@@ -1,0 +1,19 @@
+includes:
+	- phpstan-baseline.neon
+parameters:
+    level: 7
+    paths:
+        - app
+    ignoreErrors:
+        -
+         identifier: missingType.iterableValue
+        
+    # Ensure we have proper bootstrapping
+    bootstrapFiles:
+        - vendor/autoload.php
+    
+    # Memory limit for analysis
+    memoryLimitFile: .phpstan-memory-limit
+    
+    # Additional configurations
+    reportUnmatchedIgnoredErrors: false

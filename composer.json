@@ -1,0 +1,67 @@
+{
+    "name": "baseapi/baseapi-template",
+    "description": "Project template for BaseAPI - a tiny, KISS-first PHP 8.4 framework",
+    "type": "project",
+    "license": "MIT",
+    "keywords": [
+        "baseapi",
+        "template",
+        "skeleton",
+        "php",
+        "api"
+    ],
+    "authors": [
+        {
+            "name": "Tim Anthony Alexander",
+            "role": "Developer"
+        }
+    ],
+    "require": {
+        "php": "^8.4",
+        "baseapi/baseapi": "~v1.9.5",
+        "stripe/stripe-php": "^18.0",
+        "symfony/mailer": "^7.1",
+        "symfony/mime": "^7.1"
+    },
+    "require-dev": {
+        "brianium/paratest": "^7.4",
+        "phpstan/phpstan": "^1.12",
+        "phpunit/phpunit": "^11.0",
+        "rector/rector": "^1.2"
+    },
+    "autoload": {
+        "psr-4": {
+            "App\\": "app/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "App\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "serve": "php mason serve",
+        "serve-screen": "screen -dmS baseapi php mason serve",
+        "phpstan": "phpstan analyse --memory-limit=256M",
+        "phpstan-baseline": "phpstan analyse --memory-limit=256M --generate-baseline",
+        "post-create-project-cmd": [
+            "@php -r \"copy('.env.example', '.env');\"",
+            "@php -r \"if (!is_dir('storage')) mkdir('storage', 0755, true);\"",
+            "@php -r \"if (!is_dir('storage/ratelimits')) mkdir('storage/ratelimits', 0755, true);\""
+        ],
+        "setup-hooks": [
+            "bash .githooks/setup.sh"
+        ],
+        "phpunit": "phpunit --colors=always tests/",
+        "rector": "vendor/bin/rector process --dry-run",
+        "rector:fix": "vendor/bin/rector process",
+        "rector:ci": "vendor/bin/rector process --dry-run --ansi"
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "sort-packages": true,
+        "preferred-install": "dist"
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true
+}
