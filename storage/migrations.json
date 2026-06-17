@@ -1,4 +1,68 @@
 {
     "version": "1.0",
-    "migrations": []
+    "migrations": [
+        {
+            "id": "mig_04257903c246",
+            "sql": "CREATE TABLE `api_token` (\n  `user_id` VARCHAR(36) NOT NULL DEFAULT '',\n  `name` TEXT NOT NULL,\n  `token_hash` TEXT NOT NULL,\n  `expires_at` TEXT,\n  `last_used_at` TEXT,\n  `id` VARCHAR(36) NOT NULL DEFAULT '',\n  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            "destructive": false,
+            "generated_at": "2026-06-17T20:58:45+00:00",
+            "table": "api_token",
+            "operation": "create_table",
+            "warning": null
+        },
+        {
+            "id": "mig_bc5914a2bca2",
+            "sql": "CREATE TABLE `user` (\n  `name` VARCHAR(255) NOT NULL DEFAULT '',\n  `password` VARCHAR(255) NOT NULL DEFAULT '',\n  `email` VARCHAR(255) NOT NULL DEFAULT '',\n  `active` TINYINT(1) NOT NULL DEFAULT 1,\n  `role` VARCHAR(255) NOT NULL DEFAULT 'guest',\n  `id` VARCHAR(36) NOT NULL DEFAULT '',\n  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            "destructive": false,
+            "generated_at": "2026-06-17T20:58:45+00:00",
+            "table": "user",
+            "operation": "create_table",
+            "warning": null
+        },
+        {
+            "id": "mig_6b14df9e082e",
+            "sql": "ALTER TABLE `api_token` ADD UNIQUE KEY `uniq_api_token_token_hash` (`token_hash`(191))",
+            "destructive": false,
+            "generated_at": "2026-06-17T20:58:45+00:00",
+            "table": "api_token",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_215286bab9cc",
+            "sql": "ALTER TABLE `api_token` ADD INDEX `idx_api_token_user_id` (`user_id`)",
+            "destructive": false,
+            "generated_at": "2026-06-17T20:58:45+00:00",
+            "table": "api_token",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_eb324a971027",
+            "sql": "ALTER TABLE `user` ADD UNIQUE KEY `uniq_user_email` (`email`)",
+            "destructive": false,
+            "generated_at": "2026-06-17T20:58:45+00:00",
+            "table": "user",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_8e7c8c6dc3fe",
+            "sql": "ALTER TABLE `api_token` ADD CONSTRAINT `fk_api_token_user_id` FOREIGN KEY (`user_id`) REFERENCES `user` (`id`) ON DELETE CASCADE ON UPDATE CASCADE",
+            "destructive": false,
+            "generated_at": "2026-06-17T20:58:45+00:00",
+            "table": "api_token",
+            "operation": "add_fk",
+            "warning": null
+        },
+        {
+            "id": "mig_fc4e24b5b25b",
+            "sql": "CREATE TABLE `jobs` (\n    `id` VARCHAR(36) NOT NULL PRIMARY KEY,\n    `queue` VARCHAR(255) NOT NULL DEFAULT 'default',\n    `payload` TEXT NOT NULL,\n    `status` VARCHAR(50) NOT NULL DEFAULT 'pending',\n    `attempts` INT NOT NULL DEFAULT 0,\n    `error` TEXT,\n    `run_at` DATETIME NOT NULL,\n    `started_at` DATETIME,\n    `completed_at` DATETIME,\n    `failed_at` DATETIME,\n    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;\n\n-- Create essential indexes for queue performance\nCREATE INDEX jobs_queue_status_run_at_index ON jobs (queue, status, run_at);\nCREATE INDEX jobs_status_run_at_index ON jobs (status, run_at);\nCREATE INDEX jobs_status_index ON jobs (status);",
+            "destructive": false,
+            "generated_at": "2026-06-17T20:58:56+00:00",
+            "table": "jobs",
+            "operation": "create_table",
+            "description": "Create jobs table and indexes for queue system"
+        }
+    ]
 }
