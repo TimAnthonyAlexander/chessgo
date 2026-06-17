@@ -1,0 +1,180 @@
+.board-wrap {
+  width: 100%;
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+.board {
+  position: relative;
+  container-type: inline-size;
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  grid-template-rows: repeat(8, 1fr);
+  aspect-ratio: 1;
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--board-frame);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 24px 60px -28px rgba(0, 0, 0, 0.8),
+    0 0 0 1px rgba(0, 0, 0, 0.5);
+  user-select: none;
+  touch-action: manipulation;
+}
+
+.sq {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sq.light {
+  background: var(--board-light);
+}
+.sq.dark {
+  background: var(--board-dark);
+}
+.sq.interactive {
+  cursor: pointer;
+}
+
+.sq.last::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--last-move);
+  pointer-events: none;
+}
+.sq.sel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--select);
+  pointer-events: none;
+}
+.sq.check::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at center, var(--check), transparent 72%);
+  pointer-events: none;
+}
+
+.piece {
+  position: relative;
+  z-index: 2;
+  font-size: 9cqi;
+  line-height: 1;
+  animation: pieceIn 0.16s ease;
+  transition: transform 0.12s ease;
+}
+.piece.white {
+  color: #f7f4ec;
+  text-shadow:
+    0 0 1px rgba(0, 0, 0, 0.55),
+    0 1.5px 2px rgba(0, 0, 0, 0.4);
+  -webkit-text-stroke: 0.4px rgba(20, 20, 20, 0.7);
+}
+.piece.black {
+  color: #1b1e25;
+  text-shadow: 0 1px 1.5px rgba(0, 0, 0, 0.35);
+  -webkit-text-stroke: 0.4px rgba(255, 255, 255, 0.16);
+}
+.sq.interactive:hover .piece {
+  transform: translateY(-1px) scale(1.03);
+}
+
+/* Legal-move markers */
+.dot {
+  position: absolute;
+  z-index: 1;
+  width: 30%;
+  height: 30%;
+  border-radius: 50%;
+  background: var(--dot);
+  pointer-events: none;
+}
+.sq.light .dot {
+  background: var(--dot-light);
+}
+.ring {
+  position: absolute;
+  z-index: 1;
+  inset: 7%;
+  border-radius: 50%;
+  border: 0.6cqi solid var(--dot);
+  pointer-events: none;
+}
+.sq.light .ring {
+  border-color: var(--dot-light);
+}
+
+/* In-square coordinates (lichess-style) */
+.coord {
+  position: absolute;
+  z-index: 3;
+  font-family: var(--font-mono);
+  font-size: 1.9cqi;
+  font-weight: 600;
+  opacity: 0.62;
+  pointer-events: none;
+}
+.coord.file {
+  right: 4%;
+  bottom: 2%;
+}
+.coord.rank {
+  left: 4%;
+  top: 2%;
+}
+.sq.light .coord {
+  color: var(--board-dark);
+}
+.sq.dark .coord {
+  color: var(--board-light);
+}
+
+/* Promotion picker */
+.promo-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 9;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 11, 14, 0.66);
+  backdrop-filter: blur(2px);
+}
+.promo {
+  display: flex;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 0 18px 40px -18px rgba(0, 0, 0, 0.8);
+  animation: rise 0.16s ease;
+}
+.promo button {
+  width: 17cqi;
+  height: 17cqi;
+  max-width: 76px;
+  max-height: 76px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12cqi;
+  line-height: 1;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: #f7f4ec;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+.promo button:hover {
+  border-color: var(--accent-line);
+  background: #2c313d;
+}

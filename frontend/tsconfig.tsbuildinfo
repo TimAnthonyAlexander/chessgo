@@ -1,0 +1,1 @@
+{"root":["./src/main.tsx","./src/theme.ts","./src/vite-env.d.ts","./src/api/client.ts","./src/components/board.tsx","./src/components/layout.tsx","./src/components/movelist.tsx","./src/lib/chess.ts","./src/pages/botgame.tsx","./src/pages/home.tsx"],"version":"5.9.3"}

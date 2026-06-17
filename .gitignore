@@ -6,3 +6,4 @@ storage/logs/*.log
 # Rector cache
 var/cache/rector
 .phpunit.cache
+frontend/node_modules
