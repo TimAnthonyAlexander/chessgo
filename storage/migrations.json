@@ -63,6 +63,42 @@
             "table": "jobs",
             "operation": "create_table",
             "description": "Create jobs table and indexes for queue system"
+        },
+        {
+            "id": "mig_0ad4c24ac616",
+            "sql": "CREATE TABLE `bot_game` (\n  `level` INT NOT NULL DEFAULT 5,\n  `human_color` VARCHAR(255) NOT NULL DEFAULT 'w',\n  `fen` VARCHAR(255) NOT NULL DEFAULT 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1',\n  `side_to_move` VARCHAR(36) NOT NULL DEFAULT 'w',\n  `status` VARCHAR(255) NOT NULL DEFAULT 'ongoing',\n  `result` VARCHAR(255),\n  `moves` JSON NOT NULL,\n  `history_fens` JSON NOT NULL,\n  `id` VARCHAR(36) NOT NULL DEFAULT '',\n  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            "destructive": false,
+            "generated_at": "2026-06-17T21:49:07+00:00",
+            "table": "bot_game",
+            "operation": "create_table",
+            "warning": null
+        },
+        {
+            "id": "mig_8b160a55e0c6",
+            "sql": "ALTER TABLE `bot_game` ADD INDEX `idx_bot_game_status` (`status`)",
+            "destructive": false,
+            "generated_at": "2026-06-17T21:49:07+00:00",
+            "table": "bot_game",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_8a88a5ce272c",
+            "sql": "ALTER TABLE `bot_game` MODIFY COLUMN `moves` TEXT",
+            "destructive": true,
+            "generated_at": "2026-06-17T21:51:30+00:00",
+            "table": "bot_game",
+            "operation": "modify_column",
+            "warning": null
+        },
+        {
+            "id": "mig_fe3fedc6a448",
+            "sql": "ALTER TABLE `bot_game` MODIFY COLUMN `history_fens` TEXT",
+            "destructive": true,
+            "generated_at": "2026-06-17T21:51:30+00:00",
+            "table": "bot_game",
+            "operation": "modify_column",
+            "warning": null
         }
     ]
 }

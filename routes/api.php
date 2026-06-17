@@ -11,6 +11,8 @@ use App\Controllers\BenchmarkController;
 use App\Controllers\OpenApiController;
 use App\Controllers\ApiTokenController;
 use App\Controllers\StreamController;
+use App\Controllers\BotGameController;
+use App\Controllers\BotMoveController;
 use BaseApi\Http\Middleware\RateLimitMiddleware;
 use BaseApi\Http\SessionStartMiddleware;
 use BaseApi\Permissions\PermissionsMiddleware;
@@ -30,6 +32,25 @@ $router->get('/health', [
 
 // Benchmark endpoint (no middleware for performance testing)
 $router->get('/benchmark', [BenchmarkController::class]);
+
+// ================================
+// VS-Bot (guest play, no auth) — SPEC §6
+// ================================
+
+// Create a new game vs the AI: { level?: 0..10, human_color?: "w"|"b" }
+$router->post('/bot-games', [
+    RateLimitMiddleware::class => ['limit' => '30/1m'],
+    BotGameController::class,
+]);
+
+// Fetch a game's current state + legal moves
+$router->get('/bot-games/{id}', [BotGameController::class]);
+
+// Submit the human's move (UCI), get the bot's reply: { move: "e2e4" }
+$router->post('/bot-games/{id}/move', [
+    RateLimitMiddleware::class => ['limit' => '180/1m'],
+    BotMoveController::class,
+]);
 
 // ================================  
 // Authentication Endpoints
