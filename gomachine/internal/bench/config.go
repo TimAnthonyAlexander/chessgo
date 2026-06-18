@@ -78,6 +78,24 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.DeltaPrune = b
+		case "asp", "aspiration":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.Aspiration = b
+		case "rfp":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.RFP = b
+		case "lmp":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.LMP = b
 		default:
 			return base, fmt.Errorf("unknown param %q", key)
 		}
@@ -119,6 +137,15 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.DeltaPrune != patch.DeltaPrune {
 		diffs = append(diffs, fmt.Sprintf("delta: %s→%s", onoff(base.DeltaPrune), onoff(patch.DeltaPrune)))
+	}
+	if base.Aspiration != patch.Aspiration {
+		diffs = append(diffs, fmt.Sprintf("asp: %s→%s", onoff(base.Aspiration), onoff(patch.Aspiration)))
+	}
+	if base.RFP != patch.RFP {
+		diffs = append(diffs, fmt.Sprintf("rfp: %s→%s", onoff(base.RFP), onoff(patch.RFP)))
+	}
+	if base.LMP != patch.LMP {
+		diffs = append(diffs, fmt.Sprintf("lmp: %s→%s", onoff(base.LMP), onoff(patch.LMP)))
 	}
 	if len(diffs) == 0 {
 		return "(identical — sanity/noise run)"

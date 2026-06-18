@@ -18,6 +18,9 @@ type Params struct {
 	CheckExtension bool // extend search by one ply when in check
 	SEE            bool // order captures by SEE; prune losing captures in quiescence
 	DeltaPrune     bool // delta pruning in quiescence (skip captures that can't raise alpha)
+	Aspiration     bool // aspiration windows around the previous iteration's score
+	RFP            bool // reverse futility pruning (static null move) near leaves
+	LMP            bool // late move pruning (move-count pruning) of late quiets near leaves
 }
 
 // DefaultParams returns the engine's current full-strength configuration.
@@ -26,10 +29,13 @@ type Params struct {
 // nodes, [0,6] bounds, 2026-06-18:
 //   - SEE:        +66.2 ± 22.9 Elo (468 pairs)
 //   - DeltaPrune: +22.0 ± 12.2 Elo (473 pairs, on top of SEE)
+//   - Aspiration: +21.8 ± 12.1 Elo (876 pairs)
+//   - RFP:        +67.2 ± 23.1 Elo (286 pairs)
+//   - LMP:        +94.6 ± 28.5 Elo (124 pairs)
 //
-// Next under test (each: implement behind a flag, SPRT-gate on vs off, then flip
-// the default here): aspiration windows → RFP/futility/LMP/razoring → countermove
-// → TT static eval.
+// Cumulative this session: ~+270 Elo at fixed nodes (real-time gain is smaller —
+// pruning's CPU cost isn't charged at fixed nodes; see the Stockfish anchor).
+// Next under test: futility pruning → razoring → countermove → TT static eval.
 func DefaultParams() Params {
 	return Params{
 		UseTT:          true,
@@ -39,5 +45,8 @@ func DefaultParams() Params {
 		CheckExtension: true,
 		SEE:            true,
 		DeltaPrune:     true,
+		Aspiration:     true,
+		RFP:            true,
+		LMP:            true,
 	}
 }

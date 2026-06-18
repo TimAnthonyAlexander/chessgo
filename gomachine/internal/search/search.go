@@ -18,6 +18,12 @@ const (
 	mateThreshold = mateScore - maxPly
 	// deltaMargin is the safety cushion (centipawns) for quiescence delta pruning.
 	deltaMargin = 200
+	// Reverse futility pruning: margin per depth and the max depth it applies at.
+	rfpMargin   = 75
+	rfpMaxDepth = 8
+	// Late move pruning: max depth it applies at. The move-count limit is
+	// 3 + depth² (so depth 1→4, 2→7, 3→12, …).
+	lmpMaxDepth = 8
 )
 
 // pieceOrderVal is a coarse piece value used by MVV-LVA move ordering.
@@ -138,7 +144,7 @@ func (s *Searcher) Search(pos *chess.Position, limits Limits, gameHistory []uint
 	start := time.Now()
 	var result Result
 	for d := 1; d <= maxDepth; d++ {
-		s.negamax(pos, d, 0, -infinity, infinity)
+		s.searchRoot(pos, d, result.Score)
 		if s.stop && d > 1 {
 			break // discard incomplete iteration
 		}
@@ -157,6 +163,70 @@ func (s *Searcher) Search(pos *chess.Position, limits Limits, gameHistory []uint
 	}
 	result.Elapsed = time.Since(start)
 	return result
+}
+
+// Aspiration-window constants (SPEC §4.5). Around the previous iteration's
+// score we open a narrow window and only re-search wider on a fail.
+const (
+	aspMinDepth  = 4    // full window for shallower iterations
+	aspInitDelta = 25   // initial half-window (centipawns)
+	aspMaxDelta  = 1500 // beyond this, fall back to a full window
+)
+
+// searchRoot runs one iterative-deepening iteration at the given depth. With
+// aspiration enabled (and past the warmup depth) it searches a narrow window
+// around prevScore, widening only the bound that fails until the score lands
+// inside — fewer root nodes than a full -inf/+inf window. rootBest/rootScore are
+// set by negamax at ply 0; on a fail-low the root move is not trusted (we
+// re-search), and the caller discards the whole iteration if the clock expires.
+func (s *Searcher) searchRoot(pos *chess.Position, depth, prevScore int) {
+	if !s.params.Aspiration || depth < aspMinDepth || absInt(prevScore) >= mateThreshold {
+		s.negamax(pos, depth, 0, -infinity, infinity)
+		return
+	}
+	delta := aspInitDelta
+	alpha := maxInt(prevScore-delta, -infinity)
+	beta := minInt(prevScore+delta, infinity)
+	for {
+		score := s.negamax(pos, depth, 0, alpha, beta)
+		if s.stop {
+			return
+		}
+		switch {
+		case score <= alpha: // fail low: lower alpha, pull beta toward center
+			beta = (alpha + beta) / 2
+			alpha = maxInt(score-delta, -infinity)
+		case score >= beta: // fail high: raise beta
+			beta = minInt(score+delta, infinity)
+		default:
+			return // score inside the window
+		}
+		delta += delta
+		if delta >= aspMaxDelta {
+			alpha, beta = -infinity, infinity
+		}
+	}
+}
+
+func absInt(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // RootMove pairs a root move with its searched score.
@@ -248,6 +318,23 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 		}
 	}
 
+	isPV := beta-alpha > 1
+
+	// Static evaluation at this node (meaningless while in check); used by
+	// reverse futility pruning, and later by other heuristics.
+	var staticEval int
+	if !inCheck {
+		staticEval = eval.Evaluate(pos)
+	}
+
+	// Reverse futility pruning (static null move): at a non-PV node near the
+	// leaves, if the static eval beats beta by a depth-scaled margin even after
+	// conceding that margin, fail high without searching.
+	if s.params.RFP && !inCheck && !isPV && ply > 0 && depth <= rfpMaxDepth &&
+		absInt(beta) < mateThreshold && staticEval-rfpMargin*depth >= beta {
+		return staticEval - rfpMargin*depth
+	}
+
 	// Null-move pruning.
 	if s.params.NullMove && !inCheck && depth >= 3 && ply > 0 && beta < mateThreshold &&
 		pos.NonPawnMaterial(pos.SideToMove()) {
@@ -287,6 +374,16 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 		selectMove(&ml, &scores, i)
 		m := ml.Get(i)
 		quiet := !isCapture(pos, m) && m.Type() != chess.Promotion
+
+		// Late move pruning: at a non-PV node near the leaves, once enough quiet
+		// moves have been searched, skip the remaining late quiets (move ordering
+		// puts them last, so they are almost never the best move). Never when in
+		// check or when escaping a mate.
+		if s.params.LMP && quiet && !isPV && !inCheck && searched > 0 &&
+			depth <= lmpMaxDepth && bestScore > -mateThreshold &&
+			searched >= 3+depth*depth {
+			continue
+		}
 
 		var u chess.Undo
 		pos.DoMove(m, &u)

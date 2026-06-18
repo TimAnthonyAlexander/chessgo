@@ -7,9 +7,12 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/timanthonyalexander/gomachine/internal/bench"
+	"github.com/timanthonyalexander/gomachine/internal/chess"
+	"github.com/timanthonyalexander/gomachine/internal/engine"
 	"github.com/timanthonyalexander/gomachine/internal/search"
 )
 
@@ -24,6 +27,8 @@ func cmdBench(args []string) {
 		cmdBenchSPRT(args[1:])
 	case "vs-stockfish", "stockfish", "sf":
 		cmdBenchStockfish(args[1:])
+	case "game":
+		cmdBenchGame(args[1:])
 	case "-h", "--help", "help":
 		benchUsage()
 	default:
@@ -198,6 +203,120 @@ func cmdBenchStockfish(args []string) {
 		os.Exit(1)
 	}
 	reporter.Final(summary)
+}
+
+// cmdBenchGame plays a single game (gomachine vs Stockfish) and prints the moves
+// + result — for watching, not measuring.
+func cmdBenchGame(args []string) {
+	fs := flag.NewFlagSet("bench game", flag.ExitOnError)
+	sfPath := fs.String("sf", "stockfish", "path to the stockfish binary")
+	sfSkill := fs.Int("sf-skill", 20, "Stockfish Skill Level 0..20 (20 = full strength)")
+	sfElo := fs.Int("sf-elo", 0, "if >0, limit Stockfish to this UCI_Elo instead of Skill")
+	movetime := fs.Int("movetime", 300, "ms per move for BOTH engines")
+	ourColor := fs.String("color", "white", "gomachine's color: white|black")
+	fenFlag := fs.String("fen", chess.StartFEN, "starting FEN")
+	_ = fs.Parse(args)
+
+	pos, err := chess.ParseFEN(*fenFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "invalid fen:", err)
+		os.Exit(1)
+	}
+	sfOpts := map[string]string{}
+	sfDesc := fmt.Sprintf("Stockfish (Skill %d)", *sfSkill)
+	if *sfElo > 0 {
+		sfOpts["UCI_LimitStrength"] = "true"
+		sfOpts["UCI_Elo"] = fmt.Sprintf("%d", *sfElo)
+		sfDesc = fmt.Sprintf("Stockfish (UCI_Elo %d)", *sfElo)
+	} else {
+		sfOpts["Skill Level"] = fmt.Sprintf("%d", *sfSkill)
+	}
+
+	sf, err := bench.StartUCI(*sfPath, sfOpts)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "stockfish:", err)
+		os.Exit(1)
+	}
+	defer sf.Close()
+
+	ours := engine.New(64)
+	ourSide := chess.White
+	if strings.HasPrefix(strings.ToLower(*ourColor), "b") {
+		ourSide = chess.Black
+	}
+	budget := bench.UCIBudget{MoveTime: time.Duration(*movetime) * time.Millisecond}
+	ourLim := search.Limits{MoveTime: time.Duration(*movetime) * time.Millisecond}
+
+	fmt.Printf("\n  gomachine (%s) vs %s   ·   %dms/move\n  start: %s\n\n",
+		*ourColor, sfDesc, *movetime, *fenFlag)
+
+	startFEN := pos.FEN()
+	var history []uint64
+	var moves []string
+	ply := 0
+	for ; ply < 600; ply++ {
+		st := engine.Adjudicate(pos, history)
+		if st.State != "ongoing" {
+			printGameEnd(st.State, st.Result, ourSide, ply)
+			return
+		}
+		if contains(st.ClaimableDraws, "threefold") || contains(st.ClaimableDraws, "fifty") {
+			fmt.Printf("\n  ½-½ draw (%s) after %d moves\n", st.ClaimableDraws[0], ply/2)
+			return
+		}
+
+		var uci, san string
+		if pos.SideToMove() == ourSide {
+			res := ours.Play(pos, ourLim, history)
+			uci = res.Move.String()
+			san = pos.SAN(res.Move)
+		} else {
+			uci, err = sf.BestMove(startFEN, moves, budget)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "stockfish move error:", err)
+				return
+			}
+			m, ok := pos.ParseUCIMove(uci)
+			if !ok {
+				fmt.Fprintf(os.Stderr, "stockfish illegal move %q\n", uci)
+				return
+			}
+			san = pos.SAN(m)
+		}
+		m, _ := pos.ParseUCIMove(uci)
+		if pos.SideToMove() == chess.White {
+			fmt.Printf("%d. %-7s", (ply/2)+1, san)
+		} else {
+			fmt.Printf("%-7s\n", san)
+		}
+		history = append(history, pos.Key())
+		var u chess.Undo
+		pos.DoMove(m, &u)
+		moves = append(moves, uci)
+	}
+	fmt.Printf("\n  reached move cap (%d plies)\n", ply)
+}
+
+func printGameEnd(state, result string, ourSide chess.Color, ply int) {
+	fmt.Printf("\n\n  game over: %s  (%s)  after %d moves\n", state, result, (ply+1)/2)
+	if state == "checkmate" {
+		winnerWhite := result == "1-0"
+		ourWin := (winnerWhite && ourSide == chess.White) || (!winnerWhite && ourSide == chess.Black)
+		if ourWin {
+			fmt.Println("  🏆 gomachine WINS")
+		} else {
+			fmt.Println("  💀 gomachine got mated")
+		}
+	}
+}
+
+func contains(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }
 
 func ourBudgetDesc(nodes uint64, movetimeMs int) string {
