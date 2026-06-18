@@ -7,9 +7,12 @@
 >
 > **Status:** v1 in progress. **Last updated:** 2026-06-18.
 > Built & working: the Go engine (`gomachine`, perft-verified, ~2400+ Lichess
-> strength), bot games + eval bar, the lobby, and **live human-vs-human play** —
-> WebSocket hub with matchmaking, server clocks, and reconnect/resume. See
-> `docs/COMMANDS.md` to run it, `CLAUDE.md` for a fast codebase orientation.
+> strength), bot games + eval bar, the lobby, **live human-vs-human play**
+> (WebSocket hub, matchmaking, server clocks, reconnect/resume), **bot backfill**
+> (a fill-in bot when no human is found), **accounts** (signup/login via session
+> cookies), **per-time-control Elo**, and **game persistence** (hub → BaseAPI).
+> Live lobby counts at `/stats`. See `docs/COMMANDS.md` to run it, `CLAUDE.md` for
+> a fast codebase orientation.
 
 ---
 
@@ -87,7 +90,7 @@ working defaults:
       │ • persistence (MySQL)     │   │ • verifies ticket (shared secret) │
       └─────────────┬─────────────┘   │ • imports internal/chess directly │
         internal HTTP│ (FEN-in)        └──────────────┬───────────────────┘
-                     ▼                  persist results via BaseAPI (next phase)
+                     ▼                  POST /internal/games → BaseAPI (persist + Elo)
       ┌───────────────────────────┐
       │ gomachine ENGINE (Go):6466│  rules + AI, pure (FEN, limit) → result
       └───────────────────────────┘  (same binary, `serve` subcommand)
@@ -105,8 +108,9 @@ working defaults:
 |---|---|
 | Durable persistence (users, finished games, ratings) | Legal move generation + game-end detection (engine & hub) |
 | Auth, accounts, signing WS tickets | Best-move search + evaluation (engine `serve`) |
-| Bot-game orchestration, analyze proxy | **Live game state, matchmaking, server clocks (hub)** |
-| Elo ratings (next phase) | Reconnect/resume + presence (hub, in-memory) |
+| Bot-game orchestration, analyze proxy, `/stats` proxy | **Live game state, matchmaking, server clocks (hub)** |
+| Per-category Elo (`EloService`) + game records | Reconnect/resume + presence (hub, in-memory) |
+| Account sessions (cookies), `/internal/games` results sink | Bot backfill (engine-driven fill-in opponent) |
 | — | Zobrist keying, repetition/50-move, FIDE 6.9 timeout test |
 
 ### Ports (all `127.0.0.1`, all confirmed free at setup; theme = 64 squares)
@@ -465,14 +469,33 @@ payload = { sub, anon, name, rating, exp }   # sub = user id, or a stable per-br
 Anonymous players get a stable id (browser `localStorage` `chessgo.anonId` →
 `GET /ws-ticket?anon=…` → ticket `sub`) so the hub can recognise them across
 reconnects. **Anonymous = casual/unrated; rated requires a registered account**
-(`anon=false`). Games are rated only when **both** players are accounts.
+(`anon=false`). A human-vs-human game is rated only when **both** players are
+accounts; a fill-in bot game is rated (one-sided) when the human is an account.
+The ticket carries the account's **per-category ratings** so the hub can show the
+opponent's rating in the game's time-control category.
 
 ### 8.4 Matchmaking & clocks
 - **Pools** keyed by time control (`"3+0"`, `"10+5"`, …); FIFO match (rating-
   proximity matching is a later refinement). Colors random.
+- **Bot backfill**: if a player waits past a delay (default **15 s**) with no
+  human, the hub pairs them with an engine-driven bot that looks like a normal
+  player (random username + rating, level 6, human-like move pacing). Two humans
+  still match instantly, so only a lone waiter is backfilled. Toggled by hub flags
+  (`-bots`, `-bot-level`, `-bot-delay`). Bot search runs off the hub goroutine
+  (engine pool) and is applied back via a channel. A bot game is **rated for a
+  logged-in human** (one-sided Elo vs the bot's displayed rating); anonymous →
+  casual. Explicitly chosen `/bot` games go through BaseAPI, never the hub, so
+  they never affect Elo.
 - **Clocks are server-authoritative**: the side-to-move's time decreases from a
   per-move timestamp; on a move the mover's clock is debited + incremented. A
   200 ms ticker flags timeouts, applying the FIDE 6.9 timeout-vs-material rule.
+- **Lichess-style clock start**: neither clock runs until that side has made its
+  first move — the clock is live only once **both** opening moves are played
+  (2 plies); both first moves are untimed. A stalled opening ply is handled by a
+  **30 s first-move abort** (`firstMoveTimeout`), which ends the game with no
+  result (`reason: "aborted"`, not persisted), not by the clock. `finish()`
+  snapshots both clocks **before** marking the game over, so a flagged side
+  correctly reads 0.
 - **Disconnect ≠ abandon**: the hub marks the player offline and keeps the game;
   the clock keeps running (so an absent player still flags). On reconnect (same
   identity) the hub reattaches and sends a full `resume`. Presence is pushed as
@@ -491,13 +514,20 @@ hub → client:  hello   { name, anon, rating }
                state   { gameId, fen, sideToMove, lastMove, san, status, check,
                          clock:{w,b}, ply, legalMoves }
                resume  { …matched fields…, moves:[{uci,san}], opponentOnline }
-               end     { gameId, result, reason, status, clock }
+               end     { gameId, result, reason, status, clock }   # reason "aborted" → result null
                opponentGone | opponentBack | error { message }
 ```
 
+`opponent.rating` in `matched`/`resume` is the opponent's rating **in that game's
+time-control category** (the ticket carries all four; the hub picks by pool).
+Separately, the hub exposes `GET /stats → { playersOnline, activeGames }` (live
+counts via atomics), proxied by BaseAPI's `GET /stats` for the homepage.
+
 Frontend: a singleton WS store (`src/lib/socket.ts`, via `useSyncExternalStore`)
 survives navigation; the lobby queues and routes to `/game/:id` on `matched`; the
-homepage shows a "resume" banner whenever an unfinished game exists.
+homepage shows a "resume" banner whenever an unfinished game exists. A second
+singleton store (`src/lib/auth.ts`) holds the session/user (session-cookie auth);
+sounds (`src/lib/sounds.ts`) are gesture-unlocked Web Audio.
 
 ---
 
@@ -506,8 +536,11 @@ homepage shows a "resume" banner whenever an unfinished game exists.
 ```
 chessgo/
   app/            # BaseAPI PHP: Models, Controllers, Services, Providers, Auth
-                  #   BotGame model; GomachineClient, BotGameService, WsTicketService
-                  #   Controllers: BotGame, BotMove, Analyze, WsTicket, …
+                  #   Models: User (per-category ratings), BotGame, Game
+                  #   Services: GomachineClient, BotGameService, WsTicketService,
+                  #             HubClient (stats proxy), EloService (categories + Elo)
+                  #   Controllers: BotGame, BotMove, Analyze, WsTicket, Stats,
+                  #             GameResult (/internal/games), Login/Signup/Logout/Me
   routes/         # api.php
   config/         # app.php, i18n.php
   storage/        # migrations.json, logs, cache
@@ -520,15 +553,18 @@ chessgo/
     internal/search/    # negamax, αβ, ID, quiescence, ordering, TT, null-move, LMR
     internal/engine/    # orchestration: level 0–10 mapping, status adjudication
     internal/server/    # stateless engine HTTP/JSON handlers (the §7.3 contract)
-    internal/hub/       # realtime: matchmaking, live games, clocks, WS protocol
-    internal/auth/      # HMAC ticket verification (shared secret)
+    internal/hub/       # realtime: matchmaking, live games, clocks, WS protocol,
+                        #   /stats, persistence POST (hub.go) + bot backfill (bot.go)
+    internal/auth/      # HMAC ticket verification; Identity carries per-cat ratings
     internal/uci/       # UCI protocol loop (for chess GUIs / test tools)
     Makefile            # build, test, perft, cross-compile (CGO_ENABLED=0)
   frontend/       # React + Vite + TS + MUI + Bun
     src/pages/          # Home (lobby), BotGame (/bot), LiveGame (/game/:id)
-    src/components/      # Board, EvalBar, Clock, MoveList, Layout, GameModeCard
-    src/lib/            # socket (WS store), chess (FEN/board helpers), sounds
-    src/api/            # client (REST + ws-ticket)
+    src/components/      # Board, EvalBar, Clock, MoveList, Layout, GameModeCard,
+                        #   AuthDialog (login/signup)
+    src/lib/            # socket (WS store), auth (session/user store), sounds
+                        #   (gesture-unlocked Web Audio), chess (FEN/board helpers)
+    src/api/            # client (REST + ws-ticket + auth; credentials: 'include')
     public/piece/cburnett/   # SVG piece set (Lichess cburnett, GPL)
   docs/           # SPEC.md (this file), COMMANDS.md (run/deploy)
   CLAUDE.md       # codebase orientation for Claude Code
@@ -542,16 +578,24 @@ chessgo/
 - [x] **Bot games** — BaseAPI `BotGame` + level 0–10, frontend `/bot`, eval bar.
 - [x] **Lobby** — quick-pairing grid, action buttons, optimistic presentation.
 - [x] **Live multiplayer (queue)** — Go hub, WebSocket, server clocks, ticket auth,
-      reconnect/resume + presence, frontend live game view.
+      reconnect/resume + presence, frontend live game view. Lichess-style clock
+      start (untimed first moves) + 30 s first-move abort.
+- [x] **Bot backfill** — fill-in engine opponent when no human is found in ~15 s;
+      random identity, human-like pacing; rated (one-sided) for logged-in players.
 - [x] **Persistence + Elo + accounts** — `game` table + per-category `User`
       ratings; hub persists finished games via `POST /internal/games` (secret-gated)
       and applies provisional-K Elo for rated games; frontend signup/login (session
       cookies), header user menu with per-category ratings, rated/casual badge.
+- [x] **Live lobby counts** — hub `/stats` (atomics) proxied by BaseAPI `/stats`;
+      homepage shows real counts + optional smooth `STATS_PADDING` filler.
 - [ ] **Hub-restart durability** — persist live games so resume survives a restart.
+- [ ] **Match bot strength to its rating** — fill-in bot currently plays level 6
+      with a random displayed rating; tie displayed rating to actual strength (and
+      to the player's Elo) so rated bot games are fair / non-farmable.
 - [ ] **More lobby features** — Challenge-a-friend (private link), Custom games,
-      correspondence; rating-proximity matchmaking.
-- [ ] **Polish** — premoves, draw offers, takebacks, PGN export, profiles,
-      spectating, richer eval terms / opening book.
+      correspondence; rating-proximity matchmaking; profiles + game history + PGN.
+- [ ] **Polish** — premoves, draw offers, takebacks, spectating, richer eval
+      terms / opening book.
 
 ---
 
