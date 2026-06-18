@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import {
   Box,
   Button,
@@ -11,6 +11,8 @@ import {
 } from '@mui/material'
 import { Crown, Cpu, Swords, Trophy, UserPlus, Users, Zap } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import { gameSocket } from '../lib/socket'
+import { useGameSocket } from '../lib/useGameSocket'
 
 // Quick-pairing presets (presentational for now — online play comes next).
 interface Preset {
@@ -39,10 +41,22 @@ const EVENTS = [
 
 export default function Home() {
   const navigate = useNavigate()
+  const s = useGameSocket()
   const [search, setSearch] = useState<string | null>(null)
   const [snack, setSnack] = useState<string | null>(null)
 
-  const queue = (label: string) => setSearch(label)
+  // When the hub matches us, jump into the live game.
+  useEffect(() => {
+    if (s.status === 'matched' && s.game) {
+      setSearch(null)
+      navigate(`/game/${s.game.id}`)
+    }
+  }, [s.status, s.game?.id, navigate])
+
+  const queue = (label: string, pool: string) => {
+    void gameSocket.queue(pool)
+    setSearch(label)
+  }
 
   return (
     <Box sx={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
@@ -116,7 +130,7 @@ export default function Home() {
 
           <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 1.25 }}>
             {PRESETS.map((p) => (
-              <Cell key={p.time + p.cat} onClick={() => queue(`${p.cat} · ${p.time}`)}>
+              <Cell key={p.time + p.cat} onClick={() => queue(`${p.cat} · ${p.time}`, p.time)}>
                 <Typography sx={{ fontSize: { xs: 26, md: 32 }, fontWeight: 300, lineHeight: 1, letterSpacing: '-0.01em' }}>
                   {p.time}
                 </Typography>
@@ -131,7 +145,7 @@ export default function Home() {
 
         {/* Right rail — actions + counters */}
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
-          <Action icon={<Swords size={18} />} label="Create a game" onClick={() => queue('Casual game')} />
+          <Action icon={<Swords size={18} />} label="Create a game" onClick={() => setSnack('Custom game creation is coming soon — pick a time control above to play now.')} />
           <Action icon={<UserPlus size={18} />} label="Challenge a friend" onClick={() => setSnack('Friend challenges are coming soon.')} />
           <Action icon={<Cpu size={18} />} label="Play the computer" highlight onClick={() => navigate('/bot')} />
 
@@ -159,11 +173,11 @@ export default function Home() {
             Finding an opponent…
           </Typography>
           <Typography sx={{ color: 'var(--text-dim)', fontSize: 13.5, mt: 1, maxWidth: 280, mx: 'auto' }}>
-            Online multiplayer is coming soon. For now, take on the engine — it's a strong opponent.
+            {s.error ?? 'Waiting for another player to join this pool. Open a second tab to test, or take on the engine.'}
           </Typography>
         </DialogContent>
         <DialogActions sx={{ justifyContent: 'center', pb: 3, gap: 1 }}>
-          <Button color="inherit" onClick={() => setSearch(null)} sx={{ color: 'var(--text-dim)' }}>
+          <Button color="inherit" onClick={() => { gameSocket.cancelQueue(); setSearch(null) }} sx={{ color: 'var(--text-dim)' }}>
             Cancel
           </Button>
           <Button variant="contained" onClick={() => navigate('/bot')}>

@@ -92,4 +92,15 @@ export function analyze(fen: string): Promise<Analysis> {
   return request<Analysis>('/analyze', { method: 'POST', body: JSON.stringify({ fen }) })
 }
 
+export interface WsTicket {
+  ticket: string
+  wsUrl: string
+  identity: { name: string; anon: boolean; rating: number }
+}
+
+/** Mint a short-lived ticket + ws URL for the realtime hub. */
+export function getWsTicket(): Promise<WsTicket> {
+  return request<WsTicket>('/ws-ticket')
+}
+
 export { ApiError }

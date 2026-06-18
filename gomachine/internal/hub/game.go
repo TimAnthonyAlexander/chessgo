@@ -131,5 +131,14 @@ func (g *game) snapshot() map[string]any {
 		"check":      st.Check,
 		"clock":      map[string]int64{"w": g.remainingMs(chess.White), "b": g.remainingMs(chess.Black)},
 		"ply":        len(g.moves),
+		"legalMoves": g.legalMoves(),
 	}
+}
+
+// legalMoves returns the UCI legal moves for the side to move (empty if over).
+func (g *game) legalMoves() []string {
+	if g.over {
+		return []string{}
+	}
+	return g.pos.LegalMoveStrings(chess.SqNone)
 }

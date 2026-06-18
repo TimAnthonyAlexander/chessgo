@@ -171,6 +171,7 @@ func (h *Hub) sendMatched(g *game, c *Client, color chess.Color) {
 		"timeControl": map[string]int64{"base": g.tc.Base, "inc": g.tc.Inc},
 		"clock":       map[string]int64{"w": g.clockMs[chess.White], "b": g.clockMs[chess.Black]},
 		"opponent":    map[string]any{"name": opp.Name, "rating": opp.Rating, "anon": opp.Anon},
+		"legalMoves":  g.legalMoves(),
 	})))
 }
 
