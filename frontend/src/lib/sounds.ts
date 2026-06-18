@@ -147,3 +147,21 @@ export function playForSan(san: string, gameOver: boolean): void {
   else sounds.move()
   if (san.includes('+')) setTimeout(() => sounds.check(), 90)
 }
+
+// Unlock audio on the first user gesture ANYWHERE in the app. Browsers create an
+// AudioContext in a "suspended" state when it's first touched outside a gesture
+// and won't play until resumed from one — so a sound driven purely by an event
+// (an opponent/bot move arriving over WebSocket) would never be heard. Creating +
+// resuming the context inside this listener primes it for all later sounds. The
+// listener removes itself once the context is actually running.
+if (typeof window !== 'undefined') {
+  const unlock = () => {
+    const a = audio() // creates + resumes within the gesture
+    if (a && a.c.state === 'running') {
+      window.removeEventListener('pointerdown', unlock)
+      window.removeEventListener('keydown', unlock)
+    }
+  }
+  window.addEventListener('pointerdown', unlock)
+  window.addEventListener('keydown', unlock)
+}

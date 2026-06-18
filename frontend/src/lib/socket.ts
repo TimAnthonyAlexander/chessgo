@@ -177,6 +177,16 @@ class GameSocket {
     this.set({ status: 'idle', pool: null, game: null, error: null })
   }
 
+  /** Re-open the socket so a fresh ws-ticket (new account identity) is minted —
+   * called after login/logout. Skipped during a live game to avoid disruption. */
+  reidentify() {
+    if (this.state.game && !this.state.game.ended) return
+    this.intentional = true
+    this.ws?.close()
+    this.ws = null
+    void this.connect()
+  }
+
   private onClose() {
     this.ws = null
     this.set({ conn: 'closed' })

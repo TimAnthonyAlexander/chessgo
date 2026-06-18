@@ -36,6 +36,27 @@ func parseTimeControl(pool string) (timeControl, bool) {
 	return timeControl{Base: int64(base) * 60_000, Inc: int64(inc) * 1000}, true
 }
 
+// categoryForPool maps a pool to a rating category by estimated game duration
+// (base seconds + 40·increment), mirroring BaseAPI's EloService so the displayed
+// rating matches the one ratings are tracked under.
+func categoryForPool(pool string) string {
+	tc, ok := parseTimeControl(pool)
+	if !ok {
+		return "blitz"
+	}
+	est := tc.Base/1000 + 40*tc.Inc/1000 // seconds
+	switch {
+	case est < 180:
+		return "bullet"
+	case est < 480:
+		return "blitz"
+	case est < 1500:
+		return "rapid"
+	default:
+		return "classical"
+	}
+}
+
 // out builds a server→client message as a JSON-marshalable map.
 func out(typ string, fields map[string]any) map[string]any {
 	if fields == nil {

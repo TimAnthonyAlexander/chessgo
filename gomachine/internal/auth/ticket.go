@@ -17,11 +17,21 @@ import (
 
 // Identity is the authenticated player behind a connection.
 type Identity struct {
-	UserID string `json:"sub"`    // empty for anonymous
-	Anon   bool   `json:"anon"`   // true if not a registered account
-	Name   string `json:"name"`   // display name
-	Rating int    `json:"rating"` // current Elo (0 if unrated/anon)
-	Exp    int64  `json:"exp"`    // unix seconds; 0 = no expiry
+	UserID  string         `json:"sub"`               // empty for anonymous
+	Anon    bool           `json:"anon"`              // true if not a registered account
+	Name    string         `json:"name"`              // display name
+	Rating  int            `json:"rating"`            // default Elo (0 if unrated/anon)
+	Ratings map[string]int `json:"ratings,omitempty"` // per-category Elo (bullet/blitz/rapid/classical)
+	Exp     int64          `json:"exp"`               // unix seconds; 0 = no expiry
+}
+
+// RatingFor returns the player's rating in a time-control category, falling back
+// to the default Rating when no per-category value is present (e.g. bots).
+func (id Identity) RatingFor(category string) int {
+	if r, ok := id.Ratings[category]; ok && r > 0 {
+		return r
+	}
+	return id.Rating
 }
 
 var b64 = base64.RawURLEncoding

@@ -92,11 +92,14 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool string) {
 	bot := newBotIdentity()
 	pos, _ := chess.ParseFEN(chess.StartFEN)
 	g := &game{
-		id:        newID(),
-		pos:       pos,
-		tc:        tc,
-		pool:      pool,
-		rated:     false, // bot games are never rated
+		id:   newID(),
+		pos:  pos,
+		tc:   tc,
+		pool: pool,
+		// A matchmaking bot fill-in is rated for a logged-in human (one-sided Elo
+		// vs the bot). Anonymous players can't be rated. Explicitly chosen /bot
+		// games never reach the hub, so they're unaffected.
+		rated:     !human.id.Anon,
 		clockMs:   [2]int64{tc.Base, tc.Base},
 		turnStart: time.Now(),
 		online:    [2]bool{true, true},

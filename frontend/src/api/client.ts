@@ -50,6 +50,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     res = await fetch(BASE + path, {
       ...init,
+      credentials: 'include', // session cookie for authenticated endpoints
       headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
     })
   } catch {
@@ -125,6 +126,54 @@ export interface LobbyStats {
 /** Live lobby counts (players online + games in play) from the realtime hub. */
 export function getStats(): Promise<LobbyStats> {
   return request<LobbyStats>('/stats')
+}
+
+// --- Accounts (session-cookie auth) ---
+
+export type RatingCategory = 'bullet' | 'blitz' | 'rapid' | 'classical'
+
+export interface User {
+  id: string
+  name: string
+  email: string
+  role: string
+  rating_bullet: number
+  rating_blitz: number
+  rating_rapid: number
+  rating_classical: number
+  games_bullet: number
+  games_blitz: number
+  games_rapid: number
+  games_classical: number
+}
+
+export function signup(name: string, email: string, password: string): Promise<User> {
+  return request<User>('/auth/signup', {
+    method: 'POST',
+    body: JSON.stringify({ name, email, password }),
+  })
+}
+
+export function login(email: string, password: string): Promise<User> {
+  return request<User>('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  })
+}
+
+export function logout(): Promise<unknown> {
+  return request('/auth/logout', { method: 'POST' })
+}
+
+/** Current user, or null if not logged in (401). Rethrows other errors. */
+export async function me(): Promise<User | null> {
+  try {
+    const r = await request<{ user: User }>('/me')
+    return r.user
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) return null
+    throw e
+  }
 }
 
 export { ApiError }

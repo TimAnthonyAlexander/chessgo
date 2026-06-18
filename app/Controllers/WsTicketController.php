@@ -4,6 +4,7 @@ namespace App\Controllers;
 
 use BaseApi\Controllers\Controller;
 use BaseApi\Http\JsonResponse;
+use App\Models\User;
 use App\Services\WsTicketService;
 
 /**
@@ -24,14 +25,31 @@ class WsTicketController extends Controller
 
     public function get(): JsonResponse
     {
+        // Optional session auth: resolve the logged-in user from the session
+        // (SessionStartMiddleware ran). $request->user is only set on the
+        // token-auth path, so fall back to the session user_id for the SPA.
         $user = $this->request->user ?? null;
+        if (!is_array($user) || empty($user['id'])) {
+            $uid = $_SESSION['user_id'] ?? null;
+            if ($uid) {
+                $found = User::find((string)$uid);
+                $user = $found instanceof User ? $found->jsonSerialize() : null;
+            }
+        }
 
         if (is_array($user) && !empty($user['id'])) {
+            $ratings = [
+                'bullet' => (int)($user['rating_bullet'] ?? 1500),
+                'blitz' => (int)($user['rating_blitz'] ?? 1500),
+                'rapid' => (int)($user['rating_rapid'] ?? 1500),
+                'classical' => (int)($user['rating_classical'] ?? 1500),
+            ];
             $identity = [
                 'sub' => (string)$user['id'],
                 'anon' => false,
                 'name' => (string)($user['name'] ?? 'Player'),
-                'rating' => (int)($user['rating'] ?? 1500),
+                'rating' => $ratings['blitz'], // default shown when category is unknown
+                'ratings' => $ratings,
             ];
         } else {
             // Anonymous: a stable browser id (sub) lets the hub reconnect/resume.

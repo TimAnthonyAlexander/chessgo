@@ -1,8 +1,11 @@
-import { useEffect } from 'react'
-import { Box, Button, Tooltip } from '@mui/material'
-import { Search } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Box, Button, Divider, Menu, MenuItem, Tooltip, Typography } from '@mui/material'
+import { ChevronDown, LogOut, Search } from 'lucide-react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
 import { gameSocket } from '../lib/socket'
+import { authStore, useAuth } from '../lib/auth'
+import AuthDialog from './AuthDialog'
+import type { RatingCategory, User } from '../api/client'
 
 const LINKS: { label: string; to: string | null }[] = [
   { label: 'Play', to: '/' },
@@ -15,10 +18,13 @@ const LINKS: { label: string; to: string | null }[] = [
 /** App shell: a flat, full-width top nav (Lichess-style) over the routed page. */
 export default function Layout() {
   const { pathname } = useLocation()
+  const { user } = useAuth()
+  const [authOpen, setAuthOpen] = useState(false)
 
-  // Open the realtime socket once on load so the hub can resume any active game.
+  // Open the realtime socket + resolve the session once on load.
   useEffect(() => {
     void gameSocket.connect()
+    void authStore.init()
   }, [])
 
   const linkSx = (active: boolean, real: boolean) => ({
@@ -80,22 +86,80 @@ export default function Layout() {
 
         <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 1.5 }}>
           <Search size={18} color="var(--muted)" />
-          <Tooltip title="Accounts coming soon" arrow>
+          {user ? (
+            <UserMenu user={user} />
+          ) : (
             <Button
               variant="outlined"
               color="inherit"
               size="small"
-              sx={{ borderColor: 'var(--line)', color: 'var(--text-dim)', px: 1.75 }}
+              onClick={() => setAuthOpen(true)}
+              sx={{ borderColor: 'var(--line)', color: 'var(--text-dim)', px: 1.75, '&:hover': { borderColor: 'var(--accent)', color: 'var(--accent)' } }}
             >
-              Sign in
+              Log in
             </Button>
-          </Tooltip>
+          )}
         </Box>
       </Box>
 
       <Box component="main" sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
         <Outlet />
       </Box>
+
+      <AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} />
     </Box>
+  )
+}
+
+const CATEGORIES: { key: RatingCategory; label: string }[] = [
+  { key: 'bullet', label: 'Bullet' },
+  { key: 'blitz', label: 'Blitz' },
+  { key: 'rapid', label: 'Rapid' },
+  { key: 'classical', label: 'Classical' },
+]
+
+function UserMenu({ user }: { user: User }) {
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null)
+  return (
+    <>
+      <Button
+        color="inherit"
+        size="small"
+        endIcon={<ChevronDown size={15} />}
+        onClick={(e) => setAnchor(e.currentTarget)}
+        sx={{ textTransform: 'none', color: 'var(--text)', fontWeight: 600, fontSize: 14, px: 1.25 }}
+      >
+        {user.name}
+        <Typography component="span" sx={{ ml: 0.75, fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-dim)' }}>
+          {user.rating_blitz}
+        </Typography>
+      </Button>
+      <Menu
+        anchorEl={anchor}
+        open={!!anchor}
+        onClose={() => setAnchor(null)}
+        slotProps={{ paper: { sx: { bgcolor: 'var(--surface)', border: '1px solid var(--line)', minWidth: 200 } } }}
+      >
+        {CATEGORIES.map((c) => (
+          <MenuItem key={c.key} disableRipple sx={{ cursor: 'default', justifyContent: 'space-between', gap: 3, fontSize: 13.5 }}>
+            <span style={{ color: 'var(--text-dim)' }}>{c.label}</span>
+            <span style={{ fontFamily: 'var(--font-mono)' }}>
+              {user[`rating_${c.key}`]}
+              <span style={{ color: 'var(--muted)', fontSize: 11 }}> · {user[`games_${c.key}`]}</span>
+            </span>
+          </MenuItem>
+        ))}
+        <Divider sx={{ borderColor: 'var(--line-soft)' }} />
+        <MenuItem
+          onClick={() => {
+            setAnchor(null)
+            void authStore.logout()
+          }}
+          sx={{ fontSize: 13.5, gap: 1 }}
+        >
+          <LogOut size={15} /> Log out
+        </MenuItem>
+      </Menu>
+    </>
   )
 }

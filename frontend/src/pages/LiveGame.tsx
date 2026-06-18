@@ -8,7 +8,7 @@ import MoveList from '../components/MoveList'
 import type { MoveEntry } from '../api/client'
 import { type Color, gameSocket, type LiveGameState, liveRemaining } from '../lib/socket'
 import { useGameSocket } from '../lib/useGameSocket'
-import { applyUciVisually, type BoardMap, parseFen } from '../lib/chess'
+import { applyUciVisually, type BoardMap, fileOf, parseFen } from '../lib/chess'
 import { playForSan, sounds } from '../lib/sounds'
 
 const other = (c: Color): Color => (c === 'w' ? 'b' : 'w')
@@ -35,10 +35,12 @@ export default function LiveGame() {
     setOptimisticLast(null)
   }, [g?.fen])
 
-  // Sound: play the newest move (either side) as the authoritative position
-  // advances. Tracked per game id so resuming an in-progress game doesn't replay
-  // its whole history. The SAN from the hub carries check/capture/promotion, so
-  // playForSan picks the right knock.
+  // Sound: voice the OPPONENT's newest move as the position advances. Our own
+  // move is played synchronously in onMove (inside the click gesture) — both for
+  // instant feedback and, crucially, to create/resume the AudioContext within a
+  // user gesture (browsers keep it suspended otherwise, so a purely
+  // state-message-driven sound never plays). Tracked per game id so resuming
+  // doesn't replay history. The mover is the side NOT to move now.
   const soundedPly = useRef<{ id: string; ply: number } | null>(null)
   useEffect(() => {
     if (!g) return
@@ -48,8 +50,8 @@ export default function LiveGame() {
       return
     }
     if (g.moves.length > prev.ply) {
-      playForSan(g.moves[g.moves.length - 1].san, false)
       soundedPly.current = { id: g.id, ply: g.moves.length }
+      if (other(g.sideToMove) !== g.color) playForSan(g.moves[g.moves.length - 1].san, false)
     }
   }, [g?.id, g?.moves.length])
 
@@ -77,8 +79,10 @@ export default function LiveGame() {
 
   function onMove(uci: string) {
     if (!g) return
-    setOverride(applyUciVisually(parseFen(g.fen), uci))
+    const before = parseFen(g.fen)
+    setOverride(applyUciVisually(before, uci))
     setOptimisticLast({ from: uci.slice(0, 2), to: uci.slice(2, 4) })
+    playHumanSound(before, uci) // synchronous: instant feedback + unlocks audio within the gesture
     gameSocket.move(uci)
   }
 
@@ -135,6 +139,27 @@ export default function LiveGame() {
             alignSelf: { md: 'center' },
           }}
         >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.75, py: 1, bgcolor: '#23272f', borderBottom: '1px solid var(--line-soft)' }}>
+            <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-dim)' }}>{g.pool}</Typography>
+            <Box
+              sx={{
+                ml: 'auto',
+                px: 1,
+                py: 0.25,
+                borderRadius: 1,
+                fontSize: 10.5,
+                fontWeight: 700,
+                letterSpacing: '0.1em',
+                textTransform: 'uppercase',
+                border: '1px solid',
+                color: g.rated ? 'var(--accent)' : 'var(--text-dim)',
+                bgcolor: g.rated ? 'var(--accent-soft)' : 'transparent',
+                borderColor: g.rated ? 'var(--accent-line)' : 'var(--line)',
+              }}
+            >
+              {g.rated ? 'Rated' : 'Casual'}
+            </Box>
+          </Box>
           <PlayerBar
             name={g.opponent.name}
             rating={g.opponent.anon ? null : g.opponent.rating}
@@ -240,6 +265,18 @@ function PlayerBar({
       </Box>
     </Box>
   )
+}
+
+/** Pick + play the sound for the local player's own move (called synchronously
+ * inside the click gesture, mirroring BotGame, so the AudioContext unlocks). */
+function playHumanSound(board: BoardMap, uci: string) {
+  const from = uci.slice(0, 2)
+  const to = uci.slice(2, 4)
+  const piece = board[from]?.toLowerCase()
+  if (uci.length === 5) sounds.promote()
+  else if (piece === 'k' && Math.abs(fileOf(to) - fileOf(from)) === 2) sounds.castle()
+  else if (board[to] || (piece === 'p' && from[0] !== to[0])) sounds.capture()
+  else sounds.move()
 }
 
 function resultText(g: LiveGameState): string {

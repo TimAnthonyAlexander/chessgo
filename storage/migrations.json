@@ -99,6 +99,123 @@
             "table": "bot_game",
             "operation": "modify_column",
             "warning": null
+        },
+        {
+            "id": "mig_4bfd5729192c",
+            "sql": "CREATE TABLE `game` (\n  `hub_game_id` VARCHAR(36) NOT NULL DEFAULT '',\n  `pool` VARCHAR(255) NOT NULL DEFAULT '',\n  `category` VARCHAR(255) NOT NULL DEFAULT '',\n  `rated` TINYINT(1) NOT NULL DEFAULT 0,\n  `result` VARCHAR(255) NOT NULL DEFAULT '',\n  `reason` VARCHAR(255) NOT NULL DEFAULT '',\n  `white_uid` VARCHAR(36) NOT NULL DEFAULT '',\n  `black_uid` VARCHAR(36) NOT NULL DEFAULT '',\n  `white_name` VARCHAR(255) NOT NULL DEFAULT '',\n  `black_name` VARCHAR(255) NOT NULL DEFAULT '',\n  `white_user_id` VARCHAR(36),\n  `black_user_id` VARCHAR(36),\n  `white_is_bot` TINYINT(1) NOT NULL DEFAULT 0,\n  `black_is_bot` TINYINT(1) NOT NULL DEFAULT 0,\n  `white_rating_before` INT,\n  `white_rating_after` INT,\n  `black_rating_before` INT,\n  `black_rating_after` INT,\n  `ply` INT NOT NULL DEFAULT 0,\n  `moves` TEXT,\n  `sans` TEXT,\n  `id` VARCHAR(36) NOT NULL DEFAULT '',\n  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            "destructive": false,
+            "generated_at": "2026-06-18T11:34:11+00:00",
+            "table": "game",
+            "operation": "create_table",
+            "warning": null
+        },
+        {
+            "id": "mig_64539895a538",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rating_bullet` INT NOT NULL DEFAULT 1500",
+            "destructive": false,
+            "generated_at": "2026-06-18T11:34:11+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_4a363156c5c9",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rating_blitz` INT NOT NULL DEFAULT 1500",
+            "destructive": false,
+            "generated_at": "2026-06-18T11:34:11+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_1fd5b3b16574",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rating_rapid` INT NOT NULL DEFAULT 1500",
+            "destructive": false,
+            "generated_at": "2026-06-18T11:34:11+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_f9ae923fd8ed",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rating_classical` INT NOT NULL DEFAULT 1500",
+            "destructive": false,
+            "generated_at": "2026-06-18T11:34:11+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_e587192d45e3",
+            "sql": "ALTER TABLE `user` ADD COLUMN `games_bullet` INT NOT NULL DEFAULT 0",
+            "destructive": false,
+            "generated_at": "2026-06-18T11:34:11+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_48221fd34508",
+            "sql": "ALTER TABLE `user` ADD COLUMN `games_blitz` INT NOT NULL DEFAULT 0",
+            "destructive": false,
+            "generated_at": "2026-06-18T11:34:11+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_7287dd0de739",
+            "sql": "ALTER TABLE `user` ADD COLUMN `games_rapid` INT NOT NULL DEFAULT 0",
+            "destructive": false,
+            "generated_at": "2026-06-18T11:34:11+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_1a6403f04f9d",
+            "sql": "ALTER TABLE `user` ADD COLUMN `games_classical` INT NOT NULL DEFAULT 0",
+            "destructive": false,
+            "generated_at": "2026-06-18T11:34:11+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_43aa5fdc1658",
+            "sql": "ALTER TABLE `game` ADD UNIQUE KEY `uniq_game_hub_game_id` (`hub_game_id`)",
+            "destructive": false,
+            "generated_at": "2026-06-18T11:34:11+00:00",
+            "table": "game",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_1c0845c2a494",
+            "sql": "ALTER TABLE `game` ADD INDEX `idx_game_white_user_id` (`white_user_id`)",
+            "destructive": false,
+            "generated_at": "2026-06-18T11:34:11+00:00",
+            "table": "game",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_fa8f5a89a829",
+            "sql": "ALTER TABLE `game` ADD INDEX `idx_game_black_user_id` (`black_user_id`)",
+            "destructive": false,
+            "generated_at": "2026-06-18T11:34:11+00:00",
+            "table": "game",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_c648710ffe86",
+            "sql": "ALTER TABLE `game` ADD INDEX `idx_game_category` (`category`)",
+            "destructive": false,
+            "generated_at": "2026-06-18T11:34:11+00:00",
+            "table": "game",
+            "operation": "add_index",
+            "warning": null
         }
     ]
 }

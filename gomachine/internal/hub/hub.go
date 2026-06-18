@@ -60,15 +60,17 @@ func (h *Hub) Stats() (online, games int64) {
 
 // FinishedGame is handed to the persistence hook when a game ends.
 type FinishedGame struct {
-	ID     string
-	Pool   string
-	Rated  bool
-	White  auth.Identity
-	Black  auth.Identity
-	Result string // "1-0" | "0-1" | "1/2-1/2"
-	Reason string
-	Moves  []string
-	SANs   []string
+	ID       string
+	Pool     string
+	Rated    bool
+	White    auth.Identity
+	Black    auth.Identity
+	WhiteBot bool // bot opponents have a non-anon identity (for display) but no account
+	BlackBot bool
+	Result   string // "1-0" | "0-1" | "1/2-1/2"
+	Reason   string
+	Moves    []string
+	SANs     []string
 }
 
 // New creates a Hub authenticating tickets with the given shared secret.
@@ -209,7 +211,7 @@ func (h *Hub) sendMatched(g *game, c *Client, color chess.Color) {
 		"fen":         g.pos.FEN(),
 		"timeControl": map[string]int64{"base": g.tc.Base, "inc": g.tc.Inc},
 		"clock":       map[string]int64{"w": g.clockMs[chess.White], "b": g.clockMs[chess.Black]},
-		"opponent":    map[string]any{"name": opp.Name, "rating": opp.Rating, "anon": opp.Anon},
+		"opponent":    map[string]any{"name": opp.Name, "rating": opp.RatingFor(categoryForPool(g.pool)), "anon": opp.Anon},
 		"legalMoves":  g.legalMoves(),
 	})))
 }
@@ -312,6 +314,7 @@ func (h *Hub) finish(g *game, result, reason string) {
 		h.onFinish(FinishedGame{
 			ID: g.id, Pool: g.pool, Rated: g.rated,
 			White: g.white.id, Black: g.black.id,
+			WhiteBot: g.white.isBot, BlackBot: g.black.isBot,
 			Result: result, Reason: reason, Moves: g.moves, SANs: g.sans,
 		})
 	}
@@ -389,7 +392,7 @@ func (h *Hub) resumeMsg(g *game, color chess.Color) map[string]any {
 		"check":          st.Check,
 		"timeControl":    map[string]int64{"base": g.tc.Base, "inc": g.tc.Inc},
 		"clock":          map[string]int64{"w": g.remainingMs(chess.White), "b": g.remainingMs(chess.Black)},
-		"opponent":       map[string]any{"name": opp.Name, "rating": opp.Rating, "anon": opp.Anon},
+		"opponent":       map[string]any{"name": opp.Name, "rating": opp.RatingFor(categoryForPool(g.pool)), "anon": opp.Anon},
 		"legalMoves":     g.legalMoves(),
 		"moves":          g.moveLog(),
 		"lastMove":       g.lastUci(),

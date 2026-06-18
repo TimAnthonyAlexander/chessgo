@@ -16,6 +16,7 @@ use App\Controllers\BotMoveController;
 use App\Controllers\AnalyzeController;
 use App\Controllers\WsTicketController;
 use App\Controllers\StatsController;
+use App\Controllers\GameResultController;
 use BaseApi\Http\Middleware\RateLimitMiddleware;
 use BaseApi\Http\SessionStartMiddleware;
 use BaseApi\Permissions\PermissionsMiddleware;
@@ -61,8 +62,10 @@ $router->post('/analyze', [
     AnalyzeController::class,
 ]);
 
-// WebSocket ticket for the realtime hub (anonymous = casual-only)
+// WebSocket ticket for the realtime hub. Session is optional: a logged-in user
+// gets an account identity (rated play); anonymous callers get a casual ticket.
 $router->get('/ws-ticket', [
+    SessionStartMiddleware::class,
     RateLimitMiddleware::class => ['limit' => '60/1m'],
     WsTicketController::class,
 ]);
@@ -72,6 +75,9 @@ $router->get('/stats', [
     RateLimitMiddleware::class => ['limit' => '120/1m'],
     StatsController::class,
 ]);
+
+// Internal: the realtime hub persists finished games here (secret-gated, no session)
+$router->post('/internal/games', [GameResultController::class]);
 
 // ================================  
 // Authentication Endpoints

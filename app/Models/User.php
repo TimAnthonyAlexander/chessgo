@@ -18,6 +18,24 @@ class User extends BaseModel
 
     public string $role = 'guest';
 
+    // Per-time-control Elo ratings (Lichess-style categories), with the number of
+    // rated games played in each (drives the provisional K-factor). See EloService.
+    public int $rating_bullet = 1500;
+
+    public int $rating_blitz = 1500;
+
+    public int $rating_rapid = 1500;
+
+    public int $rating_classical = 1500;
+
+    public int $games_bullet = 0;
+
+    public int $games_blitz = 0;
+
+    public int $games_rapid = 0;
+
+    public int $games_classical = 0;
+
     /**
      * Define indexes for this model
      * @var array<string, string>

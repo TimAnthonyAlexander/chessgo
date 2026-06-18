@@ -40,8 +40,8 @@ game lifecycle, persistence, clocks, ratings, and matchmaking.
 | **AI scope (v1)** | Strong classical engine | Bitboards/magic, negamax+αβ, ID, TT, ordering, quiescence, tapered PeSTO eval. Target ~1800+ Elo. No Stockfish/NNUE. |
 | **Real-time** | **WebSocket via a Go hub** | Dedicated realtime service (`gomachine hub`, §8); 30s ping heartbeat + client auto-reconnect (Cloudflare-ready). _Supersedes the earlier "polling first" call (SSE is unreliable behind Cloudflare)._ |
 | **Frontend stack** | React + Vite + TypeScript + MUI + Lucide Icons + Bun + React-Router | Consumes BaseAPI's generated `types.ts`. |
-| **Accounts** | Anonymous **casual** + accounts for **rated** (Lichess model) | Anonymous players (stable per-browser id) play casual/unrated; rated needs a registered account. Email/pw auth scaffolded in BaseAPI; frontend login still TODO. |
-| **Ratings** | Classic **Elo** | For rated games (accounts). Persistence + Elo update is the next phase. |
+| **Accounts** | Anonymous **casual** + accounts for **rated** (Lichess model) | Anonymous players (stable per-browser id) play casual/unrated; rated needs a registered account. Email/pw auth + **frontend signup/login (session cookies)** built; the ws-ticket carries the account identity + per-category ratings. |
+| **Ratings** | **Elo, per time-control category** (bullet/blitz/rapid/classical) | For rated games (both accounts). Provisional K=40 for the first 20 games per category, then K=20; start 1500. Finished games persisted by the hub via `POST /internal/games`; Elo applied there. |
 | **Clocks** | **Real server-authoritative clocks** | Bullet/Blitz/Rapid; the hub ticks clocks and flags, applying the FIDE 6.9 timeout-vs-material rule. _Supersedes the earlier "untimed first" call (the lobby commits to timed presets)._ |
 | **AI difficulty** | **Levels 0–10** | See §6. Level 10 = max strength + slightly longer thinking; level 0 = short thinking + small blunder probability. Monotonic strength curve. |
 | **Database** | **MySQL** | Local dev user `chessgo`@`localhost`. |
@@ -543,8 +543,10 @@ chessgo/
 - [x] **Lobby** — quick-pairing grid, action buttons, optimistic presentation.
 - [x] **Live multiplayer (queue)** — Go hub, WebSocket, server clocks, ticket auth,
       reconnect/resume + presence, frontend live game view.
-- [ ] **Persistence + Elo + accounts** — store finished games, update ratings,
-      frontend login (makes rated real; lays groundwork for restart-durable resume).
+- [x] **Persistence + Elo + accounts** — `game` table + per-category `User`
+      ratings; hub persists finished games via `POST /internal/games` (secret-gated)
+      and applies provisional-K Elo for rated games; frontend signup/login (session
+      cookies), header user menu with per-category ratings, rated/casual badge.
 - [ ] **Hub-restart durability** — persist live games so resume survives a restart.
 - [ ] **More lobby features** — Challenge-a-friend (private link), Custom games,
       correspondence; rating-proximity matchmaking.
