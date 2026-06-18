@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use BaseApi\App;
+
 /**
  * Thin HTTP client for the realtime hub's public stats endpoint. The hub owns
  * the live lobby counts (connected clients, active games); this reads them for
@@ -13,7 +15,7 @@ class HubClient
 
     public function __construct()
     {
-        $this->baseUrl = rtrim($_ENV['HUB_URL'] ?? 'http://127.0.0.1:6467', '/');
+        $this->baseUrl = rtrim((string) (App::config('gomachine.hub_url') ?? 'http://127.0.0.1:6467'), '/');
     }
 
     /**

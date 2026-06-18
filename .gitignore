@@ -7,3 +7,8 @@ storage/logs/*.log
 var/cache/rector
 .phpunit.cache
 frontend/node_modules
+
+# Build artifacts (built on deploy) + per-host secret (never commit)
+/frontend/dist/
+/frontend/tsconfig.tsbuildinfo
+.env.hub

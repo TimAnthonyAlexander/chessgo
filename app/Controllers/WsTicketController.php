@@ -2,6 +2,7 @@
 
 namespace App\Controllers;
 
+use BaseApi\App;
 use BaseApi\Controllers\Controller;
 use BaseApi\Http\JsonResponse;
 use App\Models\User;
@@ -63,7 +64,7 @@ class WsTicketController extends Controller
 
         return JsonResponse::ok([
             'ticket' => $this->tickets->mint($identity),
-            'wsUrl' => $_ENV['WS_PUBLIC_URL'] ?? 'ws://127.0.0.1:6467/ws',
+            'wsUrl' => (string) (App::config('gomachine.ws_public_url') ?? 'ws://127.0.0.1:6467/ws'),
             'identity' => [
                 'name' => $identity['name'],
                 'anon' => $identity['anon'],

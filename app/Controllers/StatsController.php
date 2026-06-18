@@ -2,6 +2,7 @@
 
 namespace App\Controllers;
 
+use BaseApi\App;
 use BaseApi\Controllers\Controller;
 use BaseApi\Http\JsonResponse;
 use App\Services\HubClient;
@@ -30,7 +31,7 @@ class StatsController extends Controller
     {
         $stats = $this->hub->stats();
 
-        $base = (int)($_ENV['STATS_PADDING'] ?? 0);
+        $base = (int) (App::config('gomachine.stats_padding') ?? 0);
         if ($base > 0) {
             $t = (float) time();
 

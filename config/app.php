@@ -68,6 +68,31 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | gomachine (engine + realtime hub) — chessgo
+    |--------------------------------------------------------------------------
+    |
+    | Resolved HERE at boot (where $_ENV is populated) and read everywhere via
+    | App::config('gomachine.*'). Reading $_ENV directly from controllers/
+    | services is unreliable under PHP-FPM: php.ini variables_order has no "E",
+    | so the $_ENV superglobal is empty on every request after the FIRST one a
+    | worker handles (App::boot()'s Dotenv load is guarded by a static flag that
+    | persists in the long-lived worker). App::config is captured at boot into a
+    | static and therefore always returns the right value. Mirrors how brandinio
+    | exposes its custom env (App::config('kling.*'), etc.).
+    |
+    */
+    'gomachine' => [
+        'engine_url'        => $_ENV['ENGINE_URL'] ?? 'http://127.0.0.1:6466',
+        'engine_timeout_ms' => (int)($_ENV['ENGINE_TIMEOUT_MS'] ?? 8000),
+        'hub_url'           => $_ENV['HUB_URL'] ?? 'http://127.0.0.1:6467',
+        'ws_public_url'     => $_ENV['WS_PUBLIC_URL'] ?? 'ws://127.0.0.1:6467/ws',
+        'ws_ticket_secret'  => $_ENV['WS_TICKET_SECRET'] ?? 'dev-insecure-secret',
+        'ws_ticket_ttl'     => (int)($_ENV['WS_TICKET_TTL'] ?? 60),
+        'stats_padding'     => (int)($_ENV['STATS_PADDING'] ?? 0),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Service Providers
     |--------------------------------------------------------------------------
     |

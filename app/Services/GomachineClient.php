@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use BaseApi\App;
 use RuntimeException;
 
 /**
@@ -18,9 +19,9 @@ class GomachineClient
 
     public function __construct()
     {
-        $this->baseUrl = rtrim($_ENV['ENGINE_URL'] ?? 'http://127.0.0.1:6466', '/');
+        $this->baseUrl = rtrim((string) (App::config('gomachine.engine_url') ?? 'http://127.0.0.1:6466'), '/');
         // Engine think time can reach ~2s at level 10; allow headroom.
-        $this->timeoutMs = (int)($_ENV['ENGINE_TIMEOUT_MS'] ?? 8000);
+        $this->timeoutMs = (int) (App::config('gomachine.engine_timeout_ms') ?? 8000);
     }
 
     /**

@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use BaseApi\App;
 use JsonException;
 
 /**
@@ -22,8 +23,8 @@ class WsTicketService
 
     public function __construct()
     {
-        $this->secret = $_ENV['WS_TICKET_SECRET'] ?? 'dev-insecure-secret';
-        $this->ttl = (int)($_ENV['WS_TICKET_TTL'] ?? 60);
+        $this->secret = (string) (App::config('gomachine.ws_ticket_secret') ?? 'dev-insecure-secret');
+        $this->ttl = (int) (App::config('gomachine.ws_ticket_ttl') ?? 60);
     }
 
     /**

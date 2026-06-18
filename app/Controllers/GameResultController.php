@@ -2,6 +2,7 @@
 
 namespace App\Controllers;
 
+use BaseApi\App;
 use BaseApi\Controllers\Controller;
 use BaseApi\Http\JsonResponse;
 use App\Models\Game;
@@ -103,7 +104,7 @@ class GameResultController extends Controller
 
     private function authorized(): bool
     {
-        $secret = (string)($_ENV['WS_TICKET_SECRET'] ?? '');
+        $secret = (string) (App::config('gomachine.ws_ticket_secret') ?? '');
         if ($secret === '') {
             return false;
         }
