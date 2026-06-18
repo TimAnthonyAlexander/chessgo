@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { type ReactNode, useEffect, useRef } from 'react'
 import { Box } from '@mui/material'
 import type { Judgment, Tree, TreeNode } from '../lib/analysisTree'
 import { sanToGlyph } from '../lib/chess'
@@ -64,6 +64,14 @@ export default function MoveTree({ tree, currentId, onSelect }: Props) {
       pending = { no, black: node }
     }
   }
+
+  // Keep the active node's row in view as the line advances (auto-play / loading a
+  // game), so the latest move doesn't sit below the scroll cutoff. `block: 'nearest'`
+  // only scrolls the move container, never the page.
+  const activeRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [currentId])
 
   let cur: TreeNode | undefined = root
   while (cur && cur.children.length > 0) {
@@ -153,7 +161,12 @@ export default function MoveTree({ tree, currentId, onSelect }: Props) {
   }
 
   return (
-    <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+    // The scroll area is absolutely positioned on md so its content height never
+    // grows the surrounding grid row — the panel then tracks the board's height and
+    // moves scroll inside it. On xs the outer box scrolls directly (parent is
+    // already height-bounded), so the layout there is unchanged.
+    <Box sx={{ flex: 1, minHeight: 0, position: 'relative', overflowY: { xs: 'auto', md: 'visible' } }}>
+      <Box sx={{ position: { md: 'absolute' }, inset: { md: 0 }, overflowY: { md: 'auto' } }}>
       {rows.length === 0 ? (
         <Box sx={{ color: 'var(--muted)', fontSize: 13, fontStyle: 'italic', px: 1.5, py: 1.25 }}>
           Make a move to start exploring.
@@ -161,7 +174,11 @@ export default function MoveTree({ tree, currentId, onSelect }: Props) {
       ) : (
         rows.map((r, idx) =>
           r.kind === 'moves' ? (
-            <Box key={idx} sx={{ display: 'grid', gridTemplateColumns: `${NUM_COL}px 1fr 1fr` }}>
+            <Box
+              key={idx}
+              ref={r.white?.id === currentId || r.black?.id === currentId ? activeRef : undefined}
+              sx={{ display: 'grid', gridTemplateColumns: `${NUM_COL}px 1fr 1fr` }}
+            >
               <NumCell no={r.no} />
               <Cell node={r.white} whiteCol currentId={currentId} onSelect={onSelect} />
               <Cell node={r.black} currentId={currentId} onSelect={onSelect} />
@@ -184,6 +201,7 @@ export default function MoveTree({ tree, currentId, onSelect }: Props) {
           ),
         )
       )}
+      </Box>
     </Box>
   )
 }

@@ -35,9 +35,12 @@ type botSnapshot struct {
 
 // EnableBotFill turns on bot backfill: a player waiting longer than `delay` with
 // no human match is paired with an engine opponent at `level`. `workers` pooled
-// engines (each `ttMB` of transposition table) bound concurrent bot thinking.
-// Call before Run so the configuration is visible to the Run goroutine.
-func (h *Hub) EnableBotFill(level int, delay time.Duration, workers, ttMB int) {
+// engines (each `ttMB` of transposition table) bound concurrent bot thinking;
+// each engine runs `searchThreads` Lazy SMP workers per move (only the top,
+// full-strength levels are time-bounded, so SMP helps there — weakened levels
+// rank moves serially). Keep workers*searchThreads under the host's cores so bot
+// search can't starve the hub goroutine. Call before Run.
+func (h *Hub) EnableBotFill(level int, delay time.Duration, workers, ttMB, searchThreads int) {
 	if workers < 1 {
 		workers = 1
 	}
@@ -46,7 +49,7 @@ func (h *Hub) EnableBotFill(level int, delay time.Duration, workers, ttMB int) {
 	h.botDelay = delay
 	h.engines = make(chan *engineHandle, workers)
 	for range workers {
-		h.engines <- engine.New(ttMB)
+		h.engines <- engine.NewWithThreads(ttMB, searchThreads)
 	}
 }
 

@@ -1,7 +1,8 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
-import { Alert, Box, Button, CircularProgress, MenuItem, Select, Typography } from '@mui/material'
-import { CheckCircle2, ChevronRight, RotateCcw, XCircle } from 'lucide-react'
+import { Box, CircularProgress, MenuItem, Select, Typography } from '@mui/material'
+import { CheckCircle2, ChevronRight, RotateCcw, Target, XCircle } from 'lucide-react'
 import Board from '../components/Board'
+import { ActionBtn, ErrorBanner } from '../components/PanelUI'
 import {
   type Color,
   nextPuzzle,
@@ -38,6 +39,7 @@ const THEMES: { value: string; label: string }[] = [
   { value: 'advantage', label: 'Advantage' },
 ]
 
+const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 const splitUci = (uci: string): Mark => ({ from: uci.slice(0, 2), to: uci.slice(2, 4) })
 
 export default function Puzzles() {
@@ -179,72 +181,141 @@ export default function Puzzles() {
     <Box
       sx={{
         flex: 1,
-        display: 'grid',
-        gridTemplateColumns: { xs: '1fr', lg: '1fr auto 1fr' },
-        alignItems: 'center',
-        justifyItems: 'center',
-        columnGap: { lg: 4 },
-        rowGap: 3,
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: { xs: 'flex-start', md: 'center' },
         px: { xs: 2, md: 3 },
-        py: { xs: 3, lg: 2 },
+        py: { xs: 3, md: 2 },
       }}
     >
-      {/* Left — heading + theme filter (desktop) */}
-      <Box sx={{ display: { xs: 'none', lg: 'block' }, justifySelf: 'end', width: '100%', maxWidth: 290 }}>
-        <Box sx={{ bgcolor: '#1b1e24', border: '1px solid var(--line)', borderRadius: 2.5, p: 2.5 }}>
-          <Typography sx={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 22, mb: 0.5 }}>
-            Puzzles
-          </Typography>
-          <Typography sx={{ fontSize: 13, color: 'var(--muted)', mb: 2 }}>
-            Find the best move. Puzzles are matched to your rating.
-          </Typography>
-          <Label>Theme</Label>
-          <ThemeSelect value={theme} onChange={onThemeChange} />
-        </Box>
-      </Box>
-
-      {/* Center — board */}
       <Box
         sx={{
-          width: { xs: 'min(94vw, 64vh)', lg: 'min(calc(100vh - 100px), calc(100vw - 780px), 820px)' },
+          display: 'grid',
+          // Same board sizing as the other pages, but Bot/Analysis put a ~46px
+          // EvalBar (38px) + gap (8px) beside the board, shrinking it that much.
+          // Puzzles has no eval bar, so trim the board column by 46px to match.
+          gridTemplateColumns: {
+            xs: '1fr',
+            md: '320px min(calc(100vh - 166px), calc(100vw - 798px), 834px) 320px',
+          },
+          columnGap: { md: 4 },
+          rowGap: 2.5,
+          alignItems: { xs: 'center', md: 'stretch' },
+          justifyContent: 'center',
+          width: { xs: '100%', md: 'fit-content' },
+          maxWidth: '100%',
+          mx: 'auto',
         }}
       >
-        <Board
-          fen={displayFen}
-          orientation={orientation}
-          sideToMove={orientation}
-          legalMoves={interactive ? legal : []}
-          lastMove={lastMove}
-          inCheck={false}
-          interactive={interactive}
-          onMove={onMove}
-          {...(override ? { overrideBoard: override } : {})}
-        />
-      </Box>
+        {/* Left — about + theme filter (desktop) */}
+        <Box sx={{ display: { xs: 'none', md: 'block' }, justifySelf: 'end', alignSelf: 'start', width: '100%' }}>
+          <InfoCard user={user ? { rating: user.rating_puzzle, games: user.games_puzzle } : null} theme={theme} onThemeChange={onThemeChange} />
+        </Box>
 
-      {/* Right — status / controls */}
-      <Box sx={{ justifySelf: { lg: 'start' }, width: '100%', maxWidth: { xs: 'min(94vw, 64vh)', lg: 320 } }}>
-        <StatusCard
-          phase={phase}
-          orientation={orientation}
-          puzzleRating={data?.rating ?? null}
-          result={result}
-          user={user ? { rating: user.rating_puzzle, games: user.games_puzzle } : null}
-          theme={theme}
-          onThemeChange={onThemeChange}
-          onNext={() => void load(theme)}
-        />
-        {error && (
-          <Alert severity="error" variant="outlined" sx={{ mt: 2, fontSize: 13 }}>
-            {error}
-          </Alert>
-        )}
+        {/* Center — board, top-aligned to line up with the side cards. The xs width
+            trims the same ~34px (26px eval + gap) the other pages lose on mobile. */}
+        <Box sx={{ alignSelf: 'start', width: { xs: 'calc(min(94vw, 64vh) - 34px)', md: '100%' } }}>
+          <Board
+            fen={displayFen}
+            orientation={orientation}
+            sideToMove={orientation}
+            legalMoves={interactive ? legal : []}
+            lastMove={lastMove}
+            inCheck={false}
+            interactive={interactive}
+            onMove={onMove}
+            {...(override ? { overrideBoard: override } : {})}
+          />
+        </Box>
+
+        {/* Right — status / controls */}
+        <Box
+          sx={{
+            justifySelf: { md: 'start' },
+            alignSelf: 'start',
+            width: '100%',
+            maxWidth: { xs: 'min(94vw, 64vh)', md: 'none' },
+          }}
+        >
+          <StatusCard
+            phase={phase}
+            orientation={orientation}
+            puzzleRating={data?.rating ?? null}
+            result={result}
+            user={user ? { rating: user.rating_puzzle, games: user.games_puzzle } : null}
+            theme={theme}
+            onThemeChange={onThemeChange}
+            onNext={() => void load(theme)}
+          />
+          {error && <ErrorBanner sx={{ mx: 0, mt: 1.5 }}>{error}</ErrorBanner>}
+        </Box>
       </Box>
     </Box>
   )
 }
 
-const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
+function InfoCard({
+  user,
+  theme,
+  onThemeChange,
+}: {
+  user: { rating: number; games: number } | null
+  theme: string
+  onThemeChange: (t: string) => void
+}) {
+  return (
+    <Box
+      sx={{
+        bgcolor: 'var(--surface)',
+        border: '1px solid var(--line-soft)',
+        borderRadius: '16px',
+        p: 2.5,
+        boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+      }}
+    >
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
+        <Box
+          sx={{
+            width: 34,
+            height: 34,
+            borderRadius: '10px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            bgcolor: 'var(--accent-soft)',
+            border: '1px solid var(--accent-line)',
+            color: 'var(--accent)',
+          }}
+        >
+          <Target size={18} />
+        </Box>
+        <Typography sx={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 22 }}>Puzzles</Typography>
+      </Box>
+      <Typography sx={{ fontSize: 13, color: 'var(--muted)', mt: 1.25 }}>
+        Find the best move. Each puzzle is matched to your rating.
+      </Typography>
+
+      <Box sx={{ borderTop: '1px solid var(--line-soft)', mt: 2.25, pt: 2.25 }}>
+        <Label>Your puzzle rating</Label>
+        {user ? (
+          <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
+            <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 30, fontWeight: 700, color: 'var(--accent)', lineHeight: 1 }}>
+              {user.rating}
+            </Typography>
+            <Typography sx={{ fontSize: 13, color: 'var(--muted)' }}>· {user.games} solved</Typography>
+          </Box>
+        ) : (
+          <Typography sx={{ fontSize: 13, color: 'var(--text-dim)' }}>Log in to track your rating.</Typography>
+        )}
+      </Box>
+
+      <Box sx={{ borderTop: '1px solid var(--line-soft)', mt: 2.25, pt: 2.25 }}>
+        <Label>Theme</Label>
+        <ThemeSelect value={theme} onChange={onThemeChange} />
+      </Box>
+    </Box>
+  )
+}
 
 function StatusCard({
   phase,
@@ -270,9 +341,17 @@ function StatusCard({
   const toMove = orientation === 'w' ? 'White' : 'Black'
 
   return (
-    <Box sx={{ bgcolor: '#1b1e24', border: '1px solid var(--line)', borderRadius: 2.5, overflow: 'hidden' }}>
+    <Box
+      sx={{
+        bgcolor: 'var(--surface)',
+        border: '1px solid var(--line-soft)',
+        borderRadius: '16px',
+        overflow: 'hidden',
+        boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+      }}
+    >
       {/* Headline */}
-      <Box sx={{ px: 2.25, py: 2 }}>
+      <Box sx={{ px: 2.25, py: 2.25 }}>
         {phase === 'loading' && (
           <Row>
             <CircularProgress size={16} sx={{ color: 'var(--muted)' }} />
@@ -286,7 +365,7 @@ function StatusCard({
         )}
         {(phase === 'intro' || phase === 'solving' || phase === 'checking') && (
           <>
-            <Typography sx={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19, color: 'var(--text)' }}>
+            <Typography sx={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 20, color: 'var(--text)' }}>
               {toMove} to move
             </Typography>
             <Typography sx={{ fontSize: 13.5, color: 'var(--muted)', mt: 0.25 }}>
@@ -296,9 +375,9 @@ function StatusCard({
         )}
         {phase === 'solved' && (
           <Row>
-            <CheckCircle2 size={22} color="#7bb661" />
+            <CheckCircle2 size={24} color="#7bb661" />
             <Box>
-              <Typography sx={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19, color: '#7bb661' }}>
+              <Typography sx={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 20, color: '#7bb661' }}>
                 Solved!
               </Typography>
               {puzzleRating != null && (
@@ -309,9 +388,9 @@ function StatusCard({
         )}
         {phase === 'failed' && (
           <Row>
-            <XCircle size={22} color="#e0796b" />
+            <XCircle size={24} color="#e0796b" />
             <Box>
-              <Typography sx={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19, color: '#e0796b' }}>
+              <Typography sx={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 20, color: '#e0796b' }}>
                 Incorrect
               </Typography>
               {puzzleRating != null && (
@@ -322,48 +401,62 @@ function StatusCard({
         )}
 
         {terminal && delta != null && (
-          <Typography sx={{ mt: 1.25, fontFamily: 'var(--font-mono)', fontSize: 13.5, color: delta >= 0 ? '#7bb661' : '#e0796b' }}>
-            Puzzle rating {result?.rating?.value} ({delta >= 0 ? '+' : ''}
+          <Typography
+            sx={{ mt: 1.5, fontFamily: 'var(--font-mono)', fontSize: 13.5, color: delta >= 0 ? '#7bb661' : '#e0796b' }}
+          >
+            Your rating {result?.rating?.value} ({delta >= 0 ? '+' : ''}
             {delta})
           </Typography>
         )}
         {terminal && result?.themes && result.themes.length > 0 && (
-          <Typography sx={{ mt: 0.75, fontSize: 12, color: 'var(--muted)' }}>
-            {result.themes.slice(0, 6).join(' · ')}
-          </Typography>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.6, mt: 1.25 }}>
+            {result.themes.slice(0, 6).map((t) => (
+              <Box
+                key={t}
+                sx={{
+                  px: 0.85,
+                  py: 0.3,
+                  borderRadius: '6px',
+                  fontSize: 11,
+                  color: 'var(--text-dim)',
+                  bgcolor: 'var(--surface-2)',
+                  border: '1px solid var(--line)',
+                }}
+              >
+                {t}
+              </Box>
+            ))}
+          </Box>
         )}
       </Box>
 
-      {/* Next */}
-      <Box sx={{ px: 2.25, pb: 2, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
-        <Button
-          variant="contained"
+      {/* Controls */}
+      <Box sx={{ px: 2.25, pb: 2.25, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+        <ActionBtn
+          tone={terminal ? 'primary' : 'neutral'}
+          icon={terminal ? <ChevronRight size={16} /> : <RotateCcw size={15} />}
+          label={terminal ? 'Next puzzle' : 'Skip'}
           onClick={onNext}
-          endIcon={phase === 'solved' || phase === 'failed' ? <ChevronRight size={16} /> : <RotateCcw size={15} />}
-          sx={{ alignSelf: 'stretch' }}
-        >
-          {terminal ? 'Next puzzle' : 'Skip'}
-        </Button>
+        />
 
-        {/* Theme filter (always available; mirrors the desktop panel for mobile) */}
-        <Box sx={{ display: { xs: 'block', lg: 'none' } }}>
+        {/* Theme + rating mirror the desktop panel for mobile (where it's hidden). */}
+        <Box sx={{ display: { xs: 'block', md: 'none' } }}>
           <Label>Theme</Label>
           <ThemeSelect value={theme} onChange={onThemeChange} />
+          <Typography sx={{ fontSize: 12.5, color: 'var(--muted)', mt: 1.5 }}>
+            {user ? (
+              <>
+                Your rating:{' '}
+                <Box component="span" sx={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>
+                  {user.rating}
+                </Box>{' '}
+                · {user.games} solved
+              </>
+            ) : (
+              'Log in to track your puzzle rating.'
+            )}
+          </Typography>
         </Box>
-
-        {user ? (
-          <Typography sx={{ fontSize: 12.5, color: 'var(--muted)', mt: 0.5 }}>
-            Your puzzle rating:{' '}
-            <Box component="span" sx={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>
-              {user.rating}
-            </Box>{' '}
-            · {user.games} solved
-          </Typography>
-        ) : (
-          <Typography sx={{ fontSize: 12.5, color: 'var(--muted)', mt: 0.5 }}>
-            Log in to track your puzzle rating.
-          </Typography>
-        )}
       </Box>
     </Box>
   )
@@ -380,11 +473,16 @@ function ThemeSelect({ value, onChange }: { value: string; onChange: (v: string)
       sx={{
         color: 'var(--text)',
         fontSize: 14,
+        bgcolor: 'var(--surface-2)',
+        borderRadius: '10px',
         '.MuiOutlinedInput-notchedOutline': { borderColor: 'var(--line)' },
         '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--accent-line)' },
+        '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--accent)' },
         '.MuiSvgIcon-root': { color: 'var(--text-dim)' },
       }}
-      MenuProps={{ slotProps: { paper: { sx: { bgcolor: 'var(--surface)', border: '1px solid var(--line)' } } } }}
+      MenuProps={{
+        slotProps: { paper: { sx: { bgcolor: 'var(--surface)', border: '1px solid var(--line)', borderRadius: '10px', mt: 0.5 } } },
+      }}
     >
       {THEMES.map((t) => (
         <MenuItem key={t.value} value={t.value} sx={{ fontSize: 13.5 }}>

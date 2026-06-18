@@ -16,21 +16,40 @@ import (
 // Engine wraps a Searcher (which owns the transposition table). It is safe to
 // reuse across positions but NOT safe for concurrent searches — use one Engine
 // per worker, or guard with a mutex (the HTTP server pools them).
+//
+// threads is the Lazy SMP worker count for full-strength searches (BestMove's
+// full-strength branch and SearchDirect). threads<=1 routes to the serial path,
+// which is byte-identical to single-threaded search; >1 trades cores for depth at
+// a fixed time budget, so it only helps under a MoveTime limit. Weakened levels
+// (which rank root moves at shallow depth) always run serial.
 type Engine struct {
 	searcher *search.Searcher
+	threads  int
 }
 
-// New creates a full-strength Engine with a transposition table of ttSizeMB
-// megabytes.
+// New creates a full-strength, single-threaded Engine with a transposition table
+// of ttSizeMB megabytes.
 func New(ttSizeMB int) *Engine {
-	return &Engine{searcher: search.New(ttSizeMB)}
+	return NewWithThreads(ttSizeMB, 1)
+}
+
+// NewWithThreads creates a full-strength Engine whose full-strength searches run
+// across `threads` Lazy SMP workers (sharing one transposition table). threads<=1
+// is single-threaded (byte-identical to serial). Use >1 only when searches are
+// time-bounded; size it against the host's cores and any per-request pooling so
+// the box isn't oversubscribed.
+func NewWithThreads(ttSizeMB, threads int) *Engine {
+	if threads < 1 {
+		threads = 1
+	}
+	return &Engine{searcher: search.New(ttSizeMB), threads: threads}
 }
 
 // NewWithParams creates an Engine whose search is configured by params. The
 // self-play harness uses this to instantiate the "old" and "new" engines from
 // one binary (see internal/bench).
 func NewWithParams(ttSizeMB int, params search.Params) *Engine {
-	return &Engine{searcher: search.NewWithParams(ttSizeMB, params)}
+	return &Engine{searcher: search.NewWithParams(ttSizeMB, params), threads: 1}
 }
 
 // NewGame clears the transposition table so a prior game can't bias the next.
@@ -71,9 +90,10 @@ func (e *Engine) BestMove(pos *chess.Position, level int, history []uint64) Best
 	cfg := configForLevel(level)
 	limits := search.Limits{Depth: cfg.Depth, MoveTime: cfg.MoveTime}
 
-	// Full-strength levels: just return the search's best move.
+	// Full-strength levels: just return the search's best move (Lazy SMP across
+	// e.threads workers; threads<=1 is the serial path).
 	if cfg.NoiseCp == 0 && cfg.Blunder == 0 {
-		r := e.searcher.Search(pos, limits, history)
+		r := e.searcher.SearchParallel(pos, limits, history, e.threads)
 		return BestResult{
 			Move: r.BestMove, Score: r.Score, Depth: r.Depth,
 			Nodes: r.Nodes, PV: r.PV, MateIn: r.MateIn, Level: level,
@@ -125,7 +145,7 @@ func (e *Engine) BestMove(pos *chess.Position, level int, history []uint64) Best
 // SearchDirect runs a full-strength search to an explicit depth and/or time
 // budget (depth<=0 means unbounded depth, relying on the time budget).
 func (e *Engine) SearchDirect(pos *chess.Position, depth int, movetime time.Duration, history []uint64) BestResult {
-	r := e.searcher.Search(pos, search.Limits{Depth: depth, MoveTime: movetime}, history)
+	r := e.searcher.SearchParallel(pos, search.Limits{Depth: depth, MoveTime: movetime}, history, e.threads)
 	return BestResult{
 		Move: r.BestMove, Score: r.Score, Depth: r.Depth,
 		Nodes: r.Nodes, PV: r.PV, MateIn: r.MateIn, Level: -1,

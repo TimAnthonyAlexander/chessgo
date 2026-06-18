@@ -39,6 +39,7 @@ func cmdHub(args []string) {
 	bots := fs.Bool("bots", true, "offer a bot opponent to a player waiting longer than -bot-delay")
 	botLevel := fs.Int("bot-level", 6, "fallback bot level (0..10) for anonymous players; rated players get a bot matched to their Elo")
 	botDelay := fs.Duration("bot-delay", 15*time.Second, "wait before a bot opponent is offered")
+	botSearchThreads := fs.Int("bot-search-threads", 1, "Lazy SMP threads per bot move (helps only the time-bounded top levels; keep workers*threads <= cores)")
 	_ = fs.Parse(args)
 
 	secret := os.Getenv("WS_TICKET_SECRET")
@@ -53,8 +54,8 @@ func cmdHub(args []string) {
 		if workers < 1 {
 			workers = 1
 		}
-		h.EnableBotFill(*botLevel, *botDelay, workers, 16)
-		fmt.Printf("bot backfill on: Elo-matched (fallback level %d) after %s (%d search workers)\n", *botLevel, *botDelay, workers)
+		h.EnableBotFill(*botLevel, *botDelay, workers, 16, *botSearchThreads)
+		fmt.Printf("bot backfill on: Elo-matched (fallback level %d) after %s (%d search workers, %d SMP threads/move)\n", *botLevel, *botDelay, workers, *botSearchThreads)
 	}
 	go h.Run()
 

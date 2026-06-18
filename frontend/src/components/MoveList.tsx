@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { Box } from '@mui/material'
 import type { MoveEntry } from '../api/client'
 import { sanToGlyph } from '../lib/chess'
@@ -31,15 +32,26 @@ export default function MoveList({
   }
   const padCount = fill ? 0 : Math.max(0, visibleRows - rows.length)
 
-  return (
-    <Box sx={fill ? { flex: 1, minHeight: 0, overflowY: 'auto' } : { height: visibleRows * ROW_H, overflowY: 'auto' }}>
-      {rows.map((r) => (
-        <Box key={r.no} sx={{ display: 'grid', gridTemplateColumns: '32px 1fr 1fr' }}>
-          <RowNumber no={r.no} />
-          <Cell entry={r.white} whiteCol current={currentPly} onSelect={onSelectPly} />
-          <Cell entry={r.black} current={currentPly} onSelect={onSelectPly} />
-        </Box>
-      ))}
+  // Keep the active (latest-played / selected) row in view as moves come in, so the
+  // newest moves don't disappear below the scroll cutoff. `block: 'nearest'` only
+  // scrolls the move container, never the page.
+  const activeRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [currentPly, moves.length])
+
+  const rowEls = (
+    <>
+      {rows.map((r) => {
+        const isActive = r.white?.ply === currentPly || r.black?.ply === currentPly
+        return (
+          <Box key={r.no} ref={isActive ? activeRef : undefined} sx={{ display: 'grid', gridTemplateColumns: '32px 1fr 1fr' }}>
+            <RowNumber no={r.no} />
+            <Cell entry={r.white} whiteCol current={currentPly} onSelect={onSelectPly} />
+            <Cell entry={r.black} current={currentPly} onSelect={onSelectPly} />
+          </Box>
+        )
+      })}
       {Array.from({ length: padCount }, (_, k) => (
         <Box key={`pad-${k}`} sx={{ display: 'grid', gridTemplateColumns: '32px 1fr 1fr' }}>
           <RowNumber />
@@ -47,6 +59,20 @@ export default function MoveList({
           <Cell current={currentPly} onSelect={onSelectPly} />
         </Box>
       ))}
+    </>
+  )
+
+  // Fixed mode has a definite height, so it scrolls directly. Fill mode grows to
+  // fill a full-height panel: on md the scroll area is absolutely positioned so its
+  // content never grows the surrounding grid row (the panel then matches the board's
+  // height and moves scroll inside). On xs the parent is already height-bounded, so
+  // the outer box scrolls directly and the layout there is unchanged.
+  if (!fill) {
+    return <Box sx={{ height: visibleRows * ROW_H, overflowY: 'auto' }}>{rowEls}</Box>
+  }
+  return (
+    <Box sx={{ flex: 1, minHeight: 0, position: 'relative', overflowY: { xs: 'auto', md: 'visible' } }}>
+      <Box sx={{ position: { md: 'absolute' }, inset: { md: 0 }, overflowY: { md: 'auto' } }}>{rowEls}</Box>
     </Box>
   )
 }

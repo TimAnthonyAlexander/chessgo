@@ -19,14 +19,18 @@ type Server struct {
 	pool chan *engine.Engine
 }
 
-// New builds a Server with `workers` engines of ttSizeMB megabytes each.
-func New(workers, ttSizeMB int) *Server {
+// New builds a Server with `workers` engines of ttSizeMB megabytes each, every
+// full-strength search running across `searchThreads` Lazy SMP workers. The pool
+// (workers) parallelizes across concurrent requests; searchThreads parallelizes
+// within one search — keep workers*searchThreads at/under the host's cores so a
+// burst of analyses can't oversubscribe the box. searchThreads<=1 is serial.
+func New(workers, ttSizeMB, searchThreads int) *Server {
 	if workers < 1 {
 		workers = 1
 	}
 	pool := make(chan *engine.Engine, workers)
 	for i := 0; i < workers; i++ {
-		pool <- engine.New(ttSizeMB)
+		pool <- engine.NewWithThreads(ttSizeMB, searchThreads)
 	}
 	return &Server{pool: pool}
 }

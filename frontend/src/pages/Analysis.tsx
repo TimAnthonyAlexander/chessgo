@@ -616,11 +616,10 @@ function EngineLine({
               flex: 1,
               minWidth: 0,
               fontSize: 13.5,
-              lineHeight: '23px',
+              lineHeight: '32px',
+              whiteSpace: 'nowrap',
               overflow: 'hidden',
-              display: '-webkit-box',
-              WebkitLineClamp: 3,
-              WebkitBoxOrient: 'vertical',
+              textOverflow: 'ellipsis',
             }}
           >
             {tokens.length === 0 ? (
