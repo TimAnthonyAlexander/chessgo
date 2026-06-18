@@ -315,6 +315,114 @@
             "table": "puzzle_attempt",
             "operation": "add_fk",
             "warning": null
+        },
+        {
+            "id": "mig_e731641db9a9",
+            "sql": "ALTER TABLE `puzzle_attempt` ADD COLUMN `puzzle_id` VARCHAR(36) NOT NULL DEFAULT ''",
+            "destructive": false,
+            "generated_at": "2026-06-18T14:03:30+00:00",
+            "table": "puzzle_attempt",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_af20547eff40",
+            "sql": "ALTER TABLE `puzzle_theme` ADD COLUMN `puzzle_id` VARCHAR(36) NOT NULL DEFAULT ''",
+            "destructive": false,
+            "generated_at": "2026-06-18T14:03:30+00:00",
+            "table": "puzzle_theme",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_9fe2badceb2d",
+            "sql": "ALTER TABLE `puzzle` ADD INDEX `idx_puzzle_ext_id` (`ext_id`)",
+            "destructive": false,
+            "generated_at": "2026-06-18T14:03:30+00:00",
+            "table": "puzzle",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_c05bacd319a2",
+            "sql": "ALTER TABLE `puzzle_attempt` ADD UNIQUE KEY `uniq_puzzle_attempt_user_id_puzzle_id` (`user_id`, `puzzle_id`)",
+            "destructive": false,
+            "generated_at": "2026-06-18T14:03:30+00:00",
+            "table": "puzzle_attempt",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_3776c269d1cd",
+            "sql": "ALTER TABLE `puzzle_theme` ADD UNIQUE KEY `uniq_puzzle_theme_puzzle_id_theme` (`puzzle_id`, `theme`)",
+            "destructive": false,
+            "generated_at": "2026-06-18T14:03:30+00:00",
+            "table": "puzzle_theme",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_7bad5d4ee3af",
+            "sql": "ALTER TABLE `puzzle_attempt` ADD CONSTRAINT `fk_puzzle_attempt_puzzle_id` FOREIGN KEY (`puzzle_id`) REFERENCES `puzzle` (`id`) ON DELETE CASCADE ON UPDATE CASCADE",
+            "destructive": false,
+            "generated_at": "2026-06-18T14:03:30+00:00",
+            "table": "puzzle_attempt",
+            "operation": "add_fk",
+            "warning": null
+        },
+        {
+            "id": "mig_b98ad8a0cdea",
+            "sql": "ALTER TABLE `puzzle_theme` ADD CONSTRAINT `fk_puzzle_theme_puzzle_id` FOREIGN KEY (`puzzle_id`) REFERENCES `puzzle` (`id`) ON DELETE CASCADE ON UPDATE CASCADE",
+            "destructive": false,
+            "generated_at": "2026-06-18T14:03:30+00:00",
+            "table": "puzzle_theme",
+            "operation": "add_fk",
+            "warning": null
+        },
+        {
+            "id": "mig_1259e3d506f0",
+            "sql": "ALTER TABLE `puzzle` DROP INDEX `uniq_puzzle_ext_id`",
+            "destructive": true,
+            "generated_at": "2026-06-18T14:03:30+00:00",
+            "table": "puzzle",
+            "operation": "drop_index",
+            "warning": null
+        },
+        {
+            "id": "mig_16fe3c325b3a",
+            "sql": "ALTER TABLE `puzzle_attempt` DROP INDEX `uniq_puzzle_attempt_user_id_puzzle_ext_id`",
+            "destructive": true,
+            "generated_at": "2026-06-18T14:03:30+00:00",
+            "table": "puzzle_attempt",
+            "operation": "drop_index",
+            "warning": null
+        },
+        {
+            "id": "mig_1b3534a32a50",
+            "sql": "ALTER TABLE `puzzle_theme` DROP INDEX `uniq_puzzle_theme_puzzle_ext_id_theme`",
+            "destructive": true,
+            "generated_at": "2026-06-18T14:03:30+00:00",
+            "table": "puzzle_theme",
+            "operation": "drop_index",
+            "warning": null
+        },
+        {
+            "id": "mig_7ffe9d289116",
+            "sql": "ALTER TABLE `puzzle_attempt` DROP COLUMN `puzzle_ext_id`",
+            "destructive": true,
+            "generated_at": "2026-06-18T14:03:30+00:00",
+            "table": "puzzle_attempt",
+            "operation": "drop_column",
+            "warning": null
+        },
+        {
+            "id": "mig_a42605e2c0e0",
+            "sql": "ALTER TABLE `puzzle_theme` DROP COLUMN `puzzle_ext_id`",
+            "destructive": true,
+            "generated_at": "2026-06-18T14:03:30+00:00",
+            "table": "puzzle_theme",
+            "operation": "drop_column",
+            "warning": null
         }
     ]
 }

@@ -553,18 +553,26 @@ is a fifth category that happens not to be a time control.
   validated server-side by index.
 
 ### 9.2 Data model (BaseAPI, singular snake_case)
-- **`puzzle`** — `ext_id` (Lichess id, unique), `fen`, `moves` (TEXT JSON
+- **`puzzle`** — `ext_id` (Lichess id, plain index), `fen`, `moves` (TEXT JSON
   solution line), `rating` (indexed), `rating_deviation`, `popularity`,
   `nb_plays`, `themes` (TEXT JSON), `game_url`. JSON via the array-cast-footgun
   pattern (TEXT + manual `json_encode/decode`), mirroring `BotGame`.
-- **`puzzle_theme`** — denormalized `(puzzle_ext_id, theme, rating)` with a
-  composite **(theme, rating)** index, so theme-filtered serving is an index
-  range scan, not a JSON `LIKE`. Unique `(puzzle_ext_id, theme)` for idempotent
-  import.
-- **`puzzle_attempt`** — unique `(user_id, puzzle_ext_id)`, `solved`,
+- **`puzzle_theme`** — denormalized `(puzzle_id, theme, rating)` with a composite
+  **(theme, rating)** index, so theme-filtered serving is an index range scan,
+  not a JSON `LIKE`. Unique `(puzzle_id, theme)` for idempotent import.
+- **`puzzle_attempt`** — unique `(user_id, puzzle_id)`, `solved`,
   `rating_before/after`. One (first) rated attempt per puzzle; drives both
   de-duplication and Elo idempotency. Anonymous solvers are not recorded.
 - **`user`** gains `rating_puzzle` (1500) + `games_puzzle` (0).
+
+> **Case-sensitivity gotcha (don't break):** Lichess PuzzleIds are
+> **case-sensitive** (`0QCaI` ≠ `0qcai`) but MySQL's default collation is **not**,
+> and BaseAPI only sets collation at the table level. So `ext_id` must **never**
+> be a unique or join key — distinct ids would collide, dropping puzzles on import
+> and bleeding themes across them. All internal links use the puzzle's **UUID `id`**
+> (lowercase hex → collision-free), which the importer derives **deterministically
+> from `ext_id` (UUIDv5)** so distinct ids get distinct keys and re-import stays
+> idempotent. The served/solved puzzle id is the UUID, not `ext_id`.
 
 ### 9.3 Solution convention
 Lichess convention: `puzzle.fen` is the position **before** the opponent's setup

@@ -57,6 +57,30 @@ function uuidv4(): string
     return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
 }
 
+// Fixed namespace for deriving a puzzle's UUID PK from its (case-sensitive)
+// Lichess id. Deterministic → import is idempotent AND distinct case-variant
+// ids ("0QCaI" vs "0qcai") map to distinct, collision-free UUID keys.
+const PUZZLE_NS = '6f9a1d2c-3b4e-5a6f-8c1d-2e3f4a5b6c7d';
+
+function uuidv5(string $namespace, string $name): string
+{
+    $nhex = str_replace('-', '', $namespace);
+    $nbin = '';
+    for ($i = 0, $n = strlen($nhex); $i < $n; $i += 2) {
+        $nbin .= chr((int) hexdec(substr($nhex, $i, 2)));
+    }
+    $hash = sha1($nbin . $name);
+
+    return sprintf(
+        '%08s-%04s-%04x-%04x-%12s',
+        substr($hash, 0, 8),
+        substr($hash, 8, 4),
+        (hexdec(substr($hash, 12, 4)) & 0x0fff) | 0x5000, // version 5
+        (hexdec(substr($hash, 16, 4)) & 0x3fff) | 0x8000, // RFC variant
+        substr($hash, 20, 12),
+    );
+}
+
 [$csvPath, $flags] = parseArgs($argv);
 
 if ($csvPath === '' || !is_readable($csvPath)) {
@@ -122,7 +146,7 @@ function flushRows(DB $db, string $table, array $cols, array $rows): void
 }
 
 $puzzleCols = ['id', 'ext_id', 'fen', 'moves', 'rating', 'rating_deviation', 'popularity', 'nb_plays', 'themes', 'game_url', 'created_at', 'updated_at'];
-$themeCols = ['id', 'puzzle_ext_id', 'theme', 'rating', 'created_at', 'updated_at'];
+$themeCols = ['id', 'puzzle_id', 'theme', 'rating', 'created_at', 'updated_at'];
 
 while (($row = fgetcsv($handle, 0, ',', '"', '')) !== false) {
     $scanned++;
@@ -166,14 +190,16 @@ while (($row = fgetcsv($handle, 0, ',', '"', '')) !== false) {
     $nbPlays = isset($col['NbPlays']) ? (int) ($row[$col['NbPlays']] ?? 0) : 0;
     $gameUrl = isset($col['GameUrl']) ? ($row[$col['GameUrl']] ?? null) : null;
 
+    $puzzleId = uuidv5(PUZZLE_NS, $extId);
+
     $puzzleRows[] = [
-        uuidv4(), $extId, $fen, json_encode(array_values($moves)),
+        $puzzleId, $extId, $fen, json_encode(array_values($moves)),
         $rating, $ratingDev, $popularity, $nbPlays,
         json_encode(array_values($themes)), $gameUrl, $now, $now,
     ];
 
     foreach ($themes as $t) {
-        $themeRows[] = [uuidv4(), $extId, $t, $rating, $now, $now];
+        $themeRows[] = [uuidv4(), $puzzleId, $t, $rating, $now, $now];
     }
 
     $imported++;

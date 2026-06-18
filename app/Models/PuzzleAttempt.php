@@ -17,8 +17,8 @@ class PuzzleAttempt extends BaseModel
 {
     public string $user_id = '';
 
-    /** References Puzzle::ext_id. */
-    public string $puzzle_ext_id = '';
+    /** References Puzzle::id (the UUID PK; case-safe, unlike the Lichess ext_id). */
+    public string $puzzle_id = '';
 
     /** True = solved with no wrong move; false = failed. */
     public bool $solved = false;
@@ -33,7 +33,7 @@ class PuzzleAttempt extends BaseModel
      * @var array<int|string, mixed>
      */
     public static array $indexes = [
-        ['user_id', 'puzzle_ext_id', 'type' => 'unique'],
+        ['user_id', 'puzzle_id', 'type' => 'unique'],
     ];
 
     public function user(): BelongsTo

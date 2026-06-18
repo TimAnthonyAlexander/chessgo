@@ -376,6 +376,7 @@ function ThemeSelect({ value, onChange }: { value: string; onChange: (v: string)
       onChange={(e) => onChange(e.target.value)}
       size="small"
       fullWidth
+      displayEmpty
       sx={{
         color: 'var(--text)',
         fontSize: 14,

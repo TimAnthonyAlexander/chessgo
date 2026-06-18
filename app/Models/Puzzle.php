@@ -23,7 +23,14 @@ use BaseApi\Models\BaseModel;
  */
 class Puzzle extends BaseModel
 {
-    /** Lichess PuzzleId (e.g. "00sHx"). Stable external key for join + de-dup. */
+    /**
+     * Lichess PuzzleId (e.g. "00sHx"), informational. NOTE: Lichess ids are
+     * CASE-SENSITIVE, but MySQL's default collation is case-insensitive — so
+     * `ext_id` must NOT be a unique/join key (distinct ids like "0QCaI" and
+     * "0qcai" would collide). Internal joins use the UUID `id`, which the
+     * importer derives deterministically from this id (UUIDv5) so the case is
+     * preserved in the key. Plain index only.
+     */
     public string $ext_id = '';
 
     /** Starting position (FEN), before the opponent's setup move. */
@@ -54,7 +61,7 @@ class Puzzle extends BaseModel
      * @var array<string, string>
      */
     public static array $indexes = [
-        'ext_id' => 'unique',
+        'ext_id' => 'index',
         'rating' => 'index',
     ];
 

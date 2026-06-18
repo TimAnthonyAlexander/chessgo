@@ -278,9 +278,10 @@ public int $rating_puzzle = 1500;   public int $games_puzzle = 0;
 - `games_puzzle` counts rated puzzle attempts and selects the K-factor — it is
   the count **before** the current attempt, exactly like the game categories
   (provisional K=40 for the first 20, then K=20).
-- `puzzle_attempt` (unique `(user_id, puzzle_ext_id)`) records `solved` and
+- `puzzle_attempt` (unique `(user_id, puzzle_id)`) records `solved` and
   `rating_before` / `rating_after` for each first encounter — the audit trail and
-  the idempotency key (below).
+  the idempotency key (below). `puzzle_id` is the puzzle's UUID, not the
+  case-sensitive Lichess `ext_id` (see SPEC §9.2).
 
 ### 9.3 The update
 

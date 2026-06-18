@@ -50,11 +50,11 @@ class PuzzleController extends Controller
         $seen = [];
         if ($user instanceof User) {
             $rows = App::db()->raw(
-                'SELECT puzzle_ext_id FROM puzzle_attempt WHERE user_id = ?',
+                'SELECT puzzle_id FROM puzzle_attempt WHERE user_id = ?',
                 [$user->id],
             );
             foreach ($rows as $r) {
-                $seen[$r['puzzle_ext_id']] = true;
+                $seen[$r['puzzle_id']] = true;
             }
         }
 
@@ -77,7 +77,7 @@ class PuzzleController extends Controller
         $legal = $this->engine->legalMoves($playerFen);
 
         return JsonResponse::ok([
-            'id' => $puzzle->ext_id,
+            'id' => $puzzle->id,
             'rating' => $puzzle->rating,
             'start_fen' => $puzzle->fen,
             'opponent_move' => $solution[0],
@@ -102,7 +102,7 @@ class PuzzleController extends Controller
             return JsonResponse::badRequest('fen is required');
         }
 
-        $puzzle = Puzzle::firstWhere('ext_id', '=', $this->id);
+        $puzzle = Puzzle::find($this->id);
         if (!$puzzle instanceof Puzzle) {
             return JsonResponse::notFound('Puzzle not found');
         }
@@ -178,11 +178,11 @@ class PuzzleController extends Controller
             $pivot = random_int($lo, $hi);
 
             foreach ([['>=', 'ASC'], ['<=', 'DESC']] as [$cmp, $dir]) {
-                foreach ($this->candidateIds($theme, $lo, $hi, $pivot, $cmp, $dir) as $extId) {
-                    if (isset($seen[$extId])) {
+                foreach ($this->candidateIds($theme, $lo, $hi, $pivot, $cmp, $dir) as $id) {
+                    if (isset($seen[$id])) {
                         continue;
                     }
-                    $p = Puzzle::firstWhere('ext_id', '=', $extId);
+                    $p = Puzzle::find($id);
                     if ($p instanceof Puzzle) {
                         return $p;
                     }
@@ -194,24 +194,24 @@ class PuzzleController extends Controller
     }
 
     /**
-     * @return list<string> candidate ext_ids. $cmp/$dir are fixed literals
+     * @return list<string> candidate puzzle UUIDs. $cmp/$dir are fixed literals
      *                      (never user input), safe to interpolate.
      */
     private function candidateIds(string $theme, int $lo, int $hi, int $pivot, string $cmp, string $dir): array
     {
         if ($theme !== '') {
-            $sql = "SELECT puzzle_ext_id AS ext_id FROM puzzle_theme
+            $sql = "SELECT puzzle_id AS id FROM puzzle_theme
                     WHERE theme = ? AND rating BETWEEN ? AND ? AND rating $cmp ?
                     ORDER BY rating $dir LIMIT 30";
             $rows = App::db()->raw($sql, [$theme, $lo, $hi, $pivot]);
         } else {
-            $sql = "SELECT ext_id FROM puzzle
+            $sql = "SELECT id FROM puzzle
                     WHERE rating BETWEEN ? AND ? AND rating $cmp ?
                     ORDER BY rating $dir LIMIT 30";
             $rows = App::db()->raw($sql, [$lo, $hi, $pivot]);
         }
 
-        return array_values(array_column($rows, 'ext_id'));
+        return array_values(array_column($rows, 'id'));
     }
 
     /**
@@ -227,8 +227,8 @@ class PuzzleController extends Controller
         }
 
         $alreadyPlayed = App::db()->scalar(
-            'SELECT 1 FROM puzzle_attempt WHERE user_id = ? AND puzzle_ext_id = ? LIMIT 1',
-            [$user->id, $puzzle->ext_id],
+            'SELECT 1 FROM puzzle_attempt WHERE user_id = ? AND puzzle_id = ? LIMIT 1',
+            [$user->id, $puzzle->id],
         );
         if ($alreadyPlayed) {
             return ['value' => $user->rating_puzzle, 'delta' => 0, 'games' => $user->games_puzzle];
@@ -243,7 +243,7 @@ class PuzzleController extends Controller
 
         $attempt = new PuzzleAttempt();
         $attempt->user_id = $user->id;
-        $attempt->puzzle_ext_id = $puzzle->ext_id;
+        $attempt->puzzle_id = $puzzle->id;
         $attempt->solved = $solved;
         $attempt->rating_before = $before;
         $attempt->rating_after = $after;
