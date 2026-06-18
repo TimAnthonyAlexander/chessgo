@@ -111,8 +111,11 @@ someone is actually watching (the `GET /games` poll is the signal) and run on a
 | `-watch-target` | `5` | number of live games shown (real games padded with fillers up to this) |
 | `-watch-filler-workers` | `2` | dedicated engine workers for fillers (small, so they can't starve bot-fill) |
 
-Filler games are always **unrated and never persisted** (no `/internal/games`
-POST, no Elo). Real games always sort ahead of fillers, and in-flight fillers
+Filler games are **never persisted and never Elo'd** (no `/internal/games` POST)
+— `finish()` gates that on the `filler` flag, not on `rated`. They're shown as
+**Rated** in the lobby/spectate view purely for display (a single `rated` field
+is the source of truth both views read). Real games always sort ahead of fillers,
+and in-flight fillers
 **finish naturally** — when the lobby gets busy (or watchers leave) they're just
 not replenished. They DO count toward the hub's `activeGames`, so the homepage
 "games in play" ticks up a few while someone is on the Watch page.

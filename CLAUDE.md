@@ -110,8 +110,12 @@ php mason migrate:generate && php mason migrate:apply -y                     # D
   lobby up to `-watch-target` (5) on a **dedicated** small engine pool (can't
   starve human bot-fill), and **only while someone's watching** — the `GET /games`
   poll stamps `lastWatchActivity` (`watchWindow` 12s). They're `filler=true`:
-  **unrated, never `onFinish`-persisted**, and their bot-ness is **never sent to
-  the client** (no `bot` flag in `sideInfo`/the summary). In-flight fillers always
+  **never `onFinish`-persisted, never Elo'd** — `finish()` gates that on the
+  `filler` flag, NOT on `rated`. They're created with `rated:true` purely for
+  **display** (so the lobby looks like ranked play); the single `rated` field is
+  the source of truth both the `/games` summary and the `watching` payload read,
+  so overview + spectate stay consistent. Their bot-ness is **never sent to the
+  client** (no `bot` flag in `sideInfo`/the summary). In-flight fillers always
   **finish naturally**; we only stop replenishing once watchers leave. They DO
   count toward `activeGames` (so the homepage stat ticks up a few while watched).
   Both filler sides are bots → `scheduleBotMove` reschedules from `applyBotMove`

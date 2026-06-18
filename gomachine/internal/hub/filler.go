@@ -80,13 +80,18 @@ func (h *Hub) startFillerGame() {
 
 	pos, _ := chess.ParseFEN(chess.StartFEN)
 	g := &game{
-		id:        newID(),
-		white:     &player{id: newBotIdentity(rW), isBot: true, level: levelForRating(rW)},
-		black:     &player{id: newBotIdentity(rB), isBot: true, level: levelForRating(rB)},
-		pos:       pos,
-		tc:        tc,
-		pool:      pool,
-		rated:     false,
+		id:    newID(),
+		white: &player{id: newBotIdentity(rW), isBot: true, level: levelForRating(rW)},
+		black: &player{id: newBotIdentity(rB), isBot: true, level: levelForRating(rB)},
+		pos:   pos,
+		tc:    tc,
+		pool:  pool,
+		// Display as Rated so the lobby looks like real ranked play. This is the
+		// single source of truth both the /games summary and the spectator
+		// "watching" payload read, so overview and spectate stay consistent. It is
+		// purely cosmetic: the `filler` flag (not `rated`) is what gates persistence
+		// and Elo in finish(), so a filler game is never recorded regardless.
+		rated:     true,
 		clockMs:   [2]int64{tc.Base, tc.Base},
 		turnStart: time.Now(),
 		online:    [2]bool{true, true},
