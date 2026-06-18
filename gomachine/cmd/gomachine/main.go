@@ -37,6 +37,8 @@ func main() {
 		cmdPlay(os.Args[2:])
 	case "selfplay":
 		cmdSelfPlay(os.Args[2:])
+	case "bench":
+		cmdBench(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -57,5 +59,7 @@ Usage:
   gomachine perft -depth N [-fen FEN] [-divide]
   gomachine play [-level 0..10] [-color white|black] [-fen FEN]
   gomachine selfplay [-level 0..10] [-max 200] [-movetime ms]
+  gomachine bench sprt [-new SPEC] [-old SPEC] [-nodes N] ...
+                                         in-process self-play SPRT (strength test)
 `)
 }

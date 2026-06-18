@@ -42,6 +42,7 @@ type Result struct {
 // Searcher holds reusable search state (TT, killers, history).
 type Searcher struct {
 	tt       *TT
+	params   Params
 	killers  [maxPly][2]chess.Move
 	history  [12][64]int
 	nodes    uint64
@@ -55,13 +56,23 @@ type Searcher struct {
 	rootScore int
 }
 
-// New returns a Searcher with a transposition table of ttSizeMB megabytes.
-func New(ttSizeMB int) *Searcher {
+// New returns a full-strength Searcher with a transposition table of ttSizeMB
+// megabytes.
+func New(ttSizeMB int) *Searcher { return NewWithParams(ttSizeMB, DefaultParams()) }
+
+// NewWithParams returns a Searcher configured by params — used by the self-play
+// harness to build the "old" and "new" engines from the same code.
+func NewWithParams(ttSizeMB int, params Params) *Searcher {
 	return &Searcher{
 		tt:       NewTT(ttSizeMB),
+		params:   params,
 		keyStack: make([]uint64, 0, 1024),
 	}
 }
+
+// ClearTT empties the transposition table. The match driver calls this between
+// games so a finished game's entries never bias the next one.
+func (s *Searcher) ClearTT() { s.tt.Clear() }
 
 func (s *Searcher) reset(limits Limits, gameHistory []uint64) {
 	s.nodes = 0
@@ -207,7 +218,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 	}
 
 	inCheck := pos.InCheck()
-	if inCheck {
+	if inCheck && s.params.CheckExtension {
 		depth++ // check extension
 	}
 	if depth <= 0 {
@@ -216,7 +227,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 
 	// Transposition table probe.
 	ttMove := chess.NullMove
-	if e, ok := s.tt.probe(pos.Key()); ok {
+	if e, ok := s.tt.probe(pos.Key()); s.params.UseTT && ok {
 		ttMove = e.move
 		if ply > 0 && int(e.depth) >= depth {
 			sc := e.scoreFromTT(ply)
@@ -236,12 +247,12 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 	}
 
 	// Null-move pruning.
-	if !inCheck && depth >= 3 && ply > 0 && beta < mateThreshold &&
+	if s.params.NullMove && !inCheck && depth >= 3 && ply > 0 && beta < mateThreshold &&
 		pos.NonPawnMaterial(pos.SideToMove()) {
 		var u chess.Undo
 		pos.DoNullMove(&u)
 		s.pushKey(pos.Key())
-		r := 2 + depth/4
+		r := s.params.NullMoveR + depth/4
 		sc := -s.negamax(pos, depth-1-r, ply+1, -beta, -beta+1)
 		s.popKey()
 		pos.UndoNullMove(&u)
@@ -285,7 +296,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 			sc = -s.negamax(pos, depth-1, ply+1, -beta, -alpha)
 		} else {
 			reduction := 0
-			if depth >= 3 && searched >= 4 && quiet && !inCheck && !givesCheck {
+			if s.params.LMR && depth >= 3 && searched >= 4 && quiet && !inCheck && !givesCheck {
 				reduction = 1
 				if searched >= 8 {
 					reduction = 2
@@ -333,7 +344,9 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 	} else if bestScore >= beta {
 		flag = ttLower
 	}
-	s.tt.store(pos.Key(), bestMove, bestScore, depth, ply, flag)
+	if s.params.UseTT {
+		s.tt.store(pos.Key(), bestMove, bestScore, depth, ply, flag)
+	}
 	return bestScore
 }
 

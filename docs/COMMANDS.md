@@ -130,6 +130,45 @@ cd frontend && bun run build
 bun run preview       # locally preview the built bundle
 ```
 
+## Engine strength testing — in-process self-play SPRT
+
+The strength feedback loop is `gomachine bench sprt`: two configurations of the
+**same binary** play game pairs against each other (reversed colors from a shared
+opening) until an SPRT accepts H1 (the patch is an improvement) or H0 (it isn't).
+The arbiter is our own perft-verified `internal/chess` + `engine.Adjudicate` —
+**no UCI, no Stockfish, no subprocesses**. Games run at **fixed nodes** so results
+are reproducible and hardware-independent. Stats are the pentanomial GSPRT.
+
+A patch is a `search.Params` diff. `--old` is the baseline, `--new` is the patch;
+each is a comma-separated spec applied on top of the full-strength default:
+
+```
+tt=on|off   nullmove=on|off   nullr=<int>   lmr=on|off   checkext=on|off
+```
+
+```sh
+cd gomachine && go build -o bin/gomachine ./cmd/gomachine
+
+# Validate the harness: full strength vs a deliberately weakened engine
+# should read as clearly +Elo and accept H1.
+./bin/gomachine bench sprt --new "" --old "tt=off,nullmove=off,lmr=off" \
+  --nodes 10000 --elo0 0 --elo1 30
+
+# Gate a real patch (once it's wired behind a Params flag), the standard loop:
+./bin/gomachine bench sprt --new "see=on" --old "see=off" --elo0 0 --elo1 5
+```
+
+Key flags (see `bench sprt -h`): `--nodes` (fixed nodes/move, primary),
+`--elo0/--elo1` (SPRT bounds), `--alpha/--beta` (error rates, default 0.05),
+`--concurrency` (default = NCPU), `--maxpairs` (hard cap), `--tt` (MB/engine),
+`--book` (`.epd`/`.fen` or UCI move-lines; default: a built-in balanced book).
+Ctrl-C ends early and prints the result so far.
+
+**Workflow:** implement one improvement behind a new `search.Params` flag,
+SPRT-gate `flag=on` vs `flag=off`; if H1, make it the default and re-baseline.
+Absolute Elo vs Stockfish (a thin UCI adapter) is a later, decoupled add-on —
+self-play SPRT only says "new beats old", not the absolute number.
+
 ## Database / migrations
 
 Schema is driven by the models — **never** hand-write SQL/DDL.

@@ -687,6 +687,16 @@ chessgo/
       detection + uniqueness check) to grow the set beyond the Lichess seed; plus
       alternate-mate acceptance, Daily puzzle, Puzzle Rush.
 - [ ] **Hub-restart durability** — persist live games so resume survives a restart.
+- [x] **Engine strength harness** — native, in-process self-play **SPRT**
+      (`gomachine bench sprt`, `internal/bench`): two `search.Params` configs of the
+      same binary play game pairs (reversed colors, shared opening), arbitrated by
+      our own perft-verified rules + `Adjudicate` — no UCI/subprocess. Fixed-nodes
+      (reproducible), pentanomial GSPRT with a regularizing prior + a min-pairs gate,
+      colorful live LLR/Elo report. A patch = one `Params` flag, SPRT-gated on→off.
+      Improvement backlog (each to be gated): SEE + delta pruning → aspiration
+      windows → reverse-futility/futility/LMP/razoring → countermove → TT static
+      eval → Texel/SPSA tuning → (optional) NNUE. Deferred: a thin UCI adapter to
+      anchor **absolute** Elo vs Stockfish (self-play SPRT only says "new beats old").
 - [x] **Match bot strength to its rating** — fill-in bot displayed rating is now
       anchored to the human's Elo (±120) and the engine level is derived from it
       (`levelForRating`), so rated bot games are fair. Remaining: precise

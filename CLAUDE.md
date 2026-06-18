@@ -53,6 +53,7 @@ Quick version: `./mason serve --screen` (API), `gomachine serve` (engine),
 ```sh
 cd gomachine && go build -o bin/gomachine ./cmd/gomachine && go test ./...   # Go
 cd gomachine && ./bin/gomachine perft -depth 5                                # movegen sanity
+cd gomachine && ./bin/gomachine bench sprt --new "" --old "lmr=off"           # strength SPRT (self-play; docs/COMMANDS.md)
 cd frontend && bun run typecheck && bun run build                            # frontend
 php mason migrate:generate && php mason migrate:apply -y                     # DB schema
 ```

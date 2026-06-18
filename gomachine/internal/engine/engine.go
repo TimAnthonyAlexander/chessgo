@@ -20,9 +20,31 @@ type Engine struct {
 	searcher *search.Searcher
 }
 
-// New creates an Engine with a transposition table of ttSizeMB megabytes.
+// New creates a full-strength Engine with a transposition table of ttSizeMB
+// megabytes.
 func New(ttSizeMB int) *Engine {
 	return &Engine{searcher: search.New(ttSizeMB)}
+}
+
+// NewWithParams creates an Engine whose search is configured by params. The
+// self-play harness uses this to instantiate the "old" and "new" engines from
+// one binary (see internal/bench).
+func NewWithParams(ttSizeMB int, params search.Params) *Engine {
+	return &Engine{searcher: search.NewWithParams(ttSizeMB, params)}
+}
+
+// NewGame clears the transposition table so a prior game can't bias the next.
+func (e *Engine) NewGame() { e.searcher.ClearTT() }
+
+// Play runs a full-strength search under the given limits (depth/movetime/nodes)
+// and returns the result. Used by the match driver with a fixed Nodes budget for
+// reproducible, hardware-independent games.
+func (e *Engine) Play(pos *chess.Position, limits search.Limits, history []uint64) BestResult {
+	r := e.searcher.Search(pos, limits, history)
+	return BestResult{
+		Move: r.BestMove, Score: r.Score, Depth: r.Depth,
+		Nodes: r.Nodes, PV: r.PV, MateIn: r.MateIn, Level: -1,
+	}
 }
 
 // BestResult is the outcome of a best-move computation.
