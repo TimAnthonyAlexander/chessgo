@@ -209,43 +209,54 @@ export default function BotGame() {
     <Box
       sx={{
         flex: 1,
-        display: 'grid',
-        // Same board sizing as LiveGame: 320px side columns, a board that fills
-        // almost the full height. Equal gutters keep the board centered.
-        gridTemplateColumns: {
-          xs: '1fr',
-          lg: '320px min(calc(100vh - 120px), calc(100vw - 752px), 880px) 320px',
-        },
-        alignItems: { xs: 'center', lg: 'stretch' },
-        justifyItems: 'center',
-        columnGap: { lg: 4 },
-        rowGap: 3,
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: { xs: 'flex-start', md: 'center' },
         px: { xs: 2, md: 3 },
-        py: { xs: 3, lg: 2 },
+        py: { xs: 3, md: 2 },
       }}
     >
-      {/* Left — game mode, top-aligned (mirrors the right column to center the board) */}
       <Box
         sx={{
-          display: { xs: 'none', lg: 'block' },
-          justifySelf: 'end',
-          alignSelf: 'start',
-          width: '100%',
+          display: 'grid',
+          // Same board sizing as LiveGame: 320px side columns, a board that fills
+          // almost the full height. The fit-content grid + mx:auto keeps the BOARD
+          // centered in the viewport (equal 320px gutters mirror each other).
+          gridTemplateColumns: {
+            xs: '1fr',
+            md: '320px min(calc(100vh - 120px), calc(100vw - 752px), 880px) 320px',
+          },
+          columnGap: { md: 4 },
+          rowGap: 3,
+          alignItems: { xs: 'center', md: 'stretch' },
+          justifyContent: 'center',
+          width: { xs: '100%', md: 'fit-content' },
+          maxWidth: '100%',
+          mx: 'auto',
         }}
       >
-        <GameModeCard level={game?.level ?? level} />
-      </Box>
+        {/* Left — game mode, top-aligned (mirrors the right column to center the board) */}
+        <Box
+          sx={{
+            display: { xs: 'none', md: 'block' },
+            justifySelf: 'end',
+            alignSelf: 'start',
+            width: '100%',
+          }}
+        >
+          <GameModeCard level={game?.level ?? level} />
+        </Box>
 
-      {/* Center — board, top-aligned so its top lines up with the side cards */}
-      <Box
-        sx={{
-          alignSelf: 'start',
-          width: { xs: 'min(94vw, 64vh)', lg: '100%' },
-          display: 'flex',
-          gap: { xs: 0.75, md: 1.25 },
-          alignItems: 'stretch',
-        }}
-      >
+        {/* Center — board, top-aligned so its top lines up with the side cards */}
+        <Box
+          sx={{
+            alignSelf: 'start',
+            width: { xs: 'min(94vw, 64vh)', md: '100%' },
+            display: 'flex',
+            gap: { xs: 0.75, md: 1.25 },
+            alignItems: 'stretch',
+          }}
+        >
         <EvalBar ev={analyzedEval} orientation={orientation} />
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Board
@@ -265,10 +276,10 @@ export default function BotGame() {
       {/* Right — full-height move panel, or the setup card (top-aligned) */}
       <Box
         sx={{
-          justifySelf: { lg: 'start' },
-          alignSelf: { xs: 'auto', lg: game ? 'stretch' : 'start' },
+          justifySelf: { md: 'start' },
+          alignSelf: { xs: 'auto', md: game ? 'stretch' : 'start' },
           width: '100%',
-          maxWidth: { xs: 'min(94vw, 64vh)', lg: 'none' },
+          maxWidth: { xs: 'min(94vw, 64vh)', md: 'none' },
           minHeight: 0,
           display: 'flex',
           flexDirection: 'column',
@@ -307,6 +318,7 @@ export default function BotGame() {
             {error && <ErrorBanner sx={{ mt: 1.5 }}>{error}</ErrorBanner>}
           </>
         )}
+        </Box>
       </Box>
     </Box>
   )
