@@ -29,6 +29,7 @@ type botSnapshot struct {
 	fen         string
 	history     []uint64
 	level       int
+	tc          timeControl // pacing scales with the time control
 	remainingMs int64
 	legalCount  int
 }
@@ -165,6 +166,7 @@ func (h *Hub) scheduleBotMove(g *game) {
 		fen:         g.pos.FEN(),
 		history:     append([]uint64(nil), g.history...),
 		level:       bot.level,
+		tc:          g.tc,
 		remainingMs: g.remainingMs(botColor),
 		legalCount:  len(g.pos.LegalMoveStrings(chess.SqNone)),
 	}, engines)
@@ -187,7 +189,7 @@ func (h *Hub) computeBotMove(s botSnapshot, engines chan *engineHandle) {
 		return
 	}
 
-	delay := botThinkDelay(s.remainingMs, s.legalCount)
+	delay := botThinkDelay(s.tc, s.remainingMs, s.legalCount)
 	if elapsed := time.Since(start); elapsed < delay {
 		time.Sleep(delay - elapsed)
 	}
@@ -223,21 +225,38 @@ func (h *Hub) applyBotMove(r botMoveResult) {
 	h.scheduleBotMove(g)
 }
 
-// botThinkDelay returns a randomized, human-ish pause before the bot's move,
-// never spending more than ~40% of its remaining clock (so it won't flag itself).
-func botThinkDelay(remainingMs int64, legalCount int) time.Duration {
-	ms := 400 + mrand.IntN(1400) // ~0.4–1.8s baseline
-	if legalCount > 28 {
-		ms += mrand.IntN(900) // more options → think a little longer
+// botThinkDelay returns a randomized, human-ish pause before a bot's move, SCALED
+// to the time control: a slow game gets slower moves than a fast one (a 10-minute
+// game thinks much longer than a 1-minute one). The pause comes off the bot's
+// clock (it's real time), so it's bounded three ways: never more than ~30% of the
+// remaining clock (won't flag), never more than maxThinkMs absolute (keeps slow
+// controls sane and the untimed first move safely under the 30s first-move abort),
+// and never below a small human floor (fast games aren't instant).
+func botThinkDelay(tc timeControl, remainingMs int64, legalCount int) time.Duration {
+	// Rough per-move time budget: assume ~30 moves a side, plus the increment you
+	// get back each move. e.g. 1+0 → 2s, 3+0 → 6s, 5+0 → 10s, 10+0 → 20s, 3+2 → 8s.
+	perMove := float64(tc.Base)/30.0 + float64(tc.Inc)
+
+	// A typical move spends a varying fraction of that budget.
+	ms := int64(perMove * (0.12 + mrand.Float64()*0.40)) // ~12%–52%
+	// A few moves get a noticeably longer think.
+	if mrand.Float64() < 0.12 {
+		ms += int64(perMove * (0.3 + mrand.Float64()*0.7))
 	}
-	if mrand.Float64() < 0.15 {
-		ms += mrand.IntN(2200) // occasional longer ponder
+	// Busier positions take a touch longer.
+	if legalCount > 30 {
+		ms += int64(perMove * 0.15)
 	}
-	if maxMs := int(remainingMs * 4 / 10); ms > maxMs {
-		ms = maxMs
+
+	if cap := remainingMs * 3 / 10; ms > cap {
+		ms = cap
 	}
-	if ms < 150 {
-		ms = 150
+	const maxThinkMs = 12_000
+	if ms > maxThinkMs {
+		ms = maxThinkMs
+	}
+	if ms < 250 {
+		ms = 250
 	}
 	return time.Duration(ms) * time.Millisecond
 }
