@@ -46,6 +46,10 @@ func cmdBestMove(args []string) {
 		fmt.Fprintln(os.Stderr, "invalid fen:", err)
 		os.Exit(1)
 	}
+	if !pos.Legal() {
+		fmt.Fprintln(os.Stderr, "illegal position: side not to move is in check, or a king is missing")
+		os.Exit(1)
+	}
 	eng := engine.New(*tt)
 	start := time.Now()
 	var res engine.BestResult
@@ -88,6 +92,10 @@ func cmdPerft(args []string) {
 		fmt.Fprintln(os.Stderr, "invalid fen:", err)
 		os.Exit(1)
 	}
+	if !pos.Legal() {
+		fmt.Fprintln(os.Stderr, "illegal position: side not to move is in check, or a king is missing")
+		os.Exit(1)
+	}
 	start := time.Now()
 	if *divide {
 		div, total := chess.Divide(pos, *depth)
@@ -114,6 +122,10 @@ func cmdSelfPlay(args []string) {
 	pos, err := chess.ParseFEN(*fen)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "invalid fen:", err)
+		os.Exit(1)
+	}
+	if !pos.Legal() {
+		fmt.Fprintln(os.Stderr, "illegal position: side not to move is in check, or a king is missing")
 		os.Exit(1)
 	}
 	eng := engine.New(64)
@@ -158,6 +170,10 @@ func cmdPlay(args []string) {
 	pos, err := chess.ParseFEN(*fen)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "invalid fen:", err)
+		os.Exit(1)
+	}
+	if !pos.Legal() {
+		fmt.Fprintln(os.Stderr, "illegal position: side not to move is in check, or a king is missing")
 		os.Exit(1)
 	}
 	human := chess.White

@@ -43,7 +43,35 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /status", s.handleStatus)
 	mux.HandleFunc("POST /perft", s.handlePerft)
 	mux.HandleFunc("GET /healthz", s.handleHealth)
-	return mux
+	return recoverPanics(mux)
+}
+
+// recoverPanics turns any handler panic into a clean 500 instead of a reset
+// connection, keeping the service alive on unexpected input.
+func recoverPanics(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				writeErr(w, http.StatusInternalServerError, "internal engine error")
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// parseLegal parses a FEN and rejects illegal positions (missing king, or the
+// side not to move left in check) before they reach the search.
+func parseLegal(w http.ResponseWriter, fen string) (*chess.Position, bool) {
+	pos, err := chess.ParseFEN(fen)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid fen: "+err.Error())
+		return nil, false
+	}
+	if !pos.Legal() {
+		writeErr(w, http.StatusBadRequest, "illegal position: side not to move is in check, or a king is missing")
+		return nil, false
+	}
+	return pos, true
 }
 
 // --- helpers ---
@@ -100,9 +128,8 @@ func (s *Server) handleMove(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	pos, err := chess.ParseFEN(req.FEN)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid fen: "+err.Error())
+	pos, ok := parseLegal(w, req.FEN)
+	if !ok {
 		return
 	}
 	m, ok := pos.ParseUCIMove(req.Move)
@@ -148,9 +175,8 @@ func (s *Server) handleLegalMoves(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	pos, err := chess.ParseFEN(req.FEN)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid fen: "+err.Error())
+	pos, ok := parseLegal(w, req.FEN)
+	if !ok {
 		return
 	}
 	from := chess.SqNone
@@ -178,9 +204,8 @@ func (s *Server) handleBestMove(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	pos, err := chess.ParseFEN(req.FEN)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid fen: "+err.Error())
+	pos, ok := parseLegal(w, req.FEN)
+	if !ok {
 		return
 	}
 	hist := historyKeys(req.History)
@@ -236,9 +261,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	pos, err := chess.ParseFEN(req.FEN)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid fen: "+err.Error())
+	pos, ok := parseLegal(w, req.FEN)
+	if !ok {
 		return
 	}
 	hist := historyKeys(req.History)
@@ -289,9 +313,8 @@ func (s *Server) handlePerft(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
-	pos, err := chess.ParseFEN(req.FEN)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid fen: "+err.Error())
+	pos, ok := parseLegal(w, req.FEN)
+	if !ok {
 		return
 	}
 	if req.Depth < 1 || req.Depth > 8 {

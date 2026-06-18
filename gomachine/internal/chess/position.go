@@ -136,6 +136,18 @@ func (pos *Position) InCheck() bool {
 	return pos.attackedBy(pos.kingSq(pos.side), pos.side.Opposite(), pos.occupied)
 }
 
+// Legal reports whether the position is sound to search/play from: both kings
+// are present and the side NOT to move is not in check (an "illegal" position
+// would otherwise let the search capture a king and crash). Input FENs from
+// clients must pass this before being searched.
+func (pos *Position) Legal() bool {
+	if pos.pieces[MakePiece(White, King)] == 0 || pos.pieces[MakePiece(Black, King)] == 0 {
+		return false
+	}
+	them := pos.side.Opposite()
+	return !pos.attackedBy(pos.kingSq(them), pos.side, pos.occupied)
+}
+
 // epIsRealFor reports whether color c could legally-by-attack capture on the
 // current en-passant square with a pawn (pseudo-legal pawn-attack test).
 func (pos *Position) epIsRealFor(c Color) bool {
