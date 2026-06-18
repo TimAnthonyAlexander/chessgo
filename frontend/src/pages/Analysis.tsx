@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Box, Button, Typography } from '@mui/material'
-import { ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, Cpu, Eye, EyeOff, FlipVertical2, Play, Square, Target, Zap } from 'lucide-react'
+import { Box, Button, Tooltip, Typography } from '@mui/material'
+import { ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, Cpu, FlipVertical2, Play, Power, Square, Target, Zap } from 'lucide-react'
 import { useParams } from 'react-router-dom'
 import Board from '../components/Board'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
@@ -313,7 +313,7 @@ export default function Analysis() {
             maxHeight: { md: 'min(calc(100vh - 140px), 820px)' },
           }}
         >
-          {id && <Header id={id} game={game} loading={loading} loadError={loadError} />}
+          {id && <Header game={game} loading={loading} loadError={loadError} />}
 
           <EngineLine
             engineOn={engineOn}
@@ -332,12 +332,14 @@ export default function Analysis() {
               onClick={() => toggleAuto('play')}
               icon={autoMode === 'play' ? <Square size={14} /> : <Play size={14} />}
               label={autoMode === 'play' ? 'Stop' : 'Auto Play'}
+              tip={autoMode === 'play' ? 'Stop auto play' : 'Play through the moves in the list'}
             />
             <AutoBtn
               active={autoMode === 'best'}
               onClick={() => toggleAuto('best')}
               icon={autoMode === 'best' ? <Square size={14} /> : <Zap size={14} />}
               label={autoMode === 'best' ? 'Stop' : 'Auto Best Move'}
+              tip={autoMode === 'best' ? 'Stop auto play' : "Keep playing the engine's best move from here"}
             />
           </Box>
 
@@ -348,9 +350,6 @@ export default function Analysis() {
             <NavBtn onClick={goNext} label="Next"><ChevronRight size={18} /></NavBtn>
             <NavBtn onClick={goEnd} label="End"><ChevronLast size={18} /></NavBtn>
             <Box sx={{ flex: 1 }} />
-            <NavBtn onClick={toggleEngine} label="Engine analysis" active={engineOn}>
-              <Cpu size={17} />
-            </NavBtn>
             <NavBtn onClick={() => setShowArrow((v) => !v)} label="Best move arrow" active={engineOn && showArrow}>
               <Target size={17} />
             </NavBtn>
@@ -376,36 +375,37 @@ function NavBtn({
   children: React.ReactNode
 }) {
   return (
-    <Button
-      onClick={onClick}
-      aria-label={label}
-      sx={{
-        minWidth: 0,
-        px: 1,
-        py: 0.5,
-        color: active ? 'var(--accent)' : 'var(--text-dim)',
-        '&:hover': { color: 'var(--accent)', bgcolor: 'var(--line)' },
-      }}
-    >
-      {children}
-    </Button>
+    <Tooltip title={label} arrow>
+      <Button
+        onClick={onClick}
+        aria-label={label}
+        sx={{
+          minWidth: 0,
+          px: 1,
+          py: 0.5,
+          color: active ? 'var(--accent)' : 'var(--text-dim)',
+          '&:hover': { color: 'var(--accent)', bgcolor: 'var(--line)' },
+        }}
+      >
+        {children}
+      </Button>
+    </Tooltip>
   )
 }
 
 // The engine line (principal variation) row, Lichess-style: an eval chip plus the
-// engine's predicted best continuation in SAN. Display-only; `show` collapses just
-// this row, while `engineOn` is the master switch (off → eval/line are suppressed).
+// engine's predicted best continuation in SAN. Display-only. The CPU button on the
+// right is the MASTER engine switch — off suppresses the eval bar, board arrow, and
+// this line all at once.
 function EngineLine({
   engineOn,
-  show,
-  onToggleShow,
+  onToggleEngine,
   evalWhite,
   fen,
   pvUci,
 }: {
   engineOn: boolean
-  show: boolean
-  onToggleShow: () => void
+  onToggleEngine: () => void
   evalWhite: WhiteEval | null
   fen: string
   pvUci: string[] | null
@@ -470,7 +470,7 @@ function EngineLine({
           lineHeight: 1.5,
           color: 'var(--text-dim)',
           overflow: 'hidden',
-          display: show ? '-webkit-box' : 'none',
+          display: '-webkit-box',
           WebkitLineClamp: 2,
           WebkitBoxOrient: 'vertical',
         }}
@@ -496,20 +496,22 @@ function EngineLine({
         )}
       </Box>
 
-      {/* Show/hide just the line */}
-      <Button
-        onClick={onToggleShow}
-        aria-label={show ? 'Hide engine line' : 'Show engine line'}
-        sx={{
-          minWidth: 0,
-          p: 0.5,
-          flexShrink: 0,
-          color: 'var(--text-dim)',
-          '&:hover': { color: 'var(--accent)', bgcolor: 'var(--line)' },
-        }}
-      >
-        {show ? <Eye size={15} /> : <EyeOff size={15} />}
-      </Button>
+      {/* Master engine on/off */}
+      <Tooltip title={engineOn ? 'Turn engine off' : 'Turn engine on'} arrow>
+        <Button
+          onClick={onToggleEngine}
+          aria-label={engineOn ? 'Turn engine off' : 'Turn engine on'}
+          sx={{
+            minWidth: 0,
+            p: 0.5,
+            flexShrink: 0,
+            color: engineOn ? 'var(--accent)' : 'var(--text-dim)',
+            '&:hover': { color: 'var(--accent)', bgcolor: 'var(--line)' },
+          }}
+        >
+          {engineOn ? <Cpu size={16} /> : <Power size={16} />}
+        </Button>
+      </Tooltip>
     </Box>
   )
 }
@@ -519,64 +521,53 @@ function AutoBtn({
   onClick,
   icon,
   label,
+  tip,
 }: {
   active?: boolean
   onClick: () => void
   icon: React.ReactNode
   label: string
+  tip: string
 }) {
   return (
-    <Button
-      onClick={onClick}
-      aria-label={label}
-      startIcon={icon}
-      sx={{
-        flex: 1,
-        textTransform: 'none',
-        fontSize: 13,
-        fontWeight: 600,
-        py: 0.5,
-        gap: 0.25,
-        color: active ? 'var(--bg)' : 'var(--text-dim)',
-        bgcolor: active ? 'var(--accent)' : 'var(--line)',
-        border: '1px solid var(--line-soft)',
-        '&:hover': {
-          bgcolor: active ? 'var(--accent)' : 'var(--line-soft)',
-          color: active ? 'var(--bg)' : 'var(--accent)',
-        },
-      }}
-    >
-      {label}
-    </Button>
+    <Tooltip title={tip} arrow>
+      <Button
+        onClick={onClick}
+        aria-label={label}
+        startIcon={icon}
+        sx={{
+          flex: 1,
+          textTransform: 'none',
+          fontSize: 13,
+          fontWeight: 600,
+          py: 0.5,
+          gap: 0.25,
+          color: active ? 'var(--bg)' : 'var(--text-dim)',
+          bgcolor: active ? 'var(--accent)' : 'var(--line)',
+          border: '1px solid var(--line-soft)',
+          '&:hover': {
+            bgcolor: active ? 'var(--accent)' : 'var(--line-soft)',
+            color: active ? 'var(--bg)' : 'var(--accent)',
+          },
+        }}
+      >
+        {label}
+      </Button>
+    </Tooltip>
   )
 }
 
+// The game header (players / result / accuracy). Only rendered in review mode
+// (a loaded game); free mode has no header — the engine line sits at the top.
 function Header({
-  id,
   game,
   loading,
   loadError,
-  current,
 }: {
-  id?: string
   game: GameAnalysis | null
   loading: boolean
   loadError: string | null
-  current: { evalWhite: WhiteEval | null; bestUci: string | null }
 }) {
-  const evalText = formatEval(current.evalWhite)
-  if (!id) {
-    return (
-      <Box sx={{ p: 1.5, borderBottom: '1px solid var(--line-soft)' }}>
-        <Typography sx={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 16 }}>
-          Analysis board
-        </Typography>
-        <Typography sx={{ fontSize: 12.5, color: 'var(--muted)' }}>
-          Move freely · {evalText}
-        </Typography>
-      </Box>
-    )
-  }
   if (loading) {
     return (
       <Box sx={{ p: 1.5, borderBottom: '1px solid var(--line-soft)' }}>
