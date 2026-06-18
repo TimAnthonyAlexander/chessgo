@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { Box } from '@mui/material'
 import type { Color } from '../api/client'
 
@@ -29,8 +30,17 @@ function evalLabel(ev: WhiteEval | null): string {
 }
 
 export default function EvalBar({ ev, orientation }: EvalBarProps) {
-  const whitePct = whiteWinPercent(ev)
-  const whiteAhead = ev ? ev.white >= 0 : true
+  // While the engine is still computing the new position's eval, `ev` is null.
+  // Keep showing (and animating from) the last known eval instead of snapping the
+  // bar to center, so it slides old → new once the result arrives.
+  const lastRef = useRef<WhiteEval | null>(ev)
+  useEffect(() => {
+    if (ev) lastRef.current = ev
+  }, [ev])
+  const shown = ev ?? lastRef.current
+
+  const whitePct = whiteWinPercent(shown)
+  const whiteAhead = shown ? shown.white >= 0 : true
   const whiteAnchor = orientation === 'w' ? 'bottom' : 'top' // White grows from its own side
 
   // The single value prints at the winning side's end of the bar.
@@ -95,7 +105,7 @@ export default function EvalBar({ ev, orientation }: EvalBarProps) {
           pointerEvents: 'none',
         }}
       >
-        {evalLabel(ev)}
+        {evalLabel(shown)}
       </Box>
     </Box>
   )
