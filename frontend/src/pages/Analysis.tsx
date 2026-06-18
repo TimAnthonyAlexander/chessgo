@@ -353,10 +353,17 @@ export default function Analysis() {
             <Box sx={{ display: 'flex', gap: 1 }}>
               <AutoBtn
                 active={autoMode === 'play'}
+                disabled={autoMode !== 'play' && current.children.length === 0}
                 onClick={() => toggleAuto('play')}
                 icon={autoMode === 'play' ? <Square size={15} /> : <Play size={15} />}
                 label={autoMode === 'play' ? 'Stop' : 'Auto Play'}
-                tip={autoMode === 'play' ? 'Stop auto play' : 'Play through the moves in the list'}
+                tip={
+                  autoMode === 'play'
+                    ? 'Stop auto play'
+                    : current.children.length === 0
+                      ? 'Already at the latest move'
+                      : 'Play through the moves in the list'
+                }
               />
               <AutoBtn
                 active={autoMode === 'best'}
@@ -647,46 +654,58 @@ function AutoBtn({
   icon,
   label,
   tip,
+  disabled,
 }: {
   active?: boolean
   onClick: () => void
   icon: React.ReactNode
   label: string
   tip: string
+  disabled?: boolean
 }) {
   return (
     <Tooltip title={tip} arrow>
-      <Button
-        onClick={onClick}
-        aria-label={label}
-        startIcon={icon}
-        disableRipple
-        sx={{
-          flex: 1,
-          height: 46,
-          textTransform: 'none',
-          fontFamily: 'var(--font-display)',
-          fontSize: 14,
-          fontWeight: 600,
-          letterSpacing: 0.2,
-          borderRadius: '10px',
-          gap: 0.4,
-          color: active ? '#15171c' : 'var(--text)',
-          background: active ? 'linear-gradient(180deg, #e3b56a, #d8a657)' : 'var(--surface-2)',
-          border: active ? '1px solid var(--accent)' : '1px solid var(--line)',
-          boxShadow: active ? '0 0 16px -4px rgba(216,166,87,0.6)' : 'none',
-          transition: 'background-color .15s, color .15s, border-color .15s, box-shadow .2s',
-          '& .MuiButton-startIcon': { mr: 0.2 },
-          '&:hover': {
-            background: active ? 'linear-gradient(180deg, #e7bd76, #dcab5d)' : 'var(--line)',
-            color: active ? '#15171c' : 'var(--accent)',
-            borderColor: active ? 'var(--accent)' : 'var(--accent-line)',
-          },
-          '&:active': { transform: 'translateY(1px)' },
-        }}
-      >
-        {label}
-      </Button>
+      {/* span wrapper so the tooltip still works while the button is disabled */}
+      <Box component="span" sx={{ flex: 1, display: 'flex' }}>
+        <Button
+          onClick={onClick}
+          aria-label={label}
+          startIcon={icon}
+          disableRipple
+          disabled={disabled}
+          sx={{
+            flex: 1,
+            height: 46,
+            textTransform: 'none',
+            fontFamily: 'var(--font-display)',
+            fontSize: 14,
+            fontWeight: 600,
+            letterSpacing: 0.2,
+            borderRadius: '10px',
+            gap: 0.4,
+            color: active ? '#15171c' : 'var(--text)',
+            background: active ? 'linear-gradient(180deg, #e3b56a, #d8a657)' : 'var(--surface-2)',
+            border: active ? '1px solid var(--accent)' : '1px solid var(--line)',
+            boxShadow: active ? '0 0 16px -4px rgba(216,166,87,0.6)' : 'none',
+            transition: 'background-color .15s, color .15s, border-color .15s, box-shadow .2s',
+            '& .MuiButton-startIcon': { mr: 0.2 },
+            '&:hover': {
+              background: active ? 'linear-gradient(180deg, #e7bd76, #dcab5d)' : 'var(--line)',
+              color: active ? '#15171c' : 'var(--accent)',
+              borderColor: active ? 'var(--accent)' : 'var(--accent-line)',
+            },
+            '&:active': { transform: 'translateY(1px)' },
+            '&.Mui-disabled': {
+              color: 'var(--muted)',
+              background: 'var(--surface-2)',
+              border: '1px solid var(--line-soft)',
+              opacity: 0.5,
+            },
+          }}
+        >
+          {label}
+        </Button>
+      </Box>
     </Tooltip>
   )
 }

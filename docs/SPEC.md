@@ -6,8 +6,9 @@
 > product decisions, the architecture, and the research that informs both.
 >
 > **Status:** v1 in progress. **Last updated:** 2026-06-18.
-> Built & working: the Go engine (`gomachine`, perft-verified, ~2400+ Lichess
-> strength), bot games + eval bar, the lobby, **live human-vs-human play**
+> Built & working: the Go engine (`gomachine`, perft-verified, **~2600** vs
+> handicapped Stockfish after the SPRT-gated search + Lazy-SMP work — see
+> `docs/ENGINE_STRENGTH.md`), bot games + eval bar, the lobby, **live human-vs-human play**
 > (WebSocket hub, matchmaking, server clocks, reconnect/resume), **bot backfill**
 > (a fill-in bot when no human is found), **accounts** (signup/login via session
 > cookies), **per-time-control Elo**, and **game persistence** (hub → BaseAPI).
@@ -189,6 +190,13 @@ pure Go so a single `go build` cross-compiles to any target.
   `Position` never escapes to the heap.
 
 ### 4.5 Search (ordered by Elo-per-effort)
+
+> **Implemented & SPRT-measured:** all of the below, plus **SEE-ordered captures,
+> delta pruning, reverse futility pruning, late move pruning, and Lazy SMP**
+> (multithreading via a lock-free TT). See `docs/ENGINE_STRENGTH.md` §3–4 for the
+> per-feature Elo and the lock-free TT design. The list here is the original
+> design order.
+
 1. **Negamax + alpha-beta** (foundation; ~√b branching with good ordering).
 2. **Quiescence search** (mandatory; resolves captures/promotions, stand-pat,
    delta pruning; no stand-pat when in check).
@@ -687,16 +695,24 @@ chessgo/
       detection + uniqueness check) to grow the set beyond the Lichess seed; plus
       alternate-mate acceptance, Daily puzzle, Puzzle Rush.
 - [ ] **Hub-restart durability** — persist live games so resume survives a restart.
-- [x] **Engine strength harness** — native, in-process self-play **SPRT**
-      (`gomachine bench sprt`, `internal/bench`): two `search.Params` configs of the
-      same binary play game pairs (reversed colors, shared opening), arbitrated by
-      our own perft-verified rules + `Adjudicate` — no UCI/subprocess. Fixed-nodes
-      (reproducible), pentanomial GSPRT with a regularizing prior + a min-pairs gate,
-      colorful live LLR/Elo report. A patch = one `Params` flag, SPRT-gated on→off.
-      Improvement backlog (each to be gated): SEE + delta pruning → aspiration
-      windows → reverse-futility/futility/LMP/razoring → countermove → TT static
-      eval → Texel/SPSA tuning → (optional) NNUE. Deferred: a thin UCI adapter to
-      anchor **absolute** Elo vs Stockfish (self-play SPRT only says "new beats old").
+- [x] **Engine strength harness + first wave of improvements** — see
+      **`docs/ENGINE_STRENGTH.md`** for the full writeup. Native in-process self-play
+      **SPRT** (`gomachine bench sprt`, `internal/bench`): two `search.Params` configs
+      of the same binary play game pairs (reversed colors, shared opening), arbitrated
+      by our perft-verified rules + `Adjudicate` — no UCI/subprocess, fixed-nodes
+      reproducible, pentanomial GSPRT. Plus an absolute-Elo Stockfish anchor
+      (`bench vs-stockfish`), a single-game viewer (`bench game`), and a Texel tuner
+      (`gomachine tune`, game-result + Stockfish-distillation targets).
+      **Shipped (SPRT-gated, ~+250 Elo @ movetime, now defaults):** SEE (+66),
+      delta pruning (+22), aspiration windows (+22), reverse futility pruning (+67),
+      late move pruning (+95). **Lazy SMP** (lock-free atomic TT; +97 Elo @ 4
+      threads) — engine supports it; not yet wired into the `serve`/hub prod paths.
+      **Eval terms** (mobility/pawns/king-safety/bishop-pair) + tuner BUILT but
+      **off by default**: MSE-tuned eval was SPRT-rejected at −148 Elo (eval-fit ≠
+      strength — distillation gave the lowest MSE yet lost hardest). Current strength
+      ~2600 (beats handicapped SF-2500). Next: ship SMP to prod, remaining cheap
+      search patches, then **NNUE** (the distillation pipeline is its data step) or
+      SPSA — bolt-on linear eval terms are a dead end.
 - [x] **Match bot strength to its rating** — fill-in bot displayed rating is now
       anchored to the human's Elo (±120) and the engine level is derived from it
       (`levelForRating`), so rated bot games are fair. Remaining: precise

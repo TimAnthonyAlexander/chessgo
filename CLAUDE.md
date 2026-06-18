@@ -53,7 +53,9 @@ Quick version: `./mason serve --screen` (API), `gomachine serve` (engine),
 ```sh
 cd gomachine && go build -o bin/gomachine ./cmd/gomachine && go test ./...   # Go
 cd gomachine && ./bin/gomachine perft -depth 5                                # movegen sanity
-cd gomachine && ./bin/gomachine bench sprt --new "" --old "lmr=off"           # strength SPRT (self-play; docs/COMMANDS.md)
+cd gomachine && ./bin/gomachine bench sprt --new "" --old "lmr=off"           # strength SPRT (self-play; docs/ENGINE_STRENGTH.md)
+cd gomachine && ./bin/gomachine bench vs-stockfish --sf-elo 2500              # absolute Elo anchor (noisy — a band, not a number)
+cd gomachine && ./bin/gomachine tune --games 1500 --target stockfish         # Texel/distillation eval tuner (terms off by default)
 cd frontend && bun run typecheck && bun run build                            # frontend
 php mason migrate:generate && php mason migrate:apply -y                     # DB schema
 ```
@@ -81,6 +83,15 @@ php mason migrate:generate && php mason migrate:apply -y                     # D
 - **Engine owns rules.** PHP never re-implements chess — it calls the engine /
   the hub uses `internal/chess`. Keep the engine HTTP boundary **stateless**
   (FEN-in) so magic tables + TT stay warm.
+- **Engine strength = SPRT, not vibes** (see `docs/ENGINE_STRENGTH.md`). To change
+  playing strength: implement behind a `search.Params`/`eval.Config` flag
+  (default off), then `gomachine bench sprt --new "flag=on" --old "flag=off"`; only
+  flip the default if it accepts H1. Search patches (SEE/delta/aspiration/RFP/LMP)
+  + **Lazy SMP** are shipped (~+250/+97 Elo). **Eval terms are OFF by default** —
+  MSE/distillation tuning was SPRT-rejected at −148 Elo (*eval-fit ≠ strength*;
+  the lowest-MSE fit lost hardest). The lock-free TT (`tt.go`, Hyatt XOR) makes the
+  TT concurrency-safe; `threads=1` is byte-identical to serial — **run
+  `go test -race ./internal/search/` after touching the TT or the parallel driver.**
 - **`WS_TICKET_SECRET` must match** between BaseAPI (`.env`) and the hub's env, or
   every WebSocket connection is rejected. It's **also** the shared secret the hub
   sends as `X-Hub-Secret` when persisting games to `POST /internal/games`. The dev
@@ -140,6 +151,14 @@ seeded tactical trainer on an **isolated** `rating_puzzle` (never touches the
 time-control ratings); `puzzle`/`puzzle_theme`/`puzzle_attempt` models + the
 `scripts/import_puzzles.php` CSV importer; serving is rating-matched + de-duped
 with a theme filter, and the solution is validated server-side (never sent to the
-client). See SPEC.md §9. Next: hub-restart-durable resume, puzzle generation
-pipeline, precise level↔Elo *calibration* (the bot's `levelForRating` mapping is
-currently a monotonic heuristic), a true cross-pool ranked queue. See `docs/SPEC.md` §11 roadmap.
+client). See SPEC.md §9. Also: **engine strength push** (`docs/ENGINE_STRENGTH.md`)
+— a native in-process self-play **SPRT** harness (`gomachine bench`) drove five
+SPRT-gated search improvements (SEE, delta/aspiration/reverse-futility/late-move
+pruning; ~+250 Elo) and **Lazy SMP** (lock-free TT; ~+97 Elo), reaching **~2600**
+(beats handicapped SF-2500). A Texel tuner (`gomachine tune`, game-result +
+Stockfish-distillation) + handcrafted eval terms exist but are **off by default**
+(MSE-tuned eval lost −148 Elo — *eval-fit ≠ strength*). Next: hub-restart-durable
+resume, puzzle generation pipeline, ship SMP to the `serve`/hub prod paths,
+remaining cheap search patches → **NNUE** (the distillation pipeline is its data
+step), precise level↔Elo *calibration*, a true cross-pool ranked queue. See
+`docs/SPEC.md` §11 roadmap.

@@ -159,15 +159,46 @@ cd gomachine && go build -o bin/gomachine ./cmd/gomachine
 ```
 
 Key flags (see `bench sprt -h`): `--nodes` (fixed nodes/move, primary),
-`--elo0/--elo1` (SPRT bounds), `--alpha/--beta` (error rates, default 0.05),
-`--concurrency` (default = NCPU), `--maxpairs` (hard cap), `--tt` (MB/engine),
-`--book` (`.epd`/`.fen` or UCI move-lines; default: a built-in balanced book).
-Ctrl-C ends early and prints the result so far.
+`--movetime` (use instead of nodes for time-dependent features), `--elo0/--elo1`
+(SPRT bounds), `--alpha/--beta` (error rates, default 0.05), `--concurrency`
+(default = NCPU), `--maxpairs` (hard cap), `--tt` (MB/engine), `--book`
+(`.epd`/`.fen` or UCI move-lines; default: a built-in balanced book),
+`--new-threads`/`--old-threads` (Lazy SMP — use with `--movetime`). Ctrl-C ends
+early and prints the result so far.
 
-**Workflow:** implement one improvement behind a new `search.Params` flag,
-SPRT-gate `flag=on` vs `flag=off`; if H1, make it the default and re-baseline.
-Absolute Elo vs Stockfish (a thin UCI adapter) is a later, decoupled add-on —
-self-play SPRT only says "new beats old", not the absolute number.
+Param spec keys: `tt nullmove nullr lmr checkext see delta asp rfp lmp mobility
+pawns kingsafety bishoppair eval` (`eval` toggles all knowledge terms at once).
+
+**Workflow:** implement an improvement behind a new `search.Params` flag, SPRT-gate
+`flag=on` vs `flag=off`; if H1, make it the default and re-baseline.
+
+### Absolute Elo anchor & watching games
+
+```sh
+# Anchor our strength against Stockfish (handicapped via UCI_Elo). NOISY — a band,
+# not a number; gate patches on the SPRT, not this.
+./bin/gomachine bench vs-stockfish --sf /opt/homebrew/bin/stockfish \
+  --sf-elo 2500 --movetime 100 --games 60 --threads 4
+
+# Watch a single game vs full-strength Stockfish.
+./bin/gomachine bench game --sf-skill 20 --movetime 300 --color white --threads 4
+```
+
+### Texel tuning (`gomachine tune`)
+
+Optimizes the eval's knowledge-term weights. Target = game **result** or
+**Stockfish distillation** (label each position with SF's eval — denser, cleaner).
+
+```sh
+./bin/gomachine tune --games 1500 --target result
+./bin/gomachine tune --games 1500 --target stockfish \
+  --sf /opt/homebrew/bin/stockfish --sf-depth 8 --workers 10
+```
+
+> **Note:** the eval terms + tuner are BUILT but **off by default** — MSE-tuned
+> eval was SPRT-rejected at −148 Elo (eval-fit ≠ strength). See
+> **`docs/ENGINE_STRENGTH.md`** for the full story, the implemented techniques,
+> measured Elo, and the findings.
 
 ## Database / migrations
 
