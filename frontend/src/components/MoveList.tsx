@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Box } from '@mui/material'
+import { Box, useMediaQuery, useTheme } from '@mui/material'
 import type { MoveEntry } from '../api/client'
 import { sanToGlyph } from '../lib/chess'
 
@@ -34,11 +34,15 @@ export default function MoveList({
 
   // Keep the active (latest-played / selected) row in view as moves come in, so the
   // newest moves don't disappear below the scroll cutoff. `block: 'nearest'` only
-  // scrolls the move container, never the page.
+  // scrolls the move container, never the page. Desktop only: on mobile the move
+  // list shares vertical scroll with the page, so auto-scrolling it on every move
+  // yanks the viewport around — leave it be there.
+  const isDesktop = useMediaQuery(useTheme().breakpoints.up('md'))
   const activeRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
+    if (!isDesktop) return
     activeRef.current?.scrollIntoView({ block: 'nearest' })
-  }, [currentPly, moves.length])
+  }, [currentPly, moves.length, isDesktop])
 
   const rowEls = (
     <>
