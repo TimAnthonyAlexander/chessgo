@@ -1,6 +1,5 @@
 .board-wrap {
   width: 100%;
-  max-width: 560px;
   margin: 0 auto;
 }
 
@@ -19,7 +18,47 @@
     0 24px 60px -28px rgba(0, 0, 0, 0.8),
     0 0 0 1px rgba(0, 0, 0, 0.5);
   user-select: none;
-  touch-action: manipulation;
+  touch-action: none;
+}
+
+.sq.interactive {
+  cursor: grab;
+}
+.board.dragging,
+.board.dragging .sq.interactive {
+  cursor: grabbing;
+}
+/* No piece-hover lift while dragging — keep it crisp */
+.board.dragging .piece {
+  transition: none;
+}
+
+/* Square currently under the dragged piece */
+.sq.over {
+  box-shadow: inset 0 0 0 4px var(--select);
+  z-index: 1;
+}
+
+/* The piece that follows the cursor during a drag */
+.drag-ghost {
+  position: fixed;
+  z-index: 1000;
+  line-height: 1;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  will-change: left, top;
+}
+.drag-ghost.white {
+  color: #f7f4ec;
+  text-shadow:
+    0 0 1px rgba(0, 0, 0, 0.55),
+    0 2px 5px rgba(0, 0, 0, 0.5);
+  -webkit-text-stroke: 0.5px rgba(20, 20, 20, 0.7);
+}
+.drag-ghost.black {
+  color: #1b1e25;
+  text-shadow: 0 2px 5px rgba(0, 0, 0, 0.5);
+  -webkit-text-stroke: 0.5px rgba(255, 255, 255, 0.16);
 }
 
 .sq {
@@ -33,9 +72,6 @@
 }
 .sq.dark {
   background: var(--board-dark);
-}
-.sq.interactive {
-  cursor: pointer;
 }
 
 .sq.last::after {
