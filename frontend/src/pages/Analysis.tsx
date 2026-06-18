@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Box, Button, Typography } from '@mui/material'
-import { ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, FlipVertical2, Play, Square, Target, Zap } from 'lucide-react'
+import { ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, Cpu, Eye, EyeOff, FlipVertical2, Play, Square, Target, Zap } from 'lucide-react'
 import { useParams } from 'react-router-dom'
 import Board from '../components/Board'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
@@ -16,6 +16,7 @@ import {
   gameOverAt,
   legalUci,
   playMove,
+  pvToSan,
   START_FEN,
   turnAt,
 } from '../lib/analysisTree'
@@ -43,6 +44,7 @@ export default function Analysis() {
   const [currentId, setCurrentId] = useState(0)
   const [orientation, setOrientation] = useState<Color>('w')
   const [showArrow, setShowArrow] = useState(true)
+  const [engineOn, setEngineOn] = useState(true) // master: eval bar + arrow + engine line
   const [game, setGame] = useState<GameAnalysis | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loading, setLoading] = useState<boolean>(!!id)
@@ -99,6 +101,7 @@ export default function Analysis() {
 
   // --- Live engine eval for positions we don't already have one for ---
   useEffect(() => {
+    if (!engineOn) return // engine analysis disabled — no fetching
     if (current.evalWhite !== null) return
 
     // Terminal positions: derive the eval locally, no engine call.
@@ -106,7 +109,7 @@ export default function Analysis() {
       let ev: WhiteEval
       if (over.checkmate) ev = { type: 'mate', white: sideToMove === 'w' ? -1 : 1 }
       else ev = { type: 'cp', white: 0 }
-      setTree((t) => annotateEval(t, current.id, ev, null))
+      setTree((t) => annotateEval(t, current.id, ev, null, []))
       return
     }
 
@@ -115,11 +118,11 @@ export default function Analysis() {
       .then((r) => {
         if (cancelled) return
         if (!r.eval) {
-          setTree((t) => annotateEval(t, current.id, { type: 'cp', white: 0 }, r.bestmove))
+          setTree((t) => annotateEval(t, current.id, { type: 'cp', white: 0 }, r.bestmove, r.pv))
           return
         }
         const white = sideToMove === 'w' ? r.eval.value : -r.eval.value
-        setTree((t) => annotateEval(t, current.id, { type: r.eval!.type, white }, r.bestmove))
+        setTree((t) => annotateEval(t, current.id, { type: r.eval!.type, white }, r.bestmove, r.pv))
       })
       .catch(() => {
         /* leave eval unknown on engine error */
@@ -127,7 +130,7 @@ export default function Analysis() {
     return () => {
       cancelled = true
     }
-  }, [current.id, current.fen, current.evalWhite, over.over, over.checkmate, sideToMove])
+  }, [engineOn, current.id, current.fen, current.evalWhite, over.over, over.checkmate, sideToMove])
 
   // --- Navigation (manual navigation always cancels any auto playback) ---
   const goPrev = useCallback(() => {
@@ -224,13 +227,23 @@ export default function Analysis() {
   }, [autoMode, currentId, current.bestUci, over.over, tree])
 
   const toggleAuto = useCallback((mode: Exclude<AutoMode, 'off'>) => {
+    if (mode === 'best') setEngineOn(true) // Auto Best Move needs the engine running
     setAutoMode((m) => (m === mode ? 'off' : mode))
   }, [])
 
-  // Always surface the best-move arrow while Auto Best Move is driving, so the
-  // user sees the engine's choice before it's played.
+  // Master engine toggle: turning it off also stops Auto Best Move (which depends
+  // on the engine) — Auto Play, which just replays the move list, keeps going.
+  const toggleEngine = useCallback(() => {
+    setEngineOn((on) => {
+      if (on) setAutoMode((m) => (m === 'best' ? 'off' : m))
+      return !on
+    })
+  }, [])
+
+  // The board arrow needs the engine on. Always surface it while Auto Best Move
+  // is driving so the user sees the engine's choice before it's played.
   const arrow =
-    (showArrow || autoMode === 'best') && current.bestUci
+    engineOn && (showArrow || autoMode === 'best') && current.bestUci
       ? { from: current.bestUci.slice(0, 2), to: current.bestUci.slice(2, 4) }
       : null
 
@@ -270,7 +283,7 @@ export default function Analysis() {
 
         {/* Eval bar + board */}
         <Box sx={{ minWidth: 0, display: 'flex', gap: 1, alignItems: 'stretch' }}>
-          <EvalBar ev={current.evalWhite} orientation={orientation} />
+          <EvalBar ev={engineOn ? current.evalWhite : null} orientation={orientation} />
           <Box sx={{ flex: 1, minWidth: 0 }}>
             <Board
               fen={current.fen}
@@ -300,7 +313,15 @@ export default function Analysis() {
             maxHeight: { md: 'min(calc(100vh - 140px), 820px)' },
           }}
         >
-          <Header id={id} game={game} loading={loading} loadError={loadError} current={current} />
+          {id && <Header id={id} game={game} loading={loading} loadError={loadError} />}
+
+          <EngineLine
+            engineOn={engineOn}
+            onToggleEngine={toggleEngine}
+            evalWhite={current.evalWhite}
+            fen={current.fen}
+            pvUci={current.bestPv}
+          />
 
           <MoveTree tree={tree} currentId={currentId} onSelect={selectNode} />
 
@@ -327,7 +348,10 @@ export default function Analysis() {
             <NavBtn onClick={goNext} label="Next"><ChevronRight size={18} /></NavBtn>
             <NavBtn onClick={goEnd} label="End"><ChevronLast size={18} /></NavBtn>
             <Box sx={{ flex: 1 }} />
-            <NavBtn onClick={() => setShowArrow((v) => !v)} label="Best move" active={showArrow}>
+            <NavBtn onClick={toggleEngine} label="Engine analysis" active={engineOn}>
+              <Cpu size={17} />
+            </NavBtn>
+            <NavBtn onClick={() => setShowArrow((v) => !v)} label="Best move arrow" active={engineOn && showArrow}>
               <Target size={17} />
             </NavBtn>
             <NavBtn onClick={() => setOrientation((o) => (o === 'w' ? 'b' : 'w'))} label="Flip board">
@@ -365,6 +389,128 @@ function NavBtn({
     >
       {children}
     </Button>
+  )
+}
+
+// The engine line (principal variation) row, Lichess-style: an eval chip plus the
+// engine's predicted best continuation in SAN. Display-only; `show` collapses just
+// this row, while `engineOn` is the master switch (off → eval/line are suppressed).
+function EngineLine({
+  engineOn,
+  show,
+  onToggleShow,
+  evalWhite,
+  fen,
+  pvUci,
+}: {
+  engineOn: boolean
+  show: boolean
+  onToggleShow: () => void
+  evalWhite: WhiteEval | null
+  fen: string
+  pvUci: string[] | null
+}) {
+  // Render the PV as numbered SAN tokens ("12. Nf3 Nc6 13. Bb5 …") relative to
+  // the current position's move number and side to move.
+  const tokens = useMemo<{ text: string; num: boolean }[]>(() => {
+    if (!pvUci || pvUci.length === 0) return []
+    const fields = fen.split(' ')
+    let full = parseInt(fields[5] || '1', 10) || 1
+    let white = fields[1] !== 'b'
+    const out: { text: string; num: boolean }[] = []
+    pvToSan(fen, pvUci).forEach((m: { san: string }, i) => {
+      if (white) out.push({ text: `${full}.`, num: true })
+      else if (i === 0) out.push({ text: `${full}…`, num: true })
+      out.push({ text: m.san, num: false })
+      if (!white) full += 1
+      white = !white
+    })
+    return out
+  }, [fen, pvUci])
+
+  const evalText = formatEval(engineOn ? evalWhite : null)
+  const evalPositive = engineOn && evalWhite ? evalWhite.white > 0 : false
+
+  return (
+    <Box
+      sx={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 1,
+        px: 1.5,
+        py: 1,
+        borderBottom: '1px solid var(--line-soft)',
+        bgcolor: 'var(--bg)',
+        minHeight: 38,
+      }}
+    >
+      {/* Eval chip */}
+      <Box
+        sx={{
+          fontFamily: 'var(--font-mono)',
+          fontSize: 12.5,
+          fontWeight: 700,
+          px: 0.75,
+          py: 0.25,
+          borderRadius: '4px',
+          flexShrink: 0,
+          color: !engineOn ? 'var(--muted)' : evalPositive ? 'var(--bg)' : 'var(--text)',
+          bgcolor: !engineOn ? 'var(--line)' : evalPositive ? 'var(--text)' : 'var(--line)',
+        }}
+      >
+        {engineOn ? evalText : 'off'}
+      </Box>
+
+      {/* PV line (or a hint when nothing to show) */}
+      <Box
+        sx={{
+          flex: 1,
+          minWidth: 0,
+          fontSize: 13,
+          lineHeight: 1.5,
+          color: 'var(--text-dim)',
+          overflow: 'hidden',
+          display: show ? '-webkit-box' : 'none',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
+        }}
+      >
+        {!engineOn ? (
+          <Box component="span" sx={{ color: 'var(--muted)' }}>Engine off</Box>
+        ) : tokens.length === 0 ? (
+          <Box component="span" sx={{ color: 'var(--muted)' }}>…</Box>
+        ) : (
+          tokens.map((t, i) => (
+            <Box
+              key={i}
+              component="span"
+              sx={{
+                color: t.num ? 'var(--muted)' : 'var(--text)',
+                fontFamily: t.num ? 'var(--font-mono)' : undefined,
+                mr: 0.5,
+              }}
+            >
+              {t.text}
+            </Box>
+          ))
+        )}
+      </Box>
+
+      {/* Show/hide just the line */}
+      <Button
+        onClick={onToggleShow}
+        aria-label={show ? 'Hide engine line' : 'Show engine line'}
+        sx={{
+          minWidth: 0,
+          p: 0.5,
+          flexShrink: 0,
+          color: 'var(--text-dim)',
+          '&:hover': { color: 'var(--accent)', bgcolor: 'var(--line)' },
+        }}
+      >
+        {show ? <Eye size={15} /> : <EyeOff size={15} />}
+      </Button>
+    </Box>
   )
 }
 

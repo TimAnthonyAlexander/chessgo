@@ -77,6 +77,8 @@ func cmdBenchSPRT(args []string) {
 	conc := fs.Int("concurrency", runtime.NumCPU(), "parallel game-pair workers")
 	maxPairs := fs.Int("maxpairs", 40000, "hard cap on game pairs")
 	bookPath := fs.String("book", "", "opening book (.epd/.fen or UCI move-lines); default: embedded")
+	newThreads := fs.Int("new-threads", 1, "Lazy SMP threads for --new (use with --movetime)")
+	oldThreads := fs.Int("old-threads", 1, "Lazy SMP threads for --old")
 	_ = fs.Parse(args)
 
 	base := search.DefaultParams()
@@ -112,6 +114,8 @@ func cmdBenchSPRT(args []string) {
 		Concurrency: *conc,
 		MaxPairs:    *maxPairs,
 		Book:        book,
+		NewThreads:  *newThreads,
+		OldThreads:  *oldThreads,
 	}
 
 	reporter := bench.NewReporter(cfg)
@@ -136,6 +140,7 @@ func cmdBenchStockfish(args []string) {
 	sfMovetime := fs.Int("sf-movetime", 100, "Stockfish ms per move")
 	ourNodes := fs.Uint64("nodes", 0, "our fixed nodes per move (0 → use --movetime)")
 	ourMovetime := fs.Int("movetime", 100, "our ms per move (if --nodes 0)")
+	ourThreads := fs.Int("threads", 1, "our Lazy SMP threads")
 	tt := fs.Int("tt", 16, "our transposition table size (MB)")
 	games := fs.Int("games", 60, "number of games (rounded to color-swapped pairs)")
 	conc := fs.Int("concurrency", 4, "parallel games (each spawns its own Stockfish)")
@@ -179,6 +184,7 @@ func cmdBenchStockfish(args []string) {
 		OurParams:   ourParams,
 		OurNodes:    *ourNodes,
 		OurMoveTime: time.Duration(*ourMovetime) * time.Millisecond,
+		OurThreads:  *ourThreads,
 		TTMB:        *tt,
 		SFPath:      *sfPath,
 		SFOptions:   sfOpts,
@@ -214,6 +220,7 @@ func cmdBenchGame(args []string) {
 	sfElo := fs.Int("sf-elo", 0, "if >0, limit Stockfish to this UCI_Elo instead of Skill")
 	movetime := fs.Int("movetime", 300, "ms per move for BOTH engines")
 	ourColor := fs.String("color", "white", "gomachine's color: white|black")
+	threads := fs.Int("threads", 1, "gomachine Lazy SMP threads")
 	fenFlag := fs.String("fen", chess.StartFEN, "starting FEN")
 	_ = fs.Parse(args)
 
@@ -267,7 +274,7 @@ func cmdBenchGame(args []string) {
 
 		var uci, san string
 		if pos.SideToMove() == ourSide {
-			res := ours.Play(pos, ourLim, history)
+			res := ours.PlayThreads(pos, ourLim, history, *threads)
 			uci = res.Move.String()
 			san = pos.SAN(res.Move)
 		} else {

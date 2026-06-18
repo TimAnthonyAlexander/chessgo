@@ -30,6 +30,19 @@ type Config struct {
 	Concurrency int     // parallel game-pair workers
 	MaxPairs    int     // hard cap on pairs before giving up
 	Book        []Opening
+
+	NewThreads int // Lazy SMP threads for the patch engine (default 1)
+	OldThreads int // Lazy SMP threads for the baseline engine (default 1)
+}
+
+// player pairs an engine with its Lazy SMP thread count.
+type player struct {
+	eng     *engine.Engine
+	threads int
+}
+
+func (p player) play(pos *chess.Position, lim search.Limits, history []uint64) engine.BestResult {
+	return p.eng.PlayThreads(pos, lim, history, p.threads)
 }
 
 // gameOutcome is a single game's result from White's perspective.
@@ -53,9 +66,9 @@ func (c *Config) limits() search.Limits {
 // White's perspective. white and black are reused across games — NewGame() (TT
 // clear) is called here so no game biases the next; killers/history reset per
 // search already. ctx cancellation ends the game as a draw (run is stopping).
-func playGame(ctx context.Context, white, black *engine.Engine, openFEN string, lim search.Limits) gameOutcome {
-	white.NewGame()
-	black.NewGame()
+func playGame(ctx context.Context, white, black player, openFEN string, lim search.Limits) gameOutcome {
+	white.eng.NewGame()
+	black.eng.NewGame()
 
 	pos, err := chess.ParseFEN(openFEN)
 	if err != nil {
@@ -87,7 +100,7 @@ func playGame(ctx context.Context, white, black *engine.Engine, openFEN string, 
 		if pos.SideToMove() == chess.Black {
 			mover = black
 		}
-		res := mover.Play(pos, lim, history)
+		res := mover.play(pos, lim, history)
 		if res.Move == chess.NullMove {
 			// No move returned though Adjudicate said ongoing — treat as draw
 			// rather than crash the run (should not happen).
@@ -150,11 +163,11 @@ func RunSPRT(ctx context.Context, cfg Config, onProgress func(Progress)) Summary
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			newEng := engine.NewWithParams(cfg.TTMB, cfg.NewParams)
-			oldEng := engine.NewWithParams(cfg.TTMB, cfg.OldParams)
+			newP := player{engine.NewWithParams(cfg.TTMB, cfg.NewParams), maxThreads(cfg.NewThreads)}
+			oldP := player{engine.NewWithParams(cfg.TTMB, cfg.OldParams), maxThreads(cfg.OldThreads)}
 			for open := range jobs {
-				r1 := playGame(ctx, newEng, oldEng, open.FEN, lim)
-				r2 := playGame(ctx, oldEng, newEng, open.FEN, lim)
+				r1 := playGame(ctx, newP, oldP, open.FEN, lim)
+				r2 := playGame(ctx, oldP, newP, open.FEN, lim)
 				score := float64(r1) + (1 - float64(r2))
 				select {
 				case results <- pairOut{score: score, r1w: r1, r2w: r2}:
@@ -258,4 +271,12 @@ func boolToInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// maxThreads normalizes a thread count (0/negative → 1).
+func maxThreads(n int) int {
+	if n < 1 {
+		return 1
+	}
+	return n
 }

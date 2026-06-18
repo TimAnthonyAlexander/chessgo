@@ -19,6 +19,7 @@ type GauntletConfig struct {
 	OurParams   search.Params
 	OurNodes    uint64        // our per-move budget (nodes; 0 → use OurMoveTime)
 	OurMoveTime time.Duration // our per-move budget (time; if OurNodes == 0)
+	OurThreads  int           // Lazy SMP threads for our engine (default 1)
 	TTMB        int
 
 	SFPath    string            // path to the stockfish binary
@@ -94,7 +95,7 @@ func RunGauntlet(ctx context.Context, cfg GauntletConfig, onProgress func(Gauntl
 				open := cfg.Book[idx%len(cfg.Book)]
 				// Game A: we are White. Game B: we are Black (same opening).
 				for _, ourColor := range []chess.Color{chess.White, chess.Black} {
-					s, err := playVsUCI(ctx, ours, sf, open.FEN, ourColor, ourLim, cfg.SFBudget)
+					s, err := playVsUCI(ctx, ours, maxThreads(cfg.OurThreads), sf, open.FEN, ourColor, ourLim, cfg.SFBudget)
 					if err != nil {
 						select {
 						case errCh <- err:
@@ -178,7 +179,7 @@ func RunGauntlet(ctx context.Context, cfg GauntletConfig, onProgress func(Gauntl
 
 // playVsUCI plays one game from openFEN. ourColor is the side our engine plays;
 // the opponent (sf) plays the other side. Returns our score (1, 0.5, 0).
-func playVsUCI(ctx context.Context, ours *engine.Engine, sf *UCIEngine, openFEN string, ourColor chess.Color, ourLim search.Limits, sfBudget UCIBudget) (float64, error) {
+func playVsUCI(ctx context.Context, ours *engine.Engine, ourThreads int, sf *UCIEngine, openFEN string, ourColor chess.Color, ourLim search.Limits, sfBudget UCIBudget) (float64, error) {
 	ours.NewGame()
 	if err := sf.NewGame(); err != nil {
 		return 0, err
@@ -206,7 +207,7 @@ func playVsUCI(ctx context.Context, ours *engine.Engine, sf *UCIEngine, openFEN 
 
 		var uci string
 		if pos.SideToMove() == ourColor {
-			res := ours.Play(pos, ourLim, history)
+			res := ours.PlayThreads(pos, ourLim, history, ourThreads)
 			if res.Move == chess.NullMove {
 				return 0.5, nil
 			}

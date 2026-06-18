@@ -85,6 +85,7 @@ export function playMove(id: string, move: string): Promise<BotGame> {
 export interface Analysis {
   eval: { type: 'cp' | 'mate'; value: number } | null
   bestmove: string | null
+  pv: string[] | null // principal variation (best line) as UCI moves from the position
   depth: number | null
 }
 

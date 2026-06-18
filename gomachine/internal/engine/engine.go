@@ -40,7 +40,14 @@ func (e *Engine) NewGame() { e.searcher.ClearTT() }
 // and returns the result. Used by the match driver with a fixed Nodes budget for
 // reproducible, hardware-independent games.
 func (e *Engine) Play(pos *chess.Position, limits search.Limits, history []uint64) BestResult {
-	r := e.searcher.Search(pos, limits, history)
+	return e.PlayThreads(pos, limits, history, 1)
+}
+
+// PlayThreads runs a full-strength search using Lazy SMP across `threads` workers
+// (threads<=1 is single-threaded). More threads → deeper search at a fixed time
+// budget; use with a MoveTime limit (fixed Nodes does not parallelize meaningfully).
+func (e *Engine) PlayThreads(pos *chess.Position, limits search.Limits, history []uint64, threads int) BestResult {
+	r := e.searcher.SearchParallel(pos, limits, history, threads)
 	return BestResult{
 		Move: r.BestMove, Score: r.Score, Depth: r.Depth,
 		Nodes: r.Nodes, PV: r.PV, MateIn: r.MateIn, Level: -1,

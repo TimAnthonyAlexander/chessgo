@@ -12,7 +12,10 @@ use App\Services\GomachineClient;
  * any game's bot difficulty.
  *
  *   POST /analyze   { fen: "<FEN>" }
- *   → { eval: {type:"cp"|"mate", value}, bestmove, depth }
+ *   → { eval: {type:"cp"|"mate", value}, bestmove, pv: [uci...], depth }
+ *
+ * `pv` is the principal variation (the engine's predicted best line) as UCI
+ * moves from this position, used by the analysis board's engine line.
  */
 class AnalyzeController extends Controller
 {
@@ -33,6 +36,7 @@ class AnalyzeController extends Controller
         return JsonResponse::ok([
             'eval' => $res['eval'] ?? null,
             'bestmove' => $res['bestmove'] ?? null,
+            'pv' => $res['pv'] ?? null,
             'depth' => $res['depth'] ?? null,
         ]);
     }

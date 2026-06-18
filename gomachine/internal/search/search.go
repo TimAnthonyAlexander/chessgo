@@ -5,6 +5,7 @@
 package search
 
 import (
+	"sync"
 	"time"
 
 	"github.com/timanthonyalexander/gomachine/internal/chess"
@@ -78,6 +79,17 @@ func NewWithParams(ttSizeMB int, params Params) *Searcher {
 	}
 }
 
+// newWithSharedTT returns a helper Searcher that shares tt with others (Lazy SMP
+// worker). It has its own killers/history/stack/node counter; only the TT is
+// shared. It must NOT bump the TT age — the coordinator does that once.
+func newWithSharedTT(tt *TT, params Params) *Searcher {
+	return &Searcher{
+		tt:       tt,
+		params:   params,
+		keyStack: make([]uint64, 0, 1024),
+	}
+}
+
 // ClearTT empties the transposition table. The match driver calls this between
 // games so a finished game's entries never bias the next one.
 func (s *Searcher) ClearTT() { s.tt.Clear() }
@@ -87,7 +99,6 @@ func (s *Searcher) reset(limits Limits, gameHistory []uint64) {
 	s.stop = false
 	s.killers = [maxPly][2]chess.Move{}
 	s.history = [12][64]int{}
-	s.tt.NewSearchAge()
 	s.useTime = limits.MoveTime > 0
 	if s.useTime {
 		s.deadline = time.Now().Add(limits.MoveTime)
@@ -133,6 +144,50 @@ func (s *Searcher) isRepetition(pos *chess.Position) bool {
 // Search runs iterative deepening and returns the best line. gameHistory holds
 // Zobrist keys of positions that occurred before the root (for repetition).
 func (s *Searcher) Search(pos *chess.Position, limits Limits, gameHistory []uint64) Result {
+	s.tt.NewSearchAge()
+	return s.runID(pos, limits, gameHistory)
+}
+
+// SearchParallel runs Lazy SMP: `threads` workers search the same position
+// concurrently, sharing this Searcher's transposition table (each worker keeps
+// its own killers/history/stack). They diverge via timing and cross-pollinate
+// through the shared TT; the result is taken from the worker that reached the
+// greatest completed depth. threads<=1 is exactly the single-threaded Search.
+func (s *Searcher) SearchParallel(pos *chess.Position, limits Limits, gameHistory []uint64, threads int) Result {
+	if threads <= 1 {
+		return s.Search(pos, limits, gameHistory)
+	}
+	s.tt.NewSearchAge() // once, before any worker — TT age is then read-only
+
+	results := make([]Result, threads)
+	var wg sync.WaitGroup
+	for i := 0; i < threads; i++ {
+		wg.Add(1)
+		worker := s
+		if i > 0 {
+			worker = newWithSharedTT(s.tt, s.params)
+		}
+		go func(i int, w *Searcher) {
+			defer wg.Done()
+			p := *pos // value copy: each worker mutates its own board
+			results[i] = w.runID(&p, limits, gameHistory)
+		}(i, worker)
+	}
+	wg.Wait()
+
+	best := results[0]
+	for i := 1; i < threads; i++ {
+		if results[i].Depth > best.Depth ||
+			(results[i].Depth == best.Depth && results[i].Score > best.Score) {
+			best = results[i]
+		}
+	}
+	return best
+}
+
+// runID is the iterative-deepening loop for one worker (no TT-age bump — the
+// caller owns that so parallel workers don't all bump the shared counter).
+func (s *Searcher) runID(pos *chess.Position, limits Limits, gameHistory []uint64) Result {
 	s.reset(limits, gameHistory)
 	s.pushKey(pos.Key())
 
@@ -242,6 +297,7 @@ func (s *Searcher) Nodes() uint64 { return s.nodes }
 // returns their scores (MultiPV-style), used by the engine's level-based
 // weakening. Scores are from the root side-to-move's perspective.
 func (s *Searcher) RootScores(pos *chess.Position, limits Limits, gameHistory []uint64) []RootMove {
+	s.tt.NewSearchAge()
 	s.reset(limits, gameHistory)
 	s.pushKey(pos.Key())
 

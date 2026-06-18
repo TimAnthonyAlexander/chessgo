@@ -24,6 +24,7 @@ export interface TreeNode {
   move: TreeMove | null // the move leading INTO this node (null at root)
   evalWhite: WhiteEval | null // eval at this position, White-relative (null = unknown)
   bestUci: string | null // engine's best move FROM this position (for the arrow)
+  bestPv: string[] | null // engine's principal variation FROM this position (UCI), bestUci first
   judgment: Judgment | null // judgment of `move` (set for a loaded game's mainline)
   cpLoss: number | null
 }
@@ -46,6 +47,7 @@ function emptyNode(id: number, fen: string, ply: number, parent: number | null):
     move: null,
     evalWhite: null,
     bestUci: null,
+    bestPv: null,
     judgment: null,
     cpLoss: null,
   }
@@ -144,11 +146,47 @@ export function pathToNode(tree: Tree, nodeId: number): TreeNode[] {
   return out.reverse()
 }
 
-/** Store an eval (and optional best move) on a node immutably. */
-export function annotateEval(tree: Tree, nodeId: number, evalWhite: WhiteEval | null, bestUci: string | null): Tree {
+/** Store an eval (and optional best move + principal variation) on a node immutably. */
+export function annotateEval(
+  tree: Tree,
+  nodeId: number,
+  evalWhite: WhiteEval | null,
+  bestUci: string | null,
+  bestPv: string[] | null = null,
+): Tree {
   const node = tree.nodes[nodeId]
   if (!node) return tree
-  return { ...tree, nodes: { ...tree.nodes, [nodeId]: { ...node, evalWhite, bestUci } } }
+  return { ...tree, nodes: { ...tree.nodes, [nodeId]: { ...node, evalWhite, bestUci, bestPv } } }
+}
+
+export interface PvMove {
+  san: string
+  ply: number // half-move index within the PV (0-based)
+}
+
+/**
+ * Convert a principal variation (UCI moves from `fen`) into SAN for display,
+ * e.g. ['e2e4','e7e5'] → [{san:'e4'}, {san:'e5'}]. Stops early if a move is
+ * illegal (defensive — the engine should only ever return a legal line).
+ */
+export function pvToSan(fen: string, pvUci: string[]): PvMove[] {
+  const out: PvMove[] = []
+  let c: Chess
+  try {
+    c = new Chess(fen)
+  } catch {
+    return out
+  }
+  for (let i = 0; i < pvUci.length; i++) {
+    const uci = pvUci[i]
+    try {
+      const res = c.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci.length > 4 ? uci[4] : undefined })
+      out.push({ san: res.san, ply: i })
+    } catch {
+      break
+    }
+  }
+  return out
 }
 
 export interface AnalysisPlyDTO {

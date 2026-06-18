@@ -91,6 +91,59 @@ func clone(pos *chess.Position) *chess.Position {
 	return &p
 }
 
+// Lazy SMP must not break tactics or race on the shared TT. Run this package with
+// -race to exercise the lock-free table under concurrent workers.
+func TestParallelSearchKeepsTactics(t *testing.T) {
+	for _, threads := range []int{2, 4, 8} {
+		mate, _ := chess.ParseFEN("6k1/5ppp/8/8/8/8/8/R6K w - - 0 1")
+		r := New(16).SearchParallel(mate, Limits{Depth: 6}, nil, threads)
+		if r.BestMove.String() != "a1a8" {
+			t.Errorf("threads=%d: mate-in-1 best = %s, want a1a8", threads, r.BestMove)
+		}
+
+		hang, _ := chess.ParseFEN("4k3/8/8/8/7q/8/8/4K2R w - - 0 1")
+		r = New(16).SearchParallel(hang, Limits{Depth: 8}, nil, threads)
+		if r.BestMove.String() != "h1h4" {
+			t.Errorf("threads=%d: win-queen best = %s, want h1h4", threads, r.BestMove)
+		}
+	}
+}
+
+// A node-limited parallel search must terminate cleanly and return a legal move
+// (stresses the shared TT and the stop path under -race).
+func TestParallelSearchNodeLimited(t *testing.T) {
+	pos, _ := chess.ParseFEN("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
+	r := New(32).SearchParallel(pos, Limits{Nodes: 200000}, nil, 6)
+	if r.BestMove == chess.NullMove {
+		t.Fatal("parallel search returned no move")
+	}
+	var ml chess.MoveList
+	pos.GenerateLegal(&ml)
+	legal := false
+	for i := 0; i < ml.Len(); i++ {
+		if ml.Get(i) == r.BestMove {
+			legal = true
+			break
+		}
+	}
+	if !legal {
+		t.Fatalf("parallel search returned illegal move %s", r.BestMove)
+	}
+}
+
+// threads=1 via SearchParallel must be identical to plain Search (same path).
+func TestParallelThreadsOneMatchesSerial(t *testing.T) {
+	for _, fen := range []string{chess.StartFEN, "4k3/8/8/8/7q/8/8/4K2R w - - 0 1"} {
+		pos, _ := chess.ParseFEN(fen)
+		a := New(16).Search(clone(pos), Limits{Depth: 7}, nil)
+		b := New(16).SearchParallel(clone(pos), Limits{Depth: 7}, nil, 1)
+		if a.BestMove != b.BestMove || a.Score != b.Score {
+			t.Errorf("%s: threads=1 differs from serial: serial=%s/%d parallel=%s/%d",
+				fen, a.BestMove, a.Score, b.BestMove, b.Score)
+		}
+	}
+}
+
 // RFP and LMP are forward-pruning heuristics (they change the search, not just
 // its speed), so they must not blind the engine to basic tactics. Verify the
 // mate-in-1 and hanging-queen positions are still solved with both enabled.
