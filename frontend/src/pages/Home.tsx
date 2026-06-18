@@ -11,7 +11,7 @@ import {
 } from '@mui/material'
 import { Crown, Cpu, Swords, Trophy, UserPlus, Users, Zap } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { gameSocket } from '../lib/socket'
+import { gameSocket, type LiveGameState } from '../lib/socket'
 import { useGameSocket } from '../lib/useGameSocket'
 
 // Quick-pairing presets (presentational for now — online play comes next).
@@ -42,6 +42,7 @@ const EVENTS = [
 export default function Home() {
   const navigate = useNavigate()
   const s = useGameSocket()
+  const live = s.game
   const [search, setSearch] = useState<string | null>(null)
   const [snack, setSnack] = useState<string | null>(null)
 
@@ -76,6 +77,8 @@ export default function Home() {
           ♞
         </Box>
       </Box>
+
+      {live && !live.ended && <ResumeBanner game={live} />}
 
       <Box
         sx={{
@@ -193,6 +196,50 @@ export default function Home() {
         message={snack}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       />
+    </Box>
+  )
+}
+
+function ResumeBanner({ game }: { game: LiveGameState }) {
+  const navigate = useNavigate()
+  const go = () => navigate(`/game/${game.id}`)
+  return (
+    <Box sx={{ maxWidth: 1180, mx: 'auto', px: { xs: 2, md: 3 }, pt: { xs: 2.5, md: 3 } }}>
+      <Box
+        onClick={go}
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 1.5,
+          p: 1.5,
+          borderRadius: 2,
+          cursor: 'pointer',
+          bgcolor: 'var(--accent-soft)',
+          border: '1px solid var(--accent-line)',
+          transition: 'background 0.12s ease',
+          '&:hover': { bgcolor: 'rgba(216,166,87,0.18)' },
+        }}
+      >
+        <Swords size={18} color="var(--accent)" />
+        <Box sx={{ minWidth: 0 }}>
+          <Typography sx={{ fontWeight: 600, fontSize: 14.5 }}>You have a game in progress</Typography>
+          <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
+            vs {game.opponent.name} · {game.pool}
+            {game.opponentOnline ? '' : ' · opponent disconnected'}
+          </Typography>
+        </Box>
+        <Button
+          variant="contained"
+          size="small"
+          sx={{ ml: 'auto', flexShrink: 0 }}
+          onClick={(e) => {
+            e.stopPropagation()
+            go()
+          }}
+        >
+          Resume
+        </Button>
+      </Box>
     </Box>
   )
 }

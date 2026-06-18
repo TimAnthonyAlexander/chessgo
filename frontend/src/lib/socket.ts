@@ -25,6 +25,7 @@ export interface LiveGameState {
   result: string | null
   reason: string | null
   ended: boolean
+  opponentOnline: boolean
 }
 
 export interface SocketState {
@@ -61,6 +62,33 @@ function buildGame(m: Msg): LiveGameState {
     result: null,
     reason: null,
     ended: false,
+    opponentOnline: true,
+  }
+}
+
+// Build a full game state from a resume message (includes move history).
+function buildResume(m: Msg): LiveGameState {
+  const moves: { san: string; uci: string }[] = (m.moves ?? []).map((x: Msg) => ({ san: x.san, uci: x.uci }))
+  return {
+    id: m.gameId,
+    color: m.color,
+    rated: !!m.rated,
+    pool: m.pool,
+    timeControl: m.timeControl,
+    opponent: m.opponent,
+    fen: m.fen,
+    sideToMove: m.sideToMove,
+    lastMove: parseLast(m.lastMove),
+    check: !!m.check,
+    status: m.status,
+    legalMoves: m.legalMoves ?? [],
+    clock: m.clock,
+    clockAt: Date.now(),
+    moves,
+    result: null,
+    reason: null,
+    ended: m.status !== 'ongoing',
+    opponentOnline: m.opponentOnline !== false,
   }
 }
 
@@ -69,6 +97,7 @@ class GameSocket {
   private ws: WebSocket | null = null
   private listeners = new Set<() => void>()
   private reconnectTimer: number | null = null
+  private resumeTimer: number | null = null
   private attempts = 0
   private intentional = false
   private wantQueue: string | null = null
@@ -152,13 +181,8 @@ class GameSocket {
     this.ws = null
     this.set({ conn: 'closed' })
     if (this.intentional) return
-    if (this.state.game && !this.state.game.ended) {
-      // A mid-game disconnect ends the game server-side (abandon).
-      this.set({
-        error: 'Connection lost.',
-        game: { ...this.state.game, ended: true, status: 'disconnected', reason: 'connection lost', legalMoves: [] },
-      })
-    }
+    // The game is NOT abandoned — the hub keeps it alive. We reconnect and the
+    // hub resumes us (or tells us it's over).
     this.scheduleReconnect()
   }
 
@@ -174,6 +198,9 @@ class GameSocket {
 
   private handle(msg: Msg) {
     switch (msg.type) {
+      case 'hello':
+        this.onHello()
+        break
       case 'queued':
         this.set({ status: 'queued', pool: msg.pool })
         break
@@ -183,11 +210,20 @@ class GameSocket {
       case 'matched':
         this.set({ status: 'matched', pool: msg.pool, game: buildGame(msg), error: null })
         break
+      case 'resume':
+        this.onResume(msg)
+        break
       case 'state':
         this.applyState(msg)
         break
       case 'end':
         this.applyEnd(msg)
+        break
+      case 'opponentGone':
+        this.setOpponentOnline(false)
+        break
+      case 'opponentBack':
+        this.setOpponentOnline(true)
         break
       case 'error':
         this.set({ error: msg.message })
@@ -195,6 +231,35 @@ class GameSocket {
       default:
         break
     }
+  }
+
+  // On (re)connect: if we still have an unfinished game but the hub doesn't send
+  // a resume shortly after hello, it ended while we were away — mark it over.
+  private onHello() {
+    if (this.state.game && !this.state.game.ended) {
+      if (this.resumeTimer !== null) window.clearTimeout(this.resumeTimer)
+      this.resumeTimer = window.setTimeout(() => {
+        this.resumeTimer = null
+        const g = this.state.game
+        if (g && !g.ended) {
+          this.set({ game: { ...g, ended: true, status: 'ended', reason: 'ended while away', legalMoves: [] } })
+        }
+      }, 1500)
+    }
+  }
+
+  private onResume(msg: Msg) {
+    if (this.resumeTimer !== null) {
+      window.clearTimeout(this.resumeTimer)
+      this.resumeTimer = null
+    }
+    this.set({ game: buildResume(msg), error: null })
+  }
+
+  private setOpponentOnline(online: boolean) {
+    const g = this.state.game
+    if (!g) return
+    this.set({ game: { ...g, opponentOnline: online } })
   }
 
   private applyState(msg: Msg) {

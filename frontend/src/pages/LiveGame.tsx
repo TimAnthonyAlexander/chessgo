@@ -112,7 +112,16 @@ export default function LiveGame() {
             rating={g.opponent.anon ? null : g.opponent.rating}
             ms={liveRemaining(g, other(g.color))}
             active={!g.ended && g.sideToMove === other(g.color)}
+            online={g.opponentOnline}
           />
+
+          {s.conn !== 'open' && !g.ended && (
+            <Box sx={{ px: 1.75, py: 0.75, bgcolor: 'var(--accent-soft)', borderBottom: '1px solid var(--accent-line)' }}>
+              <Typography sx={{ fontSize: 12.5, color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>
+                Reconnecting…
+              </Typography>
+            </Box>
+          )}
 
           <MoveList moves={moveEntries} currentPly={moveEntries.length} onSelectPly={() => {}} />
 
@@ -161,11 +170,13 @@ function PlayerBar({
   rating,
   ms,
   active,
+  online,
 }: {
   name: string
   rating: number | null
   ms: number
   active: boolean
+  online?: boolean
 }) {
   return (
     <Box
@@ -178,11 +189,23 @@ function PlayerBar({
         bgcolor: '#23272f',
       }}
     >
+      <Box
+        sx={{
+          width: 8,
+          height: 8,
+          borderRadius: '50%',
+          flexShrink: 0,
+          background: online === false ? 'var(--muted)' : '#7bb661',
+        }}
+      />
       <Typography sx={{ fontWeight: 600, fontSize: 14.5 }}>{name}</Typography>
       {rating != null && (
         <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-dim)' }}>
           {rating}
         </Typography>
+      )}
+      {online === false && (
+        <Typography sx={{ fontSize: 11.5, color: 'var(--muted)' }}>disconnected</Typography>
       )}
       <Box sx={{ ml: 'auto' }}>
         <Clock ms={ms} active={active} />

@@ -30,7 +30,33 @@ type game struct {
 	turnStart time.Time
 	history   []uint64 // prior-position Zobrist keys (repetition)
 	over      bool
+	online    [2]bool // per-color connection presence
 	startFen  string
+}
+
+// colorForID returns which side the given identity id plays.
+func (g *game) colorForID(id string) chess.Color {
+	if g.white.id.UserID == id {
+		return chess.White
+	}
+	return chess.Black
+}
+
+// lastUci returns the last move played (UCI), or "".
+func (g *game) lastUci() string {
+	if len(g.moves) == 0 {
+		return ""
+	}
+	return g.moves[len(g.moves)-1]
+}
+
+// moveLog returns the full move history as {uci, san} pairs (for resume).
+func (g *game) moveLog() []map[string]string {
+	log := make([]map[string]string, len(g.moves))
+	for i := range g.moves {
+		log[i] = map[string]string{"uci": g.moves[i], "san": g.sans[i]}
+	}
+	return log
 }
 
 func (g *game) playerFor(c chess.Color) *player {

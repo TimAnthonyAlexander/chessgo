@@ -16,8 +16,12 @@ import (
 const testSecret = "test-secret"
 
 func dial(t *testing.T, srvURL, name string) *websocket.Conn {
+	return dialAs(t, srvURL, name, "")
+}
+
+func dialAs(t *testing.T, srvURL, name, userID string) *websocket.Conn {
 	t.Helper()
-	ticket := auth.Sign(auth.Identity{Anon: true, Name: name}, testSecret)
+	ticket := auth.Sign(auth.Identity{UserID: userID, Anon: true, Name: name}, testSecret)
 	url := "ws" + strings.TrimPrefix(srvURL, "http") + "/ws?ticket=" + ticket
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -110,6 +114,62 @@ func TestMatchPlayAndResign(t *testing.T) {
 	end := readType(t, white, "end")
 	if end["result"] != "0-1" {
 		t.Errorf("result = %v, want 0-1 (white resigned)", end["result"])
+	}
+}
+
+func TestReconnectResume(t *testing.T) {
+	h := New(testSecret)
+	go h.Run()
+	srv := httptest.NewServer(http.HandlerFunc(h.ServeWS))
+	defer srv.Close()
+
+	a := dialAs(t, srv.URL, "alice", "id-alice")
+	defer a.CloseNow()
+	b := dialAs(t, srv.URL, "bob", "id-bob")
+	defer b.CloseNow()
+	readType(t, a, "hello")
+	readType(t, b, "hello")
+
+	send(t, a, map[string]any{"type": "queue", "pool": "3+0"})
+	send(t, b, map[string]any{"type": "queue", "pool": "3+0"})
+	ma := readType(t, a, "matched")
+	mb := readType(t, b, "matched")
+
+	// Identify white (conn, id) and black.
+	whiteConn, whiteID, blackConn := a, "id-alice", b
+	if ma["color"] == "b" {
+		whiteConn, whiteID, blackConn = b, "id-bob", a
+	}
+	_ = mb
+
+	send(t, whiteConn, map[string]any{"type": "move", "move": "e2e4"})
+	readType(t, whiteConn, "state")
+	readType(t, blackConn, "state")
+
+	// White's tab "closes", then reconnects with the same identity.
+	whiteConn.CloseNow()
+	time.Sleep(60 * time.Millisecond)
+	w2 := dialAs(t, srv.URL, "alice", whiteID)
+	defer w2.CloseNow()
+	readType(t, w2, "hello")
+
+	rm := readType(t, w2, "resume")
+	if rm["color"] != "w" {
+		t.Errorf("resume color = %v, want w", rm["color"])
+	}
+	moves, ok := rm["moves"].([]any)
+	if !ok || len(moves) != 1 {
+		t.Errorf("resume moves = %v, want 1 move", rm["moves"])
+	}
+	if rm["opponentOnline"] != true {
+		t.Errorf("opponentOnline = %v, want true", rm["opponentOnline"])
+	}
+
+	// The reconnected white can keep playing: black moves, white sees it.
+	send(t, blackConn, map[string]any{"type": "move", "move": "e7e5"})
+	st := readType(t, w2, "state")
+	if st["sideToMove"] != "w" {
+		t.Errorf("after black reply sideToMove = %v, want w", st["sideToMove"])
 	}
 }
 

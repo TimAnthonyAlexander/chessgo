@@ -26,12 +26,14 @@ type command struct {
 
 // Hub owns all realtime state. Use New, then run Run in a goroutine.
 type Hub struct {
-	secret     string
-	unregister chan *Client
-	commands   chan command
-	pools      map[string][]*Client // waiting clients per time-control pool
-	games      map[string]*game
-	onFinish   func(FinishedGame)
+	secret      string
+	register    chan *Client
+	unregister  chan *Client
+	commands    chan command
+	pools       map[string][]*Client // waiting clients per time-control pool
+	games       map[string]*game
+	playerGames map[string]*game // identity id -> active game (for reconnect)
+	onFinish    func(FinishedGame)
 }
 
 // FinishedGame is handed to the persistence hook when a game ends.
@@ -50,11 +52,13 @@ type FinishedGame struct {
 // New creates a Hub authenticating tickets with the given shared secret.
 func New(secret string) *Hub {
 	return &Hub{
-		secret:     secret,
-		unregister: make(chan *Client),
-		commands:   make(chan command, 256),
-		pools:      map[string][]*Client{},
-		games:      map[string]*game{},
+		secret:      secret,
+		register:    make(chan *Client),
+		unregister:  make(chan *Client),
+		commands:    make(chan command, 256),
+		pools:       map[string][]*Client{},
+		games:       map[string]*game{},
+		playerGames: map[string]*game{},
 	}
 }
 
@@ -67,6 +71,8 @@ func (h *Hub) Run() {
 	defer ticker.Stop()
 	for {
 		select {
+		case c := <-h.register:
+			h.handleRegister(c)
 		case c := <-h.unregister:
 			h.handleDisconnect(c)
 		case cmd := <-h.commands:
@@ -148,10 +154,13 @@ func (h *Hub) startGame(a, b *Client, tc timeControl, pool string) {
 		rated:     !white.id.Anon && !black.id.Anon, // rated only if both are accounts
 		clockMs:   [2]int64{tc.Base, tc.Base},
 		turnStart: time.Now(),
+		online:    [2]bool{true, true},
 		startFen:  chess.StartFEN,
 	}
 	white.game, black.game = g, g
 	h.games[g.id] = g
+	h.playerGames[white.id.UserID] = g
+	h.playerGames[black.id.UserID] = g
 	h.sendMatched(g, white, chess.White)
 	h.sendMatched(g, black, chess.Black)
 }
@@ -252,6 +261,8 @@ func (h *Hub) finish(g *game, result, reason string) {
 	g.white.client.game = nil
 	g.black.client.game = nil
 	delete(h.games, g.id)
+	delete(h.playerGames, g.white.id.UserID)
+	delete(h.playerGames, g.black.id.UserID)
 
 	if h.onFinish != nil {
 		h.onFinish(FinishedGame{
@@ -262,15 +273,71 @@ func (h *Hub) finish(g *game, result, reason string) {
 	}
 }
 
+// handleRegister runs when a connection opens. If the player (by identity id)
+// has an active game, reattach them and send a full resume; the lobby/game view
+// can then pick it back up.
+func (h *Hub) handleRegister(c *Client) {
+	key := c.id.UserID
+	if key == "" {
+		return
+	}
+	g := h.playerGames[key]
+	if g == nil || g.over {
+		return
+	}
+	color := g.colorForID(key)
+	g.playerFor(color).client = c
+	g.online[color] = true
+	c.game = g
+	c.trySend(mustJSON(h.resumeMsg(g, color)))
+
+	if opp := g.playerFor(color.Opposite()); g.online[color.Opposite()] && opp.client != nil {
+		opp.client.trySend(mustJSON(out("opponentBack", map[string]any{"gameId": g.id})))
+	}
+}
+
+func (h *Hub) resumeMsg(g *game, color chess.Color) map[string]any {
+	opp := g.playerFor(color.Opposite()).id
+	st := g.status()
+	colStr := "w"
+	if color == chess.Black {
+		colStr = "b"
+	}
+	return out("resume", map[string]any{
+		"gameId":         g.id,
+		"color":          colStr,
+		"rated":          g.rated,
+		"pool":           g.pool,
+		"fen":            g.pos.FEN(),
+		"sideToMove":     st.SideToMove,
+		"status":         st.State,
+		"check":          st.Check,
+		"timeControl":    map[string]int64{"base": g.tc.Base, "inc": g.tc.Inc},
+		"clock":          map[string]int64{"w": g.remainingMs(chess.White), "b": g.remainingMs(chess.Black)},
+		"opponent":       map[string]any{"name": opp.Name, "rating": opp.Rating, "anon": opp.Anon},
+		"legalMoves":     g.legalMoves(),
+		"moves":          g.moveLog(),
+		"lastMove":       g.lastUci(),
+		"opponentOnline": g.online[color.Opposite()],
+	})
+}
+
+// handleDisconnect keeps the game alive (no abandon): it marks the player
+// offline so they can reconnect and resume. The clock keeps running, so an
+// absent player still flags normally.
 func (h *Hub) handleDisconnect(c *Client) {
 	h.dequeue(c)
-	if g := c.game; g != nil && !g.over {
-		color, _ := g.colorOf(c)
-		result := "0-1"
-		if color == chess.Black {
-			result = "1-0"
-		}
-		h.finish(g, result, "abandon")
+	g := c.game
+	if g == nil || g.over {
+		return
+	}
+	color := g.colorForID(c.id.UserID)
+	if g.playerFor(color).client != c {
+		return // a newer connection already took over this seat
+	}
+	g.online[color] = false
+	if opp := g.playerFor(color.Opposite()); g.online[color.Opposite()] && opp.client != nil {
+		opp.client.trySend(mustJSON(out("opponentGone", map[string]any{"gameId": g.id})))
 	}
 }
 
@@ -300,6 +367,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	c := &Client{hub: h, conn: conn, id: id, send: make(chan []byte, sendBuffer), ctx: ctx, cancel: cancel}
 	go c.writePump()
 	c.trySend(mustJSON(out("hello", map[string]any{"name": id.Name, "anon": id.Anon, "rating": id.Rating})))
+	h.register <- c // reattach + resume if this player has an active game
 
 	c.readPump() // blocks until the connection closes
 

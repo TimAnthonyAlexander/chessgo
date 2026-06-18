@@ -15,6 +15,9 @@ use App\Services\WsTicketService;
  */
 class WsTicketController extends Controller
 {
+    /** Stable per-browser anonymous id (from the client's ?anon=). */
+    public string $anon = '';
+
     public function __construct(private readonly WsTicketService $tickets)
     {
     }
@@ -31,7 +34,13 @@ class WsTicketController extends Controller
                 'rating' => (int)($user['rating'] ?? 1500),
             ];
         } else {
-            $identity = ['sub' => '', 'anon' => true, 'name' => 'Anonymous', 'rating' => 0];
+            // Anonymous: a stable browser id (sub) lets the hub reconnect/resume.
+            $anonId = preg_replace('/[^A-Za-z0-9_-]/', '', $this->anon) ?? '';
+            $anonId = substr($anonId, 0, 64);
+            if ($anonId === '') {
+                $anonId = 'anon-' . bin2hex(random_bytes(8));
+            }
+            $identity = ['sub' => $anonId, 'anon' => true, 'name' => 'Anonymous', 'rating' => 0];
         }
 
         return JsonResponse::ok([

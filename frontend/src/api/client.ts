@@ -98,9 +98,23 @@ export interface WsTicket {
   identity: { name: string; anon: boolean; rating: number }
 }
 
+/** A stable per-browser anonymous id, so the hub can reconnect/resume games. */
+export function anonId(): string {
+  try {
+    let id = localStorage.getItem('chessgo.anonId')
+    if (!id) {
+      id = crypto.randomUUID()
+      localStorage.setItem('chessgo.anonId', id)
+    }
+    return id
+  } catch {
+    return crypto.randomUUID()
+  }
+}
+
 /** Mint a short-lived ticket + ws URL for the realtime hub. */
 export function getWsTicket(): Promise<WsTicket> {
-  return request<WsTicket>('/ws-ticket')
+  return request<WsTicket>(`/ws-ticket?anon=${encodeURIComponent(anonId())}`)
 }
 
 export { ApiError }

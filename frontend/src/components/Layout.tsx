@@ -1,6 +1,8 @@
+import { useEffect } from 'react'
 import { Box, Button, Tooltip } from '@mui/material'
 import { Search } from 'lucide-react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
+import { gameSocket } from '../lib/socket'
 
 const LINKS: { label: string; to: string | null }[] = [
   { label: 'Play', to: '/' },
@@ -13,6 +15,11 @@ const LINKS: { label: string; to: string | null }[] = [
 /** App shell: a flat, full-width top nav (Lichess-style) over the routed page. */
 export default function Layout() {
   const { pathname } = useLocation()
+
+  // Open the realtime socket once on load so the hub can resume any active game.
+  useEffect(() => {
+    void gameSocket.connect()
+  }, [])
 
   const linkSx = (active: boolean, real: boolean) => ({
     fontSize: 12.5,
