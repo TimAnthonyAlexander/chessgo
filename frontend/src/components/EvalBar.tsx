@@ -21,6 +21,7 @@ function whiteWinPercent(ev: WhiteEval | null): number {
   return 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * cp)) - 1)
 }
 
+// Just the value: pawns (e.g. "2.0") or "M" + moves. No sign, no percentage.
 function evalLabel(ev: WhiteEval | null): string {
   if (!ev) return '0.0'
   if (ev.type === 'mate') return 'M' + Math.abs(ev.white)
@@ -29,21 +30,20 @@ function evalLabel(ev: WhiteEval | null): string {
 
 export default function EvalBar({ ev, orientation }: EvalBarProps) {
   const whitePct = whiteWinPercent(ev)
-  const whiteAhead = ev ? (ev.type === 'mate' ? ev.white >= 0 : ev.white >= 0) : true
+  const whiteAhead = ev ? ev.white >= 0 : true
   const whiteAnchor = orientation === 'w' ? 'bottom' : 'top' // White grows from its own side
 
-  // The number sits at the winning side's end of the bar, in contrasting ink.
+  // The single value prints at the winning side's end of the bar.
   const winningSide: Color = whiteAhead ? 'w' : 'b'
   const numberAtBottom = winningSide === orientation
-  const numberOnLight = whiteAhead
 
   return (
     <Box
       sx={{
         position: 'relative',
-        width: { xs: 14, md: 20 },
+        width: { xs: 26, md: 38 },
         flexShrink: 0,
-        borderRadius: 1,
+        borderRadius: '3px',
         overflow: 'hidden',
         bgcolor: '#191c22', // black's region (background)
         border: '1px solid var(--line-soft)',
@@ -78,20 +78,20 @@ export default function EvalBar({ ev, orientation }: EvalBarProps) {
         />
       ))}
 
-      {/* Numeric eval at the winning side */}
+      {/* The single eval value, at the winning side's end */}
       <Box
         sx={{
           position: 'absolute',
           left: 0,
           right: 0,
-          [numberAtBottom ? 'bottom' : 'top']: 3,
+          [numberAtBottom ? 'bottom' : 'top']: 4,
           textAlign: 'center',
           fontFamily: 'var(--font-mono)',
-          fontSize: { xs: 8.5, md: 10 },
-          fontWeight: 600,
+          fontSize: { xs: 9.5, md: 11.5 },
+          fontWeight: 700,
           letterSpacing: '-0.02em',
           lineHeight: 1,
-          color: numberOnLight ? '#1c1f26' : '#e9e1cf',
+          color: whiteAhead ? '#1c1f26' : '#e9e1cf', // dark on white fill, light on black fill
           pointerEvents: 'none',
         }}
       >
