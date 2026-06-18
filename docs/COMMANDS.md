@@ -10,7 +10,7 @@ architecture.
 | **MySQL** | durable data (users, games, ratings) | `127.0.0.1:3306` | `127.0.0.1:3306` |
 | **BaseAPI** (PHP) | REST API: auth, games, matchmaking ticket, persistence | `127.0.0.1:6464` | nginx + PHP-FPM |
 | **gomachine engine** (Go) | internal HTTP: rules + AI (`/bot`, `/analyze`) | `127.0.0.1:6466` | internal only (PHP calls it) |
-| **gomachine hub** (Go) | realtime WebSocket: matchmaking + live games | `127.0.0.1:6467` | nginx `wss://…/ws` proxy |
+| **gomachine hub** (Go) | realtime WebSocket: matchmaking + live games + spectating | `127.0.0.1:6467` | nginx `wss://…/ws` proxy |
 | **Frontend** (React/Vite) | the web app | `127.0.0.1:6465` | nginx static (`dist/`) |
 
 > The engine (6466) and hub (6467) are the **same binary** (`gomachine`) with
@@ -91,6 +91,32 @@ pair instantly — the bot only fills in for a lone, long-waiting player. Bot
 moves are searched off the hub's main goroutine and paced to feel human (the
 think time comes off the bot's clock).
 
+### Watch page fillers (spectator self-play)
+
+The Watch page (`/watch`) shows the top live games. To keep it from looking
+empty, the hub runs **engine-vs-engine** games with believable fake players that
+pad the list up to `-watch-target`. They are **JIT**: they spawn only while
+someone is actually watching (the `GET /games` poll is the signal) and run on a
+**dedicated** engine pool so they can never starve human bot-fill. On by default:
+
+```sh
+./bin/gomachine hub                          # default: fillers on, up to 5 shown, 2 workers
+./bin/gomachine hub -watch-target 6
+./bin/gomachine hub -watch-fillers=false     # real games only (Watch can be empty)
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `-watch-fillers` | `true` | keep self-play games running to populate the Watch page |
+| `-watch-target` | `5` | number of live games shown (real games padded with fillers up to this) |
+| `-watch-filler-workers` | `2` | dedicated engine workers for fillers (small, so they can't starve bot-fill) |
+
+Filler games are always **unrated and never persisted** (no `/internal/games`
+POST, no Elo). Real games always sort ahead of fillers, and in-flight fillers
+**finish naturally** — when the lobby gets busy (or watchers leave) they're just
+not replenished. They DO count toward the hub's `activeGames`, so the homepage
+"games in play" ticks up a few while someone is on the Watch page.
+
 ### Managing the screens
 
 ```sh
@@ -108,6 +134,8 @@ curl -s 127.0.0.1:6466/healthz          # engine
 curl -s 127.0.0.1:6467/healthz          # hub
 curl -s 127.0.0.1:6467/stats            # hub live counts {playersOnline, activeGames}
 curl -s 127.0.0.1:6464/stats            # same, via the BaseAPI proxy (homepage uses this)
+curl -s 127.0.0.1:6467/games            # hub Watch lobby {games:[…], max} — polling this spawns fillers
+curl -s 127.0.0.1:6464/watch            # same, via the BaseAPI proxy (Watch page uses this)
 # verify API↔hub share the ticket secret:
 T=$(curl -s 127.0.0.1:6464/ws-ticket | sed -E 's/.*"ticket":"([^"]+)".*/\1/')
 ( cd gomachine && ./bin/gomachine verifyticket \
