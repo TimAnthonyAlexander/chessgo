@@ -93,6 +93,91 @@ export function analyze(fen: string): Promise<Analysis> {
   return request<Analysis>('/analyze', { method: 'POST', body: JSON.stringify({ fen }) })
 }
 
+// --- Finished live games + post-game analysis (analysis board) ---
+
+/** A persisted finished live game (GET /games/{id} by hub id). */
+export interface LiveGameRecord {
+  id: string
+  hub_game_id: string
+  pool: string
+  category: string
+  rated: boolean
+  result: string
+  reason: string
+  white_name: string
+  black_name: string
+  white_is_bot: boolean
+  black_is_bot: boolean
+  white_rating_before: number | null
+  white_rating_after: number | null
+  black_rating_before: number | null
+  black_rating_after: number | null
+  ply: number
+  moves: string[]
+  sans: string[]
+}
+
+export function getGame(id: string): Promise<LiveGameRecord> {
+  return request<LiveGameRecord>(`/games/${id}`)
+}
+
+export interface AnalysisEval {
+  type: 'cp' | 'mate'
+  white: number
+}
+
+export type AnalysisJudgment = 'best' | 'good' | 'inaccuracy' | 'mistake' | 'blunder'
+
+export interface AnalysisMove {
+  uci: string
+  san: string
+  color: Color
+  cpLoss: number
+  isBest: boolean
+  judgment: AnalysisJudgment
+}
+
+export interface AnalysisPly {
+  ply: number
+  fen: string
+  sideToMove: Color
+  evalWhite: AnalysisEval | null
+  bestUci: string | null
+  bestSan: string | null
+  move?: AnalysisMove
+}
+
+export interface AnalysisSide {
+  best: number
+  good: number
+  inaccuracy: number
+  mistake: number
+  blunder: number
+  acpl: number
+  accuracy: number
+}
+
+export interface GameAnalysis {
+  version: number
+  hubGameId: string
+  result: string
+  reason: string
+  pool: string
+  rated: boolean
+  whiteName: string
+  blackName: string
+  whiteIsBot: boolean
+  blackIsBot: boolean
+  startFen: string
+  plies: AnalysisPly[]
+  summary: { w: AnalysisSide; b: AnalysisSide }
+}
+
+/** Full-game engine analysis (per-ply eval, best move, blunders). Cached server-side. */
+export function getGameAnalysis(id: string): Promise<GameAnalysis> {
+  return request<GameAnalysis>(`/games/${id}/analysis`)
+}
+
 // --- Puzzles (Lichess-style training, SPEC §Puzzles) ---
 
 /** A served puzzle. The opponent's setup move is already applied into `fen`

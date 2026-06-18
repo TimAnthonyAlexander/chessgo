@@ -206,7 +206,7 @@ export default function Home() {
             Finding an opponent…
           </Typography>
           <Typography sx={{ color: 'var(--text-dim)', fontSize: 13.5, mt: 1, maxWidth: 280, mx: 'auto' }}>
-            {s.error ?? 'Waiting for another player to join this pool. Open a second tab to test, or take on the engine.'}
+            {s.error ?? 'Hang tight while we match you with another player. Prefer not to wait? Play the computer instead.'}
           </Typography>
         </DialogContent>
         <DialogActions sx={{ justifyContent: 'center', pb: 3, gap: 1 }}>
@@ -214,7 +214,7 @@ export default function Home() {
             Cancel
           </Button>
           <Button variant="contained" onClick={() => navigate('/bot')}>
-            Play a bot instead
+            Play the computer instead
           </Button>
         </DialogActions>
       </Dialog>

@@ -17,6 +17,8 @@ use App\Controllers\AnalyzeController;
 use App\Controllers\WsTicketController;
 use App\Controllers\StatsController;
 use App\Controllers\GameResultController;
+use App\Controllers\GameController;
+use App\Controllers\GameAnalysisController;
 use App\Controllers\PuzzleController;
 use BaseApi\Http\Middleware\RateLimitMiddleware;
 use BaseApi\Http\SessionStartMiddleware;
@@ -79,6 +81,18 @@ $router->get('/stats', [
 
 // Internal: the realtime hub persists finished games here (secret-gated, no session)
 $router->post('/internal/games', [GameResultController::class]);
+
+// Fetch a finished live game by hub id (for the post-game analysis board)
+$router->get('/games/{id}', [
+    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    GameController::class,
+]);
+
+// Full-game engine analysis (per-ply eval, best move, blunders) — cached on first call
+$router->get('/games/{id}/analysis', [
+    RateLimitMiddleware::class => ['limit' => '30/1m'],
+    GameAnalysisController::class,
+]);
 
 // ================================
 // Puzzles — Lichess-style training (SPEC §Puzzles)

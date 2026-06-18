@@ -423,6 +423,15 @@
             "table": "puzzle_theme",
             "operation": "drop_column",
             "warning": null
+        },
+        {
+            "id": "mig_9f87826b6281",
+            "sql": "ALTER TABLE `game` ADD COLUMN `analysis` TEXT",
+            "destructive": false,
+            "generated_at": "2026-06-18T17:28:26+00:00",
+            "table": "game",
+            "operation": "add_column",
+            "warning": null
         }
     ]
 }

@@ -40,6 +40,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /move", s.handleMove)
 	mux.HandleFunc("POST /legal-moves", s.handleLegalMoves)
 	mux.HandleFunc("POST /bestmove", s.handleBestMove)
+	mux.HandleFunc("POST /analyze-game", s.handleAnalyzeGame)
 	mux.HandleFunc("POST /status", s.handleStatus)
 	mux.HandleFunc("POST /perft", s.handlePerft)
 	mux.HandleFunc("GET /healthz", s.handleHealth)

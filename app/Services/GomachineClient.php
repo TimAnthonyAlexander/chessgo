@@ -71,6 +71,32 @@ class GomachineClient
     }
 
     /**
+     * Full-game analysis: replay UCI `moves` from `startFen` (null = standard
+     * start) and evaluate every resulting position at full strength. The engine
+     * fans the positions out across its worker pool, so this is one HTTP call;
+     * it can still take many seconds for a long game, hence the longer timeout.
+     *
+     * @param string[] $moves UCI moves in order
+     * @return array<string, mixed> {positions: list<position>, count} where each
+     *   position is {ply?, fen, sideToMove, eval|null, bestmove|null, bestSan|null,
+     *   terminal, checkmate, stalemate}
+     */
+    public function analyzeGame(array $moves, ?string $startFen = null, int $movetimeMs = 600): array
+    {
+        $body = [
+            'moves' => array_values($moves),
+            'movetime' => $movetimeMs,
+        ];
+        if ($startFen !== null && $startFen !== '') {
+            $body['startFen'] = $startFen;
+        }
+
+        // A full game can be 80+ positions; even fanned out across the pool this
+        // dwarfs the per-move budget, so allow a generous ceiling.
+        return $this->post('/analyze-game', $body, 120_000);
+    }
+
+    /**
      * List legal moves (optionally from a single square).
      *
      * @return array<string, mixed> {moves, count}
@@ -103,9 +129,11 @@ class GomachineClient
      * POST JSON and decode the response.
      *
      * @param array<string, mixed> $body
+     * @param int|null $timeoutMs Override the default request timeout (e.g. for
+     *   long full-game analysis); null uses the configured default.
      * @return array<string, mixed>
      */
-    private function post(string $path, array $body): array
+    private function post(string $path, array $body, ?int $timeoutMs = null): array
     {
         $ch = curl_init($this->baseUrl . $path);
         curl_setopt_array($ch, [
@@ -113,7 +141,7 @@ class GomachineClient
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => json_encode($body, JSON_THROW_ON_ERROR),
             CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
-            CURLOPT_TIMEOUT_MS => $this->timeoutMs,
+            CURLOPT_TIMEOUT_MS => $timeoutMs ?? $this->timeoutMs,
             CURLOPT_CONNECTTIMEOUT_MS => 2000,
         ]);
         $raw = curl_exec($ch);

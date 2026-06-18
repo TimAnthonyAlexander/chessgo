@@ -8,6 +8,7 @@ import Home from './pages/Home'
 import BotGame from './pages/BotGame'
 import LiveGame from './pages/LiveGame'
 import Puzzles from './pages/Puzzles'
+import Analysis from './pages/Analysis'
 import './styles.css'
 
 const router = createBrowserRouter([
@@ -18,6 +19,8 @@ const router = createBrowserRouter([
       { path: '/bot', element: <BotGame /> },
       { path: '/puzzles', element: <Puzzles /> },
       { path: '/game/:id', element: <LiveGame /> },
+      { path: '/analysis', element: <Analysis /> },
+      { path: '/analysis/:id', element: <Analysis /> },
     ],
   },
 ])

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Box, Button, Typography } from '@mui/material'
-import { Flag } from 'lucide-react'
+import { Flag, Telescope } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import Board from '../components/Board'
 import Clock from '../components/Clock'
@@ -225,6 +225,18 @@ export default function LiveGame() {
                   New game
                 </Button>
               </Box>
+              {g.reason !== 'aborted' && g.status !== 'aborted' && (
+                <Button
+                  fullWidth
+                  variant="outlined"
+                  color="inherit"
+                  startIcon={<Telescope size={16} />}
+                  onClick={() => navigate(`/analysis/${g.id}`)}
+                  sx={{ borderColor: 'var(--line)', color: 'var(--text-dim)', '&:hover': { borderColor: 'var(--accent)', color: 'var(--accent)' } }}
+                >
+                  Analyse game
+                </Button>
+              )}
             </Box>
           )}
 

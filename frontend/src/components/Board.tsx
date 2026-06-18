@@ -4,11 +4,13 @@ import type { Color } from '../api/client'
 import {
   type BoardMap,
   type Square,
+  fileOf,
   isWhitePiece,
   kingSquare,
   parseFen,
   pieceImageUrl,
   promotionsFor,
+  rankOf,
   squareAt,
   targetsFrom,
 } from '../lib/chess'
@@ -33,6 +35,8 @@ interface BoardProps {
   onMove: (uci: string) => void
   /** Optional display-only board override for optimistic move feedback. */
   overrideBoard?: BoardMap
+  /** Optional move arrow (e.g. the engine's best move) drawn over the board. */
+  arrow?: { from: Square; to: Square } | null
 }
 
 const PROMO_ORDER = ['q', 'r', 'b', 'n']
@@ -61,6 +65,7 @@ export default function Board({
   interactive,
   onMove,
   overrideBoard,
+  arrow,
 }: BoardProps) {
   const boardRef = useRef<HTMLDivElement>(null)
   const [selected, setSelected] = useState<Square | null>(null)
@@ -70,6 +75,17 @@ export default function Board({
   const board: BoardMap = overrideBoard ?? parseFen(fen)
   const targets = selected ? targetsFrom(legalMoves, selected) : new Set<Square>()
   const checkKing = inCheck ? kingSquare(board, sideToMove === 'w') : null
+
+  // Arrow geometry in an 80×80 coordinate space (10 units / square), oriented.
+  const arrowGeom = (() => {
+    if (!arrow) return null
+    const center = (sq: Square) => {
+      const col = orientation === 'w' ? fileOf(sq) : 7 - fileOf(sq)
+      const row = orientation === 'w' ? 7 - rankOf(sq) : rankOf(sq)
+      return { x: col * 10 + 5, y: row * 10 + 5 }
+    }
+    return { a: center(arrow.from), b: center(arrow.to) }
+  })()
 
   const ranks = orientation === 'w' ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7]
   const files = orientation === 'w' ? [0, 1, 2, 3, 4, 5, 6, 7] : [7, 6, 5, 4, 3, 2, 1, 0]
@@ -215,6 +231,32 @@ export default function Board({
               </div>
             )
           }),
+        )}
+
+        {arrowGeom && (
+          <svg
+            className="board-arrow"
+            viewBox="0 0 80 80"
+            preserveAspectRatio="none"
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 5 }}
+          >
+            <defs>
+              <marker id="bm-head" markerWidth="4" markerHeight="4" refX="2.6" refY="2" orient="auto">
+                <path d="M0,0 L4,2 L0,4 z" fill="var(--accent)" />
+              </marker>
+            </defs>
+            <line
+              x1={arrowGeom.a.x}
+              y1={arrowGeom.a.y}
+              x2={arrowGeom.b.x}
+              y2={arrowGeom.b.y}
+              stroke="var(--accent)"
+              strokeWidth={1.7}
+              strokeLinecap="round"
+              markerEnd="url(#bm-head)"
+              opacity={0.7}
+            />
+          </svg>
         )}
 
         {promo && (

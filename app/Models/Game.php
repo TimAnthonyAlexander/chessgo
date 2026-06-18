@@ -72,6 +72,13 @@ class Game extends BaseModel
     public ?string $sans = null;
 
     /**
+     * Cached full-game engine analysis as JSON text (per-ply eval + best move +
+     * blunder judgments), computed once on first request. Internal — stripped
+     * from the default serialization; served only via the analysis endpoint.
+     */
+    public ?string $analysis = null;
+
+    /**
      * @var array<string, string>
      */
     public static array $indexes = [
@@ -87,7 +94,25 @@ class Game extends BaseModel
     public static array $columns = [
         'moves' => ['type' => 'TEXT', 'nullable' => true],
         'sans' => ['type' => 'TEXT', 'nullable' => true],
+        'analysis' => ['type' => 'TEXT', 'nullable' => true],
     ];
+
+    /** @return array<string, mixed>|null Decoded cached analysis, or null if absent. */
+    public function getAnalysis(): ?array
+    {
+        if ($this->analysis === null || $this->analysis === '') {
+            return null;
+        }
+        $decoded = json_decode($this->analysis, true);
+
+        return is_array($decoded) ? $decoded : null;
+    }
+
+    /** @param array<string, mixed> $analysis */
+    public function setAnalysis(array $analysis): void
+    {
+        $this->analysis = json_encode($analysis);
+    }
 
     /** @return list<string> */
     public function getMoves(): array
@@ -133,6 +158,7 @@ class Game extends BaseModel
     public function jsonSerialize(): array
     {
         $data = parent::jsonSerialize();
+        unset($data['analysis']); // large cached blob; served only via the analysis endpoint
         $data['moves'] = $this->getMoves();
         $data['sans'] = $this->getSans();
 
