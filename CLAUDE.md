@@ -66,6 +66,14 @@ php mason migrate:generate && php mason migrate:apply -y                     # D
   read but **NOT encoded on write** (it becomes the string `"Array"`). Store
   JSON-shaped data in a `?string` TEXT column (`static $columns`) with explicit
   `json_encode/decode` accessors. See `app/Models/BotGame.php`.
+- **Env reaches code via `config/app.php` + `App::config()`, NOT `$_ENV`.** Under
+  PHP-FPM (`variables_order` has no `E` + `App::boot()`'s static guard) `$_ENV` is
+  empty on a worker's 2nd+ request, so direct `$_ENV` reads silently fall back to
+  defaults in prod. Resolve env in `config/app.php` (the `gomachine` block) at
+  boot and read via `App::config('gomachine.*')`. Also: prod `.env` must be
+  readable by the FPM user (`640 tim:www-data`, never `600`), and after a
+  `.env`/`config` change **restart** php-fpm (reload won't re-read). See
+  `docs/COMMANDS.md` → Critical prod gotchas.
 - **Controllers** use HTTP-verb methods (`get`/`post`/…), `$this->validate([...])`
   first, `JsonResponse` helpers, constructor DI. Always null-check `find()` with
   `instanceof`.

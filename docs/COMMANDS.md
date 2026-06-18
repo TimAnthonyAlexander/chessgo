@@ -166,11 +166,34 @@ smoke-testing the importer + endpoints without the multi-GB download.
 
 ## Production
 
-Prod runs the two Go binaries as long-lived services, PHP behind PHP-FPM, and
-nginx serves the static frontend build + reverse-proxies the API and the
-WebSocket. The engine (6466) stays internal (only PHP reaches it).
+Live at **https://chessgo.timanthonyalexander.de** (SPA) +
+**https://chessgo-api.timanthonyalexander.de** (API + `/ws`), behind Cloudflare
+(proxied, Full/strict TLS). Prod runs the two Go binaries as systemd services,
+PHP behind PHP-FPM (pool user **`www-data`**), and nginx serves the static
+frontend build + reverse-proxies the API and the WebSocket. The engine (6466) and
+hub (6467) bind to `127.0.0.1` only; nginx exposes just the hub's `/ws`.
+
+> The nginx vhost is committed at **`config/nginx/chessgo.conf`** (two server
+> blocks) and symlinked into `sites-enabled`. Read the **Critical prod gotchas**
+> below before deploying — every one of them cost real debugging.
+
+### Server tooling
+
+- **Go 1.25+** is required by `go.mod`. The system `go` may be older and the
+  auto-toolchain download can be blocked (`toolchain not available`). Install a
+  local toolchain once and build with it:
+  ```sh
+  VER=$(curl -s 'https://go.dev/dl/?mode=json' | grep -oE 'go1\.25\.[0-9]+' | sort -uV | tail -1)
+  mkdir -p ~/go1.25 && curl -fsSL "https://go.dev/dl/${VER}.linux-amd64.tar.gz" \
+    | tar -C ~/go1.25 --strip-components=1 -xz
+  ( cd gomachine && GOTOOLCHAIN=local ~/go1.25/bin/go build -o bin/gomachine ./cmd/gomachine )
+  ```
+- **bun** is at `~/.bun/bin` (not on the non-interactive `PATH` —
+  `export PATH="$HOME/.bun/bin:$PATH"`).
 
 ### Go services (systemd)
+
+Run as **`tim`** (owns the binary; the services need no DB and write nothing).
 
 `/etc/systemd/system/chessgo-engine.service`:
 
@@ -183,7 +206,11 @@ After=network.target
 WorkingDirectory=/var/www/chessgo/gomachine
 ExecStart=/var/www/chessgo/gomachine/bin/gomachine serve -addr 127.0.0.1:6466
 Restart=always
-User=chessgo
+RestartSec=3
+User=tim
+Group=tim
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
@@ -201,90 +228,123 @@ WorkingDirectory=/var/www/chessgo/gomachine
 EnvironmentFile=/var/www/chessgo/.env.hub          # contains WS_TICKET_SECRET=...
 ExecStart=/var/www/chessgo/gomachine/bin/gomachine hub -addr 127.0.0.1:6467
 Restart=always
-User=chessgo
+RestartSec=3
+User=tim
+Group=tim
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
 ```
 
+`/var/www/chessgo/.env.hub` (mode 600), read by the hub via Go `os.Getenv`:
+
+```sh
+WS_TICKET_SECRET=<same value as the PHP .env>
+BASEAPI_URL=https://chessgo-api.timanthonyalexander.de
+```
+
+- `WS_TICKET_SECRET` **must equal** the PHP `.env` value, or the hub rejects every
+  ticket (it's also the `X-Hub-Secret` the hub sends to `/internal/games`).
+- `BASEAPI_URL` is where the hub POSTs finished games. In prod it's the **public
+  API URL**, NOT `127.0.0.1:6464` — PHP runs under FPM with no local HTTP port.
+  `/internal/games` is secret-gated, so the public round-trip is fine.
+
 ```sh
 sudo systemctl daemon-reload
 sudo systemctl enable --now chessgo-engine chessgo-hub
-sudo systemctl restart chessgo-hub          # after a redeploy
+sudo systemctl restart chessgo-engine chessgo-hub   # after rebuilding the Go binary
 ```
 
-> `/var/www/chessgo/.env.hub` must hold the **same** `WS_TICKET_SECRET` as the PHP
-> app's `.env`, or every WebSocket connection will be rejected.
+### nginx + TLS
 
-### nginx
+The vhost is committed at **`config/nginx/chessgo.conf`** — a frontend block on
+the root domain and an API block on `chessgo-api…` carrying the `/ws` proxy. It
+reuses the box's shared `include global;` (listen 443 + ssl params) and
+`include php;` (FPM fastcgi) snippets, so it has no `listen`/`fastcgi` lines of
+its own.
 
-```nginx
-# --- Frontend (static SPA) ---
-server {
-    server_name chessgo.example.com;
-    root /var/www/chessgo/frontend/dist;
-
-    location / {
-        try_files $uri /index.html;        # SPA fallback
-    }
-}
-
-# --- API + WebSocket (api.chessgo.example.com) ---
-server {
-    server_name api.chessgo.example.com;
-    root /var/www/chessgo/public;              # BaseAPI front controller
-    index index.php;
-
-    # Realtime hub: WebSocket upgrade → Go hub on 6467
-    location /ws {
-        proxy_pass http://127.0.0.1:6467/ws;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_read_timeout 3600s;          # long-lived connections
-        proxy_send_timeout 3600s;
-    }
-
-    # REST API → PHP-FPM
-    location / {
-        try_files $uri /index.php$is_args$args;
-    }
-    location ~ \.php$ {
-        fastcgi_pass unix:/run/php/php8.4-fpm.sock;
-        include fastcgi_params;
-        fastcgi_param SCRIPT_FILENAME $document_root/index.php;
-    }
-}
+```sh
+sudo ln -s /var/www/chessgo/config/nginx/chessgo.conf /etc/nginx/sites-enabled/chessgo.conf
+sudo certbot --nginx -d chessgo.timanthonyalexander.de -d chessgo-api.timanthonyalexander.de
+sudo nginx -t && sudo systemctl reload nginx
 ```
 
-Put both behind TLS (certbot). The hub is reached as `wss://api.chessgo.example.com/ws`.
+The committed config points at the **real** `chessgo.timanthonyalexander.de` LE
+cert (one SAN cert covers both domains). The `/ws` location is an **exact match**
+(`location = /ws`) — see the gotchas below.
+
+### Critical prod gotchas (each cost real debugging)
+
+- **`.env` MUST be readable by the FPM pool (`www-data`) — never `600`.**
+  ```sh
+  sudo chgrp www-data /var/www/chessgo/.env && sudo chmod 640 /var/www/chessgo/.env
+  ```
+  If FPM can't read `.env`, Dotenv loads nothing and **every** value silently
+  falls back to framework defaults (DB→`baseapi`, CORS→localhost, ws secret→
+  insecure) — the app "boots" but is wrong everywhere. CLI (run as `tim`) hides
+  this because it can read the file.
+- **Read custom env via `App::config()`, never `$_ENV` directly.** Under PHP-FPM
+  `variables_order` has no `E`, so `$_ENV` is empty on a worker's 2nd+ request
+  (`App::boot()`'s Dotenv load is guarded by a static flag that persists in the
+  long-lived worker). Resolve env in a `config/app.php` block (e.g. `gomachine`)
+  at boot and read it via `App::config('gomachine.*')` — that value is captured
+  into a static and survives. (Mirrors how brandinio exposes its custom env.)
+- **After changing `.env` or `config/app.php`, `restart` php-fpm — not `reload`.**
+  Workers cache the booted config in a static for their lifetime; a graceful
+  reload won't re-read it. `sudo systemctl restart php8.4-fpm` (shared across
+  sites — a sub-second blip, doesn't break them).
+- **nginx `/ws` must be an EXACT match (`location = /ws`).** A prefix match
+  (`^~ /ws`) also captures `/ws-ticket` (a PHP route) and proxies it to the hub,
+  breaking ticket minting.
+- **Cloudflare 526 = wrong/placeholder origin cert.** With Full/strict the origin
+  must present a valid cert for the hostname. Keep the real cert path committed in
+  `chessgo.conf`; a `git reset`/redeploy that reverts it to a placeholder triggers
+  526. Check the origin directly:
+  ```sh
+  echo | openssl s_client -connect 127.0.0.1:443 -servername chessgo-api.timanthonyalexander.de 2>/dev/null | openssl x509 -noout -subject
+  ```
 
 ### Deploy checklist
 
 ```sh
-git pull
+cd /var/www/chessgo
+# pull (the server's GitHub key isn't in the agent for non-interactive shells)
+GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519_github -o IdentitiesOnly=yes' git pull
 composer install --no-dev
-php mason migrate:apply -y
-( cd gomachine && go build -o bin/gomachine ./cmd/gomachine )
-( cd frontend && bun install && bun run build )
-sudo systemctl restart chessgo-engine chessgo-hub
-sudo systemctl reload php8.4-fpm nginx
+php mason migrate:apply -y                                  # never --safe
+( cd gomachine && GOTOOLCHAIN=local ~/go1.25/bin/go build -o bin/gomachine ./cmd/gomachine )
+( cd frontend && export PATH="$HOME/.bun/bin:$PATH" && bun install \
+    && VITE_API_URL=https://chessgo-api.timanthonyalexander.de bun run build )
+sudo systemctl restart chessgo-engine chessgo-hub          # Go binary changed
+sudo systemctl restart php8.4-fpm                          # pick up code/.env/config (restart, not reload)
+sudo nginx -t && sudo systemctl reload nginx
 ```
+
+> `frontend/dist` and `.env.hub` are gitignored — `dist` is rebuilt on deploy,
+> `.env.hub` is host-local. The frontend build needs `VITE_API_URL` set to the
+> prod API origin (it's baked into the bundle).
 
 ---
 
 ## Environment (`.env`) — keys that matter here
 
-| Key | Used by | Notes |
-|---|---|---|
-| `APP_PORT` / `APP_URL` | BaseAPI | API bind (dev `6464`) |
-| `CORS_ALLOWLIST` | BaseAPI | must include the frontend origin |
-| `DB_*` | BaseAPI | MySQL connection (`chessgo` user) |
-| `ENGINE_URL` | BaseAPI | where PHP reaches the engine (`http://127.0.0.1:6466`) |
-| `WS_TICKET_SECRET` | BaseAPI **and** hub | **must match** on both sides |
-| `WS_TICKET_TTL` | BaseAPI | ticket lifetime (seconds) |
-| `WS_PUBLIC_URL` | BaseAPI → frontend | ws URL the client dials (dev `ws://127.0.0.1:6467/ws`; prod `wss://…/ws`) |
+| Key | Used by | Dev | Prod |
+|---|---|---|---|
+| `APP_ENV` / `APP_DEBUG` | BaseAPI | `local` / `true` | `production` / `false` |
+| `APP_URL` | BaseAPI | `http://127.0.0.1:6464` | `https://chessgo-api.timanthonyalexander.de` |
+| `CORS_ALLOWLIST` | BaseAPI | `…:6465` | `https://chessgo.timanthonyalexander.de` |
+| `DB_*` | BaseAPI | `chessgo` user | same (prod password) |
+| `ENGINE_URL` | BaseAPI (`gomachine.engine_url`) | `http://127.0.0.1:6466` | same (internal) |
+| `HUB_URL` | BaseAPI `/stats` proxy (`gomachine.hub_url`) | `http://127.0.0.1:6467` | same (internal) |
+| `WS_TICKET_SECRET` | BaseAPI **and** hub `.env.hub` | dev secret | **must match** both sides |
+| `WS_TICKET_TTL` | BaseAPI | `60` | `60` |
+| `WS_PUBLIC_URL` | BaseAPI → client | `ws://127.0.0.1:6467/ws` | `wss://chessgo-api.timanthonyalexander.de/ws` |
+| `BASEAPI_URL` | **hub** (`.env.hub`) → PHP | `http://127.0.0.1:6464` | `https://chessgo-api.timanthonyalexander.de` |
 
-Prod: set `APP_URL`, `CORS_ALLOWLIST` to the real frontend origin, and
-`WS_PUBLIC_URL=wss://api.chessgo.example.com/ws`.
+> All `ENGINE_URL` / `HUB_URL` / `WS_*` keys are resolved in `config/app.php`
+> (the `gomachine` block) and read via `App::config('gomachine.*')`. Reading
+> `$_ENV` directly fails under FPM — see the prod gotcha above. The internal
+> service URLs stay on `127.0.0.1`; only `WS_PUBLIC_URL` (browser→hub) and
+> `BASEAPI_URL` (hub→PHP) use the public hostname.
