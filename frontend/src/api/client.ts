@@ -117,4 +117,14 @@ export function getWsTicket(): Promise<WsTicket> {
   return request<WsTicket>(`/ws-ticket?anon=${encodeURIComponent(anonId())}`)
 }
 
+export interface LobbyStats {
+  playersOnline: number
+  activeGames: number
+}
+
+/** Live lobby counts (players online + games in play) from the realtime hub. */
+export function getStats(): Promise<LobbyStats> {
+  return request<LobbyStats>('/stats')
+}
+
 export { ApiError }

@@ -56,6 +56,12 @@ func cmdHub(args []string) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
+	// Live lobby counts for the homepage (public, no ticket).
+	mux.HandleFunc("GET /stats", func(w http.ResponseWriter, _ *http.Request) {
+		online, games := h.Stats()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]int64{"playersOnline": online, "activeGames": games})
+	})
 
 	fmt.Printf("gomachine hub (realtime) listening on http://%s  (ws at /ws)\n", *addr)
 	if err := http.ListenAndServe(*addr, mux); err != nil {

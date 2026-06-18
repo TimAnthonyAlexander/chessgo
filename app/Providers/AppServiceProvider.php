@@ -11,6 +11,7 @@ use App\Services\EmailService;
 use App\Services\GomachineClient;
 use App\Services\BotGameService;
 use App\Services\WsTicketService;
+use App\Services\HubClient;
 use BaseApi\Auth\UserProvider;
 
 /**
@@ -33,6 +34,9 @@ class AppServiceProvider extends ServiceProvider
         $container->singleton(GomachineClient::class);
         $container->singleton(BotGameService::class);
         $container->singleton(WsTicketService::class);
+
+        // Realtime hub stats client (homepage lobby counts)
+        $container->singleton(HubClient::class);
 
         // Example: Register a custom service with manual configuration
         // $container->singleton(SomeService::class, function (ContainerInterface $c) {

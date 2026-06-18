@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	mrand "math/rand/v2"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -34,6 +35,18 @@ type Hub struct {
 	games       map[string]*game
 	playerGames map[string]*game // identity id -> active game (for reconnect)
 	onFinish    func(FinishedGame)
+
+	// Live lobby counters. Written only on the Run goroutine (paired with the
+	// register/unregister and startGame/finish lifecycle), read via atomics from
+	// the /stats HTTP handler on another goroutine.
+	onlineClients atomic.Int64
+	activeGames   atomic.Int64
+}
+
+// Stats returns live lobby counts (connected clients, active games). Safe to call
+// from any goroutine.
+func (h *Hub) Stats() (online, games int64) {
+	return h.onlineClients.Load(), h.activeGames.Load()
 }
 
 // FinishedGame is handed to the persistence hook when a game ends.
@@ -72,8 +85,10 @@ func (h *Hub) Run() {
 	for {
 		select {
 		case c := <-h.register:
+			h.onlineClients.Add(1)
 			h.handleRegister(c)
 		case c := <-h.unregister:
+			h.onlineClients.Add(-1)
 			h.handleDisconnect(c)
 		case cmd := <-h.commands:
 			h.handle(cmd)
@@ -161,6 +176,7 @@ func (h *Hub) startGame(a, b *Client, tc timeControl, pool string) {
 	h.games[g.id] = g
 	h.playerGames[white.id.UserID] = g
 	h.playerGames[black.id.UserID] = g
+	h.activeGames.Add(1)
 	h.sendMatched(g, white, chess.White)
 	h.sendMatched(g, black, chess.Black)
 }
@@ -268,6 +284,7 @@ func (h *Hub) finish(g *game, result, reason string) {
 	delete(h.games, g.id)
 	delete(h.playerGames, g.white.id.UserID)
 	delete(h.playerGames, g.black.id.UserID)
+	h.activeGames.Add(-1)
 
 	if h.onFinish != nil {
 		h.onFinish(FinishedGame{

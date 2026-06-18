@@ -13,6 +13,7 @@ import { Crown, Cpu, Swords, Trophy, UserPlus, Users, Zap } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { gameSocket, type LiveGameState } from '../lib/socket'
 import { useGameSocket } from '../lib/useGameSocket'
+import { getStats, type LobbyStats } from '../api/client'
 
 // Quick-pairing presets (presentational for now — online play comes next).
 interface Preset {
@@ -62,6 +63,21 @@ export default function Home() {
   // Show the dialog for either source: our optimistic label, or a queue we landed
   // in (e.g. "New game" from a finished live game, which queues before routing here).
   const searching = search ?? (s.status === 'queued' ? s.pool : null)
+
+  // Live lobby counts from the hub (via BaseAPI). Poll while the lobby is open;
+  // failures leave the last value (or null → shown as "—"), never throw.
+  const [stats, setStats] = useState<LobbyStats | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    const tick = () => {
+      getStats()
+        .then((r) => { if (!cancelled) setStats(r) })
+        .catch(() => {})
+    }
+    tick()
+    const id = window.setInterval(tick, 10_000)
+    return () => { cancelled = true; window.clearInterval(id) }
+  }, [])
 
   return (
     <Box sx={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
@@ -157,8 +173,16 @@ export default function Home() {
           <Action icon={<Cpu size={18} />} label="Play the computer" highlight onClick={() => navigate('/bot')} />
 
           <Box sx={{ mt: 2, px: 0.5, display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-            <Counter icon={<Users size={15} />} value="1,204" label="players online" />
-            <Counter icon={<Swords size={15} />} value="312" label="games in play" />
+            <Counter
+              icon={<Users size={15} />}
+              value={stats ? stats.playersOnline.toLocaleString() : '—'}
+              label="players online"
+            />
+            <Counter
+              icon={<Swords size={15} />}
+              value={stats ? stats.activeGames.toLocaleString() : '—'}
+              label="games in play"
+            />
           </Box>
         </Box>
       </Box>

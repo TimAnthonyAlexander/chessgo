@@ -15,6 +15,7 @@ use App\Controllers\BotGameController;
 use App\Controllers\BotMoveController;
 use App\Controllers\AnalyzeController;
 use App\Controllers\WsTicketController;
+use App\Controllers\StatsController;
 use BaseApi\Http\Middleware\RateLimitMiddleware;
 use BaseApi\Http\SessionStartMiddleware;
 use BaseApi\Permissions\PermissionsMiddleware;
@@ -64,6 +65,12 @@ $router->post('/analyze', [
 $router->get('/ws-ticket', [
     RateLimitMiddleware::class => ['limit' => '60/1m'],
     WsTicketController::class,
+]);
+
+// Live lobby counts (players online + active games) — proxies the realtime hub
+$router->get('/stats', [
+    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    StatsController::class,
 ]);
 
 // ================================  
