@@ -243,6 +243,7 @@ function PlayerBar({
 }
 
 function resultText(g: LiveGameState): string {
+  if (g.reason === 'aborted' || g.status === 'aborted') return 'Game aborted'
   if (g.status === 'disconnected') return 'Disconnected'
   if (g.result === '1/2-1/2') return 'Draw'
   if (g.result === '1-0' || g.result === '0-1') {

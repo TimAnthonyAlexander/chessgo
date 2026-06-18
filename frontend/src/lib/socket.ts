@@ -306,10 +306,12 @@ class GameSocket {
 
 export const gameSocket = new GameSocket()
 
-/** Live remaining time (ms) for a color, counting down if it's their turn. */
+/** Live remaining time (ms) for a color, counting down if it's their turn.
+ * Clocks are frozen until both sides have made their first move (the opening two
+ * plies are untimed, Lichess-style) — mirrors the server's authoritative clock. */
 export function liveRemaining(g: LiveGameState, color: Color): number {
   let rem = g.clock[color]
-  if (!g.ended && g.sideToMove === color) {
+  if (!g.ended && g.moves.length >= 2 && g.sideToMove === color) {
     rem -= Date.now() - g.clockAt
   }
   return Math.max(0, rem)

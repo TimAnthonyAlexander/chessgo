@@ -97,11 +97,17 @@ func (g *game) opponent(c *Client) *Client {
 	return g.white.client
 }
 
+// clocksRunning reports whether the clocks have started. Lichess-style: neither
+// side's clock runs until it has made its first move, so the opening ply by each
+// colour — the first two plies of the game — is untimed. From the moment both
+// have moved (len >= 2), the side-to-move's clock always runs.
+func (g *game) clocksRunning() bool { return len(g.moves) >= 2 }
+
 // remainingMs is the live remaining time for color c (deducting elapsed time if
-// it is currently c's turn).
+// it is currently c's turn and the clocks have started).
 func (g *game) remainingMs(c chess.Color) int64 {
 	rem := g.clockMs[c]
-	if !g.over && g.pos.SideToMove() == c {
+	if !g.over && g.clocksRunning() && g.pos.SideToMove() == c {
 		rem -= time.Since(g.turnStart).Milliseconds()
 	}
 	if rem < 0 {
@@ -121,11 +127,15 @@ func (g *game) applyMove(uci string) (string, bool) {
 
 	now := time.Now()
 	side := g.pos.SideToMove()
-	g.clockMs[side] -= now.Sub(g.turnStart).Milliseconds()
-	if g.clockMs[side] < 0 {
-		g.clockMs[side] = 0
+	// The clock only runs once both sides have made their first move. Until then
+	// (this side's opening ply) the move is untimed — no deduction, no increment.
+	if g.clocksRunning() {
+		g.clockMs[side] -= now.Sub(g.turnStart).Milliseconds()
+		if g.clockMs[side] < 0 {
+			g.clockMs[side] = 0
+		}
+		g.clockMs[side] += g.tc.Inc
 	}
-	g.clockMs[side] += g.tc.Inc
 
 	g.history = append(g.history, g.pos.Key())
 	var u chess.Undo

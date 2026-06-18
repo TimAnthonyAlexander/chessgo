@@ -258,8 +258,19 @@ func (h *Hub) resign(c *Client) {
 	h.finish(g, result, "resign")
 }
 
+// firstMoveTimeout is how long a side has to make its (untimed) first move
+// before the game is aborted — a stalling guard that stands in for the clock
+// while it hasn't started yet (Lichess-style).
+const firstMoveTimeout = 30 * time.Second
+
 func (h *Hub) checkClocks() {
 	for _, g := range h.games {
+		// Before the clocks start, neither side's time is running, so a stalled
+		// opening ply can't flag. Abort if the side to move sits past the window.
+		if !g.over && !g.clocksRunning() && time.Since(g.turnStart) >= firstMoveTimeout {
+			h.abortGame(g)
+			continue
+		}
 		side, flagged := g.flaggedSide()
 		if !flagged {
 			continue
@@ -295,6 +306,36 @@ func (h *Hub) finish(g *game, result, reason string) {
 		"status": g.status().State,
 		"clock":  clock,
 	})))
+	h.teardown(g)
+
+	if h.onFinish != nil {
+		h.onFinish(FinishedGame{
+			ID: g.id, Pool: g.pool, Rated: g.rated,
+			White: g.white.id, Black: g.black.id,
+			Result: result, Reason: reason, Moves: g.moves, SANs: g.sans,
+		})
+	}
+}
+
+// abortGame ends a game with no result (first-move timeout). Aborted games are
+// NOT reported to onFinish — they don't count toward records or ratings.
+func (h *Hub) abortGame(g *game) {
+	if g.over {
+		return
+	}
+	g.over = true
+	h.broadcast(g, mustJSON(out("end", map[string]any{
+		"gameId": g.id,
+		"result": nil,
+		"reason": "aborted",
+		"status": "aborted",
+		"clock":  map[string]int64{"w": g.remainingMs(chess.White), "b": g.remainingMs(chess.Black)},
+	})))
+	h.teardown(g)
+}
+
+// teardown detaches both clients and removes the game from all indexes.
+func (h *Hub) teardown(g *game) {
 	if g.white.client != nil {
 		g.white.client.game = nil
 	}
@@ -305,14 +346,6 @@ func (h *Hub) finish(g *game, result, reason string) {
 	delete(h.playerGames, g.white.id.UserID)
 	delete(h.playerGames, g.black.id.UserID)
 	h.activeGames.Add(-1)
-
-	if h.onFinish != nil {
-		h.onFinish(FinishedGame{
-			ID: g.id, Pool: g.pool, Rated: g.rated,
-			White: g.white.id, Black: g.black.id,
-			Result: result, Reason: reason, Moves: g.moves, SANs: g.sans,
-		})
-	}
 }
 
 // handleRegister runs when a connection opens. If the player (by identity id)
