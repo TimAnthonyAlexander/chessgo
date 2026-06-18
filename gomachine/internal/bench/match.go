@@ -23,7 +23,13 @@ type Config struct {
 
 	Nodes    uint64        // fixed nodes per move (primary, reproducible)
 	MoveTime time.Duration // alternative budget (used only if Nodes == 0)
-	TTMB     int           // transposition table size per engine
+	// Asymmetric time control: when Nodes==0 and one of these is >0, that side
+	// uses its own per-move budget instead of the shared MoveTime. Lets us measure
+	// the Elo value of a time edge (e.g. new=100ms vs old=200ms). 0 → fall back to
+	// MoveTime. Ignored when Nodes>0 (fixed-nodes is hardware-independent already).
+	NewMoveTime time.Duration
+	OldMoveTime time.Duration
+	TTMB        int // transposition table size per engine
 
 	Elo0, Elo1  float64 // SPRT hypotheses (H0: ≤Elo0, H1: ≥Elo1)
 	Alpha, Beta float64 // error rates
@@ -35,14 +41,16 @@ type Config struct {
 	OldThreads int // Lazy SMP threads for the baseline engine (default 1)
 }
 
-// player pairs an engine with its Lazy SMP thread count.
+// player pairs an engine with its Lazy SMP thread count and its own per-move
+// search budget (so the two sides can run different time controls).
 type player struct {
 	eng     *engine.Engine
 	threads int
+	lim     search.Limits
 }
 
-func (p player) play(pos *chess.Position, lim search.Limits, history []uint64) engine.BestResult {
-	return p.eng.PlayThreads(pos, lim, history, p.threads)
+func (p player) play(pos *chess.Position, history []uint64) engine.BestResult {
+	return p.eng.PlayThreads(pos, p.lim, history, p.threads)
 }
 
 // gameOutcome is a single game's result from White's perspective.
@@ -54,10 +62,15 @@ const (
 	blackWin gameOutcome = 0.0
 )
 
-// limits returns the search limits for one move.
-func (c *Config) limits() search.Limits {
+// limitsFor returns the per-move search limits for one side. Fixed nodes (when
+// set) are shared and hardware-independent; otherwise each side uses its own
+// movetime if given (asymmetric TC), falling back to the shared MoveTime.
+func (c *Config) limitsFor(sideMoveTime time.Duration) search.Limits {
 	if c.Nodes > 0 {
 		return search.Limits{Nodes: c.Nodes}
+	}
+	if sideMoveTime > 0 {
+		return search.Limits{MoveTime: sideMoveTime}
 	}
 	return search.Limits{MoveTime: c.MoveTime}
 }
@@ -66,7 +79,7 @@ func (c *Config) limits() search.Limits {
 // White's perspective. white and black are reused across games — NewGame() (TT
 // clear) is called here so no game biases the next; killers/history reset per
 // search already. ctx cancellation ends the game as a draw (run is stopping).
-func playGame(ctx context.Context, white, black player, openFEN string, lim search.Limits) gameOutcome {
+func playGame(ctx context.Context, white, black player, openFEN string) gameOutcome {
 	white.eng.NewGame()
 	black.eng.NewGame()
 
@@ -100,7 +113,7 @@ func playGame(ctx context.Context, white, black player, openFEN string, lim sear
 		if pos.SideToMove() == chess.Black {
 			mover = black
 		}
-		res := mover.play(pos, lim, history)
+		res := mover.play(pos, history)
 		if res.Move == chess.NullMove {
 			// No move returned though Adjudicate said ongoing — treat as draw
 			// rather than crash the run (should not happen).
@@ -142,7 +155,8 @@ func RunSPRT(ctx context.Context, cfg Config, onProgress func(Progress)) Summary
 	if cfg.Concurrency < 1 {
 		cfg.Concurrency = 1
 	}
-	lim := cfg.limits()
+	newLim := cfg.limitsFor(cfg.NewMoveTime)
+	oldLim := cfg.limitsFor(cfg.OldMoveTime)
 	lower, upper := Bounds(cfg.Alpha, cfg.Beta)
 
 	type pairOut struct {
@@ -163,11 +177,11 @@ func RunSPRT(ctx context.Context, cfg Config, onProgress func(Progress)) Summary
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			newP := player{engine.NewWithParams(cfg.TTMB, cfg.NewParams), maxThreads(cfg.NewThreads)}
-			oldP := player{engine.NewWithParams(cfg.TTMB, cfg.OldParams), maxThreads(cfg.OldThreads)}
+			newP := player{engine.NewWithParams(cfg.TTMB, cfg.NewParams), maxThreads(cfg.NewThreads), newLim}
+			oldP := player{engine.NewWithParams(cfg.TTMB, cfg.OldParams), maxThreads(cfg.OldThreads), oldLim}
 			for open := range jobs {
-				r1 := playGame(ctx, newP, oldP, open.FEN, lim)
-				r2 := playGame(ctx, oldP, newP, open.FEN, lim)
+				r1 := playGame(ctx, newP, oldP, open.FEN)
+				r2 := playGame(ctx, oldP, newP, open.FEN)
 				score := float64(r1) + (1 - float64(r2))
 				select {
 				case results <- pairOut{score: score, r1w: r1, r2w: r2}:

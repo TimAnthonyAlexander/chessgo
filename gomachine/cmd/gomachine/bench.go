@@ -79,6 +79,8 @@ func cmdBenchSPRT(args []string) {
 	bookPath := fs.String("book", "", "opening book (.epd/.fen or UCI move-lines); default: embedded")
 	newThreads := fs.Int("new-threads", 1, "Lazy SMP threads for --new (use with --movetime)")
 	oldThreads := fs.Int("old-threads", 1, "Lazy SMP threads for --old")
+	newMovetime := fs.Int("new-movetime", 0, "ms/move for --new only (asymmetric TC; 0 → shared --movetime). Needs --nodes 0")
+	oldMovetime := fs.Int("old-movetime", 0, "ms/move for --old only (asymmetric TC; 0 → shared --movetime)")
 	_ = fs.Parse(args)
 
 	base := search.DefaultParams()
@@ -106,6 +108,8 @@ func cmdBenchSPRT(args []string) {
 		OldName:     nameFor(*oldSpec, "old"),
 		Nodes:       *nodes,
 		MoveTime:    time.Duration(*movetime) * time.Millisecond,
+		NewMoveTime: time.Duration(*newMovetime) * time.Millisecond,
+		OldMoveTime: time.Duration(*oldMovetime) * time.Millisecond,
 		TTMB:        *tt,
 		Elo0:        *elo0,
 		Elo1:        *elo1,
