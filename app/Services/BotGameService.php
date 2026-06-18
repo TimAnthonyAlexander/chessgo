@@ -102,6 +102,7 @@ class BotGameService
             'uci' => $uci,
             'san' => is_string($result['san'] ?? null) ? $result['san'] : $uci,
             'by' => $by,
+            'fen' => is_string($result['newFen'] ?? null) ? $result['newFen'] : $game->fen,
         ];
         if ($by === 'bot' && isset($best['eval'])) {
             $entry['eval'] = $best['eval'];

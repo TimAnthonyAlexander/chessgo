@@ -4,14 +4,23 @@ import type { Color } from '../api/client'
 import {
   type BoardMap,
   type Square,
-  glyphFor,
   isWhitePiece,
   kingSquare,
   parseFen,
+  pieceImageUrl,
   promotionsFor,
   squareAt,
   targetsFrom,
 } from '../lib/chess'
+
+function PieceGlyph({ piece, hidden }: { piece: string; hidden?: boolean }) {
+  return (
+    <span
+      className="piece"
+      style={{ backgroundImage: `url(${pieceImageUrl(piece)})`, ...(hidden ? { opacity: 0 } : {}) }}
+    />
+  )
+}
 
 interface BoardProps {
   fen: string
@@ -200,14 +209,7 @@ export default function Board({
               <div key={sq} className={classes}>
                 {isTarget && !piece && <span className="dot" />}
                 {isTarget && piece && <span className="ring" />}
-                {piece && (
-                  <span
-                    className={`piece ${isWhitePiece(piece) ? 'white' : 'black'}`}
-                    style={isDragOrigin ? { opacity: 0 } : undefined}
-                  >
-                    {glyphFor(piece)}
-                  </span>
-                )}
+                {piece && <PieceGlyph piece={piece} hidden={isDragOrigin} />}
                 {showRank && <span className="coord rank">{rank + 1}</span>}
                 {showFile && <span className="coord file">{'abcdefgh'[file]}</span>}
               </div>
@@ -220,7 +222,7 @@ export default function Board({
             <div className="promo" onPointerDown={(e) => e.stopPropagation()}>
               {PROMO_ORDER.filter((p) => promo.options.includes(p)).map((p) => (
                 <button key={p} onClick={() => choosePromotion(p)} aria-label={`Promote to ${p}`}>
-                  {glyphFor(sideToMove === 'w' ? p.toUpperCase() : p)}
+                  <PieceGlyph piece={sideToMove === 'w' ? p.toUpperCase() : p} />
                 </button>
               ))}
             </div>
@@ -230,11 +232,15 @@ export default function Board({
 
       {drag?.moved && (
         <span
-          className={`drag-ghost ${isWhitePiece(drag.piece) ? 'white' : 'black'}`}
-          style={{ left: drag.x, top: drag.y, fontSize: drag.size * 0.82 }}
-        >
-          {glyphFor(drag.piece)}
-        </span>
+          className="drag-ghost"
+          style={{
+            left: drag.x,
+            top: drag.y,
+            width: drag.size,
+            height: drag.size,
+            backgroundImage: `url(${pieceImageUrl(drag.piece)})`,
+          }}
+        />
       )}
     </div>
   )

@@ -17,15 +17,17 @@
   --accent-soft: rgba(216, 166, 87, 0.14);
   --accent-line: rgba(216, 166, 87, 0.4);
 
-  /* Board — ivory + muted deep teal */
-  --board-light: #e9e1cf;
-  --board-dark: #4f6f68;
+  /* Board — Lichess-style cool grey-blue two-tone */
+  --board-light: #dde2e6;
+  --board-dark: #8198a6;
   --board-frame: #0e0f13;
-  --last-move: rgba(216, 166, 87, 0.32);
-  --select: rgba(216, 166, 87, 0.5);
-  --dot: rgba(20, 22, 18, 0.26);
-  --dot-light: rgba(20, 22, 18, 0.2);
-  --check: rgba(202, 74, 74, 0.62);
+  --last-move: rgba(188, 203, 128, 0.62); /* soft olive/yellow-green */
+  --select: rgba(174, 196, 110, 0.72);
+  --dot: rgba(40, 54, 64, 0.3);
+  --dot-light: rgba(40, 54, 64, 0.22);
+  --check: rgba(202, 74, 74, 0.66);
+  --coord-on-light: #6f828f;
+  --coord-on-dark: #e4eaef;
 
   --font-display: 'Fraunces', Georgia, serif;
   --font-ui: 'Hanken Grotesk', system-ui, sans-serif;

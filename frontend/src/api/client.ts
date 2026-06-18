@@ -19,6 +19,7 @@ export interface MoveEntry {
   uci: string
   san: string
   by: 'human' | 'bot'
+  fen: string // position after this move (for history navigation)
   eval?: { type: 'cp' | 'mate'; value: number }
 }
 

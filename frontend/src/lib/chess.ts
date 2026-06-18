@@ -113,17 +113,18 @@ export function kingSquare(board: BoardMap, white: boolean): Square | null {
   return null
 }
 
-// Unicode glyphs — solid set for both colors; color comes from CSS fill.
-const GLYPH: Record<string, string> = {
-  k: '♚',
-  q: '♛',
-  r: '♜',
-  b: '♝',
-  n: '♞',
-  p: '♟',
+// Real cburnett vector pieces (the Lichess set), served from /public.
+export function pieceImageUrl(piece: string): string {
+  const color = isWhitePiece(piece) ? 'w' : 'b'
+  return `/piece/cburnett/${color}${piece.toUpperCase()}.svg`
 }
-export function glyphFor(piece: string): string {
-  return GLYPH[piece.toLowerCase()] ?? ''
+
+// Render SAN with an outline piece glyph instead of the piece letter (Lichess
+// move list style): "Nf3" → "♘f3", pawn moves and castling unchanged.
+const SAN_GLYPH: Record<string, string> = { K: '♔', Q: '♕', R: '♖', B: '♗', N: '♘' }
+export function sanToGlyph(san: string): string {
+  const g = SAN_GLYPH[san[0]]
+  return g ? g + san.slice(1) : san
 }
 
 const STATUS_LABEL: Record<string, string> = {

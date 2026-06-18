@@ -3,20 +3,28 @@ import {
   Alert,
   Box,
   Button,
-  Chip,
   CircularProgress,
-  Divider,
-  IconButton,
   Slider,
   ToggleButton,
   ToggleButtonGroup,
   Tooltip,
   Typography,
 } from '@mui/material'
-import { Flag, FlipVertical2, RotateCcw, Volume2, VolumeX } from 'lucide-react'
+import {
+  ChevronFirst,
+  ChevronLast,
+  ChevronLeft,
+  ChevronRight,
+  Flag,
+  FlipVertical2,
+  RotateCcw,
+  Volume2,
+  VolumeX,
+} from 'lucide-react'
 import Board from '../components/Board'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveList from '../components/MoveList'
+import GameModeCard from '../components/GameModeCard'
 import { analyze, type BotGame as Game, type Color, createBotGame, playMove } from '../api/client'
 import { applyUciVisually, type BoardMap, fileOf, parseFen, statusLabel } from '../lib/chess'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
@@ -38,18 +46,37 @@ export default function BotGame() {
   const [resigned, setResigned] = useState(false)
   const [sound, setSound] = useState(soundEnabled())
   const [analyzedEval, setAnalyzedEval] = useState<WhiteEval | null>(null)
+  const [viewIndex, setViewIndex] = useState<number | null>(null) // null = live
 
   const humanColor: Color = game?.human_color ?? (colorChoice === 'random' ? 'w' : colorChoice)
-  const botColor = other(humanColor)
   const orientation: Color = flipped ? other(humanColor) : humanColor
-  const fen = game?.fen ?? START_FEN
   const over = resigned || (game != null && game.status !== 'ongoing')
   const ongoing = !!game && !over
-  const interactive = ongoing && game.your_turn && !thinking
 
-  // Eval bar is driven by a FULL-STRENGTH analysis of the current position,
-  // independent of the bot's difficulty level — fetched asynchronously so it
-  // never slows the bot's reply (SPEC §6).
+  const liveLen = game?.moves.length ?? 0
+  const shownPly = viewIndex === null ? liveLen : Math.min(viewIndex, liveLen)
+  const atLive = shownPly === liveLen
+  const interactive = ongoing && atLive && game.your_turn && !thinking
+
+  const boardFen = !game
+    ? START_FEN
+    : atLive
+      ? game.fen
+      : shownPly === 0
+        ? START_FEN
+        : game.moves[shownPly - 1].fen
+
+  const lastMove =
+    override && atLive && optimisticLast
+      ? optimisticLast
+      : game && shownPly > 0
+        ? {
+            from: game.moves[shownPly - 1].uci.slice(0, 2),
+            to: game.moves[shownPly - 1].uci.slice(2, 4),
+          }
+        : null
+
+  // Eval bar — full-strength analysis of the live position, level-independent.
   useEffect(() => {
     if (!game) {
       setAnalyzedEval(null)
@@ -57,10 +84,10 @@ export default function BotGame() {
     }
     if (game.status !== 'ongoing') {
       if (game.status === 'checkmate') {
-        const winner: Color = game.side_to_move === 'w' ? 'b' : 'w' // side to move is mated
+        const winner: Color = game.side_to_move === 'w' ? 'b' : 'w'
         setAnalyzedEval({ type: 'mate', white: winner === 'w' ? 1 : -1 })
       } else {
-        setAnalyzedEval({ type: 'cp', white: 0 }) // any draw → even
+        setAnalyzedEval({ type: 'cp', white: 0 })
       }
       return
     }
@@ -68,7 +95,6 @@ export default function BotGame() {
     analyze(game.fen)
       .then((r) => {
         if (cancelled || !r.eval) return
-        // r.eval is from the side-to-move's perspective; convert to White's.
         const white = game.side_to_move === 'w' ? r.eval.value : -r.eval.value
         setAnalyzedEval({ type: r.eval.type, white })
       })
@@ -78,11 +104,6 @@ export default function BotGame() {
     }
   }, [game?.fen, game?.status, game?.side_to_move])
 
-  const lastEntry = game && game.moves.length ? game.moves[game.moves.length - 1] : null
-  const lastMove =
-    optimisticLast ??
-    (lastEntry ? { from: lastEntry.uci.slice(0, 2), to: lastEntry.uci.slice(2, 4) } : null)
-
   async function newGame() {
     setError(null)
     setCreating(true)
@@ -90,11 +111,11 @@ export default function BotGame() {
     setOptimisticLast(null)
     setResigned(false)
     setFlipped(false)
+    setViewIndex(null)
     const color: Color = colorChoice === 'random' ? (Math.random() < 0.5 ? 'w' : 'b') : colorChoice
     try {
       const g = await createBotGame(level, color)
       setGame(g)
-      // If the bot opened (human is Black), voice its move.
       const opener = g.moves[g.moves.length - 1]
       if (opener) playForSan(opener.san, g.status !== 'ongoing')
     } catch (e) {
@@ -107,6 +128,7 @@ export default function BotGame() {
   async function onMove(uci: string) {
     if (!game) return
     setError(null)
+    setViewIndex(null)
     const before = parseFen(game.fen)
     setOverride(applyUciVisually(before, uci))
     setOptimisticLast({ from: uci.slice(0, 2), to: uci.slice(2, 4) })
@@ -125,7 +147,6 @@ export default function BotGame() {
     }
   }
 
-  // Immediate, optimistic sound for the human's move (no check info yet).
   function playHumanSound(board: BoardMap, uci: string) {
     const from = uci.slice(0, 2)
     const to = uci.slice(2, 4)
@@ -136,21 +157,16 @@ export default function BotGame() {
     else sounds.move()
   }
 
-  // After the server responds, voice whatever the bot played (or game end).
   function voiceServerReply(priorCount: number, g: Game) {
-    const fresh = g.moves.slice(priorCount + 1) // skip our own move (already voiced)
+    const fresh = g.moves.slice(priorCount + 1)
     const gameOver = g.status !== 'ongoing'
-    if (fresh.length > 0) {
-      playForSan(fresh[fresh.length - 1].san, gameOver)
-    } else if (gameOver) {
-      sounds.end()
-    }
+    if (fresh.length > 0) playForSan(fresh[fresh.length - 1].san, gameOver)
+    else if (gameOver) sounds.end()
   }
 
   function resign() {
     if (!ongoing) return
     setResigned(true)
-    // Resigning hands the win to the bot — peg the bar to the winner.
     setAnalyzedEval({ type: 'mate', white: humanColor === 'w' ? -1 : 1 })
     sounds.end()
   }
@@ -162,257 +178,338 @@ export default function BotGame() {
     if (next) sounds.move()
   }
 
+  // Move navigation
+  const goFirst = () => setViewIndex(0)
+  const goPrev = () => setViewIndex(Math.max(0, shownPly - 1))
+  const goNext = () => {
+    const n = Math.min(liveLen, shownPly + 1)
+    setViewIndex(n >= liveLen ? null : n)
+  }
+  const goLast = () => setViewIndex(null)
+  const selectPly = (p: number) => setViewIndex(p >= liveLen ? null : p)
+
   const resultScore = resigned ? (humanColor === 'w' ? '0-1' : '1-0') : (game?.result ?? null)
-  const statusText = over
-    ? resigned
-      ? 'You resigned'
-      : game
-        ? statusLabel(game.status)
-        : ''
-    : thinking
-      ? 'Bot is thinking…'
-      : game
-        ? game.your_turn
-          ? 'Your turn'
-          : `${game.side_to_move === 'w' ? 'White' : 'Black'} to move`
-        : 'Choose a level and start'
+  const caption = !atLive
+    ? `Reviewing move ${shownPly} / ${liveLen}`
+    : over
+      ? resigned
+        ? `You resigned · ${resultScore}`
+        : `${game ? statusLabel(game.status) : ''}${resultScore ? ` · ${resultScore}` : ''}`
+      : thinking
+        ? 'Bot is thinking…'
+        : game
+          ? game.your_turn
+            ? 'Your turn'
+            : `${game.side_to_move === 'w' ? 'White' : 'Black'} to move`
+          : 'Choose a level and start'
 
   return (
     <Box
       sx={{
         flex: 1,
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: { xs: 'flex-start', md: 'center' },
-        px: { xs: 2, md: 4 },
-        py: { xs: 3, md: 2 },
+        display: 'grid',
+        gridTemplateColumns: { xs: '1fr', lg: '1fr auto 1fr' },
+        alignItems: 'center',
+        justifyItems: 'center',
+        columnGap: { lg: 4 },
+        rowGap: 3,
+        px: { xs: 2, md: 3 },
+        py: { xs: 3, lg: 2 },
       }}
     >
+      {/* Left — game mode (desktop only) */}
+      <Box sx={{ display: { xs: 'none', lg: 'block' }, justifySelf: 'end', width: '100%', maxWidth: 290 }}>
+        <GameModeCard level={game?.level ?? level} />
+      </Box>
+
+      {/* Center — perfectly centered board (auto column with equal 1fr gutters) */}
       <Box
         sx={{
-          display: 'grid',
-          gridTemplateColumns: {
-            xs: '1fr',
-            md: 'min(calc(100vh - 116px), calc(100vw - 420px), 900px) 320px',
-          },
-          columnGap: { md: 5 },
-          rowGap: 3,
-          alignItems: 'center',
-          width: '100%',
-          maxWidth: 1280,
+          width: { xs: 'min(94vw, 64vh)', lg: 'min(calc(100vh - 100px), calc(100vw - 780px), 820px)' },
+          display: 'flex',
+          gap: { xs: 0.75, md: 1.25 },
+          alignItems: 'stretch',
         }}
       >
-        <Box sx={{ minWidth: 0, display: 'flex', gap: { xs: 0.75, md: 1.25 }, alignItems: 'stretch' }}>
-          <EvalBar ev={analyzedEval} orientation={orientation} />
-          <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Board
-              fen={fen}
-              orientation={orientation}
-              sideToMove={game?.side_to_move ?? 'w'}
-              legalMoves={interactive ? game.legal_moves : []}
-              lastMove={lastMove}
-              inCheck={false}
-              interactive={interactive}
-              onMove={onMove}
-              {...(override ? { overrideBoard: override } : {})}
-            />
-          </Box>
-        </Box>
-
-        {/* Right rail — vertically centered beside the board */}
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.75, alignSelf: 'center' }}>
-          <PlayerRow
-            name="gomachine"
-            color={botColor}
-            active={ongoing && game.side_to_move === botColor}
-            trailing={
-              <>
-                <Chip
-                  label={`Lv ${game?.level ?? level}`}
-                  size="small"
-                  sx={{
-                    height: 22,
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: 11,
-                    bgcolor: 'var(--accent-soft)',
-                    color: 'var(--accent)',
-                    border: '1px solid var(--accent-line)',
-                  }}
-                />
-                {thinking && <CircularProgress size={13} sx={{ color: 'var(--accent)' }} />}
-              </>
-            }
+        <EvalBar ev={analyzedEval} orientation={orientation} />
+        <Box sx={{ flex: 1, minWidth: 0 }}>
+          <Board
+            fen={boardFen}
+            orientation={orientation}
+            sideToMove={game?.side_to_move ?? 'w'}
+            legalMoves={interactive ? game.legal_moves : []}
+            lastMove={lastMove}
+            inCheck={false}
+            interactive={interactive}
+            onMove={onMove}
+            {...(override && atLive ? { overrideBoard: override } : {})}
           />
-
-          <Divider sx={{ borderColor: 'var(--line-soft)' }} />
-
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <RailIcon label="Flip board" onClick={() => setFlipped((f) => !f)}>
-              <FlipVertical2 size={17} />
-            </RailIcon>
-            <RailIcon label={sound ? 'Mute sounds' : 'Unmute sounds'} onClick={toggleSound}>
-              {sound ? <Volume2 size={17} /> : <VolumeX size={17} />}
-            </RailIcon>
-            <Box sx={{ flex: 1 }} />
-            {ongoing && (
-              <RailIcon label="Resign" onClick={resign}>
-                <Flag size={16} />
-              </RailIcon>
-            )}
-          </Box>
-
-          {game && (
-            <Box
-              sx={{
-                bgcolor: 'var(--bg-2)',
-                border: '1px solid var(--line-soft)',
-                borderRadius: 2,
-                px: 1.5,
-                py: 1,
-              }}
-            >
-              <MoveList moves={game.moves} />
-            </Box>
-          )}
-
-          {error && (
-            <Alert severity="error" variant="outlined" sx={{ fontSize: 13 }}>
-              {error}
-            </Alert>
-          )}
-
-          {(!game || over) && (
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.75 }}>
-              <Box>
-                <Label>Difficulty · level {level}</Label>
-                <Box sx={{ px: 0.5 }}>
-                  <Slider
-                    value={level}
-                    onChange={(_, v) => setLevel(v as number)}
-                    min={0}
-                    max={10}
-                    step={1}
-                    marks
-                    valueLabelDisplay="auto"
-                    sx={{ color: 'var(--accent)' }}
-                  />
-                </Box>
-                <Typography sx={{ fontSize: 12, color: 'var(--muted)', mt: -0.5 }}>
-                  {levelHint(level)}
-                </Typography>
-              </Box>
-              <Box>
-                <Label>Play as</Label>
-                <ToggleButtonGroup
-                  exclusive
-                  fullWidth
-                  size="small"
-                  value={colorChoice}
-                  onChange={(_, v) => v && setColorChoice(v as ColorChoice)}
-                  sx={toggleSx}
-                >
-                  <ToggleButton value="w">White</ToggleButton>
-                  <ToggleButton value="b">Black</ToggleButton>
-                  <ToggleButton value="random">Random</ToggleButton>
-                </ToggleButtonGroup>
-              </Box>
-            </Box>
-          )}
-
-          <Divider sx={{ borderColor: 'var(--line-soft)' }} />
-
-          <PlayerRow name="You" color={humanColor} active={ongoing && game.side_to_move === humanColor} />
-
-          <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, minHeight: 24 }}>
-            <Typography
-              sx={{
-                fontFamily: 'var(--font-display)',
-                fontSize: 17,
-                fontWeight: 600,
-                color: over ? 'var(--accent)' : ongoing && game.your_turn ? 'var(--text)' : 'var(--text-dim)',
-              }}
-            >
-              {statusText}
-            </Typography>
-            {over && resultScore && (
-              <Typography sx={{ ml: 'auto', fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>
-                {resultScore}
-              </Typography>
-            )}
-          </Box>
-
-          {ongoing ? (
-            <Button variant="outlined" color="inherit" onClick={() => setGame(null)} startIcon={<RotateCcw size={15} />}>
-              New game
-            </Button>
-          ) : (
-            <Button
-              variant="contained"
-              onClick={newGame}
-              disabled={creating}
-              startIcon={creating ? <CircularProgress size={15} color="inherit" /> : <RotateCcw size={15} />}
-            >
-              {game ? 'Play again' : 'Start game'}
-            </Button>
-          )}
         </Box>
+      </Box>
+
+      {/* Right — move panel / setup */}
+      <Box sx={{ justifySelf: { lg: 'start' }, width: '100%', maxWidth: { xs: 'min(94vw, 64vh)', lg: 320 } }}>
+        {game ? (
+          <MovePanel
+            game={game}
+            level={level}
+            ongoing={ongoing}
+            shownPly={shownPly}
+            sound={sound}
+            onSelectPly={selectPly}
+            onFirst={goFirst}
+            onPrev={goPrev}
+            onNext={goNext}
+            onLast={goLast}
+            onFlip={() => setFlipped((f) => !f)}
+            onToggleSound={toggleSound}
+            onResign={resign}
+            onNewGame={() => setGame(null)}
+          />
+        ) : (
+          <Setup
+            level={level}
+            colorChoice={colorChoice}
+            creating={creating}
+            onLevel={setLevel}
+            onColor={setColorChoice}
+            onStart={newGame}
+          />
+        )}
+
+        {error && (
+          <Alert severity="error" variant="outlined" sx={{ mt: 2, fontSize: 13 }}>
+            {error}
+          </Alert>
+        )}
+
+        <Typography
+          sx={{
+            mt: 1.75,
+            fontFamily: 'var(--font-display)',
+            fontSize: 17,
+            fontWeight: 600,
+            color: !atLive ? 'var(--text-dim)' : over ? 'var(--accent)' : ongoing && game!.your_turn ? 'var(--text)' : 'var(--text-dim)',
+          }}
+        >
+          {caption}
+        </Typography>
       </Box>
     </Box>
   )
 }
 
-function PlayerRow({
-  name,
-  color,
-  active,
-  trailing,
+function MovePanel({
+  game,
+  level,
+  ongoing,
+  shownPly,
+  sound,
+  onSelectPly,
+  onFirst,
+  onPrev,
+  onNext,
+  onLast,
+  onFlip,
+  onToggleSound,
+  onResign,
+  onNewGame,
 }: {
-  name: string
-  color: Color
-  active?: boolean
-  trailing?: ReactNode
+  game: Game
+  level: number
+  ongoing: boolean
+  shownPly: number
+  sound: boolean
+  onSelectPly: (p: number) => void
+  onFirst: () => void
+  onPrev: () => void
+  onNext: () => void
+  onLast: () => void
+  onFlip: () => void
+  onToggleSound: () => void
+  onResign: () => void
+  onNewGame: () => void
 }) {
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
+    <Box
+      sx={{
+        bgcolor: '#1b1e24',
+        border: '1px solid var(--line)',
+        borderRadius: 2.5,
+        overflow: 'hidden',
+      }}
+    >
+      {/* Header strip */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.75, py: 1.25, bgcolor: '#23272f' }}>
+        <Dot color="#7bb661" />
+        <Typography sx={{ fontWeight: 600, fontSize: 14.5 }}>gomachine</Typography>
+        <Typography sx={{ ml: 'auto', fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-dim)' }}>
+          level {game.level ?? level}
+        </Typography>
+      </Box>
+
+      {/* Navigation toolbar */}
       <Box
         sx={{
-          width: 14,
-          height: 14,
-          borderRadius: '50%',
-          flexShrink: 0,
-          background: color === 'w' ? '#f1ece0' : '#15181e',
-          border: '1px solid rgba(255,255,255,0.22)',
-          boxShadow: active ? '0 0 0 3px var(--accent-soft)' : 'none',
-        }}
-      />
-      <Typography
-        sx={{
-          fontWeight: 600,
-          fontSize: 15,
-          color: active ? 'var(--text)' : 'var(--text-dim)',
+          display: 'flex',
+          alignItems: 'center',
+          px: 0.5,
+          py: 0.25,
+          borderBottom: '1px solid var(--line-soft)',
         }}
       >
-        {name}
-      </Typography>
-      <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 0.75 }}>{trailing}</Box>
+        <PanelIcon label="Flip board" onClick={onFlip}>
+          <FlipVertical2 size={16} />
+        </PanelIcon>
+        <PanelIcon label={sound ? 'Mute' : 'Unmute'} onClick={onToggleSound}>
+          {sound ? <Volume2 size={16} /> : <VolumeX size={16} />}
+        </PanelIcon>
+        <Box sx={{ flex: 1 }} />
+        <PanelIcon label="First move" onClick={onFirst}>
+          <ChevronFirst size={17} />
+        </PanelIcon>
+        <PanelIcon label="Previous" onClick={onPrev}>
+          <ChevronLeft size={17} />
+        </PanelIcon>
+        <PanelIcon label="Next" onClick={onNext}>
+          <ChevronRight size={17} />
+        </PanelIcon>
+        <PanelIcon label="Latest" onClick={onLast}>
+          <ChevronLast size={17} />
+        </PanelIcon>
+      </Box>
+
+      {/* Move grid */}
+      <MoveList moves={game.moves} currentPly={shownPly} onSelectPly={onSelectPly} />
+
+      {/* Actions */}
+      <Box
+        sx={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 1,
+          py: 0.75,
+          borderTop: '1px solid var(--line-soft)',
+        }}
+      >
+        {ongoing && (
+          <PanelIcon label="Resign" onClick={onResign}>
+            <Flag size={15} />
+          </PanelIcon>
+        )}
+        <PanelIcon label="New game" onClick={onNewGame}>
+          <RotateCcw size={15} />
+        </PanelIcon>
+      </Box>
+
+      {/* Footer */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.75, py: 1.25, bgcolor: '#23272f' }}>
+        <Dot color="#7bb661" />
+        <Typography sx={{ fontWeight: 600, fontSize: 14.5 }}>You</Typography>
+      </Box>
     </Box>
   )
 }
 
-function RailIcon({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
+function Setup({
+  level,
+  colorChoice,
+  creating,
+  onLevel,
+  onColor,
+  onStart,
+}: {
+  level: number
+  colorChoice: ColorChoice
+  creating: boolean
+  onLevel: (n: number) => void
+  onColor: (c: ColorChoice) => void
+  onStart: () => void
+}) {
+  return (
+    <Box
+      sx={{
+        bgcolor: '#1b1e24',
+        border: '1px solid var(--line)',
+        borderRadius: 2.5,
+        p: 2.5,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 2.5,
+      }}
+    >
+      <Box>
+        <Label>Difficulty · level {level}</Label>
+        <Box sx={{ px: 0.5 }}>
+          <Slider
+            value={level}
+            onChange={(_, v) => onLevel(v as number)}
+            min={0}
+            max={10}
+            step={1}
+            marks
+            valueLabelDisplay="auto"
+            sx={{ color: 'var(--accent)' }}
+          />
+        </Box>
+        <Typography sx={{ fontSize: 12, color: 'var(--muted)', mt: -0.5 }}>{levelHint(level)}</Typography>
+      </Box>
+
+      <Box>
+        <Label>Play as</Label>
+        <ToggleButtonGroup
+          exclusive
+          fullWidth
+          size="small"
+          value={colorChoice}
+          onChange={(_, v) => v && onColor(v as ColorChoice)}
+          sx={toggleSx}
+        >
+          <ToggleButton value="w">White</ToggleButton>
+          <ToggleButton value="b">Black</ToggleButton>
+          <ToggleButton value="random">Random</ToggleButton>
+        </ToggleButtonGroup>
+      </Box>
+
+      <Button
+        variant="contained"
+        onClick={onStart}
+        disabled={creating}
+        startIcon={creating ? <CircularProgress size={15} color="inherit" /> : <RotateCcw size={15} />}
+      >
+        Start game
+      </Button>
+    </Box>
+  )
+}
+
+function Dot({ color }: { color: string }) {
+  return <Box sx={{ width: 9, height: 9, borderRadius: '50%', background: color, flexShrink: 0 }} />
+}
+
+function PanelIcon({ label, onClick, children }: { label: string; onClick: () => void; children: ReactNode }) {
   return (
     <Tooltip title={label} arrow>
-      <IconButton
+      <Box
+        component="button"
         onClick={onClick}
-        size="small"
         sx={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 32,
+          height: 30,
+          border: 'none',
+          background: 'transparent',
           color: 'var(--text-dim)',
           borderRadius: 1.5,
-          '&:hover': { color: 'var(--accent)', bgcolor: 'var(--accent-soft)' },
+          cursor: 'pointer',
+          '&:hover': { color: 'var(--accent)', background: 'var(--accent-soft)' },
         }}
       >
         {children}
-      </IconButton>
+      </Box>
     </Tooltip>
   )
 }
