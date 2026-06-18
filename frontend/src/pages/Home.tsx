@@ -59,6 +59,10 @@ export default function Home() {
     setSearch(label)
   }
 
+  // Show the dialog for either source: our optimistic label, or a queue we landed
+  // in (e.g. "New game" from a finished live game, which queues before routing here).
+  const searching = search ?? (s.status === 'queued' ? s.pool : null)
+
   return (
     <Box sx={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
       {/* Oversized faint knight watermark behind the grid */}
@@ -159,9 +163,11 @@ export default function Home() {
         </Box>
       </Box>
 
-      {/* Optimistic "searching" dialog */}
+      {/* "Searching" dialog — driven by the optimistic local label when we queue
+          from here, or by the socket's queued status when we arrive already in the
+          queue (e.g. "New game" from a finished live game). */}
       <Dialog
-        open={search !== null}
+        open={searching !== null}
         onClose={() => setSearch(null)}
         slotProps={{ paper: { sx: { bgcolor: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 3, minWidth: 340 } } }}
       >
@@ -169,7 +175,7 @@ export default function Home() {
           <Typography
             sx={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, letterSpacing: '0.14em', color: 'var(--accent)', textTransform: 'uppercase' }}
           >
-            {search}
+            {searching}
           </Typography>
           <CircularProgress sx={{ color: 'var(--accent)', my: 3 }} />
           <Typography sx={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 19 }}>

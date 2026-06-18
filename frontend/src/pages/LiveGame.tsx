@@ -174,7 +174,7 @@ export default function LiveGame() {
                 <Button fullWidth variant="outlined" color="inherit" onClick={() => { gameSocket.leave(); navigate('/') }}>
                   Lobby
                 </Button>
-                <Button fullWidth variant="contained" onClick={() => { gameSocket.leave(); navigate('/') }}>
+                <Button fullWidth variant="contained" onClick={() => { gameSocket.queue(g.pool); navigate('/') }}>
                   New game
                 </Button>
               </Box>
