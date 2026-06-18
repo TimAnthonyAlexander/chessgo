@@ -4,6 +4,7 @@ import { Flag } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import Board from '../components/Board'
 import Clock from '../components/Clock'
+import LiveModeCard from '../components/LiveModeCard'
 import MoveList from '../components/MoveList'
 import type { MoveEntry } from '../api/client'
 import { type Color, gameSocket, type LiveGameState, liveRemaining } from '../lib/socket'
@@ -108,14 +109,24 @@ export default function LiveGame() {
       <Box
         sx={{
           display: 'grid',
-          gridTemplateColumns: { xs: '1fr', md: 'min(calc(100vh - 140px), calc(100vw - 380px), 760px) 300px' },
+          // A left spacer column mirrors the 320px sidebar so the BOARD itself
+          // (not the board+sidebar block) is centered in the viewport.
+          gridTemplateColumns: {
+            xs: '1fr',
+            md: '320px min(calc(100vh - 120px), calc(100vw - 752px), 880px) 320px',
+          },
           columnGap: { md: 4 },
           rowGap: 2,
           alignItems: 'center',
-          width: '100%',
-          maxWidth: 1120,
+          justifyContent: 'center',
+          width: { xs: '100%', md: 'fit-content' },
+          maxWidth: '100%',
+          mx: 'auto',
         }}
       >
+        <Box sx={{ display: { xs: 'none', md: 'block' }, width: '100%', justifySelf: 'end', alignSelf: 'start' }}>
+          <LiveModeCard pool={g.pool} rated={g.rated} color={g.color} opponent={g.opponent} />
+        </Box>
         <Box sx={{ minWidth: 0 }}>
           <Board
             fen={g.fen}
