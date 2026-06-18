@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Box, Button, Typography } from '@mui/material'
-import { ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, FlipVertical2, Target } from 'lucide-react'
+import { ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, FlipVertical2, Play, Square, Target, Zap } from 'lucide-react'
 import { useParams } from 'react-router-dom'
 import Board from '../components/Board'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
@@ -9,6 +9,7 @@ import { analyze, getGameAnalysis, type GameAnalysis } from '../api/client'
 import type { Color } from '../api/client'
 import {
   type Tree,
+  type TreeNode,
   annotateEval,
   buildFromAnalysis,
   createTree,
@@ -20,6 +21,21 @@ import {
 } from '../lib/analysisTree'
 import { sounds } from '../lib/sounds'
 
+// How long (ms) each auto-played move lingers before the next one.
+const AUTO_DELAY = 700
+
+type AutoMode = 'off' | 'play' | 'best'
+
+// Play the appropriate sound for the move that leads INTO a node.
+function playMoveSound(node?: TreeNode) {
+  const m = node?.move
+  if (!m) return
+  if (m.san.includes('x')) sounds.capture()
+  else if (m.san.startsWith('O-O')) sounds.castle()
+  else if (m.uci.length === 5) sounds.promote()
+  else sounds.move()
+}
+
 export default function Analysis() {
   const { id } = useParams<{ id?: string }>()
 
@@ -30,9 +46,11 @@ export default function Analysis() {
   const [game, setGame] = useState<GameAnalysis | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loading, setLoading] = useState<boolean>(!!id)
+  const [autoMode, setAutoMode] = useState<AutoMode>('off')
 
   // --- Load a finished game's analysis (review mode) ---
   useEffect(() => {
+    setAutoMode('off')
     if (!id) {
       // Free mode: fresh board from the start position.
       setTree(createTree(START_FEN))
@@ -111,21 +129,31 @@ export default function Analysis() {
     }
   }, [current.id, current.fen, current.evalWhite, over.over, over.checkmate, sideToMove])
 
-  // --- Navigation ---
+  // --- Navigation (manual navigation always cancels any auto playback) ---
   const goPrev = useCallback(() => {
+    setAutoMode('off')
     setCurrentId((cur) => tree.nodes[cur]?.parent ?? cur)
   }, [tree])
   const goNext = useCallback(() => {
+    setAutoMode('off')
     setCurrentId((cur) => tree.nodes[cur]?.children[0] ?? cur)
   }, [tree])
-  const goStart = useCallback(() => setCurrentId(tree.rootId), [tree.rootId])
+  const goStart = useCallback(() => {
+    setAutoMode('off')
+    setCurrentId(tree.rootId)
+  }, [tree.rootId])
   const goEnd = useCallback(() => {
+    setAutoMode('off')
     setCurrentId((cur) => {
       let n = tree.nodes[cur]
       while (n && n.children.length > 0) n = tree.nodes[n.children[0]]
       return n ? n.id : cur
     })
   }, [tree])
+  const selectNode = useCallback((nodeId: number) => {
+    setAutoMode('off')
+    setCurrentId(nodeId)
+  }, [])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -147,20 +175,62 @@ export default function Analysis() {
       if (!node) return
       const res = playMove(tree, currentId, uci)
       if (res.nodeId === currentId) return // illegal / no-op
-      // Sound: a capture is a diagonal pawn move or a move onto an occupied square.
-      const san = res.tree.nodes[res.nodeId]?.move?.san ?? ''
-      if (san.includes('x')) sounds.capture()
-      else if (san.startsWith('O-O')) sounds.castle()
-      else if (uci.length === 5) sounds.promote()
-      else sounds.move()
+      setAutoMode('off') // a manual move ends auto playback
+      playMoveSound(res.tree.nodes[res.nodeId])
       setTree(res.tree)
       setCurrentId(res.nodeId)
     },
     [tree, currentId],
   )
 
+  // --- Auto Play: step through the mainline (children[0]) on a timer ---
+  useEffect(() => {
+    if (autoMode !== 'play') return
+    const nextId = tree.nodes[currentId]?.children[0]
+    if (nextId === undefined) {
+      setAutoMode('off') // reached the end of the line
+      return
+    }
+    const t = setTimeout(() => {
+      playMoveSound(tree.nodes[nextId])
+      setCurrentId(nextId)
+    }, AUTO_DELAY)
+    return () => clearTimeout(t)
+  }, [autoMode, currentId, tree])
+
+  // --- Auto Best Move: keep playing the engine's best move from here, branching
+  // off the existing line when the best move differs from what was played. We
+  // lean on the eval effect to populate `bestUci`; when it's not yet known we
+  // simply wait (this effect re-runs once it arrives). ---
+  useEffect(() => {
+    if (autoMode !== 'best') return
+    if (over.over) {
+      setAutoMode('off') // game over — nothing left to play
+      return
+    }
+    const best = current.bestUci
+    if (!best) return // waiting for the engine's best move; re-runs when known
+    const t = setTimeout(() => {
+      const res = playMove(tree, currentId, best)
+      if (res.nodeId === currentId) {
+        setAutoMode('off') // defensive: engine returned an unplayable move
+        return
+      }
+      playMoveSound(res.tree.nodes[res.nodeId])
+      setTree(res.tree)
+      setCurrentId(res.nodeId)
+    }, AUTO_DELAY)
+    return () => clearTimeout(t)
+  }, [autoMode, currentId, current.bestUci, over.over, tree])
+
+  const toggleAuto = useCallback((mode: Exclude<AutoMode, 'off'>) => {
+    setAutoMode((m) => (m === mode ? 'off' : mode))
+  }, [])
+
+  // Always surface the best-move arrow while Auto Best Move is driving, so the
+  // user sees the engine's choice before it's played.
   const arrow =
-    showArrow && current.bestUci
+    (showArrow || autoMode === 'best') && current.bestUci
       ? { from: current.bestUci.slice(0, 2), to: current.bestUci.slice(2, 4) }
       : null
 
@@ -232,7 +302,23 @@ export default function Analysis() {
         >
           <Header id={id} game={game} loading={loading} loadError={loadError} current={current} />
 
-          <MoveTree tree={tree} currentId={currentId} onSelect={setCurrentId} />
+          <MoveTree tree={tree} currentId={currentId} onSelect={selectNode} />
+
+          {/* Auto playback */}
+          <Box sx={{ display: 'flex', gap: 1, px: 1, pt: 1 }}>
+            <AutoBtn
+              active={autoMode === 'play'}
+              onClick={() => toggleAuto('play')}
+              icon={autoMode === 'play' ? <Square size={14} /> : <Play size={14} />}
+              label={autoMode === 'play' ? 'Stop' : 'Auto Play'}
+            />
+            <AutoBtn
+              active={autoMode === 'best'}
+              onClick={() => toggleAuto('best')}
+              icon={autoMode === 'best' ? <Square size={14} /> : <Zap size={14} />}
+              label={autoMode === 'best' ? 'Stop' : 'Auto Best Move'}
+            />
+          </Box>
 
           {/* Controls */}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, p: 1, borderTop: '1px solid var(--line-soft)' }}>
@@ -278,6 +364,43 @@ function NavBtn({
       }}
     >
       {children}
+    </Button>
+  )
+}
+
+function AutoBtn({
+  active,
+  onClick,
+  icon,
+  label,
+}: {
+  active?: boolean
+  onClick: () => void
+  icon: React.ReactNode
+  label: string
+}) {
+  return (
+    <Button
+      onClick={onClick}
+      aria-label={label}
+      startIcon={icon}
+      sx={{
+        flex: 1,
+        textTransform: 'none',
+        fontSize: 13,
+        fontWeight: 600,
+        py: 0.5,
+        gap: 0.25,
+        color: active ? 'var(--bg)' : 'var(--text-dim)',
+        bgcolor: active ? 'var(--accent)' : 'var(--line)',
+        border: '1px solid var(--line-soft)',
+        '&:hover': {
+          bgcolor: active ? 'var(--accent)' : 'var(--line-soft)',
+          color: active ? 'var(--bg)' : 'var(--accent)',
+        },
+      }}
+    >
+      {label}
     </Button>
   )
 }
