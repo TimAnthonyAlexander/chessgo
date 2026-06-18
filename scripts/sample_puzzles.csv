@@ -1,0 +1,4 @@
+PuzzleId,FEN,Moves,Rating,RatingDeviation,Popularity,NbPlays,Themes,GameUrl,OpeningTags
+smoke001,rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1,e2e4 e7e5 g1f3 b8c6 f1b5 a7a6,1200,80,90,1000,opening short,https://lichess.org/x,Ruy_Lopez
+smoke002,rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1,d2d4 d7d5 c2c4 e7e6,1500,80,90,1000,opening queensGambit,https://lichess.org/y,Queens_Gambit
+smoke003,rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1,e2e4 c7c5 g1f3 d7d6,1800,80,90,1000,opening sicilian mateIn2,https://lichess.org/z,Sicilian

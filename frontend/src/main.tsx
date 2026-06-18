@@ -7,6 +7,7 @@ import Layout from './components/Layout'
 import Home from './pages/Home'
 import BotGame from './pages/BotGame'
 import LiveGame from './pages/LiveGame'
+import Puzzles from './pages/Puzzles'
 import './styles.css'
 
 const router = createBrowserRouter([
@@ -15,6 +16,7 @@ const router = createBrowserRouter([
     children: [
       { path: '/', element: <Home /> },
       { path: '/bot', element: <BotGame /> },
+      { path: '/puzzles', element: <Puzzles /> },
       { path: '/game/:id', element: <LiveGame /> },
     ],
   },

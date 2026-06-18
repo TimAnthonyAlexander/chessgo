@@ -124,6 +124,11 @@ after a 15s wait, level 6, human-like pacing, random identity — `-bots`/
 **game persistence** (hub → `POST /internal/games`). Rated when both are accounts;
 a logged-in human vs a fill-in bot is one-sided rated; explicit `/bot` games never
 hit the hub so they're unrated. **Resume is still in-memory** — survives tab
-close/refresh but not a hub restart. Next: hub-restart-durable resume, rating-
-proximity matchmaking, matching bot *strength* to its displayed rating. See
-`docs/SPEC.md` §10 roadmap.
+close/refresh but not a hub restart. Also: **Puzzles** (`/puzzles`) — Lichess-
+seeded tactical trainer on an **isolated** `rating_puzzle` (never touches the
+time-control ratings); `puzzle`/`puzzle_theme`/`puzzle_attempt` models + the
+`scripts/import_puzzles.php` CSV importer; serving is rating-matched + de-duped
+with a theme filter, and the solution is validated server-side (never sent to the
+client). See SPEC.md §9. Next: hub-restart-durable resume, puzzle generation
+pipeline, rating-proximity matchmaking, matching bot *strength* to its displayed
+rating. See `docs/SPEC.md` §11 roadmap.

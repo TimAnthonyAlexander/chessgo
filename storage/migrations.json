@@ -216,6 +216,105 @@
             "table": "game",
             "operation": "add_index",
             "warning": null
+        },
+        {
+            "id": "mig_ed8d073a9387",
+            "sql": "CREATE TABLE `puzzle` (\n  `ext_id` VARCHAR(36) NOT NULL DEFAULT '',\n  `fen` VARCHAR(255) NOT NULL DEFAULT '',\n  `moves` TEXT,\n  `rating` INT NOT NULL DEFAULT 1500,\n  `rating_deviation` INT NOT NULL DEFAULT 0,\n  `popularity` INT NOT NULL DEFAULT 0,\n  `nb_plays` INT NOT NULL DEFAULT 0,\n  `themes` TEXT,\n  `game_url` TEXT,\n  `id` VARCHAR(36) NOT NULL DEFAULT '',\n  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            "destructive": false,
+            "generated_at": "2026-06-18T13:06:02+00:00",
+            "table": "puzzle",
+            "operation": "create_table",
+            "warning": null
+        },
+        {
+            "id": "mig_a3771cf57be3",
+            "sql": "CREATE TABLE `puzzle_attempt` (\n  `user_id` VARCHAR(36) NOT NULL DEFAULT '',\n  `puzzle_ext_id` VARCHAR(36) NOT NULL DEFAULT '',\n  `solved` TINYINT(1) NOT NULL DEFAULT 0,\n  `rating_before` INT NOT NULL DEFAULT 1500,\n  `rating_after` INT NOT NULL DEFAULT 1500,\n  `id` VARCHAR(36) NOT NULL DEFAULT '',\n  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            "destructive": false,
+            "generated_at": "2026-06-18T13:06:02+00:00",
+            "table": "puzzle_attempt",
+            "operation": "create_table",
+            "warning": null
+        },
+        {
+            "id": "mig_1a8a9afbcd06",
+            "sql": "CREATE TABLE `puzzle_theme` (\n  `puzzle_ext_id` VARCHAR(36) NOT NULL DEFAULT '',\n  `theme` VARCHAR(255) NOT NULL DEFAULT '',\n  `rating` INT NOT NULL DEFAULT 1500,\n  `id` VARCHAR(36) NOT NULL DEFAULT '',\n  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            "destructive": false,
+            "generated_at": "2026-06-18T13:06:02+00:00",
+            "table": "puzzle_theme",
+            "operation": "create_table",
+            "warning": null
+        },
+        {
+            "id": "mig_19ce6de1017b",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rating_puzzle` INT NOT NULL DEFAULT 1500",
+            "destructive": false,
+            "generated_at": "2026-06-18T13:06:02+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_50f3086a6c3f",
+            "sql": "ALTER TABLE `user` ADD COLUMN `games_puzzle` INT NOT NULL DEFAULT 0",
+            "destructive": false,
+            "generated_at": "2026-06-18T13:06:02+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_01a6a4393a15",
+            "sql": "ALTER TABLE `puzzle` ADD UNIQUE KEY `uniq_puzzle_ext_id` (`ext_id`)",
+            "destructive": false,
+            "generated_at": "2026-06-18T13:06:02+00:00",
+            "table": "puzzle",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_2b64efd8521e",
+            "sql": "ALTER TABLE `puzzle` ADD INDEX `idx_puzzle_rating` (`rating`)",
+            "destructive": false,
+            "generated_at": "2026-06-18T13:06:02+00:00",
+            "table": "puzzle",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_e1457d4dc565",
+            "sql": "ALTER TABLE `puzzle_attempt` ADD UNIQUE KEY `uniq_puzzle_attempt_user_id_puzzle_ext_id` (`user_id`, `puzzle_ext_id`)",
+            "destructive": false,
+            "generated_at": "2026-06-18T13:06:02+00:00",
+            "table": "puzzle_attempt",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_8c0085b1edb3",
+            "sql": "ALTER TABLE `puzzle_theme` ADD INDEX `idx_puzzle_theme_theme_rating` (`theme`, `rating`)",
+            "destructive": false,
+            "generated_at": "2026-06-18T13:06:02+00:00",
+            "table": "puzzle_theme",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_e7f56b4fc02a",
+            "sql": "ALTER TABLE `puzzle_theme` ADD UNIQUE KEY `uniq_puzzle_theme_puzzle_ext_id_theme` (`puzzle_ext_id`, `theme`)",
+            "destructive": false,
+            "generated_at": "2026-06-18T13:06:02+00:00",
+            "table": "puzzle_theme",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_f63ce2cd1842",
+            "sql": "ALTER TABLE `puzzle_attempt` ADD CONSTRAINT `fk_puzzle_attempt_user_id` FOREIGN KEY (`user_id`) REFERENCES `user` (`id`) ON DELETE CASCADE ON UPDATE CASCADE",
+            "destructive": false,
+            "generated_at": "2026-06-18T13:06:02+00:00",
+            "table": "puzzle_attempt",
+            "operation": "add_fk",
+            "warning": null
         }
     ]
 }

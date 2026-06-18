@@ -17,6 +17,7 @@ use App\Controllers\AnalyzeController;
 use App\Controllers\WsTicketController;
 use App\Controllers\StatsController;
 use App\Controllers\GameResultController;
+use App\Controllers\PuzzleController;
 use BaseApi\Http\Middleware\RateLimitMiddleware;
 use BaseApi\Http\SessionStartMiddleware;
 use BaseApi\Permissions\PermissionsMiddleware;
@@ -78,6 +79,27 @@ $router->get('/stats', [
 
 // Internal: the realtime hub persists finished games here (secret-gated, no session)
 $router->post('/internal/games', [GameResultController::class]);
+
+// ================================
+// Puzzles — Lichess-style training (SPEC §Puzzles)
+// ================================
+// Session is OPTIONAL: a logged-in user gets rating-matched + de-duped puzzles
+// and an isolated rating_puzzle update; anonymous still solves casually.
+
+// Serve the next puzzle near the solver's rating (solution withheld): ?theme=
+$router->get('/puzzles/next', [
+    SessionStartMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    PuzzleController::class,
+]);
+
+// Submit one player move (UCI), validated against the hidden solution line:
+//   { move: "e2e4", fen: "<current FEN>", ply: 1 }
+$router->post('/puzzles/{id}/move', [
+    SessionStartMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '240/1m'],
+    PuzzleController::class,
+]);
 
 // ================================  
 // Authentication Endpoints

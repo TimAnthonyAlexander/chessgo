@@ -150,7 +150,7 @@ pure Go so a single `go build` cross-compiles to any target.
 
 ## 4. gomachine — engine design (research-backed)
 
-> Full research synthesis with sources in §11. This section is the design we'll build.
+> Full research synthesis with sources in §12. This section is the design we'll build.
 
 ### 4.1 Board representation
 - **Bitboards**: 12 `uint64` (piece-type × color) = 96 B. Set bit = occupancy.
@@ -531,7 +531,79 @@ sounds (`src/lib/sounds.ts`) are gesture-unlocked Web Audio.
 
 ---
 
-## 9. Repository layout
+## 9. Puzzles (training)
+
+Lichess-style tactical training on a **separate, isolated rating**. Solving
+puzzles never touches the bullet/blitz/rapid/classical ratings — `rating_puzzle`
+is a fifth category that happens not to be a time control.
+
+### 9.1 Decisions (locked)
+- **Source:** seed from the **Lichess open puzzle database (CC0)** — millions of
+  pre-rated, pre-tagged puzzles, zero engine compute. A gomachine game-mining
+  generator is a later phase; per the research we **avoid synthetic/random mate
+  generation** (low realism) in favour of mining real games.
+- **Rating:** puzzle ratings are **fixed** (Lichess values treated as ground
+  truth); only the solver's `rating_puzzle` moves, via the existing `EloService`
+  (provisional K=40→20) against the puzzle's rating as the "opponent". **No time
+  component, no hints** (Lichess-pure).
+- **v1 scope:** rated training stream + theme filter (incl. mate-in-N). Daily
+  puzzle, Puzzle Rush, and alternate-mate acceptance are deferred.
+- **Access:** anonymous solvers play casually (unrated); rating requires an
+  account. The solution line is **never sent to the client** — moves are
+  validated server-side by index.
+
+### 9.2 Data model (BaseAPI, singular snake_case)
+- **`puzzle`** — `ext_id` (Lichess id, unique), `fen`, `moves` (TEXT JSON
+  solution line), `rating` (indexed), `rating_deviation`, `popularity`,
+  `nb_plays`, `themes` (TEXT JSON), `game_url`. JSON via the array-cast-footgun
+  pattern (TEXT + manual `json_encode/decode`), mirroring `BotGame`.
+- **`puzzle_theme`** — denormalized `(puzzle_ext_id, theme, rating)` with a
+  composite **(theme, rating)** index, so theme-filtered serving is an index
+  range scan, not a JSON `LIKE`. Unique `(puzzle_ext_id, theme)` for idempotent
+  import.
+- **`puzzle_attempt`** — unique `(user_id, puzzle_ext_id)`, `solved`,
+  `rating_before/after`. One (first) rated attempt per puzzle; drives both
+  de-duplication and Elo idempotency. Anonymous solvers are not recorded.
+- **`user`** gains `rating_puzzle` (1500) + `games_puzzle` (0).
+
+### 9.3 Solution convention
+Lichess convention: `puzzle.fen` is the position **before** the opponent's setup
+move; `moves[0]` is that move (auto-played), then the line alternates. The player
+answers the **odd indices**. "White to move, mate in 3" is just a theme filter
+(`mateIn3`) over this same model.
+
+### 9.4 Endpoints (optional session, like `/ws-ticket`)
+- **`GET /puzzles/next?theme=`** — picks an unseen puzzle near the solver's
+  rating via a **random rating pivot + indexed range scan** (never
+  `ORDER BY RAND()`, which is O(n) at millions of rows), widening the window
+  until something unseen turns up. Auto-applies the opponent move and returns
+  `{id, rating, start_fen, opponent_move, fen, color, legal_moves, ply}` —
+  **solution withheld**.
+- **`POST /puzzles/{id}/move`** — `{move, fen, ply}`. Validates the move against
+  the stored line **by index** (the solution stays on the server). Correct +
+  more → returns the scripted reply + next legal moves; correct + done → solved;
+  wrong → reveals the remaining solution. On a terminal event a logged-in
+  solver's `rating_puzzle` updates **once** (idempotent on the attempt record).
+
+The engine is used only to compute display FENs + legal moves per ply (as it
+already does for every board); correctness itself is a string-index compare
+against the hidden line — so puzzles add **no chess logic to PHP**.
+
+### 9.5 Seeding
+The Lichess CSV is large and **not committed**. `scripts/import_puzzles.php` (a
+standalone bootstrap script — BaseAPI has no app-command mechanism) bulk-
+`INSERT IGNORE`s in batches and is re-run safe (filters: `--limit`,
+`--min/max-rating`, `--min-popularity`, `--themes`). See `docs/COMMANDS.md`.
+
+### 9.6 Frontend
+`/puzzles` (`pages/Puzzles.tsx`) reuses the controlled `Board`: it animates the
+opponent's setup move, validates each player move server-side, and reveals the
+puzzle rating + rating delta + themes on completion. A theme `Select` filters by
+type; the header user menu shows `rating_puzzle` as a separate row.
+
+---
+
+## 10. Repository layout
 
 ```
 chessgo/
@@ -572,7 +644,7 @@ chessgo/
 
 ---
 
-## 10. Roadmap
+## 11. Roadmap
 
 - [x] **gomachine engine** — perft-verified rules, search, eval, CLI, HTTP service.
 - [x] **Bot games** — BaseAPI `BotGame` + level 0–10, frontend `/bot`, eval bar.
@@ -588,6 +660,13 @@ chessgo/
       cookies), header user menu with per-category ratings, rated/casual badge.
 - [x] **Live lobby counts** — hub `/stats` (atomics) proxied by BaseAPI `/stats`;
       homepage shows real counts + optional smooth `STATS_PADDING` filler.
+- [x] **Puzzles (training)** — Lichess-seeded tactical trainer on an **isolated**
+      puzzle Elo (§9); `puzzle`/`puzzle_theme`/`puzzle_attempt` tables + CSV
+      importer; rating-matched + de-duped serving, theme filter (incl. mate-in-N),
+      server-side index validation with the solution withheld; `/puzzles` page.
+- [ ] **Puzzle generation pipeline** — mine real games with gomachine (blunder
+      detection + uniqueness check) to grow the set beyond the Lichess seed; plus
+      alternate-mate acceptance, Daily puzzle, Puzzle Rush.
 - [ ] **Hub-restart durability** — persist live games so resume survives a restart.
 - [ ] **Match bot strength to its rating** — fill-in bot currently plays level 6
       with a random displayed rating; tie displayed rating to actual strength (and
@@ -599,7 +678,7 @@ chessgo/
 
 ---
 
-## 11. Sources (research)
+## 12. Sources (research)
 
 **Engine:** CPW — Bitboards, Magic Bitboards, BMI2, Encoding Moves, Move
 Generation, Copy-Make, Alpha-Beta, Null Move Pruning, Late Move Reductions,

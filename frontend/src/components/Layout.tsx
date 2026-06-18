@@ -10,7 +10,7 @@ import type { RatingCategory, User } from '../api/client'
 const LINKS: { label: string; to: string | null }[] = [
   { label: 'Play', to: '/' },
   { label: 'Computer', to: '/bot' },
-  { label: 'Puzzles', to: null },
+  { label: 'Puzzles', to: '/puzzles' },
   { label: 'Watch', to: null },
   { label: 'Learn', to: null },
 ]
@@ -149,6 +149,14 @@ function UserMenu({ user }: { user: User }) {
             </span>
           </MenuItem>
         ))}
+        <Divider sx={{ borderColor: 'var(--line-soft)' }} />
+        <MenuItem disableRipple sx={{ cursor: 'default', justifyContent: 'space-between', gap: 3, fontSize: 13.5 }}>
+          <span style={{ color: 'var(--text-dim)' }}>Puzzles</span>
+          <span style={{ fontFamily: 'var(--font-mono)' }}>
+            {user.rating_puzzle}
+            <span style={{ color: 'var(--muted)', fontSize: 11 }}> · {user.games_puzzle}</span>
+          </span>
+        </MenuItem>
         <Divider sx={{ borderColor: 'var(--line-soft)' }} />
         <MenuItem
           onClick={() => {

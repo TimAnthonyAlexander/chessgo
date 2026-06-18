@@ -141,6 +141,29 @@ php mason migrate:apply -y     # apply ALL pending migrations (never --safe)
 
 ---
 
+## Seeding puzzles (SPEC §9)
+
+Puzzles are seeded from the **Lichess open puzzle database (CC0)** — large, and
+**not committed**. Run the migrations first (creates `puzzle` / `puzzle_theme` /
+`puzzle_attempt`), then download + import:
+
+```sh
+# 1. Download + decompress the CC0 puzzle CSV (~1 GB uncompressed, ~6M puzzles)
+curl -L https://database.lichess.org/lichess_db_puzzle.csv.zst -o puzzles.csv.zst
+zstd -d puzzles.csv.zst -o lichess_db_puzzle.csv
+
+# 2. Bulk import (batched INSERT IGNORE — re-run safe). Filters are optional:
+php scripts/import_puzzles.php lichess_db_puzzle.csv \
+    --limit=200000 --min-popularity=50            # a healthy starter subset
+# php scripts/import_puzzles.php lichess_db_puzzle.csv   # everything
+# flags: --limit=N --min-rating=N --max-rating=N --min-popularity=N --themes=a,b
+```
+
+A tiny `scripts/sample_puzzles.csv` (legal-but-synthetic) exists only for
+smoke-testing the importer + endpoints without the multi-GB download.
+
+---
+
 ## Production
 
 Prod runs the two Go binaries as long-lived services, PHP behind PHP-FPM, and

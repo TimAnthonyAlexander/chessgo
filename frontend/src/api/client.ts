@@ -93,6 +93,64 @@ export function analyze(fen: string): Promise<Analysis> {
   return request<Analysis>('/analyze', { method: 'POST', body: JSON.stringify({ fen }) })
 }
 
+// --- Puzzles (Lichess-style training, SPEC §Puzzles) ---
+
+/** A served puzzle. The opponent's setup move is already applied into `fen`
+ * (`opponent_move` is provided so the UI can animate it); the solution line is
+ * never sent. The player answers from `fen`, starting at `ply`. */
+export interface PuzzleNext {
+  id: string
+  rating: number
+  start_fen: string
+  opponent_move: string
+  fen: string
+  color: Color
+  legal_moves: string[]
+  ply: number
+}
+
+export interface PuzzleRating {
+  value: number
+  delta: number
+  games: number
+}
+
+/** Result of submitting one player move. On a correct non-final move the
+ * scripted opponent reply + next position are returned; on completion or a
+ * wrong move the outcome (and, for logged-in solvers, the rating change). */
+export interface PuzzleMoveResult {
+  correct: boolean
+  complete: boolean
+  solved?: boolean
+  opponent_move?: string
+  fen?: string
+  legal_moves?: string[]
+  ply?: number
+  status?: GameStatus
+  solution?: string[]
+  themes?: string[]
+  rating?: PuzzleRating | null
+}
+
+/** Serve the next puzzle near the solver's rating; optional theme filter. */
+export function nextPuzzle(theme?: string): Promise<PuzzleNext> {
+  const q = theme ? `?theme=${encodeURIComponent(theme)}` : ''
+  return request<PuzzleNext>(`/puzzles/next${q}`)
+}
+
+/** Submit one player move (UCI) for validation against the hidden solution. */
+export function submitPuzzleMove(
+  id: string,
+  move: string,
+  fen: string,
+  ply: number,
+): Promise<PuzzleMoveResult> {
+  return request<PuzzleMoveResult>(`/puzzles/${id}/move`, {
+    method: 'POST',
+    body: JSON.stringify({ move, fen, ply }),
+  })
+}
+
 export interface WsTicket {
   ticket: string
   wsUrl: string
@@ -145,6 +203,8 @@ export interface User {
   games_blitz: number
   games_rapid: number
   games_classical: number
+  rating_puzzle: number
+  games_puzzle: number
 }
 
 export function signup(name: string, email: string, password: string): Promise<User> {

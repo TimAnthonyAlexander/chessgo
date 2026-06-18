@@ -36,6 +36,13 @@ class User extends BaseModel
 
     public int $games_classical = 0;
 
+    // Puzzle rating is a SEPARATE, isolated category: solving puzzles never
+    // touches the time-control ratings above. Updated by EloService against the
+    // puzzle's (fixed) rating as the "opponent". See PuzzleController.
+    public int $rating_puzzle = 1500;
+
+    public int $games_puzzle = 0;
+
     /**
      * Define indexes for this model
      * @var array<string, string>
