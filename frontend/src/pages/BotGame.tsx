@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import {
   Alert,
   Box,
@@ -17,7 +17,7 @@ import { Flag, FlipVertical2, RotateCcw, Volume2, VolumeX } from 'lucide-react'
 import Board from '../components/Board'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveList from '../components/MoveList'
-import { type BotGame as Game, type Color, createBotGame, playMove } from '../api/client'
+import { analyze, type BotGame as Game, type Color, createBotGame, playMove } from '../api/client'
 import { applyUciVisually, type BoardMap, fileOf, parseFen, statusLabel } from '../lib/chess'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 
@@ -37,6 +37,7 @@ export default function BotGame() {
   const [flipped, setFlipped] = useState(false)
   const [resigned, setResigned] = useState(false)
   const [sound, setSound] = useState(soundEnabled())
+  const [analyzedEval, setAnalyzedEval] = useState<WhiteEval | null>(null)
 
   const humanColor: Color = game?.human_color ?? (colorChoice === 'random' ? 'w' : colorChoice)
   const botColor = other(humanColor)
@@ -46,18 +47,36 @@ export default function BotGame() {
   const ongoing = !!game && !over
   const interactive = ongoing && game.your_turn && !thinking
 
-  // Latest engine evaluation (from bot moves), converted to White's perspective.
-  const evalState: WhiteEval | null = (() => {
-    if (!game) return null
-    for (let i = game.moves.length - 1; i >= 0; i--) {
-      const m = game.moves[i]
-      if (m.by === 'bot' && m.eval) {
-        const sign = botColor === 'w' ? 1 : -1
-        return { type: m.eval.type, white: m.eval.value * sign }
-      }
+  // Eval bar is driven by a FULL-STRENGTH analysis of the current position,
+  // independent of the bot's difficulty level — fetched asynchronously so it
+  // never slows the bot's reply (SPEC §6).
+  useEffect(() => {
+    if (!game) {
+      setAnalyzedEval(null)
+      return
     }
-    return null
-  })()
+    if (game.status !== 'ongoing') {
+      if (game.status === 'checkmate') {
+        const winner: Color = game.side_to_move === 'w' ? 'b' : 'w' // side to move is mated
+        setAnalyzedEval({ type: 'mate', white: winner === 'w' ? 1 : -1 })
+      } else {
+        setAnalyzedEval({ type: 'cp', white: 0 }) // any draw → even
+      }
+      return
+    }
+    let cancelled = false
+    analyze(game.fen)
+      .then((r) => {
+        if (cancelled || !r.eval) return
+        // r.eval is from the side-to-move's perspective; convert to White's.
+        const white = game.side_to_move === 'w' ? r.eval.value : -r.eval.value
+        setAnalyzedEval({ type: r.eval.type, white })
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [game?.fen, game?.status, game?.side_to_move])
 
   const lastEntry = game && game.moves.length ? game.moves[game.moves.length - 1] : null
   const lastMove =
@@ -131,6 +150,8 @@ export default function BotGame() {
   function resign() {
     if (!ongoing) return
     setResigned(true)
+    // Resigning hands the win to the bot — peg the bar to the winner.
+    setAnalyzedEval({ type: 'mate', white: humanColor === 'w' ? -1 : 1 })
     sounds.end()
   }
 
@@ -182,7 +203,7 @@ export default function BotGame() {
         }}
       >
         <Box sx={{ minWidth: 0, display: 'flex', gap: { xs: 0.75, md: 1.25 }, alignItems: 'stretch' }}>
-          <EvalBar ev={evalState} orientation={orientation} />
+          <EvalBar ev={analyzedEval} orientation={orientation} />
           <Box sx={{ flex: 1, minWidth: 0 }}>
             <Board
               fen={fen}

@@ -54,6 +54,22 @@ class GomachineClient
     }
 
     /**
+     * Full-strength positional analysis, INDEPENDENT of any bot difficulty
+     * level (SPEC §6) — used to drive the eval bar. Always searches at full
+     * power for a fixed time budget, so a level-1 bot game still shows an
+     * accurate evaluation.
+     *
+     * @return array<string, mixed> {bestmove, san, eval, pv, depth, nodes}
+     */
+    public function analyze(string $fen, int $movetimeMs = 1500): array
+    {
+        return $this->post('/bestmove', [
+            'fen' => $fen,
+            'limits' => ['movetime' => $movetimeMs],
+        ]);
+    }
+
+    /**
      * List legal moves (optionally from a single square).
      *
      * @return array<string, mixed> {moves, count}

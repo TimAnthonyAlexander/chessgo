@@ -80,4 +80,15 @@ export function playMove(id: string, move: string): Promise<BotGame> {
   })
 }
 
+export interface Analysis {
+  eval: { type: 'cp' | 'mate'; value: number } | null
+  bestmove: string | null
+  depth: number | null
+}
+
+/** Full-strength evaluation of a position (drives the eval bar, level-independent). */
+export function analyze(fen: string): Promise<Analysis> {
+  return request<Analysis>('/analyze', { method: 'POST', body: JSON.stringify({ fen }) })
+}
+
 export { ApiError }

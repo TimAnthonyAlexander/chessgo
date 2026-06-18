@@ -13,6 +13,7 @@ use App\Controllers\ApiTokenController;
 use App\Controllers\StreamController;
 use App\Controllers\BotGameController;
 use App\Controllers\BotMoveController;
+use App\Controllers\AnalyzeController;
 use BaseApi\Http\Middleware\RateLimitMiddleware;
 use BaseApi\Http\SessionStartMiddleware;
 use BaseApi\Permissions\PermissionsMiddleware;
@@ -50,6 +51,12 @@ $router->get('/bot-games/{id}', [BotGameController::class]);
 $router->post('/bot-games/{id}/move', [
     RateLimitMiddleware::class => ['limit' => '180/1m'],
     BotMoveController::class,
+]);
+
+// Full-strength eval of a position (drives the eval bar): { fen }
+$router->post('/analyze', [
+    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    AnalyzeController::class,
 ]);
 
 // ================================  
