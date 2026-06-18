@@ -29,7 +29,12 @@ var levelConfigs = [11]LevelConfig{
 	7:  {Depth: 8, MoveTime: 700 * ms, NoiseCp: 12, Blunder: 0.015},
 	8:  {Depth: 10, MoveTime: 1000 * ms, NoiseCp: 6, Blunder: 0.006},
 	9:  {Depth: 12, MoveTime: 1400 * ms, NoiseCp: 0, Blunder: 0},
-	10: {Depth: 14, MoveTime: 1900 * ms, NoiseCp: 0, Blunder: 0},
+	// Depth 18 (not 14): measured time-to-depth on current hardware shows the old
+	// 14 cap clipped quiet middlegames ~1 ply short of what 1900ms reaches (~d15),
+	// while sharp middlegames are time-bound at ~d13 (cap never binds there). 18
+	// frees that ply yet still early-outs trivial endgames (which blow past d14 in
+	// <0.5s) instead of grinding to ~d30 — keeping moves snappy and CPU bounded.
+	10: {Depth: 18, MoveTime: 1900 * ms, NoiseCp: 0, Blunder: 0},
 }
 
 // configForLevel clamps level to 0..10 and returns its config.

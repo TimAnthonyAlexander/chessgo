@@ -103,6 +103,7 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool string) {
 	}
 	displayed := botDisplayRating(userRating)
 	bot := newBotIdentity(displayed)
+	botLevel := levelForRating(displayed)
 	pos, _ := chess.ParseFEN(chess.StartFEN)
 	g := &game{
 		id:   newID(),
@@ -117,7 +118,6 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool string) {
 		turnStart: time.Now(),
 		online:    [2]bool{true, true},
 		startFen:  chess.StartFEN,
-		botLevel:  levelForRating(displayed),
 	}
 
 	humanColor := chess.White
@@ -126,9 +126,9 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool string) {
 	}
 	if humanColor == chess.White {
 		g.white = &player{client: human, id: human.id}
-		g.black = &player{id: bot, isBot: true}
+		g.black = &player{id: bot, isBot: true, level: botLevel}
 	} else {
-		g.white = &player{id: bot, isBot: true}
+		g.white = &player{id: bot, isBot: true, level: botLevel}
 		g.black = &player{client: human, id: human.id}
 	}
 
@@ -141,38 +141,48 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool string) {
 	h.scheduleBotMove(g) // if the bot plays White, it moves first
 }
 
-// scheduleBotMove starts async move computation when it is the bot's turn.
+// scheduleBotMove starts async move computation when it is a bot's turn. Works
+// for human-vs-bot (one bot) and filler bot-vs-bot (both sides bots); a filler
+// game uses its own dedicated engine pool so it can't starve human bot-fill.
 func (h *Hub) scheduleBotMove(g *game) {
-	if !h.botFill || g.over {
+	if g.over {
 		return
 	}
-	_, botColor, ok := g.botPlayer()
+	bot, botColor, ok := g.botPlayer()
 	if !ok || g.pos.SideToMove() != botColor {
 		return
+	}
+	engines := h.engines
+	if g.filler {
+		engines = h.fillerEngines
+	}
+	if engines == nil {
+		return // the relevant pool isn't enabled
 	}
 	go h.computeBotMove(botSnapshot{
 		gameID:      g.id,
 		ply:         len(g.moves),
 		fen:         g.pos.FEN(),
 		history:     append([]uint64(nil), g.history...),
-		level:       g.botLevel,
+		level:       bot.level,
 		remainingMs: g.remainingMs(botColor),
 		legalCount:  len(g.pos.LegalMoveStrings(chess.SqNone)),
-	})
+	}, engines)
 }
 
-// computeBotMove runs OFF the Run goroutine: search for a move, pace it to feel
-// human (the delay is real time, so it comes off the bot's clock), then hand it
-// back via botMoves for application on the Run goroutine.
-func (h *Hub) computeBotMove(s botSnapshot) {
+// computeBotMove runs OFF the Run goroutine: search for a move (on a leased
+// engine from `engines`), pace it to feel human (the delay is real time, so it
+// comes off the bot's clock), then hand it back via botMoves for application on
+// the Run goroutine.
+func (h *Hub) computeBotMove(s botSnapshot, engines chan *engineHandle) {
 	pos, err := chess.ParseFEN(s.fen)
 	if err != nil {
 		return
 	}
 	start := time.Now()
-	eng := <-h.engines
+	eng := <-engines
 	res := eng.BestMove(pos, s.level, s.history)
-	h.engines <- eng
+	engines <- eng
 	if res.Move == chess.NullMove {
 		return
 	}
@@ -205,9 +215,12 @@ func (h *Hub) applyBotMove(r botMoveResult) {
 	h.broadcast(g, mustJSON(out("state", g.snapshot())))
 	if st := g.status(); st.State != "ongoing" {
 		h.finish(g, st.Result, st.State)
+		return
 	}
-	// After a bot move it is the human's turn; the next bot move is scheduled when
-	// the human replies (in move()).
+	// In a filler (bot-vs-bot) game the other side is also a bot, so keep it
+	// going. In a human-vs-bot game it is now the human's turn and this no-ops
+	// (the next bot move is scheduled from move() when the human replies).
+	h.scheduleBotMove(g)
 }
 
 // botThinkDelay returns a randomized, human-ish pause before the bot's move,

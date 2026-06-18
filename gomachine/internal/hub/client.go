@@ -27,10 +27,15 @@ type Client struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
+	// spectator connections (?spectate=1) never play: they don't reattach to a
+	// player's game on connect and aren't counted in the online tally.
+	spectator bool
+
 	// Touched only by the hub goroutine:
 	game     *game
 	pool     string    // current queue pool, "" if not queued
 	queuedAt time.Time // when the client entered its current pool (for bot backfill)
+	watching *game     // the game this client is spectating, if any
 }
 
 func (c *Client) readPump() {

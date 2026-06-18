@@ -16,6 +16,7 @@ use App\Controllers\BotMoveController;
 use App\Controllers\AnalyzeController;
 use App\Controllers\WsTicketController;
 use App\Controllers\StatsController;
+use App\Controllers\WatchController;
 use App\Controllers\GameResultController;
 use App\Controllers\GameController;
 use App\Controllers\GameAnalysisController;
@@ -77,6 +78,12 @@ $router->get('/ws-ticket', [
 $router->get('/stats', [
     RateLimitMiddleware::class => ['limit' => '120/1m'],
     StatsController::class,
+]);
+
+// Top live games for the Watch page — proxies the realtime hub
+$router->get('/watch', [
+    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    WatchController::class,
 ]);
 
 // Internal: the realtime hub persists finished games here (secret-gated, no session)

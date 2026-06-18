@@ -98,7 +98,24 @@ php mason migrate:generate && php mason migrate:apply -y                     # D
   commands derive it from `.env`.
 - **Hub→BaseAPI persistence:** on game end the hub fire-and-forgets a POST to
   `BASEAPI_URL/internal/games` (off its goroutine). BaseAPI stores the `Game` and,
-  if rated, applies Elo. `HUB_URL` lets BaseAPI proxy the hub's `/stats`.
+  if rated, applies Elo. `HUB_URL` lets BaseAPI proxy the hub's `/stats` **and
+  `/games`** (the Watch lobby; BaseAPI route `GET /watch`).
+- **Watch / spectating:** read-only viewers connect with `?spectate=1` (the hub
+  skips player reattach + doesn't count them online) and send `watch`/`unwatch`;
+  the game fans `state`/`end` out to its `spectators` set. The Watch page **polls**
+  `GET /watch` (top-5 snapshot, hub-side sorted real-first-by-rating, capped at
+  `lobbyMax`) for previews; clicking opens a **separate** spectator socket
+  (`lib/spectate.ts`, not `lib/socket.ts`, so it never clobbers your own game).
+- **Watch fillers are JIT engine-vs-engine games** (`filler.go`): they pad the
+  lobby up to `-watch-target` (5) on a **dedicated** small engine pool (can't
+  starve human bot-fill), and **only while someone's watching** — the `GET /games`
+  poll stamps `lastWatchActivity` (`watchWindow` 12s). They're `filler=true`:
+  **unrated, never `onFinish`-persisted**, and their bot-ness is **never sent to
+  the client** (no `bot` flag in `sideInfo`/the summary). In-flight fillers always
+  **finish naturally**; we only stop replenishing once watchers leave. They DO
+  count toward `activeGames` (so the homepage stat ticks up a few while watched).
+  Both filler sides are bots → `scheduleBotMove` reschedules from `applyBotMove`
+  (not just `move()`); each `player` carries its own `level`.
 - **Session-cookie auth:** the SPA sends `credentials: 'include'`; CORS must
   echo the origin + allow credentials (`CORS_ALLOWLIST` includes `:6465`).
   `/ws-ticket` runs `SessionStartMiddleware` and resolves the user from the

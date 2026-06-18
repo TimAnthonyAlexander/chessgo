@@ -272,6 +272,40 @@ export function getStats(): Promise<LobbyStats> {
   return request<LobbyStats>('/stats')
 }
 
+// --- Watch (live spectating) ---
+
+export interface LiveSide {
+  name: string
+  rating: number
+  anon: boolean
+}
+
+/** One row of the Watch lobby: a live game with enough to render a preview. */
+export interface LiveGameSummary {
+  id: string
+  pool: string
+  rated: boolean
+  white: LiveSide
+  black: LiveSide
+  fen: string
+  sideToMove: Color
+  lastMove: string // UCI of the last move, or "" at the start
+  ply: number
+  clockW: number // ms remaining (snapshot at poll time)
+  clockB: number
+}
+
+export interface LiveGamesResult {
+  games: LiveGameSummary[]
+  max: number
+}
+
+/** Top live games for the Watch page. Polling this also signals the hub that
+ * someone is watching, which is what keeps the self-play filler games running. */
+export function getLiveGames(): Promise<LiveGamesResult> {
+  return request<LiveGamesResult>('/watch')
+}
+
 // --- Accounts (session-cookie auth) ---
 
 export type RatingCategory = 'bullet' | 'blitz' | 'rapid' | 'classical'

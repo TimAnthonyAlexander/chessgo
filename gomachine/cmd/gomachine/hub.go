@@ -40,6 +40,9 @@ func cmdHub(args []string) {
 	botLevel := fs.Int("bot-level", 6, "fallback bot level (0..10) for anonymous players; rated players get a bot matched to their Elo")
 	botDelay := fs.Duration("bot-delay", 15*time.Second, "wait before a bot opponent is offered")
 	botSearchThreads := fs.Int("bot-search-threads", 1, "Lazy SMP threads per bot move (helps only the time-bounded top levels; keep workers*threads <= cores)")
+	watchFillers := fs.Bool("watch-fillers", true, "keep engine-vs-engine games running to populate the Watch page (only while someone is watching)")
+	watchTarget := fs.Int("watch-target", 5, "number of live games shown on the Watch page (real games padded with fillers up to this)")
+	watchWorkers := fs.Int("watch-filler-workers", 2, "dedicated engine workers for self-play filler games (small, so they can't starve human bot-fill)")
 	_ = fs.Parse(args)
 
 	secret := os.Getenv("WS_TICKET_SECRET")
@@ -56,6 +59,10 @@ func cmdHub(args []string) {
 		}
 		h.EnableBotFill(*botLevel, *botDelay, workers, 16, *botSearchThreads)
 		fmt.Printf("bot backfill on: Elo-matched (fallback level %d) after %s (%d search workers, %d SMP threads/move)\n", *botLevel, *botDelay, workers, *botSearchThreads)
+	}
+	if *watchFillers {
+		h.EnableSpectatorFillers(*watchTarget, *watchWorkers, 8, 1)
+		fmt.Printf("watch fillers on: up to %d shown games, padded by self-play on %d dedicated workers (only while watched)\n", *watchTarget, *watchWorkers)
 	}
 	go h.Run()
 
@@ -82,6 +89,13 @@ func cmdHub(args []string) {
 		online, games := h.Stats()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]int64{"playersOnline": online, "activeGames": games})
+	})
+	// Top live games for the Watch page (public, no ticket). The poll itself is
+	// the "someone is watching" signal that keeps self-play fillers topped up.
+	mux.HandleFunc("GET /games", func(w http.ResponseWriter, _ *http.Request) {
+		h.WatchPing()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(h.LobbyJSON())
 	})
 
 	fmt.Printf("gomachine hub (realtime) listening on http://%s  (ws at /ws)\n", *addr)

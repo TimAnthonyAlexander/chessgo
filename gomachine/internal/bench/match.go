@@ -29,7 +29,12 @@ type Config struct {
 	// MoveTime. Ignored when Nodes>0 (fixed-nodes is hardware-independent already).
 	NewMoveTime time.Duration
 	OldMoveTime time.Duration
-	TTMB        int // transposition table size per engine
+	// Per-side max search depth (0 → unbounded, time/nodes limited). Lets us A/B a
+	// depth cap against an uncapped search at the same budget (e.g. is level 10's
+	// Depth:14 cap leaving Elo on the table at its 1900ms?).
+	NewDepth int
+	OldDepth int
+	TTMB     int // transposition table size per engine
 
 	Elo0, Elo1  float64 // SPRT hypotheses (H0: ≤Elo0, H1: ≥Elo1)
 	Alpha, Beta float64 // error rates
@@ -64,15 +69,19 @@ const (
 
 // limitsFor returns the per-move search limits for one side. Fixed nodes (when
 // set) are shared and hardware-independent; otherwise each side uses its own
-// movetime if given (asymmetric TC), falling back to the shared MoveTime.
-func (c *Config) limitsFor(sideMoveTime time.Duration) search.Limits {
-	if c.Nodes > 0 {
-		return search.Limits{Nodes: c.Nodes}
+// movetime if given (asymmetric TC), falling back to the shared MoveTime. sideDepth
+// (0 = unbounded) caps the iterative-deepening loop on top of the time/node budget.
+func (c *Config) limitsFor(sideMoveTime time.Duration, sideDepth int) search.Limits {
+	lim := search.Limits{Depth: sideDepth}
+	switch {
+	case c.Nodes > 0:
+		lim.Nodes = c.Nodes
+	case sideMoveTime > 0:
+		lim.MoveTime = sideMoveTime
+	default:
+		lim.MoveTime = c.MoveTime
 	}
-	if sideMoveTime > 0 {
-		return search.Limits{MoveTime: sideMoveTime}
-	}
-	return search.Limits{MoveTime: c.MoveTime}
+	return lim
 }
 
 // playGame plays one game from the opening FEN and returns the result from
@@ -155,8 +164,8 @@ func RunSPRT(ctx context.Context, cfg Config, onProgress func(Progress)) Summary
 	if cfg.Concurrency < 1 {
 		cfg.Concurrency = 1
 	}
-	newLim := cfg.limitsFor(cfg.NewMoveTime)
-	oldLim := cfg.limitsFor(cfg.OldMoveTime)
+	newLim := cfg.limitsFor(cfg.NewMoveTime, cfg.NewDepth)
+	oldLim := cfg.limitsFor(cfg.OldMoveTime, cfg.OldDepth)
 	lower, upper := Bounds(cfg.Alpha, cfg.Beta)
 
 	type pairOut struct {

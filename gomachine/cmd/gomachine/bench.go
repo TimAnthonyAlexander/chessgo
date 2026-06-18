@@ -81,6 +81,8 @@ func cmdBenchSPRT(args []string) {
 	oldThreads := fs.Int("old-threads", 1, "Lazy SMP threads for --old")
 	newMovetime := fs.Int("new-movetime", 0, "ms/move for --new only (asymmetric TC; 0 → shared --movetime). Needs --nodes 0")
 	oldMovetime := fs.Int("old-movetime", 0, "ms/move for --old only (asymmetric TC; 0 → shared --movetime)")
+	newDepth := fs.Int("new-depth", 0, "max search depth for --new (0 → unbounded; caps on top of the time budget)")
+	oldDepth := fs.Int("old-depth", 0, "max search depth for --old (0 → unbounded)")
 	_ = fs.Parse(args)
 
 	base := search.DefaultParams()
@@ -110,6 +112,8 @@ func cmdBenchSPRT(args []string) {
 		MoveTime:    time.Duration(*movetime) * time.Millisecond,
 		NewMoveTime: time.Duration(*newMovetime) * time.Millisecond,
 		OldMoveTime: time.Duration(*oldMovetime) * time.Millisecond,
+		NewDepth:    *newDepth,
+		OldDepth:    *oldDepth,
 		TTMB:        *tt,
 		Elo0:        *elo0,
 		Elo1:        *elo1,

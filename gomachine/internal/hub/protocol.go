@@ -5,11 +5,13 @@ import (
 	"strings"
 )
 
-// inMsg is a message from a client. Type is one of: queue, cancel, move, resign.
+// inMsg is a message from a client. Type is one of: queue, cancel, move,
+// resign, watch, unwatch.
 type inMsg struct {
-	Type string `json:"type"`
-	Pool string `json:"pool,omitempty"` // time control, e.g. "3+0" (queue)
-	Move string `json:"move,omitempty"` // UCI (move)
+	Type   string `json:"type"`
+	Pool   string `json:"pool,omitempty"`   // time control, e.g. "3+0" (queue)
+	Move   string `json:"move,omitempty"`   // UCI (move)
+	GameID string `json:"gameId,omitempty"` // target game (watch)
 }
 
 // timeControl is a base time + per-move increment, both in milliseconds.

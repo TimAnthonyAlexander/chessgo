@@ -49,4 +49,37 @@ class HubClient
             'activeGames' => (int)($decoded['activeGames'] ?? 0),
         ];
     }
+
+    /**
+     * Top live games for the Watch page. Returns an empty list (with the default
+     * cap) if the hub is unreachable, so the page still renders. The hub already
+     * shapes, sorts, and caps the list; this is a thin pass-through.
+     *
+     * @return array{games: list<array<string, mixed>>, max: int}
+     */
+    public function games(): array
+    {
+        $ch = curl_init($this->baseUrl . '/games');
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT_MS => 1000,
+            CURLOPT_CONNECTTIMEOUT_MS => 800,
+        ]);
+        $raw = curl_exec($ch);
+        $code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+
+        if (!is_string($raw) || $code !== 200) {
+            return ['games' => [], 'max' => 5];
+        }
+
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded) || !isset($decoded['games']) || !is_array($decoded['games'])) {
+            return ['games' => [], 'max' => 5];
+        }
+
+        return [
+            'games' => array_values($decoded['games']),
+            'max' => (int)($decoded['max'] ?? 5),
+        ];
+    }
 }

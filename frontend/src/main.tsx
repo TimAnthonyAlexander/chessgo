@@ -9,6 +9,8 @@ import BotGame from './pages/BotGame'
 import LiveGame from './pages/LiveGame'
 import Puzzles from './pages/Puzzles'
 import Analysis from './pages/Analysis'
+import Watch from './pages/Watch'
+import Spectate from './pages/Spectate'
 import './styles.css'
 
 const router = createBrowserRouter([
@@ -19,6 +21,8 @@ const router = createBrowserRouter([
       { path: '/bot', element: <BotGame /> },
       { path: '/puzzles', element: <Puzzles /> },
       { path: '/game/:id', element: <LiveGame /> },
+      { path: '/watch', element: <Watch /> },
+      { path: '/watch/:id', element: <Spectate /> },
       { path: '/analysis', element: <Analysis /> },
       { path: '/analysis/:id', element: <Analysis /> },
     ],

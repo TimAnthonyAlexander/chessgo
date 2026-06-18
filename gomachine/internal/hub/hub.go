@@ -42,14 +42,29 @@ type Hub struct {
 	botFill  bool
 	botLevel int
 	botDelay time.Duration
-	engines  chan *engineHandle    // search workers (nil until EnableBotFill)
-	botMoves chan botMoveResult    // bot moves ready to apply (on the Run goroutine)
+	engines  chan *engineHandle // search workers (nil until EnableBotFill)
+	botMoves chan botMoveResult // bot moves ready to apply (on the Run goroutine)
+
+	// Spectator fillers: engine-vs-engine games kept running so the Watch page
+	// is never empty. They run on a SEPARATE, small engine pool so they can't
+	// starve human bot-fill, and only while someone is actually watching (JIT) —
+	// the GET /games poll stamps lastWatchActivity. In-flight fillers always
+	// finish naturally; we just stop replenishing once nobody is watching.
+	fillerOn          bool
+	fillerTarget      int                // desired total live games shown (real first, padded)
+	fillerEngines     chan *engineHandle // dedicated filler search pool (nil until enabled)
+	lastWatchActivity atomic.Int64       // unix-nano of the most recent watch poll/connect
 
 	// Live lobby counters. Written only on the Run goroutine (paired with the
 	// register/unregister and startGame/finish lifecycle), read via atomics from
 	// the /stats HTTP handler on another goroutine.
 	onlineClients atomic.Int64
 	activeGames   atomic.Int64
+
+	// lobby is the pre-marshaled JSON for the GET /games handler — a top-N
+	// snapshot of live games rebuilt on the Run goroutine each tick and published
+	// here, read (never mutated) from the HTTP goroutine.
+	lobby atomic.Pointer[[]byte]
 }
 
 // Stats returns live lobby counts (connected clients, active games). Safe to call
@@ -97,10 +112,14 @@ func (h *Hub) Run() {
 	for {
 		select {
 		case c := <-h.register:
-			h.onlineClients.Add(1)
+			if !c.spectator {
+				h.onlineClients.Add(1)
+			}
 			h.handleRegister(c)
 		case c := <-h.unregister:
-			h.onlineClients.Add(-1)
+			if !c.spectator {
+				h.onlineClients.Add(-1)
+			}
 			h.handleDisconnect(c)
 		case cmd := <-h.commands:
 			h.handle(cmd)
@@ -110,6 +129,8 @@ func (h *Hub) Run() {
 			h.checkClocks()
 			h.matchWaiting()
 			h.checkBotFill()
+			h.checkFillers()
+			h.publishLobby()
 		}
 	}
 }
@@ -126,6 +147,10 @@ func (h *Hub) handle(cmd command) {
 		h.move(c, cmd.msg.Move)
 	case "resign":
 		h.resign(c)
+	case "watch":
+		h.watchGame(c, cmd.msg.GameID)
+	case "unwatch":
+		h.unwatchGame(c)
 	}
 }
 
@@ -312,7 +337,8 @@ func (h *Hub) finish(g *game, result, reason string) {
 	})))
 	h.teardown(g)
 
-	if h.onFinish != nil {
+	// Filler (engine-vs-engine) games are never persisted or rated.
+	if h.onFinish != nil && !g.filler {
 		h.onFinish(FinishedGame{
 			ID: g.id, Pool: g.pool, Rated: g.rated,
 			White: g.white.id, Black: g.black.id,
@@ -339,7 +365,9 @@ func (h *Hub) abortGame(g *game) {
 	h.teardown(g)
 }
 
-// teardown detaches both clients and removes the game from all indexes.
+// teardown detaches both clients and removes the game from all indexes. The
+// terminal end broadcast has already reached spectators; detach them so a later
+// game lookup or unwatch is a no-op.
 func (h *Hub) teardown(g *game) {
 	if g.white.client != nil {
 		g.white.client.game = nil
@@ -347,6 +375,10 @@ func (h *Hub) teardown(g *game) {
 	if g.black.client != nil {
 		g.black.client.game = nil
 	}
+	for c := range g.spectators {
+		c.watching = nil
+	}
+	g.spectators = nil
 	delete(h.games, g.id)
 	delete(h.playerGames, g.white.id.UserID)
 	delete(h.playerGames, g.black.id.UserID)
@@ -357,6 +389,9 @@ func (h *Hub) teardown(g *game) {
 // has an active game, reattach them and send a full resume; the lobby/game view
 // can then pick it back up.
 func (h *Hub) handleRegister(c *Client) {
+	if c.spectator {
+		return // spectators never reattach to a player's game
+	}
 	key := c.id.UserID
 	if key == "" {
 		return
@@ -407,6 +442,7 @@ func (h *Hub) resumeMsg(g *game, color chess.Color) map[string]any {
 // absent player still flags normally.
 func (h *Hub) handleDisconnect(c *Client) {
 	h.dequeue(c)
+	h.unwatchGame(c) // a spectator (or a player who was also watching) leaving
 	g := c.game
 	if g == nil || g.over {
 		return
@@ -428,6 +464,9 @@ func (h *Hub) broadcast(g *game, data []byte) {
 	if g.black.client != nil {
 		g.black.client.trySend(data)
 	}
+	for c := range g.spectators {
+		c.trySend(data)
+	}
 }
 
 func (h *Hub) sendErr(c *Client, msg string) {
@@ -448,7 +487,8 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	c := &Client{hub: h, conn: conn, id: id, send: make(chan []byte, sendBuffer), ctx: ctx, cancel: cancel}
+	spectate := r.URL.Query().Get("spectate") == "1"
+	c := &Client{hub: h, conn: conn, id: id, send: make(chan []byte, sendBuffer), ctx: ctx, cancel: cancel, spectator: spectate}
 	go c.writePump()
 	c.trySend(mustJSON(out("hello", map[string]any{"name": id.Name, "anon": id.Anon, "rating": id.Rating})))
 	h.register <- c // reattach + resume if this player has an active game

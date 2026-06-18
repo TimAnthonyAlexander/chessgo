@@ -12,7 +12,7 @@ const LINKS: { label: string; to: string | null }[] = [
   { label: 'Computer', to: '/bot' },
   { label: 'Puzzles', to: '/puzzles' },
   { label: 'Analysis', to: '/analysis' },
-  { label: 'Watch', to: null },
+  { label: 'Watch', to: '/watch' },
 ]
 
 /** App shell: a flat, full-width top nav (Lichess-style) over the routed page. */

@@ -9,11 +9,12 @@ import (
 )
 
 // player is one side of a live game. A bot opponent has isBot=true and a nil
-// client (no socket); the hub plays its moves via the engine.
+// client (no socket); the hub plays its moves via the engine at `level`.
 type player struct {
 	client *Client
 	id     auth.Identity
 	isBot  bool
+	level  int // engine level (0..10) for a bot side; unused for humans
 }
 
 // game is a single live game held entirely in memory. The clock is server-
@@ -34,7 +35,16 @@ type game struct {
 	over      bool
 	online    [2]bool // per-color connection presence
 	startFen  string
-	botLevel  int // engine level for the fill-in bot (0 for human-vs-human games)
+
+	// filler is true for an engine-vs-engine "watch" game: it has no human
+	// players, is never rated, and is NOT reported to onFinish (no persistence,
+	// no Elo). It exists only to populate the spectator lobby.
+	filler bool
+
+	// spectators are read-only watchers of this game. They receive the same
+	// state/end broadcasts as players but never affect the game; a slow one is
+	// dropped by trySend like any client. Lazily allocated on first watcher.
+	spectators map[*Client]struct{}
 }
 
 // colorForID returns which side the given identity id plays.
@@ -70,8 +80,13 @@ func (g *game) playerFor(c chess.Color) *player {
 }
 
 // botPlayer returns the bot side and its color, or ok=false if this is a
-// human-vs-human game.
+// human-vs-human game. With a filler (engine-vs-engine) game both sides are
+// bots; this returns whichever side is to move so callers schedule the right one.
 func (g *game) botPlayer() (*player, chess.Color, bool) {
+	side := g.pos.SideToMove()
+	if p := g.playerFor(side); p.isBot {
+		return p, side, true
+	}
 	if g.white.isBot {
 		return g.white, chess.White, true
 	}
