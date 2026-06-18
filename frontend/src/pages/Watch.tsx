@@ -1,39 +1,59 @@
 import { useEffect, useRef, useState } from 'react'
-import { Box, Typography } from '@mui/material'
+import { Box, CircularProgress, Typography } from '@mui/material'
 import { Eye, Radio } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import MiniBoard from '../components/MiniBoard'
 import { getLiveGames, type LiveGameSummary, type LiveSide } from '../api/client'
 
-const POLL_MS = 2500
+const POLL_MS = 2500 // steady cadence once games are flowing
+const WARM_MS = 800 // fast cadence while the lobby is still warming up
+const WARM_POLLS = 5 // empty responses to see before we declare the lobby truly empty
 
 export default function Watch() {
   const navigate = useNavigate()
   const [games, setGames] = useState<LiveGameSummary[] | null>(null)
   const [max, setMax] = useState(5)
-  const loadedOnce = useRef(false)
+  // Until we've either seen games or confirmed the lobby is genuinely empty
+  // (several empty polls in a row), we keep showing a spinner rather than a
+  // premature "no games" — the hub spawns its self-play fillers lazily on the
+  // first poll, so the very first response is often empty for a beat.
+  const [settled, setSettled] = useState(false)
+  const emptyPolls = useRef(0)
 
   // Poll the lobby. The request itself signals the hub that someone is watching,
-  // which is what spins up the self-play filler games (so the first poll may come
-  // back sparse, then fill in over the next second or two).
+  // which is what spins up the filler games; so we poll fast while warming, then
+  // settle to a steady cadence once something's there.
   useEffect(() => {
     let cancelled = false
-    const tick = () => {
+    let timer = 0
+    const poll = () => {
       getLiveGames()
         .then((r) => {
           if (cancelled) return
-          loadedOnce.current = true
           setGames(r.games)
           setMax(r.max)
+          if (r.games.length > 0) {
+            emptyPolls.current = 0
+            setSettled(true)
+          } else {
+            emptyPolls.current += 1
+            if (emptyPolls.current >= WARM_POLLS) setSettled(true)
+          }
+          const warming = r.games.length === 0 && emptyPolls.current < WARM_POLLS
+          timer = window.setTimeout(poll, warming ? WARM_MS : POLL_MS)
         })
-        .catch(() => {})
+        .catch(() => {
+          if (!cancelled) timer = window.setTimeout(poll, POLL_MS)
+        })
     }
-    tick()
-    const id = window.setInterval(tick, POLL_MS)
-    return () => { cancelled = true; window.clearInterval(id) }
+    poll()
+    return () => { cancelled = true; window.clearTimeout(timer) }
   }, [])
 
-  const empty = loadedOnce.current && games != null && games.length === 0
+  // Spinner until the first response, and while the lobby is still warming up;
+  // the "no games" text only after the endpoint has genuinely stayed empty.
+  const loading = games == null || (games.length === 0 && !settled)
+  const empty = games != null && games.length === 0 && settled
 
   return (
     <Box sx={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
@@ -82,10 +102,10 @@ export default function Watch() {
         </Box>
 
         {/* Grid */}
-        {games == null ? (
-          <Placeholder text="Loading live games…" />
+        {loading ? (
+          <Placeholder spinner text="Loading live games…" />
         ) : empty ? (
-          <Placeholder text="No live games at the moment — hang on a sec while a few get going." />
+          <Placeholder text="No live games right now. Check back in a bit." />
         ) : (
           <Box
             sx={{
@@ -104,13 +124,15 @@ export default function Watch() {
   )
 }
 
-function Placeholder({ text }: { text: string }) {
+function Placeholder({ text, spinner }: { text: string; spinner?: boolean }) {
   return (
     <Box
       sx={{
         display: 'flex',
+        flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
+        gap: 2,
         minHeight: 200,
         borderRadius: '16px',
         border: '1px dashed var(--line)',
@@ -119,6 +141,7 @@ function Placeholder({ text }: { text: string }) {
         px: 3,
       }}
     >
+      {spinner && <CircularProgress size={26} sx={{ color: 'var(--accent)' }} />}
       <Typography sx={{ fontSize: 14 }}>{text}</Typography>
     </Box>
   )
