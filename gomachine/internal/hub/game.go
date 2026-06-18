@@ -8,10 +8,12 @@ import (
 	"github.com/timanthonyalexander/gomachine/internal/engine"
 )
 
-// player is one side of a live game.
+// player is one side of a live game. A bot opponent has isBot=true and a nil
+// client (no socket); the hub plays its moves via the engine.
 type player struct {
 	client *Client
 	id     auth.Identity
+	isBot  bool
 }
 
 // game is a single live game held entirely in memory. The clock is server-
@@ -64,6 +66,18 @@ func (g *game) playerFor(c chess.Color) *player {
 		return g.white
 	}
 	return g.black
+}
+
+// botPlayer returns the bot side and its color, or ok=false if this is a
+// human-vs-human game.
+func (g *game) botPlayer() (*player, chess.Color, bool) {
+	if g.white.isBot {
+		return g.white, chess.White, true
+	}
+	if g.black.isBot {
+		return g.black, chess.Black, true
+	}
+	return nil, 0, false
 }
 
 func (g *game) colorOf(c *Client) (chess.Color, bool) {

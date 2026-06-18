@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime"
+	"time"
 
 	"github.com/timanthonyalexander/gomachine/internal/auth"
 	"github.com/timanthonyalexander/gomachine/internal/hub"
@@ -33,6 +35,9 @@ func cmdVerifyTicket(args []string) {
 func cmdHub(args []string) {
 	fs := flag.NewFlagSet("hub", flag.ExitOnError)
 	addr := fs.String("addr", "127.0.0.1:6467", "listen address")
+	bots := fs.Bool("bots", true, "offer a bot opponent to a player waiting longer than -bot-delay")
+	botLevel := fs.Int("bot-level", 6, "bot difficulty level (0..10)")
+	botDelay := fs.Duration("bot-delay", 15*time.Second, "wait before a bot opponent is offered")
 	_ = fs.Parse(args)
 
 	secret := os.Getenv("WS_TICKET_SECRET")
@@ -42,6 +47,14 @@ func cmdHub(args []string) {
 	}
 
 	h := hub.New(secret)
+	if *bots {
+		workers := runtime.NumCPU() / 2
+		if workers < 1 {
+			workers = 1
+		}
+		h.EnableBotFill(*botLevel, *botDelay, workers, 16)
+		fmt.Printf("bot backfill on: level %d after %s (%d search workers)\n", *botLevel, *botDelay, workers)
+	}
 	go h.Run()
 
 	// Persist finished games via BaseAPI (wired in the next step). For now, log.

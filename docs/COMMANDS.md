@@ -68,6 +68,29 @@ Then open <http://127.0.0.1:6465>.
 > After changing `.env`, restart `chessgo-api` (it reads `.env` at boot) — and
 > the hub if you changed `WS_TICKET_SECRET`.
 
+### Bot backfill (matchmaking fallback)
+
+If a player waits in a pool with no human opponent, the hub pairs them with an
+engine-driven bot that looks like a normal player (random username + rating).
+It is **on by default**; tune or disable it with hub flags:
+
+```sh
+./bin/gomachine hub                        # default: bots on, level 6, after 15s
+./bin/gomachine hub -bot-level 8 -bot-delay 20s
+./bin/gomachine hub -bots=false            # humans only (no backfill)
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `-bots` | `true` | offer a bot once a player has waited past `-bot-delay` |
+| `-bot-level` | `6` | bot difficulty (0..10) |
+| `-bot-delay` | `15s` | how long a lone player waits before a bot is offered |
+
+Bot games are always **casual (unrated)**. Two humans in the same pool still
+pair instantly — the bot only fills in for a lone, long-waiting player. Bot
+moves are searched off the hub's main goroutine and paced to feel human (the
+think time comes off the bot's clock).
+
 ### Managing the screens
 
 ```sh
@@ -83,6 +106,8 @@ screen -S chessgo-hub -X quit      # stop one
 curl -s 127.0.0.1:6464/health           # BaseAPI
 curl -s 127.0.0.1:6466/healthz          # engine
 curl -s 127.0.0.1:6467/healthz          # hub
+curl -s 127.0.0.1:6467/stats            # hub live counts {playersOnline, activeGames}
+curl -s 127.0.0.1:6464/stats            # same, via the BaseAPI proxy (homepage uses this)
 # verify API↔hub share the ticket secret:
 T=$(curl -s 127.0.0.1:6464/ws-ticket | sed -E 's/.*"ticket":"([^"]+)".*/\1/')
 ( cd gomachine && ./bin/gomachine verifyticket \

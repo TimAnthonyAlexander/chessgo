@@ -36,6 +36,15 @@ type Hub struct {
 	playerGames map[string]*game // identity id -> active game (for reconnect)
 	onFinish    func(FinishedGame)
 
+	// Bot backfill: if a player waits longer than botDelay with no human match,
+	// pair them with an engine-driven opponent. Moves are computed off the Run
+	// goroutine by a pool of engines and applied back via botMoves.
+	botFill  bool
+	botLevel int
+	botDelay time.Duration
+	engines  chan *engineHandle    // search workers (nil until EnableBotFill)
+	botMoves chan botMoveResult    // bot moves ready to apply (on the Run goroutine)
+
 	// Live lobby counters. Written only on the Run goroutine (paired with the
 	// register/unregister and startGame/finish lifecycle), read via atomics from
 	// the /stats HTTP handler on another goroutine.
@@ -72,6 +81,7 @@ func New(secret string) *Hub {
 		pools:       map[string][]*Client{},
 		games:       map[string]*game{},
 		playerGames: map[string]*game{},
+		botMoves:    make(chan botMoveResult, 64),
 	}
 }
 
@@ -92,8 +102,11 @@ func (h *Hub) Run() {
 			h.handleDisconnect(c)
 		case cmd := <-h.commands:
 			h.handle(cmd)
+		case r := <-h.botMoves:
+			h.applyBotMove(r)
 		case <-ticker.C:
 			h.checkClocks()
+			h.checkBotFill()
 		}
 	}
 }
@@ -135,6 +148,7 @@ func (h *Hub) queue(c *Client, pool string) {
 		}
 	}
 	c.pool = pool
+	c.queuedAt = time.Now()
 	h.pools[pool] = append(h.pools[pool], c)
 	c.trySend(mustJSON(out("queued", map[string]any{"pool": pool})))
 }
@@ -223,7 +237,9 @@ func (h *Hub) move(c *Client, uci string) {
 	h.broadcast(g, mustJSON(out("state", g.snapshot())))
 	if st := g.status(); st.State != "ongoing" {
 		h.finish(g, st.Result, st.State)
+		return
 	}
+	h.scheduleBotMove(g) // no-op unless this is a bot game and it's now the bot's turn
 }
 
 func (h *Hub) resign(c *Client) {
@@ -279,8 +295,12 @@ func (h *Hub) finish(g *game, result, reason string) {
 		"status": g.status().State,
 		"clock":  clock,
 	})))
-	g.white.client.game = nil
-	g.black.client.game = nil
+	if g.white.client != nil {
+		g.white.client.game = nil
+	}
+	if g.black.client != nil {
+		g.black.client.game = nil
+	}
 	delete(h.games, g.id)
 	delete(h.playerGames, g.white.id.UserID)
 	delete(h.playerGames, g.black.id.UserID)
@@ -364,8 +384,12 @@ func (h *Hub) handleDisconnect(c *Client) {
 }
 
 func (h *Hub) broadcast(g *game, data []byte) {
-	g.white.client.trySend(data)
-	g.black.client.trySend(data)
+	if g.white.client != nil {
+		g.white.client.trySend(data)
+	}
+	if g.black.client != nil {
+		g.black.client.trySend(data)
+	}
 }
 
 func (h *Hub) sendErr(c *Client, msg string) {

@@ -28,8 +28,9 @@ type Client struct {
 	cancel context.CancelFunc
 
 	// Touched only by the hub goroutine:
-	game *game
-	pool string // current queue pool, "" if not queued
+	game     *game
+	pool     string    // current queue pool, "" if not queued
+	queuedAt time.Time // when the client entered its current pool (for bot backfill)
 }
 
 func (c *Client) readPump() {
