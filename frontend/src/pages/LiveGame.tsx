@@ -11,6 +11,7 @@ import { type Color, gameSocket, type LiveGameState, liveRemaining } from '../li
 import { useGameSocket } from '../lib/useGameSocket'
 import { applyUciVisually, type BoardMap, fileOf, parseFen } from '../lib/chess'
 import { playForSan, sounds } from '../lib/sounds'
+import { authStore } from '../lib/auth'
 
 const other = (c: Color): Color => (c === 'w' ? 'b' : 'w')
 
@@ -64,6 +65,16 @@ export default function LiveGame() {
       sounds.end()
     }
   }, [g?.id, g?.ended])
+
+  // A rated game changes the player's rating server-side; refresh the cached
+  // user (once per game) so the navbar rating isn't stale.
+  const ratedRefresh = useRef<string | null>(null)
+  useEffect(() => {
+    if (g && g.ended && g.rated && ratedRefresh.current !== g.id) {
+      ratedRefresh.current = g.id
+      void authStore.refresh()
+    }
+  }, [g?.id, g?.ended, g?.rated])
 
   if (!g) {
     return (

@@ -11,9 +11,14 @@ use App\Services\HubClient;
  *
  *   GET /stats → { playersOnline, activeGames }
  *
- * STATS_PADDING (.env) optionally inflates players-online by that base ± 20% so a
- * quiet lobby still looks alive; games-in-play is then shown as a believable
- * minority of that (always under half). 0 / unset = real counts only.
+ * STATS_PADDING (.env) optionally inflates players-online by a base that drifts
+ * ±~18% over time so a quiet lobby still looks alive; games-in-play is shown as a
+ * believable minority of that (always under half). 0 / unset = real counts only.
+ *
+ * The filler is a smooth, deterministic function of the wall clock (summed sines)
+ * — NOT random per request. So every visitor sees the same number at a given
+ * moment (consistent cross-browser / cross-session) and consecutive reloads barely
+ * change it; it only drifts over minutes. No stored state needed.
  */
 class StatsController extends Controller
 {
@@ -25,12 +30,18 @@ class StatsController extends Controller
     {
         $stats = $this->hub->stats();
 
-        $padding = (int)($_ENV['STATS_PADDING'] ?? 0);
-        if ($padding > 0) {
-            $players = $stats['playersOnline'] + $this->jitter($padding);
-            // Games read as a random 30–45% of who's online (a plausible minority),
-            // never the real count if that's higher, and hard-capped below half.
-            $ratio = 0.30 + (random_int(0, 1000) / 1000.0) * 0.15;
+        $base = (int)($_ENV['STATS_PADDING'] ?? 0);
+        if ($base > 0) {
+            $t = (float) time();
+
+            // Slowly-drifting filler: summed sines (periods ~1.5/7/30 min) give an
+            // organic wiggle. Same for everyone at time t; ~constant across a reload.
+            $playerWave = (sin($t / 1800.0) + 0.5 * sin($t / 420.0) + 0.3 * sin($t / 95.0)) / 1.8;
+            $players = $stats['playersOnline'] + (int) round($base * (1.0 + 0.18 * $playerWave));
+
+            // Games: a believable minority of who's online, on its own slow phase so
+            // it isn't perfectly correlated — and hard-capped strictly below half.
+            $ratio = 0.38 + 0.06 * sin($t / 900.0 + 1.7); // ~0.32–0.44
             $games = max($stats['activeGames'], (int) round($players * $ratio));
             $cap = intdiv($players, 2) - 1;
             if ($cap >= 0 && $games > $cap) {
@@ -42,13 +53,5 @@ class StatsController extends Controller
         }
 
         return JsonResponse::ok($stats);
-    }
-
-    /** A base value varied by a fresh ±20% each call (so the number drifts). */
-    private function jitter(int $base): int
-    {
-        $factor = 0.8 + (random_int(0, 1000) / 1000.0) * 0.4; // 0.8–1.2
-
-        return (int) round($base * $factor);
     }
 }

@@ -39,6 +39,18 @@ class AuthStore {
     }
   }
 
+  /** Re-fetch the current user (e.g. after a rated game changes the rating).
+   * No-op when signed out. */
+  async refresh(): Promise<void> {
+    if (!this.state.user) return
+    try {
+      const user = await me()
+      this.set({ user })
+    } catch {
+      // keep the stale user rather than dropping the session on a transient error
+    }
+  }
+
   async login(email: string, password: string): Promise<void> {
     const user = await apiLogin(email, password)
     this.set({ user, status: 'ready' })
