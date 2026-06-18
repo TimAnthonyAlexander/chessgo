@@ -34,8 +34,13 @@ func init() {
 }
 
 // Evaluate returns the static evaluation in centipawns from the perspective of
-// the side to move.
-func Evaluate(pos *chess.Position) int {
+// the side to move. The base score (material + tapered PSQT + tempo) is always
+// computed; cfg enables the optional knowledge terms and supplies their weights.
+func Evaluate(pos *chess.Position, cfg Config) int {
+	w := cfg.W
+	if w == nil {
+		w = defaultW
+	}
 	var mg, eg, phase int
 	for pc := chess.WhitePawn; pc <= chess.BlackKing; pc++ {
 		bb := pos.PieceBB(pc)
@@ -45,6 +50,24 @@ func Evaluate(pos *chess.Position) int {
 			eg += egTable[pc][sq]
 			phase += gamePhaseInc[pc.Type()]
 		}
+	}
+	if cfg.Mobility {
+		m, e := mobility(pos, w)
+		mg += m
+		eg += e
+	}
+	if cfg.Pawns {
+		m, e := pawnStructure(pos, w)
+		mg += m
+		eg += e
+	}
+	if cfg.BishopPair {
+		m, e := bishopPair(pos, w)
+		mg += m
+		eg += e
+	}
+	if cfg.KingSafety {
+		mg += kingSafety(pos, w) // middlegame term
 	}
 	if phase > 24 {
 		phase = 24

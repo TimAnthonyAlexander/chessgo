@@ -52,6 +52,7 @@ type Result struct {
 type Searcher struct {
 	tt       *TT
 	params   Params
+	ec       eval.Config // evaluation config derived from params
 	killers  [maxPly][2]chess.Move
 	history  [12][64]int
 	nodes    uint64
@@ -75,8 +76,25 @@ func NewWithParams(ttSizeMB int, params Params) *Searcher {
 	return &Searcher{
 		tt:       NewTT(ttSizeMB),
 		params:   params,
+		ec:       evalConfig(params),
 		keyStack: make([]uint64, 0, 1024),
 	}
+}
+
+// evalConfig derives the evaluation config (term toggles + weights) from params.
+func evalConfig(p Params) eval.Config {
+	return eval.Config{
+		Mobility:   p.Mobility,
+		Pawns:      p.Pawns,
+		KingSafety: p.KingSafety,
+		BishopPair: p.BishopPair,
+		W:          eval.DefaultWeights(),
+	}
+}
+
+// evaluate is the searcher's static evaluation, honoring its enabled eval terms.
+func (s *Searcher) evaluate(pos *chess.Position) int {
+	return eval.Evaluate(pos, s.ec)
 }
 
 // newWithSharedTT returns a helper Searcher that shares tt with others (Lazy SMP
@@ -86,6 +104,7 @@ func newWithSharedTT(tt *TT, params Params) *Searcher {
 	return &Searcher{
 		tt:       tt,
 		params:   params,
+		ec:       evalConfig(params),
 		keyStack: make([]uint64, 0, 1024),
 	}
 }
@@ -339,7 +358,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 		return 0
 	}
 	if ply >= maxPly-1 {
-		return eval.Evaluate(pos)
+		return s.evaluate(pos)
 	}
 	if ply > 0 && (pos.HalfmoveClock() >= 100 || s.isRepetition(pos)) {
 		return 0
@@ -380,7 +399,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 	// reverse futility pruning, and later by other heuristics.
 	var staticEval int
 	if !inCheck {
-		staticEval = eval.Evaluate(pos)
+		staticEval = s.evaluate(pos)
 	}
 
 	// Reverse futility pruning (static null move): at a non-PV node near the
@@ -512,13 +531,13 @@ func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 		return 0
 	}
 	if ply >= maxPly-1 {
-		return eval.Evaluate(pos)
+		return s.evaluate(pos)
 	}
 
 	inCheck := pos.InCheck()
 	standPat := 0
 	if !inCheck {
-		standPat = eval.Evaluate(pos)
+		standPat = s.evaluate(pos)
 		if standPat >= beta {
 			return beta
 		}

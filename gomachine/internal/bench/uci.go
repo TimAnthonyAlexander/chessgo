@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -131,6 +132,55 @@ func (e *UCIEngine) BestMove(openFEN string, moves []string, b UCIBudget) (strin
 		return "", err
 	}
 	return "", io.EOF
+}
+
+// Evaluate asks the engine to search the position and returns its evaluation in
+// centipawns from the SIDE-TO-MOVE's perspective (mate scores are mapped to a
+// large bounded cp value). Used to label positions for Texel distillation.
+func (e *UCIEngine) Evaluate(openFEN string, moves []string, b UCIBudget) (int, error) {
+	pos := "position fen " + openFEN
+	if len(moves) > 0 {
+		pos += " moves " + strings.Join(moves, " ")
+	}
+	if err := e.send(pos); err != nil {
+		return 0, err
+	}
+	if err := e.send(b.goLine()); err != nil {
+		return 0, err
+	}
+	cp := 0
+	for e.out.Scan() {
+		f := strings.Fields(e.out.Text())
+		if len(f) == 0 {
+			continue
+		}
+		if f[0] == "info" {
+			for i := 0; i+2 < len(f); i++ {
+				if f[i] == "score" {
+					switch f[i+1] {
+					case "cp":
+						if v, err := strconv.Atoi(f[i+2]); err == nil {
+							cp = v
+						}
+					case "mate":
+						if v, err := strconv.Atoi(f[i+2]); err == nil {
+							if v >= 0 {
+								cp = 20000 - v
+							} else {
+								cp = -20000 - v
+							}
+						}
+					}
+				}
+			}
+		} else if f[0] == "bestmove" {
+			return cp, nil
+		}
+	}
+	if err := e.out.Err(); err != nil {
+		return 0, err
+	}
+	return cp, io.EOF
 }
 
 // Close terminates the engine process.

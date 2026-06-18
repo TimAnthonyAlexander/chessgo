@@ -96,6 +96,37 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.LMP = b
+		case "mobility", "mob":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.Mobility = b
+		case "pawns":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.Pawns = b
+		case "kingsafety", "ks":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.KingSafety = b
+		case "bishoppair", "bp":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.BishopPair = b
+		case "eval":
+			// convenience: enable/disable all knowledge eval terms at once
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.Mobility, base.Pawns, base.KingSafety, base.BishopPair = b, b, b, b
 		default:
 			return base, fmt.Errorf("unknown param %q", key)
 		}
@@ -146,6 +177,18 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.LMP != patch.LMP {
 		diffs = append(diffs, fmt.Sprintf("lmp: %s→%s", onoff(base.LMP), onoff(patch.LMP)))
+	}
+	if base.Mobility != patch.Mobility {
+		diffs = append(diffs, fmt.Sprintf("mobility: %s→%s", onoff(base.Mobility), onoff(patch.Mobility)))
+	}
+	if base.Pawns != patch.Pawns {
+		diffs = append(diffs, fmt.Sprintf("pawns: %s→%s", onoff(base.Pawns), onoff(patch.Pawns)))
+	}
+	if base.KingSafety != patch.KingSafety {
+		diffs = append(diffs, fmt.Sprintf("kingsafety: %s→%s", onoff(base.KingSafety), onoff(patch.KingSafety)))
+	}
+	if base.BishopPair != patch.BishopPair {
+		diffs = append(diffs, fmt.Sprintf("bishoppair: %s→%s", onoff(base.BishopPair), onoff(patch.BishopPair)))
 	}
 	if len(diffs) == 0 {
 		return "(identical — sanity/noise run)"

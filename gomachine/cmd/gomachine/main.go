@@ -39,6 +39,8 @@ func main() {
 		cmdSelfPlay(os.Args[2:])
 	case "bench":
 		cmdBench(os.Args[2:])
+	case "tune":
+		cmdTune(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:

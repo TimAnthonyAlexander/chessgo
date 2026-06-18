@@ -21,6 +21,10 @@ type Params struct {
 	Aspiration     bool // aspiration windows around the previous iteration's score
 	RFP            bool // reverse futility pruning (static null move) near leaves
 	LMP            bool // late move pruning (move-count pruning) of late quiets near leaves
+	Mobility       bool // evaluation: piece mobility term
+	Pawns          bool // evaluation: pawn structure (isolated/doubled/passed)
+	KingSafety     bool // evaluation: king pawn-shield term
+	BishopPair     bool // evaluation: bishop-pair bonus
 }
 
 // DefaultParams returns the engine's current full-strength configuration.
@@ -48,5 +52,9 @@ func DefaultParams() Params {
 		Aspiration:     true,
 		RFP:            true,
 		LMP:            true,
+		Mobility:       false, // eval terms: off until Texel-tuned, then SPRT'd as a set
+		Pawns:          false,
+		KingSafety:     false,
+		BishopPair:     false,
 	}
 }

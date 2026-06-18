@@ -105,6 +105,29 @@ func (pos *Position) ColorBB(c Color) Bitboard { return pos.byColor[c] }
 // Occupied returns the all-pieces occupancy bitboard.
 func (pos *Position) Occupied() Bitboard { return pos.occupied }
 
+// AttacksFrom returns the squares attacked by the piece on sq, given the current
+// occupancy (empty if sq is empty). Used by evaluation (mobility, king safety).
+func (pos *Position) AttacksFrom(sq Square) Bitboard {
+	pc := pos.board[sq]
+	if pc == NoPiece {
+		return 0
+	}
+	return attacksFrom(pc.Type(), pc.Color(), sq, pos.occupied)
+}
+
+// PawnAttacksBB returns every square attacked by color c's pawns.
+func (pos *Position) PawnAttacksBB(c Color) Bitboard {
+	var bb Bitboard
+	pawns := pos.pieces[MakePiece(c, Pawn)]
+	for pawns != 0 {
+		bb |= pawnAttacks[c][pawns.PopLSB()]
+	}
+	return bb
+}
+
+// KingSquare returns the square of color c's king.
+func (pos *Position) KingSquare(c Color) Square { return pos.kingSq(c) }
+
 // NonPawnMaterial reports whether color c has any piece other than king/pawns
 // (used to guard null-move pruning against zugzwang).
 func (pos *Position) NonPawnMaterial(c Color) bool {
