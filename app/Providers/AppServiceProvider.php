@@ -10,6 +10,7 @@ use App\Auth\SimpleUserProvider;
 use App\Services\EmailService;
 use App\Services\GomachineClient;
 use App\Services\BotGameService;
+use App\Services\WsTicketService;
 use BaseApi\Auth\UserProvider;
 
 /**
@@ -31,6 +32,7 @@ class AppServiceProvider extends ServiceProvider
         // gomachine engine client + bot game logic (SPEC §6, §7)
         $container->singleton(GomachineClient::class);
         $container->singleton(BotGameService::class);
+        $container->singleton(WsTicketService::class);
 
         // Example: Register a custom service with manual configuration
         // $container->singleton(SomeService::class, function (ContainerInterface $c) {

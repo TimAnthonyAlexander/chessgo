@@ -14,6 +14,7 @@ use App\Controllers\StreamController;
 use App\Controllers\BotGameController;
 use App\Controllers\BotMoveController;
 use App\Controllers\AnalyzeController;
+use App\Controllers\WsTicketController;
 use BaseApi\Http\Middleware\RateLimitMiddleware;
 use BaseApi\Http\SessionStartMiddleware;
 use BaseApi\Permissions\PermissionsMiddleware;
@@ -57,6 +58,12 @@ $router->post('/bot-games/{id}/move', [
 $router->post('/analyze', [
     RateLimitMiddleware::class => ['limit' => '120/1m'],
     AnalyzeController::class,
+]);
+
+// WebSocket ticket for the realtime hub (anonymous = casual-only)
+$router->get('/ws-ticket', [
+    RateLimitMiddleware::class => ['limit' => '60/1m'],
+    WsTicketController::class,
 ]);
 
 // ================================  

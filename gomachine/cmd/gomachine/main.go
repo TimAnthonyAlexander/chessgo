@@ -25,6 +25,10 @@ func main() {
 		cmdUCI()
 	case "serve":
 		cmdServe(os.Args[2:])
+	case "hub":
+		cmdHub(os.Args[2:])
+	case "verifyticket":
+		cmdVerifyTicket(os.Args[2:])
 	case "bestmove":
 		cmdBestMove(os.Args[2:])
 	case "perft":
