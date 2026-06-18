@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { Box, Button, Typography } from '@mui/material'
-import { Flag, Telescope } from 'lucide-react'
+import { Flag, Telescope, User } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import Board from '../components/Board'
 import Clock from '../components/Clock'
 import LiveModeCard from '../components/LiveModeCard'
 import MoveList from '../components/MoveList'
+import { ActionBtn, Avatar, PANEL_SHADOW } from '../components/PanelUI'
 import type { MoveEntry } from '../api/client'
 import { type Color, gameSocket, type LiveGameState, liveRemaining } from '../lib/socket'
 import { useGameSocket } from '../lib/useGameSocket'
@@ -128,7 +129,7 @@ export default function LiveGame() {
           },
           columnGap: { md: 4 },
           rowGap: 2,
-          alignItems: 'center',
+          alignItems: { xs: 'flex-start', md: 'stretch' },
           justifyContent: 'center',
           width: { xs: '100%', md: 'fit-content' },
           maxWidth: '100%',
@@ -138,7 +139,7 @@ export default function LiveGame() {
         <Box sx={{ display: { xs: 'none', md: 'block' }, width: '100%', justifySelf: 'end', alignSelf: 'start' }}>
           <LiveModeCard pool={g.pool} rated={g.rated} color={g.color} opponent={g.opponent} />
         </Box>
-        <Box sx={{ minWidth: 0 }}>
+        <Box sx={{ minWidth: 0, alignSelf: 'start', width: '100%' }}>
           <Board
             fen={g.fen}
             orientation={g.color}
@@ -154,21 +155,38 @@ export default function LiveGame() {
 
         <Box
           sx={{
-            bgcolor: '#1b1e24',
-            border: '1px solid var(--line)',
-            borderRadius: 2.5,
+            flex: 1,
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            bgcolor: 'var(--surface)',
+            border: '1px solid var(--line-soft)',
+            borderRadius: '14px',
             overflow: 'hidden',
-            alignSelf: { md: 'center' },
+            boxShadow: PANEL_SHADOW,
+            alignSelf: { md: 'stretch' },
+            width: '100%',
           }}
         >
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.75, py: 1, bgcolor: '#23272f', borderBottom: '1px solid var(--line-soft)' }}>
-            <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-dim)' }}>{g.pool}</Typography>
+          {/* Pool + rated badge */}
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+              px: 1.75,
+              py: 1.25,
+              bgcolor: 'var(--bg-2)',
+              borderBottom: '1px solid var(--line-soft)',
+            }}
+          >
+            <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, color: 'var(--text-dim)' }}>{g.pool}</Typography>
             <Box
               sx={{
                 ml: 'auto',
                 px: 1,
-                py: 0.25,
-                borderRadius: 1,
+                py: 0.3,
+                borderRadius: '6px',
                 fontSize: 10.5,
                 fontWeight: 700,
                 letterSpacing: '0.1em',
@@ -182,12 +200,15 @@ export default function LiveGame() {
               {g.rated ? 'Rated' : 'Casual'}
             </Box>
           </Box>
+
+          {/* Opponent */}
           <PlayerBar
             name={g.opponent.name}
             rating={g.opponent.anon ? null : g.opponent.rating}
             ms={liveRemaining(g, other(g.color))}
             active={!g.ended && g.sideToMove === other(g.color)}
             online={g.opponentOnline}
+            divider="bottom"
           />
 
           {s.conn !== 'open' && !g.ended && (
@@ -198,54 +219,45 @@ export default function LiveGame() {
             </Box>
           )}
 
-          <MoveList moves={moveEntries} currentPly={moveEntries.length} onSelectPly={() => {}} />
+          {/* Moves (fills the panel) */}
+          <MoveList fill moves={moveEntries} currentPly={moveEntries.length} onSelectPly={() => {}} />
 
+          {/* Resign while playing, or the result + next actions when over */}
           {!g.ended ? (
-            <Box sx={{ display: 'flex', justifyContent: 'center', py: 0.75, borderTop: '1px solid var(--line-soft)' }}>
-              <Button
-                size="small"
-                color="inherit"
-                startIcon={<Flag size={14} />}
-                onClick={() => gameSocket.resign()}
-                sx={{ color: 'var(--text-dim)', '&:hover': { color: '#ca4a4a' } }}
-              >
-                Resign
-              </Button>
+            <Box sx={{ p: 1.25, borderTop: '1px solid var(--line-soft)', bgcolor: 'var(--bg-2)' }}>
+              <ActionBtn tone="danger" icon={<Flag size={15} />} label="Resign" onClick={() => gameSocket.resign()} />
             </Box>
           ) : (
-            <Box sx={{ p: 1.5, borderTop: '1px solid var(--line-soft)', display: 'flex', flexDirection: 'column', gap: 1 }}>
-              <Typography sx={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 600, textAlign: 'center' }}>
+            <Box
+              sx={{
+                p: 1.25,
+                borderTop: '1px solid var(--line-soft)',
+                bgcolor: 'var(--bg-2)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 1.25,
+              }}
+            >
+              <Typography sx={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, textAlign: 'center' }}>
                 {resultText(g)}
               </Typography>
               <Box sx={{ display: 'flex', gap: 1 }}>
-                <Button fullWidth variant="outlined" color="inherit" onClick={() => { gameSocket.leave(); navigate('/') }}>
-                  Lobby
-                </Button>
-                <Button fullWidth variant="contained" onClick={() => { gameSocket.queue(g.pool); navigate('/') }}>
-                  New game
-                </Button>
+                <ActionBtn tone="neutral" label="Lobby" onClick={() => { gameSocket.leave(); navigate('/') }} />
+                <ActionBtn tone="primary" label="New game" onClick={() => { gameSocket.queue(g.pool); navigate('/') }} />
               </Box>
               {g.reason !== 'aborted' && g.status !== 'aborted' && (
-                <Button
-                  fullWidth
-                  variant="outlined"
-                  color="inherit"
-                  startIcon={<Telescope size={16} />}
+                <ActionBtn
+                  tone="neutral"
+                  icon={<Telescope size={16} />}
+                  label="Analyse game"
                   onClick={() => navigate(`/analysis/${g.id}`)}
-                  sx={{ borderColor: 'var(--line)', color: 'var(--text-dim)', '&:hover': { borderColor: 'var(--accent)', color: 'var(--accent)' } }}
-                >
-                  Analyse game
-                </Button>
+                />
               )}
             </Box>
           )}
 
-          <PlayerBar
-            name="You"
-            rating={null}
-            ms={liveRemaining(g, g.color)}
-            active={myTurn}
-          />
+          {/* You */}
+          <PlayerBar name="You" rating={null} ms={liveRemaining(g, g.color)} active={myTurn} divider="top" />
         </Box>
       </Box>
     </Box>
@@ -258,42 +270,40 @@ function PlayerBar({
   ms,
   active,
   online,
+  divider,
 }: {
   name: string
   rating: number | null
   ms: number
   active: boolean
   online?: boolean
+  divider?: 'top' | 'bottom'
 }) {
   return (
     <Box
       sx={{
         display: 'flex',
         alignItems: 'center',
-        gap: 1,
+        gap: 1.25,
         px: 1.75,
         py: 1.25,
-        bgcolor: '#23272f',
+        bgcolor: 'var(--bg-2)',
+        borderTop: divider === 'top' ? '1px solid var(--line-soft)' : undefined,
+        borderBottom: divider === 'bottom' ? '1px solid var(--line-soft)' : undefined,
       }}
     >
-      <Box
-        sx={{
-          width: 8,
-          height: 8,
-          borderRadius: '50%',
-          flexShrink: 0,
-          background: online === false ? 'var(--muted)' : '#7bb661',
-        }}
-      />
-      <Typography sx={{ fontWeight: 600, fontSize: 14.5 }}>{name}</Typography>
-      {rating != null && (
-        <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-dim)' }}>
-          {rating}
-        </Typography>
-      )}
-      {online === false && (
-        <Typography sx={{ fontSize: 11.5, color: 'var(--muted)' }}>disconnected</Typography>
-      )}
+      <Avatar small><User size={15} /></Avatar>
+      <Box sx={{ minWidth: 0 }}>
+        <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75 }}>
+          <Typography sx={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14.5 }} noWrap>
+            {name}
+          </Typography>
+          {rating != null && (
+            <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-dim)' }}>{rating}</Typography>
+          )}
+        </Box>
+        {online === false && <Typography sx={{ fontSize: 11, color: 'var(--muted)', lineHeight: 1.1 }}>disconnected</Typography>}
+      </Box>
       <Box sx={{ ml: 'auto' }}>
         <Clock ms={ms} active={active} />
       </Box>

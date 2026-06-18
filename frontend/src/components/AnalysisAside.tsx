@@ -138,11 +138,6 @@ function MaterialCard({ mat }: { mat: Material }) {
         <Box sx={{ height: '1px', bgcolor: 'var(--line-soft)' }} />
         <SideRow label="Black" pieces={mat.capturedByBlack} color="w" adv={mat.diff < 0 ? -mat.diff : 0} />
       </Box>
-      {mat.diff === 0 && (
-        <Typography sx={{ mt: 1.5, fontSize: 12, color: 'var(--muted)', fontStyle: 'italic' }}>
-          Material is even.
-        </Typography>
-      )}
     </Card>
   )
 }

@@ -9,8 +9,9 @@ export default function GameModeCard({ level }: { level: number }) {
       sx={{
         bgcolor: 'var(--surface)',
         border: '1px solid var(--line-soft)',
-        borderRadius: 2.5,
+        borderRadius: '14px',
         p: 2.5,
+        boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
       }}
     >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'var(--accent)' }}>

@@ -7,23 +7,32 @@ interface MoveListProps {
   currentPly: number // 0 = start position, k = after k plies
   onSelectPly: (ply: number) => void
   visibleRows?: number // fixed number of full-move rows the panel shows before scrolling
+  fill?: boolean // grow to fill the parent (full-height panel) instead of a fixed height
 }
 
 const ROW_H = 31 // px per row; keep in sync with Cell minHeight so rows fit exactly
 const DEFAULT_VISIBLE_ROWS = 10
 
 /** Lichess-style move grid: number gutter, White column (lighter), Black column.
- * Always renders `visibleRows` rows tall — padded with empty rows when there are
- * fewer moves, scrollable once there are more — so the panel height never jumps. */
-export default function MoveList({ moves, currentPly, onSelectPly, visibleRows = DEFAULT_VISIBLE_ROWS }: MoveListProps) {
+ * In fixed mode it always renders `visibleRows` rows tall — padded with empty rows
+ * when there are fewer, scrollable once there are more — so the panel height never
+ * jumps. In `fill` mode it grows to fill the parent and scrolls, for full-height
+ * panels. */
+export default function MoveList({
+  moves,
+  currentPly,
+  onSelectPly,
+  visibleRows = DEFAULT_VISIBLE_ROWS,
+  fill = false,
+}: MoveListProps) {
   const rows: { no: number; white?: MoveEntry; black?: MoveEntry }[] = []
   for (let i = 0; i < moves.length; i += 2) {
     rows.push({ no: i / 2 + 1, white: moves[i], black: moves[i + 1] })
   }
-  const padCount = Math.max(0, visibleRows - rows.length)
+  const padCount = fill ? 0 : Math.max(0, visibleRows - rows.length)
 
   return (
-    <Box sx={{ height: visibleRows * ROW_H, overflowY: 'auto' }}>
+    <Box sx={fill ? { flex: 1, minHeight: 0, overflowY: 'auto' } : { height: visibleRows * ROW_H, overflowY: 'auto' }}>
       {rows.map((r) => (
         <Box key={r.no} sx={{ display: 'grid', gridTemplateColumns: '32px 1fr 1fr' }}>
           <RowNumber no={r.no} />

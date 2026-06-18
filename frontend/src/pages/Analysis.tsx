@@ -275,7 +275,7 @@ export default function Analysis() {
           // board+sidebar block) is centered in the viewport — same trick as LiveGame.
           gridTemplateColumns: {
             xs: '1fr',
-            md: '360px min(calc(100vh - 140px), calc(100vw - 840px), 820px) 360px',
+            md: '320px min(calc(100vh - 120px), calc(100vw - 752px), 880px) 320px',
           },
           columnGap: { md: 4 },
           rowGap: 2,
