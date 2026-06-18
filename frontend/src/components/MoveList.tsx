@@ -6,43 +6,56 @@ interface MoveListProps {
   moves: MoveEntry[]
   currentPly: number // 0 = start position, k = after k plies
   onSelectPly: (ply: number) => void
+  visibleRows?: number // fixed number of full-move rows the panel shows before scrolling
 }
 
-/** Lichess-style move grid: number gutter, White column (lighter), Black column. */
-export default function MoveList({ moves, currentPly, onSelectPly }: MoveListProps) {
-  if (moves.length === 0) {
-    return (
-      <Box sx={{ px: 1.75, py: 2.5, color: 'var(--muted)', fontFamily: 'var(--font-mono)', fontSize: 13 }}>
-        No moves yet.
-      </Box>
-    )
-  }
+const ROW_H = 31 // px per row; keep in sync with Cell minHeight so rows fit exactly
+const DEFAULT_VISIBLE_ROWS = 10
 
+/** Lichess-style move grid: number gutter, White column (lighter), Black column.
+ * Always renders `visibleRows` rows tall — padded with empty rows when there are
+ * fewer moves, scrollable once there are more — so the panel height never jumps. */
+export default function MoveList({ moves, currentPly, onSelectPly, visibleRows = DEFAULT_VISIBLE_ROWS }: MoveListProps) {
   const rows: { no: number; white?: MoveEntry; black?: MoveEntry }[] = []
   for (let i = 0; i < moves.length; i += 2) {
     rows.push({ no: i / 2 + 1, white: moves[i], black: moves[i + 1] })
   }
+  const padCount = Math.max(0, visibleRows - rows.length)
 
   return (
-    <Box sx={{ maxHeight: { xs: 200, lg: 320 }, overflowY: 'auto' }}>
+    <Box sx={{ height: visibleRows * ROW_H, overflowY: 'auto' }}>
       {rows.map((r) => (
         <Box key={r.no} sx={{ display: 'grid', gridTemplateColumns: '32px 1fr 1fr' }}>
-          <Box
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'var(--muted)',
-              fontFamily: 'var(--font-mono)',
-              fontSize: 12,
-            }}
-          >
-            {r.no}
-          </Box>
+          <RowNumber no={r.no} />
           <Cell entry={r.white} whiteCol current={currentPly} onSelect={onSelectPly} />
           <Cell entry={r.black} current={currentPly} onSelect={onSelectPly} />
         </Box>
       ))}
+      {Array.from({ length: padCount }, (_, k) => (
+        <Box key={`pad-${k}`} sx={{ display: 'grid', gridTemplateColumns: '32px 1fr 1fr' }}>
+          <RowNumber />
+          <Cell whiteCol current={currentPly} onSelect={onSelectPly} />
+          <Cell current={currentPly} onSelect={onSelectPly} />
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
+function RowNumber({ no }: { no?: number }) {
+  return (
+    <Box
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: ROW_H,
+        color: 'var(--muted)',
+        fontFamily: 'var(--font-mono)',
+        fontSize: 12,
+      }}
+    >
+      {no ?? ''}
     </Box>
   )
 }

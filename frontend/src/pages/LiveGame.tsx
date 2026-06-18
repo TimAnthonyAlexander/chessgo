@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Box, Button, Typography } from '@mui/material'
 import { Flag } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
@@ -9,6 +9,7 @@ import type { MoveEntry } from '../api/client'
 import { type Color, gameSocket, type LiveGameState, liveRemaining } from '../lib/socket'
 import { useGameSocket } from '../lib/useGameSocket'
 import { applyUciVisually, type BoardMap, parseFen } from '../lib/chess'
+import { playForSan, sounds } from '../lib/sounds'
 
 const other = (c: Color): Color => (c === 'w' ? 'b' : 'w')
 
@@ -33,6 +34,33 @@ export default function LiveGame() {
     setOverride(null)
     setOptimisticLast(null)
   }, [g?.fen])
+
+  // Sound: play the newest move (either side) as the authoritative position
+  // advances. Tracked per game id so resuming an in-progress game doesn't replay
+  // its whole history. The SAN from the hub carries check/capture/promotion, so
+  // playForSan picks the right knock.
+  const soundedPly = useRef<{ id: string; ply: number } | null>(null)
+  useEffect(() => {
+    if (!g) return
+    const prev = soundedPly.current
+    if (!prev || prev.id !== g.id) {
+      soundedPly.current = { id: g.id, ply: g.moves.length } // baseline; don't replay
+      return
+    }
+    if (g.moves.length > prev.ply) {
+      playForSan(g.moves[g.moves.length - 1].san, false)
+      soundedPly.current = { id: g.id, ply: g.moves.length }
+    }
+  }, [g?.id, g?.moves.length])
+
+  // Sound: one game-over tone when the game ends (once per game).
+  const endedSound = useRef<string | null>(null)
+  useEffect(() => {
+    if (g && g.ended && endedSound.current !== g.id) {
+      endedSound.current = g.id
+      sounds.end()
+    }
+  }, [g?.id, g?.ended])
 
   if (!g) {
     return (
