@@ -108,6 +108,7 @@ func (h *Hub) Run() {
 			h.applyBotMove(r)
 		case <-ticker.C:
 			h.checkClocks()
+			h.matchWaiting()
 			h.checkBotFill()
 		}
 	}
@@ -141,16 +142,17 @@ func (h *Hub) queue(c *Client, pool string) {
 		return
 	}
 	h.dequeue(c)
-	for i, other := range h.pools[pool] {
-		if other != c {
-			h.pools[pool] = append(h.pools[pool][:i], h.pools[pool][i+1:]...)
-			other.pool = ""
-			h.startGame(other, c, tc, pool)
-			return
-		}
+	now := time.Now()
+	c.queuedAt = now
+	// Pair immediately only with a rating-close opponent (within this fresh
+	// arrival's tight tolerance). Otherwise wait — matchWaiting widens the
+	// acceptable gap over time, and bot backfill catches a lone long-waiter.
+	if other := h.bestOpponent(c, pool, now); other != nil {
+		h.dequeue(other)
+		h.startGame(other, c, tc, pool)
+		return
 	}
 	c.pool = pool
-	c.queuedAt = time.Now()
 	h.pools[pool] = append(h.pools[pool], c)
 	c.trySend(mustJSON(out("queued", map[string]any{"pool": pool})))
 }

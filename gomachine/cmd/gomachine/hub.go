@@ -37,7 +37,7 @@ func cmdHub(args []string) {
 	fs := flag.NewFlagSet("hub", flag.ExitOnError)
 	addr := fs.String("addr", "127.0.0.1:6467", "listen address")
 	bots := fs.Bool("bots", true, "offer a bot opponent to a player waiting longer than -bot-delay")
-	botLevel := fs.Int("bot-level", 6, "bot difficulty level (0..10)")
+	botLevel := fs.Int("bot-level", 6, "fallback bot level (0..10) for anonymous players; rated players get a bot matched to their Elo")
 	botDelay := fs.Duration("bot-delay", 15*time.Second, "wait before a bot opponent is offered")
 	_ = fs.Parse(args)
 
@@ -54,7 +54,7 @@ func cmdHub(args []string) {
 			workers = 1
 		}
 		h.EnableBotFill(*botLevel, *botDelay, workers, 16)
-		fmt.Printf("bot backfill on: level %d after %s (%d search workers)\n", *botLevel, *botDelay, workers)
+		fmt.Printf("bot backfill on: Elo-matched (fallback level %d) after %s (%d search workers)\n", *botLevel, *botDelay, workers)
 	}
 	go h.Run()
 

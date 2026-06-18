@@ -89,7 +89,17 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool string) {
 	if human.game != nil {
 		return
 	}
-	bot := newBotIdentity()
+	// Anchor the bot near the human's rating in this category so a one-sided rated
+	// game is fair: the bot's displayed rating (what the human's Elo moves against)
+	// sits within a small jitter of the human's, and the engine plays at roughly
+	// that strength. Anonymous players have no rating, so fall back to the
+	// configured default level's nominal rating.
+	userRating := human.id.RatingFor(categoryForPool(pool))
+	if userRating <= 0 {
+		userRating = ratingForLevel(h.botLevel)
+	}
+	displayed := botDisplayRating(userRating)
+	bot := newBotIdentity(displayed)
 	pos, _ := chess.ParseFEN(chess.StartFEN)
 	g := &game{
 		id:   newID(),
@@ -104,6 +114,7 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool string) {
 		turnStart: time.Now(),
 		online:    [2]bool{true, true},
 		startFen:  chess.StartFEN,
+		botLevel:  levelForRating(displayed),
 	}
 
 	humanColor := chess.White
@@ -141,7 +152,7 @@ func (h *Hub) scheduleBotMove(g *game) {
 		ply:         len(g.moves),
 		fen:         g.pos.FEN(),
 		history:     append([]uint64(nil), g.history...),
-		level:       h.botLevel,
+		level:       g.botLevel,
 		remainingMs: g.remainingMs(botColor),
 		legalCount:  len(g.pos.LegalMoveStrings(chess.SqNone)),
 	})
@@ -217,13 +228,59 @@ func botThinkDelay(remainingMs int64, legalCount int) time.Duration {
 
 // --- fake identity ---
 
-func newBotIdentity() auth.Identity {
+// newBotIdentity builds a fill-in bot with a given displayed rating.
+func newBotIdentity(rating int) auth.Identity {
 	return auth.Identity{
 		UserID: "bot-" + newID(),
 		Anon:   false, // rendered like an account so the rating shows
 		Name:   fakeUsername(),
-		Rating: 900 + mrand.IntN(1100), // ~900–2000
+		Rating: rating,
 	}
+}
+
+// Bot strength matching. The fill-in bot's displayed rating wobbles around the
+// human's by botRatingJitter, clamped to a sane band, and the engine level is
+// derived from that displayed rating so the bot plays at roughly the strength it
+// advertises.
+const (
+	botRatingJitter = 120  // ± Elo wobble around the human's rating
+	botRatingMin    = 600  // floor for a displayed bot rating
+	botRatingMax    = 2600 // ceiling for a displayed bot rating
+)
+
+// botDisplayRating picks the bot's shown rating near the human's, so a one-sided
+// rated game is fair — the human's Elo moves against a number close to their own.
+func botDisplayRating(userRating int) int {
+	r := userRating + (mrand.IntN(2*botRatingJitter+1) - botRatingJitter)
+	if r < botRatingMin {
+		r = botRatingMin
+	}
+	if r > botRatingMax {
+		r = botRatingMax
+	}
+	return r
+}
+
+// levelForRating maps a displayed Elo to an engine level 0..10 so the bot plays
+// roughly at the strength it advertises. Heuristic and monotonic — the engine's
+// levels aren't yet precisely Elo-calibrated (SPEC §11), so this is an
+// approximation that will tighten as the levels are calibrated. ~600→0, 1500→5,
+// ≥2400→10.
+func levelForRating(rating int) int {
+	lvl := (rating - 600) / 180
+	if lvl < 0 {
+		lvl = 0
+	}
+	if lvl > 10 {
+		lvl = 10
+	}
+	return lvl
+}
+
+// ratingForLevel is the rough inverse, used to anchor a bot when the human has no
+// rating (anonymous): pick a displayed rating typical of a given engine level.
+func ratingForLevel(level int) int {
+	return 600 + 180*level
 }
 
 var (

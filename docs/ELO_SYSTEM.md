@@ -209,14 +209,19 @@ In every case the `Game` record stores `white_rating_before/after` and
 - `WsTicketController` sets the default ticket `rating` to the player's **blitz**
   rating (shown when the category is unknown, e.g. the `hello` message before a
   pool is chosen).
-- Fill-in bots get a random displayed rating in `newBotIdentity`:
-  `900 + rand(0..1099)` ≈ **900–2000**. This is purely cosmetic for matchmaking
-  and the one-sided Elo opponent value.
+- Fill-in bots are **Elo-matched to the human** (`startBotGame` + `bot.go`):
+  the displayed rating wobbles around the human's category rating by
+  `±botRatingJitter` (120), clamped to `[botRatingMin, botRatingMax]` = `[600,
+  2600]`, and the engine level is derived from that displayed rating via
+  `levelForRating` (~600→0, 1500→5, ≥2400→10) and stored on the game (`g.botLevel`).
+  So the one-sided Elo opponent value is close to the human's own rating and the
+  bot actually plays at roughly that strength. Anonymous humans have no rating, so
+  the bot falls back to the configured `-bot-level` (`ratingForLevel`).
 
-> **Known caveat (roadmap, not a bug):** the fill-in bot always plays at engine
-> **level 6** regardless of its random displayed rating, so a one-sided rated bot
-> game is not strength-matched to the displayed number. Tying bot strength to its
-> displayed rating (and to the player's Elo) is tracked in `docs/SPEC.md` §11.
+> **Heuristic, not yet calibrated:** `levelForRating` is a reasonable monotonic
+> mapping, but the engine's levels aren't precisely Elo-calibrated, so a "1700"
+> bot only plays *approximately* at 1700. Tightening the level↔Elo calibration is
+> tracked in `docs/SPEC.md` §11.
 
 ---
 

@@ -125,9 +125,11 @@ php mason migrate:generate && php mason migrate:apply -y                     # D
 ## Status / next
 
 Built and tested: engine, bot games, lobby, **live human-vs-human play**
-(matchmaking, server clocks, reconnect/resume), **bot backfill** (a fill-in bot
-after a 15s wait, level 6, human-like pacing, random identity — `-bots`/
-`-bot-level`/`-bot-delay` flags), **accounts** (signup/login via session cookies),
+(**rating-proximity matchmaking** — a wait-widening Elo bracket, 100→400 cap, so
+mismatched players never pair; server clocks, reconnect/resume), **bot backfill**
+(a fill-in bot after a 15s wait, **Elo-matched to the human** — displayed rating
+±120 of the user, engine level derived via `levelForRating`; human-like pacing —
+`-bots`/`-bot-level`/`-bot-delay` flags), **accounts** (signup/login via session cookies),
 **per-time-control Elo** (bullet/blitz/rapid/classical, provisional K), and
 **game persistence** (hub → `POST /internal/games`). Rated when both are accounts;
 a logged-in human vs a fill-in bot is one-sided rated; explicit `/bot` games never
@@ -138,5 +140,5 @@ time-control ratings); `puzzle`/`puzzle_theme`/`puzzle_attempt` models + the
 `scripts/import_puzzles.php` CSV importer; serving is rating-matched + de-duped
 with a theme filter, and the solution is validated server-side (never sent to the
 client). See SPEC.md §9. Next: hub-restart-durable resume, puzzle generation
-pipeline, rating-proximity matchmaking, matching bot *strength* to its displayed
-rating. See `docs/SPEC.md` §11 roadmap.
+pipeline, precise level↔Elo *calibration* (the bot's `levelForRating` mapping is
+currently a monotonic heuristic), a true cross-pool ranked queue. See `docs/SPEC.md` §11 roadmap.

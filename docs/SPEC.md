@@ -475,12 +475,23 @@ The ticket carries the account's **per-category ratings** so the hub can show th
 opponent's rating in the game's time-control category.
 
 ### 8.4 Matchmaking & clocks
-- **Pools** keyed by time control (`"3+0"`, `"10+5"`, …); FIFO match (rating-
-  proximity matching is a later refinement). Colors random.
+- **Pools** keyed by time control (`"3+0"`, `"10+5"`, …). **Rating-proximity
+  match**: paired only when both players' category ratings are within an
+  acceptable gap that starts tight (`baseRatingGap` 100) and widens with wait time
+  (`+ratingGapPerSec`/s) up to a hard ceiling (`maxRatingGap` 400) — so close
+  matches form instantly, near matches after a short wait, and wildly mismatched
+  players (e.g. 800 vs 2400) never pair as humans (they get a bot instead). The
+  widening is re-checked each tick (`matchWaiting`); both sides must consent
+  (gap ≤ each player's current tolerance). Anonymous/unrated players are treated
+  as 1500 for matching. Colors random.
 - **Bot backfill**: if a player waits past a delay (default **15 s**) with no
   human, the hub pairs them with an engine-driven bot that looks like a normal
-  player (random username + rating, level 6, human-like move pacing). Two humans
-  still match instantly, so only a lone waiter is backfilled. Toggled by hub flags
+  player. The bot is **Elo-matched to the human**: displayed rating wobbles ±120
+  around the human's category rating (clamped to 600–2600) and the engine level is
+  derived from it (`levelForRating`), so the bot plays at roughly the strength it
+  advertises (anonymous humans fall back to `-bot-level`). Human-like move pacing.
+  Two close humans still match instantly, so only a lone (or unmatched) waiter is
+  backfilled. Toggled by hub flags
   (`-bots`, `-bot-level`, `-bot-delay`). Bot search runs off the hub goroutine
   (engine pool) and is applied back via a channel. A bot game is **rated for a
   logged-in human** (one-sided Elo vs the bot's displayed rating); anonymous →
@@ -676,11 +687,15 @@ chessgo/
       detection + uniqueness check) to grow the set beyond the Lichess seed; plus
       alternate-mate acceptance, Daily puzzle, Puzzle Rush.
 - [ ] **Hub-restart durability** — persist live games so resume survives a restart.
-- [ ] **Match bot strength to its rating** — fill-in bot currently plays level 6
-      with a random displayed rating; tie displayed rating to actual strength (and
-      to the player's Elo) so rated bot games are fair / non-farmable.
+- [x] **Match bot strength to its rating** — fill-in bot displayed rating is now
+      anchored to the human's Elo (±120) and the engine level is derived from it
+      (`levelForRating`), so rated bot games are fair. Remaining: precise
+      level↔Elo *calibration* (the mapping is currently a monotonic heuristic).
+- [x] **Rating-proximity matchmaking** — human pairing now matches within a
+      wait-widening Elo bracket (100→400 cap), never pairing wildly mismatched
+      players. Remaining: a true cross-pool ranked queue / seek graph.
 - [ ] **More lobby features** — Challenge-a-friend (private link), Custom games,
-      correspondence; rating-proximity matchmaking; profiles + game history + PGN.
+      correspondence; profiles + game history + PGN.
 - [ ] **Polish** — premoves, draw offers, takebacks, spectating, richer eval
       terms / opening book.
 

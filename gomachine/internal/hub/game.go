@@ -34,6 +34,7 @@ type game struct {
 	over      bool
 	online    [2]bool // per-color connection presence
 	startFen  string
+	botLevel  int // engine level for the fill-in bot (0 for human-vs-human games)
 }
 
 // colorForID returns which side the given identity id plays.
