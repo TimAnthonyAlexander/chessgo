@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Box, Button, Tooltip, Typography } from '@mui/material'
-import { ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, Cpu, FlipVertical2, Play, Power, Square, Target, Zap } from 'lucide-react'
+import { ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, FlipVertical2, Play, Square, Target, Zap } from 'lucide-react'
 import { useParams } from 'react-router-dom'
+import AnalysisAside from '../components/AnalysisAside'
 import Board from '../components/Board'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveTree from '../components/MoveTree'
@@ -118,11 +119,11 @@ export default function Analysis() {
       .then((r) => {
         if (cancelled) return
         if (!r.eval) {
-          setTree((t) => annotateEval(t, current.id, { type: 'cp', white: 0 }, r.bestmove, r.pv))
+          setTree((t) => annotateEval(t, current.id, { type: 'cp', white: 0 }, r.bestmove, r.pv, r.depth))
           return
         }
         const white = sideToMove === 'w' ? r.eval.value : -r.eval.value
-        setTree((t) => annotateEval(t, current.id, { type: r.eval!.type, white }, r.bestmove, r.pv))
+        setTree((t) => annotateEval(t, current.id, { type: r.eval!.type, white }, r.bestmove, r.pv, r.depth))
       })
       .catch(() => {
         /* leave eval unknown on engine error */
@@ -156,6 +157,13 @@ export default function Analysis() {
   const selectNode = useCallback((nodeId: number) => {
     setAutoMode('off')
     setCurrentId(nodeId)
+  }, [])
+  // Load a fresh position into the board (new game / Chess960 / pasted FEN).
+  const loadPosition = useCallback((fen: string) => {
+    setAutoMode('off')
+    const fresh = createTree(fen)
+    setTree(fresh)
+    setCurrentId(fresh.rootId)
   }, [])
 
   useEffect(() => {
@@ -271,15 +279,17 @@ export default function Analysis() {
           },
           columnGap: { md: 4 },
           rowGap: 2,
-          alignItems: 'center',
+          alignItems: { xs: 'start', md: 'stretch' },
           justifyContent: 'center',
           width: { xs: '100%', md: 'fit-content' },
           maxWidth: '100%',
           mx: 'auto',
         }}
       >
-        {/* Left spacer (keeps the board centered) */}
-        <Box sx={{ display: { xs: 'none', md: 'block' } }} />
+        {/* Left column: material + position cards (mirrors the sidebar width, so
+            the board stays centered). Setup tools only in free mode — reviewing a
+            loaded game shows material alone. */}
+        <AnalysisAside fen={current.fen} onLoadFen={loadPosition} showSetup={!id} />
 
         {/* Eval bar + board */}
         <Box sx={{ minWidth: 0, display: 'flex', gap: 1, alignItems: 'stretch' }}>
@@ -306,11 +316,13 @@ export default function Analysis() {
             justifySelf: { md: 'start' },
             display: 'flex',
             flexDirection: 'column',
+            minHeight: 0,
             border: '1px solid var(--line-soft)',
-            borderRadius: '6px',
+            borderRadius: '12px',
             bgcolor: 'var(--surface)',
             overflow: 'hidden',
-            maxHeight: { md: 'min(calc(100vh - 140px), 820px)' },
+            boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+            maxHeight: { xs: '72vh', md: 'none' },
           }}
         >
           {id && <Header game={game} loading={loading} loadError={loadError} />}
@@ -319,43 +331,56 @@ export default function Analysis() {
             engineOn={engineOn}
             onToggleEngine={toggleEngine}
             evalWhite={current.evalWhite}
+            depth={current.bestDepth}
             fen={current.fen}
             pvUci={current.bestPv}
           />
 
           <MoveTree tree={tree} currentId={currentId} onSelect={selectNode} />
 
-          {/* Auto playback */}
-          <Box sx={{ display: 'flex', gap: 1, px: 1, pt: 1 }}>
-            <AutoBtn
-              active={autoMode === 'play'}
-              onClick={() => toggleAuto('play')}
-              icon={autoMode === 'play' ? <Square size={14} /> : <Play size={14} />}
-              label={autoMode === 'play' ? 'Stop' : 'Auto Play'}
-              tip={autoMode === 'play' ? 'Stop auto play' : 'Play through the moves in the list'}
-            />
-            <AutoBtn
-              active={autoMode === 'best'}
-              onClick={() => toggleAuto('best')}
-              icon={autoMode === 'best' ? <Square size={14} /> : <Zap size={14} />}
-              label={autoMode === 'best' ? 'Stop' : 'Auto Best Move'}
-              tip={autoMode === 'best' ? 'Stop auto play' : "Keep playing the engine's best move from here"}
-            />
-          </Box>
+          {/* Footer: auto playback + navigation */}
+          <Box
+            sx={{
+              borderTop: '1px solid var(--line-soft)',
+              bgcolor: 'var(--bg-2)',
+              p: 1.25,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 1.25,
+            }}
+          >
+            {/* Auto playback */}
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <AutoBtn
+                active={autoMode === 'play'}
+                onClick={() => toggleAuto('play')}
+                icon={autoMode === 'play' ? <Square size={15} /> : <Play size={15} />}
+                label={autoMode === 'play' ? 'Stop' : 'Auto Play'}
+                tip={autoMode === 'play' ? 'Stop auto play' : 'Play through the moves in the list'}
+              />
+              <AutoBtn
+                active={autoMode === 'best'}
+                onClick={() => toggleAuto('best')}
+                icon={autoMode === 'best' ? <Square size={15} /> : <Zap size={15} />}
+                label={autoMode === 'best' ? 'Stop' : 'Auto Best'}
+                tip={autoMode === 'best' ? 'Stop auto play' : "Keep playing the engine's best move from here"}
+              />
+            </Box>
 
-          {/* Controls */}
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, p: 1, borderTop: '1px solid var(--line-soft)' }}>
-            <NavBtn onClick={goStart} label="Start"><ChevronFirst size={18} /></NavBtn>
-            <NavBtn onClick={goPrev} label="Previous"><ChevronLeft size={18} /></NavBtn>
-            <NavBtn onClick={goNext} label="Next"><ChevronRight size={18} /></NavBtn>
-            <NavBtn onClick={goEnd} label="End"><ChevronLast size={18} /></NavBtn>
-            <Box sx={{ flex: 1 }} />
-            <NavBtn onClick={() => setShowArrow((v) => !v)} label="Best move arrow" active={engineOn && showArrow}>
-              <Target size={17} />
-            </NavBtn>
-            <NavBtn onClick={() => setOrientation((o) => (o === 'w' ? 'b' : 'w'))} label="Flip board">
-              <FlipVertical2 size={17} />
-            </NavBtn>
+            {/* Navigation + view toggles */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <NavBtn onClick={goStart} label="Start" grow><ChevronFirst size={21} /></NavBtn>
+              <NavBtn onClick={goPrev} label="Previous" grow><ChevronLeft size={21} /></NavBtn>
+              <NavBtn onClick={goNext} label="Next" grow><ChevronRight size={21} /></NavBtn>
+              <NavBtn onClick={goEnd} label="End" grow><ChevronLast size={21} /></NavBtn>
+              <Box sx={{ width: '1px', height: 26, bgcolor: 'var(--line)', mx: 0.5 }} />
+              <NavBtn onClick={() => setShowArrow((v) => !v)} label="Best move arrow" active={engineOn && showArrow}>
+                <Target size={19} />
+              </NavBtn>
+              <NavBtn onClick={() => setOrientation((o) => (o === 'w' ? 'b' : 'w'))} label="Flip board">
+                <FlipVertical2 size={19} />
+              </NavBtn>
+            </Box>
           </Box>
         </Box>
       </Box>
@@ -367,11 +392,13 @@ function NavBtn({
   onClick,
   label,
   active,
+  grow,
   children,
 }: {
   onClick: () => void
   label: string
   active?: boolean
+  grow?: boolean
   children: React.ReactNode
 }) {
   return (
@@ -379,12 +406,23 @@ function NavBtn({
       <Button
         onClick={onClick}
         aria-label={label}
+        disableRipple
         sx={{
           minWidth: 0,
-          px: 1,
-          py: 0.5,
+          flex: grow ? 1 : 'none',
+          width: grow ? 'auto' : 44,
+          height: 42,
+          p: 0,
+          borderRadius: '9px',
           color: active ? 'var(--accent)' : 'var(--text-dim)',
-          '&:hover': { color: 'var(--accent)', bgcolor: 'var(--line)' },
+          bgcolor: active ? 'var(--accent-soft)' : 'transparent',
+          border: active ? '1px solid var(--accent-line)' : '1px solid transparent',
+          transition: 'background-color .15s, color .15s, border-color .15s',
+          '&:hover': {
+            color: 'var(--accent)',
+            bgcolor: active ? 'var(--accent-soft)' : 'var(--line)',
+          },
+          '&:active': { transform: 'translateY(1px)' },
         }}
       >
         {children}
@@ -393,20 +431,80 @@ function NavBtn({
   )
 }
 
-// The engine line (principal variation) row, Lichess-style: an eval chip plus the
-// engine's predicted best continuation in SAN. Display-only. The CPU button on the
-// right is the MASTER engine switch — off suppresses the eval bar, board arrow, and
-// this line all at once.
+// Short eval for the colored pill: "+0.34", "-1.2", or "#3" / "-#2" for mate.
+function pillEval(ev: WhiteEval | null): string {
+  if (!ev) return '–'
+  if (ev.type === 'mate') return (ev.white < 0 ? '-' : '') + '#' + Math.abs(ev.white)
+  const v = ev.white / 100
+  return (v > 0 ? '+' : '') + v.toFixed(2)
+}
+
+// Hand-built on/off switch — a gold track with a sliding knob and a soft glow when
+// live. Keyboard + ARIA accessible. Replaces the stock MUI Switch.
+function Toggle({ on, onChange }: { on: boolean; onChange: () => void }) {
+  return (
+    <Box
+      role="switch"
+      aria-checked={on}
+      aria-label="Toggle engine"
+      tabIndex={0}
+      onClick={onChange}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onChange()
+        }
+      }}
+      sx={{
+        position: 'relative',
+        flexShrink: 0,
+        width: 48,
+        height: 28,
+        borderRadius: 999,
+        cursor: 'pointer',
+        bgcolor: on ? 'var(--accent)' : 'var(--surface-2)',
+        boxShadow: on
+          ? '0 0 0 1px var(--accent-line), 0 0 14px -3px rgba(216, 166, 87, 0.7)'
+          : 'inset 0 0 0 1px var(--line)',
+        transition: 'background-color .22s ease, box-shadow .22s ease',
+        outline: 'none',
+        '&:hover': { bgcolor: on ? 'var(--accent)' : 'var(--line)' },
+        '&:focus-visible': { boxShadow: '0 0 0 2px var(--accent-line)' },
+      }}
+    >
+      <Box
+        sx={{
+          position: 'absolute',
+          top: 3,
+          left: 3,
+          width: 22,
+          height: 22,
+          borderRadius: '50%',
+          bgcolor: on ? '#15171c' : 'var(--text-dim)',
+          transform: on ? 'translateX(20px)' : 'translateX(0)',
+          transition: 'transform .24s cubic-bezier(.34, 1.4, .5, 1), background-color .22s ease',
+          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.45)',
+        }}
+      />
+    </Box>
+  )
+}
+
+// The engine panel: the custom toggle is the MASTER engine on/off (off suppresses
+// the eval bar, board arrow, and this panel), beside a wordmark + depth readout,
+// with a colored eval pill and the predicted best line (PV) in SAN. Display-only.
 function EngineLine({
   engineOn,
   onToggleEngine,
   evalWhite,
+  depth,
   fen,
   pvUci,
 }: {
   engineOn: boolean
   onToggleEngine: () => void
   evalWhite: WhiteEval | null
+  depth: number | null
   fen: string
   pvUci: string[] | null
 }) {
@@ -428,90 +526,117 @@ function EngineLine({
     return out
   }, [fen, pvUci])
 
-  const evalText = formatEval(engineOn ? evalWhite : null)
-  const evalPositive = engineOn && evalWhite ? evalWhite.white > 0 : false
+  // Eval pill follows the eval bar's palette: cream when White's better, dark when
+  // Black's. Drawn/zero sits neutral.
+  const whiteAdv = !!evalWhite && evalWhite.white > 0
+  const blackAdv = !!evalWhite && evalWhite.white < 0
+  const pillBg = whiteAdv ? 'linear-gradient(180deg, #f3eee2, #e4dccb)' : blackAdv ? '#15171c' : 'var(--surface-2)'
+  const pillFg = whiteAdv ? '#15171c' : blackAdv ? '#ece9e1' : 'var(--text-dim)'
 
   return (
     <Box
       sx={{
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: 1,
-        px: 1.5,
-        py: 1,
         borderBottom: '1px solid var(--line-soft)',
-        bgcolor: 'var(--bg)',
-        minHeight: 38,
+        bgcolor: 'var(--bg-2)',
+        background: engineOn
+          ? 'linear-gradient(180deg, rgba(216,166,87,0.06), rgba(216,166,87,0) 60%), var(--bg-2)'
+          : 'var(--bg-2)',
       }}
     >
-      {/* Eval chip */}
-      <Box
-        sx={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: 12.5,
-          fontWeight: 700,
-          px: 0.75,
-          py: 0.25,
-          borderRadius: '4px',
-          flexShrink: 0,
-          color: !engineOn ? 'var(--muted)' : evalPositive ? 'var(--bg)' : 'var(--text)',
-          bgcolor: !engineOn ? 'var(--line)' : evalPositive ? 'var(--text)' : 'var(--line)',
-        }}
-      >
-        {engineOn ? evalText : 'off'}
-      </Box>
-
-      {/* PV line (or a hint when nothing to show) */}
-      <Box
-        sx={{
-          flex: 1,
-          minWidth: 0,
-          fontSize: 13,
-          lineHeight: 1.5,
-          color: 'var(--text-dim)',
-          overflow: 'hidden',
-          display: '-webkit-box',
-          WebkitLineClamp: 2,
-          WebkitBoxOrient: 'vertical',
-        }}
-      >
-        {!engineOn ? (
-          <Box component="span" sx={{ color: 'var(--muted)' }}>Engine off</Box>
-        ) : tokens.length === 0 ? (
-          <Box component="span" sx={{ color: 'var(--muted)' }}>…</Box>
-        ) : (
-          tokens.map((t, i) => (
-            <Box
-              key={i}
-              component="span"
-              sx={{
-                color: t.num ? 'var(--muted)' : 'var(--text)',
-                fontFamily: t.num ? 'var(--font-mono)' : undefined,
-                mr: 0.5,
-              }}
-            >
-              {t.text}
+      {/* Header: toggle + wordmark + depth */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1.25 }}>
+        <Tooltip title={engineOn ? 'Turn engine off' : 'Turn engine on'} arrow placement="top">
+          <Toggle on={engineOn} onChange={onToggleEngine} />
+        </Tooltip>
+        <Box sx={{ display: 'flex', flexDirection: 'column', lineHeight: 1 }}>
+          <Typography
+            sx={{
+              fontFamily: 'var(--font-display)',
+              fontSize: 13,
+              fontWeight: 700,
+              letterSpacing: 1.8,
+              textTransform: 'uppercase',
+              color: engineOn ? 'var(--text)' : 'var(--muted)',
+              transition: 'color .2s',
+            }}
+          >
+            Engine
+          </Typography>
+        </Box>
+        <Box sx={{ flex: 1 }} />
+        {engineOn ? (
+          depth != null && (
+            <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.6 }}>
+              <Typography sx={{ fontSize: 10, letterSpacing: 1.2, textTransform: 'uppercase', color: 'var(--muted)' }}>
+                depth
+              </Typography>
+              <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 13.5, fontWeight: 700, color: 'var(--text-dim)' }}>
+                {depth}
+              </Typography>
             </Box>
-          ))
+          )
+        ) : (
+          <Typography sx={{ fontSize: 10.5, letterSpacing: 1.5, textTransform: 'uppercase', color: 'var(--muted)' }}>
+            off
+          </Typography>
         )}
       </Box>
 
-      {/* Master engine on/off */}
-      <Tooltip title={engineOn ? 'Turn engine off' : 'Turn engine on'} arrow>
-        <Button
-          onClick={onToggleEngine}
-          aria-label={engineOn ? 'Turn engine off' : 'Turn engine on'}
-          sx={{
-            minWidth: 0,
-            p: 0.5,
-            flexShrink: 0,
-            color: engineOn ? 'var(--accent)' : 'var(--text-dim)',
-            '&:hover': { color: 'var(--accent)', bgcolor: 'var(--line)' },
-          }}
-        >
-          {engineOn ? <Cpu size={16} /> : <Power size={16} />}
-        </Button>
-      </Tooltip>
+      {/* Eval pill + best line — only while the engine is on */}
+      {engineOn && (
+        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.25, px: 1.5, pb: 1.5 }}>
+          <Box
+            sx={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 14.5,
+              fontWeight: 700,
+              minWidth: 64,
+              height: 32,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: '6px',
+              flexShrink: 0,
+              color: evalWhite ? pillFg : 'var(--muted)',
+              background: evalWhite ? pillBg : 'var(--surface-2)',
+              boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
+            }}
+          >
+            {evalWhite ? pillEval(evalWhite) : '…'}
+          </Box>
+          <Box
+            sx={{
+              flex: 1,
+              minWidth: 0,
+              fontSize: 13.5,
+              lineHeight: '23px',
+              overflow: 'hidden',
+              display: '-webkit-box',
+              WebkitLineClamp: 3,
+              WebkitBoxOrient: 'vertical',
+            }}
+          >
+            {tokens.length === 0 ? (
+              <Box component="span" sx={{ color: 'var(--muted)', fontStyle: 'italic' }}>analysing…</Box>
+            ) : (
+              tokens.map((t, i) => (
+                <Box
+                  key={i}
+                  component="span"
+                  sx={{
+                    color: t.num ? 'var(--muted)' : 'var(--text)',
+                    fontFamily: t.num ? 'var(--font-mono)' : 'var(--font-mono)',
+                    fontWeight: t.num ? 400 : 600,
+                    mr: t.num ? 0.4 : 0.8,
+                  }}
+                >
+                  {t.text}
+                </Box>
+              ))
+            )}
+          </Box>
+        </Box>
+      )}
     </Box>
   )
 }
@@ -535,20 +660,29 @@ function AutoBtn({
         onClick={onClick}
         aria-label={label}
         startIcon={icon}
+        disableRipple
         sx={{
           flex: 1,
+          height: 46,
           textTransform: 'none',
-          fontSize: 13,
+          fontFamily: 'var(--font-display)',
+          fontSize: 14,
           fontWeight: 600,
-          py: 0.5,
-          gap: 0.25,
-          color: active ? 'var(--bg)' : 'var(--text-dim)',
-          bgcolor: active ? 'var(--accent)' : 'var(--line)',
-          border: '1px solid var(--line-soft)',
+          letterSpacing: 0.2,
+          borderRadius: '10px',
+          gap: 0.4,
+          color: active ? '#15171c' : 'var(--text)',
+          background: active ? 'linear-gradient(180deg, #e3b56a, #d8a657)' : 'var(--surface-2)',
+          border: active ? '1px solid var(--accent)' : '1px solid var(--line)',
+          boxShadow: active ? '0 0 16px -4px rgba(216,166,87,0.6)' : 'none',
+          transition: 'background-color .15s, color .15s, border-color .15s, box-shadow .2s',
+          '& .MuiButton-startIcon': { mr: 0.2 },
           '&:hover': {
-            bgcolor: active ? 'var(--accent)' : 'var(--line-soft)',
-            color: active ? 'var(--bg)' : 'var(--accent)',
+            background: active ? 'linear-gradient(180deg, #e7bd76, #dcab5d)' : 'var(--line)',
+            color: active ? '#15171c' : 'var(--accent)',
+            borderColor: active ? 'var(--accent)' : 'var(--accent-line)',
           },
+          '&:active': { transform: 'translateY(1px)' },
         }}
       >
         {label}
@@ -617,9 +751,3 @@ function SideSummary({ label, side }: { label: string; side: GameAnalysis['summa
   )
 }
 
-function formatEval(ev: WhiteEval | null): string {
-  if (!ev) return '…'
-  if (ev.type === 'mate') return ev.white === 0 ? 'mate' : `mate in ${Math.abs(ev.white)}`
-  const v = ev.white / 100
-  return (v >= 0 ? '+' : '') + v.toFixed(2)
-}

@@ -25,6 +25,7 @@ export interface TreeNode {
   evalWhite: WhiteEval | null // eval at this position, White-relative (null = unknown)
   bestUci: string | null // engine's best move FROM this position (for the arrow)
   bestPv: string[] | null // engine's principal variation FROM this position (UCI), bestUci first
+  bestDepth: number | null // search depth the eval/PV were computed at
   judgment: Judgment | null // judgment of `move` (set for a loaded game's mainline)
   cpLoss: number | null
 }
@@ -48,6 +49,7 @@ function emptyNode(id: number, fen: string, ply: number, parent: number | null):
     evalWhite: null,
     bestUci: null,
     bestPv: null,
+    bestDepth: null,
     judgment: null,
     cpLoss: null,
   }
@@ -146,17 +148,18 @@ export function pathToNode(tree: Tree, nodeId: number): TreeNode[] {
   return out.reverse()
 }
 
-/** Store an eval (and optional best move + principal variation) on a node immutably. */
+/** Store an eval (and optional best move + principal variation + depth) on a node immutably. */
 export function annotateEval(
   tree: Tree,
   nodeId: number,
   evalWhite: WhiteEval | null,
   bestUci: string | null,
   bestPv: string[] | null = null,
+  bestDepth: number | null = null,
 ): Tree {
   const node = tree.nodes[nodeId]
   if (!node) return tree
-  return { ...tree, nodes: { ...tree.nodes, [nodeId]: { ...node, evalWhite, bestUci, bestPv } } }
+  return { ...tree, nodes: { ...tree.nodes, [nodeId]: { ...node, evalWhite, bestUci, bestPv, bestDepth } } }
 }
 
 export interface PvMove {
