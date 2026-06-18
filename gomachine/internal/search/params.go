@@ -16,10 +16,20 @@ type Params struct {
 	NullMoveR      int  // null-move base reduction R (effective R = NullMoveR + depth/4)
 	LMR            bool // late move reductions
 	CheckExtension bool // extend search by one ply when in check
+	SEE            bool // order captures by SEE; prune losing captures in quiescence
+	DeltaPrune     bool // delta pruning in quiescence (skip captures that can't raise alpha)
 }
 
-// DefaultParams returns the engine's current full-strength configuration. A
-// Searcher built with these plays identically to the pre-Params engine.
+// DefaultParams returns the engine's current full-strength configuration.
+//
+// Accepted improvements (SPRT-gated, then made default here), all self-play @ 40k
+// nodes, [0,6] bounds, 2026-06-18:
+//   - SEE:        +66.2 ± 22.9 Elo (468 pairs)
+//   - DeltaPrune: +22.0 ± 12.2 Elo (473 pairs, on top of SEE)
+//
+// Next under test (each: implement behind a flag, SPRT-gate on vs off, then flip
+// the default here): aspiration windows → RFP/futility/LMP/razoring → countermove
+// → TT static eval.
 func DefaultParams() Params {
 	return Params{
 		UseTT:          true,
@@ -27,5 +37,7 @@ func DefaultParams() Params {
 		NullMoveR:      2,
 		LMR:            true,
 		CheckExtension: true,
+		SEE:            true,
+		DeltaPrune:     true,
 	}
 }

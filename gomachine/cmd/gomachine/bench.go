@@ -47,6 +47,7 @@ shared opening) until the SPRT accepts H1 (improvement) or H0 (no improvement).
 Param spec (comma-separated key=value), applied on top of the full-strength
 default:
   tt=on|off  nullmove=on|off  nullr=<int>  lmr=on|off  checkext=on|off
+  see=on|off  delta=on|off
 
 Examples:
   # Validate the harness: a feature we KNOW helps should read as +Elo.

@@ -16,6 +16,8 @@ const (
 	infinity      = 30000
 	mateScore     = 29000
 	mateThreshold = mateScore - maxPly
+	// deltaMargin is the safety cushion (centipawns) for quiescence delta pruning.
+	deltaMargin = 200
 )
 
 // pieceOrderVal is a coarse piece value used by MVV-LVA move ordering.
@@ -361,8 +363,9 @@ func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 	}
 
 	inCheck := pos.InCheck()
+	standPat := 0
 	if !inCheck {
-		standPat := eval.Evaluate(pos)
+		standPat = eval.Evaluate(pos)
 		if standPat >= beta {
 			return beta
 		}
@@ -389,6 +392,18 @@ func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 		// Out of check, search only captures/promotions; in check, all evasions.
 		if !inCheck && !isCapture(pos, m) && m.Type() != chess.Promotion {
 			continue
+		}
+		// SEE pruning: out of check, skip captures that lose material outright.
+		if !inCheck && s.params.SEE && isCapture(pos, m) && m.Type() != chess.Promotion &&
+			pos.SEE(m) < 0 {
+			continue
+		}
+		// Delta pruning: out of check, skip a capture that even in the best case
+		// (winning the victim plus a margin) cannot raise alpha.
+		if !inCheck && s.params.DeltaPrune && isCapture(pos, m) && m.Type() != chess.Promotion {
+			if standPat+captureGain(pos, m)+deltaMargin <= alpha {
+				continue
+			}
 		}
 		var u chess.Undo
 		pos.DoMove(m, &u)

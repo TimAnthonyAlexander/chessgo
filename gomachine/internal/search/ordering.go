@@ -10,11 +10,25 @@ const (
 	scoreCapture = 1_000_000
 	scoreKiller0 = 900_000
 	scoreKiller1 = 800_000
+	// scoreLosingCapture sits below killers and quiet (history) moves so that
+	// SEE-losing captures are tried last (SEE ordering, enabled by Params.SEE).
+	scoreLosingCapture = -2_000_000
 )
 
 // isCapture reports whether m captures on the (pre-move) position.
 func isCapture(pos *chess.Position, m chess.Move) bool {
 	return pos.PieceOn(m.To()) != chess.NoPiece || m.Type() == chess.EnPassant
+}
+
+// captureGain returns the centipawn value of m's victim (for delta pruning).
+func captureGain(pos *chess.Position, m chess.Move) int {
+	if m.Type() == chess.EnPassant {
+		return chess.SEEValues[chess.Pawn]
+	}
+	if v := pos.PieceOn(m.To()); v != chess.NoPiece {
+		return chess.SEEValues[v.Type()]
+	}
+	return 0
 }
 
 // scoreMoves fills scores[i] with the ordering score of ml[i].
@@ -32,11 +46,13 @@ func (s *Searcher) moveScore(pos *chess.Position, m, ttMove chess.Move, ply int)
 		return scorePromo + pieceOrderVal[m.Promo()]
 	}
 	if m.Type() == chess.EnPassant {
-		return scoreCapture + pieceOrderVal[chess.Pawn]*16 - pieceOrderVal[chess.Pawn]
+		mvvlva := pieceOrderVal[chess.Pawn]*16 - pieceOrderVal[chess.Pawn]
+		return s.captureScore(pos, m, mvvlva)
 	}
 	if victim := pos.PieceOn(m.To()); victim != chess.NoPiece {
 		attacker := pos.PieceOn(m.From()).Type()
-		return scoreCapture + pieceOrderVal[victim.Type()]*16 - pieceOrderVal[attacker]
+		mvvlva := pieceOrderVal[victim.Type()]*16 - pieceOrderVal[attacker]
+		return s.captureScore(pos, m, mvvlva)
 	}
 	// Quiet move.
 	if m == s.killers[ply][0] {
@@ -46,6 +62,15 @@ func (s *Searcher) moveScore(pos *chess.Position, m, ttMove chess.Move, ply int)
 		return scoreKiller1
 	}
 	return s.history[pos.PieceOn(m.From())][m.To()]
+}
+
+// captureScore ranks a capture: winning/equal captures (or all captures when SEE
+// is off) sort by MVV-LVA above killers; SEE-losing captures sort last.
+func (s *Searcher) captureScore(pos *chess.Position, m chess.Move, mvvlva int) int {
+	if s.params.SEE && pos.SEE(m) < 0 {
+		return scoreLosingCapture + mvvlva
+	}
+	return scoreCapture + mvvlva
 }
 
 // selectMove performs one step of a selection sort: it finds the highest-scored

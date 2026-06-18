@@ -66,6 +66,18 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.CheckExtension = b
+		case "see":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.SEE = b
+		case "delta", "deltaprune":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.DeltaPrune = b
 		default:
 			return base, fmt.Errorf("unknown param %q", key)
 		}
@@ -101,6 +113,12 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.CheckExtension != patch.CheckExtension {
 		diffs = append(diffs, fmt.Sprintf("checkext: %s→%s", onoff(base.CheckExtension), onoff(patch.CheckExtension)))
+	}
+	if base.SEE != patch.SEE {
+		diffs = append(diffs, fmt.Sprintf("see: %s→%s", onoff(base.SEE), onoff(patch.SEE)))
+	}
+	if base.DeltaPrune != patch.DeltaPrune {
+		diffs = append(diffs, fmt.Sprintf("delta: %s→%s", onoff(base.DeltaPrune), onoff(patch.DeltaPrune)))
 	}
 	if len(diffs) == 0 {
 		return "(identical — sanity/noise run)"
