@@ -250,13 +250,18 @@ func (h *Hub) finish(g *game, result, reason string) {
 	if g.over {
 		return
 	}
+	// Snapshot the live clocks BEFORE flipping `over`: remainingMs only deducts
+	// the side-to-move's elapsed think-time while !over, so reading after over=true
+	// would report the flagged side's pre-turn time (e.g. "lost on time" with 44s
+	// still showing) instead of 0.
+	clock := map[string]int64{"w": g.remainingMs(chess.White), "b": g.remainingMs(chess.Black)}
 	g.over = true
 	h.broadcast(g, mustJSON(out("end", map[string]any{
 		"gameId": g.id,
 		"result": result,
 		"reason": reason,
 		"status": g.status().State,
-		"clock":  map[string]int64{"w": g.remainingMs(chess.White), "b": g.remainingMs(chess.Black)},
+		"clock":  clock,
 	})))
 	g.white.client.game = nil
 	g.black.client.game = nil

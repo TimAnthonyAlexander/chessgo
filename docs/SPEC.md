@@ -5,7 +5,11 @@
 > the AI implemented in a dedicated Go engine. This document captures the
 > product decisions, the architecture, and the research that informs both.
 >
-> **Status:** v1 in progress. **Last updated:** 2026-06-17.
+> **Status:** v1 in progress. **Last updated:** 2026-06-18.
+> Built & working: the Go engine (`gomachine`, perft-verified, ~2400+ Lichess
+> strength), bot games + eval bar, the lobby, and **live human-vs-human play** —
+> WebSocket hub with matchmaking, server clocks, and reconnect/resume. See
+> `docs/COMMANDS.md` to run it, `CLAUDE.md` for a fast codebase orientation.
 
 ---
 
@@ -34,11 +38,11 @@ game lifecycle, persistence, clocks, ratings, and matchmaking.
 |---|---|---|
 | **Engine ownership** | Go owns rules + AI; PHP calls it | DRY, one source of truth, fastest. |
 | **AI scope (v1)** | Strong classical engine | Bitboards/magic, negamax+αβ, ID, TT, ordering, quiescence, tapered PeSTO eval. Target ~1800+ Elo. No Stockfish/NNUE. |
-| **Real-time** | Polling first | Poll REST for opponent moves / match status. Clean upgrade path to SSE/WebSocket later. |
+| **Real-time** | **WebSocket via a Go hub** | Dedicated realtime service (`gomachine hub`, §8); 30s ping heartbeat + client auto-reconnect (Cloudflare-ready). _Supersedes the earlier "polling first" call (SSE is unreliable behind Cloudflare)._ |
 | **Frontend stack** | React + Vite + TypeScript + MUI + Lucide Icons + Bun + React-Router | Consumes BaseAPI's generated `types.ts`. |
-| **Accounts** | Email/password **+ guest play** | Registered accounts via BaseAPI auth; guests can play casual + vs-AI. Ratings/history only for accounts. |
-| **Ratings** | Classic **Elo** | Dynamic/fixed K-factor. Competitive ranked pool for accounts. |
-| **Clocks** | **Untimed first** | Live games are move-by-move without time pressure in v1. Clean upgrade to bullet/blitz/rapid with server-authoritative clocks later. |
+| **Accounts** | Anonymous **casual** + accounts for **rated** (Lichess model) | Anonymous players (stable per-browser id) play casual/unrated; rated needs a registered account. Email/pw auth scaffolded in BaseAPI; frontend login still TODO. |
+| **Ratings** | Classic **Elo** | For rated games (accounts). Persistence + Elo update is the next phase. |
+| **Clocks** | **Real server-authoritative clocks** | Bullet/Blitz/Rapid; the hub ticks clocks and flags, applying the FIDE 6.9 timeout-vs-material rule. _Supersedes the earlier "untimed first" call (the lobby commits to timed presets)._ |
 | **AI difficulty** | **Levels 0–10** | See §6. Level 10 = max strength + slightly longer thinking; level 0 = short thinking + small blunder probability. Monotonic strength curve. |
 | **Database** | **MySQL** | Local dev user `chessgo`@`localhost`. |
 | **Cross-platform** | Ubuntu (deploy) + macOS (dev/deploy) | `gomachine` is **pure Go, no cgo** → cross-compiles cleanly. |
@@ -70,41 +74,40 @@ working defaults:
 ## 3. Architecture
 
 ```
-                  ┌──────────────────────────────────────────────┐
-  Browser  ──────►│  Frontend (React+Vite+MUI+Bun)               │
-  (poll)          │  127.0.0.1:6465                              │
-                  └───────────────┬──────────────────────────────┘
-                                  │ REST/JSON (typed via types.ts)
-                                  ▼
-                  ┌──────────────────────────────────────────────┐
-                  │  BaseAPI (PHP 8.4)  127.0.0.1:6464           │
-                  │  • users / auth (+ guest)                    │
-                  │  • games, moves, PGN history                 │
-                  │  • matchmaking queue, Elo ratings            │
-                  │  • clocks (later), draw/resign workflow      │
-                  │  • enqueues AI-move jobs (JobTask queue)     │
-                  └───────────────┬──────────────────────────────┘
-                                  │ internal HTTP/JSON (stateless, FEN-in)
-                                  ▼
-                  ┌──────────────────────────────────────────────┐
-                  │  gomachine (Go)  127.0.0.1:6466 (internal)   │
-                  │  • legal move gen + game-end detection       │
-                  │  • best-move search + eval (AI)              │
-                  │  • pure function: (FEN, limit) → result      │
-                  │  Also ships a UCI/CLI binary.                │
-                  │  MySQL ──── persistence (PHP only)           │
-                  └──────────────────────────────────────────────┘
+                ┌─────────────────────────────────────────────┐
+   Browser ────►│  Frontend (React+Vite+MUI+Bun)   :6465      │
+                └──┬───────────────────────────────┬──────────┘
+       REST/JSON   │                               │  WebSocket  (/ws, wss in prod)
+                   ▼                               ▼
+      ┌───────────────────────────┐   ┌──────────────────────────────────┐
+      │ BaseAPI (PHP 8.4)  :6464  │   │ gomachine HUB (Go)   :6467        │
+      │ • auth (+ anonymous)      │   │ • matchmaking pool (per TC)       │
+      │ • bot games, /analyze     │   │ • live games + server clocks      │
+      │ • /ws-ticket (HMAC sign)  │   │ • reconnect / resume (in-memory)  │
+      │ • persistence (MySQL)     │   │ • verifies ticket (shared secret) │
+      └─────────────┬─────────────┘   │ • imports internal/chess directly │
+        internal HTTP│ (FEN-in)        └──────────────┬───────────────────┘
+                     ▼                  persist results via BaseAPI (next phase)
+      ┌───────────────────────────┐
+      │ gomachine ENGINE (Go):6466│  rules + AI, pure (FEN, limit) → result
+      └───────────────────────────┘  (same binary, `serve` subcommand)
+                     │
+                  MySQL :3306    durable data (users, games, ratings) — PHP only
 ```
+
+> The engine (`:6466`) and hub (`:6467`) are the **same Go binary** with different
+> subcommands (`serve` / `hub`). The hub reuses `internal/chess` for move
+> validation + clocks + draw rules — no rules duplication, no HTTP hop.
 
 ### Source-of-truth split
 
-| Owned by **PHP (BaseAPI)** | Owned by **gomachine (Go)** |
+| Owned by **PHP (BaseAPI)** | Owned by **gomachine — engine (`serve`) + hub** |
 |---|---|
-| Game/user persistence, move history, PGN record | Legal move generation |
-| Clocks, time control, flag detection (later) | Game-end detection (mate/stalemate/dead/75-move/5-fold) |
-| Matchmaking, Elo ratings, resign/draw-offer workflow | Best-move search + evaluation (AI) |
-| Enqueuing AI-move jobs, notifications | Zobrist keying, repetition/50-move bookkeeping for a supplied history |
-| Adjudicating timeout **outcome** | "Can opponent mate by any legal sequence" test that informs timeout adjudication |
+| Durable persistence (users, finished games, ratings) | Legal move generation + game-end detection (engine & hub) |
+| Auth, accounts, signing WS tickets | Best-move search + evaluation (engine `serve`) |
+| Bot-game orchestration, analyze proxy | **Live game state, matchmaking, server clocks (hub)** |
+| Elo ratings (next phase) | Reconnect/resume + presence (hub, in-memory) |
+| — | Zobrist keying, repetition/50-move, FIDE 6.9 timeout test |
 
 ### Ports (all `127.0.0.1`, all confirmed free at setup; theme = 64 squares)
 
@@ -113,6 +116,10 @@ working defaults:
 | BaseAPI REST | `127.0.0.1:6464` |
 | Frontend (Vite dev / served build) | `127.0.0.1:6465` |
 | `gomachine` engine HTTP (internal) | `127.0.0.1:6466` |
+| `gomachine` hub — WebSocket (client-facing) | `127.0.0.1:6467` |
+| MySQL | `127.0.0.1:3306` (always running on dev + prod) |
+
+See `docs/COMMANDS.md` for how to start each service (dev screens + prod systemd/nginx).
 
 ### Database
 
@@ -139,7 +146,7 @@ pure Go so a single `go build` cross-compiles to any target.
 
 ## 4. gomachine — engine design (research-backed)
 
-> Full research synthesis with sources in §8. This section is the design we'll build.
+> Full research synthesis with sources in §11. This section is the design we'll build.
 
 ### 4.1 Board representation
 - **Bitboards**: 12 `uint64` (piece-type × color) = 96 B. Set bit = occupancy.
@@ -424,45 +431,129 @@ triggers the FIDE 6.9 "any legal series" test.
 
 ---
 
-## 8. Repository layout (target)
+## 8. Realtime multiplayer (the hub)
+
+Human-vs-human play runs on a dedicated Go WebSocket service (`gomachine hub`,
+`:6467`), separate from the stateless engine. It holds all live state **in
+memory** and reuses `internal/chess` for rules.
+
+### 8.1 Why WebSocket via Go
+Live chess with clocks needs low-latency server push. Behind Cloudflare, **SSE is
+unreliable** (response buffering until ~100 KB, a hard ~100 s idle timeout, and
+silent regressions); WebSocket is officially supported. Go excels at concurrent
+connections. So: WebSocket, with a **30 s `Ping` heartbeat** (beats the idle
+drop) and **client auto-reconnect with backoff** (survives edge redeploys).
+
+### 8.2 State & durability
+The hub keeps the matchmaking pool + live games (board, clocks, move history) in
+memory on a single goroutine (no locks; connections talk to it over channels).
+Durable data (users, finished games, ratings) is persisted **via BaseAPI** — PHP
+stays the MySQL authority. **Caveat:** resume is in-memory only — it survives tab
+close / refresh / navigation / network blips, **not a hub process restart**
+(restart-durable resume needs persisting live games via PHP — a later phase).
+
+### 8.3 Identity — signed HMAC ticket
+BaseAPI mints a short-lived ticket the client passes when opening the socket; the
+hub verifies the signature with a shared secret (`WS_TICKET_SECRET`, must match
+on both sides) — **no per-connect call to PHP**.
+
+```
+ticket = base64url(payloadJSON) . "." . base64url(HMAC-SHA256(base64url(payloadJSON)))
+payload = { sub, anon, name, rating, exp }   # sub = user id, or a stable per-browser anon id
+```
+
+Anonymous players get a stable id (browser `localStorage` `chessgo.anonId` →
+`GET /ws-ticket?anon=…` → ticket `sub`) so the hub can recognise them across
+reconnects. **Anonymous = casual/unrated; rated requires a registered account**
+(`anon=false`). Games are rated only when **both** players are accounts.
+
+### 8.4 Matchmaking & clocks
+- **Pools** keyed by time control (`"3+0"`, `"10+5"`, …); FIFO match (rating-
+  proximity matching is a later refinement). Colors random.
+- **Clocks are server-authoritative**: the side-to-move's time decreases from a
+  per-move timestamp; on a move the mover's clock is debited + incremented. A
+  200 ms ticker flags timeouts, applying the FIDE 6.9 timeout-vs-material rule.
+- **Disconnect ≠ abandon**: the hub marks the player offline and keeps the game;
+  the clock keeps running (so an absent player still flags). On reconnect (same
+  identity) the hub reattaches and sends a full `resume`. Presence is pushed as
+  `opponentGone` / `opponentBack`.
+
+### 8.5 WebSocket protocol
+
+```
+client → hub:  { type: "queue", pool: "3+0" } | { type: "cancel" }
+               { type: "move", move: "e2e4" }  | { type: "resign" }
+
+hub → client:  hello   { name, anon, rating }
+               queued  { pool }              | idle
+               matched { gameId, color, rated, pool, fen, timeControl,
+                         clock:{w,b}, opponent:{name,rating,anon}, legalMoves }
+               state   { gameId, fen, sideToMove, lastMove, san, status, check,
+                         clock:{w,b}, ply, legalMoves }
+               resume  { …matched fields…, moves:[{uci,san}], opponentOnline }
+               end     { gameId, result, reason, status, clock }
+               opponentGone | opponentBack | error { message }
+```
+
+Frontend: a singleton WS store (`src/lib/socket.ts`, via `useSyncExternalStore`)
+survives navigation; the lobby queues and routes to `/game/:id` on `matched`; the
+homepage shows a "resume" banner whenever an unfinished game exists.
+
+---
+
+## 9. Repository layout
 
 ```
 chessgo/
-  app/            # BaseAPI PHP: Models, Controllers, Services, Jobs, Auth
+  app/            # BaseAPI PHP: Models, Controllers, Services, Providers, Auth
+                  #   BotGame model; GomachineClient, BotGameService, WsTicketService
+                  #   Controllers: BotGame, BotMove, Analyze, WsTicket, …
   routes/         # api.php
   config/         # app.php, i18n.php
   storage/        # migrations.json, logs, cache
-  gomachine/      # Go engine + CLI + HTTP service (module: …/gomachine)
-    cmd/gomachine/      # CLI: uci, serve, bestmove, perft, play, selfplay
+  gomachine/      # Go module …/gomachine — engine + hub + CLI (one binary)
+    cmd/gomachine/      # subcommands: serve, hub, uci, bestmove, perft, play,
+                        #   selfplay, verifyticket
     internal/chess/     # rules core: bitboards, magic sliders, mailbox, FEN,
-                        #   Zobrist, move encoding, movegen, make/unmake, SAN,
-                        #   material/draw rules, perft  (one cohesive package so
-                        #   the hot path inlines and shares internals)
+                        #   Zobrist, movegen, make/unmake, SAN, material/draw, perft
     internal/eval/      # material + tapered PeSTO PSQT + tempo
     internal/search/    # negamax, αβ, ID, quiescence, ordering, TT, null-move, LMR
     internal/engine/    # orchestration: level 0–10 mapping, status adjudication
-    internal/server/    # stateless HTTP/JSON handlers (the §7.3 contract)
+    internal/server/    # stateless engine HTTP/JSON handlers (the §7.3 contract)
+    internal/hub/       # realtime: matchmaking, live games, clocks, WS protocol
+    internal/auth/      # HMAC ticket verification (shared secret)
     internal/uci/       # UCI protocol loop (for chess GUIs / test tools)
     Makefile            # build, test, perft, cross-compile (CGO_ENABLED=0)
-  frontend/       # React + Vite + TS + MUI + Bun (later)
-  docs/SPEC.md    # this file
+  frontend/       # React + Vite + TS + MUI + Bun
+    src/pages/          # Home (lobby), BotGame (/bot), LiveGame (/game/:id)
+    src/components/      # Board, EvalBar, Clock, MoveList, Layout, GameModeCard
+    src/lib/            # socket (WS store), chess (FEN/board helpers), sounds
+    src/api/            # client (REST + ws-ticket)
+    public/piece/cburnett/   # SVG piece set (Lichess cburnett, GPL)
+  docs/           # SPEC.md (this file), COMMANDS.md (run/deploy)
+  CLAUDE.md       # codebase orientation for Claude Code
 ```
 
 ---
 
-## 9. Roadmap
+## 10. Roadmap
 
-1. **gomachine v1** (this phase) — engine + CLI + perft-verified rules + HTTP service.
-2. **BaseAPI** — MySQL models (user, game, move, matchmaking, rating), auth +
-   guest, REST endpoints, JobTask AI-move worker, calls gomachine.
-3. **Frontend** — React board, play vs AI (level 0–10), matchmaking + polling
-   live play, history/PGN, profiles.
-4. **Later** — clocks/time controls, SSE/WebSocket real-time, Glicko or richer
-   eval terms, opening book, spectating/chat/analysis.
+- [x] **gomachine engine** — perft-verified rules, search, eval, CLI, HTTP service.
+- [x] **Bot games** — BaseAPI `BotGame` + level 0–10, frontend `/bot`, eval bar.
+- [x] **Lobby** — quick-pairing grid, action buttons, optimistic presentation.
+- [x] **Live multiplayer (queue)** — Go hub, WebSocket, server clocks, ticket auth,
+      reconnect/resume + presence, frontend live game view.
+- [ ] **Persistence + Elo + accounts** — store finished games, update ratings,
+      frontend login (makes rated real; lays groundwork for restart-durable resume).
+- [ ] **Hub-restart durability** — persist live games so resume survives a restart.
+- [ ] **More lobby features** — Challenge-a-friend (private link), Custom games,
+      correspondence; rating-proximity matchmaking.
+- [ ] **Polish** — premoves, draw offers, takebacks, PGN export, profiles,
+      spectating, richer eval terms / opening book.
 
 ---
 
-## 10. Sources (research)
+## 11. Sources (research)
 
 **Engine:** CPW — Bitboards, Magic Bitboards, BMI2, Encoding Moves, Move
 Generation, Copy-Make, Alpha-Beta, Null Move Pruning, Late Move Reductions,
