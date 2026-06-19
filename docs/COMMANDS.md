@@ -163,7 +163,10 @@ bun run preview       # locally preview the built bundle
 
 ## Performance & load testing
 
-Three tools measure **speed** (distinct from `bench sprt`, which measures
+> See **`docs/BENCHMARKING.md`** for the measured baselines, the full concurrency
+> curves, and analysis. This section is the command reference.
+
+Four tools measure **speed** (distinct from `bench sprt`, which measures
 **strength**). Numbers below are from an 11-core arm64 box — treat them as a
 baseline to regression-track, not absolutes.
 
@@ -230,6 +233,34 @@ Concurrency sweep on an 11-core box (max stress, `-move-delay 0`, 8s each):
 Throughput plateaus ~**62k moves/sec** (the single Run goroutine saturating one
 core); past that, added load shows up as latency, not lost moves — and these are
 worst-case (zero think time). Real games at human pace are a tiny fraction of this.
+
+**4. Engine search load** (`gomachine engineload`) — concurrent `/bestmove`
+requests at a running `serve`, measuring the **AI scaling wall**: the engine
+answers from a bounded pool of `-workers` engines, so this is the limit bot moves
+and `/analyze` actually hit (and the path a PHP engine would replace).
+
+```sh
+./bin/gomachine serve -addr 127.0.0.1:6477 -workers 4 &
+./bin/gomachine engineload -url http://127.0.0.1:6477 -concurrency 8 -movetime 100 -duration 15s
+# limit per search: -movetime ms (default 100) | -depth N | -level 0..10
+```
+
+Concurrency sweep, 4-worker engine, `-movetime 100`:
+
+| in-flight | searches/sec | mean lat | p50 |
+|--:|--:|--:|--:|
+| 1  | 11  | 88ms  | 131ms |
+| 2  | 23  | 88ms  | 131ms |
+| 4  | 44  | 89ms  | 131ms |
+| 8  | 45  | 176ms | 262ms |
+| 16 | 45  | 348ms | 524ms |
+
+Throughput scales **linearly up to `-workers`**, then flat — excess requests queue
+on the pool and become latency (0 lost). The wall moves with workers (cores
+permitting): 4/8/10 workers → 44/90/112 searches/sec at the same ~88ms latency.
+This is the real capacity knob for bot games at scale — `serve -workers N`
+(keep `workers × search-threads ≤ cores`). Human-vs-human (tool #3) needs none
+of it; only bot/analyze load touches the search pool.
 
 ## Engine strength testing — in-process self-play SPRT
 

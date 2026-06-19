@@ -16,6 +16,40 @@ import { authStore } from '../lib/auth'
 
 const other = (c: Color): Color => (c === 'w' ? 'b' : 'w')
 
+// Per-time-control "low time" threshold: ~1/10 of the base clock, clamped to a
+// sane 8s–60s window (bullet warns late, classical not absurdly early).
+function lowTimeThreshold(baseMs: number): number {
+  return Math.min(60_000, Math.max(8_000, baseMs / 10))
+}
+
+// Fire the low-time cue once when our own clock crosses the threshold; re-arm if
+// an increment lifts us back above it. Reads the latest game via a ref (the
+// authoritative clock advances outside React) and checks on a light interval.
+function useLowTimeWarning(g: LiveGameState | null): void {
+  const armed = useRef(true)
+  const gRef = useRef(g)
+  gRef.current = g
+  useEffect(() => {
+    armed.current = true
+  }, [g?.id])
+  useEffect(() => {
+    if (!g || g.ended) return
+    const id = window.setInterval(() => {
+      const cur = gRef.current
+      if (!cur || cur.ended || !cur.timeControl || cur.moves.length < 2) return
+      const thr = lowTimeThreshold(cur.timeControl.base)
+      const rem = liveRemaining(cur, cur.color)
+      if (rem <= thr && armed.current) {
+        armed.current = false
+        sounds.lowTime()
+      } else if (rem > thr + 2_000) {
+        armed.current = true
+      }
+    }, 250)
+    return () => window.clearInterval(id)
+  }, [g?.id, g?.ended])
+}
+
 export default function LiveGame() {
   const navigate = useNavigate()
   const s = useGameSocket()
@@ -57,6 +91,10 @@ export default function LiveGame() {
       if (other(g.sideToMove) !== g.color) playForSan(g.moves[g.moves.length - 1].san, false)
     }
   }, [g?.id, g?.moves.length])
+
+  // Sound: warn once when our own clock enters "low time" (threshold scales with
+  // the time control). Re-arms if we climb back above it via increment.
+  useLowTimeWarning(g)
 
   // Sound: one game-over tone when the game ends (once per game).
   const endedSound = useRef<string | null>(null)

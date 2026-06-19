@@ -4,6 +4,9 @@
 > struct shape, and default value below was true at the time of writing but is
 > **not guaranteed** to still match the code. Treat this as orientation, not
 > ground truth — re-verify against the source before acting on any specific fact.
+>
+> 📊 For **measured** numbers (engine/hub throughput, latency curves, the AI
+> scaling wall) and the tools that produce them, see **`docs/BENCHMARKING.md`**.
 
 Scope: the chess engine's concurrency model, the cost of pooling, and what to
 watch for on a small VPS with multiple simultaneous players. Plus two adjacent

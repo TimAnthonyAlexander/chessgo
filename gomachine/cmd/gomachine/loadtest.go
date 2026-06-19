@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"math/bits"
 	"math/rand/v2"
 	"os"
 	"sync"
@@ -271,20 +270,15 @@ func legalMoves(msg map[string]any) []string {
 
 // --- metrics ---
 
-// loadMetrics aggregates counters across all client goroutines. Latency is kept
-// in a lock-free power-of-two microsecond histogram so memory is bounded
-// regardless of throughput; percentiles are derived from it at the end.
+// loadMetrics aggregates counters across all client goroutines. Latency uses the
+// shared lock-free latHist (bounded memory regardless of throughput).
 type loadMetrics struct {
 	conns        atomic.Int64
 	moves        atomic.Int64
 	gamesStarted atomic.Int64
 	gamesEnded   atomic.Int64
 	errs         atomic.Int64
-
-	latCount atomic.Int64
-	latSumUs atomic.Int64
-	latMaxUs atomic.Int64
-	latBkts  [40]atomic.Int64 // bucket i = latencies with bit-length i (µs)
+	lat          latHist
 
 	errSample atomic.Pointer[string] // first error message text seen
 }
@@ -296,45 +290,8 @@ func (m *loadMetrics) noteErr(text string) {
 	}
 }
 
-func (m *loadMetrics) activeGames() int64 { return m.gamesStarted.Load() - m.gamesEnded.Load() }
-
-func (m *loadMetrics) recordLatency(d time.Duration) {
-	us := d.Microseconds()
-	if us < 1 {
-		us = 1
-	}
-	m.latCount.Add(1)
-	m.latSumUs.Add(us)
-	for {
-		cur := m.latMaxUs.Load()
-		if us <= cur || m.latMaxUs.CompareAndSwap(cur, us) {
-			break
-		}
-	}
-	b := bits.Len64(uint64(us)) // 1µs→1, 2-3µs→2, 4-7µs→3, …
-	if b >= len(m.latBkts) {
-		b = len(m.latBkts) - 1
-	}
-	m.latBkts[b].Add(1)
-}
-
-// percentileUs returns the upper bound (µs) of the bucket containing the pth
-// percentile latency — approximate (power-of-two granularity), labeled as such.
-func (m *loadMetrics) percentileUs(p float64) int64 {
-	total := m.latCount.Load()
-	if total == 0 {
-		return 0
-	}
-	target := int64(p * float64(total))
-	var cum int64
-	for b := 0; b < len(m.latBkts); b++ {
-		cum += m.latBkts[b].Load()
-		if cum >= target {
-			return int64(1) << b // upper bound of bucket b
-		}
-	}
-	return m.latMaxUs.Load()
-}
+func (m *loadMetrics) activeGames() int64            { return m.gamesStarted.Load() - m.gamesEnded.Load() }
+func (m *loadMetrics) recordLatency(d time.Duration) { m.lat.add(d) }
 
 func (m *loadMetrics) report(elapsed time.Duration) {
 	moves := m.moves.Load()
@@ -350,26 +307,5 @@ func (m *loadMetrics) report(elapsed time.Duration) {
 		fmt.Printf("  (first: %q)", *s)
 	}
 	fmt.Println()
-
-	n := m.latCount.Load()
-	if n == 0 {
-		fmt.Println("move→echo latency: no samples")
-		return
-	}
-	mean := float64(m.latSumUs.Load()) / float64(n)
-	fmt.Println("move→echo latency (send move → receive resulting state broadcast):")
-	fmt.Printf("  samples: %d\n", n)
-	fmt.Printf("  mean:    %s\n", usStr(int64(mean)))
-	fmt.Printf("  p50≤:    %s\n", usStr(m.percentileUs(0.50)))
-	fmt.Printf("  p95≤:    %s\n", usStr(m.percentileUs(0.95)))
-	fmt.Printf("  p99≤:    %s\n", usStr(m.percentileUs(0.99)))
-	fmt.Printf("  max:     %s\n", usStr(m.latMaxUs.Load()))
-	fmt.Println("  (percentiles are power-of-two bucket upper bounds — approximate)")
-}
-
-func usStr(us int64) string {
-	if us < 1000 {
-		return fmt.Sprintf("%dµs", us)
-	}
-	return fmt.Sprintf("%.2fms", float64(us)/1000)
+	m.lat.report("move→echo latency (send move → receive resulting state broadcast)")
 }

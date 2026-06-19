@@ -41,6 +41,8 @@ func main() {
 		cmdBench(os.Args[2:])
 	case "loadtest":
 		cmdLoadtest(os.Args[2:])
+	case "engineload":
+		cmdEngineLoad(os.Args[2:])
 	case "tune":
 		cmdTune(os.Args[2:])
 	case "-h", "--help", "help":
@@ -68,5 +70,8 @@ Usage:
   gomachine loadtest [-clients N] [-pool 3+0] [-duration 30s] [-move-delay 0]
                                          drive synthetic WS clients at a running hub
                                          (throughput + move→echo latency)
+  gomachine engineload [-concurrency N] [-movetime ms] [-duration 15s]
+                                         drive concurrent /bestmove at a running engine
+                                         (search rate + per-search latency)
 `)
 }
