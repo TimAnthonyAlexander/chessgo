@@ -44,7 +44,7 @@ export default function BotGame() {
 
   const [game, setGame] = useState<Game | null>(null)
   const [startFen, setStartFen] = useState<string | null>(navFen)
-  const [level, setLevel] = useState(4)
+  const [rating, setRating] = useState(1500)
   // Default to playing whichever side is to move in the carried-over position.
   const [colorChoice, setColorChoice] = useState<ColorChoice>(navFen ? sideToMoveOf(navFen) : 'w')
   const [creating, setCreating] = useState(false)
@@ -133,7 +133,7 @@ export default function BotGame() {
     setViewIndex(null)
     const color: Color = colorChoice === 'random' ? (Math.random() < 0.5 ? 'w' : 'b') : colorChoice
     try {
-      const g = await createBotGame(level, color, startFen ?? undefined)
+      const g = await createBotGame(rating, color, startFen ?? undefined)
       setGame(g)
       const opener = g.moves[g.moves.length - 1]
       if (opener) playForSan(opener.san, g.status !== 'ongoing')
@@ -220,7 +220,7 @@ export default function BotGame() {
           ? game.your_turn
             ? 'Your turn'
             : `${game.side_to_move === 'w' ? 'White' : 'Black'} to move`
-          : 'Choose a level and start'
+          : 'Choose a rating and start'
   const statusTone: StatusTone = !atLive ? 'dim' : over ? 'accent' : ongoing && game!.your_turn ? 'bright' : 'dim'
 
   return (
@@ -262,7 +262,7 @@ export default function BotGame() {
             width: '100%',
           }}
         >
-          <GameModeCard level={game?.level ?? level} />
+          <GameModeCard rating={game?.rating ?? rating} />
         </Box>
 
         {/* Center — board, top-aligned so its top lines up with the side cards */}
@@ -306,7 +306,7 @@ export default function BotGame() {
         {game ? (
           <MovePanel
             game={game}
-            level={level}
+            rating={rating}
             ongoing={ongoing}
             shownPly={shownPly}
             sound={sound}
@@ -329,11 +329,11 @@ export default function BotGame() {
         ) : (
           <>
             <Setup
-              level={level}
+              rating={rating}
               colorChoice={colorChoice}
               creating={creating}
               customStart={!!startFen}
-              onLevel={setLevel}
+              onRating={setRating}
               onColor={setColorChoice}
               onStart={newGame}
             />
@@ -355,7 +355,7 @@ const TONE_COLOR: Record<StatusTone, string> = {
 
 function MovePanel({
   game,
-  level,
+  rating,
   ongoing,
   shownPly,
   sound,
@@ -373,7 +373,7 @@ function MovePanel({
   onNewGame,
 }: {
   game: Game
-  level: number
+  rating: number
   ongoing: boolean
   shownPly: number
   sound: boolean
@@ -419,7 +419,7 @@ function MovePanel({
         <Avatar><Bot size={18} /></Avatar>
         <Box sx={{ minWidth: 0, lineHeight: 1.2 }}>
           <Typography sx={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}>gomachine</Typography>
-          <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)' }}>Engine · Level {game.level ?? level}</Typography>
+          <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)' }}>Engine · ~{game.rating ?? rating} Elo</Typography>
         </Box>
       </Box>
 
@@ -468,19 +468,19 @@ function MovePanel({
 }
 
 function Setup({
-  level,
+  rating,
   colorChoice,
   creating,
   customStart,
-  onLevel,
+  onRating,
   onColor,
   onStart,
 }: {
-  level: number
+  rating: number
   colorChoice: ColorChoice
   creating: boolean
   customStart: boolean
-  onLevel: (n: number) => void
+  onRating: (n: number) => void
   onColor: (c: ColorChoice) => void
   onStart: () => void
 }) {
@@ -508,24 +508,23 @@ function Setup({
 
       <Box>
         <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', mb: 0.5 }}>
-          <Label>Difficulty</Label>
+          <Label>Opponent rating</Label>
           <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 15, fontWeight: 700, color: 'var(--accent)' }}>
-            Level {level}
+            ~{rating} Elo
           </Typography>
         </Box>
         <Box sx={{ px: 0.5 }}>
           <Slider
-            value={level}
-            onChange={(_, v) => onLevel(v as number)}
-            min={0}
-            max={10}
-            step={1}
-            marks
+            value={rating}
+            onChange={(_, v) => onRating(v as number)}
+            min={700}
+            max={2700}
+            step={50}
             valueLabelDisplay="auto"
             sx={sliderSx}
           />
         </Box>
-        <Typography sx={{ fontSize: 12.5, color: 'var(--muted)', mt: 0.25 }}>{levelHint(level)}</Typography>
+        <Typography sx={{ fontSize: 12.5, color: 'var(--muted)', mt: 0.25 }}>{ratingHint(rating)}</Typography>
       </Box>
 
       <Box>
@@ -572,12 +571,13 @@ function Label({ children }: { children: ReactNode }) {
   )
 }
 
-function levelHint(level: number): string {
-  if (level <= 1) return 'Gentle — short thinking, the odd blunder.'
-  if (level <= 4) return 'Casual — a fair club-level opponent.'
-  if (level <= 7) return 'Strong — punishes loose play.'
-  if (level <= 9) return 'Very strong — deep, accurate search.'
-  return 'Maximum — the full engine, no mercy.'
+function ratingHint(rating: number): string {
+  if (rating < 1000) return 'Beginner — frequent blunders, gentle.'
+  if (rating < 1400) return 'Casual — a fair improver, the odd slip.'
+  if (rating < 1800) return 'Club — punishes loose play.'
+  if (rating < 2200) return 'Strong — accurate, hard to outplay.'
+  if (rating < 2600) return 'Expert — deep, precise search.'
+  return 'Master — the full engine, no mercy.'
 }
 
 const sliderSx = {

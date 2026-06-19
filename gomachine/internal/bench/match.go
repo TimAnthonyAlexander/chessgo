@@ -44,17 +44,29 @@ type Config struct {
 
 	NewThreads int // Lazy SMP threads for the patch engine (default 1)
 	OldThreads int // Lazy SMP threads for the baseline engine (default 1)
+
+	// Difficulty level per side, or <0 for full strength. Calibration sets these
+	// to play the weakened BestMove path; SPRT/strength runs leave them <0.
+	NewLevel int
+	OldLevel int
 }
 
 // player pairs an engine with its Lazy SMP thread count and its own per-move
-// search budget (so the two sides can run different time controls).
+// search budget (so the two sides can run different time controls). When level
+// >= 0 the player plays the WEAKENED level path (BestMove: the level's own
+// depth/movetime + noise/blunder) instead of full strength — used by calibration
+// to measure each difficulty level's Elo. level < 0 means full strength.
 type player struct {
 	eng     *engine.Engine
 	threads int
 	lim     search.Limits
+	level   int
 }
 
 func (p player) play(pos *chess.Position, history []uint64) engine.BestResult {
+	if p.level >= 0 {
+		return p.eng.BestMove(pos, p.level, history)
+	}
 	return p.eng.PlayThreads(pos, p.lim, history, p.threads)
 }
 
@@ -186,8 +198,8 @@ func RunSPRT(ctx context.Context, cfg Config, onProgress func(Progress)) Summary
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			newP := player{engine.NewWithParams(cfg.TTMB, cfg.NewParams), maxThreads(cfg.NewThreads), newLim}
-			oldP := player{engine.NewWithParams(cfg.TTMB, cfg.OldParams), maxThreads(cfg.OldThreads), oldLim}
+			newP := player{engine.NewWithParams(cfg.TTMB, cfg.NewParams), maxThreads(cfg.NewThreads), newLim, cfg.NewLevel}
+			oldP := player{engine.NewWithParams(cfg.TTMB, cfg.OldParams), maxThreads(cfg.OldThreads), oldLim, cfg.OldLevel}
 			for open := range jobs {
 				r1 := playGame(ctx, newP, oldP, open.FEN)
 				r2 := playGame(ctx, oldP, newP, open.FEN)

@@ -100,19 +100,51 @@ func (e *Engine) BestMove(pos *chess.Position, level int, history []uint64) Best
 		}
 	}
 
-	// Weakened levels: rank all root moves at a bounded depth, jitter the scores,
-	// and occasionally pick a deliberately worse move.
+	// Weakened levels: rank all root moves at a bounded depth (≤6 for the 0..10
+	// levels), jitter the scores, and occasionally pick a deliberately worse move.
 	rankDepth := cfg.Depth
 	if rankDepth > 6 {
 		rankDepth = 6
 	}
 	roots := e.searcher.RootScores(pos, search.Limits{Depth: rankDepth}, history)
+	r := e.pickWeakened(roots, cfg, rankDepth)
+	r.Level = level
+	return r
+}
+
+// BestMoveConfig plays one move under an explicit weakening config. Unlike
+// BestMove(level) it honours cfg.Depth for the root ranking directly (no ≤6 cap),
+// so it can span the full rating ladder. NoiseCp==0 && Blunder==0 → full-strength
+// search capped by cfg.Depth/MoveTime; otherwise root-rank + noise + blunder.
+func (e *Engine) BestMoveConfig(pos *chess.Position, cfg LevelConfig, history []uint64) BestResult {
+	if cfg.NoiseCp == 0 && cfg.Blunder == 0 {
+		limits := search.Limits{Depth: cfg.Depth, MoveTime: cfg.MoveTime}
+		r := e.searcher.SearchParallel(pos, limits, history, e.threads)
+		return BestResult{Move: r.BestMove, Score: r.Score, Depth: r.Depth,
+			Nodes: r.Nodes, PV: r.PV, MateIn: r.MateIn}
+	}
+	rankDepth := cfg.Depth
+	if rankDepth < 1 {
+		rankDepth = 1
+	}
+	roots := e.searcher.RootScores(pos, search.Limits{Depth: rankDepth}, history)
+	return e.pickWeakened(roots, cfg, rankDepth)
+}
+
+// BestMoveForRating plays at a target Elo (clamped to RatingMin..RatingMax) — the
+// rating-first entry point used by bot games and matchmaking bot-fill.
+func (e *Engine) BestMoveForRating(pos *chess.Position, rating int, history []uint64) BestResult {
+	return e.BestMoveConfig(pos, configForRating(rating), history)
+}
+
+// pickWeakened applies eval noise + occasional blunders to a root-move ranking.
+func (e *Engine) pickWeakened(roots []search.RootMove, cfg LevelConfig, rankDepth int) BestResult {
 	if len(roots) == 0 {
-		return BestResult{Move: chess.NullMove, Level: level}
+		return BestResult{Move: chess.NullMove}
 	}
 	if len(roots) == 1 {
 		return BestResult{Move: roots[0].Move, Score: roots[0].Score, Depth: rankDepth,
-			Nodes: e.searcher.Nodes(), Level: level}
+			Nodes: e.searcher.Nodes()}
 	}
 
 	noisy := make([]search.RootMove, len(roots))
@@ -139,7 +171,7 @@ func (e *Engine) BestMove(pos *chess.Position, level int, history []uint64) Best
 		}
 	}
 	return BestResult{Move: chosen, Score: trueScore, Depth: rankDepth,
-		Nodes: e.searcher.Nodes(), PV: []chess.Move{chosen}, Level: level}
+		Nodes: e.searcher.Nodes(), PV: []chess.Move{chosen}}
 }
 
 // SearchDirect runs a full-strength search to an explicit depth and/or time

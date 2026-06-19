@@ -19,8 +19,10 @@ use BaseApi\Models\BaseModel;
  */
 class BotGame extends BaseModel
 {
-    /** AI difficulty 0..10. */
-    public int $level = 5;
+    /** AI strength as a target Elo (RatingMin..RatingMax ≈ 700..2720). The
+     *  engine maps this to a weakening config; see gomachine internal/engine
+     *  rating.go. Replaces the old 0..10 level. */
+    public int $rating = 1500;
 
     /** The human's color: 'w' or 'b'. */
     public string $human_color = 'w';

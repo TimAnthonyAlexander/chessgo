@@ -40,17 +40,18 @@ class GomachineClient
     }
 
     /**
-     * Compute the AI's move at a difficulty level (0..10).
+     * Compute the AI's move at a target Elo rating (the engine maps it to a
+     * weakening config at a fixed think time).
      *
      * @param string[] $history
      * @return array<string, mixed> {bestmove, san, eval, pv, depth, nodes, nps}
      */
-    public function bestMove(string $fen, int $level, array $history = []): array
+    public function bestMove(string $fen, int $rating, array $history = []): array
     {
         return $this->post('/bestmove', [
             'fen' => $fen,
             'history' => array_values($history),
-            'limits' => ['level' => $level],
+            'limits' => ['rating' => $rating],
         ]);
     }
 

@@ -25,7 +25,7 @@ export interface MoveEntry {
 
 export interface BotGame {
   id: string
-  level: number
+  rating: number
   human_color: Color
   fen: string
   side_to_move: Color
@@ -66,10 +66,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 /** Create a bot game. An optional `fen` starts from a custom position (e.g. one
  * carried over from the analysis board); omitted = the standard start. */
-export function createBotGame(level: number, humanColor: Color, fen?: string): Promise<BotGame> {
+export function createBotGame(rating: number, humanColor: Color, fen?: string): Promise<BotGame> {
   return request<BotGame>('/bot-games', {
     method: 'POST',
-    body: JSON.stringify({ level, human_color: humanColor, ...(fen ? { fen } : {}) }),
+    body: JSON.stringify({ rating, human_color: humanColor, ...(fen ? { fen } : {}) }),
   })
 }
 

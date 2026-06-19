@@ -3,7 +3,7 @@ import { Infinity as InfinityIcon } from 'lucide-react'
 
 /** Left-side game-mode card. We currently only offer casual, untimed games vs
  * the engine — shown plainly, no placeholders for modes we don't have. */
-export default function GameModeCard({ level }: { level: number }) {
+export default function GameModeCard({ rating }: { rating: number }) {
   return (
     <Box
       sx={{
@@ -47,7 +47,7 @@ export default function GameModeCard({ level }: { level: number }) {
           Opponent
         </Typography>
         <Typography sx={{ fontWeight: 600, fontSize: 16 }}>gomachine</Typography>
-        <Typography sx={{ color: 'var(--text-dim)', fontSize: 13.5 }}>Engine · Level {level}</Typography>
+        <Typography sx={{ color: 'var(--text-dim)', fontSize: 13.5 }}>Engine · ~{rating} Elo</Typography>
       </Box>
     </Box>
   )

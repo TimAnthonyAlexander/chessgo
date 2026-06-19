@@ -11,9 +11,10 @@ use App\Services\BotGameService;
  * Create and fetch human-vs-AI games (SPEC §6). Public/guest — no auth required
  * to play the bot.
  *
- *   POST /bot-games        { level?: 0..10, human_color?: "w"|"b", fen?: string }
+ *   POST /bot-games        { rating?: 700..2720, human_color?: "w"|"b", fen?: string }
  *   GET  /bot-games/{id}
  *
+ * `rating` is the bot's target Elo (the engine maps it to a weakening config).
  * An optional `fen` starts the game from a custom position (carried over from
  * the analysis board); omitted = the standard start position.
  */
@@ -21,7 +22,7 @@ class BotGameController extends Controller
 {
     public string $id = '';
 
-    public int $level = 5;
+    public int $rating = 1500;
 
     public string $human_color = 'w';
 
@@ -47,14 +48,14 @@ class BotGameController extends Controller
     public function post(): JsonResponse
     {
         $this->validate([
-            'level' => 'integer|min:0|max:10',
+            'rating' => 'integer|min:700|max:2720',
             'human_color' => 'in:w,b',
             'fen' => 'string',
         ]);
 
         try {
             $game = $this->games->create(
-                $this->level,
+                $this->rating,
                 $this->human_color,
                 $this->fen !== '' ? $this->fen : null,
             );

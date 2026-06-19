@@ -432,6 +432,24 @@
             "table": "game",
             "operation": "add_column",
             "warning": null
+        },
+        {
+            "id": "mig_e13220b868e6",
+            "sql": "ALTER TABLE `bot_game` ADD COLUMN `rating` INT NOT NULL DEFAULT 1500",
+            "destructive": false,
+            "generated_at": "2026-06-19T11:29:03+00:00",
+            "table": "bot_game",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_51ef3f64ddd0",
+            "sql": "ALTER TABLE `bot_game` DROP COLUMN `level`",
+            "destructive": true,
+            "generated_at": "2026-06-19T11:29:03+00:00",
+            "table": "bot_game",
+            "operation": "drop_column",
+            "warning": null
         }
     ]
 }

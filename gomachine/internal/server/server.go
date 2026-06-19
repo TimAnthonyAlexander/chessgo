@@ -198,7 +198,8 @@ type bestMoveRequest struct {
 	FEN     string   `json:"fen"`
 	History []string `json:"history"`
 	Limits  struct {
-		Level    *int `json:"level"`
+		Rating   *int `json:"rating"` // target Elo (rating-first bot strength); takes priority over level
+		Level    *int `json:"level"`  // legacy 0..10 difficulty
 		Depth    int  `json:"depth"`
 		MoveTime int  `json:"movetime"` // milliseconds
 	} `json:"limits"`
@@ -221,6 +222,8 @@ func (s *Server) handleBestMove(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	var res engine.BestResult
 	switch {
+	case req.Limits.Rating != nil:
+		res = eng.BestMoveForRating(pos, *req.Limits.Rating, hist)
 	case req.Limits.Level != nil:
 		res = eng.BestMove(pos, *req.Limits.Level, hist)
 	case req.Limits.Depth > 0 || req.Limits.MoveTime > 0:

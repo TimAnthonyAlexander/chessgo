@@ -29,6 +29,8 @@ func cmdBench(args []string) {
 		cmdBenchStockfish(args[1:])
 	case "game":
 		cmdBenchGame(args[1:])
+	case "calibrate", "levels":
+		cmdBenchCalibrate(args[1:])
 	case "-h", "--help", "help":
 		benchUsage()
 	default:
@@ -124,6 +126,8 @@ func cmdBenchSPRT(args []string) {
 		Book:        book,
 		NewThreads:  *newThreads,
 		OldThreads:  *oldThreads,
+		NewLevel:    -1, // full strength (SPRT tests search.Params, not levels)
+		OldLevel:    -1,
 	}
 
 	reporter := bench.NewReporter(cfg)
@@ -350,4 +354,44 @@ func nameFor(spec, fallback string) string {
 		return "patch"
 	}
 	return spec
+}
+
+// cmdBenchCalibrate measures each difficulty level's absolute Elo via a self-play
+// ladder anchored to a known full-strength number (the Stockfish anchor). Feeds
+// the rating↔level calibration (SPEC §11).
+func cmdBenchCalibrate(args []string) {
+	fs := flag.NewFlagSet("bench calibrate", flag.ExitOnError)
+	maxLevel := fs.Int("max-level", 10, "calibrate levels 0..max-level")
+	pairs := fs.Int("pairs", 100, "game pairs per adjacent-level match")
+	conc := fs.Int("concurrency", runtime.NumCPU(), "parallel game-pair workers")
+	tt := fs.Int("tt", 16, "transposition table size per engine (MB)")
+	anchorElo := fs.Float64("anchor-elo", 2720, "known absolute Elo of full strength at --anchor-movetime")
+	anchorMT := fs.Int("anchor-movetime", 100, "movetime (ms) at which --anchor-elo was measured")
+	bookPath := fs.String("book", "", "opening book; default: embedded")
+	_ = fs.Parse(args)
+
+	book, err := bench.LoadBook(*bookPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "book:", err)
+		os.Exit(1)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	fmt.Printf("♟  level calibration — self-play ladder (levels 0..%d, %d pairs/rung)\n", *maxLevel, *pairs)
+	fmt.Printf("   anchored: full strength @ %dms ≡ %.0f Elo (Stockfish anchor)\n\n", *anchorMT, *anchorElo)
+
+	t0 := time.Now()
+	levels := bench.Calibrate(ctx, book, *maxLevel, *pairs, *conc, *tt,
+		*anchorElo, time.Duration(*anchorMT)*time.Millisecond,
+		func(s string) { fmt.Println(s) })
+
+	fmt.Printf("\n  level   Elo    Δ vs below   advertised (ratingForLevel)   gap\n")
+	for _, l := range levels {
+		advertised := 600 + 180*l.Level // mirrors hub ratingForLevel
+		fmt.Printf("   %2d   %5.0f    %+6.0f          %5d                 %+5.0f\n",
+			l.Level, l.Elo, l.Delta, advertised, l.Elo-float64(advertised))
+	}
+	fmt.Printf("\nDone in %s. (advertised = current hub ratingForLevel; gap>0 means the\n", time.Since(t0).Round(time.Second))
+	fmt.Println("level plays STRONGER than it advertises → recalibrate ratingForLevel/levels.go.")
 }

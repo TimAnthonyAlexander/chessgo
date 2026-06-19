@@ -13,6 +13,10 @@ use App\Models\BotGame;
  */
 class BotGameService
 {
+    /** Bot strength bounds (mirror gomachine engine rating.go RatingMin/Max). */
+    public const RATING_MIN = 700;
+    public const RATING_MAX = 2720;
+
     public function __construct(private readonly GomachineClient $engine)
     {
     }
@@ -26,10 +30,10 @@ class BotGameService
      *   over from the analysis board). Null = standard start.
      * @throws \InvalidArgumentException if the custom FEN is invalid or already finished.
      */
-    public function create(int $level, string $humanColor, ?string $startFen = null): BotGame
+    public function create(int $rating, string $humanColor, ?string $startFen = null): BotGame
     {
         $game = new BotGame();
-        $game->level = max(0, min(10, $level));
+        $game->rating = max(self::RATING_MIN, min(self::RATING_MAX, $rating));
         $game->human_color = $humanColor === 'b' ? 'b' : 'w';
         $game->setMoves([]);
         $game->setHistory([]);
@@ -106,7 +110,7 @@ class BotGameService
         if ($game->status !== 'ongoing') {
             return;
         }
-        $best = $this->engine->bestMove($game->fen, $game->level, $game->getHistory());
+        $best = $this->engine->bestMove($game->fen, $game->rating, $game->getHistory());
         $uci = $best['bestmove'] ?? null;
         if (!is_string($uci) || $uci === '') {
             return;
