@@ -847,6 +847,9 @@ function StatusCard({
               <Typography sx={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 20, color: '#7bb661' }}>
                 Solved!
               </Typography>
+              {result?.alternative && (
+                <Typography sx={{ fontSize: 13, color: 'var(--muted)' }}>Not the puzzle line — but that works!</Typography>
+              )}
               {puzzleRating != null && (
                 <Typography sx={{ fontSize: 13, color: 'var(--muted)' }}>Puzzle rating {puzzleRating}</Typography>
               )}

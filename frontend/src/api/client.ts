@@ -245,6 +245,9 @@ export interface PuzzleMoveResult {
   correct: boolean
   complete: boolean
   solved?: boolean
+  /** True when the move wasn't the scripted line but the engine judged it just as
+   *  good (an alternative mate / equally-winning best move) and counted it solved. */
+  alternative?: boolean
   opponent_move?: string
   fen?: string
   legal_moves?: string[]

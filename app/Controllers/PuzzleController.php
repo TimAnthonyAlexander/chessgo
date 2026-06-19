@@ -30,6 +30,14 @@ use App\Services\GomachineClient;
  */
 class PuzzleController extends Controller
 {
+    /** A non-scripted move counts as a solve if it's within this many centipawns
+     *  of the scripted move (engine-judged). 50cp ≈ "no meaningful difference". */
+    private const EQUIV_MARGIN_CP = 50;
+
+    /** Think time for the equivalence eval. Short — it only runs when the player
+     *  deviates, and a couple hundred ms is plenty to rank candidate moves. */
+    private const EVAL_MOVETIME_MS = 350;
+
     /** Bound from path {id} = Puzzle::ext_id (post route only). */
     public string $id = '';
 
@@ -115,27 +123,38 @@ class PuzzleController extends Controller
         }
 
         $user = $this->resolveUser();
-        $correct = ($move === $solution[$ply]);
+        $exact = ($move === $solution[$ply]);
+        $finalPly = ($ply + 1 >= $count);
 
-        if (!$correct) {
-            return JsonResponse::ok([
-                'correct' => false,
-                'complete' => true,
-                'solved' => false,
-                'solution' => array_values(array_slice($solution, $ply)),
-                'themes' => $puzzle->getThemes(),
-                'rating' => $this->applyResult($user, $puzzle, false),
-            ]);
+        // The played move isn't the scripted one — but on "best move" puzzles
+        // (endgames, advantage/crushing …) other moves are often just as winning,
+        // and a mate-in-N has many mating moves. Ask the engine whether the move is
+        // OBJECTIVELY as good; if so, count it as a solve (Lichess does the same).
+        $alternative = false;
+        if (!$exact) {
+            if (!$this->isAcceptableAlternative($fen, $move, $solution[$ply], $finalPly)) {
+                return JsonResponse::ok([
+                    'correct' => false,
+                    'complete' => true,
+                    'solved' => false,
+                    'solution' => array_values(array_slice($solution, $ply)),
+                    'themes' => $puzzle->getThemes(),
+                    'rating' => $this->applyResult($user, $puzzle, false),
+                ]);
+            }
+            $alternative = true;
         }
 
-        // Correct. If no scripted opponent reply follows, the puzzle is solved.
-        if ($ply + 1 >= $count) {
+        // Solved when the move is the scripted final move, OR an accepted
+        // equivalent/mating alternative (which always ends the puzzle).
+        if ($alternative || $finalPly) {
             $applied = $this->engine->move($fen, $move);
 
             return JsonResponse::ok([
                 'correct' => true,
                 'complete' => true,
                 'solved' => true,
+                'alternative' => $alternative,
                 'status' => $applied['status'] ?? 'ongoing',
                 'fen' => $applied['newFen'] ?? $fen,
                 'themes' => $puzzle->getThemes(),
@@ -160,6 +179,70 @@ class PuzzleController extends Controller
             'legal_moves' => $legal['moves'] ?? [],
             'ply' => $ply + 2,
         ]);
+    }
+
+    /**
+     * Is $played objectively as good as the scripted $solutionMove from $fen?
+     *
+     * Two acceptances, both chess-correct:
+     *   1. Any move that delivers immediate checkmate (a mate-in-N has many mates).
+     *   2. On the FINAL player move only, a move whose resulting eval is within
+     *      EQUIV_MARGIN_CP of the scripted move's (so "best move" puzzles stop
+     *      punishing equally-winning alternatives).
+     *
+     * Intermediate deviations are never accepted (we can't follow the scripted
+     * reply after one), and those plies are almost always genuine only-moves.
+     */
+    private function isAcceptableAlternative(string $fen, string $played, string $solutionMove, bool $finalPly): bool
+    {
+        $applied = $this->engine->move($fen, $played);
+        if (empty($applied['legal'])) {
+            return false; // illegal / not a real move → just wrong
+        }
+        if (($applied['status'] ?? '') === 'checkmate') {
+            return true; // any mate counts
+        }
+        if (!$finalPly) {
+            return false;
+        }
+
+        $afterSolution = $this->engine->move($fen, $solutionMove);
+        if (empty($afterSolution['legal'])) {
+            return false; // malformed solution → fall back to strict matching
+        }
+        // If the scripted move mates outright, only a mating move is acceptable —
+        // and any such move was already accepted above. (A mated position also has
+        // no eval to compare, so this avoids a false "equally good" accept.)
+        if (($afterSolution['status'] ?? '') === 'checkmate') {
+            return false;
+        }
+
+        $oursPlayed = $this->ourEvalCp((string) $applied['newFen']);
+        $oursSolution = $this->ourEvalCp((string) $afterSolution['newFen']);
+
+        return $oursPlayed >= $oursSolution - self::EQUIV_MARGIN_CP;
+    }
+
+    /**
+     * Evaluate the position AFTER our move, in centipawns from OUR perspective
+     * (the engine reports it from the side-to-move = the opponent, so we negate).
+     * Mate scores collapse to large magnitudes so they dominate + order by speed.
+     */
+    private function ourEvalCp(string $fenAfterOurMove): int
+    {
+        $res = $this->engine->analyze($fenAfterOurMove, self::EVAL_MOVETIME_MS);
+        $eval = is_array($res['eval'] ?? null) ? $res['eval'] : ['type' => 'cp', 'value' => 0];
+        $value = (int) ($eval['value'] ?? 0);
+
+        if (($eval['type'] ?? 'cp') === 'mate') {
+            // Opponent-POV mate distance → ours is the negation; closer mate = larger.
+            $ours = -$value;
+            $base = 1_000_000;
+
+            return $ours >= 0 ? $base - $ours : -$base - $ours;
+        }
+
+        return -$value; // cp: opponent POV → ours
     }
 
     /**
