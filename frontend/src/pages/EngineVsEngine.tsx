@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Box, Slider, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material'
 import { Bot, Cpu, Pause, Play, RotateCcw, Telescope, Volume2, VolumeX } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import Board from '../components/Board'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveList from '../components/MoveList'
@@ -50,6 +50,10 @@ function loadSettings(): EveSettings {
 export default function EngineVsEngine() {
   const { user, status: authStatus } = useAuth()
   const navigate = useNavigate()
+  // A starting position carried over from the board editor ("Engine vs Engine
+  // from this position"). Falls back to the standard start.
+  const navFen = (useLocation().state as { fen?: string } | null)?.fen ?? null
+  const startFen = navFen ?? START_FEN
 
   // Settings — initialised from (and persisted back to) localStorage.
   const [gomaRating, setGomaRating] = useState(() => loadSettings().gomaRating)
@@ -66,7 +70,7 @@ export default function EngineVsEngine() {
   }, [gomaRating, sfElo, gomaSide, budget])
 
   // Game
-  const [fen, setFen] = useState(START_FEN)
+  const [fen, setFen] = useState(startFen)
   const [moves, setMoves] = useState<MoveEntry[]>([])
   const [status, setStatus] = useState<GameStatus>('ongoing')
   const [result, setResult] = useState<string | null>(null)
@@ -170,7 +174,7 @@ export default function EngineVsEngine() {
 
   function reset() {
     setRunning(false)
-    setFen(START_FEN)
+    setFen(startFen)
     setMoves([])
     setStatus('ongoing')
     setResult(null)
@@ -178,6 +182,20 @@ export default function EngineVsEngine() {
     setWhiteEval(null)
     setError(null)
   }
+
+  // Re-entering from the editor with a different position: adopt it and reset the
+  // game (the initial state only reads navFen once).
+  useEffect(() => {
+    if (!navFen) return
+    setRunning(false)
+    setFen(navFen)
+    setMoves([])
+    setStatus('ongoing')
+    setResult(null)
+    setLastMove(null)
+    setWhiteEval(null)
+    setError(null)
+  }, [navFen])
 
   function toggleRun() {
     if (over) reset()
@@ -276,7 +294,7 @@ export default function EngineVsEngine() {
               <Box sx={{ flex: 1 }} />
               <NavBtn
                 label="Analyse"
-                onClick={() => navigate('/analysis', { state: { moves: moves.map((m) => m.uci) } })}
+                onClick={() => navigate('/analysis', { state: { moves: moves.map((m) => m.uci), startFen } })}
                 disabled={moves.length === 0}
               >
                 <Telescope size={18} />

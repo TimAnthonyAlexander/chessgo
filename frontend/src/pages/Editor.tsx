@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Box, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material'
-import { Bot, Check, Copy, Eraser, FlipVertical2, Microscope, RotateCcw } from 'lucide-react'
+import { Bot, Check, Copy, Cpu, Eraser, FlipVertical2, Microscope, RotateCcw } from 'lucide-react'
 import BoardEditor, { type Brush, EditorPalette } from '../components/BoardEditor'
 import { ActionBtn } from '../components/PanelUI'
 import type { Color } from '../api/client'
+import { useAuth } from '../lib/auth'
 import { parseFen } from '../lib/chess'
 import {
   type Active,
@@ -27,6 +28,7 @@ const CASTLE_RIGHTS: { code: string; label: string }[] = [
 
 export default function Editor() {
   const navigate = useNavigate()
+  const { user } = useAuth()
   // Seeded from the analysis board ("Edit this board") or starts from scratch.
   const navFen = (useLocation().state as { fen?: string } | null)?.fen ?? null
   const [fen, setFen] = useState<string>(navFen || START_FEN)
@@ -58,6 +60,7 @@ export default function Editor() {
 
   const analyse = () => navigate('/analysis', { state: { startFen: fen } })
   const playBot = () => navigate('/bot', { state: { fen } })
+  const engineVsEngine = () => navigate('/admin/engine-vs', { state: { fen } })
 
   return (
     <Box
@@ -242,6 +245,15 @@ export default function Editor() {
                 onClick={playBot}
                 disabled={!valid.ok}
               />
+              {user?.role === 'admin' && (
+                <ActionBtn
+                  tone="neutral"
+                  icon={<Cpu size={16} />}
+                  label="Engine vs Engine from here"
+                  onClick={engineVsEngine}
+                  disabled={!valid.ok}
+                />
+              )}
             </Box>
           </Box>
         </Box>
