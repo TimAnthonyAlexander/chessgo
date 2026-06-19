@@ -73,8 +73,9 @@ export default function Puzzles() {
   const [override, setOverride] = useState<BoardMap | null>(null)
   const [result, setResult] = useState<PuzzleMoveResult | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // In-memory (non-persisted) win/loss log for this session, newest last.
-  const [history, setHistory] = useState<boolean[]>([])
+  // In-memory (non-persisted) win/loss log for this session, newest last. delta is
+  // the rating change (null when unrated, e.g. logged out).
+  const [history, setHistory] = useState<{ win: boolean; delta: number | null }[]>([])
 
   // Timers for the staged opponent-move animations; cleared on unmount / reload.
   const timers = useRef<ReturnType<typeof setTimeout>[]>([])
@@ -159,7 +160,7 @@ export default function Puzzles() {
         setResult(res)
         setPhase('solved')
         sounds.success()
-        setHistory((h) => [...h, true])
+        setHistory((h) => [...h, { win: true, delta: res.rating?.delta ?? null }])
         if (res.rating) void authStore.refresh()
         // Auto-advance to the next puzzle after a brief celebratory pause.
         later(() => void load(theme), 2000)
@@ -195,7 +196,7 @@ export default function Puzzles() {
       }
       setPhase('failed')
       sounds.end()
-      setHistory((h) => [...h, false])
+      setHistory((h) => [...h, { win: false, delta: res.rating?.delta ?? null }])
       if (res.rating) void authStore.refresh()
     } catch (e) {
       // Network/server error — revert the optimistic move, let them retry.
@@ -502,9 +503,9 @@ function StatusCard({
   )
 }
 
-function HistoryStrip({ history }: { history: boolean[] }) {
+function HistoryStrip({ history }: { history: { win: boolean; delta: number | null }[] }) {
   if (history.length === 0) return null
-  const wins = history.filter(Boolean).length
+  const wins = history.filter((h) => h.win).length
   const losses = history.length - wins
   // Newest first so the most recent result is the easy-to-spot top-left box.
   const ordered = [...history].reverse()
@@ -529,22 +530,28 @@ function HistoryStrip({ history }: { history: boolean[] }) {
         </Typography>
       </Box>
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.6 }}>
-        {ordered.map((win, i) => (
+        {ordered.map(({ win, delta }, i) => (
           <Box
             key={history.length - 1 - i}
             sx={{
-              width: 26,
+              minWidth: 26,
               height: 26,
+              px: delta != null ? 0.85 : 0,
               borderRadius: '7px',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
+              gap: 0.4,
+              fontFamily: 'var(--font-mono)',
+              fontSize: 11.5,
+              fontWeight: 600,
               color: win ? '#7bb661' : '#e0796b',
               bgcolor: win ? 'rgba(123,182,97,0.16)' : 'rgba(224,121,107,0.16)',
               border: `1px solid ${win ? 'rgba(123,182,97,0.4)' : 'rgba(224,121,107,0.4)'}`,
             }}
           >
-            {win ? <Check size={15} /> : <X size={15} />}
+            {win ? <Check size={13} /> : <X size={13} />}
+            {delta != null && <span>{delta >= 0 ? '+' : ''}{delta}</span>}
           </Box>
         ))}
       </Box>
