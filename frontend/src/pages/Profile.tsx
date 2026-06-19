@@ -172,7 +172,7 @@ export default function Profile() {
               icon={<Zap size={13} />}
               rating={data.puzzle.rating}
               provisional={data.puzzle.provisional}
-              sub={`${data.puzzle.solved}/${data.puzzle.games} solved`}
+              sub={`${data.puzzle.solved}W ${data.puzzle.games - data.puzzle.solved}L`}
               accent
             />
           </Box>
