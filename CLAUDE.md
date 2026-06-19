@@ -39,7 +39,10 @@ duplication, no HTTP hop. Engine is internal (PHP calls it); hub is client-facin
 - `frontend/src/{pages,components,lib,api}` — `lib/socket.ts` is the WS store
   (singleton, `useSyncExternalStore`); `lib/auth.ts` is the session/user store;
   `lib/sounds.ts` is the Web-Audio engine; `lib/chess.ts` is display-only board
-  helpers; `components/AuthDialog.tsx` is login/signup.
+  helpers; `lib/useBoardInteraction.ts` is the board-interaction controller (the
+  local player's move lifecycle — optimistic overlay + sound + submit + **premove**
+  queue — behind a `BoardControl` contract, so live/bot wire it once, not per page);
+  `components/AuthDialog.tsx` is login/signup.
 
 ## Run (dev)
 
@@ -133,7 +136,15 @@ php mason migrate:generate && php mason migrate:apply -y                     # D
   only resumes inside a gesture handler. Play the local player's own move
   **synchronously in the click handler** (not from an async socket/state effect),
   and `lib/sounds.ts` installs a one-time `pointerdown`/`keydown` unlock. Safari
-  is strictest here.
+  is strictest here. `useBoardInteraction` already plays the move sound
+  synchronously in its `onMove` — route player moves through it, don't re-add sound.
+- **Premoves are client-side only** (`useBoardInteraction`): a move made while
+  it's not your turn is queued (not sent), shown with the `.premove` highlight, and
+  **survives the opponent's reply**; when it becomes your turn the controller plays
+  it if it matches a move in the new `legalMoves` (ignoring the promo piece —
+  auto-queen), else discards it. No hub/protocol change — it's sent as a normal
+  `move` once legal. Board input during the opponent's turn is gated by
+  `premoveColor` (the player's own color) + `premoveTargets` (pseudo-legal dots).
 - **After Go changes**, rebuild the binary and **restart the engine + hub
   screens** (no hot reload). The frontend has Vite HMR; PHP re-reads code per
   request — but **`.env` is read at boot, so restart `chessgo-api` after `.env` edits**.
@@ -179,7 +190,10 @@ seeded tactical trainer on an **isolated** `rating_puzzle` (never touches the
 time-control ratings); `puzzle`/`puzzle_theme`/`puzzle_attempt` models + the
 `scripts/import_puzzles.php` CSV importer; serving is rating-matched + de-duped
 with a theme filter, and the solution is validated server-side (never sent to the
-client). See SPEC.md §9. Also: **engine strength push** (`docs/ENGINE_STRENGTH.md`)
+client). See SPEC.md §9. Also: **premoves** — a move made during the opponent's
+turn is queued by the shared `useBoardInteraction` controller, held across the
+reply, then played if legal in the new position (else discarded); client-side
+only, live + bot. Also: **engine strength push** (`docs/ENGINE_STRENGTH.md`)
 — a native in-process self-play **SPRT** harness (`gomachine bench`) drove five
 SPRT-gated search improvements (SEE, delta/aspiration/reverse-futility/late-move
 pruning; ~+250 Elo) and **Lazy SMP** (lock-free TT; ~+97 Elo), then the
