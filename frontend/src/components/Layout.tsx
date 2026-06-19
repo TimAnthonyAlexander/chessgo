@@ -5,6 +5,7 @@ import { Link, Outlet, useLocation } from 'react-router-dom'
 import { gameSocket } from '../lib/socket'
 import { authStore, useAuth } from '../lib/auth'
 import AuthDialog from './AuthDialog'
+import Logo from './Logo'
 import type { RatingCategory, User } from '../api/client'
 
 const LINKS: { label: string; to: string | null }[] = [
@@ -52,8 +53,8 @@ export default function Layout() {
       >
         <Link to="/" aria-label="chessgo home">
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Box component="span" sx={{ fontSize: 22, lineHeight: 1, color: 'var(--accent)' }}>
-              ♞
+            <Box sx={{ display: 'flex', color: 'var(--accent)' }}>
+              <Logo size={24} />
             </Box>
             <Box
               component="span"
