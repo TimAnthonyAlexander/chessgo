@@ -17,6 +17,33 @@ const MOVE_DELAY = 550 // ms between plies, so it's watchable
 
 const sideToMoveOf = (fen: string): Color => (fen.split(' ')[1] === 'b' ? 'b' : 'w')
 
+// The left-card settings persist to localStorage, so whatever you last set becomes
+// your new defaults on the next visit.
+const SETTINGS_KEY = 'eve.settings'
+interface EveSettings {
+  gomaRating: number
+  sfElo: number
+  gomaSide: Color
+  budget: number
+}
+const DEFAULT_SETTINGS: EveSettings = { gomaRating: 2200, sfElo: 1500, gomaSide: 'w', budget: 300 }
+
+function loadSettings(): EveSettings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY)
+    if (!raw) return DEFAULT_SETTINGS
+    const p = JSON.parse(raw) as Partial<EveSettings>
+    return {
+      gomaRating: typeof p.gomaRating === 'number' ? p.gomaRating : DEFAULT_SETTINGS.gomaRating,
+      sfElo: typeof p.sfElo === 'number' ? p.sfElo : DEFAULT_SETTINGS.sfElo,
+      gomaSide: p.gomaSide === 'b' ? 'b' : 'w',
+      budget: typeof p.budget === 'number' ? p.budget : DEFAULT_SETTINGS.budget,
+    }
+  } catch {
+    return DEFAULT_SETTINGS // unparseable / storage unavailable → fall back to defaults
+  }
+}
+
 /** Admin-only: watch our engine (gomachine, at a target Elo rating) play Stockfish
  * (at a UCI_Elo). The browser drives the game ply-by-ply through the admin proxy;
  * the engines themselves stay stateless. */
@@ -24,11 +51,19 @@ export default function EngineVsEngine() {
   const { user, status: authStatus } = useAuth()
   const navigate = useNavigate()
 
-  // Settings
-  const [gomaRating, setGomaRating] = useState(2200)
-  const [sfElo, setSfElo] = useState(1500)
-  const [gomaSide, setGomaSide] = useState<Color>('w')
-  const [budget, setBudget] = useState(300) // ms per move, both engines
+  // Settings — initialised from (and persisted back to) localStorage.
+  const [gomaRating, setGomaRating] = useState(() => loadSettings().gomaRating)
+  const [sfElo, setSfElo] = useState(() => loadSettings().sfElo)
+  const [gomaSide, setGomaSide] = useState<Color>(() => loadSettings().gomaSide)
+  const [budget, setBudget] = useState(() => loadSettings().budget) // ms per move, both engines
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ gomaRating, sfElo, gomaSide, budget }))
+    } catch {
+      // storage unavailable / quota — settings just won't persist this session
+    }
+  }, [gomaRating, sfElo, gomaSide, budget])
 
   // Game
   const [fen, setFen] = useState(START_FEN)
