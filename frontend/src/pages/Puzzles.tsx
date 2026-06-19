@@ -23,8 +23,8 @@ import {
   type PuzzleNext,
   submitPuzzleMove,
 } from '../api/client'
-import { applyUciVisually, type BoardMap, fileOf, parseFen } from '../lib/chess'
-import { sounds } from '../lib/sounds'
+import { applyUciVisually, type BoardMap, parseFen } from '../lib/chess'
+import { playForMove, sounds } from '../lib/sounds'
 import { authStore, useAuth } from '../lib/auth'
 
 type Phase = 'loading' | 'intro' | 'solving' | 'checking' | 'solved' | 'failed' | 'empty'
@@ -119,7 +119,9 @@ function storeLimit(v: number | null): void {
 
 export default function Puzzles() {
   const { user } = useAuth()
-  const userStats = user ? { rating: user.rating_puzzle, games: user.games_puzzle } : null
+  const userStats = user
+    ? { rating: user.rating_puzzle, games: user.games_puzzle, provisional: user.provisional?.puzzle ?? false }
+    : null
 
   // Session selection (persisted defaults).
   const [mode, setMode] = useState<Mode>('setup')
@@ -258,16 +260,6 @@ export default function Puzzles() {
   // Clear any pending timers on unmount.
   useEffect(() => clearTimers, [])
 
-  function moveSound(board: BoardMap, uci: string) {
-    const from = uci.slice(0, 2)
-    const to = uci.slice(2, 4)
-    const piece = board[from]?.toLowerCase()
-    if (uci.length === 5) sounds.promote()
-    else if (piece === 'k' && Math.abs(fileOf(to) - fileOf(from)) === 2) sounds.castle()
-    else if (board[to] || (piece === 'p' && from[0] !== to[0])) sounds.capture()
-    else sounds.move()
-  }
-
   // Advance to the next puzzle — but only if the session is still running (a
   // queued advance is dropped if the clock expired while this puzzle resolved).
   const advance = () => {
@@ -279,7 +271,7 @@ export default function Puzzles() {
     const board = parseFen(fen)
     setOverride(applyUciVisually(board, uci))
     setLastMove(splitUci(uci))
-    moveSound(board, uci)
+    playForMove(board, uci)
     setPhase('checking')
     try {
       const res = await submitPuzzleMove(data.id, uci, fen, ply)
@@ -502,7 +494,7 @@ function SetupScreen({
 }: {
   theme: string
   limitSec: number | null
-  user: { rating: number; games: number } | null
+  user: { rating: number; games: number; provisional: boolean } | null
   onTheme: (t: string) => void
   onLimit: (l: number | null) => void
   onStart: () => void
@@ -554,7 +546,7 @@ function SetupScreen({
           <>
             Your puzzle rating{' '}
             <Box component="span" sx={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}>
-              {user.rating}
+              {user.rating}{user.provisional ? '?' : ''}
             </Box>{' '}
             · {user.games} solved
           </>
@@ -708,7 +700,7 @@ function RunningAside({
   theme,
   limitSec,
 }: {
-  user: { rating: number; games: number } | null
+  user: { rating: number; games: number; provisional: boolean } | null
   theme: string
   limitSec: number | null
 }) {
@@ -739,7 +731,7 @@ function RunningAside({
         {user ? (
           <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
             <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 30, fontWeight: 700, color: 'var(--accent)', lineHeight: 1 }}>
-              {user.rating}
+              {user.rating}{user.provisional ? '?' : ''}
             </Typography>
             <Typography sx={{ fontSize: 13, color: 'var(--muted)' }}>· {user.games} solved</Typography>
           </Box>
@@ -775,7 +767,7 @@ function StatusCard({
   orientation: Color
   puzzleRating: number | null
   result: PuzzleMoveResult | null
-  user: { rating: number; games: number } | null
+  user: { rating: number; games: number; provisional: boolean } | null
   theme: string
   limitSec: number | null
   remainingMs: number
@@ -916,7 +908,7 @@ function StatusCard({
             <>
               Your rating:{' '}
               <Box component="span" sx={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>
-                {user.rating}
+                {user.rating}{user.provisional ? '?' : ''}
               </Box>{' '}
               · {user.games} solved
             </>

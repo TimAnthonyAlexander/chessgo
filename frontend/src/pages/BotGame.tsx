@@ -28,7 +28,8 @@ import MoveList from '../components/MoveList'
 import GameModeCard from '../components/GameModeCard'
 import { ActionBtn, Avatar, ErrorBanner, NavBtn } from '../components/PanelUI'
 import { analyze, type BotGame as Game, type Color, createBotGame, playMove } from '../api/client'
-import { applyUciVisually, type BoardMap, fileOf, parseFen, statusLabel } from '../lib/chess'
+import { statusLabel } from '../lib/chess'
+import { useBoardInteraction } from '../lib/useBoardInteraction'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
@@ -49,8 +50,6 @@ export default function BotGame() {
   const [colorChoice, setColorChoice] = useState<ColorChoice>(navFen ? sideToMoveOf(navFen) : 'w')
   const [creating, setCreating] = useState(false)
   const [thinking, setThinking] = useState(false)
-  const [override, setOverride] = useState<BoardMap | null>(null)
-  const [optimisticLast, setOptimisticLast] = useState<{ from: string; to: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [flipped, setFlipped] = useState(false)
   const [resigned, setResigned] = useState(false)
@@ -68,6 +67,31 @@ export default function BotGame() {
   const atLive = shownPly === liveLen
   const interactive = ongoing && atLive && game.your_turn && !thinking
 
+  // Board interaction (optimistic overlay + move sound + submit) lives in the
+  // shared controller. The bot reply, "thinking" gate, and error are this page's
+  // concern, so they ride along in `submit`.
+  const interaction = useBoardInteraction({
+    fen: game?.fen ?? startFen ?? START_FEN,
+    myTurn: interactive,
+    legalMoves: interactive && game ? game.legal_moves : [],
+    canPremove: true,
+    submit: async (uci) => {
+      if (!game) return
+      setError(null)
+      setViewIndex(null)
+      setThinking(true)
+      try {
+        const g = await playMove(game.id, uci)
+        setGame(g)
+        voiceServerReply(game.moves.length, g)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Move failed.')
+      } finally {
+        setThinking(false)
+      }
+    },
+  })
+
   const boardFen = !game
     ? (startFen ?? START_FEN)
     : atLive
@@ -77,8 +101,8 @@ export default function BotGame() {
         : game.moves[shownPly - 1].fen
 
   const lastMove =
-    override && atLive && optimisticLast
-      ? optimisticLast
+    interaction.override && atLive && interaction.optimisticLast
+      ? interaction.optimisticLast
       : game && shownPly > 0
         ? {
             from: game.moves[shownPly - 1].uci.slice(0, 2),
@@ -126,8 +150,6 @@ export default function BotGame() {
   async function newGame() {
     setError(null)
     setCreating(true)
-    setOverride(null)
-    setOptimisticLast(null)
     setResigned(false)
     setFlipped(false)
     setViewIndex(null)
@@ -142,38 +164,6 @@ export default function BotGame() {
     } finally {
       setCreating(false)
     }
-  }
-
-  async function onMove(uci: string) {
-    if (!game) return
-    setError(null)
-    setViewIndex(null)
-    const before = parseFen(game.fen)
-    setOverride(applyUciVisually(before, uci))
-    setOptimisticLast({ from: uci.slice(0, 2), to: uci.slice(2, 4) })
-    setThinking(true)
-    playHumanSound(before, uci)
-    try {
-      const g = await playMove(game.id, uci)
-      setGame(g)
-      voiceServerReply(game.moves.length, g)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Move failed.')
-    } finally {
-      setOverride(null)
-      setOptimisticLast(null)
-      setThinking(false)
-    }
-  }
-
-  function playHumanSound(board: BoardMap, uci: string) {
-    const from = uci.slice(0, 2)
-    const to = uci.slice(2, 4)
-    const piece = board[from]?.toLowerCase()
-    if (uci.length === 5) sounds.promote()
-    else if (piece === 'k' && Math.abs(fileOf(to) - fileOf(from)) === 2) sounds.castle()
-    else if (board[to] || (piece === 'p' && from[0] !== to[0])) sounds.capture()
-    else sounds.move()
   }
 
   function voiceServerReply(priorCount: number, g: Game) {
@@ -285,8 +275,11 @@ export default function BotGame() {
             lastMove={lastMove}
             inCheck={false}
             interactive={interactive}
-            onMove={onMove}
-            {...(override && atLive ? { overrideBoard: override } : {})}
+            onMove={interaction.onMove}
+            premoveColor={ongoing && atLive ? humanColor : null}
+            premove={atLive ? interaction.premove : null}
+            onCancelPremove={interaction.cancelPremove}
+            {...(interaction.override && atLive ? { overrideBoard: interaction.override } : {})}
           />
         </Box>
       </Box>

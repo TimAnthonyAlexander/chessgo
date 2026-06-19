@@ -134,7 +134,7 @@ function UserMenu({ user }: { user: User }) {
       >
         {user.name}
         <Typography component="span" sx={{ ml: 0.75, fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--text-dim)' }}>
-          {user.rating_blitz}
+          {user.rating_blitz}{user.provisional?.blitz ? '?' : ''}
         </Typography>
       </Button>
       <Menu
@@ -147,7 +147,7 @@ function UserMenu({ user }: { user: User }) {
           <MenuItem key={c.key} disableRipple sx={{ cursor: 'default', justifyContent: 'space-between', gap: 3, fontSize: 13.5 }}>
             <span style={{ color: 'var(--text-dim)' }}>{c.label}</span>
             <span style={{ fontFamily: 'var(--font-mono)' }}>
-              {user[`rating_${c.key}`]}
+              {user[`rating_${c.key}`]}{user.provisional?.[c.key] ? '?' : ''}
               <span style={{ color: 'var(--muted)', fontSize: 11 }}> · {user[`games_${c.key}`]}</span>
             </span>
           </MenuItem>
@@ -156,7 +156,7 @@ function UserMenu({ user }: { user: User }) {
         <MenuItem disableRipple sx={{ cursor: 'default', justifyContent: 'space-between', gap: 3, fontSize: 13.5 }}>
           <span style={{ color: 'var(--text-dim)' }}>Puzzles</span>
           <span style={{ fontFamily: 'var(--font-mono)' }}>
-            {user.rating_puzzle}
+            {user.rating_puzzle}{user.provisional?.puzzle ? '?' : ''}
             <span style={{ color: 'var(--muted)', fontSize: 11 }}> · {user.games_puzzle}</span>
           </span>
         </MenuItem>

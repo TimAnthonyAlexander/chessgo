@@ -9,6 +9,7 @@ import {
   kingSquare,
   parseFen,
   pieceImageUrl,
+  premoveTargets,
   promotionsFor,
   rankOf,
   squareAt,
@@ -37,6 +38,13 @@ interface BoardProps {
   overrideBoard?: BoardMap
   /** Optional move arrow (e.g. the engine's best move) drawn over the board. */
   arrow?: { from: Square; to: Square } | null
+  /** The local player's own color — enables premove input while it isn't their
+   * turn (i.e. while `interactive` is false). Omit/null to disable premoves. */
+  premoveColor?: Color | null
+  /** A queued premove to highlight (from + to). */
+  premove?: { from: Square; to: Square } | null
+  /** Discard the queued premove (user clicked an empty / invalid square). */
+  onCancelPremove?: () => void
 }
 
 const PROMO_ORDER = ['q', 'r', 'b', 'n']
@@ -66,6 +74,9 @@ export default function Board({
   onMove,
   overrideBoard,
   arrow,
+  premoveColor,
+  premove,
+  onCancelPremove,
 }: BoardProps) {
   const boardRef = useRef<HTMLDivElement>(null)
   const [selected, setSelected] = useState<Square | null>(null)
@@ -73,7 +84,18 @@ export default function Board({
   const [drag, setDrag] = useState<DragState | null>(null)
 
   const board: BoardMap = overrideBoard ?? parseFen(fen)
-  const targets = selected ? targetsFrom(legalMoves, selected) : new Set<Square>()
+
+  // Premove mode: while it isn't our turn but we're a player, we let the user
+  // queue a move. Inputs come from the same handlers; the only differences are
+  // which pieces are "ours" (our color, not the side to move) and which targets
+  // are valid (piece geometry, since the real legal-move list isn't ours yet).
+  const premoveActive = !interactive && premoveColor != null
+  const inputEnabled = interactive || premoveActive
+  const movingColor: Color = interactive ? sideToMove : (premoveColor ?? sideToMove)
+  const destsFor = (from: Square): Set<Square> =>
+    interactive ? targetsFrom(legalMoves, from) : premoveTargets(board, from)
+
+  const targets = selected ? destsFor(selected) : new Set<Square>()
   const checkKing = inCheck ? kingSquare(board, sideToMove === 'w') : null
 
   // Arrow geometry in an 80×80 coordinate space (10 units / square), oriented.
@@ -104,21 +126,29 @@ export default function Board({
 
   function ownPieceAt(sq: Square): boolean {
     const p = board[sq]
-    return !!p && (isWhitePiece(p) ? 'w' : 'b') === sideToMove
+    return !!p && (isWhitePiece(p) ? 'w' : 'b') === movingColor
   }
 
   function commit(from: Square, to: Square) {
-    const options = promotionsFor(legalMoves, from, to)
-    if (options.length > 0) {
-      setPromo({ from, to, options })
+    if (interactive) {
+      const options = promotionsFor(legalMoves, from, to)
+      if (options.length > 0) {
+        setPromo({ from, to, options })
+        return
+      }
+      setSelected(null)
+      onMove(from + to)
       return
     }
+    // Premove: auto-queen a promoting pawn (Chess.com-style — no picker mid-premove).
+    const piece = board[from]?.toLowerCase()
+    const promoting = piece === 'p' && (to[1] === '8' || to[1] === '1')
     setSelected(null)
-    onMove(from + to)
+    onMove(from + to + (promoting ? 'q' : ''))
   }
 
   function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
-    if (!interactive || promo) return
+    if (!inputEnabled || promo) return
     const sq = squareFromPoint(e.clientX, e.clientY)
     if (!sq) return
 
@@ -147,6 +177,7 @@ export default function Board({
       commit(selected, sq)
     } else {
       setSelected(null)
+      if (premoveActive) onCancelPremove?.() // tapped empty/elsewhere → drop the premove
     }
   }
 
@@ -168,10 +199,11 @@ export default function Board({
 
     if (d.moved) {
       const dropSq = squareFromPoint(e.clientX, e.clientY)
-      if (dropSq && targetsFrom(legalMoves, d.from).has(dropSq)) {
+      if (dropSq && destsFor(d.from).has(dropSq)) {
         commit(d.from, dropSq)
       } else {
         setSelected(null) // failed drag → deselect
+        if (premoveActive) onCancelPremove?.()
       }
     } else if (d.reselect) {
       setSelected(null) // tapped an already-selected piece → toggle off
@@ -204,14 +236,16 @@ export default function Board({
             const light = (file + rank) % 2 === 1
             const isTarget = targets.has(sq)
             const isLast = lastMove && (lastMove.from === sq || lastMove.to === sq)
+            const isPremove = premove && (premove.from === sq || premove.to === sq)
             const isDragOrigin = drag?.moved && drag.from === sq
-            const isOver = drag?.moved && drag.over === sq && targetsFrom(legalMoves, drag.from).has(sq)
+            const isOver = drag?.moved && drag.over === sq && destsFor(drag.from).has(sq)
             const classes = [
               'sq',
               light ? 'light' : 'dark',
-              interactive ? 'interactive' : '',
+              inputEnabled ? 'interactive' : '',
               selected === sq ? 'sel' : '',
               isLast ? 'last' : '',
+              isPremove ? 'premove' : '',
               isOver ? 'over' : '',
               checkKing === sq ? 'check' : '',
             ]

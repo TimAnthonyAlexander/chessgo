@@ -10,7 +10,7 @@ import { ActionBtn, Avatar, PANEL_SHADOW } from '../components/PanelUI'
 import type { MoveEntry } from '../api/client'
 import { type Color, gameSocket, type LiveGameState, liveRemaining } from '../lib/socket'
 import { useGameSocket } from '../lib/useGameSocket'
-import { applyUciVisually, type BoardMap, fileOf, parseFen } from '../lib/chess'
+import { useBoardInteraction } from '../lib/useBoardInteraction'
 import { playForSan, sounds } from '../lib/sounds'
 import { authStore } from '../lib/auth'
 
@@ -55,8 +55,6 @@ export default function LiveGame() {
   const s = useGameSocket()
   const g = s.game
 
-  const [override, setOverride] = useState<BoardMap | null>(null)
-  const [optimisticLast, setOptimisticLast] = useState<{ from: string; to: string } | null>(null)
   const [, force] = useState(0)
 
   // Tick for live clock countdown while a game is running.
@@ -66,11 +64,18 @@ export default function LiveGame() {
     return () => window.clearInterval(id)
   }, [g?.id, g?.ended])
 
-  // Clear optimistic state whenever the authoritative position advances.
-  useEffect(() => {
-    setOverride(null)
-    setOptimisticLast(null)
-  }, [g?.fen])
+  // The local player can move when it's their turn and the socket is live.
+  const myTurn = !!g && !g.ended && g.sideToMove === g.color && s.conn === 'open'
+
+  // Board interaction (optimistic overlay + move sound + submit) lives in one
+  // shared controller; we just feed it the game state and the socket's move call.
+  const interaction = useBoardInteraction({
+    fen: g?.fen ?? '',
+    myTurn,
+    legalMoves: g && myTurn ? g.legalMoves : [],
+    submit: (uci) => gameSocket.move(uci),
+    canPremove: true,
+  })
 
   // Sound: voice the OPPONENT's newest move as the position advances. Our own
   // move is played synchronously in onMove (inside the click gesture) — both for
@@ -126,17 +131,6 @@ export default function LiveGame() {
     )
   }
 
-  const myTurn = !g.ended && g.sideToMove === g.color && s.conn === 'open'
-
-  function onMove(uci: string) {
-    if (!g) return
-    const before = parseFen(g.fen)
-    setOverride(applyUciVisually(before, uci))
-    setOptimisticLast({ from: uci.slice(0, 2), to: uci.slice(2, 4) })
-    playHumanSound(before, uci) // synchronous: instant feedback + unlocks audio within the gesture
-    gameSocket.move(uci)
-  }
-
   const moveEntries: MoveEntry[] = g.moves.map((m, i) => ({
     ply: i + 1,
     san: m.san,
@@ -183,11 +177,14 @@ export default function LiveGame() {
             orientation={g.color}
             sideToMove={g.sideToMove}
             legalMoves={myTurn ? g.legalMoves : []}
-            lastMove={optimisticLast ?? g.lastMove}
+            lastMove={interaction.optimisticLast ?? g.lastMove}
             inCheck={g.check}
             interactive={myTurn}
-            onMove={onMove}
-            {...(override ? { overrideBoard: override } : {})}
+            onMove={interaction.onMove}
+            premoveColor={g.ended ? null : g.color}
+            premove={interaction.premove}
+            onCancelPremove={interaction.cancelPremove}
+            {...(interaction.override ? { overrideBoard: interaction.override } : {})}
           />
         </Box>
 
@@ -347,18 +344,6 @@ function PlayerBar({
       </Box>
     </Box>
   )
-}
-
-/** Pick + play the sound for the local player's own move (called synchronously
- * inside the click gesture, mirroring BotGame, so the AudioContext unlocks). */
-function playHumanSound(board: BoardMap, uci: string) {
-  const from = uci.slice(0, 2)
-  const to = uci.slice(2, 4)
-  const piece = board[from]?.toLowerCase()
-  if (uci.length === 5) sounds.promote()
-  else if (piece === 'k' && Math.abs(fileOf(to) - fileOf(from)) === 2) sounds.castle()
-  else if (board[to] || (piece === 'p' && from[0] !== to[0])) sounds.capture()
-  else sounds.move()
 }
 
 function resultText(g: LiveGameState): string {

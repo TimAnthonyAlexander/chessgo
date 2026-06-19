@@ -12,6 +12,8 @@
 // GenericNotify bell (which standard also uses for win/loss/draw). The
 // AudioContext is created lazily on the first sound (always after a gesture).
 
+import { type BoardMap, fileOf } from './chess'
+
 let ctx: AudioContext | null = null
 let master: GainNode | null = null
 let enabled = readEnabled()
@@ -244,6 +246,20 @@ export const sounds = {
       body({ freq: 759, dur: 0.4, gain: 0.095 })
       body({ freq: 1122, dur: 0.3, gain: 0.06 })
     }),
+}
+
+/** Pick the right sound for a UCI move, given the board BEFORE it's applied.
+ * Used for the local player's own move (played synchronously inside the click
+ * gesture, both for instant feedback and to unlock the AudioContext). The SAN
+ * variant `playForSan` is the counterpart for moves that arrive as SAN. */
+export function playForMove(board: BoardMap, uci: string): void {
+  const from = uci.slice(0, 2)
+  const to = uci.slice(2, 4)
+  const piece = board[from]?.toLowerCase()
+  if (uci.length === 5) sounds.promote()
+  else if (piece === 'k' && Math.abs(fileOf(to) - fileOf(from)) === 2) sounds.castle()
+  else if (board[to] || (piece === 'p' && from[0] !== to[0])) sounds.capture()
+  else sounds.move()
 }
 
 /** Pick the right sound for a SAN string (after the move is on the board). */

@@ -78,6 +78,14 @@
   background: var(--select);
   pointer-events: none;
 }
+/* Queued premove (from + to), distinct from the gold last-move highlight. */
+.sq.premove::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(229, 116, 92, 0.5);
+  pointer-events: none;
+}
 .sq.check::before {
   content: '';
   position: absolute;

@@ -95,6 +95,85 @@ export function targetsFrom(legalMoves: string[], from: Square): Set<Square> {
   return out
 }
 
+/**
+ * Pseudo-legal destination squares for a PREMOVE — the moves a piece could make
+ * by its own geometry, evaluated while it isn't your turn (so the real legal-move
+ * list isn't available). Deliberately permissive, Chess.com-style: it ignores
+ * check, whose turn it is, and pins; sliders ignore blockers along the ray (a
+ * blocking piece may move first), pawns include both diagonals (a capture may
+ * appear). Own-occupied squares are excluded so we never dot a friendly piece.
+ * The queued move is still validated against the real legal moves before it's
+ * played, so anything illegal is simply discarded.
+ */
+export function premoveTargets(board: BoardMap, from: Square): Set<Square> {
+  const out = new Set<Square>()
+  const piece = board[from]
+  if (!piece) return out
+  const white = isWhitePiece(piece)
+  const type = piece.toLowerCase()
+  const f = fileOf(from)
+  const r = rankOf(from)
+  const mine = (sq: Square) => board[sq] && isWhitePiece(board[sq]) === white
+
+  // Add a single square if on-board and not our own piece; return whether a ray
+  // may continue through it (only empty squares don't stop a ray).
+  const step = (file: number, rank: number): boolean => {
+    if (file < 0 || file > 7 || rank < 0 || rank > 7) return false
+    const sq = squareAt(file, rank)
+    if (mine(sq)) return false
+    out.add(sq)
+    return !board[sq]
+  }
+  const ray = (df: number, dr: number) => {
+    for (let i = 1; step(f + df * i, r + dr * i); i++) {
+      /* walk until blocked / off-board */
+    }
+  }
+
+  if (type === 'p') {
+    const dir = white ? 1 : -1
+    const start = white ? 1 : 6
+    // Forward pushes ignore current blockers (the square ahead may clear); the
+    // diagonals are always offered (a capture or en passant may materialise).
+    if (r + dir >= 0 && r + dir <= 7) out.add(squareAt(f, r + dir))
+    if (r === start) out.add(squareAt(f, r + 2 * dir))
+    for (const df of [-1, 1]) {
+      const nf = f + df
+      const nr = r + dir
+      if (nf >= 0 && nf <= 7 && nr >= 0 && nr <= 7) out.add(squareAt(nf, nr))
+    }
+  } else if (type === 'n') {
+    for (const [df, dr] of [[1, 2], [2, 1], [2, -1], [1, -2], [-1, -2], [-2, -1], [-2, 1], [-1, 2]]) {
+      step(f + df, r + dr)
+    }
+  } else if (type === 'k') {
+    for (let df = -1; df <= 1; df++) {
+      for (let dr = -1; dr <= 1; dr++) {
+        if (df || dr) step(f + df, r + dr)
+      }
+    }
+    if (f === 4) {
+      out.add(squareAt(6, r)) // king-side castle target
+      out.add(squareAt(2, r)) // queen-side castle target
+    }
+  } else {
+    if (type === 'b' || type === 'q') {
+      ray(1, 1)
+      ray(1, -1)
+      ray(-1, 1)
+      ray(-1, -1)
+    }
+    if (type === 'r' || type === 'q') {
+      ray(1, 0)
+      ray(-1, 0)
+      ray(0, 1)
+      ray(0, -1)
+    }
+  }
+  out.delete(from)
+  return out
+}
+
 /** Promotion piece options for a from→to pair, if the move is a promotion. */
 export function promotionsFor(legalMoves: string[], from: Square, to: Square): string[] {
   const out: string[] = []

@@ -365,6 +365,9 @@ export interface User {
   games_classical: number
   rating_puzzle: number
   games_puzzle: number
+  // Per-category Glicko-2 provisional flag (RD > 110): the rating is still
+  // settling and is shown with a "?". Keyed by category, incl. 'puzzle'.
+  provisional: Record<string, boolean>
 }
 
 export function signup(name: string, email: string, password: string): Promise<User> {

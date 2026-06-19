@@ -8,7 +8,7 @@ use BaseApi\Http\JsonResponse;
 use App\Models\Puzzle;
 use App\Models\PuzzleAttempt;
 use App\Models\User;
-use App\Services\EloService;
+use App\Services\Glicko2Service;
 use App\Services\GomachineClient;
 
 /**
@@ -44,9 +44,12 @@ class PuzzleController extends Controller
     /** Bound from ?theme= (get route only). Empty = any theme. */
     public string $theme = '';
 
+    /** A puzzle's rating is a fixed, well-established opponent (tight RD). */
+    private const PUZZLE_RD = 60.0;
+
     public function __construct(
         private readonly GomachineClient $engine,
-        private readonly EloService $elo,
+        private readonly Glicko2Service $glicko,
     ) {}
 
     public function get(): JsonResponse
@@ -318,9 +321,27 @@ class PuzzleController extends Controller
         }
 
         $before = $user->rating_puzzle;
-        $after = $this->elo->newRating($before, $puzzle->rating, $solved ? 1.0 : 0.0, $user->games_puzzle);
 
+        // RD grown for idle time since the last rated puzzle, then one Glicko-2
+        // game against the puzzle's (fixed, established) rating.
+        $idleDays = 0.0;
+        if (is_string($user->rated_at_puzzle) && $user->rated_at_puzzle !== '') {
+            $idleDays = max(0.0, (time() - strtotime($user->rated_at_puzzle)) / 86400.0);
+        }
+
+        $rd = $this->glicko->inflateRd((float)$user->rd_puzzle, $idleDays);
+        [$newRating, $newRd, $newVol] = $this->glicko->update(
+            (float)$before,
+            $rd,
+            (float)$user->vol_puzzle,
+            [['rating' => (float)$puzzle->rating, 'rd' => self::PUZZLE_RD, 'score' => $solved ? 1.0 : 0.0]],
+        );
+
+        $after = (int) round($newRating);
         $user->rating_puzzle = $after;
+        $user->rd_puzzle = $newRd;
+        $user->vol_puzzle = $newVol;
+        $user->rated_at_puzzle = date('Y-m-d H:i:s');
         $user->games_puzzle = $user->games_puzzle + 1;
         $user->save();
 

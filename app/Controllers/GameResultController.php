@@ -7,7 +7,7 @@ use BaseApi\Controllers\Controller;
 use BaseApi\Http\JsonResponse;
 use App\Models\Game;
 use App\Models\User;
-use App\Services\EloService;
+use App\Services\Glicko2Service;
 
 /**
  * Internal endpoint the realtime hub calls when a game ends (SPEC §8.2). Stores
@@ -21,7 +21,13 @@ use App\Services\EloService;
  */
 class GameResultController extends Controller
 {
-    public function __construct(private readonly EloService $elo)
+    /**
+     * A fill-in bot has no account, so it isn't rated — but it still needs an
+     * RD to act as an opponent. Treat it as a stable, established anchor.
+     */
+    private const BOT_RD = 50.0;
+
+    public function __construct(private readonly Glicko2Service $glicko)
     {
     }
 
@@ -49,7 +55,7 @@ class GameResultController extends Controller
             return JsonResponse::ok(['id' => $existing->id, 'duplicate' => true]);
         }
 
-        $category = $this->elo->categoryForPool($pool);
+        $category = $this->glicko->categoryForPool($pool);
         $rated = (bool)($b['rated'] ?? false);
 
         $game = new Game();
@@ -144,13 +150,13 @@ class GameResultController extends Controller
 
     private function applyElo(Game $game, User $white, User $black, string $category, string $result): void
     {
-        $ratingCol = 'rating_' . $category;
-        $gamesCol = 'games_' . $category;
+        // Each player's current uncertainty, grown for any idle time since their
+        // last rated game in this category. Both updates use these pre-game RDs.
+        $wRd = $this->currentRd($white, $category);
+        $bRd = $this->currentRd($black, $category);
 
-        $wr = (int)$white->{$ratingCol};
-        $br = (int)$black->{$ratingCol};
-        $wg = (int)$white->{$gamesCol};
-        $bg = (int)$black->{$gamesCol};
+        $wr = (int)$white->{'rating_' . $category};
+        $br = (int)$black->{'rating_' . $category};
 
         [$ws, $bs] = match ($result) {
             '1-0' => [1.0, 0.0],
@@ -158,33 +164,32 @@ class GameResultController extends Controller
             default => [0.5, 0.5],
         };
 
-        $newW = $this->elo->newRating($wr, $br, $ws, $wg);
-        $newB = $this->elo->newRating($br, $wr, $bs, $bg);
+        $newW = $this->glicko->update((float)$wr, $wRd, (float)$white->{'vol_' . $category}, [
+            ['rating' => (float)$br, 'rd' => $bRd, 'score' => $ws],
+        ]);
+        $newB = $this->glicko->update((float)$br, $bRd, (float)$black->{'vol_' . $category}, [
+            ['rating' => (float)$wr, 'rd' => $wRd, 'score' => $bs],
+        ]);
 
-        $white->{$ratingCol} = $newW;
-        $white->{$gamesCol} = $wg + 1;
-        $black->{$ratingCol} = $newB;
-        $black->{$gamesCol} = $bg + 1;
+        $this->writeRating($white, $category, $newW);
+        $this->writeRating($black, $category, $newB);
         $white->save();
         $black->save();
 
         $game->white_rating_before = $wr;
-        $game->white_rating_after = $newW;
+        $game->white_rating_after = (int) round($newW[0]);
         $game->black_rating_before = $br;
-        $game->black_rating_after = $newB;
+        $game->black_rating_after = (int) round($newB[0]);
     }
 
     /**
-     * One-sided Elo: a single account vs a fill-in bot (no account). Only the
-     * account's rating moves, against the bot's displayed rating.
+     * One-sided update: a single account vs a fill-in bot (no account). Only the
+     * account's rating moves, against the bot's displayed rating (a stable anchor).
      */
     private function applyEloVsBot(Game $game, User $user, bool $userIsWhite, int $botRating, string $category, string $result): void
     {
-        $ratingCol = 'rating_' . $category;
-        $gamesCol = 'games_' . $category;
-
-        $ur = (int)$user->{$ratingCol};
-        $ug = (int)$user->{$gamesCol};
+        $ur = (int)$user->{'rating_' . $category};
+        $rd = $this->currentRd($user, $category);
 
         $score = match ($result) {
             '1-0' => $userIsWhite ? 1.0 : 0.0,
@@ -192,21 +197,52 @@ class GameResultController extends Controller
             default => 0.5,
         };
 
-        $newU = $this->elo->newRating($ur, $botRating, $score, $ug);
-        $user->{$ratingCol} = $newU;
-        $user->{$gamesCol} = $ug + 1;
+        $newU = $this->glicko->update((float)$ur, $rd, (float)$user->{'vol_' . $category}, [
+            ['rating' => (float)$botRating, 'rd' => self::BOT_RD, 'score' => $score],
+        ]);
+
+        $this->writeRating($user, $category, $newU);
         $user->save();
 
+        $after = (int) round($newU[0]);
         if ($userIsWhite) {
             $game->white_rating_before = $ur;
-            $game->white_rating_after = $newU;
+            $game->white_rating_after = $after;
             $game->black_rating_before = $botRating;
             $game->black_rating_after = $botRating;
         } else {
             $game->black_rating_before = $ur;
-            $game->black_rating_after = $newU;
+            $game->black_rating_after = $after;
             $game->white_rating_before = $botRating;
             $game->white_rating_after = $botRating;
         }
+    }
+
+    /** RD for this category right now, grown for idle time since the last game. */
+    private function currentRd(User $user, string $category): float
+    {
+        $rd = (float)$user->{'rd_' . $category};
+        $last = $user->{'rated_at_' . $category};
+        $idleDays = 0.0;
+        if (is_string($last) && $last !== '') {
+            $idleDays = max(0.0, (time() - strtotime($last)) / 86400.0);
+        }
+
+        return $this->glicko->inflateRd($rd, $idleDays);
+    }
+
+    /**
+     * Persist a Glicko-2 result triple back onto the user: rounded rating,
+     * new RD + volatility, a bumped game count, and the rated-at timestamp.
+     *
+     * @param array{0:float,1:float,2:float} $next [rating, rd, vol]
+     */
+    private function writeRating(User $user, string $category, array $next): void
+    {
+        $user->{'rating_' . $category} = (int) round($next[0]);
+        $user->{'rd_' . $category} = $next[1];
+        $user->{'vol_' . $category} = $next[2];
+        $user->{'games_' . $category} = (int)$user->{'games_' . $category} + 1;
+        $user->{'rated_at_' . $category} = date('Y-m-d H:i:s');
     }
 }

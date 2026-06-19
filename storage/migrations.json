@@ -450,6 +450,141 @@
             "table": "bot_game",
             "operation": "drop_column",
             "warning": null
+        },
+        {
+            "id": "mig_57fed01c020f",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rd_bullet` DOUBLE NOT NULL DEFAULT 350",
+            "destructive": false,
+            "generated_at": "2026-06-19T14:28:57+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_22d625917b94",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rd_blitz` DOUBLE NOT NULL DEFAULT 350",
+            "destructive": false,
+            "generated_at": "2026-06-19T14:28:57+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_13d4a0b53162",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rd_rapid` DOUBLE NOT NULL DEFAULT 350",
+            "destructive": false,
+            "generated_at": "2026-06-19T14:28:57+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_321f7c67150d",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rd_classical` DOUBLE NOT NULL DEFAULT 350",
+            "destructive": false,
+            "generated_at": "2026-06-19T14:28:57+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_e92b334acec7",
+            "sql": "ALTER TABLE `user` ADD COLUMN `vol_bullet` DOUBLE NOT NULL DEFAULT 0.06",
+            "destructive": false,
+            "generated_at": "2026-06-19T14:28:57+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_b230e5424d9d",
+            "sql": "ALTER TABLE `user` ADD COLUMN `vol_blitz` DOUBLE NOT NULL DEFAULT 0.06",
+            "destructive": false,
+            "generated_at": "2026-06-19T14:28:57+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_de3a80559f77",
+            "sql": "ALTER TABLE `user` ADD COLUMN `vol_rapid` DOUBLE NOT NULL DEFAULT 0.06",
+            "destructive": false,
+            "generated_at": "2026-06-19T14:28:57+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_78c6a58a5dbb",
+            "sql": "ALTER TABLE `user` ADD COLUMN `vol_classical` DOUBLE NOT NULL DEFAULT 0.06",
+            "destructive": false,
+            "generated_at": "2026-06-19T14:28:57+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_8b7420d59f0e",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rated_at_bullet` TEXT",
+            "destructive": false,
+            "generated_at": "2026-06-19T14:28:57+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_aa8f4d31d690",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rated_at_blitz` TEXT",
+            "destructive": false,
+            "generated_at": "2026-06-19T14:28:57+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_749f165b7938",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rated_at_rapid` TEXT",
+            "destructive": false,
+            "generated_at": "2026-06-19T14:28:57+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_ab544a1d72b8",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rated_at_classical` TEXT",
+            "destructive": false,
+            "generated_at": "2026-06-19T14:28:57+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_be40e689b895",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rd_puzzle` DOUBLE NOT NULL DEFAULT 350",
+            "destructive": false,
+            "generated_at": "2026-06-19T14:28:57+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_bc04922a6703",
+            "sql": "ALTER TABLE `user` ADD COLUMN `vol_puzzle` DOUBLE NOT NULL DEFAULT 0.06",
+            "destructive": false,
+            "generated_at": "2026-06-19T14:28:57+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_c3a08d081a46",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rated_at_puzzle` TEXT",
+            "destructive": false,
+            "generated_at": "2026-06-19T14:28:57+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
         }
     ]
 }

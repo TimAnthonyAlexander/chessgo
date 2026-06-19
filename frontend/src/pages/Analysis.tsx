@@ -22,7 +22,7 @@ import {
   START_FEN,
   turnAt,
 } from '../lib/analysisTree'
-import { sounds } from '../lib/sounds'
+import { playForSan } from '../lib/sounds'
 
 // How long (ms) each auto-played move lingers before the next one.
 const AUTO_DELAY = 700
@@ -31,12 +31,8 @@ type AutoMode = 'off' | 'play' | 'best'
 
 // Play the appropriate sound for the move that leads INTO a node.
 function playMoveSound(node?: TreeNode) {
-  const m = node?.move
-  if (!m) return
-  if (m.san.includes('x')) sounds.capture()
-  else if (m.san.startsWith('O-O')) sounds.castle()
-  else if (m.uci.length === 5) sounds.promote()
-  else sounds.move()
+  if (!node?.move) return
+  playForSan(node.move.san, false)
 }
 
 export default function Analysis() {

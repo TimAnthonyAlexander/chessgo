@@ -13,7 +13,7 @@ use App\Services\BotGameService;
 use App\Services\GameAnalysisService;
 use App\Services\WsTicketService;
 use App\Services\HubClient;
-use App\Services\EloService;
+use App\Services\Glicko2Service;
 use BaseApi\Auth\UserProvider;
 
 /**
@@ -41,8 +41,8 @@ class AppServiceProvider extends ServiceProvider
         // Realtime hub stats client (homepage lobby counts)
         $container->singleton(HubClient::class);
 
-        // Elo ratings (category mapping + rating math)
-        $container->singleton(EloService::class);
+        // Glicko-2 ratings (category mapping + rating math)
+        $container->singleton(Glicko2Service::class);
 
         // Example: Register a custom service with manual configuration
         // $container->singleton(SomeService::class, function (ContainerInterface $c) {

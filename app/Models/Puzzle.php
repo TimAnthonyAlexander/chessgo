@@ -11,7 +11,7 @@ use BaseApi\Models\BaseModel;
  *
  * The `rating` is treated as GROUND TRUTH (settled over millions of Lichess
  * attempts) and never changes here — only the solver's User::rating_puzzle
- * moves against it (see PuzzleController + EloService).
+ * moves against it (see PuzzleController + Glicko2Service).
  *
  * Lichess solution convention: `fen` is the position BEFORE the opponent's
  * setup move. `moves[0]` is that opponent move (auto-played), then the line
