@@ -14,6 +14,7 @@ use App\Controllers\StreamController;
 use App\Controllers\BotGameController;
 use App\Controllers\BotMoveController;
 use App\Controllers\AnalyzeController;
+use App\Controllers\EngineMatchController;
 use App\Controllers\WsTicketController;
 use App\Controllers\StatsController;
 use App\Controllers\WatchController;
@@ -64,6 +65,13 @@ $router->post('/bot-games/{id}/move', [
 $router->post('/analyze', [
     RateLimitMiddleware::class => ['limit' => '120/1m'],
     AnalyzeController::class,
+]);
+
+// Admin-only "engine vs engine" — one ply of gomachine(rating) vs Stockfish(elo).
+// CombinedAuthMiddleware authenticates; the controller enforces role === 'admin'.
+$router->post('/admin/engine-vs/move', [
+    CombinedAuthMiddleware::class,
+    EngineMatchController::class,
 ]);
 
 // WebSocket ticket for the realtime hub. Session is optional: a logged-in user

@@ -56,6 +56,20 @@ class GomachineClient
     }
 
     /**
+     * Stockfish's move at a target UCI_Elo (for the admin engine-vs-engine view).
+     *
+     * @return array<string, mixed> {bestmove, san}
+     */
+    public function stockfishMove(string $fen, int $elo, int $movetimeMs = 100): array
+    {
+        return $this->post('/sf-bestmove', [
+            'fen' => $fen,
+            'elo' => $elo,
+            'movetime' => $movetimeMs,
+        ]);
+    }
+
+    /**
      * Full-strength positional analysis, INDEPENDENT of any bot difficulty
      * level (SPEC §6) — used to drive the eval bar. Always searches at full
      * power for a fixed time budget, so a level-1 bot game still shows an

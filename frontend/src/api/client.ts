@@ -73,6 +73,37 @@ export function createBotGame(rating: number, humanColor: Color, fen?: string): 
   })
 }
 
+// --- Admin: engine vs engine (gomachine @ rating vs Stockfish @ Elo) ---
+
+export type EngineSide = 'gomachine' | 'stockfish'
+
+export interface EngineVsMove {
+  bestmove: string | null
+  san: string | null
+  fen: string | null
+  status: GameStatus
+  result: string | null
+  sideToMove: Color | null
+  claimableDraws: string[]
+  eval: { type: 'cp' | 'mate'; value: number } | null
+  by: EngineSide
+  reason?: string
+}
+
+/** Admin-only: play one ply of gomachine(rating) vs Stockfish(elo) and apply it. */
+export function engineVsMove(params: {
+  fen: string
+  side: EngineSide
+  rating?: number
+  elo?: number
+  movetime?: number
+}): Promise<EngineVsMove> {
+  return request<EngineVsMove>('/admin/engine-vs/move', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  })
+}
+
 export function getBotGame(id: string): Promise<BotGame> {
   return request<BotGame>(`/bot-games/${id}`)
 }

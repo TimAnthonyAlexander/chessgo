@@ -65,7 +65,10 @@ export default function Layout() {
         </Link>
 
         <Box sx={{ display: { xs: 'none', md: 'flex' }, alignItems: 'center', gap: 3 }}>
-          {LINKS.map((l) => {
+          {(user?.role === 'admin'
+            ? [...LINKS, { label: 'Engine v Engine', to: '/admin/engine-vs' }]
+            : LINKS
+          ).map((l) => {
             const active = !!l.to && (l.to === '/' ? pathname === '/' : pathname.startsWith(l.to))
             if (!l.to) {
               return (

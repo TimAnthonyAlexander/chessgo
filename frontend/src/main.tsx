@@ -11,6 +11,7 @@ import Puzzles from './pages/Puzzles'
 import Analysis from './pages/Analysis'
 import Watch from './pages/Watch'
 import Spectate from './pages/Spectate'
+import EngineVsEngine from './pages/EngineVsEngine'
 import './styles.css'
 
 const router = createBrowserRouter([
@@ -25,6 +26,7 @@ const router = createBrowserRouter([
       { path: '/watch/:id', element: <Spectate /> },
       { path: '/analysis', element: <Analysis /> },
       { path: '/analysis/:id', element: <Analysis /> },
+      { path: '/admin/engine-vs', element: <EngineVsEngine /> },
     ],
   },
 ])

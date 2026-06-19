@@ -1,0 +1,361 @@
+import { useEffect, useRef, useState } from 'react'
+import { Box, Slider, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material'
+import { Bot, Cpu, Pause, Play, RotateCcw } from 'lucide-react'
+import Board from '../components/Board'
+import EvalBar, { type WhiteEval } from '../components/EvalBar'
+import MoveList from '../components/MoveList'
+import { ActionBtn, ErrorBanner } from '../components/PanelUI'
+import { type Color, engineVsMove, type EngineSide, type GameStatus, type MoveEntry } from '../api/client'
+import { useAuth } from '../lib/auth'
+import { statusLabel } from '../lib/chess'
+
+const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
+const MAX_PLIES = 400 // hard stop so two shuffling engines can't loop forever
+const MOVE_DELAY = 550 // ms between plies, so it's watchable
+
+const sideToMoveOf = (fen: string): Color => (fen.split(' ')[1] === 'b' ? 'b' : 'w')
+
+/** Admin-only: watch our engine (gomachine, at a target Elo rating) play Stockfish
+ * (at a UCI_Elo). The browser drives the game ply-by-ply through the admin proxy;
+ * the engines themselves stay stateless. */
+export default function EngineVsEngine() {
+  const { user, status: authStatus } = useAuth()
+
+  // Settings
+  const [gomaRating, setGomaRating] = useState(2200)
+  const [sfElo, setSfElo] = useState(1500)
+  const [gomaSide, setGomaSide] = useState<Color>('w')
+
+  // Game
+  const [fen, setFen] = useState(START_FEN)
+  const [moves, setMoves] = useState<MoveEntry[]>([])
+  const [status, setStatus] = useState<GameStatus>('ongoing')
+  const [result, setResult] = useState<string | null>(null)
+  const [lastMove, setLastMove] = useState<{ from: string; to: string } | null>(null)
+  const [whiteEval, setWhiteEval] = useState<WhiteEval | null>(null)
+  const [running, setRunning] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const thinkingRef = useRef(false)
+
+  const ply = moves.length
+  const over = status !== 'ongoing'
+  const sideToMove = sideToMoveOf(fen)
+  const moverSide: EngineSide = sideToMove === gomaSide ? 'gomachine' : 'stockfish'
+
+  // The engine loop: when running, fetch the side-to-move's move after a delay,
+  // apply it (server returns the new FEN), and let the ply change re-trigger us.
+  useEffect(() => {
+    if (!running || over) return
+    if (ply >= MAX_PLIES) {
+      setRunning(false)
+      setResult('1/2-1/2')
+      return
+    }
+    let cancelled = false
+    const id = setTimeout(async () => {
+      thinkingRef.current = true
+      try {
+        const res = await engineVsMove({
+          fen,
+          side: moverSide,
+          ...(moverSide === 'gomachine' ? { rating: gomaRating } : { elo: sfElo }),
+        })
+        if (cancelled) return
+        if (!res.bestmove || !res.fen) {
+          setRunning(false)
+          setError(res.reason ?? 'engine returned no move')
+          return
+        }
+        setLastMove({ from: res.bestmove.slice(0, 2), to: res.bestmove.slice(2, 4) })
+        setMoves((m) => [
+          ...m,
+          { ply: m.length + 1, uci: res.bestmove!, san: res.san ?? res.bestmove!, by: 'bot', fen: res.fen! },
+        ])
+        if (res.eval && moverSide === 'gomachine') {
+          const white = sideToMove === 'w' ? res.eval.value : -res.eval.value
+          setWhiteEval({ type: res.eval.type, white })
+        }
+        setFen(res.fen)
+        if (res.status !== 'ongoing') {
+          setStatus(res.status)
+          setResult(res.result ?? null)
+          setRunning(false)
+        } else if (res.claimableDraws?.includes('fifty')) {
+          setStatus('draw-fifty')
+          setResult('1/2-1/2')
+          setRunning(false)
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : 'move failed')
+          setRunning(false)
+        }
+      } finally {
+        thinkingRef.current = false
+      }
+    }, MOVE_DELAY)
+    return () => {
+      cancelled = true
+      clearTimeout(id)
+    }
+  }, [running, ply, over, fen, sideToMove, moverSide, gomaRating, sfElo])
+
+  function reset() {
+    setRunning(false)
+    setFen(START_FEN)
+    setMoves([])
+    setStatus('ongoing')
+    setResult(null)
+    setLastMove(null)
+    setWhiteEval(null)
+    setError(null)
+  }
+
+  function toggleRun() {
+    if (over) reset()
+    setRunning((r) => !r)
+  }
+
+  if (authStatus === 'loading') {
+    return <Centered>Loading…</Centered>
+  }
+  if (user?.role !== 'admin') {
+    return <Centered>This page is for admins only.</Centered>
+  }
+
+  const caption = over
+    ? `${statusLabel(status)}${result ? ` · ${result}` : ''}`
+    : running
+      ? `${moverSide === 'gomachine' ? 'gomachine' : 'Stockfish'} to move…`
+      : ply > 0
+        ? 'Paused'
+        : 'Set strengths and press Start'
+
+  return (
+    <Box sx={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'flex-start', px: { xs: 2, md: 3 }, py: 3 }}>
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: '1fr', md: '320px min(calc(100vh - 120px), calc(100vw - 752px), 880px) 320px' },
+          columnGap: { md: 4 },
+          rowGap: 3,
+          width: { xs: '100%', md: 'fit-content' },
+          maxWidth: '100%',
+          mx: 'auto',
+          alignItems: 'start',
+        }}
+      >
+        {/* Left — controls */}
+        <Box sx={{ display: { xs: 'block', md: 'block' }, width: '100%' }}>
+          <Controls
+            gomaRating={gomaRating}
+            sfElo={sfElo}
+            gomaSide={gomaSide}
+            running={running}
+            disabledSettings={running}
+            onRating={setGomaRating}
+            onElo={setSfElo}
+            onSide={setGomaSide}
+            onToggleRun={toggleRun}
+            onReset={reset}
+            over={over}
+          />
+        </Box>
+
+        {/* Center — board */}
+        <Box sx={{ alignSelf: 'start', width: { xs: 'min(94vw, 64vh)', md: '100%' }, display: 'flex', gap: 1.25 }}>
+          <EvalBar ev={whiteEval} orientation={gomaSide} />
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Board
+              fen={fen}
+              orientation={gomaSide}
+              sideToMove={sideToMove}
+              legalMoves={[]}
+              lastMove={lastMove}
+              inCheck={false}
+              interactive={false}
+              onMove={() => {}}
+            />
+          </Box>
+        </Box>
+
+        {/* Right — status + move list */}
+        <Box sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+          <Box
+            sx={{
+              bgcolor: 'var(--surface)',
+              border: '1px solid var(--line-soft)',
+              borderRadius: '14px',
+              p: 1.75,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 1,
+            }}
+          >
+            <MatchupRow icon={<Cpu size={16} />} name="gomachine" detail={`~${gomaRating} Elo`} side={gomaSide} />
+            <MatchupRow icon={<Bot size={16} />} name="Stockfish" detail={`${sfElo} Elo`} side={gomaSide === 'w' ? 'b' : 'w'} />
+            <Typography sx={{ fontSize: 13, fontWeight: 600, color: 'var(--text-dim)', mt: 0.5 }}>{caption}</Typography>
+          </Box>
+          {error && <ErrorBanner>{error}</ErrorBanner>}
+          <Box sx={{ height: 420, display: 'flex' }}>
+            <MoveList fill moves={moves} currentPly={ply} onSelectPly={() => {}} />
+          </Box>
+        </Box>
+      </Box>
+    </Box>
+  )
+}
+
+function MatchupRow({ icon, name, detail, side }: { icon: React.ReactNode; name: string; detail: string; side: Color }) {
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+      <Box sx={{ color: 'var(--accent)' }}>{icon}</Box>
+      <Typography sx={{ fontWeight: 700, fontSize: 14 }}>{name}</Typography>
+      <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)' }}>{detail}</Typography>
+      <Box sx={{ flex: 1 }} />
+      <Typography sx={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'var(--font-mono)' }}>
+        {side === 'w' ? 'White' : 'Black'}
+      </Typography>
+    </Box>
+  )
+}
+
+function Controls({
+  gomaRating,
+  sfElo,
+  gomaSide,
+  running,
+  disabledSettings,
+  onRating,
+  onElo,
+  onSide,
+  onToggleRun,
+  onReset,
+  over,
+}: {
+  gomaRating: number
+  sfElo: number
+  gomaSide: Color
+  running: boolean
+  disabledSettings: boolean
+  onRating: (n: number) => void
+  onElo: (n: number) => void
+  onSide: (c: Color) => void
+  onToggleRun: () => void
+  onReset: () => void
+  over: boolean
+}) {
+  return (
+    <Box
+      sx={{
+        bgcolor: 'var(--surface)',
+        border: '1px solid var(--line-soft)',
+        borderRadius: '14px',
+        p: 2.5,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 2.5,
+        boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+      }}
+    >
+      <Box>
+        <Typography sx={{ fontFamily: 'var(--font-display)', fontSize: 22, fontWeight: 700, lineHeight: 1.1 }}>
+          Engine vs Engine
+        </Typography>
+        <Typography sx={{ fontSize: 13, color: 'var(--text-dim)', mt: 0.5 }}>
+          gomachine vs Stockfish — admin only.
+        </Typography>
+      </Box>
+
+      <Box>
+        <Label>gomachine rating</Label>
+        <SettingValue>~{gomaRating} Elo</SettingValue>
+        <Slider value={gomaRating} onChange={(_, v) => onRating(v as number)} min={700} max={2700} step={50} disabled={disabledSettings} sx={sliderSx} />
+      </Box>
+
+      <Box>
+        <Label>Stockfish rating</Label>
+        <SettingValue>{sfElo} Elo</SettingValue>
+        <Slider value={sfElo} onChange={(_, v) => onElo(v as number)} min={1320} max={3190} step={10} disabled={disabledSettings} sx={sliderSx} />
+      </Box>
+
+      <Box>
+        <Label>gomachine plays</Label>
+        <ToggleButtonGroup
+          exclusive
+          fullWidth
+          size="small"
+          value={gomaSide}
+          onChange={(_, v) => v && onSide(v as Color)}
+          disabled={disabledSettings}
+          sx={toggleSx}
+        >
+          <ToggleButton value="w">White</ToggleButton>
+          <ToggleButton value="b">Black</ToggleButton>
+        </ToggleButtonGroup>
+      </Box>
+
+      <Box sx={{ display: 'flex', gap: 1 }}>
+        <ActionBtn
+          tone="primary"
+          icon={running ? <Pause size={15} /> : <Play size={15} />}
+          label={running ? 'Pause' : over ? 'Play again' : 'Start'}
+          onClick={onToggleRun}
+        />
+        <ActionBtn tone="danger" icon={<RotateCcw size={15} />} label="Reset" onClick={onReset} />
+      </Box>
+    </Box>
+  )
+}
+
+function Centered({ children }: { children: React.ReactNode }) {
+  return (
+    <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', p: 4 }}>
+      <Typography sx={{ color: 'var(--text-dim)' }}>{children}</Typography>
+    </Box>
+  )
+}
+
+function Label({ children }: { children: React.ReactNode }) {
+  return (
+    <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 11, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--muted)' }}>
+      {children}
+    </Typography>
+  )
+}
+
+function SettingValue({ children }: { children: React.ReactNode }) {
+  return (
+    <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 14, fontWeight: 700, color: 'var(--accent)', mb: 0.25 }}>
+      {children}
+    </Typography>
+  )
+}
+
+const sliderSx = {
+  color: 'var(--accent)',
+  height: 5,
+  '& .MuiSlider-rail': { opacity: 0.4, bgcolor: 'var(--line)' },
+  '& .MuiSlider-track': { border: 'none' },
+  '& .MuiSlider-thumb': { width: 16, height: 16, bgcolor: '#f3eee2' },
+}
+
+const toggleSx = {
+  mt: 1,
+  gap: 0.75,
+  '& .MuiToggleButton-root': {
+    color: 'var(--text-dim)',
+    border: '1px solid var(--line)',
+    borderRadius: '10px !important',
+    textTransform: 'none',
+    fontFamily: 'var(--font-display)',
+    fontWeight: 600,
+    fontSize: 13.5,
+    py: 0.8,
+    '&.Mui-selected': {
+      color: '#15171c',
+      background: 'linear-gradient(180deg, #e3b56a, #d8a657)',
+      borderColor: 'var(--accent)',
+    },
+  },
+}
