@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Box, Button, Typography } from '@mui/material'
 import { ArrowLeft, User } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -9,6 +9,7 @@ import { Avatar, PANEL_SHADOW } from '../components/PanelUI'
 import type { MoveEntry } from '../api/client'
 import { type SpectateGame, type SpectateSide, spectateRemaining, spectateSocket } from '../lib/spectate'
 import { useSpectate } from '../lib/useSpectate'
+import { playForSan, sounds } from '../lib/sounds'
 
 export default function Spectate() {
   const { id } = useParams<{ id: string }>()
@@ -29,6 +30,34 @@ export default function Spectate() {
     if (!g || g.over) return
     const t = window.setInterval(() => force((n) => n + 1), 200)
     return () => window.clearInterval(t)
+  }, [g?.id, g?.over])
+
+  // Sound: voice each new move as the position advances. A spectator isn't
+  // playing, so we voice BOTH sides (unlike LiveGame, which only sounds the
+  // opponent). Audio is already unlocked by the click that brought us here (the
+  // global pointerdown unlock in lib/sounds). Baseline per game id so opening a
+  // mid-game stream doesn't replay the whole history.
+  const soundedPly = useRef<{ id: string; ply: number } | null>(null)
+  useEffect(() => {
+    if (!g) return
+    const prev = soundedPly.current
+    if (!prev || prev.id !== g.id) {
+      soundedPly.current = { id: g.id, ply: g.moves.length } // baseline; don't replay
+      return
+    }
+    if (g.moves.length > prev.ply) {
+      soundedPly.current = { id: g.id, ply: g.moves.length }
+      playForSan(g.moves[g.moves.length - 1].san, false)
+    }
+  }, [g?.id, g?.moves.length])
+
+  // Sound: one game-over tone when the game ends (once per game).
+  const endedSound = useRef<string | null>(null)
+  useEffect(() => {
+    if (g && g.over && endedSound.current !== g.id) {
+      endedSound.current = g.id
+      sounds.end()
+    }
   }, [g?.id, g?.over])
 
   if (!g) {
