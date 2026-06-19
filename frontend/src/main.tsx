@@ -9,6 +9,7 @@ import BotGame from './pages/BotGame'
 import LiveGame from './pages/LiveGame'
 import Puzzles from './pages/Puzzles'
 import Analysis from './pages/Analysis'
+import Editor from './pages/Editor'
 import Watch from './pages/Watch'
 import Spectate from './pages/Spectate'
 import EngineVsEngine from './pages/EngineVsEngine'
@@ -26,6 +27,7 @@ const router = createBrowserRouter([
       { path: '/watch/:id', element: <Spectate /> },
       { path: '/analysis', element: <Analysis /> },
       { path: '/analysis/:id', element: <Analysis /> },
+      { path: '/editor', element: <Editor /> },
       { path: '/admin/engine-vs', element: <EngineVsEngine /> },
     ],
   },

@@ -104,6 +104,67 @@ class BotGameService
         return ['ok' => true];
     }
 
+    /**
+     * Undo the human's last move, including any bot reply that followed it, so
+     * it becomes the human's turn again in the position before that move.
+     *
+     * Trailing bot move(s) are dropped first, then the human's move. If the
+     * human hasn't moved yet (nothing of theirs to take back), this is a no-op
+     * and reports an error.
+     *
+     * @return array{ok: bool, error?: string}
+     */
+    public function undo(BotGame $game): array
+    {
+        $moves = $game->getMoves();
+        $history = $game->getHistory();
+        if ($moves === []) {
+            return ['ok' => false, 'error' => 'nothing to undo'];
+        }
+
+        $newMoves = $moves;
+        $newHistory = $history;
+
+        // Drop the bot's reply (and any trailing bot moves), then require a
+        // human move to take back — otherwise the human hasn't moved.
+        while ($newMoves !== [] && (end($newMoves)['by'] ?? '') === 'bot') {
+            array_pop($newMoves);
+            array_pop($newHistory);
+        }
+        if ($newMoves === [] || (end($newMoves)['by'] ?? '') !== 'human') {
+            return ['ok' => false, 'error' => 'nothing to undo'];
+        }
+        array_pop($newMoves);
+        array_pop($newHistory);
+
+        // Re-number the surviving plies (1..N) so they stay contiguous.
+        $reindexed = [];
+        foreach (array_values($newMoves) as $i => $m) {
+            $m['ply'] = $i + 1;
+            $reindexed[] = $m;
+        }
+
+        // The position before that human move is the last surviving move's
+        // resulting FEN — or, if none survive, the game's original start (the
+        // first recorded history entry).
+        if ($reindexed === []) {
+            $game->fen = is_string($history[0] ?? null) ? $history[0] : $game->fen;
+        } else {
+            $last = $reindexed[count($reindexed) - 1];
+            $game->fen = is_string($last['fen'] ?? null) ? $last['fen'] : $game->fen;
+        }
+
+        $game->setMoves($reindexed);
+        $game->setHistory(array_values($newHistory));
+        $parts = explode(' ', $game->fen);
+        $game->side_to_move = (($parts[1] ?? 'w') === 'b') ? 'b' : 'w';
+        $game->status = 'ongoing';
+        $game->result = null;
+        $game->save();
+
+        return ['ok' => true];
+    }
+
     /** Compute and apply one bot move on the given (ongoing) game. */
     private function playBot(BotGame $game): void
     {

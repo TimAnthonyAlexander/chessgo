@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Box, Tooltip, Typography } from '@mui/material'
-import { Bot, Check, Copy, Dices, FileInput, RotateCcw } from 'lucide-react'
+import { Bot, Check, Copy, Dices, FileInput, Pencil, RotateCcw } from 'lucide-react'
 import { Chess } from 'chess.js'
 import { START_FEN } from '../lib/analysisTree'
 
@@ -75,12 +75,14 @@ export default function AnalysisAside({
   fen,
   onLoadFen,
   onPlayBot,
+  onEditBoard,
   playBotDisabled = false,
   showSetup = true,
 }: {
   fen: string
   onLoadFen: (fen: string) => void
   onPlayBot: () => void
+  onEditBoard: () => void
   playBotDisabled?: boolean
   showSetup?: boolean
 }) {
@@ -98,7 +100,42 @@ export default function AnalysisAside({
     >
       <MaterialCard mat={mat} />
       {showSetup && <PositionCard fen={fen} onLoadFen={onLoadFen} />}
+      <EditBoardButton onClick={onEditBoard} />
       <PlayBotButton onClick={onPlayBot} disabled={playBotDisabled} />
+    </Box>
+  )
+}
+
+// Open the board editor seeded with the position currently on the board. Lets
+// the user clear/rearrange pieces freely, then come back to analyse or play it.
+function EditBoardButton({ onClick }: { onClick: () => void }) {
+  return (
+    <Box
+      component="button"
+      onClick={onClick}
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 0.9,
+        width: '100%',
+        height: 44,
+        cursor: 'pointer',
+        fontFamily: 'var(--font-display)',
+        fontSize: 13.5,
+        fontWeight: 600,
+        letterSpacing: 0.2,
+        color: 'var(--text)',
+        bgcolor: 'var(--surface-2)',
+        border: '1px solid var(--line)',
+        borderRadius: '12px',
+        transition: 'color .15s, background-color .15s, border-color .15s, transform .05s',
+        '&:hover': { color: 'var(--accent)', bgcolor: 'var(--line)', borderColor: 'var(--accent-line)' },
+        '&:active': { transform: 'translateY(1px)' },
+      }}
+    >
+      <Pencil size={16} />
+      Edit this board
     </Box>
   )
 }

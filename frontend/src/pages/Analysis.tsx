@@ -68,8 +68,9 @@ export default function Analysis() {
         setLoading(false)
         return
       }
-      // Free mode: fresh board from the start position.
-      setTree(createTree(START_FEN))
+      // Free mode: fresh board from the start position — or a custom one carried
+      // over from the board editor ("Analyse this position").
+      setTree(createTree(importStartFen))
       setCurrentId(0)
       setGame(null)
       setLoading(false)
@@ -306,6 +307,7 @@ export default function Analysis() {
           fen={current.fen}
           onLoadFen={loadPosition}
           onPlayBot={() => navigate('/bot', { state: { fen: current.fen } })}
+          onEditBoard={() => navigate('/editor', { state: { fen: current.fen } })}
           playBotDisabled={over.over}
           showSetup={!id}
         />

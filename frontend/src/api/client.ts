@@ -115,6 +115,12 @@ export function playMove(id: string, move: string): Promise<BotGame> {
   })
 }
 
+/** Take back the human's last move, including any bot reply since. Returns the
+ * game reverted to the human's turn in the position before that move. */
+export function undoMove(id: string): Promise<BotGame> {
+  return request<BotGame>(`/bot-games/${id}/undo`, { method: 'POST' })
+}
+
 export interface Analysis {
   eval: { type: 'cp' | 'mate'; value: number } | null
   bestmove: string | null

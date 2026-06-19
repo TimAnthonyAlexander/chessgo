@@ -13,6 +13,7 @@ use App\Controllers\ApiTokenController;
 use App\Controllers\StreamController;
 use App\Controllers\BotGameController;
 use App\Controllers\BotMoveController;
+use App\Controllers\BotUndoController;
 use App\Controllers\AnalyzeController;
 use App\Controllers\EngineMatchController;
 use App\Controllers\WsTicketController;
@@ -59,6 +60,12 @@ $router->get('/bot-games/{id}', [BotGameController::class]);
 $router->post('/bot-games/{id}/move', [
     RateLimitMiddleware::class => ['limit' => '180/1m'],
     BotMoveController::class,
+]);
+
+// Take back the human's last move (and any bot reply since)
+$router->post('/bot-games/{id}/undo', [
+    RateLimitMiddleware::class => ['limit' => '180/1m'],
+    BotUndoController::class,
 ]);
 
 // Full-strength eval of a position (drives the eval bar): { fen }

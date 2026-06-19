@@ -18,6 +18,7 @@ import {
   FlipVertical2,
   Play,
   RotateCcw,
+  Undo2,
   User,
   Volume2,
   VolumeX,
@@ -27,7 +28,14 @@ import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveList from '../components/MoveList'
 import GameModeCard from '../components/GameModeCard'
 import { ActionBtn, Avatar, ErrorBanner, NavBtn } from '../components/PanelUI'
-import { analyze, type BotGame as Game, type Color, createBotGame, playMove } from '../api/client'
+import {
+  analyze,
+  type BotGame as Game,
+  type Color,
+  createBotGame,
+  playMove,
+  undoMove,
+} from '../api/client'
 import { statusLabel } from '../lib/chess'
 import { useBoardInteraction } from '../lib/useBoardInteraction'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
@@ -173,6 +181,25 @@ export default function BotGame() {
     else if (gameOver) sounds.end()
   }
 
+  // Take back the human's last move (plus any bot reply since). Available once
+  // the human has actually moved, while the game is live and nothing's in flight.
+  const canUndo = ongoing && !thinking && !!game?.moves.some((m) => m.by === 'human')
+  async function undo() {
+    if (!game || thinking) return
+    setError(null)
+    setViewIndex(null)
+    setThinking(true)
+    try {
+      const g = await undoMove(game.id)
+      setGame(g)
+      sounds.move()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Undo failed.')
+    } finally {
+      setThinking(false)
+    }
+  }
+
   function resign() {
     if (!ongoing) return
     setResigned(true)
@@ -301,6 +328,7 @@ export default function BotGame() {
             game={game}
             rating={rating}
             ongoing={ongoing}
+            canUndo={canUndo}
             shownPly={shownPly}
             sound={sound}
             caption={caption}
@@ -313,6 +341,7 @@ export default function BotGame() {
             onLast={goLast}
             onFlip={() => setFlipped((f) => !f)}
             onToggleSound={toggleSound}
+            onUndo={undo}
             onResign={resign}
             onNewGame={() => {
               setGame(null)
@@ -350,6 +379,7 @@ function MovePanel({
   game,
   rating,
   ongoing,
+  canUndo,
   shownPly,
   sound,
   caption,
@@ -362,12 +392,14 @@ function MovePanel({
   onLast,
   onFlip,
   onToggleSound,
+  onUndo,
   onResign,
   onNewGame,
 }: {
   game: Game
   rating: number
   ongoing: boolean
+  canUndo: boolean
   shownPly: number
   sound: boolean
   caption: string
@@ -380,6 +412,7 @@ function MovePanel({
   onLast: () => void
   onFlip: () => void
   onToggleSound: () => void
+  onUndo: () => void
   onResign: () => void
   onNewGame: () => void
 }) {
@@ -452,6 +485,15 @@ function MovePanel({
         </Box>
 
         <Box sx={{ display: 'flex', gap: 1 }}>
+          {ongoing && (
+            <ActionBtn
+              tone="neutral"
+              icon={<Undo2 size={15} />}
+              label="Undo"
+              disabled={!canUndo}
+              onClick={onUndo}
+            />
+          )}
           {ongoing && <ActionBtn tone="danger" icon={<Flag size={15} />} label="Resign" onClick={onResign} />}
           <ActionBtn tone="primary" icon={<RotateCcw size={15} />} label="New game" onClick={onNewGame} />
         </Box>

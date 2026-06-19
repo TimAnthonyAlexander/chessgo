@@ -1,0 +1,60 @@
+/* Board-editor-only styling, layered on top of Board.css. */
+
+.board.editor.brushing,
+.board.editor.brushing .sq {
+  cursor: crosshair;
+}
+
+/* Spare-piece palette rows above / below the board. */
+.editor-palette {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 4px;
+  width: 100%;
+}
+.editor-palette.top {
+  margin-bottom: 8px;
+}
+.editor-palette.bottom {
+  margin-top: 8px;
+}
+
+.pal-cell {
+  position: relative;
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease,
+    box-shadow 0.12s ease;
+}
+.pal-cell .piece {
+  position: absolute;
+  inset: 8%;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 84%;
+  animation: none;
+}
+.pal-cell:hover {
+  border-color: var(--accent-line);
+  background: var(--line);
+}
+.pal-cell.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 14px -4px rgba(216, 166, 87, 0.6);
+}
+.pal-cell.tool {
+  color: var(--text-dim);
+}
+.pal-cell.tool.active {
+  color: var(--accent);
+}
