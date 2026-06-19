@@ -122,9 +122,13 @@ export interface Analysis {
   depth: number | null
 }
 
-/** Full-strength evaluation of a position (drives the eval bar, level-independent). */
-export function analyze(fen: string): Promise<Analysis> {
-  return request<Analysis>('/analyze', { method: 'POST', body: JSON.stringify({ fen }) })
+/** Full-strength evaluation of a position (drives the eval bar, level-independent).
+ * `movetime` (ms) trades depth for latency — omit for the full-power default. */
+export function analyze(fen: string, movetime?: number): Promise<Analysis> {
+  return request<Analysis>('/analyze', {
+    method: 'POST',
+    body: JSON.stringify(movetime ? { fen, movetime } : { fen }),
+  })
 }
 
 // --- Finished live games + post-game analysis (analysis board) ---

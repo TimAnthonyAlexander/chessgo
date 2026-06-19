@@ -6,7 +6,7 @@ import Board from '../components/Board'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveList from '../components/MoveList'
 import { ActionBtn, ErrorBanner, NavBtn } from '../components/PanelUI'
-import { type Color, engineVsMove, type EngineSide, type GameStatus, type MoveEntry } from '../api/client'
+import { analyze, type Color, engineVsMove, type EngineSide, type GameStatus, type MoveEntry } from '../api/client'
 import { useAuth } from '../lib/auth'
 import { statusLabel } from '../lib/chess'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
@@ -77,10 +77,6 @@ export default function EngineVsEngine() {
           ...m,
           { ply: m.length + 1, uci: res.bestmove!, san: res.san ?? res.bestmove!, by: 'bot', fen: res.fen! },
         ])
-        if (res.eval && moverSide === 'gomachine') {
-          const white = sideToMove === 'w' ? res.eval.value : -res.eval.value
-          setWhiteEval({ type: res.eval.type, white })
-        }
         setFen(res.fen)
         const gameOver = res.status !== 'ongoing' || !!res.claimableDraws?.includes('fifty')
         playForSan(res.san ?? res.bestmove, gameOver) // move/capture/end cue
@@ -107,6 +103,35 @@ export default function EngineVsEngine() {
       clearTimeout(id)
     }
   }, [running, ply, over, fen, sideToMove, moverSide, gomaRating, sfElo, budget])
+
+  // Eval bar = ONE consistent evaluator: gomachine at full strength, re-reading the
+  // current position after every ply regardless of who moved. We deliberately do NOT
+  // use the mover's own search — gomachine's is rating-limited (and one-sided), and
+  // Stockfish returns no eval at all. A fast (300ms) /analyze keeps the loop snappy
+  // while still surfacing forced mates as M1/M2.
+  useEffect(() => {
+    if (over) {
+      // Checkmate: the side to move has been mated, so it's lost. Other terminals
+      // (stalemate / draws) are dead even.
+      setWhiteEval(status === 'checkmate' ? { type: 'mate', white: sideToMove === 'w' ? -1 : 1 } : { type: 'cp', white: 0 })
+      return
+    }
+    if (ply === 0) {
+      setWhiteEval(null) // neutral bar on the idle start screen
+      return
+    }
+    let cancelled = false
+    analyze(fen, 300)
+      .then((r) => {
+        if (cancelled || !r.eval) return
+        const white = sideToMove === 'w' ? r.eval.value : -r.eval.value
+        setWhiteEval({ type: r.eval.type, white })
+      })
+      .catch(() => {}) // a transient analyze failure just leaves the last eval shown
+    return () => {
+      cancelled = true
+    }
+  }, [fen, status, over, sideToMove, ply])
 
   function reset() {
     setRunning(false)
