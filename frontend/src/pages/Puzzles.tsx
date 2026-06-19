@@ -1,6 +1,6 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { Box, CircularProgress, MenuItem, Select, Typography } from '@mui/material'
-import { CheckCircle2, ChevronRight, RotateCcw, Target, XCircle } from 'lucide-react'
+import { Check, CheckCircle2, ChevronRight, RotateCcw, Target, X, XCircle } from 'lucide-react'
 import Board from '../components/Board'
 import { ActionBtn, ErrorBanner } from '../components/PanelUI'
 import {
@@ -42,9 +42,28 @@ const THEMES: { value: string; label: string }[] = [
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 const splitUci = (uci: string): Mark => ({ from: uci.slice(0, 2), to: uci.slice(2, 4) })
 
+// Remember the last-picked theme across sessions so you don't keep re-selecting it.
+const THEME_KEY = 'chessgo.puzzleTheme'
+function readTheme(): string {
+  try {
+    const t = localStorage.getItem(THEME_KEY)
+    if (t && THEMES.some((x) => x.value === t)) return t
+  } catch {
+    /* ignore */
+  }
+  return ''
+}
+function storeTheme(t: string): void {
+  try {
+    localStorage.setItem(THEME_KEY, t)
+  } catch {
+    /* ignore */
+  }
+}
+
 export default function Puzzles() {
   const { user } = useAuth()
-  const [theme, setTheme] = useState('')
+  const [theme, setTheme] = useState(readTheme)
   const [data, setData] = useState<PuzzleNext | null>(null)
   const [phase, setPhase] = useState<Phase>('loading')
   const [fen, setFen] = useState<string>('')
@@ -54,6 +73,8 @@ export default function Puzzles() {
   const [override, setOverride] = useState<BoardMap | null>(null)
   const [result, setResult] = useState<PuzzleMoveResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // In-memory (non-persisted) win/loss log for this session, newest last.
+  const [history, setHistory] = useState<boolean[]>([])
 
   // Timers for the staged opponent-move animations; cleared on unmount / reload.
   const timers = useRef<ReturnType<typeof setTimeout>[]>([])
@@ -99,6 +120,19 @@ export default function Puzzles() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Enter advances to the next puzzle once the current one is solved or failed.
+  useEffect(() => {
+    if (phase !== 'solved' && phase !== 'failed') return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        void load(theme)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [phase, theme, load])
+
   function moveSound(board: BoardMap, uci: string) {
     const from = uci.slice(0, 2)
     const to = uci.slice(2, 4)
@@ -124,8 +158,11 @@ export default function Puzzles() {
         setFen(res.fen ?? fen)
         setResult(res)
         setPhase('solved')
-        sounds.end()
+        sounds.success()
+        setHistory((h) => [...h, true])
         if (res.rating) void authStore.refresh()
+        // Auto-advance to the next puzzle after a brief celebratory pause.
+        later(() => void load(theme), 2000)
         return
       }
 
@@ -158,6 +195,7 @@ export default function Puzzles() {
       }
       setPhase('failed')
       sounds.end()
+      setHistory((h) => [...h, false])
       if (res.rating) void authStore.refresh()
     } catch (e) {
       // Network/server error — revert the optimistic move, let them retry.
@@ -174,6 +212,7 @@ export default function Puzzles() {
 
   function onThemeChange(next: string) {
     setTheme(next)
+    storeTheme(next)
     void load(next)
   }
 
@@ -247,6 +286,7 @@ export default function Puzzles() {
             onThemeChange={onThemeChange}
             onNext={() => void load(theme)}
           />
+          <HistoryStrip history={history} />
           {error && <ErrorBanner sx={{ mx: 0, mt: 1.5 }}>{error}</ErrorBanner>}
         </Box>
       </Box>
@@ -457,6 +497,56 @@ function StatusCard({
             )}
           </Typography>
         </Box>
+      </Box>
+    </Box>
+  )
+}
+
+function HistoryStrip({ history }: { history: boolean[] }) {
+  if (history.length === 0) return null
+  const wins = history.filter(Boolean).length
+  const losses = history.length - wins
+  // Newest first so the most recent result is the easy-to-spot top-left box.
+  const ordered = [...history].reverse()
+
+  return (
+    <Box
+      sx={{
+        bgcolor: 'var(--surface)',
+        border: '1px solid var(--line-soft)',
+        borderRadius: '16px',
+        p: 2.25,
+        mt: 1.5,
+        boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+      }}
+    >
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.25 }}>
+        <Label>History</Label>
+        <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
+          <Box component="span" sx={{ color: '#7bb661' }}>{wins}W</Box>
+          <Box component="span" sx={{ color: 'var(--muted)' }}> · </Box>
+          <Box component="span" sx={{ color: '#e0796b' }}>{losses}L</Box>
+        </Typography>
+      </Box>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.6 }}>
+        {ordered.map((win, i) => (
+          <Box
+            key={history.length - 1 - i}
+            sx={{
+              width: 26,
+              height: 26,
+              borderRadius: '7px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: win ? '#7bb661' : '#e0796b',
+              bgcolor: win ? 'rgba(123,182,97,0.16)' : 'rgba(224,121,107,0.16)',
+              border: `1px solid ${win ? 'rgba(123,182,97,0.4)' : 'rgba(224,121,107,0.4)'}`,
+            }}
+          >
+            {win ? <Check size={15} /> : <X size={15} />}
+          </Box>
+        ))}
       </Box>
     </Box>
   )

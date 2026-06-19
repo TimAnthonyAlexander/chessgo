@@ -226,6 +226,16 @@ export const sounds = {
       epNote({ freq: 183, at: 0.14, dur: 0.4, gain: 0.59 })
     }),
 
+  // A bright ascending C-major arpeggio (C5–E5–G5–C6) — a "nice" reward cue for
+  // solving a puzzle, distinct from the neutral end-bell used on a miss.
+  success: () =>
+    guard(() => {
+      body({ freq: 523.25, dur: 0.4, gain: 0.5, at: 0 })
+      body({ freq: 659.25, dur: 0.4, gain: 0.5, at: 0.09 })
+      body({ freq: 783.99, dur: 0.5, gain: 0.55, at: 0.18 })
+      body({ freq: 1046.5, dur: 0.6, gain: 0.42, at: 0.27 })
+    }),
+
   // Soft bell "ding" (= Lichess GenericNotify, which standard also uses for
   // win/loss/draw): 561Hz + faint 759 + a touch of shimmer.
   end: () =>
