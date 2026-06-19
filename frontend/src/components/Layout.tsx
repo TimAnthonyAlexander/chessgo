@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Box, Button, Divider, Menu, MenuItem, Typography } from '@mui/material'
+import { Box, Button, Divider, Typography } from '@mui/material'
 import { ChevronDown, LogOut, Search, UserRound } from 'lucide-react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { gameSocket } from '../lib/socket'
@@ -231,16 +231,33 @@ const CATEGORIES: { key: RatingCategory; label: string }[] = [
   { key: 'classical', label: 'Classical' },
 ]
 
+// Hover-opened account menu (same interaction model as NavGroup): the trigger
+// shows the name + blitz rating, hovering reveals the panel. The wrapper holds
+// BOTH the trigger and the absolutely-positioned panel (with a `pt` hover
+// bridge) so moving from one to the other never crosses a gap that closes it.
 function UserMenu({ user }: { user: User }) {
-  const [anchor, setAnchor] = useState<HTMLElement | null>(null)
+  const [open, setOpen] = useState(false)
   const navigate = useNavigate()
+  const goProfile = () => {
+    setOpen(false)
+    navigate(`/@/${encodeURIComponent(user.name)}`)
+  }
   return (
-    <>
+    <Box
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      sx={{ position: 'relative', display: 'flex', alignItems: 'center' }}
+    >
       <Button
         color="inherit"
         size="small"
-        endIcon={<ChevronDown size={15} />}
-        onClick={(e) => setAnchor(e.currentTarget)}
+        onClick={goProfile}
+        endIcon={
+          <ChevronDown
+            size={15}
+            style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .15s ease' }}
+          />
+        }
         sx={{ textTransform: 'none', color: 'var(--text)', fontWeight: 600, fontSize: 14, px: 1.25 }}
       >
         {user.name}
@@ -248,50 +265,90 @@ function UserMenu({ user }: { user: User }) {
           {user.rating_blitz}{user.provisional?.blitz ? '?' : ''}
         </Typography>
       </Button>
-      <Menu
-        anchorEl={anchor}
-        open={!!anchor}
-        onClose={() => setAnchor(null)}
-        slotProps={{ paper: { sx: { bgcolor: 'var(--surface)', border: '1px solid var(--line)', minWidth: 200 } } }}
-      >
-        <MenuItem
-          onClick={() => {
-            setAnchor(null)
-            navigate(`/@/${encodeURIComponent(user.name)}`)
-          }}
-          sx={{ fontSize: 13.5, gap: 1 }}
-        >
-          <UserRound size={15} /> Profile
-        </MenuItem>
-        <Divider sx={{ borderColor: 'var(--line-soft)' }} />
-        {CATEGORIES.map((c) => (
-          <MenuItem key={c.key} disableRipple sx={{ cursor: 'default', justifyContent: 'space-between', gap: 3, fontSize: 13.5 }}>
-            <span style={{ color: 'var(--text-dim)' }}>{c.label}</span>
-            <span style={{ fontFamily: 'var(--font-mono)' }}>
-              {user[`rating_${c.key}`]}{user.provisional?.[c.key] ? '?' : ''}
-              <span style={{ color: 'var(--muted)', fontSize: 11 }}> · {user[`games_${c.key}`]}</span>
-            </span>
-          </MenuItem>
-        ))}
-        <Divider sx={{ borderColor: 'var(--line-soft)' }} />
-        <MenuItem disableRipple sx={{ cursor: 'default', justifyContent: 'space-between', gap: 3, fontSize: 13.5 }}>
-          <span style={{ color: 'var(--text-dim)' }}>Puzzles</span>
-          <span style={{ fontFamily: 'var(--font-mono)' }}>
-            {user.rating_puzzle}{user.provisional?.puzzle ? '?' : ''}
-            <span style={{ color: 'var(--muted)', fontSize: 11 }}> · {user.games_puzzle}</span>
-          </span>
-        </MenuItem>
-        <Divider sx={{ borderColor: 'var(--line-soft)' }} />
-        <MenuItem
-          onClick={() => {
-            setAnchor(null)
-            void authStore.logout()
-          }}
-          sx={{ fontSize: 13.5, gap: 1 }}
-        >
-          <LogOut size={15} /> Log out
-        </MenuItem>
-      </Menu>
-    </>
+
+      {open && (
+        // pt is the hover "bridge" between the trigger and the panel.
+        <Box sx={{ position: 'absolute', top: '100%', right: 0, pt: 1, zIndex: 40 }}>
+          <Box
+            sx={{
+              minWidth: 224,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 0.25,
+              p: 0.75,
+              bgcolor: 'var(--surface)',
+              border: '1px solid var(--line)',
+              borderRadius: '11px',
+              boxShadow: '0 20px 50px -24px rgba(0,0,0,0.85)',
+            }}
+          >
+            <MenuAction icon={<UserRound size={15} />} label="Profile" onClick={goProfile} />
+            <Divider sx={{ borderColor: 'var(--line-soft)', my: 0.5 }} />
+            {CATEGORIES.map((c) => (
+              <RatingLine
+                key={c.key}
+                label={c.label}
+                value={`${user[`rating_${c.key}`]}${user.provisional?.[c.key] ? '?' : ''}`}
+                games={user[`games_${c.key}`]}
+              />
+            ))}
+            <Divider sx={{ borderColor: 'var(--line-soft)', my: 0.5 }} />
+            <RatingLine
+              label="Puzzles"
+              value={`${user.rating_puzzle}${user.provisional?.puzzle ? '?' : ''}`}
+              games={user.games_puzzle}
+            />
+            <Divider sx={{ borderColor: 'var(--line-soft)', my: 0.5 }} />
+            <MenuAction
+              icon={<LogOut size={15} />}
+              label="Log out"
+              onClick={() => {
+                setOpen(false)
+                void authStore.logout()
+              }}
+            />
+          </Box>
+        </Box>
+      )}
+    </Box>
+  )
+}
+
+// A non-interactive rating readout row inside the account panel.
+function RatingLine({ label, value, games }: { label: string; value: string; games: number }) {
+  return (
+    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 3, px: 1.25, py: 0.6, fontSize: 13.5 }}>
+      <span style={{ color: 'var(--text-dim)' }}>{label}</span>
+      <span style={{ fontFamily: 'var(--font-mono)' }}>
+        {value}
+        <span style={{ color: 'var(--muted)', fontSize: 11 }}> · {games}</span>
+      </span>
+    </Box>
+  )
+}
+
+// A clickable action row (Profile / Log out) inside the account panel.
+function MenuAction({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
+  return (
+    <Box
+      onClick={onClick}
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 1,
+        px: 1.25,
+        py: 0.9,
+        borderRadius: '8px',
+        fontSize: 13.5,
+        fontWeight: 600,
+        color: 'var(--text-dim)',
+        cursor: 'pointer',
+        transition: 'color .12s ease, background .12s ease',
+        '&:hover': { color: 'var(--accent)', bgcolor: 'var(--line)' },
+      }}
+    >
+      {icon}
+      {label}
+    </Box>
   )
 }
