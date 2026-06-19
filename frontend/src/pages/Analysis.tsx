@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { Box, Button, Tooltip, Typography } from '@mui/material'
 import { ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, FlipVertical2, Play, Square, Target, Zap } from 'lucide-react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
@@ -23,6 +23,7 @@ import {
   turnAt,
 } from '../lib/analysisTree'
 import { playForSan } from '../lib/sounds'
+import { useAuth } from '../lib/auth'
 
 // How long (ms) each auto-played move lingers before the next one.
 const AUTO_DELAY = 700
@@ -346,8 +347,6 @@ export default function Analysis() {
             maxHeight: { xs: '72vh', md: 'none' },
           }}
         >
-          {id && <Header game={game} loading={loading} loadError={loadError} />}
-
           <EngineLine
             engineOn={engineOn}
             onToggleEngine={toggleEngine}
@@ -358,6 +357,8 @@ export default function Analysis() {
           />
 
           <MoveTree tree={tree} currentId={currentId} onSelect={selectNode} />
+
+          {id && <Header game={game} loading={loading} loadError={loadError} />}
 
           {/* Footer: auto playback + navigation */}
           <Box
@@ -746,52 +747,116 @@ function Header({
   loading: boolean
   loadError: string | null
 }) {
+  const { user } = useAuth()
+
   if (loading) {
     return (
-      <Box sx={{ p: 1.5, borderBottom: '1px solid var(--line-soft)' }}>
+      <Box sx={{ p: 1.5, borderTop: '1px solid var(--line-soft)' }}>
         <Typography sx={{ fontSize: 13.5, color: 'var(--text-dim)' }}>Analyzing game…</Typography>
       </Box>
     )
   }
   if (loadError || !game) {
     return (
-      <Box sx={{ p: 1.5, borderBottom: '1px solid var(--line-soft)' }}>
+      <Box sx={{ p: 1.5, borderTop: '1px solid var(--line-soft)' }}>
         <Typography sx={{ fontSize: 13.5, color: '#ca4a4a' }}>{loadError ?? 'Game not found'}</Typography>
       </Box>
     )
   }
 
+  const w = game.summary.w
+  const b = game.summary.b
+
+  // Result line: "{winner} won." (or "Draw"). Green when the viewer is one of
+  // the two players — whether they won OR lost; neutral when they're just
+  // analyzing someone else's game (name-matched against the signed-in user).
+  const me = user?.name
+  const amPlayer = !!me && (me === game.whiteName || me === game.blackName)
+  const draw = game.result === '1/2-1/2'
+  const winner = game.result === '1-0' ? game.whiteName : game.blackName
+  const resultText = draw ? 'Draw' : `${winner} won.`
+  const resultColor = !draw && amPlayer ? '#5b9e5b' : 'var(--text-dim)'
+
+  // One labeled row per metric, White vs Black side by side. Accuracy is a
+  // percentage (higher = better); the rest are counts of move-quality slips,
+  // colored by severity and dimmed at zero so a clean game stays calm.
+  const rows: StatRowData[] = [
+    { label: 'Accuracy', w: `${w.accuracy}%`, b: `${b.accuracy}%`, color: 'var(--text)' },
+    { label: 'Inaccuracies', w: w.inaccuracy, b: b.inaccuracy, color: '#e0a33e', count: true },
+    { label: 'Mistakes', w: w.mistake, b: b.mistake, color: '#e08a3e', count: true },
+    { label: 'Blunders', w: w.blunder, b: b.blunder, color: '#ca4a4a', count: true },
+  ]
+
   return (
-    <Box sx={{ p: 1.5, borderBottom: '1px solid var(--line-soft)' }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
-        <Typography sx={{ fontWeight: 600, fontSize: 14.5 }}>
-          {game.whiteName} <Box component="span" sx={{ color: 'var(--muted)' }}>vs</Box> {game.blackName}
-        </Typography>
-        <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: 'var(--accent)' }}>
-          {game.result}
-        </Typography>
+    <Box sx={{ p: 1.5, borderTop: '1px solid var(--line-soft)' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, mb: 1 }}>
+        <Typography sx={{ fontWeight: 600, fontSize: 13.5, letterSpacing: 0.2 }}>Game review</Typography>
+        <Typography sx={{ fontSize: 13, fontWeight: 600, color: resultColor }}>{resultText}</Typography>
       </Box>
-      <Box sx={{ display: 'flex', gap: 2, mt: 0.75 }}>
-        <SideSummary label="White" side={game.summary.w} />
-        <SideSummary label="Black" side={game.summary.b} />
+
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: '1fr minmax(56px, auto) minmax(56px, auto)',
+          columnGap: 1.25,
+          rowGap: 0.65,
+          alignItems: 'center',
+        }}
+      >
+        {/* Header row: the two players over their value columns. */}
+        <Box />
+        <PlayerHead name={game.whiteName} light />
+        <PlayerHead name={game.blackName} />
+
+        {rows.map((r) => (
+          <Fragment key={r.label}>
+            <Typography sx={{ fontSize: 12, color: 'var(--text-dim)' }}>{r.label}</Typography>
+            <StatVal value={r.w} color={r.color} dim={r.count === true && r.w === 0} />
+            <StatVal value={r.b} color={r.color} dim={r.count === true && r.b === 0} />
+          </Fragment>
+        ))}
       </Box>
     </Box>
   )
 }
 
-function SideSummary({ label, side }: { label: string; side: GameAnalysis['summary']['w'] }) {
+interface StatRowData {
+  label: string
+  w: number | string
+  b: number | string
+  color: string
+  count?: boolean // counts dim to muted at zero; accuracy never does
+}
+
+// A player's name over its stat column, with a light/dark dot marking the side.
+function PlayerHead({ name, light }: { name: string; light?: boolean }) {
   return (
-    <Box sx={{ flex: 1, fontSize: 12 }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-        <span style={{ color: 'var(--muted)' }}>{label}</span>
-        <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>{side.accuracy}%</span>
-      </Box>
-      <Box sx={{ display: 'flex', gap: 1, color: 'var(--muted)', mt: 0.25 }}>
-        <span style={{ color: '#ca4a4a' }}>{side.blunder} ??</span>
-        <span style={{ color: '#e08a3e' }}>{side.mistake} ?</span>
-        <span style={{ color: '#e0a33e' }}>{side.inaccuracy} ?!</span>
-      </Box>
+    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 0.5, minWidth: 0 }}>
+      <Box
+        sx={{
+          width: 9,
+          height: 9,
+          borderRadius: '50%',
+          flexShrink: 0,
+          bgcolor: light ? '#ece9e1' : '#15171c',
+          border: '1px solid var(--line)',
+        }}
+      />
+      <Typography
+        sx={{ fontSize: 12, fontWeight: 600, color: 'var(--text)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 92 }}
+        title={name}
+      >
+        {name}
+      </Typography>
     </Box>
+  )
+}
+
+function StatVal({ value, color, dim }: { value: number | string; color: string; dim?: boolean }) {
+  return (
+    <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, fontWeight: 600, textAlign: 'right', color: dim ? 'var(--muted)' : color }}>
+      {value}
+    </Typography>
   )
 }
 
