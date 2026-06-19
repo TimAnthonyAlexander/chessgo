@@ -1,4 +1,3 @@
-import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import { CssBaseline, ThemeProvider } from '@mui/material'
@@ -17,29 +16,27 @@ import EngineVsEngine from './pages/EngineVsEngine'
 import './styles.css'
 
 const router = createBrowserRouter([
-  {
-    element: <Layout />,
-    children: [
-      { path: '/', element: <Home /> },
-      { path: '/bot', element: <BotGame /> },
-      { path: '/puzzles', element: <Puzzles /> },
-      { path: '/game/:id', element: <LiveGame /> },
-      { path: '/watch', element: <Watch /> },
-      { path: '/watch/:id', element: <Spectate /> },
-      { path: '/analysis', element: <Analysis /> },
-      { path: '/analysis/:id', element: <Analysis /> },
-      { path: '/editor', element: <Editor /> },
-      { path: '/@/:name', element: <Profile /> },
-      { path: '/admin/engine-vs', element: <EngineVsEngine /> },
-    ],
-  },
+    {
+        element: <Layout />,
+        children: [
+            { path: '/', element: <Home /> },
+            { path: '/bot', element: <BotGame /> },
+            { path: '/puzzles', element: <Puzzles /> },
+            { path: '/game/:id', element: <LiveGame /> },
+            { path: '/watch', element: <Watch /> },
+            { path: '/watch/:id', element: <Spectate /> },
+            { path: '/analysis', element: <Analysis /> },
+            { path: '/analysis/:id', element: <Analysis /> },
+            { path: '/editor', element: <Editor /> },
+            { path: '/@/:name', element: <Profile /> },
+            { path: '/admin/engine-vs', element: <EngineVsEngine /> },
+        ],
+    },
 ])
 
 createRoot(document.getElementById('root')!).render(
-  <StrictMode>
     <ThemeProvider theme={theme}>
-      <CssBaseline />
-      <RouterProvider router={router} />
+        <CssBaseline />
+        <RouterProvider router={router} />
     </ThemeProvider>
-  </StrictMode>,
 )

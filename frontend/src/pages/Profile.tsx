@@ -259,30 +259,36 @@ function GameRow({
 }) {
   const { outcome, color, opponent, opponentBot, delta } = perspective(game, userId)
   const o = OUTCOME_STYLE[outcome]
+  // A game with no moves played (e.g. resigned/aborted on move 0) has nothing to
+  // review — the analysis board would be a dead end, so it isn't clickable.
+  const reviewable = game.ply > 0
 
   return (
     <Box
-      onClick={onClick}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          onClick()
-        }
-      }}
+      onClick={reviewable ? onClick : undefined}
+      role={reviewable ? 'button' : undefined}
+      tabIndex={reviewable ? 0 : undefined}
+      onKeyDown={
+        reviewable
+          ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                onClick()
+              }
+            }
+          : undefined
+      }
       sx={{
         display: 'flex',
         alignItems: 'center',
         gap: 1.5,
         px: { xs: 1.5, md: 2 },
         py: 1.25,
-        cursor: 'pointer',
+        cursor: reviewable ? 'pointer' : 'default',
         borderTop: first ? 'none' : '1px solid var(--line-soft)',
         transition: 'background .12s ease',
-        '&:hover': { bgcolor: 'var(--line)' },
         outline: 'none',
-        '&:focus-visible': { bgcolor: 'var(--line)' },
+        ...(reviewable ? { '&:hover': { bgcolor: 'var(--line)' }, '&:focus-visible': { bgcolor: 'var(--line)' } } : {}),
       }}
     >
       {/* Outcome chip */}
@@ -316,6 +322,7 @@ function GameRow({
         <Typography sx={{ fontSize: 11.5, color: 'var(--muted)', textTransform: 'capitalize' }}>
           {game.category || 'casual'} · {game.pool || '—'} · as {color}
           {!game.rated && ' · casual'}
+          {!reviewable && ' · no moves'}
         </Typography>
       </Box>
 
