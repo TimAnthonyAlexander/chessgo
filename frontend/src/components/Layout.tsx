@@ -261,7 +261,7 @@ function UserMenu({ user }: { user: User }) {
           }}
           sx={{ fontSize: 13.5, gap: 1 }}
         >
-          <UserRound size={15} /> View profile
+          <UserRound size={15} /> Profile
         </MenuItem>
         <Divider sx={{ borderColor: 'var(--line-soft)' }} />
         {CATEGORIES.map((c) => (
