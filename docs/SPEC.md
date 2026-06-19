@@ -11,7 +11,7 @@
 > `docs/ENGINE_STRENGTH.md`), bot games + eval bar, the lobby, **live human-vs-human play**
 > (WebSocket hub, matchmaking, server clocks, reconnect/resume), **bot backfill**
 > (a fill-in bot when no human is found), **accounts** (signup/login via session
-> cookies), **per-time-control Elo**, and **game persistence** (hub → BaseAPI).
+> cookies), **per-time-control Glicko-2 ratings**, and **game persistence** (hub → BaseAPI).
 > Live lobby counts at `/stats`. See `docs/COMMANDS.md` to run it, `CLAUDE.md` for
 > a fast codebase orientation.
 
@@ -45,7 +45,7 @@ game lifecycle, persistence, clocks, ratings, and matchmaking.
 | **Real-time** | **WebSocket via a Go hub** | Dedicated realtime service (`gomachine hub`, §8); 30s ping heartbeat + client auto-reconnect (Cloudflare-ready). _Supersedes the earlier "polling first" call (SSE is unreliable behind Cloudflare)._ |
 | **Frontend stack** | React + Vite + TypeScript + MUI + Lucide Icons + Bun + React-Router | Consumes BaseAPI's generated `types.ts`. |
 | **Accounts** | Anonymous **casual** + accounts for **rated** (Lichess model) | Anonymous players (stable per-browser id) play casual/unrated; rated needs a registered account. Email/pw auth + **frontend signup/login (session cookies)** built; the ws-ticket carries the account identity + per-category ratings. |
-| **Ratings** | **Elo, per time-control category** (bullet/blitz/rapid/classical) | For rated games (both accounts). Provisional K=40 for the first 20 games per category, then K=20; start 1500. Finished games persisted by the hub via `POST /internal/games`; Elo applied there. |
+| **Ratings** | **Glicko-2, per time-control category** (bullet/blitz/rapid/classical) | For rated games (both accounts). Each category carries rating + RD (uncertainty) + volatility; start 1500/RD 350. RD sets step size (fresh ≈ ±175, settled ≈ ±6), drops as you play, regrows when idle; provisional while RD > 110. Finished games persisted by the hub via `POST /internal/games`; the update applied there. See `docs/ELO_SYSTEM.md`. |
 | **Clocks** | **Real server-authoritative clocks** | Bullet/Blitz/Rapid; the hub ticks clocks and flags, applying the FIDE 6.9 timeout-vs-material rule. _Supersedes the earlier "untimed first" call (the lobby commits to timed presets)._ |
 | **AI difficulty** | **Levels 0–10** | See §6. Level 10 = max strength + slightly longer thinking; level 0 = short thinking + small blunder probability. Monotonic strength curve. |
 | **Database** | **MySQL** | Local dev user `chessgo`@`localhost`. |
@@ -58,9 +58,9 @@ working defaults:
 
 - **Design vibe:** dark-first, lichess-like clean/minimal board (green or
   neutral wood theme, switchable). Refine later.
-- **v1 game features:** resign, draw offers, move list (PGN), board flip,
-  legal-move dots, last-move highlight. Premoves/spectating/chat/analysis
-  deferred.
+- **v1 game features:** resign, move list (PGN), board flip, legal-move dots,
+  last-move highlight, **premoves** (queue a move during the opponent's turn),
+  spectating, and analysis all shipped. Draw offers / takebacks / chat deferred.
 - **vs-AI UX:** pick level (0–10) + color before game; optional eval bar later.
 - **Matchmaking:** single ranked pool by Elo proximity; rematch flow. Rating-range
   filters deferred.
@@ -110,7 +110,7 @@ working defaults:
 | Durable persistence (users, finished games, ratings) | Legal move generation + game-end detection (engine & hub) |
 | Auth, accounts, signing WS tickets | Best-move search + evaluation (engine `serve`) |
 | Bot-game orchestration, analyze proxy, `/stats` proxy | **Live game state, matchmaking, server clocks (hub)** |
-| Per-category Elo (`EloService`) + game records | Reconnect/resume + presence (hub, in-memory) |
+| Per-category Glicko-2 (`Glicko2Service`) + game records | Reconnect/resume + presence (hub, in-memory) |
 | Account sessions (cookies), `/internal/games` results sink | Bot backfill (engine-driven fill-in opponent) |
 | — | Zobrist keying, repetition/50-move, FIDE 6.9 timeout test |
 
@@ -546,7 +546,14 @@ Frontend: a singleton WS store (`src/lib/socket.ts`, via `useSyncExternalStore`)
 survives navigation; the lobby queues and routes to `/game/:id` on `matched`; the
 homepage shows a "resume" banner whenever an unfinished game exists. A second
 singleton store (`src/lib/auth.ts`) holds the session/user (session-cookie auth);
-sounds (`src/lib/sounds.ts`) are gesture-unlocked Web Audio.
+sounds (`src/lib/sounds.ts`) are gesture-unlocked Web Audio. A board-interaction
+controller (`src/lib/useBoardInteraction.ts`) is the single home for the local
+player's move lifecycle — optimistic board overlay, move sound, submit, and the
+**premove** queue (capture during the opponent's turn, then on your turn replay it
+if it's legal in the new position, else discard) — behind a small `BoardControl`
+contract `{ fen, myTurn, legalMoves, submit, canPremove }`. Each board page (live,
+bot) feeds it that contract and renders its output onto `<Board>`, so
+board-interaction features are written once rather than per page.
 
 ---
 
@@ -562,9 +569,9 @@ is a fifth category that happens not to be a time control.
   generator is a later phase; per the research we **avoid synthetic/random mate
   generation** (low realism) in favour of mining real games.
 - **Rating:** puzzle ratings are **fixed** (Lichess values treated as ground
-  truth); only the solver's `rating_puzzle` moves, via the existing `EloService`
-  (provisional K=40→20) against the puzzle's rating as the "opponent". **No time
-  component, no hints** (Lichess-pure).
+  truth); only the solver's `rating_puzzle` moves, via the shared `Glicko2Service`
+  (one-game Glicko-2, RD-scaled step) against the puzzle's rating as a fixed,
+  established "opponent". **No time component, no hints** (Lichess-pure).
 - **v1 scope:** rated training stream + theme filter (incl. mate-in-N). Daily
   puzzle, Puzzle Rush, and alternate-mate acceptance are deferred.
 - **Access:** anonymous solvers play casually (unrated); rating requires an
@@ -581,8 +588,9 @@ is a fifth category that happens not to be a time control.
   not a JSON `LIKE`. Unique `(puzzle_id, theme)` for idempotent import.
 - **`puzzle_attempt`** — unique `(user_id, puzzle_id)`, `solved`,
   `rating_before/after`. One (first) rated attempt per puzzle; drives both
-  de-duplication and Elo idempotency. Anonymous solvers are not recorded.
-- **`user`** gains `rating_puzzle` (1500) + `games_puzzle` (0).
+  de-duplication and rating idempotency. Anonymous solvers are not recorded.
+- **`user`** gains the isolated puzzle triple `rating_puzzle` (1500) /
+  `rd_puzzle` (350) / `vol_puzzle` (0.06) + `rated_at_puzzle` + `games_puzzle` (0).
 
 > **Case-sensitivity gotcha (don't break):** Lichess PuzzleIds are
 > **case-sensitive** (`0QCaI` ≠ `0qcai`) but MySQL's default collation is **not**,
@@ -637,7 +645,7 @@ chessgo/
   app/            # BaseAPI PHP: Models, Controllers, Services, Providers, Auth
                   #   Models: User (per-category ratings), BotGame, Game
                   #   Services: GomachineClient, BotGameService, WsTicketService,
-                  #             HubClient (stats proxy), EloService (categories + Elo)
+                  #             HubClient (stats proxy), Glicko2Service (categories + ratings)
                   #   Controllers: BotGame, BotMove, Analyze, WsTicket, Stats,
                   #             GameResult (/internal/games), Login/Signup/Logout/Me
   routes/         # api.php
@@ -662,7 +670,8 @@ chessgo/
     src/components/      # Board, EvalBar, Clock, MoveList, Layout, GameModeCard,
                         #   AuthDialog (login/signup)
     src/lib/            # socket (WS store), auth (session/user store), sounds
-                        #   (gesture-unlocked Web Audio), chess (FEN/board helpers)
+                        #   (gesture-unlocked Web Audio), chess (FEN/board helpers),
+                        #   useBoardInteraction (optimistic moves + premoves controller)
     src/api/            # client (REST + ws-ticket + auth; credentials: 'include')
     public/piece/cburnett/   # SVG piece set (Lichess cburnett, GPL)
   docs/           # SPEC.md (this file), COMMANDS.md (run/deploy)
@@ -681,14 +690,15 @@ chessgo/
       start (untimed first moves) + 30 s first-move abort.
 - [x] **Bot backfill** — fill-in engine opponent when no human is found in ~15 s;
       random identity, human-like pacing; rated (one-sided) for logged-in players.
-- [x] **Persistence + Elo + accounts** — `game` table + per-category `User`
-      ratings; hub persists finished games via `POST /internal/games` (secret-gated)
-      and applies provisional-K Elo for rated games; frontend signup/login (session
-      cookies), header user menu with per-category ratings, rated/casual badge.
+- [x] **Persistence + ratings + accounts** — `game` table + per-category `User`
+      Glicko-2 (rating/RD/volatility); hub persists finished games via `POST
+      /internal/games` (secret-gated) and applies the update for rated games;
+      frontend signup/login (session cookies), header user menu with per-category
+      ratings (provisional "?"), rated/casual badge.
 - [x] **Live lobby counts** — hub `/stats` (atomics) proxied by BaseAPI `/stats`;
       homepage shows real counts + optional smooth `STATS_PADDING` filler.
 - [x] **Puzzles (training)** — Lichess-seeded tactical trainer on an **isolated**
-      puzzle Elo (§9); `puzzle`/`puzzle_theme`/`puzzle_attempt` tables + CSV
+      puzzle rating (§9); `puzzle`/`puzzle_theme`/`puzzle_attempt` tables + CSV
       importer; rating-matched + de-duped serving, theme filter (incl. mate-in-N),
       server-side index validation with the solution withheld; `/puzzles` page.
 - [ ] **Puzzle generation pipeline** — mine real games with gomachine (blunder
@@ -722,8 +732,12 @@ chessgo/
       players. Remaining: a true cross-pool ranked queue / seek graph.
 - [ ] **More lobby features** — Challenge-a-friend (private link), Custom games,
       correspondence; profiles + game history + PGN.
-- [ ] **Polish** — premoves, draw offers, takebacks, spectating, richer eval
-      terms / opening book.
+- [x] **Premoves** — queue a move during the opponent's turn; the shared board
+      controller (`src/lib/useBoardInteraction.ts`) holds it across the opponent's
+      reply, then validates it against the next legal-move list and either plays it
+      (optimistic + sound + submit) or discards it. Live + bot games; pseudo-legal
+      premove targets (`premoveTargets` in `src/lib/chess.ts`), auto-queen promotion.
+- [ ] **Polish** — draw offers, takebacks, richer eval terms / opening book.
 
 ---
 

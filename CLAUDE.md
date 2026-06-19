@@ -25,7 +25,7 @@ duplication, no HTTP hop. Engine is internal (PHP calls it); hub is client-facin
 
 - `app/` — BaseAPI PHP. Models (`User` w/ per-category ratings, `BotGame`,
   `Game`), Services (`GomachineClient`, `BotGameService`, `WsTicketService`,
-  `HubClient`, `EloService`), Controllers (`BotGame`, `BotMove`, `Analyze`,
+  `HubClient`, `Glicko2Service`), Controllers (`BotGame`, `BotMove`, `Analyze`,
   `WsTicket`, `Stats`, `GameResult`, plus auth `Login`/`Signup`/`Logout`/`Me`),
   `Providers/AppServiceProvider` (DI). Routes in `routes/api.php`.
 - `gomachine/internal/chess` — the rules core (bitboards/magic, FEN, Zobrist,
@@ -163,12 +163,14 @@ php mason migrate:generate && php mason migrate:apply -y                     # D
 ## Status / next
 
 Built and tested: engine, bot games, lobby, **live human-vs-human play**
-(**rating-proximity matchmaking** — a wait-widening Elo bracket, 100→400 cap, so
+(**rating-proximity matchmaking** — a wait-widening rating bracket, 100→400 cap, so
 mismatched players never pair; server clocks, reconnect/resume), **bot backfill**
-(a fill-in bot after a 15s wait, **Elo-matched to the human** — displayed rating
+(a fill-in bot after a 15s wait, **rating-matched to the human** — displayed rating
 ±120 of the user, engine level derived via `levelForRating`; human-like pacing —
 `-bots`/`-bot-level`/`-bot-delay` flags), **accounts** (signup/login via session cookies),
-**per-time-control Elo** (bullet/blitz/rapid/classical, provisional K), and
+**per-time-control Glicko-2** (bullet/blitz/rapid/classical; rating + RD +
+volatility, start 1500/RD 350, RD-scaled steps, provisional while RD>110,
+inactivity RD regrowth; see `docs/ELO_SYSTEM.md`), and
 **game persistence** (hub → `POST /internal/games`). Rated when both are accounts;
 a logged-in human vs a fill-in bot is one-sided rated; explicit `/bot` games never
 hit the hub so they're unrated. **Resume is still in-memory** — survives tab
