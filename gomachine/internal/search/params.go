@@ -21,6 +21,9 @@ type Params struct {
 	Aspiration     bool // aspiration windows around the previous iteration's score
 	RFP            bool // reverse futility pruning (static null move) near leaves
 	LMP            bool // late move pruning (move-count pruning) of late quiets near leaves
+	HistMalus      bool // history gravity update + bonus cap + malus to non-cutoff quiets
+	Improving      bool // "improving" heuristic scales RFP margin + LMP move count
+	LMRFormula     bool // log(d)·log(m) LMR table + PV/improving/history adjustments
 	Mobility       bool // evaluation: piece mobility term
 	Pawns          bool // evaluation: pawn structure (isolated/doubled/passed)
 	KingSafety     bool // evaluation: king pawn-shield term
@@ -30,17 +33,27 @@ type Params struct {
 
 // DefaultParams returns the engine's current full-strength configuration.
 //
-// Accepted improvements (SPRT-gated, then made default here), all self-play @ 40k
-// nodes, [0,6] bounds, 2026-06-18:
+// Accepted improvements (SPRT-gated, then made default here). Each figure is the
+// patch's own self-play @ 40k nodes, [0,6] bounds, measured against the baseline
+// as it stood at the time — so they compound but do NOT linearly sum, and these
+// are fixed-nodes self-play numbers (the real-time / absolute gain is smaller; see
+// the Stockfish anchor in ENGINE_STRENGTH.md, which is the only absolute check).
+//
+// Earlier work (2026-06-18):
 //   - SEE:        +66.2 ± 22.9 Elo (468 pairs)
 //   - DeltaPrune: +22.0 ± 12.2 Elo (473 pairs, on top of SEE)
 //   - Aspiration: +21.8 ± 12.1 Elo (876 pairs)
 //   - RFP:        +67.2 ± 23.1 Elo (286 pairs)
 //   - LMP:        +94.6 ± 28.5 Elo (124 pairs)
+// History/ordering work (2026-06-19):
+//   - HistMalus:  +90.8 ± 27.6 Elo (131 pairs)
+//   - Improving:  +78.3 ± 25.2 Elo (174 pairs; RFP+LMP margin scaling)
+//   - LMRFormula: +10.8 ± 7.8  Elo (592 pairs; log(d)·log(m) table + history adj,
+//                 replacing the flat 1/2. Small at fixed nodes; the depth-per-sec
+//                 part is a movetime gain this test can't measure.)
 //
-// Cumulative this session: ~+270 Elo at fixed nodes (real-time gain is smaller —
-// pruning's CPU cost isn't charged at fixed nodes; see the Stockfish anchor).
-// Next under test: futility pruning → razoring → countermove → TT static eval.
+// Next under test: richer LMR adjustments (PV/improving/cutNode, earlier onset) →
+// futility pruning → razoring → continuation history → singular extensions.
 func DefaultParams() Params {
 	return Params{
 		UseTT:          true,
@@ -53,6 +66,9 @@ func DefaultParams() Params {
 		Aspiration:     true,
 		RFP:            true,
 		LMP:            true,
+		HistMalus:      true,
+		Improving:      true,
+		LMRFormula:     true,
 		// Texel-tuned eval (tuned PSQT + knowledge terms), SPRT-accepted as a set
 		// vs the bare PeSTO base: +128 ± 35 Elo @ 40k nodes, +101 ± 29 Elo @
 		// 100ms/move (2026-06-19, internal/eval/tuned_tables.go; tuner in

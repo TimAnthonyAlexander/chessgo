@@ -176,6 +176,76 @@ func TestForwardPruningKeepsTactics(t *testing.T) {
 	}
 }
 
+// The history gravity update must stay bounded: hammering one entry with the
+// maximum bonus converges to ≈+maxHistory and never exceeds it; flipping to the
+// maximum malus converges to ≈−maxHistory. A bounded table is the whole point of
+// gravity (the legacy += depth² scheme had no ceiling).
+func TestHistoryGravityBounds(t *testing.T) {
+	if got := statBonus(1000); got != histBonusMax {
+		t.Errorf("statBonus(1000) = %d, want cap %d", got, histBonusMax)
+	}
+	s := New(1)
+	pc, sq := chess.WhiteKnight, chess.Square(20)
+	for i := 0; i < 10000; i++ {
+		s.updateHistory(pc, sq, histBonusMax)
+	}
+	if v := s.history[pc][sq]; v > maxHistory || v < maxHistory-histBonusMax {
+		t.Errorf("after saturating +bonus, history = %d, want in (%d, %d]", v, maxHistory-histBonusMax, maxHistory)
+	}
+	for i := 0; i < 20000; i++ {
+		s.updateHistory(pc, sq, -histBonusMax)
+	}
+	if v := s.history[pc][sq]; v < -maxHistory || v > -(maxHistory - histBonusMax) {
+		t.Errorf("after saturating -bonus, history = %d, want in [%d, %d)", v, -maxHistory, -(maxHistory - histBonusMax))
+	}
+}
+
+// HistMalus changes how quiet-move history is credited; it must not blind the
+// engine to basic tactics.
+func TestHistMalusKeepsTactics(t *testing.T) {
+	p := DefaultParams()
+	p.HistMalus = true
+	mate, _ := chess.ParseFEN("6k1/5ppp/8/8/8/8/8/R6K w - - 0 1")
+	if r := NewWithParams(16, p).Search(mate, Limits{Depth: 6}, nil); r.BestMove.String() != "a1a8" {
+		t.Errorf("with HistMalus, mate-in-1 best = %s, want a1a8", r.BestMove)
+	}
+	hang, _ := chess.ParseFEN("4k3/8/8/8/7q/8/8/4K2R w - - 0 1")
+	if r := NewWithParams(16, p).Search(hang, Limits{Depth: 8}, nil); r.BestMove.String() != "h1h4" {
+		t.Errorf("with HistMalus, win-queen best = %s, want h1h4", r.BestMove)
+	}
+}
+
+// The improving heuristic scales the RFP margin and LMP move count; it must not
+// blind the engine to basic tactics.
+func TestImprovingKeepsTactics(t *testing.T) {
+	p := DefaultParams()
+	p.Improving = true
+	mate, _ := chess.ParseFEN("6k1/5ppp/8/8/8/8/8/R6K w - - 0 1")
+	if r := NewWithParams(16, p).Search(mate, Limits{Depth: 6}, nil); r.BestMove.String() != "a1a8" {
+		t.Errorf("with Improving, mate-in-1 best = %s, want a1a8", r.BestMove)
+	}
+	hang, _ := chess.ParseFEN("4k3/8/8/8/7q/8/8/4K2R w - - 0 1")
+	if r := NewWithParams(16, p).Search(hang, Limits{Depth: 8}, nil); r.BestMove.String() != "h1h4" {
+		t.Errorf("with Improving, win-queen best = %s, want h1h4", r.BestMove)
+	}
+}
+
+// The log-formula LMR reduces most late quiets (more aggressively than the flat
+// 1/2), relying on the PVS re-search for safety; it must still solve basic
+// tactics. Exercise both serial and parallel (shared read-only lmrTable).
+func TestLMRFormulaKeepsTactics(t *testing.T) {
+	p := DefaultParams()
+	p.LMRFormula = true
+	mate, _ := chess.ParseFEN("6k1/5ppp/8/8/8/8/8/R6K w - - 0 1")
+	if r := NewWithParams(16, p).Search(mate, Limits{Depth: 6}, nil); r.BestMove.String() != "a1a8" {
+		t.Errorf("with LMRFormula, mate-in-1 best = %s, want a1a8", r.BestMove)
+	}
+	hang, _ := chess.ParseFEN("4k3/8/8/8/7q/8/8/4K2R w - - 0 1")
+	if r := NewWithParams(16, p).SearchParallel(hang, Limits{Depth: 8}, nil, 4); r.BestMove.String() != "h1h4" {
+		t.Errorf("with LMRFormula (4 threads), win-queen best = %s, want h1h4", r.BestMove)
+	}
+}
+
 func pvString(pv []chess.Move) string {
 	s := ""
 	for i, m := range pv {

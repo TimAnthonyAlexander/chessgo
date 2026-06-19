@@ -33,13 +33,14 @@ type Weights struct {
 	KingShield                 int // MG penalty per missing pawn in the king's shield
 }
 
-// DefaultWeights is a sane, hand-picked starting weight set (positive mobility,
-// negative penalties). NOTE: the eval terms are OFF by default — an MSE-tuned
-// version (both game-result and Stockfish-distillation targets) was SPRT-tested
-// and REJECTED at −148 Elo: the MSE-optimal fit produced play-catastrophic
-// weights (e.g. negative endgame mobility), a textbook case of "matching the eval
-// ≠ playing better". Real eval gains need SPSA (Elo-in-the-loop) tuning or NNUE,
-// not static MSE tuning of bolt-on terms over the already-tuned PSQT.
+// DefaultWeights is the hand-picked fallback weight set (positive mobility,
+// negative penalties), used only when no tuned weights are available. The engine
+// default is now the SPRT-accepted tuned set (TunedWeights, selected by
+// search.DefaultParams' TunedEval=true), which gained +101 Elo @ movetime with
+// the knowledge terms ON. An earlier MSE tune (game-result + Stockfish-distill
+// targets, coordinate descent over bolt-on scalars on a frozen PSQT) lost −148
+// Elo — but that was a broken *method*, not a verdict on these terms: joint Adam
+// on WDL with the PSQT tuned in flips the sign. See docs/ENGINE_STRENGTH.md §5–§6.
 func DefaultWeights() *Weights {
 	return &Weights{
 		MobMG:      [4]int{4, 3, 2, 1},

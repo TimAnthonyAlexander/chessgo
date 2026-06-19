@@ -5,12 +5,26 @@
 package search
 
 import (
+	"math"
 	"sync"
 	"time"
 
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 	"github.com/timanthonyalexander/gomachine/internal/eval"
 )
+
+// lmrTable[depth][moveCount] is the base late-move reduction in plies, the
+// canonical log(d)·log(m) surface (Ethereal's 0.7844 + ln·ln/2.4696). Read-only
+// after init, so it is safe to share across Lazy SMP workers.
+var lmrTable [64][64]int
+
+func init() {
+	for d := 1; d < 64; d++ {
+		for m := 1; m < 64; m++ {
+			lmrTable[d][m] = int(0.7844 + math.Log(float64(d))*math.Log(float64(m))/2.4696)
+		}
+	}
+}
 
 const (
 	maxPly        = 128
@@ -25,7 +39,61 @@ const (
 	// Late move pruning: max depth it applies at. The move-count limit is
 	// 3 + depth² (so depth 1→4, 2→7, 3→12, …).
 	lmpMaxDepth = 8
+	// History (gravity scheme, Params.HistMalus): values saturate toward
+	// ±maxHistory via the gravity update; the per-update bonus/malus is capped at
+	// histBonusMax so a single deep cutoff can't dominate the table.
+	maxHistory   = 8192
+	histBonusMax = 1536
+	// lmrHistoryDiv scales a quiet move's history into a reduction adjustment:
+	// good-history quiets reduce less, malus'd (negative) quiets reduce more.
+	lmrHistoryDiv = 4096
+	// evalNone marks a ply whose static eval is undefined (the side was in check),
+	// so the "improving" comparison skips it. Outside any real eval range.
+	evalNone = infinity + 1
 )
+
+// statBonus is the depth-scaled history bonus/malus magnitude (capped). Used both
+// as the bonus for a quiet move that caused a beta cutoff and as the malus for the
+// quiets that were tried first and did not.
+func statBonus(depth int) int {
+	b := 32 * depth * depth
+	if b > histBonusMax {
+		b = histBonusMax
+	}
+	return b
+}
+
+// updateHistory applies the "history gravity" update: the entry is nudged toward
+// ±maxHistory by bonus, with a pull proportional to the current magnitude, so the
+// table self-ages (old evidence decays as new arrives) and stays bounded.
+func (s *Searcher) updateHistory(pc chess.Piece, to chess.Square, bonus int) {
+	if bonus > maxHistory {
+		bonus = maxHistory
+	} else if bonus < -maxHistory {
+		bonus = -maxHistory
+	}
+	e := &s.history[pc][to]
+	*e += bonus - (*e)*absInt(bonus)/maxHistory
+}
+
+// updateQuietStats credits a quiet move that caused a beta cutoff. With HistMalus
+// off it keeps the legacy unbounded `depth²` bonus (byte-identical to before).
+// With it on it uses the gravity update: +bonus to the cutting move and −bonus to
+// every quiet tried before it that failed to cut off (tried includes best as its
+// last element).
+func (s *Searcher) updateQuietStats(pos *chess.Position, best chess.Move, tried []chess.Move, depth int) {
+	if !s.params.HistMalus {
+		s.history[pos.PieceOn(best.From())][best.To()] += depth * depth
+		return
+	}
+	bonus := statBonus(depth)
+	s.updateHistory(pos.PieceOn(best.From()), best.To(), bonus)
+	for _, q := range tried {
+		if q != best {
+			s.updateHistory(pos.PieceOn(q.From()), q.To(), -bonus)
+		}
+	}
+}
 
 // pieceOrderVal is a coarse piece value used by MVV-LVA move ordering.
 var pieceOrderVal = [6]int{100, 320, 330, 500, 900, 20000}
@@ -55,7 +123,10 @@ type Searcher struct {
 	ec       eval.Config // evaluation config derived from params
 	killers  [maxPly][2]chess.Move
 	history  [12][64]int
-	nodes    uint64
+	// staticEvals[ply] is the static eval at that ply (evalNone while in check), so
+	// a node can ask whether its side is "improving" vs two plies ago.
+	staticEvals [maxPly]int
+	nodes       uint64
 	stop     bool
 	deadline time.Time
 	useTime  bool
@@ -400,19 +471,39 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 
 	isPV := beta-alpha > 1
 
-	// Static evaluation at this node (meaningless while in check); used by
-	// reverse futility pruning, and later by other heuristics.
+	// Static evaluation at this node (meaningless while in check); used by reverse
+	// futility pruning and the "improving" heuristic.
 	var staticEval int
 	if !inCheck {
 		staticEval = s.evaluate(pos)
+		s.staticEvals[ply] = staticEval
+	} else {
+		s.staticEvals[ply] = evalNone
+	}
+
+	// "improving": is our static eval better than it was two plies ago (our last
+	// turn)? A position trending our way warrants pruning less; default false when
+	// unknown (in check, near the root, or after an in-check ancestor).
+	improving := false
+	if !inCheck && ply >= 2 && s.staticEvals[ply-2] != evalNone {
+		improving = staticEval > s.staticEvals[ply-2]
+	}
+	impInt := 0
+	if improving {
+		impInt = 1
 	}
 
 	// Reverse futility pruning (static null move): at a non-PV node near the
 	// leaves, if the static eval beats beta by a depth-scaled margin even after
-	// conceding that margin, fail high without searching.
+	// conceding that margin, fail high without searching. When improving, shave a
+	// ply off the margin's depth term (a position trending up is likelier to hold).
+	rfpDepth := depth
+	if s.params.Improving {
+		rfpDepth = depth - impInt
+	}
 	if s.params.RFP && !inCheck && !isPV && ply > 0 && depth <= rfpMaxDepth &&
-		absInt(beta) < mateThreshold && staticEval-rfpMargin*depth >= beta {
-		return staticEval - rfpMargin*depth
+		absInt(beta) < mateThreshold && staticEval-rfpMargin*rfpDepth >= beta {
+		return staticEval - rfpMargin*rfpDepth
 	}
 
 	// Null-move pruning.
@@ -450,10 +541,23 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 	origAlpha := alpha
 	searched := 0
 
+	// Quiet moves searched at this node (in order), so a beta cutoff can reward the
+	// cutting quiet and penalize the earlier quiets that failed (HistMalus).
+	var triedQuiets [256]chess.Move
+	nQuiets := 0
+
+	// Late-move-pruning move-count limit. Improving lets more late quiets through
+	// (2−improving halves the budget when the position is not trending our way).
+	lmpLimit := 3 + depth*depth
+	if s.params.Improving {
+		lmpLimit = (3 + depth*depth) / (2 - impInt)
+	}
+
 	for i := 0; i < ml.Len(); i++ {
 		selectMove(&ml, &scores, i)
 		m := ml.Get(i)
 		quiet := !isCapture(pos, m) && m.Type() != chess.Promotion
+		mover := pos.PieceOn(m.From()) // captured before DoMove empties m.From()
 
 		// Late move pruning: at a non-PV node near the leaves, once enough quiet
 		// moves have been searched, skip the remaining late quiets (move ordering
@@ -461,7 +565,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 		// check or when escaping a mate.
 		if s.params.LMP && quiet && !isPV && !inCheck && searched > 0 &&
 			depth <= lmpMaxDepth && bestScore > -mateThreshold &&
-			searched >= 3+depth*depth {
+			searched >= lmpLimit {
 			continue
 		}
 
@@ -475,10 +579,25 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 			sc = -s.negamax(pos, depth-1, ply+1, -beta, -alpha)
 		} else {
 			reduction := 0
-			if s.params.LMR && depth >= 3 && searched >= 4 && quiet && !inCheck && !givesCheck {
-				reduction = 1
-				if searched >= 8 {
-					reduction = 2
+			if s.params.LMR && depth >= 3 && quiet && !inCheck && !givesCheck && searched >= 4 {
+				if s.params.LMRFormula {
+					// Smooth log(d)·log(m) base in place of the flat 1/2; reduce
+					// less for good-history quiets, more for malus'd ones. Clamped
+					// to [1, depth-1] so a reduced move still searches ≥1 ply.
+					r := lmrTable[minInt(depth, 63)][minInt(searched, 63)]
+					r -= s.history[mover][m.To()] / lmrHistoryDiv
+					if r < 1 {
+						r = 1
+					}
+					if r > depth-1 {
+						r = depth - 1
+					}
+					reduction = r
+				} else {
+					reduction = 1
+					if searched >= 8 {
+						reduction = 2
+					}
 				}
 			}
 			sc = -s.negamax(pos, depth-1-reduction, ply+1, -alpha-1, -alpha)
@@ -496,6 +615,10 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 			return 0
 		}
 		searched++
+		if quiet {
+			triedQuiets[nQuiets] = m
+			nQuiets++
+		}
 
 		if sc > bestScore {
 			bestScore = sc
@@ -509,7 +632,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 				if alpha >= beta {
 					if quiet {
 						s.recordKiller(ply, m)
-						s.history[pos.PieceOn(m.From())][m.To()] += depth * depth
+						s.updateQuietStats(pos, m, triedQuiets[:nQuiets], depth)
 					}
 					break
 				}

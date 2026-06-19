@@ -20,9 +20,13 @@
   tempo, today). Improvements here add **chess knowledge** that helps at *every*
   time control.
 
-This session's gains were almost entirely **search** (the cheap, reliable Elo).
-The **eval** frontier turned out to be a dead end for hand-tuned linear terms (§6)
-— its real answer is SPSA or NNUE (§7).
+This session's gains came from **both halves**: a full suite of SPRT-gated
+**search** patches (the cheap, reliable Elo — SEE, the pruning stack, Lazy SMP),
+and then a **Texel-tuned eval** that — done right (joint Adam on WDL with the PSQT
+tuned *in*) — added **+101 Elo @ movetime** (§5). An earlier hand-tuned attempt
+was a dead end (−148 Elo), but that was a broken *method*, not a verdict on HCE
+(§6). The frontier beyond today's linear terms is richer HCE knowledge and then
+**NNUE** (§7).
 
 ---
 

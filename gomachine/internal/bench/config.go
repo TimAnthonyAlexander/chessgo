@@ -96,6 +96,24 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.LMP = b
+		case "histmalus", "histgravity":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.HistMalus = b
+		case "improving":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.Improving = b
+		case "lmrformula", "lmrf", "loglmr":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.LMRFormula = b
 		case "mobility", "mob":
 			b, err := parseBool(val)
 			if err != nil {
@@ -186,6 +204,15 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.LMP != patch.LMP {
 		diffs = append(diffs, fmt.Sprintf("lmp: %s→%s", onoff(base.LMP), onoff(patch.LMP)))
+	}
+	if base.HistMalus != patch.HistMalus {
+		diffs = append(diffs, fmt.Sprintf("histmalus: %s→%s", onoff(base.HistMalus), onoff(patch.HistMalus)))
+	}
+	if base.Improving != patch.Improving {
+		diffs = append(diffs, fmt.Sprintf("improving: %s→%s", onoff(base.Improving), onoff(patch.Improving)))
+	}
+	if base.LMRFormula != patch.LMRFormula {
+		diffs = append(diffs, fmt.Sprintf("lmrformula: %s→%s", onoff(base.LMRFormula), onoff(patch.LMRFormula)))
 	}
 	if base.Mobility != patch.Mobility {
 		diffs = append(diffs, fmt.Sprintf("mobility: %s→%s", onoff(base.Mobility), onoff(patch.Mobility)))
