@@ -1,4 +1,4 @@
-import { type PointerEvent as ReactPointerEvent, useRef, useState } from 'react'
+import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
 import './Board.css'
 import type { Color } from '../api/client'
 import {
@@ -50,6 +50,29 @@ interface BoardProps {
 const PROMO_ORDER = ['q', 'r', 'b', 'n']
 const DRAG_THRESHOLD = 5 // px before a press becomes a drag
 
+// Lichess-style right-click annotations. A shape with from === to is a square
+// highlight (ring); otherwise it's an arrow. The modifier held while drawing
+// picks the brush colour.
+type Brush = 'green' | 'red' | 'blue' | 'yellow'
+const BRUSHES: Record<Brush, string> = {
+  green: '#15781b',
+  red: '#882020',
+  blue: '#1f6fde',
+  yellow: '#e0a000',
+}
+interface Shape {
+  from: Square
+  to: Square
+  brush: Brush
+}
+function brushFor(e: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }): Brush {
+  const ctrl = e.ctrlKey || e.metaKey
+  if (e.shiftKey && ctrl) return 'yellow'
+  if (e.shiftKey) return 'red'
+  if (ctrl) return 'blue'
+  return 'green'
+}
+
 interface DragState {
   from: Square
   piece: string
@@ -82,6 +105,15 @@ export default function Board({
   const [selected, setSelected] = useState<Square | null>(null)
   const [promo, setPromo] = useState<{ from: Square; to: Square; options: string[] } | null>(null)
   const [drag, setDrag] = useState<DragState | null>(null)
+  // Right-click drawn annotations + the one currently being dragged out.
+  const [shapes, setShapes] = useState<Shape[]>([])
+  const [drawing, setDrawing] = useState<Shape | null>(null)
+
+  // Annotations are per-position: clear them whenever the position changes.
+  useEffect(() => {
+    setShapes([])
+    setDrawing(null)
+  }, [fen])
 
   const board: BoardMap = overrideBoard ?? parseFen(fen)
 
@@ -98,16 +130,13 @@ export default function Board({
   const targets = selected ? destsFor(selected) : new Set<Square>()
   const checkKing = inCheck ? kingSquare(board, sideToMove === 'w') : null
 
-  // Arrow geometry in an 80×80 coordinate space (10 units / square), oriented.
-  const arrowGeom = (() => {
-    if (!arrow) return null
-    const center = (sq: Square) => {
-      const col = orientation === 'w' ? fileOf(sq) : 7 - fileOf(sq)
-      const row = orientation === 'w' ? 7 - rankOf(sq) : rankOf(sq)
-      return { x: col * 10 + 5, y: row * 10 + 5 }
-    }
-    return { a: center(arrow.from), b: center(arrow.to) }
-  })()
+  // Square center in an 80×80 coordinate space (10 units / square), oriented.
+  const center = (sq: Square) => {
+    const col = orientation === 'w' ? fileOf(sq) : 7 - fileOf(sq)
+    const row = orientation === 'w' ? 7 - rankOf(sq) : rankOf(sq)
+    return { x: col * 10 + 5, y: row * 10 + 5 }
+  }
+  const arrowGeom = arrow ? { a: center(arrow.from), b: center(arrow.to) } : null
 
   const ranks = orientation === 'w' ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7]
   const files = orientation === 'w' ? [0, 1, 2, 3, 4, 5, 6, 7] : [7, 6, 5, 4, 3, 2, 1, 0]
@@ -147,8 +176,38 @@ export default function Board({
     onMove(from + to + (promoting ? 'q' : ''))
   }
 
+  // Add a shape, or toggle it off if the identical one already exists. A
+  // different-coloured shape on the same squares recolours it (Lichess-style).
+  function toggleShape(s: Shape) {
+    setShapes((prev) => {
+      const same = prev.find((x) => x.from === s.from && x.to === s.to)
+      const without = prev.filter((x) => !(x.from === s.from && x.to === s.to))
+      if (same && same.brush === s.brush) return without
+      return [...without, s]
+    })
+  }
+
   function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
-    if (!inputEnabled || promo) return
+    if (promo) return
+
+    // Right button → draw an annotation (works regardless of `interactive`).
+    if (e.button === 2) {
+      const sq = squareFromPoint(e.clientX, e.clientY)
+      if (!sq) return
+      e.preventDefault()
+      try {
+        boardRef.current?.setPointerCapture(e.pointerId)
+      } catch {
+        /* ignore */
+      }
+      setDrawing({ from: sq, to: sq, brush: brushFor(e) })
+      return
+    }
+
+    // Any left-click clears existing annotations (Lichess behaviour).
+    if (shapes.length) setShapes([])
+
+    if (!inputEnabled) return
     const sq = squareFromPoint(e.clientX, e.clientY)
     if (!sq) return
 
@@ -182,12 +241,28 @@ export default function Board({
   }
 
   function onPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
+    if (drawing) {
+      const sq = squareFromPoint(e.clientX, e.clientY)
+      if (sq && sq !== drawing.to) setDrawing({ ...drawing, to: sq })
+      return
+    }
     if (!drag) return
     const moved = drag.moved || Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > DRAG_THRESHOLD
     setDrag({ ...drag, x: e.clientX, y: e.clientY, over: squareFromPoint(e.clientX, e.clientY), moved })
   }
 
   function onPointerUp(e: ReactPointerEvent<HTMLDivElement>) {
+    if (drawing) {
+      const s = drawing
+      setDrawing(null)
+      try {
+        boardRef.current?.releasePointerCapture(e.pointerId)
+      } catch {
+        /* ignore */
+      }
+      toggleShape(s)
+      return
+    }
     if (!drag) return
     const d = drag
     setDrag(null)
@@ -227,7 +302,11 @@ export default function Board({
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onPointerCancel={() => setDrag(null)}
+        onPointerCancel={() => {
+          setDrag(null)
+          setDrawing(null)
+        }}
+        onContextMenu={(e) => e.preventDefault()}
       >
         {ranks.map((rank) =>
           files.map((file) => {
@@ -290,6 +369,76 @@ export default function Board({
               markerEnd="url(#bm-head)"
               opacity={0.7}
             />
+          </svg>
+        )}
+
+        {(shapes.length > 0 || drawing) && (
+          <svg
+            className="board-shapes"
+            viewBox="0 0 80 80"
+            preserveAspectRatio="none"
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 6 }}
+          >
+            <defs>
+              {(Object.keys(BRUSHES) as Brush[]).map((b) => (
+                <marker
+                  key={b}
+                  id={`arr-${b}`}
+                  markerWidth="3.2"
+                  markerHeight="3.2"
+                  refX="1.7"
+                  refY="1.6"
+                  orient="auto"
+                >
+                  <path d="M0,0 L3.2,1.6 L0,3.2 z" fill={BRUSHES[b]} />
+                </marker>
+              ))}
+            </defs>
+            {(drawing ? [...shapes, drawing] : shapes).map((s, i) => {
+              const color = BRUSHES[s.brush]
+              if (s.from === s.to) {
+                const c = center(s.from)
+                return (
+                  <circle
+                    key={i}
+                    cx={c.x}
+                    cy={c.y}
+                    r={4.3}
+                    fill="none"
+                    stroke={color}
+                    strokeWidth={0.9}
+                    opacity={0.85}
+                  />
+                )
+              }
+              const a = center(s.from)
+              const b = center(s.to)
+              const dx = b.x - a.x
+              const dy = b.y - a.y
+              const len = Math.hypot(dx, dy) || 1
+              const ux = dx / len
+              const uy = dy / len
+              // Start just outside the source-square center; stop short so the
+              // arrowhead tip lands at the target-square center.
+              const x1 = a.x + ux * 3
+              const y1 = a.y + uy * 3
+              const x2 = b.x - ux * 3
+              const y2 = b.y - uy * 3
+              return (
+                <line
+                  key={i}
+                  x1={x1}
+                  y1={y1}
+                  x2={x2}
+                  y2={y2}
+                  stroke={color}
+                  strokeWidth={1.7}
+                  strokeLinecap="round"
+                  markerEnd={`url(#arr-${s.brush})`}
+                  opacity={0.85}
+                />
+              )
+            })}
           </svg>
         )}
 
