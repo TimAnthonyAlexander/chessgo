@@ -10,15 +10,28 @@ import (
 	"github.com/timanthonyalexander/gomachine/internal/bench"
 )
 
-// stockfishPath resolves the Stockfish binary: $STOCKFISH_PATH, else a PATH
-// lookup (covers dev `/opt/homebrew/bin/stockfish` and prod `/usr/games/stockfish`,
-// both on PATH). Empty string if not found.
+// stockfishPath resolves the Stockfish binary: $STOCKFISH_PATH, then a PATH
+// lookup, then common absolute locations. The last step matters in production:
+// the Go service runs under systemd with a MINIMAL PATH that usually omits
+// `/usr/games` (Debian/Ubuntu's apt install dir), so `exec.LookPath` fails there
+// even though `which stockfish` works in an interactive shell. Empty if not found.
 func stockfishPath() string {
 	if p := os.Getenv("STOCKFISH_PATH"); p != "" {
 		return p
 	}
 	if p, err := exec.LookPath("stockfish"); err == nil {
 		return p
+	}
+	for _, p := range []string{
+		"/usr/games/stockfish", // Debian/Ubuntu (apt) — not on systemd's PATH
+		"/usr/local/bin/stockfish",
+		"/opt/homebrew/bin/stockfish", // macOS, Apple Silicon
+		"/usr/bin/stockfish",
+		"/bin/stockfish",
+	} {
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			return p
+		}
 	}
 	return ""
 }
