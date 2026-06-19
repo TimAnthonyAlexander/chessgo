@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { Box, Slider, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material'
-import { Bot, Cpu, Pause, Play, RotateCcw } from 'lucide-react'
+import { Bot, Cpu, Pause, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react'
 import Board from '../components/Board'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveList from '../components/MoveList'
-import { ActionBtn, ErrorBanner } from '../components/PanelUI'
+import { ActionBtn, ErrorBanner, NavBtn } from '../components/PanelUI'
 import { type Color, engineVsMove, type EngineSide, type GameStatus, type MoveEntry } from '../api/client'
 import { useAuth } from '../lib/auth'
 import { statusLabel } from '../lib/chess'
+import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 const MAX_PLIES = 400 // hard stop so two shuffling engines can't loop forever
@@ -36,6 +37,7 @@ export default function EngineVsEngine() {
   const [whiteEval, setWhiteEval] = useState<WhiteEval | null>(null)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [sound, setSound] = useState(soundEnabled())
   const thinkingRef = useRef(false)
 
   const ply = moves.length
@@ -78,6 +80,8 @@ export default function EngineVsEngine() {
           setWhiteEval({ type: res.eval.type, white })
         }
         setFen(res.fen)
+        const gameOver = res.status !== 'ongoing' || !!res.claimableDraws?.includes('fifty')
+        playForSan(res.san ?? res.bestmove, gameOver) // move/capture/end cue
         if (res.status !== 'ongoing') {
           setStatus(res.status)
           setResult(res.result ?? null)
@@ -116,6 +120,13 @@ export default function EngineVsEngine() {
   function toggleRun() {
     if (over) reset()
     setRunning((r) => !r)
+  }
+
+  function toggleSound() {
+    const next = !sound
+    setSound(next)
+    setSoundEnabled(next)
+    if (next) sounds.move()
   }
 
   if (authStatus === 'loading') {
@@ -198,7 +209,13 @@ export default function EngineVsEngine() {
           >
             <MatchupRow icon={<Cpu size={16} />} name="gomachine" detail={`~${gomaRating} Elo`} side={gomaSide} />
             <MatchupRow icon={<Bot size={16} />} name="Stockfish" detail={`${sfElo} Elo`} side={gomaSide === 'w' ? 'b' : 'w'} />
-            <Typography sx={{ fontSize: 13, fontWeight: 600, color: 'var(--text-dim)', mt: 0.5 }}>{caption}</Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+              <Typography sx={{ fontSize: 13, fontWeight: 600, color: 'var(--text-dim)' }}>{caption}</Typography>
+              <Box sx={{ flex: 1 }} />
+              <NavBtn label={sound ? 'Mute' : 'Unmute'} onClick={toggleSound}>
+                {sound ? <Volume2 size={18} /> : <VolumeX size={18} />}
+              </NavBtn>
+            </Box>
           </Box>
           {error && <ErrorBanner>{error}</ErrorBanner>}
           <Box sx={{ height: 420, display: 'flex' }}>
