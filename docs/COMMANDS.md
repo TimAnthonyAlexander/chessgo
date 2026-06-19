@@ -122,12 +122,31 @@ not replenished. They DO count toward the hub's `activeGames`, so the homepage
 
 ### Managing the screens
 
+The `chessgo-*` aliases (in `~/.customrc`) are the convenient path:
+
+```sh
+chessgo-up                         # start all four (api, engine, hub, web)
+chessgo-restart                    # rebuild Go binary + restart ONLY engine+hub (api & web keep running)
+chessgo-stop engine hub            # stop specific services cleanly
+chessgo-down                       # stop all four
+chessgo-ls                         # status by listening port
+```
+
+Raw screen commands still work:
+
 ```sh
 screen -ls                         # list sessions
 screen -r chessgo-hub              # attach (detach again with Ctrl-a d)
-screen -S chessgo-hub -X quit      # stop one
-# restart = quit, then re-run its start command above
+screen -S chessgo-hub -X quit      # stop one  ⚠ see the orphan gotcha below
 ```
+
+> **Orphan gotcha:** `screen -S <name> -X quit` kills the screen wrapper but can
+> leave the `gomachine` child **still running and holding its port** (6466/6467).
+> A follow-up start then silently fails ("address already in use") because the
+> orphan owns the port. The `chessgo-stop`/`chessgo-restart` aliases avoid this by
+> killing whatever **listens on the port** (not just the screen) and waiting for
+> the port to free. If you used raw `screen -X quit` and a restart won't bind:
+> `lsof -nP -iTCP:6466 -iTCP:6467 -sTCP:LISTEN` to find the orphan, then `kill` its PID.
 
 ### Health checks
 

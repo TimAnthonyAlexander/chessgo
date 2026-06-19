@@ -214,9 +214,12 @@ the sign of the result.
 | **NNUE** (learned non-linear eval) | +200–400 | high (weeks) | the eventual eval answer; the tuner's traced-coefficient dataset is a training-data step |
 | SPSA (Elo-in-the-loop weight tuning) | modest | medium | the *correct* way to tune the few params with no static objective |
 
-Current strength: **~2600** on Stockfish's UCI_Elo scale; we **beat SF-2500**
-(67.5%) where before this session's work we lost to it (37.5%). Full-strength
-Stockfish 17.1/18 (~3650 CCRL) is ~1000 Elo above us — unreachable without NNUE.
+Current strength: **≈2720 ± 79** on Stockfish's UCI_Elo scale (100 games vs
+SF-17.1 @ UCI_Elo 2500, **78%**, +220 head-to-head), up from ~2600 before the
+tuned eval — the anchor's ~+90 jump independently corroborates the eval's +101
+movetime SPRT gain. (Anchor is noisy: a band, not a number; sweep `--sf-elo` to
+triangulate, and gate patches on SPRT.) Full-strength Stockfish 17.1/18
+(~3650 CCRL) is still ~900 Elo above us — that gap needs NNUE.
 
 ---
 
