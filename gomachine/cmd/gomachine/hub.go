@@ -43,7 +43,10 @@ func cmdHub(args []string) {
 	watchFillers := fs.Bool("watch-fillers", true, "keep engine-vs-engine games running to populate the Watch page (only while someone is watching)")
 	watchTarget := fs.Int("watch-target", 5, "number of live games shown on the Watch page (real games padded with fillers up to this)")
 	watchWorkers := fs.Int("watch-filler-workers", 2, "dedicated engine workers for self-play filler games (small, so they can't starve human bot-fill)")
+	pprofAddr := fs.String("pprof", "", "if set (e.g. 127.0.0.1:6481), serve net/http/pprof on this address for profiling the Run goroutine")
 	_ = fs.Parse(args)
+
+	startPprof(*pprofAddr)
 
 	secret := os.Getenv("WS_TICKET_SECRET")
 	if secret == "" {

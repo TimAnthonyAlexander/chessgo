@@ -23,8 +23,10 @@ func cmdServe(args []string) {
 	tt := fs.Int("tt", 64, "transposition table size per worker (MB)")
 	workers := fs.Int("workers", 4, "number of engine workers (bounds concurrent searches)")
 	searchThreads := fs.Int("search-threads", 1, "Lazy SMP threads per full-strength search (helps only time-bounded searches; keep workers*search-threads <= cores)")
+	pprofAddr := fs.String("pprof", "", "if set (e.g. 127.0.0.1:6480), serve net/http/pprof on this address for profiling")
 	_ = fs.Parse(args)
 
+	startPprof(*pprofAddr)
 	srv := server.New(*workers, *tt, *searchThreads)
 	fmt.Printf("gomachine engine listening on http://%s (%d workers, %d MB TT each, %d SMP threads/search)\n", *addr, *workers, *tt, *searchThreads)
 	if err := http.ListenAndServe(*addr, srv.Handler()); err != nil {

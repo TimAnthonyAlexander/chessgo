@@ -39,6 +39,8 @@ func main() {
 		cmdSelfPlay(os.Args[2:])
 	case "bench":
 		cmdBench(os.Args[2:])
+	case "loadtest":
+		cmdLoadtest(os.Args[2:])
 	case "tune":
 		cmdTune(os.Args[2:])
 	case "-h", "--help", "help":
@@ -63,5 +65,8 @@ Usage:
   gomachine selfplay [-level 0..10] [-max 200] [-movetime ms]
   gomachine bench sprt [-new SPEC] [-old SPEC] [-nodes N] ...
                                          in-process self-play SPRT (strength test)
+  gomachine loadtest [-clients N] [-pool 3+0] [-duration 30s] [-move-delay 0]
+                                         drive synthetic WS clients at a running hub
+                                         (throughput + move→echo latency)
 `)
 }

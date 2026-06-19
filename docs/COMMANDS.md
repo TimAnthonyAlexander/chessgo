@@ -161,6 +161,76 @@ cd frontend && bun run build
 bun run preview       # locally preview the built bundle
 ```
 
+## Performance & load testing
+
+Three tools measure **speed** (distinct from `bench sprt`, which measures
+**strength**). Numbers below are from an 11-core arm64 box — treat them as a
+baseline to regression-track, not absolutes.
+
+**1. Hot-path microbenchmarks** (`go test -bench`) — movegen, make/unmake, eval,
+and fixed-depth search NPS:
+
+```sh
+cd gomachine
+go test -run '^$' -bench . ./internal/chess/ ./internal/eval/   # movegen, eval, perft NPS
+go test -run '^$' -bench BenchmarkSearch -benchtime 3x ./internal/search/   # search Mnps @ depth 9
+./bin/gomachine perft -depth 6                                   # quick movegen NPS (~56M nps)
+```
+
+Baselines: full legal movegen ~0.3–1.1µs/pos, static eval ~30–60ns, perft
+~55 Mnps, single-thread search ~1.7–4.5 Mnps. Search is depth-fixed (not time)
+so results are hardware-comparable across machines, like the SPRT harness.
+
+**2. Live CPU/heap/goroutine profiling** (`-pprof` on either Go service):
+
+```sh
+./bin/gomachine serve -pprof 127.0.0.1:6480       # engine
+./bin/gomachine hub   -pprof 127.0.0.1:6481        # hub (profile the Run goroutine)
+go tool pprof http://127.0.0.1:6481/debug/pprof/profile?seconds=30   # CPU
+go tool pprof http://127.0.0.1:6481/debug/pprof/heap                 # heap
+curl 'http://127.0.0.1:6481/debug/pprof/goroutine?debug=1' | head    # goroutine count
+```
+
+pprof serves on its **own** listener/mux — off by default, never on the service
+port. Pair it with the load test below to see where the hub spends time under load.
+
+**3. Hub WebSocket load generator** (`gomachine loadtest`) — synthetic clients
+that queue, get paired human-vs-human, and play random legal moves, isolating the
+hub's single Run goroutine + broadcast fan-out (no engine/bot search involved):
+
+```sh
+# Stress an isolated hub (bots/fillers off; point BASEAPI at nothing so finished
+# games don't spam a real API — the persist POST is fire-and-forget either way).
+WS_TICKET_SECRET=dev-insecure-secret BASEAPI_URL=http://127.0.0.1:1 \
+  ./bin/gomachine hub -addr 127.0.0.1:6499 -bots=false -watch-fillers=false &
+WS_TICKET_SECRET=dev-insecure-secret \
+  ./bin/gomachine loadtest -url ws://127.0.0.1:6499/ws -clients 100 -duration 30s
+
+# -move-delay 0 = max stress (default); set e.g. -move-delay 2s to simulate humans.
+```
+
+It mints its own tickets with `WS_TICKET_SECRET` (must match the hub), so it needs
+only the hub — not BaseAPI. UserIDs carry a per-run nonce (so a prior run's
+reconnect-preserved games aren't reattached) and clients resign on exit (so runs
+don't leave ghost games). Reports move throughput (the Run-goroutine rate) and
+move→echo latency percentiles. Flags: `-clients -pool -duration -ramp -move-delay
+-secret -url`.
+
+Concurrency sweep on an 11-core box (max stress, `-move-delay 0`, 8s each):
+
+| clients | live games | moves/sec | p50 | p95 | p99 |
+|--:|--:|--:|--:|--:|--:|
+| 10  | ~5   | 34k | 128µs | 512µs | 512µs |
+| 50  | ~25  | 45k | 512µs | 2.0ms | 2.0ms |
+| 100 | ~50  | 54k | 1.0ms | 2.0ms | 4.1ms |
+| 200 | ~100 | 59k | 2.0ms | 4.1ms | 8.2ms |
+| 400 | ~200 | 62k | 4.1ms | 8.2ms | 8.2ms |
+| 800 | ~400 | 63k | 8.2ms | 16ms  | 16ms  |
+
+Throughput plateaus ~**62k moves/sec** (the single Run goroutine saturating one
+core); past that, added load shows up as latency, not lost moves — and these are
+worst-case (zero think time). Real games at human pace are a tiny fraction of this.
+
 ## Engine strength testing — in-process self-play SPRT
 
 The strength feedback loop is `gomachine bench sprt`: two configurations of the
