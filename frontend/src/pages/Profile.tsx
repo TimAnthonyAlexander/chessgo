@@ -180,7 +180,7 @@ export default function Profile() {
 
         {/* Game history */}
         <Box>
-          <SectionLabel>Recent games</SectionLabel>
+          <SectionLabel>Games</SectionLabel>
           {games.length === 0 ? (
             <Box
               sx={{

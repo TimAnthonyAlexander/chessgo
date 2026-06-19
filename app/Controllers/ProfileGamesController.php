@@ -17,7 +17,7 @@ use App\Models\User;
 class ProfileGamesController extends Controller
 {
     /** Page size — also the hard cap on what one request can return. */
-    private const PER_PAGE = 20;
+    private const PER_PAGE = 30;
 
     /** Bound from path {name}. */
     public string $name = '';

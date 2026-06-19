@@ -25,7 +25,7 @@ use App\Services\Glicko2Service;
 class ProfileController extends Controller
 {
     /** How many recent games to embed in the first profile payload. */
-    private const RECENT_GAMES = 20;
+    private const RECENT_GAMES = 30;
 
     /** Bound from path {name}. */
     public string $name = '';
