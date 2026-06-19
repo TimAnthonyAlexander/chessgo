@@ -5,17 +5,19 @@
   cursor: crosshair;
 }
 
-/* Spare-piece palette rows above / below the board. */
+/* Compact spare-piece palette for the sidebar. Two rows of 6 pieces, then a
+   narrower tools row (eraser + pointer). */
 .editor-palette {
   display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  gap: 4px;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 5px;
   width: 100%;
 }
-.editor-palette.top {
-  margin-bottom: 8px;
+.editor-palette + .editor-palette {
+  margin-top: 5px;
 }
-.editor-palette.bottom {
+.editor-palette.tools {
+  grid-template-columns: repeat(2, 1fr);
   margin-top: 8px;
 }
 

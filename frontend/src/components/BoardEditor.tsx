@@ -1,5 +1,6 @@
 import { type PointerEvent as ReactPointerEvent, useRef, useState } from 'react'
-import { Trash2, MousePointer2 } from 'lucide-react'
+import { Box } from '@mui/material'
+import { MousePointer2, Trash2 } from 'lucide-react'
 import './Board.css'
 import './BoardEditor.css'
 import type { Color } from '../api/client'
@@ -7,11 +8,8 @@ import { type BoardMap, type Square, parseFen, pieceImageUrl, squareAt } from '.
 import { withMovedPiece, withPiece } from '../lib/fenEdit'
 
 // The active "brush": a piece to stamp, the eraser, or null (move/drag mode).
-type Brush = { kind: 'piece'; piece: string } | { kind: 'erase' } | null
+export type Brush = { kind: 'piece'; piece: string } | { kind: 'erase' } | null
 
-// Palette rows: black pieces above the board, white below (Lichess layout).
-const BLACK_PIECES = ['k', 'q', 'r', 'b', 'n', 'p']
-const WHITE_PIECES = ['K', 'Q', 'R', 'B', 'N', 'P']
 const DRAG_THRESHOLD = 5
 
 interface DragState {
@@ -27,23 +25,27 @@ interface DragState {
 }
 
 /**
- * A free-placement board editor. Two interaction models, Lichess-style:
- *  • pick a piece (or the eraser) from a palette, then click/drag-paint squares;
- *  • with no brush selected (the pointer tool), drag a piece between squares — or
- *    drag it off the board to remove it.
- * It owns no FEN state: every edit is emitted via `onChange(newFen)`.
+ * A free-placement board editor (board only — the spare-piece palette lives in
+ * the page sidebar so the board itself fits the viewport). Two interaction
+ * models, Lichess-style:
+ *  • pick a piece (or the eraser) brush, then left-click / drag-paint squares;
+ *  • with no brush (the pointer tool), drag a piece between squares — or off the
+ *    board to remove it.
+ * Right-clicking any square always clears it. It owns no FEN state: every edit is
+ * emitted via `onChange(newFen)`.
  */
 export default function BoardEditor({
   fen,
   orientation,
+  brush,
   onChange,
 }: {
   fen: string
   orientation: Color
+  brush: Brush
   onChange: (fen: string) => void
 }) {
   const boardRef = useRef<HTMLDivElement>(null)
-  const [brush, setBrush] = useState<Brush>(null)
   const [drag, setDrag] = useState<DragState | null>(null)
   // While a paint stroke is held, remember the last square we touched so a drag
   // across the board doesn't re-stamp the same square on every pointer event.
@@ -70,11 +72,11 @@ export default function BoardEditor({
     if (!b) return
     if (painting.current && painting.current.last === sq) return
     if (painting.current) painting.current.last = sq
-    if (b.kind === 'piece') onChange(withPiece(fen, sq, b.piece))
-    else onChange(withPiece(fen, sq, null))
+    onChange(withPiece(fen, sq, b.kind === 'piece' ? b.piece : null))
   }
 
   function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    if (e.button === 2) return // right-click is handled by onContextMenu (erase)
     const sq = squareFromPoint(e.clientX, e.clientY)
     if (!sq) return
     e.preventDefault()
@@ -127,10 +129,14 @@ export default function BoardEditor({
     else onChange(withPiece(fen, d.from, null)) // dropped off-board → remove
   }
 
+  function onContextMenu(e: ReactPointerEvent<HTMLDivElement>) {
+    e.preventDefault() // suppress the browser menu; right-click clears a square
+    const sq = squareFromPoint(e.clientX, e.clientY)
+    if (sq && board[sq]) onChange(withPiece(fen, sq, null))
+  }
+
   return (
     <div className="board-wrap">
-      <Palette pieces={BLACK_PIECES} brush={brush} onPick={setBrush} side="top" />
-
       <div
         ref={boardRef}
         className={`board editor${brush ? ' brushing' : ''}${drag?.moved ? ' dragging' : ''}`}
@@ -141,6 +147,7 @@ export default function BoardEditor({
           painting.current = null
           setDrag(null)
         }}
+        onContextMenu={onContextMenu}
       >
         {ranks.map((rank) =>
           files.map((file) => {
@@ -168,8 +175,6 @@ export default function BoardEditor({
         )}
       </div>
 
-      <Palette pieces={WHITE_PIECES} brush={brush} onPick={setBrush} side="bottom" />
-
       {drag?.moved && (
         <span
           className="drag-ghost"
@@ -186,51 +191,64 @@ export default function BoardEditor({
   )
 }
 
-// A palette row: spare pieces to stamp, plus the eraser and the pointer (move)
-// tool. The pointer tool is shown once (on the bottom row) — it clears the brush.
-function Palette({
-  pieces,
-  brush,
-  onPick,
-  side,
-}: {
-  pieces: string[]
-  brush: Brush
-  onPick: (b: Brush) => void
-  side: 'top' | 'bottom'
-}) {
-  const isActivePiece = (p: string) => brush?.kind === 'piece' && brush.piece === p
+const WHITE_PIECES = ['K', 'Q', 'R', 'B', 'N', 'P']
+const BLACK_PIECES = ['k', 'q', 'r', 'b', 'n', 'p']
+
+/**
+ * Compact spare-piece palette for the sidebar: white row, black row, then the
+ * eraser + pointer tools. Click a piece to arm it as the brush; click again (or
+ * the pointer tool) to return to move/drag mode.
+ */
+export function EditorPalette({ brush, onPick }: { brush: Brush; onPick: (b: Brush) => void }) {
+  const activePiece = (p: string) => brush?.kind === 'piece' && brush.piece === p
   return (
-    <div className={`editor-palette ${side}`}>
-      {pieces.map((p) => (
+    <Box>
+      <PaletteRow pieces={WHITE_PIECES} activePiece={activePiece} onPick={onPick} />
+      <PaletteRow pieces={BLACK_PIECES} activePiece={activePiece} onPick={onPick} />
+      <div className="editor-palette tools">
         <button
-          key={p}
           type="button"
-          aria-label={`Place ${p}`}
-          className={`pal-cell${isActivePiece(p) ? ' active' : ''}`}
-          onClick={() => onPick(isActivePiece(p) ? null : { kind: 'piece', piece: p })}
+          aria-label="Eraser"
+          className={`pal-cell tool${brush?.kind === 'erase' ? ' active' : ''}`}
+          onClick={() => onPick(brush?.kind === 'erase' ? null : { kind: 'erase' })}
         >
-          <span className="piece" style={{ backgroundImage: `url(${pieceImageUrl(p)})` }} />
+          <Trash2 size={16} />
         </button>
-      ))}
-      <button
-        type="button"
-        aria-label="Eraser"
-        className={`pal-cell tool${brush?.kind === 'erase' ? ' active' : ''}`}
-        onClick={() => onPick(brush?.kind === 'erase' ? null : { kind: 'erase' })}
-      >
-        <Trash2 size={18} />
-      </button>
-      {side === 'bottom' && (
         <button
           type="button"
           aria-label="Move pieces"
           className={`pal-cell tool${brush === null ? ' active' : ''}`}
           onClick={() => onPick(null)}
         >
-          <MousePointer2 size={18} />
+          <MousePointer2 size={16} />
         </button>
-      )}
+      </div>
+    </Box>
+  )
+}
+
+function PaletteRow({
+  pieces,
+  activePiece,
+  onPick,
+}: {
+  pieces: string[]
+  activePiece: (p: string) => boolean
+  onPick: (b: Brush) => void
+}) {
+  return (
+    <div className="editor-palette">
+      {pieces.map((p) => (
+        <button
+          key={p}
+          type="button"
+          aria-label={`Place ${p}`}
+          className={`pal-cell${activePiece(p) ? ' active' : ''}`}
+          onClick={() => onPick(activePiece(p) ? null : { kind: 'piece', piece: p })}
+        >
+          <span className="piece" style={{ backgroundImage: `url(${pieceImageUrl(p)})` }} />
+        </button>
+      ))}
     </div>
   )
 }

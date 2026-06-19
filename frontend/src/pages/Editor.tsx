@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Box, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material'
 import { Bot, Check, Copy, Eraser, FlipVertical2, Microscope, RotateCcw } from 'lucide-react'
-import BoardEditor from '../components/BoardEditor'
+import BoardEditor, { type Brush, EditorPalette } from '../components/BoardEditor'
 import { ActionBtn } from '../components/PanelUI'
 import type { Color } from '../api/client'
 import { parseFen } from '../lib/chess'
@@ -31,6 +31,7 @@ export default function Editor() {
   const navFen = (useLocation().state as { fen?: string } | null)?.fen ?? null
   const [fen, setFen] = useState<string>(navFen || START_FEN)
   const [orientation, setOrientation] = useState<Color>('w')
+  const [brush, setBrush] = useState<Brush>(null)
   const [copied, setCopied] = useState(false)
 
   const active = activeOf(fen)
@@ -74,7 +75,7 @@ export default function Editor() {
           display: 'grid',
           gridTemplateColumns: {
             xs: '1fr',
-            md: '320px min(calc(100vh - 200px), calc(100vw - 752px), 760px) 320px',
+            md: '320px min(calc(100vh - 120px), calc(100vw - 752px), 880px) 320px',
           },
           columnGap: { md: 4 },
           rowGap: 2,
@@ -85,14 +86,22 @@ export default function Editor() {
           mx: 'auto',
         }}
       >
-        {/* Left spacer card — mirrors the right panel so the board stays centered. */}
-        <Box sx={{ display: { xs: 'none', md: 'block' }, alignSelf: 'start', width: '100%' }}>
-          <HintCard />
+        {/* Left — spare-piece palette + how-to (mirrors the right panel so the
+            board stays centered). */}
+        <Box
+          sx={{
+            alignSelf: 'start',
+            width: '100%',
+            maxWidth: { xs: 'min(94vw, 64vh)', md: 'none' },
+            mx: { xs: 'auto', md: 0 },
+          }}
+        >
+          <PaletteCard brush={brush} onPick={setBrush} />
         </Box>
 
-        {/* Center — the editor board with its spare-piece palettes. */}
+        {/* Center — the editor board. */}
         <Box sx={{ minWidth: 0, width: { xs: 'min(94vw, 64vh)', md: '100%' }, mx: 'auto' }}>
-          <BoardEditor fen={fen} orientation={orientation} onChange={setFen} />
+          <BoardEditor fen={fen} orientation={orientation} brush={brush} onChange={setFen} />
         </Box>
 
         {/* Right — controls + actions. */}
@@ -259,14 +268,14 @@ function PanelHeader() {
   )
 }
 
-function HintCard() {
+function PaletteCard({ brush, onPick }: { brush: Brush; onPick: (b: Brush) => void }) {
   return (
     <Box
       sx={{
         border: '1px solid var(--line-soft)',
         borderRadius: '12px',
         bgcolor: 'var(--surface)',
-        p: 1.75,
+        overflow: 'hidden',
         boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
       }}
     >
@@ -278,20 +287,27 @@ function HintCard() {
           letterSpacing: 1.8,
           textTransform: 'uppercase',
           color: 'var(--text-dim)',
-          mb: 1,
+          px: 1.75,
+          py: 1.25,
+          borderBottom: '1px solid var(--line-soft)',
+          bgcolor: 'var(--bg-2)',
         }}
       >
-        How to
+        Pieces
       </Typography>
-      {[
-        'Pick a piece from a palette, then click squares to place it.',
-        'Drag-paint to fill several squares; the eraser clears them.',
-        'With the pointer tool, drag a piece to move it — or off the board to remove it.',
-      ].map((t, i) => (
-        <Typography key={i} sx={{ fontSize: 13, color: 'var(--text-dim)', mb: 0.75, lineHeight: 1.5 }}>
-          • {t}
-        </Typography>
-      ))}
+      <Box sx={{ p: 1.75 }}>
+        <EditorPalette brush={brush} onPick={onPick} />
+        <Box sx={{ height: '1px', bgcolor: 'var(--line-soft)', my: 1.5 }} />
+        {[
+          'Click a piece, then click squares to place it.',
+          'Drag-paint to fill; the pointer tool drags pieces.',
+          'Right-click a square to clear it.',
+        ].map((t, i) => (
+          <Typography key={i} sx={{ fontSize: 12, color: 'var(--muted)', mb: 0.5, lineHeight: 1.45 }}>
+            • {t}
+          </Typography>
+        ))}
+      </Box>
     </Box>
   )
 }
