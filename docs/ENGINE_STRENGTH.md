@@ -107,7 +107,11 @@ stack vs all-off) was **+250.6 ± 83.4 Elo**.
   the victim + a margin.
 - **Aspiration windows** — search the root in a narrow window around the previous
   iteration's score, widening only the failing bound. Correctness-tested to give
-  *identical* moves to a full-window search (pure speed).
+  *identical* results to a full-window search **under plain alpha-beta** (the
+  re-search logic is exact). With window-sensitive pruning on (null-move / LMR /
+  RFP / LMP / delta — all read α/β) a narrow search legitimately prunes a
+  different tree, so move/score can differ by a few cp on some positions; that's
+  expected, not a bug, which is why strength is judged by SPRT, not this equality.
 - **Reverse futility pruning** (static null move) — at a non-PV node near the
   leaves, if `staticEval - margin*depth >= beta`, fail high without searching.
   Required adding a static eval inside negamax.
@@ -140,45 +144,53 @@ measure it at `--movetime`.
 
 ---
 
-## 5. The Texel tuner (`gomachine tune`)
+## 5. The Texel tuner (`gomachine tune`) — **shipped, +101 Elo**
 
-Optimizes the evaluation's knowledge-term weights (`internal/eval` `Weights`) to
-minimize the mean-squared error between the engine's sigmoided eval and a target.
+Fits the **whole eval as one linear model** — PSQT/material *and* the knowledge
+terms, jointly — to minimize MSE between the sigmoided eval and the game result.
 
 ```sh
-# target = game result (classic Texel):
-gomachine tune --games 1500 --nodes 3000 --target result
+# tune on a quiet-labelled EPD dataset (Lichess), write tuned tables, then SPRT:
+gomachine tune --epd quiet-labeled.epd --out internal/eval/tuned_tables.go
+gomachine bench sprt --new "tuned=on" --old "" --movetime 100 --elo0 0 --elo1 6
 
-# target = Stockfish's eval per position (knowledge distillation):
-gomachine tune --games 1500 --target stockfish --sf /opt/homebrew/bin/stockfish --sf-depth 8
+# self-play instead of a dataset (slower); --lambda blends in our own search eval:
+gomachine tune --games 5000 --lambda 0.7
 ```
 
-Pipeline (`internal/tune`): self-play generates labeled positions → (optionally)
-Stockfish labels each position's eval in parallel → fit the sigmoid scale `K` →
-coordinate-descent (±1 per weight) over all weights → print tuned weights as a Go
-literal. MSE is computed in parallel across cores.
+Pipeline (`internal/tune`): load quiet WDL positions (Lichess EPD, or self-play
+with a SEE/in-check quiet filter) → trace each into eval **coefficients**
+(`eval.EvalTrace`, the "evaluation wrapping" trick) → fit `K` once → **joint Adam
+gradient descent** over all ~788 weights with decoupled decay toward PeSTO →
+emit `tuned_tables.go`. The PSQT is tuned *with* the terms, which is the whole
+point (see §6).
 
-**Distillation is the better *target***: tuning to dense per-position Stockfish
-evals produced correctly-signed weights where game-result tuning got king-safety
-and doubled-pawn signs *backwards* (one noisy win/loss label smeared across 60
-positions is a weak signal). But better target ≠ better player — see §6.
+**This replaced the earlier −148 Elo result.** That loss was a broken *method*,
+not a verdict on HCE: coordinate descent (per-term, not joint) over **bolt-on
+scalars on a frozen PSQT**, fit to a **distilled Stockfish-cp** target by **MSE
+alone** (no SPRT). Every one of those is a known anti-pattern; fixing them flips
+the sign of the result.
 
 ---
 
 ## 6. Key findings (the expensive lessons)
 
-1. **Eval-fit ≠ playing strength.** The distillation tune had the *lowest* MSE we
-   measured (best match to Stockfish's eval) and **lost −148.4 Elo** in actual
-   games. The MSE-optimal weights were play-catastrophic (e.g. `MobEG[Q] = -21`
-   → a ~−420cp penalty for an active queen in the endgame, because losing
-   positions statistically have a scrambling queen). This is the textbook reason
-   position-test/eval-matching is *not* a strength measure — measured in our own
-   numbers. **The eval terms are off by default.**
+1. **How you tune dominates what you tune.** The same terms that lost −148 Elo
+   under coordinate-descent-MSE-on-frozen-PSQT *gained* +101 Elo (movetime, SPRT)
+   under joint Adam on WDL with the PSQT tuned in. The fixes that mattered, in
+   rough order: (a) **tune the PSQT jointly** — bolt-on terms over a frozen PSQT
+   double-count and produce compensating wrong-signed weights; (b) **WDL target,
+   not distilled cp** — eval-fit ≠ strength (the lowest-MSE distillation fit was
+   play-catastrophic, e.g. `MobEG[Q] = -21`); (c) **joint gradient descent**, not
+   per-coordinate; (d) **real, diverse data** — on 725k Lichess positions even
+   pure WDL produces correctly-signed weights (queen-mobility +6 not −28, doubled
+   −22 not +12), so the old sign-smearing was substantially a small-correlated-
+   self-play *data* problem.
 
-2. **Bolt-on linear eval terms over an already-tuned PSQT don't help.** Mobility
-   et al. overlap with the PeSTO piece-square tables, so a static-MSE optimizer
-   either zeroes them out (untuned mobility SPRT'd at ~0) or produces compensating
-   wrong-signed weights. Real eval Elo needs SPSA (Elo-in-the-loop) or NNUE (§7).
+2. **Still SPRT-gate everything.** Lower MSE never means more Elo on its own — the
+   `tuned=on` set was accepted by self-play SPRT (+128 @ nodes, +101 @ movetime),
+   not by its error. A `--lambda` WDL+eval blend is available as cheap insurance
+   against label-smearing, but its value (and λ) is an SPRT question, not an MSE one.
 
 3. **The Stockfish anchor is a band, not a number** (§2.2). Trust SPRT for
    magnitude; the anchor only says "roughly here."
@@ -195,10 +207,12 @@ positions is a weak signal). But better target ≠ better player — see §6.
 
 | Lever | Elo (rough) | Effort | Notes |
 |---|---|---|---|
+| **Tuned HCE (shipped)** | **+101 @ movetime** | done | joint Adam on WDL, PSQT tuned in (§5) |
+| Richer HCE terms (Phase 2) | +30–80 | medium | king-safety attack-units, rook files, passed-pawn blockers/king-dist, threats — each behind a flag, Texel-tuned + SPRT'd |
 | Ship SMP to prod + higher threads | delivers +97 to the live bot | small | server/hub threads config |
 | Remaining search patches | +50–80 | low | futility, countermove, singular ext, TT-static-eval |
-| **NNUE** (learned non-linear eval) | +200–400 | high (weeks) | the real eval answer; the distillation pipeline (§5) is its training-data step |
-| SPSA (Elo-in-the-loop weight tuning) | modest | medium | the *correct* way to tune eval/search params with no static objective |
+| **NNUE** (learned non-linear eval) | +200–400 | high (weeks) | the eventual eval answer; the tuner's traced-coefficient dataset is a training-data step |
+| SPSA (Elo-in-the-loop weight tuning) | modest | medium | the *correct* way to tune the few params with no static objective |
 
 Current strength: **~2600** on Stockfish's UCI_Elo scale; we **beat SF-2500**
 (67.5%) where before this session's work we lost to it (37.5%). Full-strength

@@ -11,8 +11,14 @@ type Config struct {
 	Pawns      bool
 	KingSafety bool
 	BishopPair bool
+	UseTuned   bool // select the Texel-tuned PSQT (tuned_tables.go) over PeSTO
 	W          *Weights
 }
+
+// TunedWeights returns the Texel-tuned knowledge weights (tuned_tables.go),
+// paired with the tuned PSQT via Config.UseTuned. Until a tune is generated it
+// equals DefaultWeights().
+func TunedWeights() *Weights { return tunedWeightsLiteral() }
 
 // Weights holds every tunable knowledge-term weight (centipawns). The PSQT and
 // material values live in the fixed base tables (pesto_tables.go) and are not
@@ -157,9 +163,9 @@ func sidePawns(pos *chess.Position, us chess.Color, w *Weights) (mg, eg int) {
 			eg += w.IsolatedEG
 		}
 		if enemy&passedMask[us][sq] == 0 { // passed
-			adv := advancement(us, int(sq.Rank()))
-			mg += w.PassedMG * adv / 2
-			eg += w.PassedEG * adv / 2
+			adv := advancement(us, int(sq.Rank())) / 2
+			mg += w.PassedMG * adv
+			eg += w.PassedEG * adv
 		}
 	}
 	for f := 0; f < 8; f++ { // doubled

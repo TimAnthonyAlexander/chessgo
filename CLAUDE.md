@@ -87,9 +87,14 @@ php mason migrate:generate && php mason migrate:apply -y                     # D
   playing strength: implement behind a `search.Params`/`eval.Config` flag
   (default off), then `gomachine bench sprt --new "flag=on" --old "flag=off"`; only
   flip the default if it accepts H1. Search patches (SEE/delta/aspiration/RFP/LMP)
-  + **Lazy SMP** are shipped (~+250/+97 Elo). **Eval terms are OFF by default** —
-  MSE/distillation tuning was SPRT-rejected at −148 Elo (*eval-fit ≠ strength*;
-  the lowest-MSE fit lost hardest). The lock-free TT (`tt.go`, Hyatt XOR) makes the
+  + **Lazy SMP** are shipped (~+250/+97 Elo). **The Texel-tuned eval is ON by
+  default** (tuned PSQT + knowledge terms, `internal/eval/tuned_tables.go`):
+  +128 Elo @ fixed nodes, **+101 Elo @ 100ms/move**, SPRT-gated. This *replaced*
+  the old result: the earlier −148 Elo loss was a broken *method* (coordinate
+  descent on MSE, distilled CP target, frozen PSQT), not a verdict on HCE — the
+  rebuilt tuner (joint Adam on WDL, **tuning the PSQT itself**, quiet Lichess
+  positions; `internal/tune`) wins. Re-tune via `gomachine tune --epd <file>
+  --out internal/eval/tuned_tables.go`, then SPRT `--new "tuned=on"`. The lock-free TT (`tt.go`, Hyatt XOR) makes the
   TT concurrency-safe; `threads=1` is byte-identical to serial — **run
   `go test -race ./internal/search/` after touching the TT or the parallel driver.**
 - **`WS_TICKET_SECRET` must match** between BaseAPI (`.env`) and the hub's env, or
@@ -176,9 +181,11 @@ client). See SPEC.md §9. Also: **engine strength push** (`docs/ENGINE_STRENGTH.
 — a native in-process self-play **SPRT** harness (`gomachine bench`) drove five
 SPRT-gated search improvements (SEE, delta/aspiration/reverse-futility/late-move
 pruning; ~+250 Elo) and **Lazy SMP** (lock-free TT; ~+97 Elo), reaching **~2600**
-(beats handicapped SF-2500). A Texel tuner (`gomachine tune`, game-result +
-Stockfish-distillation) + handcrafted eval terms exist but are **off by default**
-(MSE-tuned eval lost −148 Elo — *eval-fit ≠ strength*). Next: hub-restart-durable
+(beats handicapped SF-2500). The **Texel-tuned eval is now shipped** (`gomachine
+tune`: joint Adam on WDL-labelled quiet Lichess positions, tuning the PSQT itself
+via coefficient tracing; **+101 Elo @ movetime**, SPRT-gated) — the old −148 Elo
+was a broken method (coordinate-descent MSE on a frozen PSQT), not HCE itself.
+Next: hub-restart-durable
 resume, puzzle generation pipeline, ship SMP to the `serve`/hub prod paths,
 remaining cheap search patches → **NNUE** (the distillation pipeline is its data
 step), precise level↔Elo *calibration*, a true cross-pool ranked queue. See

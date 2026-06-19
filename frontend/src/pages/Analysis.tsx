@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Box, Button, Tooltip, Typography } from '@mui/material'
 import { ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, FlipVertical2, Play, Square, Target, Zap } from 'lucide-react'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import AnalysisAside from '../components/AnalysisAside'
 import Board from '../components/Board'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
@@ -40,6 +40,7 @@ function playMoveSound(node?: TreeNode) {
 
 export default function Analysis() {
   const { id } = useParams<{ id?: string }>()
+  const navigate = useNavigate()
 
   const [tree, setTree] = useState<Tree>(() => createTree(START_FEN))
   const [currentId, setCurrentId] = useState(0)
@@ -248,10 +249,10 @@ export default function Analysis() {
     })
   }, [])
 
-  // The board arrow needs the engine on. Always surface it while Auto Best Move
-  // is driving so the user sees the engine's choice before it's played.
+  // The board arrow needs the engine on and the arrow toggle enabled — even while
+  // Auto Best Move is driving, we honor the user's arrow preference.
   const arrow =
-    engineOn && (showArrow || autoMode === 'best') && current.bestUci
+    engineOn && showArrow && current.bestUci
       ? { from: current.bestUci.slice(0, 2), to: current.bestUci.slice(2, 4) }
       : null
 
@@ -289,7 +290,13 @@ export default function Analysis() {
         {/* Left column: material + position cards (mirrors the sidebar width, so
             the board stays centered). Setup tools only in free mode — reviewing a
             loaded game shows material alone. */}
-        <AnalysisAside fen={current.fen} onLoadFen={loadPosition} showSetup={!id} />
+        <AnalysisAside
+          fen={current.fen}
+          onLoadFen={loadPosition}
+          onPlayBot={() => navigate('/bot', { state: { fen: current.fen } })}
+          playBotDisabled={over.over}
+          showSetup={!id}
+        />
 
         {/* Eval bar + board */}
         <Box sx={{ minWidth: 0, display: 'flex', gap: 1, alignItems: 'stretch' }}>
@@ -370,7 +377,6 @@ export default function Analysis() {
                 onClick={() => toggleAuto('best')}
                 icon={autoMode === 'best' ? <Square size={15} /> : <Zap size={15} />}
                 label={autoMode === 'best' ? 'Stop' : 'Auto Best'}
-                tip={autoMode === 'best' ? 'Stop auto play' : "Keep playing the engine's best move from here"}
               />
             </Box>
 
@@ -659,20 +665,18 @@ function AutoBtn({
   onClick: () => void
   icon: React.ReactNode
   label: string
-  tip: string
+  tip?: string
   disabled?: boolean
 }) {
-  return (
-    <Tooltip title={tip} arrow>
-      {/* span wrapper so the tooltip still works while the button is disabled */}
-      <Box component="span" sx={{ flex: 1, display: 'flex' }}>
-        <Button
-          onClick={onClick}
-          aria-label={label}
-          startIcon={icon}
-          disableRipple
-          disabled={disabled}
-          sx={{
+  const button = (
+    <Box component="span" sx={{ flex: 1, display: 'flex' }}>
+      <Button
+        onClick={onClick}
+        aria-label={label}
+        startIcon={icon}
+        disableRipple
+        disabled={disabled}
+        sx={{
             flex: 1,
             height: 46,
             textTransform: 'none',
@@ -705,7 +709,15 @@ function AutoBtn({
           {label}
         </Button>
       </Box>
+  )
+
+  // span wrapper so the tooltip still works while the button is disabled
+  return tip ? (
+    <Tooltip title={tip} arrow>
+      {button}
     </Tooltip>
+  ) : (
+    button
   )
 }
 

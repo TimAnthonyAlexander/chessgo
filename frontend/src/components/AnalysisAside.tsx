@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Box, Tooltip, Typography } from '@mui/material'
-import { Check, Copy, Dices, FileInput, RotateCcw } from 'lucide-react'
+import { Bot, Check, Copy, Dices, FileInput, RotateCcw } from 'lucide-react'
 import { Chess } from 'chess.js'
 import { START_FEN } from '../lib/analysisTree'
 
@@ -74,10 +74,14 @@ function validFen(fen: string): string | null {
 export default function AnalysisAside({
   fen,
   onLoadFen,
+  onPlayBot,
+  playBotDisabled = false,
   showSetup = true,
 }: {
   fen: string
   onLoadFen: (fen: string) => void
+  onPlayBot: () => void
+  playBotDisabled?: boolean
   showSetup?: boolean
 }) {
   const mat = useMemo(() => computeMaterial(fen), [fen])
@@ -94,6 +98,47 @@ export default function AnalysisAside({
     >
       <MaterialCard mat={mat} />
       {showSetup && <PositionCard fen={fen} onLoadFen={onLoadFen} />}
+      <PlayBotButton onClick={onPlayBot} disabled={playBotDisabled} />
+    </Box>
+  )
+}
+
+// Take the position currently on the board into a fresh game against the engine
+// (the BotGame setup then asks which side to play). Available in both free
+// analysis and game review.
+function PlayBotButton({ onClick, disabled }: { onClick: () => void; disabled?: boolean }) {
+  return (
+    <Box
+      component="button"
+      onClick={onClick}
+      disabled={disabled}
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 0.9,
+        width: '100%',
+        height: 46,
+        cursor: disabled ? 'default' : 'pointer',
+        fontFamily: 'var(--font-display)',
+        fontSize: 14,
+        fontWeight: 700,
+        letterSpacing: 0.2,
+        color: disabled ? 'var(--muted)' : '#15171c',
+        background: disabled ? 'var(--surface-2)' : 'linear-gradient(180deg, #e3b56a, #d8a657)',
+        border: `1px solid ${disabled ? 'var(--line-soft)' : 'var(--accent)'}`,
+        borderRadius: '12px',
+        boxShadow: disabled ? 'none' : '0 0 16px -6px rgba(216,166,87,0.6)',
+        opacity: disabled ? 0.6 : 1,
+        transition: 'background .15s, transform .05s, box-shadow .2s',
+        '&:hover': disabled
+          ? {}
+          : { background: 'linear-gradient(180deg, #e7bd76, #dcab5d)', boxShadow: '0 0 20px -5px rgba(216,166,87,0.75)' },
+        '&:active': disabled ? {} : { transform: 'translateY(1px)' },
+      }}
+    >
+      <Bot size={17} />
+      Play bot from here
     </Box>
   )
 }

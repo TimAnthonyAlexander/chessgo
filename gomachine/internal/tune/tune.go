@@ -1,13 +1,18 @@
-// Package tune implements Texel tuning of the evaluation's knowledge-term
-// weights (internal/eval Weights). It generates labeled positions by self-play
-// and optimizes the weights to minimize the mean-squared error between the
-// engine's sigmoided eval and a target — either the game RESULT (classic Texel)
-// or STOCKFISH's eval of the position (knowledge distillation). The result is a
-// tuned Weights printed as a Go literal to paste into DefaultWeights.
+// Package tune implements Texel tuning of the evaluation as a single linear
+// model. It generates QUIET, WDL-labelled positions by self-play, traces each
+// into eval coefficients (eval.EvalTrace), and fits the FULL weight vector —
+// PSQT/material AND the knowledge terms, jointly — by gradient descent (Adam) to
+// minimise the MSE between sigmoid(K·E) and the game result.
+//
+// This replaces the previous coordinate-descent-over-bolt-on-scalars tuner,
+// which left the PSQT frozen and accepted on MSE alone — the configuration that
+// SPRT-rejected at −148 Elo (docs/ENGINE_STRENGTH.md §6). The new tuner follows
+// the community-consensus recipe (Österlund / Grant): joint gradient descent,
+// WDL target, frozen K, quiet positions only. Every candidate it produces is
+// still SPRT-gated before shipping — MSE only proposes.
 package tune
 
 import (
-	"fmt"
 	"math"
 	"math/rand"
 	"runtime"
@@ -20,22 +25,22 @@ import (
 	"github.com/timanthonyalexander/gomachine/internal/search"
 )
 
-// Sample is one labeled position. Result is the game outcome and SFcp the
-// Stockfish eval, both from the position's SIDE-TO-MOVE perspective.
+// Sample is one quiet position, stored as its weight-independent coefficient
+// trace. Result is the GAME outcome in White's perspective ({0, 0.5, 1}); the
+// trace is also White-perspective, so no per-sample flip. SoftCp is an optional
+// strong-eval label (our own search score here, White cp) used by the WDL+eval
+// blend target (--lambda) to counter the label-smearing that flips small-term
+// signs under pure WDL (docs/ENGINE_STRENGTH.md §6); HasSoft gates it.
 type Sample struct {
-	Pos    *chess.Position
-	Result float64 // {0, 0.5, 1}
-	SFcp   int     // stockfish centipawns (only set when distilling)
-}
-
-// allTerms is the eval config with every knowledge term enabled, used for tuning
-// (we tune the weights of the full eval).
-func allTerms(w *eval.Weights) eval.Config {
-	return eval.Config{Mobility: true, Pawns: true, KingSafety: true, BishopPair: true, W: w}
+	Trace   eval.Trace
+	Result  float64
+	SoftCp  float64
+	HasSoft bool
 }
 
 // GenerateSelfPlay plays nGames self-play games (our engine, fixed nodes, with
-// 10% random moves for diversity) and returns quiet labeled positions.
+// ~10% random moves for diversity) and returns quiet, non-opening positions
+// traced into eval coefficients and labelled with the game result.
 func GenerateSelfPlay(openings []bench.Opening, nGames, nodes int, seed int64) []Sample {
 	rng := rand.New(rand.NewSource(seed))
 	eng := engine.New(64)
@@ -50,6 +55,8 @@ func GenerateSelfPlay(openings []bench.Opening, nGames, nodes int, seed int64) [
 		}
 		var history []uint64
 		var snaps []*chess.Position
+		var softs []float64
+		var hasSoft []bool
 		result := 0.5
 		decided := false
 
@@ -64,18 +71,28 @@ func GenerateSelfPlay(openings []bench.Opening, nGames, nodes int, seed int64) [
 				result, decided = 0.5, true
 				break
 			}
-			if ply >= 4 && !pos.InCheck() { // record quiet, non-opening positions
-				snap := *pos
-				snaps = append(snaps, &snap)
-			}
+			// Pick the move; a searched move yields the position's eval for free
+			// (the soft label), a random move (for diversity) does not.
 			var m chess.Move
+			softCp, searched := 0.0, false
 			if rng.Float64() < 0.10 {
 				m = randomLegal(pos, rng)
 			} else {
-				m = eng.Play(pos, search.Limits{Nodes: uint64(nodes)}, history).Move
+				res := eng.Play(pos, search.Limits{Nodes: uint64(nodes)}, history)
+				m, softCp, searched = res.Move, float64(res.Score), true
+				if pos.SideToMove() == chess.Black {
+					softCp = -softCp // store White-perspective cp
+				}
 			}
 			if m == chess.NullMove {
 				break
+			}
+			// Record past the opening, only genuinely quiet positions.
+			if ply >= 8 && isQuiet(pos) {
+				snap := *pos
+				snaps = append(snaps, &snap)
+				softs = append(softs, softCp)
+				hasSoft = append(hasSoft, searched)
 			}
 			history = append(history, pos.Key())
 			var u chess.Undo
@@ -84,82 +101,71 @@ func GenerateSelfPlay(openings []bench.Opening, nGames, nodes int, seed int64) [
 		if !decided {
 			continue // unfinished game → don't trust the label
 		}
-		for _, p := range snaps {
-			label := result
-			if p.SideToMove() == chess.Black {
-				label = 1 - result
-			}
-			out = append(out, Sample{Pos: p, Result: label})
+		for i, p := range snaps {
+			out = append(out, Sample{
+				Trace: eval.EvalTrace(p), Result: result,
+				SoftCp: softs[i], HasSoft: hasSoft[i],
+			})
 		}
 	}
 	return out
 }
 
-// LabelStockfish fills each sample's SFcp with Stockfish's eval (side-to-move cp)
-// at the given depth, using `workers` parallel Stockfish processes.
-func LabelStockfish(samples []Sample, sfPath string, depth, workers int) error {
-	if workers < 1 {
-		workers = 1
+// isQuiet reports whether pos is tactically calm enough to label: the side to
+// move is not in check and has no capture that wins material by SEE. This keeps
+// the regression off positions whose static eval the engine would never trust
+// (the most common cause of a tuned eval underperforming).
+func isQuiet(pos *chess.Position) bool {
+	if pos.InCheck() {
+		return false
 	}
-	budget := bench.UCIBudget{Depth: depth}
-	var wg sync.WaitGroup
-	errCh := make(chan error, workers)
-	chunk := (len(samples) + workers - 1) / workers
-	for w := 0; w < workers; w++ {
-		lo := w * chunk
-		hi := lo + chunk
-		if hi > len(samples) {
-			hi = len(samples)
+	var ml chess.MoveList
+	pos.GenerateLegal(&ml)
+	occ := pos.Occupied()
+	for i := 0; i < ml.Len(); i++ {
+		m := ml.Get(i)
+		capture := m.Type() == chess.EnPassant || occ&m.To().BB() != 0
+		if capture && pos.SEE(m) > 0 {
+			return false
 		}
-		if lo >= hi {
-			break
-		}
-		wg.Add(1)
-		go func(lo, hi int) {
-			defer wg.Done()
-			sf, err := bench.StartUCI(sfPath, map[string]string{})
-			if err != nil {
-				errCh <- err
-				return
-			}
-			defer sf.Close()
-			for i := lo; i < hi; i++ {
-				cp, err := sf.Evaluate(samples[i].Pos.FEN(), nil, budget)
-				if err != nil {
-					errCh <- err
-					return
-				}
-				samples[i].SFcp = cp
-			}
-		}(lo, hi)
 	}
-	wg.Wait()
-	select {
-	case err := <-errCh:
-		return err
-	default:
-		return nil
-	}
+	return true
 }
 
 func sigmoid(k, cp float64) float64 {
 	return 1.0 / (1.0 + math.Pow(10, -k*cp/400))
 }
 
-// mse returns the mean-squared error of the eval (with weights w, scale k)
-// against the chosen target over all samples, computed in parallel.
-func mse(samples []Sample, w *eval.Weights, k float64, distill bool) float64 {
-	cfg := allTerms(w)
+// target returns the regression target for a sample under the WDL+eval blend:
+// lambda·result + (1−lambda)·sigmoid(K·softEval). lambda=1 (or no soft label) is
+// pure WDL; lambda=0 is pure self-distillation onto our own search eval.
+func target(s Sample, k, lambda float64) float64 {
+	if lambda >= 1 || !s.HasSoft {
+		return s.Result
+	}
+	return lambda*s.Result + (1-lambda)*sigmoid(k, s.SoftCp)
+}
+
+// scoreTrace evaluates a trace against θ in White centipawns (the linear model).
+func scoreTrace(tr eval.Trace, θ []float64) float64 {
+	ph := float64(tr.Phase)
+	var e float64
+	for _, en := range tr.Entries {
+		f := int(en.Feat)
+		e += float64(en.Coeff) * (ph*θ[2*f] + (24-ph)*θ[2*f+1]) / 24
+	}
+	return e
+}
+
+// MSE returns the mean-squared error of sigmoid(K·E) against the (blended)
+// target, computed in parallel across samples.
+func MSE(samples []Sample, θ []float64, k, lambda float64) float64 {
 	workers := runtime.NumCPU()
 	chunk := (len(samples) + workers - 1) / workers
 	sums := make([]float64, workers)
 	var wg sync.WaitGroup
 	for wkr := 0; wkr < workers; wkr++ {
-		lo := wkr * chunk
-		hi := lo + chunk
-		if hi > len(samples) {
-			hi = len(samples)
-		}
+		lo, hi := wkr*chunk, min(wkr*chunk+chunk, len(samples))
 		if lo >= hi {
 			break
 		}
@@ -168,13 +174,7 @@ func mse(samples []Sample, w *eval.Weights, k float64, distill bool) float64 {
 			defer wg.Done()
 			var s float64
 			for i := lo; i < hi; i++ {
-				e := float64(eval.Evaluate(samples[i].Pos, cfg))
-				p := sigmoid(k, e)
-				t := samples[i].Result
-				if distill {
-					t = sigmoid(k, float64(samples[i].SFcp))
-				}
-				d := p - t
+				d := sigmoid(k, scoreTrace(samples[i].Trace, θ)) - target(samples[i], k, lambda)
 				s += d * d
 			}
 			sums[wkr] = s
@@ -188,63 +188,35 @@ func mse(samples []Sample, w *eval.Weights, k float64, distill bool) float64 {
 	return total / float64(len(samples))
 }
 
-// MSE is the exported mean-squared error (for reporting the starting error).
-func MSE(samples []Sample, w *eval.Weights, k float64, distill bool) float64 {
-	return mse(samples, w, k, distill)
-}
-
-// FitK scans for the sigmoid scale k that minimizes the result-MSE with the given
-// weights (the standard pre-step before tuning the weights).
-func FitK(samples []Sample, w *eval.Weights) float64 {
+// FitK scans for the sigmoid scale k that minimises the pure-WDL MSE at the given
+// weights — computed once on the starting weights and then frozen, per Texel's
+// method. K is fit to the game result (lambda=1) so the cp↔win-prob calibration
+// is anchored to outcomes, independent of the blend.
+func FitK(samples []Sample, θ []float64) float64 {
 	bestK, bestE := 1.0, math.Inf(1)
-	for k := 0.20; k <= 2.0; k += 0.05 {
-		if e := mse(samples, w, k, false); e < bestE {
+	for k := 0.20; k <= 2.0; k += 0.02 {
+		if e := MSE(samples, θ, k, 1.0); e < bestE {
 			bestE, bestK = e, k
 		}
 	}
 	return bestK
 }
 
-// Optimize runs coordinate-descent (±1 per weight) until no single step lowers
-// the MSE, or maxPasses is reached. Returns the final MSE.
-func Optimize(samples []Sample, w *eval.Weights, k float64, distill bool, maxPasses int, log func(string)) float64 {
-	best := mse(samples, w, k, distill)
-	params := w.Tunables()
-	for pass := 0; pass < maxPasses; pass++ {
-		improved := false
-		for _, p := range params {
-			for _, d := range []int{1, -1} {
-				*p += d
-				if e := mse(samples, w, k, distill); e < best-1e-12 {
-					best = e
-					improved = true
-				} else {
-					*p -= d // revert
-				}
-			}
+// PieceMeans returns the mean (mg, eg) value across the 64 PSQT squares of each
+// piece type — a proxy for that piece's material value, for watching drift while
+// material floats during tuning (anchored only by frozen K + decay).
+func PieceMeans(θ []float64) [6][2]float64 {
+	var out [6][2]float64
+	for pt := 0; pt < 6; pt++ {
+		var mg, eg float64
+		for pidx := 0; pidx < 64; pidx++ {
+			f := pt*64 + pidx
+			mg += θ[2*f]
+			eg += θ[2*f+1]
 		}
-		if log != nil {
-			log(fmt.Sprintf("pass %d: MSE %.6f", pass+1, best))
-		}
-		if !improved {
-			break
-		}
+		out[pt] = [2]float64{mg / 64, eg / 64}
 	}
-	return best
-}
-
-// GoLiteral formats w as a DefaultWeights()-style Go literal.
-func GoLiteral(w *eval.Weights) string {
-	return fmt.Sprintf(`&Weights{
-	MobMG:      %v,
-	MobEG:      %v,
-	IsolatedMG: %d, IsolatedEG: %d,
-	DoubledMG: %d, DoubledEG: %d,
-	PassedMG: %d, PassedEG: %d,
-	BishopPairMG: %d, BishopPairEG: %d,
-	KingShield: %d,
-}`, w.MobMG, w.MobEG, w.IsolatedMG, w.IsolatedEG, w.DoubledMG, w.DoubledEG,
-		w.PassedMG, w.PassedEG, w.BishopPairMG, w.BishopPairEG, w.KingShield)
+	return out
 }
 
 func randomLegal(pos *chess.Position, rng *rand.Rand) chess.Move {

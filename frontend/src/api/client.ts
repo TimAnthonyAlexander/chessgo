@@ -64,10 +64,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T
 }
 
-export function createBotGame(level: number, humanColor: Color): Promise<BotGame> {
+/** Create a bot game. An optional `fen` starts from a custom position (e.g. one
+ * carried over from the analysis board); omitted = the standard start. */
+export function createBotGame(level: number, humanColor: Color, fen?: string): Promise<BotGame> {
   return request<BotGame>('/bot-games', {
     method: 'POST',
-    body: JSON.stringify({ level, human_color: humanColor }),
+    body: JSON.stringify({ level, human_color: humanColor, ...(fen ? { fen } : {}) }),
   })
 }
 

@@ -127,6 +127,15 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.Mobility, base.Pawns, base.KingSafety, base.BishopPair = b, b, b, b
+		case "tuned", "tunedeval":
+			// the full Texel-tuned eval as a unit: tuned PSQT + tuned weights +
+			// all knowledge terms (what we SPRT against the shipped base eval).
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.TunedEval = b
+			base.Mobility, base.Pawns, base.KingSafety, base.BishopPair = b, b, b, b
 		default:
 			return base, fmt.Errorf("unknown param %q", key)
 		}
@@ -189,6 +198,9 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.BishopPair != patch.BishopPair {
 		diffs = append(diffs, fmt.Sprintf("bishoppair: %s→%s", onoff(base.BishopPair), onoff(patch.BishopPair)))
+	}
+	if base.TunedEval != patch.TunedEval {
+		diffs = append(diffs, fmt.Sprintf("tuned: %s→%s", onoff(base.TunedEval), onoff(patch.TunedEval)))
 	}
 	if len(diffs) == 0 {
 		return "(identical — sanity/noise run)"

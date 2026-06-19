@@ -83,12 +83,17 @@ func NewWithParams(ttSizeMB int, params Params) *Searcher {
 
 // evalConfig derives the evaluation config (term toggles + weights) from params.
 func evalConfig(p Params) eval.Config {
+	w := eval.DefaultWeights()
+	if p.TunedEval {
+		w = eval.TunedWeights()
+	}
 	return eval.Config{
 		Mobility:   p.Mobility,
 		Pawns:      p.Pawns,
 		KingSafety: p.KingSafety,
 		BishopPair: p.BishopPair,
-		W:          eval.DefaultWeights(),
+		UseTuned:   p.TunedEval,
+		W:          w,
 	}
 }
 

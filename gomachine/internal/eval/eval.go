@@ -13,6 +13,9 @@ const Tempo = 10
 var (
 	mgTable [12][64]int
 	egTable [12][64]int
+	// Tuned PSQT, built from tuned_tables.go; selected by Config.UseTuned.
+	mgTableTuned [12][64]int
+	egTableTuned [12][64]int
 )
 
 // gamePhaseInc is the phase weight contributed by each piece type
@@ -29,6 +32,10 @@ func init() {
 			egTable[wPc][sq] = egValue[pt] + egPesto[pt][sq^56]
 			mgTable[bPc][sq] = -(mgValue[pt] + mgPesto[pt][sq])
 			egTable[bPc][sq] = -(egValue[pt] + egPesto[pt][sq])
+			mgTableTuned[wPc][sq] = mgValue[pt] + tunedMgPesto[pt][sq^56]
+			egTableTuned[wPc][sq] = egValue[pt] + tunedEgPesto[pt][sq^56]
+			mgTableTuned[bPc][sq] = -(mgValue[pt] + tunedMgPesto[pt][sq])
+			egTableTuned[bPc][sq] = -(egValue[pt] + tunedEgPesto[pt][sq])
 		}
 	}
 }
@@ -41,13 +48,17 @@ func Evaluate(pos *chess.Position, cfg Config) int {
 	if w == nil {
 		w = defaultW
 	}
+	mt, et := &mgTable, &egTable
+	if cfg.UseTuned {
+		mt, et = &mgTableTuned, &egTableTuned
+	}
 	var mg, eg, phase int
 	for pc := chess.WhitePawn; pc <= chess.BlackKing; pc++ {
 		bb := pos.PieceBB(pc)
 		for bb != 0 {
 			sq := bb.PopLSB()
-			mg += mgTable[pc][sq]
-			eg += egTable[pc][sq]
+			mg += mt[pc][sq]
+			eg += et[pc][sq]
 			phase += gamePhaseInc[pc.Type()]
 		}
 	}

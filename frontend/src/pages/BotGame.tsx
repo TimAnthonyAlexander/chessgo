@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import {
   Box,
   CircularProgress,
@@ -34,10 +35,18 @@ const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 const other = (c: Color): Color => (c === 'w' ? 'b' : 'w')
 type ColorChoice = 'w' | 'b' | 'random'
 
+// The side to move encoded in a FEN's active-color field (defaults to White).
+const sideToMoveOf = (fen: string): Color => (fen.split(' ')[1] === 'b' ? 'b' : 'w')
+
 export default function BotGame() {
+  // A FEN carried over from the analysis board ("Play bot from this position").
+  const navFen = (useLocation().state as { fen?: string } | null)?.fen ?? null
+
   const [game, setGame] = useState<Game | null>(null)
+  const [startFen, setStartFen] = useState<string | null>(navFen)
   const [level, setLevel] = useState(4)
-  const [colorChoice, setColorChoice] = useState<ColorChoice>('w')
+  // Default to playing whichever side is to move in the carried-over position.
+  const [colorChoice, setColorChoice] = useState<ColorChoice>(navFen ? sideToMoveOf(navFen) : 'w')
   const [creating, setCreating] = useState(false)
   const [thinking, setThinking] = useState(false)
   const [override, setOverride] = useState<BoardMap | null>(null)
@@ -60,7 +69,7 @@ export default function BotGame() {
   const interactive = ongoing && atLive && game.your_turn && !thinking
 
   const boardFen = !game
-    ? START_FEN
+    ? (startFen ?? START_FEN)
     : atLive
       ? game.fen
       : shownPly === 0
@@ -105,6 +114,15 @@ export default function BotGame() {
     }
   }, [game?.fen, game?.status, game?.side_to_move])
 
+  // Re-entering /bot from the analysis board with a different position: adopt it
+  // and drop back to the setup screen (the initial state only reads navFen once).
+  useEffect(() => {
+    if (!navFen) return
+    setStartFen(navFen)
+    setColorChoice(sideToMoveOf(navFen))
+    setGame(null)
+  }, [navFen])
+
   async function newGame() {
     setError(null)
     setCreating(true)
@@ -115,7 +133,7 @@ export default function BotGame() {
     setViewIndex(null)
     const color: Color = colorChoice === 'random' ? (Math.random() < 0.5 ? 'w' : 'b') : colorChoice
     try {
-      const g = await createBotGame(level, color)
+      const g = await createBotGame(level, color, startFen ?? undefined)
       setGame(g)
       const opener = g.moves[g.moves.length - 1]
       if (opener) playForSan(opener.san, g.status !== 'ongoing')
@@ -303,7 +321,10 @@ export default function BotGame() {
             onFlip={() => setFlipped((f) => !f)}
             onToggleSound={toggleSound}
             onResign={resign}
-            onNewGame={() => setGame(null)}
+            onNewGame={() => {
+              setGame(null)
+              setStartFen(null)
+            }}
           />
         ) : (
           <>
@@ -311,6 +332,7 @@ export default function BotGame() {
               level={level}
               colorChoice={colorChoice}
               creating={creating}
+              customStart={!!startFen}
               onLevel={setLevel}
               onColor={setColorChoice}
               onStart={newGame}
@@ -449,6 +471,7 @@ function Setup({
   level,
   colorChoice,
   creating,
+  customStart,
   onLevel,
   onColor,
   onStart,
@@ -456,6 +479,7 @@ function Setup({
   level: number
   colorChoice: ColorChoice
   creating: boolean
+  customStart: boolean
   onLevel: (n: number) => void
   onColor: (c: ColorChoice) => void
   onStart: () => void
@@ -477,7 +501,9 @@ function Setup({
         <Typography sx={{ fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, lineHeight: 1.1 }}>
           New game
         </Typography>
-        <Typography sx={{ fontSize: 13.5, color: 'var(--text-dim)', mt: 0.5 }}>Play the gomachine engine.</Typography>
+        <Typography sx={{ fontSize: 13.5, color: 'var(--text-dim)', mt: 0.5 }}>
+          {customStart ? 'Play the gomachine engine from this position.' : 'Play the gomachine engine.'}
+        </Typography>
       </Box>
 
       <Box>

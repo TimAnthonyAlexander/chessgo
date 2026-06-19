@@ -25,6 +25,7 @@ type Params struct {
 	Pawns          bool // evaluation: pawn structure (isolated/doubled/passed)
 	KingSafety     bool // evaluation: king pawn-shield term
 	BishopPair     bool // evaluation: bishop-pair bonus
+	TunedEval      bool // evaluation: use the Texel-tuned PSQT + tuned weights
 }
 
 // DefaultParams returns the engine's current full-strength configuration.
@@ -52,9 +53,14 @@ func DefaultParams() Params {
 		Aspiration:     true,
 		RFP:            true,
 		LMP:            true,
-		Mobility:       false, // eval terms: off until Texel-tuned, then SPRT'd as a set
-		Pawns:          false,
-		KingSafety:     false,
-		BishopPair:     false,
+		// Texel-tuned eval (tuned PSQT + knowledge terms), SPRT-accepted as a set
+		// vs the bare PeSTO base: +128 ± 35 Elo @ 40k nodes, +101 ± 29 Elo @
+		// 100ms/move (2026-06-19, internal/eval/tuned_tables.go; tuner in
+		// internal/tune, dataset = Lichess quiet-labeled). See ENGINE_STRENGTH.md.
+		Mobility:   true,
+		Pawns:      true,
+		KingSafety: true,
+		BishopPair: true,
+		TunedEval:  true,
 	}
 }
