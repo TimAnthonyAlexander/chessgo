@@ -189,7 +189,7 @@ func (h *Hub) computeBotMove(s botSnapshot, engines chan *engineHandle) {
 		return
 	}
 
-	delay := botThinkDelay(s.tc, s.remainingMs, s.legalCount)
+	delay := botThinkDelay(s.tc, s.remainingMs, s.legalCount, s.ply)
 	if elapsed := time.Since(start); elapsed < delay {
 		time.Sleep(delay - elapsed)
 	}
@@ -225,40 +225,76 @@ func (h *Hub) applyBotMove(r botMoveResult) {
 	h.scheduleBotMove(g)
 }
 
+const (
+	// Snap out roughly the first this-many full moves quickly, ramping up to the
+	// normal midgame pace — like rattling off an opening you know by heart.
+	openingFastMoves = 8
+	// Below this much clock the bot starts hurrying so it can flag-race instead of
+	// thinking itself into a lost-on-time game...
+	lowTimeMs int64 = 30_000
+	// ...and below this it plays essentially as fast as it can.
+	panicTimeMs int64 = 10_000
+)
+
 // botThinkDelay returns a randomized, human-ish pause before a bot's move, SCALED
-// to the time control: a slow game gets slower moves than a fast one (a 10-minute
-// game thinks much longer than a 1-minute one). The pause comes off the bot's
-// clock (it's real time), so it's bounded three ways: never more than ~30% of the
-// remaining clock (won't flag), never more than maxThinkMs absolute (keeps slow
-// controls sane and the untimed first move safely under the 30s first-move abort),
-// and never below a small human floor (fast games aren't instant).
-func botThinkDelay(tc timeControl, remainingMs int64, legalCount int) time.Duration {
+// to the time control AND to the live state of the game: a slow control thinks
+// longer than a fast one, the opening is rattled off quickly, and the bot speeds
+// up sharply as its own clock runs low so it can actually win on time rather than
+// flag. The pause comes off the bot's clock (it's real time), so it's bounded:
+// never more than ~30% of the remaining clock (won't flag), never more than
+// maxThinkMs absolute (keeps slow controls sane and the untimed first move safely
+// under the 30s first-move abort), and never below a human floor (which itself
+// drops in real time trouble so the bot can blitz).
+func botThinkDelay(tc timeControl, remainingMs int64, legalCount, ply int) time.Duration {
 	// Rough per-move time budget: assume ~30 moves a side, plus the increment you
 	// get back each move. e.g. 1+0 → 2s, 3+0 → 6s, 5+0 → 10s, 10+0 → 20s, 3+2 → 8s.
 	perMove := float64(tc.Base)/30.0 + float64(tc.Inc)
 
 	// A typical move spends a varying fraction of that budget.
-	ms := int64(perMove * (0.12 + mrand.Float64()*0.40)) // ~12%–52%
+	ms := perMove * (0.12 + mrand.Float64()*0.40) // ~12%–52%
 	// A few moves get a noticeably longer think.
 	if mrand.Float64() < 0.12 {
-		ms += int64(perMove * (0.3 + mrand.Float64()*0.7))
+		ms += perMove * (0.3 + mrand.Float64()*0.7)
 	}
 	// Busier positions take a touch longer.
 	if legalCount > 30 {
-		ms += int64(perMove * 0.15)
+		ms += perMove * 0.15
 	}
 
-	if cap := remainingMs * 3 / 10; ms > cap {
-		ms = cap
+	// Opening: move fast for the first several full moves, ramping from ~0.35x at
+	// the very start up to the full midgame pace by openingFastMoves. ply counts
+	// both sides, so divide to get full moves played.
+	if moves := ply / 2; moves < openingFastMoves {
+		frac := float64(moves) / float64(openingFastMoves) // 0 → ~1
+		ms *= 0.35 + 0.65*frac
+	}
+
+	// Time pressure: as the clock drops below lowTimeMs, shrink the think time
+	// (quadratically, so it bites hardest right at the end) toward instant. By the
+	// time we're under panicTimeMs the bot is essentially pre-moving to flag-race.
+	if remainingMs < lowTimeMs {
+		frac := float64(remainingMs) / float64(lowTimeMs) // 1 → 0
+		ms *= frac * frac
+	}
+
+	out := int64(ms)
+
+	if cap := remainingMs * 3 / 10; out > cap {
+		out = cap
 	}
 	const maxThinkMs = 12_000
-	if ms > maxThinkMs {
-		ms = maxThinkMs
+	if out > maxThinkMs {
+		out = maxThinkMs
 	}
-	if ms < 250 {
-		ms = 250
+	// Human floor — but in genuine time trouble drop it so the bot can blitz.
+	floor := int64(250)
+	if remainingMs < panicTimeMs {
+		floor = 60
 	}
-	return time.Duration(ms) * time.Millisecond
+	if out < floor {
+		out = floor
+	}
+	return time.Duration(out) * time.Millisecond
 }
 
 // --- fake identity ---
