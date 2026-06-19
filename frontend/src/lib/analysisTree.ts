@@ -135,6 +135,23 @@ export function playMove(tree: Tree, fromId: number, uci: string): { tree: Tree;
   return { tree: { ...tree, nodes, nextId: id + 1 }, nodeId: id, created: true }
 }
 
+/**
+ * Build a tree by replaying a list of UCI moves from a start position. Used to
+ * import an in-memory game (e.g. an admin Engine-vs-Engine match that was never
+ * persisted) into the analysis board. Stops at the first illegal move.
+ */
+export function buildFromMoves(startFen: string, ucis: string[]): { tree: Tree; lastId: number } {
+  let tree = createTree(startFen || START_FEN)
+  let curId = tree.rootId
+  for (const uci of ucis) {
+    const res = playMove(tree, curId, uci)
+    if (res.nodeId === curId) break // illegal move — stop importing here
+    tree = res.tree
+    curId = res.nodeId
+  }
+  return { tree, lastId: curId }
+}
+
 /** Ancestor chain root→node (inclusive), used for the move list of the current line. */
 export function pathToNode(tree: Tree, nodeId: number): TreeNode[] {
   const out: TreeNode[] = []

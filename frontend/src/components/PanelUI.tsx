@@ -36,12 +36,14 @@ export function NavBtn({
   onClick,
   active,
   grow,
+  disabled,
   children,
 }: {
   label: string
   onClick: () => void
   active?: boolean
   grow?: boolean
+  disabled?: boolean
   children: ReactNode
 }) {
   return (
@@ -50,6 +52,7 @@ export function NavBtn({
         component="button"
         onClick={onClick}
         aria-label={label}
+        disabled={disabled}
         sx={{
           flex: grow ? 1 : 'none',
           width: grow ? 'auto' : 42,
@@ -57,7 +60,7 @@ export function NavBtn({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          cursor: 'pointer',
+          cursor: disabled ? 'default' : 'pointer',
           border: active ? '1px solid var(--accent-line)' : '1px solid transparent',
           borderRadius: '9px',
           color: active ? 'var(--accent)' : 'var(--text-dim)',
@@ -65,6 +68,7 @@ export function NavBtn({
           transition: 'background-color .15s, color .15s, border-color .15s',
           '&:hover': { color: 'var(--accent)', bgcolor: active ? 'var(--accent-soft)' : 'var(--line)' },
           '&:active': { transform: 'translateY(1px)' },
+          '&:disabled': { opacity: 0.4, pointerEvents: 'none' },
         }}
       >
         {children}

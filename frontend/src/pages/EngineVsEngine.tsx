@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Box, Slider, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material'
-import { Bot, Cpu, Pause, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react'
+import { Bot, Cpu, Pause, Play, RotateCcw, Telescope, Volume2, VolumeX } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import Board from '../components/Board'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveList from '../components/MoveList'
@@ -21,6 +22,7 @@ const sideToMoveOf = (fen: string): Color => (fen.split(' ')[1] === 'b' ? 'b' : 
  * the engines themselves stay stateless. */
 export default function EngineVsEngine() {
   const { user, status: authStatus } = useAuth()
+  const navigate = useNavigate()
 
   // Settings
   const [gomaRating, setGomaRating] = useState(2200)
@@ -212,6 +214,13 @@ export default function EngineVsEngine() {
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
               <Typography sx={{ fontSize: 13, fontWeight: 600, color: 'var(--text-dim)' }}>{caption}</Typography>
               <Box sx={{ flex: 1 }} />
+              <NavBtn
+                label="Analyse"
+                onClick={() => navigate('/analysis', { state: { moves: moves.map((m) => m.uci) } })}
+                disabled={moves.length === 0}
+              >
+                <Telescope size={18} />
+              </NavBtn>
               <NavBtn label={sound ? 'Mute' : 'Unmute'} onClick={toggleSound}>
                 {sound ? <Volume2 size={18} /> : <VolumeX size={18} />}
               </NavBtn>

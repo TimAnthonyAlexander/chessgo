@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Box, Button, Tooltip, Typography } from '@mui/material'
 import { ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, FlipVertical2, Play, Square, Target, Zap } from 'lucide-react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import AnalysisAside from '../components/AnalysisAside'
 import Board from '../components/Board'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
@@ -13,6 +13,7 @@ import {
   type TreeNode,
   annotateEval,
   buildFromAnalysis,
+  buildFromMoves,
   createTree,
   gameOverAt,
   legalUci,
@@ -41,6 +42,12 @@ function playMoveSound(node?: TreeNode) {
 export default function Analysis() {
   const { id } = useParams<{ id?: string }>()
   const navigate = useNavigate()
+  // Free mode can be seeded with an in-memory game (moves replayed from a start
+  // position) passed via navigation state — e.g. from Engine vs Engine, which is
+  // never persisted so it can't be loaded by id.
+  const navState = useLocation().state as { moves?: string[]; startFen?: string } | null
+  const importMoves = navState?.moves ?? null
+  const importStartFen = navState?.startFen ?? START_FEN
 
   const [tree, setTree] = useState<Tree>(() => createTree(START_FEN))
   const [currentId, setCurrentId] = useState(0)
@@ -56,6 +63,15 @@ export default function Analysis() {
   useEffect(() => {
     setAutoMode('off')
     if (!id) {
+      if (importMoves && importMoves.length > 0) {
+        // Seeded free mode: replay an imported game onto a fresh tree.
+        const built = buildFromMoves(importStartFen, importMoves)
+        setTree(built.tree)
+        setCurrentId(built.lastId) // land on the final position
+        setGame(null)
+        setLoading(false)
+        return
+      }
       // Free mode: fresh board from the start position.
       setTree(createTree(START_FEN))
       setCurrentId(0)
@@ -94,7 +110,7 @@ export default function Analysis() {
     return () => {
       cancelled = true
     }
-  }, [id])
+  }, [id, importMoves, importStartFen])
 
   const current = tree.nodes[currentId] ?? tree.nodes[tree.rootId]
   const sideToMove = turnAt(current)
