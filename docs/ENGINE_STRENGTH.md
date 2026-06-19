@@ -68,12 +68,17 @@ gomachine bench vs-stockfish --sf /opt/homebrew/bin/stockfish --sf-elo 2500 \
   --movetime 100 --games 60 --threads 4
 ```
 
+**Latest reading (2026-06-19, post-tuned-eval):** **≈2720 ± 79** — 100 games vs
+**SF-17.1 @ UCI_Elo 2500**, scoring **78%** (W75 D6 L19, +220 head-to-head). Up
+from ~2600 before the tuned eval; the anchor's ~+90 jump independently
+corroborates the eval's +101-Elo movetime SPRT (§5).
+
 **Caveat (important):** this anchor is *noisy and biased*. Stockfish's UCI_Elo
-scale isn't logistic-linear and it plays erratically when handicapped, so two
-reference points disagree (we measured ≈2361 vs SF-2200 *and* ≈2627 vs SF-2500 in
-the same run — intervals that don't overlap). Use it for a rough band
-(~2600-ish), **never to gate a patch.** SPRT is the ruler; this is the tape
-measure you eyeball.
+scale isn't logistic-linear and it plays erratically when handicapped, so
+reference points disagree (earlier we measured ≈2361 vs SF-2200 *and* ≈2627 vs
+SF-2500 in the same run — intervals that don't overlap). Use it for a rough band
+(now ~2700-ish), **never to gate a patch.** SPRT is the ruler; this is the tape
+measure you eyeball — sweep a few `--sf-elo` values to triangulate.
 
 ### 2.3 `bench game` — watch one game
 
@@ -145,6 +150,21 @@ measure it at `--movetime`.
 ---
 
 ## 5. The Texel tuner (`gomachine tune`) — **shipped, +101 Elo**
+
+**SPRT result (2026-06-19) — tuned eval vs the bare PeSTO base** (`bench sprt
+--new "tuned=on" --old ""`, pentanomial GSPRT, [0,6] bounds, accepted H1):
+
+| Test | Budget | Elo | Pairs | Reading |
+|---|---|---|---:|---|
+| eval *quality* | 40k nodes | **+128.1 ± 34.7** | 151 | better moves per node |
+| eval *real-time* | 100 ms/move | **+101 ± 29** | 172 | net of the terms' compute cost |
+
+`tuned=on` flips the tuned PSQT + tuned weights + all four knowledge terms on as
+one unit (now the default in `search.DefaultParams`). The ~28-Elo nodes→movetime
+drop is the eval's added cost (mobility's per-piece attack lookups), well short of
+eating the gain. Independently corroborated by the Stockfish anchor (§2.2: ~2600
+→ ~2720). **This is the single biggest eval change in the engine's history — and
+the first that *gained* strength** (vs −148 the old way; see §6).
 
 Fits the **whole eval as one linear model** — PSQT/material *and* the knowledge
 terms, jointly — to minimize MSE between the sigmoided eval and the game result.

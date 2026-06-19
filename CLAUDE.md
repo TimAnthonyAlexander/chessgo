@@ -55,7 +55,7 @@ cd gomachine && go build -o bin/gomachine ./cmd/gomachine && go test ./...   # G
 cd gomachine && ./bin/gomachine perft -depth 5                                # movegen sanity
 cd gomachine && ./bin/gomachine bench sprt --new "" --old "lmr=off"           # strength SPRT (self-play; docs/ENGINE_STRENGTH.md)
 cd gomachine && ./bin/gomachine bench vs-stockfish --sf-elo 2500              # absolute Elo anchor (noisy — a band, not a number)
-cd gomachine && ./bin/gomachine tune --games 1500 --target stockfish         # Texel/distillation eval tuner (terms off by default)
+cd gomachine && ./bin/gomachine tune --epd quiet-labeled.epd --out internal/eval/tuned_tables.go   # Texel eval tuner (shipped, +101 Elo)
 cd frontend && bun run typecheck && bun run build                            # frontend
 php mason migrate:generate && php mason migrate:apply -y                     # DB schema
 ```
@@ -180,11 +180,12 @@ with a theme filter, and the solution is validated server-side (never sent to th
 client). See SPEC.md §9. Also: **engine strength push** (`docs/ENGINE_STRENGTH.md`)
 — a native in-process self-play **SPRT** harness (`gomachine bench`) drove five
 SPRT-gated search improvements (SEE, delta/aspiration/reverse-futility/late-move
-pruning; ~+250 Elo) and **Lazy SMP** (lock-free TT; ~+97 Elo), reaching **~2600**
-(beats handicapped SF-2500). The **Texel-tuned eval is now shipped** (`gomachine
-tune`: joint Adam on WDL-labelled quiet Lichess positions, tuning the PSQT itself
-via coefficient tracing; **+101 Elo @ movetime**, SPRT-gated) — the old −148 Elo
-was a broken method (coordinate-descent MSE on a frozen PSQT), not HCE itself.
+pruning; ~+250 Elo) and **Lazy SMP** (lock-free TT; ~+97 Elo), then the
+**Texel-tuned eval** (`gomachine tune`: joint Adam on WDL-labelled quiet Lichess
+positions, tuning the PSQT itself via coefficient tracing; **+101 Elo @ movetime**,
+SPRT-gated) — reaching **≈2720** on the Stockfish-2500 anchor (78%, up from ~2600).
+The old −148 Elo eval was a broken method (coordinate-descent MSE on a frozen
+PSQT), not HCE itself.
 Next: hub-restart-durable
 resume, puzzle generation pipeline, ship SMP to the `serve`/hub prod paths,
 remaining cheap search patches → **NNUE** (the distillation pipeline is its data

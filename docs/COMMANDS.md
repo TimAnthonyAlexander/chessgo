@@ -327,7 +327,8 @@ pawns kingsafety bishoppair eval` (`eval` toggles all knowledge terms at once).
 
 ```sh
 # Anchor our strength against Stockfish (handicapped via UCI_Elo). NOISY — a band,
-# not a number; gate patches on the SPRT, not this.
+# not a number; gate patches on the SPRT, not this. Latest: ≈2720 ± 79 vs SF-2500
+# (100 games, 78%, 2026-06-19, post-tuned-eval).
 ./bin/gomachine bench vs-stockfish --sf /opt/homebrew/bin/stockfish \
   --sf-elo 2500 --movetime 100 --games 60 --threads 4
 
@@ -335,21 +336,28 @@ pawns kingsafety bishoppair eval` (`eval` toggles all knowledge terms at once).
 ./bin/gomachine bench game --sf-skill 20 --movetime 300 --color white --threads 4
 ```
 
-### Texel tuning (`gomachine tune`)
+### Texel tuning (`gomachine tune`) — SHIPPED, +101 Elo
 
-Optimizes the eval's knowledge-term weights. Target = game **result** or
-**Stockfish distillation** (label each position with SF's eval — denser, cleaner).
+Fits the **whole eval as one linear model** (PSQT/material + knowledge terms,
+jointly) by Adam gradient descent on WDL-labelled quiet positions, and writes
+`internal/eval/tuned_tables.go`. The tuned eval is **on by default**
+(`search.DefaultParams`).
 
 ```sh
-./bin/gomachine tune --games 1500 --target result
-./bin/gomachine tune --games 1500 --target stockfish \
-  --sf /opt/homebrew/bin/stockfish --sf-depth 8 --workers 10
+# tune on a quiet-labelled EPD dataset (Lichess), write tuned tables, then SPRT:
+./bin/gomachine tune --epd quiet-labeled.epd --out internal/eval/tuned_tables.go
+go build -o bin/gomachine ./cmd/gomachine
+./bin/gomachine bench sprt --new "tuned=on" --old "" --movetime 100 --elo0 0 --elo1 6
+
+# or self-play instead of a dataset (slower); --lambda blends in our own eval:
+./bin/gomachine tune --games 5000 --lambda 0.7
 ```
 
-> **Note:** the eval terms + tuner are BUILT but **off by default** — MSE-tuned
-> eval was SPRT-rejected at −148 Elo (eval-fit ≠ strength). See
-> **`docs/ENGINE_STRENGTH.md`** for the full story, the implemented techniques,
-> measured Elo, and the findings.
+> **Result:** tuned eval = **+128 ± 35 @ 40k nodes, +101 ± 29 @ 100ms/move**
+> (SPRT-accepted), lifting the Stockfish anchor ~2600 → **~2720**. This *replaced*
+> the old −148 Elo failure, which was a broken **method** (coordinate-descent MSE,
+> distilled-cp target, frozen PSQT), not a verdict on HCE. Full story, techniques,
+> and the dataset in **`docs/ENGINE_STRENGTH.md`**.
 
 ## Database / migrations
 
