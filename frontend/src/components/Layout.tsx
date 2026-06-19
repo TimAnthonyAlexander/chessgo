@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Box, Button, Divider, Menu, MenuItem, Tooltip, Typography } from '@mui/material'
+import { Box, Button, Divider, Menu, MenuItem, Typography } from '@mui/material'
 import { ChevronDown, LogOut, Search } from 'lucide-react'
 import { Link, Outlet, useLocation } from 'react-router-dom'
 import { gameSocket } from '../lib/socket'
@@ -8,13 +8,51 @@ import AuthDialog from './AuthDialog'
 import Logo from './Logo'
 import type { RatingCategory, User } from '../api/client'
 
-const LINKS: { label: string; to: string | null }[] = [
-  { label: 'Play', to: '/' },
-  { label: 'Computer', to: '/bot' },
-  { label: 'Puzzles', to: '/puzzles' },
-  { label: 'Analysis', to: '/analysis' },
-  { label: 'Watch', to: '/watch' },
-]
+// Nav model. A `link` is a plain top-level destination; a `menu` is a hover
+// dropdown of leaves whose own label may ALSO be a destination (e.g. "Play"
+// opens Online/Computer but itself goes to "/").
+interface Leaf {
+  label: string
+  to: string
+}
+type NavItem =
+  | { kind: 'link'; label: string; to: string }
+  | { kind: 'menu'; label: string; to?: string; items: Leaf[] }
+
+function navItems(isAdmin: boolean): NavItem[] {
+  const tools: Leaf[] = [
+    { label: 'Analysis', to: '/analysis' },
+    ...(isAdmin ? [{ label: 'Engine v Engine', to: '/admin/engine-vs' }] : []),
+    { label: 'Editor', to: '/editor' },
+  ]
+  return [
+    {
+      kind: 'menu',
+      label: 'Play',
+      to: '/',
+      items: [
+        { label: 'Online', to: '/' },
+        { label: 'Computer', to: '/bot' },
+      ],
+    },
+    { kind: 'link', label: 'Puzzles', to: '/puzzles' },
+    { kind: 'link', label: 'Watch', to: '/watch' },
+    { kind: 'menu', label: 'Tools', items: tools },
+  ]
+}
+
+const isActive = (to: string, pathname: string): boolean =>
+  to === '/' ? pathname === '/' : pathname.startsWith(to)
+
+const linkSx = (active: boolean, real: boolean) => ({
+  fontSize: 12.5,
+  fontWeight: 600,
+  letterSpacing: '0.12em',
+  textTransform: 'uppercase' as const,
+  color: active ? 'var(--accent)' : real ? 'var(--text-dim)' : 'var(--muted)',
+  transition: 'color 0.12s ease',
+  ...(real ? { '&:hover': { color: 'var(--accent)' } } : { cursor: 'default' }),
+})
 
 /** App shell: a flat, full-width top nav (Lichess-style) over the routed page. */
 export default function Layout() {
@@ -27,16 +65,6 @@ export default function Layout() {
     void gameSocket.connect()
     void authStore.init()
   }, [])
-
-  const linkSx = (active: boolean, real: boolean) => ({
-    fontSize: 12.5,
-    fontWeight: 600,
-    letterSpacing: '0.12em',
-    textTransform: 'uppercase' as const,
-    color: active ? 'var(--accent)' : real ? 'var(--text-dim)' : 'var(--muted)',
-    transition: 'color 0.12s ease',
-    ...(real ? { '&:hover': { color: 'var(--accent)' } } : { cursor: 'default' }),
-  })
 
   return (
     <Box sx={{ minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -66,26 +94,15 @@ export default function Layout() {
         </Link>
 
         <Box sx={{ display: { xs: 'none', md: 'flex' }, alignItems: 'center', gap: 3 }}>
-          {(user?.role === 'admin'
-            ? [...LINKS, { label: 'Engine v Engine', to: '/admin/engine-vs' }]
-            : LINKS
-          ).map((l) => {
-            const active = !!l.to && (l.to === '/' ? pathname === '/' : pathname.startsWith(l.to))
-            if (!l.to) {
-              return (
-                <Tooltip key={l.label} title="Coming soon" arrow>
-                  <Box component="span" sx={linkSx(false, false)}>
-                    {l.label}
-                  </Box>
-                </Tooltip>
-              )
-            }
-            return (
-              <Box key={l.label} component={Link} to={l.to} sx={linkSx(active, true)}>
-                {l.label}
+          {navItems(user?.role === 'admin').map((item) =>
+            item.kind === 'link' ? (
+              <Box key={item.label} component={Link} to={item.to} sx={linkSx(isActive(item.to, pathname), true)}>
+                {item.label}
               </Box>
-            )
-          })}
+            ) : (
+              <NavGroup key={item.label} item={item} pathname={pathname} />
+            ),
+          )}
         </Box>
 
         <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 1.5 }}>
@@ -111,6 +128,87 @@ export default function Layout() {
       </Box>
 
       <AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} />
+    </Box>
+  )
+}
+
+// A top-level nav entry that reveals a dropdown ON HOVER. Its own label may be a
+// link (Play → "/") while the chevron + items hang below; "Tools" has no own
+// destination, so the label is inert and only the dropdown matters.
+function NavGroup({ item, pathname }: { item: Extract<NavItem, { kind: 'menu' }>; pathname: string }) {
+  const [open, setOpen] = useState(false)
+  const groupActive =
+    (item.to ? isActive(item.to, pathname) : false) || item.items.some((c) => isActive(c.to, pathname))
+
+  return (
+    <Box
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      sx={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 0.4 }}
+    >
+      {item.to ? (
+        <Box component={Link} to={item.to} sx={linkSx(groupActive, true)}>
+          {item.label}
+        </Box>
+      ) : (
+        <Box component="span" sx={{ ...linkSx(groupActive, true), cursor: 'default' }}>
+          {item.label}
+        </Box>
+      )}
+      <ChevronDown
+        size={13}
+        style={{
+          color: groupActive ? 'var(--accent)' : 'var(--muted)',
+          transform: open ? 'rotate(180deg)' : 'none',
+          transition: 'transform .15s ease',
+        }}
+      />
+
+      {open && (
+        // pt creates a hover "bridge" so moving from the label to the panel never
+        // crosses a gap that would close the menu.
+        <Box sx={{ position: 'absolute', top: '100%', left: 0, pt: 1, zIndex: 40 }}>
+          <Box
+            sx={{
+              minWidth: 184,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 0.25,
+              p: 0.75,
+              bgcolor: 'var(--surface)',
+              border: '1px solid var(--line)',
+              borderRadius: '11px',
+              boxShadow: '0 20px 50px -24px rgba(0,0,0,0.85)',
+            }}
+          >
+            {item.items.map((c) => {
+              const active = isActive(c.to, pathname)
+              return (
+                <Box
+                  key={c.label}
+                  component={Link}
+                  to={c.to}
+                  onClick={() => setOpen(false)}
+                  sx={{
+                    px: 1.25,
+                    py: 0.9,
+                    borderRadius: '8px',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    letterSpacing: '0.04em',
+                    color: active ? 'var(--accent)' : 'var(--text-dim)',
+                    bgcolor: active ? 'var(--accent-soft)' : 'transparent',
+                    transition: 'color .12s ease, background .12s ease',
+                    '&:hover': { color: 'var(--accent)', bgcolor: 'var(--line)' },
+                  }}
+                >
+                  {c.label}
+                </Box>
+              )
+            })}
+          </Box>
+        </Box>
+      )}
     </Box>
   )
 }
