@@ -22,6 +22,8 @@ use App\Controllers\WatchController;
 use App\Controllers\GameResultController;
 use App\Controllers\GameController;
 use App\Controllers\GameAnalysisController;
+use App\Controllers\ProfileController;
+use App\Controllers\ProfileGamesController;
 use App\Controllers\PuzzleController;
 use BaseApi\Http\Middleware\RateLimitMiddleware;
 use BaseApi\Http\SessionStartMiddleware;
@@ -114,6 +116,20 @@ $router->get('/games/{id}', [
 $router->get('/games/{id}/analysis', [
     RateLimitMiddleware::class => ['limit' => '30/1m'],
     GameAnalysisController::class,
+]);
+
+// ================================
+// Player profiles (public — ratings + record + game history, keyed by name)
+// ================================
+$router->get('/users/{name}', [
+    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    ProfileController::class,
+]);
+
+// Paginated game history for a profile ("load more")
+$router->get('/users/{name}/games', [
+    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    ProfileGamesController::class,
 ]);
 
 // ================================

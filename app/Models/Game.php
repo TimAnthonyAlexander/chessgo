@@ -152,6 +152,38 @@ class Game extends BaseModel
     }
 
     /**
+     * Light row for history lists (a user's profile / game log). Deliberately
+     * omits the move/SAN/analysis blobs — those are fetched per-game via the
+     * analysis endpoint when a game is opened. `id` is the hub game id (what the
+     * analysis route keys on).
+     *
+     * @return array<string, mixed>
+     */
+    public function summaryRow(): array
+    {
+        return [
+            'id' => $this->hub_game_id,
+            'created_at' => $this->created_at,
+            'category' => $this->category,
+            'pool' => $this->pool,
+            'rated' => $this->rated,
+            'result' => $this->result,
+            'reason' => $this->reason,
+            'white_name' => $this->white_name,
+            'black_name' => $this->black_name,
+            'white_user_id' => $this->white_user_id,
+            'black_user_id' => $this->black_user_id,
+            'white_is_bot' => $this->white_is_bot,
+            'black_is_bot' => $this->black_is_bot,
+            'white_rating_before' => $this->white_rating_before,
+            'white_rating_after' => $this->white_rating_after,
+            'black_rating_before' => $this->black_rating_before,
+            'black_rating_after' => $this->black_rating_after,
+            'ply' => $this->ply,
+        ];
+    }
+
+    /**
      * @return array<string, mixed>
      */
     #[Override]

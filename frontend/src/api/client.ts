@@ -405,4 +405,81 @@ export async function me(): Promise<User | null> {
   }
 }
 
+// --- Player profiles (public; keyed by display name) ---
+
+/** One time-control rating tile. `rd` drives the provisional "?" flag. */
+export interface RatingTile {
+  rating: number
+  rd: number
+  games: number
+  provisional: boolean
+  rated_at: string | null
+}
+
+export interface PuzzleProfile {
+  rating: number
+  rd: number
+  games: number
+  solved: number
+  provisional: boolean
+}
+
+/** Win/loss/draw across all persisted games, from the player's own perspective. */
+export interface ProfileRecord {
+  wins: number
+  losses: number
+  draws: number
+  total: number
+}
+
+/** A light history row (no moves/analysis — the board fetches those on open). */
+export interface ProfileGame {
+  id: string // hub game id — the analysis route key
+  created_at: string
+  category: string
+  pool: string
+  rated: boolean
+  result: string // '1-0' | '0-1' | '1/2-1/2'
+  reason: string
+  white_name: string
+  black_name: string
+  white_user_id: string | null
+  black_user_id: string | null
+  white_is_bot: boolean
+  black_is_bot: boolean
+  white_rating_before: number | null
+  white_rating_after: number | null
+  black_rating_before: number | null
+  black_rating_after: number | null
+  ply: number
+}
+
+export interface Profile {
+  id: string
+  name: string
+  role: string
+  created_at: string
+  ratings: Record<RatingCategory, RatingTile>
+  puzzle: PuzzleProfile
+  record: ProfileRecord
+  games: ProfileGame[]
+  hasMore: boolean
+}
+
+/** Public profile by display name (ratings + record + first page of games). */
+export function getProfile(name: string): Promise<Profile> {
+  return request<Profile>(`/users/${encodeURIComponent(name)}`)
+}
+
+export interface ProfileGamesPage {
+  games: ProfileGame[]
+  offset: number
+  hasMore: boolean
+}
+
+/** A further page of a player's game history ("load more"). */
+export function getProfileGames(name: string, offset: number): Promise<ProfileGamesPage> {
+  return request<ProfileGamesPage>(`/users/${encodeURIComponent(name)}/games?offset=${offset}`)
+}
+
 export { ApiError }

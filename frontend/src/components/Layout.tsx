@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Box, Button, Divider, Menu, MenuItem, Typography } from '@mui/material'
-import { ChevronDown, LogOut, Search } from 'lucide-react'
-import { Link, Outlet, useLocation } from 'react-router-dom'
+import { ChevronDown, LogOut, Search, UserRound } from 'lucide-react'
+import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { gameSocket } from '../lib/socket'
 import { authStore, useAuth } from '../lib/auth'
 import AuthDialog from './AuthDialog'
@@ -140,21 +140,13 @@ function NavGroup({ item, pathname }: { item: Extract<NavItem, { kind: 'menu' }>
   const groupActive =
     (item.to ? isActive(item.to, pathname) : false) || item.items.some((c) => isActive(c.to, pathname))
 
-  return (
-    <Box
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-      sx={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 0.4 }}
-    >
-      {item.to ? (
-        <Box component={Link} to={item.to} sx={linkSx(groupActive, true)}>
-          {item.label}
-        </Box>
-      ) : (
-        <Box component="span" sx={{ ...linkSx(groupActive, true), cursor: 'default' }}>
-          {item.label}
-        </Box>
-      )}
+  // Label + chevron share one hit target. When the group has its own
+  // destination (Play → "/"), that target is a single Link, so clicking the
+  // triangle navigates just like clicking the text. "Tools" has no destination,
+  // so it stays an inert span.
+  const trigger = (
+    <>
+      {item.label}
       <ChevronDown
         size={13}
         style={{
@@ -163,6 +155,25 @@ function NavGroup({ item, pathname }: { item: Extract<NavItem, { kind: 'menu' }>
           transition: 'transform .15s ease',
         }}
       />
+    </>
+  )
+  const triggerSx = { ...linkSx(groupActive, true), display: 'flex', alignItems: 'center', gap: 0.4 }
+
+  return (
+    <Box
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      sx={{ position: 'relative', display: 'flex', alignItems: 'center' }}
+    >
+      {item.to ? (
+        <Box component={Link} to={item.to} sx={triggerSx}>
+          {trigger}
+        </Box>
+      ) : (
+        <Box component="span" sx={{ ...triggerSx, cursor: 'default' }}>
+          {trigger}
+        </Box>
+      )}
 
       {open && (
         // pt creates a hover "bridge" so moving from the label to the panel never
@@ -222,6 +233,7 @@ const CATEGORIES: { key: RatingCategory; label: string }[] = [
 
 function UserMenu({ user }: { user: User }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
+  const navigate = useNavigate()
   return (
     <>
       <Button
@@ -242,6 +254,16 @@ function UserMenu({ user }: { user: User }) {
         onClose={() => setAnchor(null)}
         slotProps={{ paper: { sx: { bgcolor: 'var(--surface)', border: '1px solid var(--line)', minWidth: 200 } } }}
       >
+        <MenuItem
+          onClick={() => {
+            setAnchor(null)
+            navigate(`/@/${encodeURIComponent(user.name)}`)
+          }}
+          sx={{ fontSize: 13.5, gap: 1 }}
+        >
+          <UserRound size={15} /> View profile
+        </MenuItem>
+        <Divider sx={{ borderColor: 'var(--line-soft)' }} />
         {CATEGORIES.map((c) => (
           <MenuItem key={c.key} disableRipple sx={{ cursor: 'default', justifyContent: 'space-between', gap: 3, fontSize: 13.5 }}>
             <span style={{ color: 'var(--text-dim)' }}>{c.label}</span>
