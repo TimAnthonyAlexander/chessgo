@@ -224,7 +224,8 @@ func (s *Server) handleBestMove(w http.ResponseWriter, r *http.Request) {
 	var res engine.BestResult
 	switch {
 	case req.Limits.Rating != nil:
-		res = eng.BestMoveForRating(pos, *req.Limits.Rating, hist)
+		res = eng.BestMoveForRatingTimed(pos, *req.Limits.Rating,
+			time.Duration(req.Limits.MoveTime)*time.Millisecond, hist)
 	case req.Limits.Level != nil:
 		res = eng.BestMove(pos, *req.Limits.Level, hist)
 	case req.Limits.Depth > 0 || req.Limits.MoveTime > 0:

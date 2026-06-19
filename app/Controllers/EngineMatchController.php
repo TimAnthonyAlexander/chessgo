@@ -47,10 +47,11 @@ class EngineMatchController extends Controller
             'side' => 'in:gomachine,stockfish',
         ]);
 
+        $movetime = max(20, min(5000, $this->movetime)); // clamp the budget
         if ($this->side === 'stockfish') {
-            $best = $this->engine->stockfishMove($this->fen, $this->elo, $this->movetime);
+            $best = $this->engine->stockfishMove($this->fen, $this->elo, $movetime);
         } else {
-            $best = $this->engine->bestMove($this->fen, $this->rating);
+            $best = $this->engine->bestMove($this->fen, $this->rating, [], $movetime);
         }
 
         $uci = $best['bestmove'] ?? null;

@@ -46,12 +46,17 @@ class GomachineClient
      * @param string[] $history
      * @return array<string, mixed> {bestmove, san, eval, pv, depth, nodes, nps}
      */
-    public function bestMove(string $fen, int $rating, array $history = []): array
+    public function bestMove(string $fen, int $rating, array $history = [], int $movetimeMs = 0): array
     {
+        $limits = ['rating' => $rating];
+        if ($movetimeMs > 0) {
+            $limits['movetime'] = $movetimeMs; // budget override (admin engine-vs-engine)
+        }
+
         return $this->post('/bestmove', [
             'fen' => $fen,
             'history' => array_values($history),
-            'limits' => ['rating' => $rating],
+            'limits' => $limits,
         ]);
     }
 

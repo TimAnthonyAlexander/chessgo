@@ -132,9 +132,23 @@ func (e *Engine) BestMoveConfig(pos *chess.Position, cfg LevelConfig, history []
 }
 
 // BestMoveForRating plays at a target Elo (clamped to RatingMin..RatingMax) — the
-// rating-first entry point used by bot games and matchmaking bot-fill.
+// rating-first entry point used by bot games and matchmaking bot-fill (fixed
+// 100ms budget, so it plays the strength it advertises).
 func (e *Engine) BestMoveForRating(pos *chess.Position, rating int, history []uint64) BestResult {
-	return e.BestMoveConfig(pos, configForRating(rating), history)
+	return e.BestMoveForRatingTimed(pos, rating, 0, history)
+}
+
+// BestMoveForRatingTimed is BestMoveForRating with an explicit per-move budget
+// override (movetime>0) — used by the admin engine-vs-engine view so the watcher
+// can let the engines think longer. NOTE: above the strong floor the budget,
+// not the rating, then bounds depth, so more time => stronger than the nominal
+// rating; below it the move is depth-bounded and the budget has no effect.
+func (e *Engine) BestMoveForRatingTimed(pos *chess.Position, rating int, movetime time.Duration, history []uint64) BestResult {
+	cfg := configForRating(rating)
+	if movetime > 0 {
+		cfg.MoveTime = movetime
+	}
+	return e.BestMoveConfig(pos, cfg, history)
 }
 
 // pickWeakened applies eval noise + occasional blunders to a root-move ranking.

@@ -25,6 +25,7 @@ export default function EngineVsEngine() {
   const [gomaRating, setGomaRating] = useState(2200)
   const [sfElo, setSfElo] = useState(1500)
   const [gomaSide, setGomaSide] = useState<Color>('w')
+  const [budget, setBudget] = useState(300) // ms per move, both engines
 
   // Game
   const [fen, setFen] = useState(START_FEN)
@@ -58,6 +59,7 @@ export default function EngineVsEngine() {
         const res = await engineVsMove({
           fen,
           side: moverSide,
+          movetime: budget,
           ...(moverSide === 'gomachine' ? { rating: gomaRating } : { elo: sfElo }),
         })
         if (cancelled) return
@@ -98,7 +100,7 @@ export default function EngineVsEngine() {
       cancelled = true
       clearTimeout(id)
     }
-  }, [running, ply, over, fen, sideToMove, moverSide, gomaRating, sfElo])
+  }, [running, ply, over, fen, sideToMove, moverSide, gomaRating, sfElo, budget])
 
   function reset() {
     setRunning(false)
@@ -151,11 +153,13 @@ export default function EngineVsEngine() {
             gomaRating={gomaRating}
             sfElo={sfElo}
             gomaSide={gomaSide}
+            budget={budget}
             running={running}
             disabledSettings={running}
             onRating={setGomaRating}
             onElo={setSfElo}
             onSide={setGomaSide}
+            onBudget={setBudget}
             onToggleRun={toggleRun}
             onReset={reset}
             over={over}
@@ -224,11 +228,13 @@ function Controls({
   gomaRating,
   sfElo,
   gomaSide,
+  budget,
   running,
   disabledSettings,
   onRating,
   onElo,
   onSide,
+  onBudget,
   onToggleRun,
   onReset,
   over,
@@ -236,11 +242,13 @@ function Controls({
   gomaRating: number
   sfElo: number
   gomaSide: Color
+  budget: number
   running: boolean
   disabledSettings: boolean
   onRating: (n: number) => void
   onElo: (n: number) => void
   onSide: (c: Color) => void
+  onBudget: (n: number) => void
   onToggleRun: () => void
   onReset: () => void
   over: boolean
@@ -293,6 +301,15 @@ function Controls({
           <ToggleButton value="w">White</ToggleButton>
           <ToggleButton value="b">Black</ToggleButton>
         </ToggleButtonGroup>
+      </Box>
+
+      <Box>
+        <Label>Move budget</Label>
+        <SettingValue>{budget} ms / move</SettingValue>
+        <Slider value={budget} onChange={(_, v) => onBudget(v as number)} min={50} max={3000} step={50} sx={sliderSx} />
+        <Typography sx={{ fontSize: 11.5, color: 'var(--muted)', mt: 0.25 }}>
+          Both engines think this long. Above ~2400, more time = stronger than the rating.
+        </Typography>
       </Box>
 
       <Box sx={{ display: 'flex', gap: 1 }}>
