@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"runtime"
 	"time"
@@ -43,6 +44,7 @@ func cmdHub(args []string) {
 	watchFillers := fs.Bool("watch-fillers", true, "keep engine-vs-engine games running to populate the Watch page (only while someone is watching)")
 	watchTarget := fs.Int("watch-target", 5, "number of live games shown on the Watch page (real games padded with fillers up to this)")
 	watchWorkers := fs.Int("watch-filler-workers", 2, "dedicated engine workers for self-play filler games (small, so they can't starve human bot-fill)")
+	watchFenTheme := fs.String("watch-fen-theme", "pin", "puzzle theme whose positions seed self-play fillers from realistic midgames (empty = any theme; fetched from BaseAPI)")
 	pprofAddr := fs.String("pprof", "", "if set (e.g. 127.0.0.1:6481), serve net/http/pprof on this address for profiling the Run goroutine")
 	_ = fs.Parse(args)
 
@@ -80,6 +82,22 @@ func cmdHub(args []string) {
 			g.ID, g.Result, g.Reason, g.Pool, g.Rated, len(g.Moves))
 		go persistGame(baseURL, secret, g)
 	})
+
+	// Seed self-play watch fillers from realistic midgame positions (a pool of
+	// puzzle FENs from BaseAPI). Fetched off the hot path; on any failure the
+	// pool stays empty and fillers start from the opening. Delivered to the Run
+	// goroutine via the hub's channel, so this can run concurrently and late.
+	if *watchFillers {
+		go func() {
+			fens := fetchFillerFENs(baseURL, secret, *watchFenTheme, 200)
+			h.SetFillerFENs(fens)
+			if len(fens) > 0 {
+				fmt.Printf("watch fillers: seeded %d midgame FENs (theme=%q) from BaseAPI\n", len(fens), *watchFenTheme)
+			} else {
+				fmt.Println("watch fillers: no midgame FENs fetched; fillers start from the opening")
+			}
+		}()
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", h.ServeWS)
@@ -144,4 +162,39 @@ func persistGame(baseURL, secret string, g hub.FinishedGame) {
 	if resp.StatusCode >= 300 {
 		fmt.Fprintf(os.Stderr, "persist game %s: status %d\n", g.ID, resp.StatusCode)
 	}
+}
+
+// fetchFillerFENs pulls a pool of realistic midgame positions from BaseAPI to
+// seed self-play watch fillers (GET /internal/filler-fens, hub-secret gated).
+// Best-effort: any error returns an empty slice and the hub simply starts its
+// fillers from the opening. Theme is passed through ("pin" by default).
+func fetchFillerFENs(baseURL, secret, theme string, n int) []string {
+	url := fmt.Sprintf("%s/internal/filler-fens?theme=%s&n=%d", baseURL, neturl.QueryEscape(theme), n)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fetch filler fens: %v\n", err)
+		return nil
+	}
+	req.Header.Set("X-Hub-Secret", secret)
+
+	resp, err := (&http.Client{Timeout: 8 * time.Second}).Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fetch filler fens: %v\n", err)
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		fmt.Fprintf(os.Stderr, "fetch filler fens: status %d\n", resp.StatusCode)
+		return nil
+	}
+
+	var payload struct {
+		Fens []string `json:"fens"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		fmt.Fprintf(os.Stderr, "fetch filler fens: decode: %v\n", err)
+		return nil
+	}
+
+	return payload.Fens
 }

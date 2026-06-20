@@ -5,13 +5,19 @@
 > the AI implemented in a dedicated Go engine. This document captures the
 > product decisions, the architecture, and the research that informs both.
 >
-> **Status:** v1 in progress. **Last updated:** 2026-06-18.
-> Built & working: the Go engine (`gomachine`, perft-verified, **~2600** vs
-> handicapped Stockfish after the SPRT-gated search + Lazy-SMP work — see
-> `docs/ENGINE_STRENGTH.md`), bot games + eval bar, the lobby, **live human-vs-human play**
-> (WebSocket hub, matchmaking, server clocks, reconnect/resume), **bot backfill**
-> (a fill-in bot when no human is found), **accounts** (signup/login via session
-> cookies), **per-time-control Glicko-2 ratings**, and **game persistence** (hub → BaseAPI).
+> **Status:** v1 in progress. **Last updated:** 2026-06-20.
+> Built & working: the Go engine (`gomachine`, perft-verified, **≈2720** vs
+> handicapped Stockfish after the SPRT-gated search + Lazy-SMP work **and the
+> Texel-tuned eval (now on by default)** — see `docs/ENGINE_STRENGTH.md`), bot
+> games + eval bar + takeback, the lobby, **live human-vs-human play**
+> (WebSocket hub, rating-proximity matchmaking, server clocks, reconnect/resume),
+> **bot backfill** (a fill-in bot when no human is found), **accounts**
+> (signup/login via session cookies), **per-time-control Glicko-2 ratings**,
+> **game persistence** (hub → BaseAPI), **public profiles + game history**,
+> **Watch/spectating** (with engine-vs-engine lobby fillers), a full **analysis
+> board** (variation tree + per-ply blunder/mistake judgments), a **board/position
+> editor**, **right-click arrow/square annotations**, **premoves**, and
+> **puzzles** (Lichess-seeded tactics on an isolated rating).
 > Live lobby counts at `/stats`. See `docs/COMMANDS.md` to run it, `CLAUDE.md` for
 > a fast codebase orientation.
 
@@ -58,13 +64,17 @@ working defaults:
 
 - **Design vibe:** dark-first, lichess-like clean/minimal board (green or
   neutral wood theme, switchable). Refine later.
-- **v1 game features:** resign, move list (PGN), board flip, legal-move dots,
+- **v1 game features:** resign, move list, board flip, legal-move dots,
   last-move highlight, **premoves** (queue a move during the opponent's turn),
-  spectating, and analysis all shipped. Draw offers / takebacks / chat deferred.
-- **vs-AI UX:** pick level (0–10) + color before game; optional eval bar later.
-- **Matchmaking:** single ranked pool by Elo proximity; rematch flow. Rating-range
-  filters deferred.
-- **Profiles:** game history + PGN export + W/L/D stats. Avatars deferred.
+  **right-click arrow/square annotations**, **spectating**, a full **analysis
+  board**, and a **board editor** all shipped. Bot games support **takeback**;
+  live-game draw offers / takebacks / chat and **PGN export** are deferred.
+- **vs-AI UX:** pick **strength by rating** (700–2720, mapped to engine level via
+  `levelForRating`) + color before game; eval bar shipped.
+- **Matchmaking:** single ranked pool by Elo proximity (wait-widening bracket);
+  rematch flow + cross-pool seek graph deferred.
+- **Profiles:** **shipped** — public profile by name (`/@/:name`), per-category
+  ratings + W/L/D record + paginated game history. PGN export + avatars deferred.
 - **Engine protocol:** UCI-compatible CLI **and** internal JSON HTTP service
   (UCI lets us test with standard chess tools; JSON is the PHP boundary).
 - **Opening book:** skip for v1 (pure search); small hand-curated book optional later.
@@ -109,7 +119,7 @@ working defaults:
 |---|---|
 | Durable persistence (users, finished games, ratings) | Legal move generation + game-end detection (engine & hub) |
 | Auth, accounts, signing WS tickets | Best-move search + evaluation (engine `serve`) |
-| Bot-game orchestration, analyze proxy, `/stats` proxy | **Live game state, matchmaking, server clocks (hub)** |
+| Bot-game orchestration, analyze + game-analysis, `/stats` & `/watch` proxies | **Live game state, matchmaking, server clocks (hub)** |
 | Per-category Glicko-2 (`Glicko2Service`) + game records | Reconnect/resume + presence (hub, in-memory) |
 | Account sessions (cookies), `/internal/games` results sink | Bot backfill (engine-driven fill-in opponent) |
 | — | Zobrist keying, repetition/50-move, FIDE 6.9 timeout test |
@@ -151,7 +161,7 @@ pure Go so a single `go build` cross-compiles to any target.
 
 ## 4. gomachine — engine design (research-backed)
 
-> Full research synthesis with sources in §12. This section is the design we'll build.
+> Full research synthesis with sources in §13. This section is the design we'll build.
 
 ### 4.1 Board representation
 - **Bitboards**: 12 `uint64` (piece-type × color) = 96 B. Set bit = occupancy.
@@ -377,6 +387,14 @@ Design intent (to be tuned during build):
 `/bestmove` takes `limits.level` (0–10) and/or explicit `depth`/`movetime`. PHP
 passes the player's chosen level.
 
+> **Bot-game UI selects by rating, not raw level (shipped).** The `/bot` page and
+> the `BotGame` model now store a target **`rating`** (≈700–2720); PHP maps it to
+> an engine level via `levelForRating` (the same mapping the hub's rating-matched
+> backfill uses). The 0–10 dial above is still the engine's internal contract — the
+> rating UI is a thin layer over it, so bot and fill-in opponents advertise a
+> coherent strength. (The `POST /bot-games` route comment still says `level: 0..10`
+> — stale; the field is `rating`.)
+
 ---
 
 ## 7. PHP ↔ gomachine integration
@@ -525,6 +543,7 @@ opponent's rating in the game's time-control category.
 ```
 client → hub:  { type: "queue", pool: "3+0" } | { type: "cancel" }
                { type: "move", move: "e2e4" }  | { type: "resign" }
+               { type: "watch", gameId }       | { type: "unwatch" }   # spectator
 
 hub → client:  hello   { name, anon, rating }
                queued  { pool }              | idle
@@ -535,6 +554,8 @@ hub → client:  hello   { name, anon, rating }
                resume  { …matched fields…, moves:[{uci,san}], opponentOnline }
                end     { gameId, result, reason, status, clock }   # reason "aborted" → result null
                opponentGone | opponentBack | error { message }
+               watching { gameId, players, fen, clock, moves, lastMove, ply, status }  # spectator snapshot
+               watchEnd                                                                 # game gone/over
 ```
 
 `opponent.rating` in `matched`/`resume` is the opponent's rating **in that game's
@@ -554,6 +575,32 @@ if it's legal in the new position, else discard) — behind a small `BoardContro
 contract `{ fen, myTurn, legalMoves, submit, canPremove }`. Each board page (live,
 bot) feeds it that contract and renders its output onto `<Board>`, so
 board-interaction features are written once rather than per page.
+
+### 8.6 Watch / spectating (shipped)
+
+Read-only spectating of live games, separate from the playing socket.
+
+- **Browse:** the hub exposes `GET /games` — a top-N lobby snapshot (`lobbyMax` 5,
+  pre-marshaled, sorted real-games-first then by combined rating). BaseAPI proxies
+  it as `GET /watch`. The frontend `/watch` page (`pages/Watch.tsx`) polls it and
+  renders each game as a `MiniBoard` preview. Each poll also stamps the hub's
+  "someone is watching" signal (`WatchPing`, `watchWindow` 12 s).
+- **Spectate one game:** clicking a preview opens `/watch/:id` (`pages/Spectate.tsx`)
+  on a **dedicated** read-only socket (`lib/spectate.ts`, `?spectate=1`, distinct
+  from `lib/socket.ts` so it never clobbers your own game). It sends `watch {gameId}`
+  and receives a full `watching` snapshot, then live `state`/`end` fan-out; `unwatch`
+  (or socket close) detaches. A spectator holds no seat — `move`/`resign` are ignored
+  — and is not counted as online. Each `game` carries a `spectators` set the hub
+  broadcasts to alongside the players.
+- **Engine-vs-engine fillers (`filler.go`):** to keep the Watch lobby populated, the
+  hub runs just-in-time self-play games on a **dedicated** small engine pool (so they
+  can't starve human bot-fill), padding up to `-watch-target` (5) **and only while
+  someone is watching** (`watchersActive()`). They're `filler:true`: **never
+  persisted, never Elo'd** (`finish()` gates on `filler`, not `rated`), created with
+  `rated:true` purely for display, and their bot-ness is never sent to the client.
+  In-flight fillers always finish naturally; replenishment stops once watchers leave.
+  They DO count toward `activeGames`. CLI: `-watch-fillers`, `-watch-target`,
+  `-watch-filler-workers`.
 
 ---
 
@@ -638,40 +685,107 @@ type; the header user menu shows `rating_puzzle` as a separate row.
 
 ---
 
-## 10. Repository layout
+## 10. Analysis, profiles & board tools
+
+A cluster of shipped, mostly client-driven features. The division of labour is the
+same everywhere: **`chess.js` (client) owns legality/SAN/FEN, the Go engine owns
+evaluation only** — PHP gains no new chess logic.
+
+### 10.1 Analysis board (`/analysis`, `/analysis/:id`)
+A full analysis surface (`pages/Analysis.tsx`):
+- **Eval bar + engine lines** via `POST /analyze` (`AnalyzeController` → `GomachineClient`):
+  a stateless full-strength `(FEN, movetime?) → {eval, bestmove, pv, depth}`.
+- **Branching variation tree** (`components/MoveTree.tsx`, `lib/analysisTree.ts`):
+  selectable nodes, indented inline sub-lines, per-move **judgments**
+  (`best | good | inaccuracy | mistake | blunder`). The tree is a pure client
+  structure; the engine only scores positions.
+- **Replay / flip / import:** board flip, ply navigation, copy-FEN, "Paste FEN…",
+  and a **Chess960** randomize (`components/AnalysisAside.tsx`), plus "Edit this
+  board" / "Play vs bot" hand-offs.
+- **Saved-game analysis (`/analysis/:id`):** loads `GET /games/{id}/analysis`
+  (`GameAnalysisController` + `GameAnalysisService`) — a **cached, per-ply**
+  full-game pass (White-relative evals, best move, centipawn-loss → blunder/mistake
+  tags) computed once per `Game` and reused.
+
+### 10.2 Board / position editor (`/editor`)
+`pages/Editor.tsx` + `components/BoardEditor.tsx` + `lib/fenEdit.ts` (pure,
+immutable FEN edits — `START_FEN`/`EMPTY_FEN`/place/move, `chess.js` only for final
+validation). Stamp/erase pieces with a brush, drag to move, right-click to clear a
+square; emits FENs to copy, analyze, or launch a bot game from.
+
+### 10.3 Profiles & game history (`/@/:name`)
+`pages/Profile.tsx` over two read endpoints:
+- **`GET /users/{name}`** (`ProfileController`) — public profile **by display
+  name**: per-category Glicko-2 ratings (bullet/blitz/rapid/classical + puzzle),
+  W/L/D record, and the first page of games. Never exposes email/password.
+- **`GET /users/{name}/games?offset=`** (`ProfileGamesController`) — paginated
+  history ("load more"); each row carries outcome + rating-before/after swing.
+
+Backed by the `Game` model (the same records the hub persists via
+`POST /internal/games`). **PGN export is still not implemented** anywhere —
+interchange is FEN-only.
+
+### 10.4 Right-click annotations
+`components/Board.tsx`: Lichess-style **arrows** (right-click drag) and **square-ring
+highlights** (right-click in place), with modifier keys varying the colour. Cleared
+on left-click and on any position change. Separately, a single programmatic
+best-move `arrow` prop is used by the analysis/eval surfaces. Annotations are
+**client-only** — no hub/protocol or backend involvement.
+
+### 10.5 Admin engine-vs-engine (`/admin/engine-vs`)
+`pages/EngineVsEngine.tsx` + `POST /admin/engine-vs/move` (`EngineMatchController`,
+admin-role-gated): two engines auto-play one ply at a time with a speed slider,
+pause/step, eval bar, and sound — an internal strength/behaviour inspection tool.
+
+---
+
+## 11. Repository layout
 
 ```
 chessgo/
   app/            # BaseAPI PHP: Models, Controllers, Services, Providers, Auth
-                  #   Models: User (per-category ratings), BotGame, Game
-                  #   Services: GomachineClient, BotGameService, WsTicketService,
-                  #             HubClient (stats proxy), Glicko2Service (categories + ratings)
-                  #   Controllers: BotGame, BotMove, Analyze, WsTicket, Stats,
-                  #             GameResult (/internal/games), Login/Signup/Logout/Me
+                  #   Models: User (per-category + puzzle ratings), BotGame, Game,
+                  #             Puzzle, PuzzleAttempt, PuzzleTheme, ApiToken
+                  #   Services: GomachineClient, BotGameService, GameAnalysisService,
+                  #             WsTicketService, HubClient (stats/watch proxy),
+                  #             Glicko2Service (categories + ratings)
+                  #   Controllers: BotGame, BotMove, BotUndo, Analyze, GameAnalysis,
+                  #             Game, WsTicket, Stats, Watch, Profile, ProfileGames,
+                  #             Puzzle, EngineMatch (admin), GameResult (/internal/games),
+                  #             Login/Signup/Logout/Me, ApiToken
   routes/         # api.php
   config/         # app.php, i18n.php
   storage/        # migrations.json, logs, cache
   gomachine/      # Go module …/gomachine — engine + hub + CLI (one binary)
     cmd/gomachine/      # subcommands: serve, hub, uci, bestmove, perft, play,
-                        #   selfplay, verifyticket
+                        #   selfplay, verifyticket, bench, tune, loadtest, engineload
     internal/chess/     # rules core: bitboards, magic sliders, mailbox, FEN,
                         #   Zobrist, movegen, make/unmake, SAN, material/draw, perft
-    internal/eval/      # material + tapered PeSTO PSQT + tempo
-    internal/search/    # negamax, αβ, ID, quiescence, ordering, TT, null-move, LMR
+    internal/eval/      # material + tapered PeSTO PSQT + tempo + tuned_tables.go (on)
+    internal/search/    # negamax, αβ, ID, quiescence, ordering, TT (lock-free, Lazy
+                        #   SMP), null-move, LMR, SEE, delta/RFP/LMP, aspiration
+    internal/tune/      # Texel tuner (joint Adam on WDL; tunes the PSQT itself)
     internal/engine/    # orchestration: level 0–10 mapping, status adjudication
-    internal/server/    # stateless engine HTTP/JSON handlers (the §7.3 contract)
+    internal/server/    # stateless engine HTTP/JSON handlers (§7.3) + /analyze-game
     internal/hub/       # realtime: matchmaking, live games, clocks, WS protocol,
-                        #   /stats, persistence POST (hub.go) + bot backfill (bot.go)
+                        #   /stats, persistence POST (hub.go), bot backfill (bot.go),
+                        #   spectating (spectate.go), engine-vs-engine fillers (filler.go)
     internal/auth/      # HMAC ticket verification; Identity carries per-cat ratings
     internal/uci/       # UCI protocol loop (for chess GUIs / test tools)
     Makefile            # build, test, perft, cross-compile (CGO_ENABLED=0)
   frontend/       # React + Vite + TS + MUI + Bun
-    src/pages/          # Home (lobby), BotGame (/bot), LiveGame (/game/:id)
-    src/components/      # Board, EvalBar, Clock, MoveList, Layout, GameModeCard,
-                        #   AuthDialog (login/signup)
-    src/lib/            # socket (WS store), auth (session/user store), sounds
-                        #   (gesture-unlocked Web Audio), chess (FEN/board helpers),
-                        #   useBoardInteraction (optimistic moves + premoves controller)
+    src/pages/          # Home (lobby), BotGame (/bot), LiveGame (/game/:id),
+                        #   Watch + Spectate (/watch, /watch/:id), Analysis
+                        #   (/analysis[/:id]), Editor (/editor), Profile (/@/:name),
+                        #   Puzzles (/puzzles), EngineVsEngine (/admin/engine-vs)
+    src/components/      # Board (+ arrows/annotations), BoardEditor, EvalBar, Clock,
+                        #   MoveList, MoveTree, AnalysisAside, MiniBoard, Layout,
+                        #   AuthDialog, PanelUI, LiveModeCard, GameModeCard, Logo
+    src/lib/            # socket (WS store), spectate (read-only WS store), auth
+                        #   (session/user store), sounds (gesture-unlocked Web Audio),
+                        #   chess (FEN/board helpers), fenEdit (editor), analysisTree
+                        #   (variation tree + judgments), useBoardInteraction
+                        #   (optimistic moves + premoves controller)
     src/api/            # client (REST + ws-ticket + auth; credentials: 'include')
     public/piece/cburnett/   # SVG piece set (Lichess cburnett, GPL)
   docs/           # SPEC.md (this file), COMMANDS.md (run/deploy)
@@ -680,10 +794,12 @@ chessgo/
 
 ---
 
-## 11. Roadmap
+## 12. Roadmap
 
 - [x] **gomachine engine** — perft-verified rules, search, eval, CLI, HTTP service.
-- [x] **Bot games** — BaseAPI `BotGame` + level 0–10, frontend `/bot`, eval bar.
+- [x] **Bot games** — BaseAPI `BotGame` + frontend `/bot`, eval bar, **takeback**
+      (`/bot-games/{id}/undo`). Strength picked **by rating** (mapped to engine level
+      via `levelForRating`); the engine's 0–10 dial is the internal contract (§6).
 - [x] **Lobby** — quick-pairing grid, action buttons, optimistic presentation.
 - [x] **Live multiplayer (queue)** — Go hub, WebSocket, server clocks, ticket auth,
       reconnect/resume + presence, frontend live game view. Lichess-style clock
@@ -717,12 +833,15 @@ chessgo/
       delta pruning (+22), aspiration windows (+22), reverse futility pruning (+67),
       late move pruning (+95). **Lazy SMP** (lock-free atomic TT; +97 Elo @ 4
       threads) — engine supports it; not yet wired into the `serve`/hub prod paths.
-      **Eval terms** (mobility/pawns/king-safety/bishop-pair) + tuner BUILT but
-      **off by default**: MSE-tuned eval was SPRT-rejected at −148 Elo (eval-fit ≠
-      strength — distillation gave the lowest MSE yet lost hardest). Current strength
-      ~2600 (beats handicapped SF-2500). Next: ship SMP to prod, remaining cheap
-      search patches, then **NNUE** (the distillation pipeline is its data step) or
-      SPSA — bolt-on linear eval terms are a dead end.
+      **The Texel-tuned eval is now ON by default** (tuned PSQT + knowledge terms,
+      `internal/eval/tuned_tables.go`): **+128 Elo @ fixed nodes, +101 Elo @ 100 ms/
+      move**, SPRT-gated. This *replaced* the earlier −148 Elo result, which was a
+      broken **method** (coordinate descent on MSE, distilled CP target, frozen PSQT),
+      not a verdict on HCE — the rebuilt tuner (joint Adam on WDL, **tuning the PSQT
+      itself**, quiet Lichess positions; `internal/tune`) wins. Current strength
+      **≈2720** on the SF-2500 anchor (78%, up from ~2600). Next: ship SMP to prod,
+      remaining cheap search patches, then **NNUE** (the distillation pipeline is its
+      data step) or SPSA.
 - [x] **Match bot strength to its rating** — fill-in bot displayed rating is now
       anchored to the human's Elo (±120) and the engine level is derived from it
       (`levelForRating`), so rated bot games are fair. Remaining: precise
@@ -730,18 +849,34 @@ chessgo/
 - [x] **Rating-proximity matchmaking** — human pairing now matches within a
       wait-widening Elo bracket (100→400 cap), never pairing wildly mismatched
       players. Remaining: a true cross-pool ranked queue / seek graph.
+- [x] **Watch / spectating** — read-only spectating (§8.6): hub `GET /games`
+      snapshot proxied as BaseAPI `GET /watch`, `/watch` mini-board grid +
+      `/watch/:id` on a dedicated spectate socket (`watch`/`unwatch` → `watching`
+      fan-out); plus **engine-vs-engine fillers** that pad the lobby only while
+      watched (never persisted/Elo'd).
+- [x] **Analysis board** — `/analysis` (+ `/analysis/:id`): eval bar via `POST
+      /analyze`, branching variation tree with per-move judgments, replay/flip/FEN
+      import + Chess960 (§10.1); cached per-ply **full-game analysis** (`GET
+      /games/{id}/analysis`, `GameAnalysisService`) with blunder/mistake tags.
+- [x] **Board editor + annotations** — `/editor` position editor (§10.2) and
+      Lichess-style **right-click arrows / square highlights** on the board (§10.4),
+      both client-only.
+- [x] **Profiles + game history** — public `/@/:name` profile by display name
+      (§10.3): per-category ratings + W/L/D record + paginated history
+      (`GET /users/{name}` + `/users/{name}/games`). PGN export still TODO.
 - [ ] **More lobby features** — Challenge-a-friend (private link), Custom games,
-      correspondence; profiles + game history + PGN.
+      correspondence; **PGN export** (history is shipped, PGN is not).
 - [x] **Premoves** — queue a move during the opponent's turn; the shared board
       controller (`src/lib/useBoardInteraction.ts`) holds it across the opponent's
       reply, then validates it against the next legal-move list and either plays it
       (optimistic + sound + submit) or discards it. Live + bot games; pseudo-legal
       premove targets (`premoveTargets` in `src/lib/chess.ts`), auto-queen promotion.
-- [ ] **Polish** — draw offers, takebacks, richer eval terms / opening book.
+- [ ] **Polish** — draw offers, **live-game** takebacks (bot takeback shipped),
+      richer eval terms / opening book.
 
 ---
 
-## 12. Sources (research)
+## 13. Sources (research)
 
 **Engine:** CPW — Bitboards, Magic Bitboards, BMI2, Encoding Moves, Move
 Generation, Copy-Make, Alpha-Beta, Null Move Pruning, Late Move Reductions,

@@ -20,6 +20,7 @@ use App\Controllers\WsTicketController;
 use App\Controllers\StatsController;
 use App\Controllers\WatchController;
 use App\Controllers\GameResultController;
+use App\Controllers\FillerFensController;
 use App\Controllers\GameController;
 use App\Controllers\GameAnalysisController;
 use App\Controllers\ProfileController;
@@ -105,6 +106,10 @@ $router->get('/watch', [
 
 // Internal: the realtime hub persists finished games here (secret-gated, no session)
 $router->post('/internal/games', [GameResultController::class]);
+
+// Internal: the hub seeds self-play watch fillers from realistic midgame puzzle
+// positions (secret-gated, no session). Fetched once at hub startup.
+$router->get('/internal/filler-fens', [FillerFensController::class]);
 
 // Fetch a finished live game by hub id (for the post-game analysis board)
 $router->get('/games/{id}', [

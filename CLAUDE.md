@@ -127,7 +127,18 @@ php mason migrate:generate && php mason migrate:apply -y                     # D
   **finish naturally**; we only stop replenishing once watchers leave. They DO
   count toward `activeGames` (so the homepage stat ticks up a few while watched).
   Both filler sides are bots → `scheduleBotMove` reschedules from `applyBotMove`
-  (not just `move()`); each `player` carries its own `level`.
+  (not just `move()`); each `player` carries its own `level`. **~80% of fillers
+  are seeded from a realistic midgame** (the rest from the opening): at hub
+  startup `cmd/gomachine/hub.go` fetches a pool of puzzle FENs from BaseAPI's
+  hub-secret-gated `GET /internal/filler-fens?theme=pin` (`FillerFensController`)
+  and hands it to the hub via `SetFillerFENs` (delivered to the Run goroutine over
+  `fillerFensCh`); `pickFillerStart` chooses per game, validating the FEN and
+  falling back to `StartFEN` on any miss — so an empty/unreachable pool degrades to
+  opening-only. We seed from the puzzle's **raw `fen`** (a balanced position, per
+  Lichess convention `fen` is *before* the setup blunder), **not** after `moves[0]`
+  — the theme just selects believable middlegames, it doesn't put a motif on the
+  board. `scheduleBotMove` keys off `pos.SideToMove()`, so a Black-to-move seed
+  works (White no longer always moves first).
 - **Session-cookie auth:** the SPA sends `credentials: 'include'`; CORS must
   echo the origin + allow credentials (`CORS_ALLOWLIST` includes `:6465`).
   `/ws-ticket` runs `SessionStartMiddleware` and resolves the user from the

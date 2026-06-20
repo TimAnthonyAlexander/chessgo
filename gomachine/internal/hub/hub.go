@@ -53,6 +53,8 @@ type Hub struct {
 	fillerOn          bool
 	fillerTarget      int                // desired total live games shown (real first, padded)
 	fillerEngines     chan *engineHandle // dedicated filler search pool (nil until enabled)
+	fillerFens        []string           // realistic midgame seed positions (Run goroutine only)
+	fillerFensCh      chan []string      // delivers a fetched FEN pool to the Run goroutine
 	lastWatchActivity atomic.Int64       // unix-nano of the most recent watch poll/connect
 
 	// Live lobby counters. Written only on the Run goroutine (paired with the
@@ -125,6 +127,10 @@ func (h *Hub) Run() {
 			h.handle(cmd)
 		case r := <-h.botMoves:
 			h.applyBotMove(r)
+		case fens := <-h.fillerFensCh:
+			// A fetched pool of realistic midgame FENs (from BaseAPI) — assigned on
+			// the Run goroutine so startFillerGame can read it lock-free.
+			h.fillerFens = fens
 		case <-ticker.C:
 			h.checkClocks()
 			h.matchWaiting()
