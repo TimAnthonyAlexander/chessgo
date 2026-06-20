@@ -767,15 +767,17 @@ function Header({
   const w = game.summary.w
   const b = game.summary.b
 
-  // Result line: "{winner} won." (or "Draw"). Green when the viewer is one of
-  // the two players — whether they won OR lost; neutral when they're just
-  // analyzing someone else's game (name-matched against the signed-in user).
+  // Result line: "{winner} won." (or "Draw"). Colored from the *viewer's* own
+  // result: green when the signed-in user won, red when they lost, neutral on a
+  // draw or when they're just analyzing someone else's game (name-matched
+  // against the signed-in user).
   const me = user?.name
-  const amPlayer = !!me && (me === game.whiteName || me === game.blackName)
   const draw = game.result === '1/2-1/2'
   const winner = game.result === '1-0' ? game.whiteName : game.blackName
   const resultText = draw ? 'Draw' : `${winner} won.`
-  const resultColor = !draw && amPlayer ? '#5b9e5b' : 'var(--text-dim)'
+  const amPlayer = !!me && (me === game.whiteName || me === game.blackName)
+  const iWon = !!me && !draw && me === winner
+  const resultColor = !amPlayer || draw ? 'var(--text-dim)' : iWon ? '#5b9e5b' : '#ca4a4a'
 
   // One labeled row per metric, White vs Black side by side. Accuracy is a
   // percentage (higher = better); the rest are counts of move-quality slips,
