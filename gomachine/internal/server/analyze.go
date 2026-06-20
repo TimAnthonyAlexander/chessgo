@@ -82,7 +82,7 @@ func (s *Server) handleAnalyzeGame(w http.ResponseWriter, r *http.Request) {
 		wg.Add(1)
 		go func(i int, fen string) {
 			defer wg.Done()
-			results[i] = s.analyzePosition(fen, fens[:i], movetime)
+			results[i] = s.analyzePosition(fen, movetime)
 		}(i, fen)
 	}
 	wg.Wait()
@@ -93,10 +93,18 @@ func (s *Server) handleAnalyzeGame(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// analyzePosition evaluates one position at full strength. history is the slice
-// of prior-position FENs (for repetition-aware search). Runs on a pooled engine,
-// so it blocks until a worker is free — bounding overall concurrency.
-func (s *Server) analyzePosition(fen string, history []string, movetimeMs int) map[string]any {
+// analyzePosition evaluates one position at full strength. It is deliberately
+// OBJECTIVE: it does NOT thread the game's prior positions in as repetition
+// history. Game review wants "the best move / eval in THIS position", not a
+// practical playing decision — and the search treats the first repetition of a
+// game-history position as a draw (the standard, strength-positive playing
+// heuristic; see search.isRepetition). Feeding history in would therefore let a
+// position score 0.00 the instant it recurred in the game (e.g. a king shuffle),
+// masking a forced mate — the exact analysis bug this avoids. Cycles WITHIN the
+// search tree are still detected (the searcher tracks its own move stack), so
+// perpetuals/fortresses still evaluate as draws. Runs on a pooled engine, so it
+// blocks until a worker is free — bounding overall concurrency.
+func (s *Server) analyzePosition(fen string, movetimeMs int) map[string]any {
 	pos, err := chess.ParseFEN(fen)
 	if err != nil {
 		return map[string]any{"fen": fen, "error": "invalid fen"}
@@ -125,15 +133,13 @@ func (s *Server) analyzePosition(fen string, history []string, movetimeMs int) m
 		return out
 	}
 
-	hist := historyKeys(history)
-
 	eng := s.acquire()
-	res := eng.SearchDirect(pos, 0, time.Duration(movetimeMs)*time.Millisecond, hist)
+	res := eng.SearchDirect(pos, 0, time.Duration(movetimeMs)*time.Millisecond, nil)
 	s.release(eng)
 
 	// No legal move ⇒ the game is over at this position (checkmate or stalemate).
 	if res.Move == chess.NullMove {
-		st := engine.Adjudicate(pos, hist)
+		st := engine.Adjudicate(pos, nil)
 		out["eval"] = nil
 		out["bestmove"] = nil
 		out["bestSan"] = nil
