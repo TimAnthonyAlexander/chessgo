@@ -142,8 +142,12 @@ type Result struct {
 // ProbeRoot probes the DTZ tables at the root for pos and returns the WDL value
 // and a best (DTZ-optimal) move. The bool is false when the probe fails — the
 // position has too many pieces, has castling rights, the files for that material
-// are missing, or the position is already mate/stalemate — in which case the
-// caller should fall back to a normal search. Thread-safe (serialized).
+// are missing, the position is already mate/stalemate, OR the DTZ table is stored
+// from the other side (Fathom's simple tb_probe_root gives up there rather than
+// re-probing from the resulting positions). On a miss the caller falls back to a
+// normal search, which converts ≤MaxPieces endings safely. Thread-safe
+// (serialized). The position MUST be legal (the caller guards with pos.Legal());
+// Fathom's capture-resolution assumes the side not to move is not in check.
 func (tb *Tablebase) ProbeRoot(pos Position) (Result, bool) {
 	if tb == nil {
 		return Result{}, false

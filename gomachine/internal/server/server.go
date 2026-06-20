@@ -12,6 +12,7 @@ import (
 	"github.com/timanthonyalexander/gomachine/internal/book"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 	"github.com/timanthonyalexander/gomachine/internal/engine"
+	"github.com/timanthonyalexander/gomachine/internal/syzygy"
 )
 
 // Server holds a bounded pool of engines (each with its own transposition
@@ -24,6 +25,19 @@ type Server struct {
 // SetBook attaches a loaded opening book; full-strength analysis paths consult it
 // before searching. nil disables it.
 func (s *Server) SetBook(b *book.Book) { s.book = b }
+
+// SetTablebase attaches a Syzygy endgame tablebase to every pooled engine, so
+// full-strength bot moves and analysis probe it at the root. Call once at startup
+// before serving (it drains and refills the pool). The same handle is shared across
+// engines — Fathom serializes its own probes. nil detaches.
+func (s *Server) SetTablebase(tb *syzygy.Tablebase) {
+	n := len(s.pool)
+	for i := 0; i < n; i++ {
+		e := <-s.pool
+		e.SetTablebase(tb)
+		s.pool <- e
+	}
+}
 
 // bookHit returns a book entry for the position IF the book is loaded, the key is
 // present, and the stored move is still legal here (movegen-validated, so a stale or

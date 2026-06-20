@@ -18,6 +18,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/timanthonyalexander/gomachine/internal/auth"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
+	"github.com/timanthonyalexander/gomachine/internal/syzygy"
 )
 
 type command struct {
@@ -44,6 +45,7 @@ type Hub struct {
 	botDelay time.Duration
 	engines  chan *engineHandle // search workers (nil until EnableBotFill)
 	botMoves chan botMoveResult // bot moves ready to apply (on the Run goroutine)
+	tb       *syzygy.Tablebase  // optional Syzygy tablebase, attached to every pooled engine (nil = disabled)
 
 	// Spectator fillers: engine-vs-engine games kept running so the Watch page
 	// is never empty. They run on a SEPARATE, small engine pool so they can't
@@ -103,6 +105,11 @@ func New(secret string) *Hub {
 		botMoves:    make(chan botMoveResult, 64),
 	}
 }
+
+// SetTablebase attaches a Syzygy endgame tablebase that every bot/filler engine
+// will probe at the root. Call BEFORE EnableBotFill / EnableSpectatorFillers so
+// the pools are built with it attached. nil disables it.
+func (h *Hub) SetTablebase(tb *syzygy.Tablebase) { h.tb = tb }
 
 // OnFinish registers a callback invoked (on the hub goroutine) when a game ends.
 func (h *Hub) OnFinish(fn func(FinishedGame)) { h.onFinish = fn }

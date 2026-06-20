@@ -57,6 +57,33 @@ func loadTablebase(path string) *syzygy.Tablebase {
 	return tb
 }
 
+// loadTablebaseDefault auto-discovers a Syzygy tablebase for the prod serve/hub
+// paths — no flag or deployment change needed. It tries, in order: the SYZYGY_PATH
+// env override, then `data/syzygy` (an in-repo, gitignored sidecar next to the
+// committed opening book `data/book.bin`; the working dir is gomachine/ in both the
+// dev screen and the systemd unit, so this resolves the same way the book does).
+// The first that opens wins; if none do it returns nil (silent no-op, so the engine
+// just searches everything). A non-empty `flagPath` short-circuits the search.
+//
+// In-repo (not ~/) is deliberate: the files then share the repo's ownership and
+// gitignore, and live with the rest of the engine's data assets.
+func loadTablebaseDefault(flagPath string) *syzygy.Tablebase {
+	candidates := []string{os.Getenv("SYZYGY_PATH"), "data/syzygy"}
+	if flagPath != "" {
+		candidates = []string{flagPath}
+	}
+	for _, p := range candidates {
+		if p == "" {
+			continue
+		}
+		if tb, err := syzygy.Open(p); err == nil {
+			fmt.Printf("tablebase: up to %d-piece Syzygy loaded from %s\n", tb.MaxPieces(), p)
+			return tb
+		}
+	}
+	return nil
+}
+
 // cmdBench dispatches `gomachine bench <subcommand>`.
 func cmdBench(args []string) {
 	if len(args) == 0 {

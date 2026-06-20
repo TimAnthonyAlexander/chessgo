@@ -50,7 +50,9 @@ func (h *Hub) EnableBotFill(level int, delay time.Duration, workers, ttMB, searc
 	h.botDelay = delay
 	h.engines = make(chan *engineHandle, workers)
 	for range workers {
-		h.engines <- engine.NewWithThreads(ttMB, searchThreads)
+		e := engine.NewWithThreads(ttMB, searchThreads)
+		e.SetTablebase(h.tb) // probe endgames at the root (nil = inert)
+		h.engines <- e
 	}
 }
 

@@ -45,6 +45,7 @@ func cmdHub(args []string) {
 	watchTarget := fs.Int("watch-target", 5, "number of live games shown on the Watch page (real games padded with fillers up to this)")
 	watchWorkers := fs.Int("watch-filler-workers", 2, "dedicated engine workers for self-play filler games (small, so they can't starve human bot-fill)")
 	watchFenTheme := fs.String("watch-fen-theme", "pin", "puzzle theme whose positions seed self-play fillers from realistic midgames (empty = any theme; fetched from BaseAPI)")
+	tbPath := fs.String("tb-path", "", "Syzygy tablebase dir; empty auto-discovers (SYZYGY_PATH env, then data/syzygy)")
 	pprofAddr := fs.String("pprof", "", "if set (e.g. 127.0.0.1:6481), serve net/http/pprof on this address for profiling the Run goroutine")
 	_ = fs.Parse(args)
 
@@ -57,6 +58,9 @@ func cmdHub(args []string) {
 	}
 
 	h := hub.New(secret)
+	// Auto-discover a Syzygy tablebase and attach it BEFORE the engine pools are
+	// built, so every bot/filler engine probes endgames at the root.
+	h.SetTablebase(loadTablebaseDefault(*tbPath))
 	if *bots {
 		workers := runtime.NumCPU() / 2
 		if workers < 1 {

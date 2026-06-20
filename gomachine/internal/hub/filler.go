@@ -26,7 +26,9 @@ func (h *Hub) EnableSpectatorFillers(target, workers, ttMB, searchThreads int) {
 	h.fillerEngines = make(chan *engineHandle, workers)
 	h.fillerFensCh = make(chan []string, 1)
 	for range workers {
-		h.fillerEngines <- engine.NewWithThreads(ttMB, searchThreads)
+		e := engine.NewWithThreads(ttMB, searchThreads)
+		e.SetTablebase(h.tb) // probe endgames at the root (nil = inert)
+		h.fillerEngines <- e
 	}
 }
 

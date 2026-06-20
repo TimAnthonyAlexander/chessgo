@@ -29,10 +29,14 @@ func cmdServe(args []string) {
 	// is gomachine/ in both the dev screen and the systemd unit) — no flag or
 	// deployment change needed. Override the path with -book; -book="" disables it.
 	bookPath := fs.String("book", "data/book.bin", "opening book file, auto-loaded if present (compile-book output); empty disables")
+	tbPath := fs.String("tb-path", "", "Syzygy tablebase dir; empty auto-discovers (SYZYGY_PATH env, then data/syzygy)")
 	_ = fs.Parse(args)
 
 	startPprof(*pprofAddr)
 	srv := server.New(*workers, *tt, *searchThreads)
+	if tb := loadTablebaseDefault(*tbPath); tb != nil {
+		srv.SetTablebase(tb)
+	}
 	if *bookPath != "" {
 		b, err := book.Load(*bookPath)
 		switch {

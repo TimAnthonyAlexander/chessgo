@@ -210,11 +210,19 @@ SPRT-gated search improvements (SEE, delta/aspiration/reverse-futility/late-move
 pruning; ~+250 Elo) and **Lazy SMP** (lock-free TT; ~+97 Elo), then the
 **Texel-tuned eval** (`gomachine tune`: joint Adam on WDL-labelled quiet Lichess
 positions, tuning the PSQT itself via coefficient tracing; **+101 Elo @ movetime**,
-SPRT-gated) — reaching **≈2720** on the Stockfish-2500 anchor (78%, up from ~2600).
-The old −148 Elo eval was a broken method (coordinate-descent MSE on a frozen
-PSQT), not HCE itself.
+SPRT-gated), then **5-piece Syzygy tablebases** (CGo + Fathom, root DTZ probe, `tb`
+flag; **+18.8 Elo @ movetime**, SPRT-accepted, zero lost pairs) — reaching **≈2782**
+on the Stockfish-2500 anchor (83.5%, up from ~2600). The old −148 Elo eval was a
+broken method (coordinate-descent MSE on a frozen PSQT), not HCE itself.
+**Syzygy auto-loads in prod** from `gomachine/data/syzygy/` (in-repo, gitignored,
+next to `data/book.bin`; `serve`+`hub` discover it cwd-relative with no env/flag/
+deploy change — `SYZYGY_PATH` overrides). Default-on but inert until a tablebase is
+attached; full-strength bot moves + `/analyze` probe it, weakened bots stay at
+their level. See `docs/SYZYGY_PLAN.md` for the download command, the
+*legal-positions-only* Fathom gotcha, and why the simple `tb_probe_root` (not
+`tb_probe_root_dtz`, whose rank shuffles a won KBN to a draw) is the right probe.
 Next: hub-restart-durable
-resume, puzzle generation pipeline, ship SMP to the `serve`/hub prod paths,
-remaining cheap search patches → **NNUE** (the distillation pipeline is its data
-step), precise level↔Elo *calibration*, a true cross-pool ranked queue. See
+resume, puzzle generation pipeline, ship SMP **and Syzygy** to the `serve`/hub prod
+paths, remaining cheap search patches → **NNUE** (the distillation pipeline is its
+data step), precise level↔Elo *calibration*, a true cross-pool ranked queue. See
 `docs/SPEC.md` §11 roadmap.

@@ -59,7 +59,8 @@ gomachine bench sprt --new "see=on" --old "see=off" --nodes 40000 --elo0 0 --elo
 
 If H1: make the flag the default in `DefaultParams()` and re-baseline; if H0: drop
 it. Param spec keys: `tt nullmove nullr lmr checkext see delta asp rfp lmp
-mobility pawns kingsafety bishoppair eval` (`eval` toggles all knowledge terms).
+mobility pawns kingsafety bishoppair eval tb` (`eval` toggles all knowledge terms;
+`tb` toggles Syzygy probing — needs `--tb-path` to point at a tablebase dir).
 
 ### 2.2 `bench vs-stockfish` — absolute Elo anchor
 
@@ -232,18 +233,44 @@ the sign of the result.
 | Lever | Elo (rough) | Effort | Notes |
 |---|---|---|---|
 | **Tuned HCE (shipped)** | **+101 @ movetime** | done | joint Adam on WDL, PSQT tuned in (§5) |
+| **Syzygy 5-piece TB (shipped)** | **+18.8 @ movetime** | done | CGo+Fathom, root probe, `tb` flag; SPRT-accepted (§8 below) — inert until a TB is attached |
 | Richer HCE terms (Phase 2) | +30–80 | medium | king-safety attack-units, rook files, passed-pawn blockers/king-dist, threats — each behind a flag, Texel-tuned + SPRT'd |
-| Ship SMP to prod + higher threads | delivers +97 to the live bot | small | server/hub threads config |
+| Ship SMP + Syzygy to prod | +97 (SMP) + the TB to the live bot | small | server/hub threads + `--tb-path` config |
 | Remaining search patches | +50–80 | low | futility, countermove, singular ext, TT-static-eval |
 | **NNUE** (learned non-linear eval) | +200–400 | high (weeks) | the eventual eval answer; the tuner's traced-coefficient dataset is a training-data step |
 | SPSA (Elo-in-the-loop weight tuning) | modest | medium | the *correct* way to tune the few params with no static objective |
 
-Current strength: **≈2720 ± 79** on Stockfish's UCI_Elo scale (100 games vs
-SF-17.1 @ UCI_Elo 2500, **78%**, +220 head-to-head), up from ~2600 before the
-tuned eval — the anchor's ~+90 jump independently corroborates the eval's +101
-movetime SPRT gain. (Anchor is noisy: a band, not a number; sweep `--sf-elo` to
-triangulate, and gate patches on SPRT.) Full-strength Stockfish 17.1/18
-(~3650 CCRL) is still ~900 Elo above us — that gap needs NNUE.
+Current strength: **≈2782 ± 84** on Stockfish's UCI_Elo scale (100 games vs
+SF-17.1 @ UCI_Elo 2500, **83.5%**, +282 head-to-head, `tb=on`), up from ~2720
+pre-TB (within the anchor's noise — the +18.8 movetime SPRT is the real figure for
+the tablebase; see §9). The anchor is noisy: a band, not a number; sweep `--sf-elo`
+to triangulate, and gate patches on SPRT. Full-strength Stockfish 17.1/18
+(~3650 CCRL) is still ~870 Elo above us — that gap needs NNUE.
+
+## 9. Syzygy endgame tablebases (shipped, +18.8 Elo)
+
+5-piece Syzygy probing via **CGo + Fathom** (the reference C prober;
+`internal/syzygy`, a `!cgo` stub keeps cross-compiles building). The engine probes
+`tb_probe_root` (DTZ) at the search **root only** — same hook as the opening book —
+and on a hit returns the provably-optimal move at zero search cost. Behind the `tb`
+flag (`search.Params.UseTablebase`), now default on but **inert unless a tablebase
+is attached** via `Engine.SetTablebase` (so prod is a no-op until `--tb-path` is
+plumbed into serve/hub).
+
+**SPRT (2026-06-20):** `--new "tb=on" --old "tb=off" --tb-path <5-piece> --movetime
+100` → accepted H1, **+18.8 ± 11.1 Elo**, 109 pairs, pentanomial `[0 0 97 12 0]`
+(**zero lost pairs**). Use `--movetime` — the gain is real-time and invisible at
+fixed nodes. It converts the endings search can't under a clock (K+B+N vs K, K+Q
+vs K+R, wrong-bishop fortresses).
+
+**Gotcha (cost a long debug):** Fathom assumes **legal** positions; feeding it an
+illegal one (side-not-to-move in check) makes its capture-resolution "capture the
+king" → `lsb(0)` → assert/SIGBUS that masquerades as a table-decode/alignment bug.
+It is none of those. The `pos.Legal()` guard in `tablebaseMove` covers it (real
+game positions are always legal). Also: `tb_probe_root` legitimately returns FAILED
+for some positions (needs the opposite side's table perspective) — the engine just
+searches there; don't assert "every winning move is a TB hit." Details in
+`docs/SYZYGY_PLAN.md`.
 
 ---
 

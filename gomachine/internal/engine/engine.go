@@ -64,7 +64,12 @@ func NewWithThreads(ttSizeMB, threads int) *Engine {
 	if threads < 1 {
 		threads = 1
 	}
-	return &Engine{searcher: search.New(ttSizeMB), threads: threads}
+	// useTablebase defaults on for full-strength engines (matches DefaultParams), so
+	// the prod serve/hub engines probe as soon as a tablebase is attached via
+	// SetTablebase — inert until then (tb==nil). The bench builds its A/B engines via
+	// NewWithParams instead, where probing is gated by params (so tb=off stays off
+	// even with a shared tablebase handle attached).
+	return &Engine{searcher: search.New(ttSizeMB), threads: threads, useTablebase: true}
 }
 
 // NewWithParams creates an Engine whose search is configured by params. The
@@ -142,8 +147,14 @@ func (e *Engine) BestMove(pos *chess.Position, level int, history []uint64) Best
 	limits := search.Limits{Depth: cfg.Depth, MoveTime: cfg.MoveTime}
 
 	// Full-strength levels: just return the search's best move (Lazy SMP across
-	// e.threads workers; threads<=1 is the serial path).
+	// e.threads workers; threads<=1 is the serial path). Endgame tablebase first —
+	// only the full-strength branch, so weakened bots still play at their level
+	// (a rating-matched bot shouldn't suddenly play perfect 5-piece endgames).
 	if cfg.NoiseCp == 0 && cfg.Blunder == 0 {
+		if r, ok := e.tablebaseMove(pos); ok {
+			r.Level = level
+			return r
+		}
 		r := e.searcher.SearchParallel(pos, limits, history, e.threads)
 		return BestResult{
 			Move: r.BestMove, Score: r.Score, Depth: r.Depth,
@@ -169,6 +180,9 @@ func (e *Engine) BestMove(pos *chess.Position, level int, history []uint64) Best
 // search capped by cfg.Depth/MoveTime; otherwise root-rank + noise + blunder.
 func (e *Engine) BestMoveConfig(pos *chess.Position, cfg LevelConfig, history []uint64) BestResult {
 	if cfg.NoiseCp == 0 && cfg.Blunder == 0 {
+		if r, ok := e.tablebaseMove(pos); ok {
+			return r
+		}
 		limits := search.Limits{Depth: cfg.Depth, MoveTime: cfg.MoveTime}
 		r := e.searcher.SearchParallel(pos, limits, history, e.threads)
 		return BestResult{Move: r.BestMove, Score: r.Score, Depth: r.Depth,
