@@ -6,6 +6,17 @@ import { getWsTicket } from '../api/client'
 
 export type Color = 'w' | 'b'
 
+export interface ChatMessage {
+  id: number
+  mine: boolean
+  name: string
+  text: string
+}
+
+// Pending offer state from this client's perspective: 'mine' = we offered and
+// await a reply; 'theirs' = the opponent offered and we can accept/decline.
+export type OfferState = 'mine' | 'theirs' | null
+
 export interface LiveGameState {
   id: string
   color: Color // our color
@@ -26,7 +37,12 @@ export interface LiveGameState {
   reason: string | null
   ended: boolean
   opponentOnline: boolean
+  messages: ChatMessage[]
+  drawOffer: OfferState
+  takebackOffer: OfferState
 }
+
+let chatSeq = 0
 
 export interface SocketState {
   conn: 'closed' | 'connecting' | 'open'
@@ -63,6 +79,9 @@ function buildGame(m: Msg): LiveGameState {
     reason: null,
     ended: false,
     opponentOnline: true,
+    messages: [],
+    drawOffer: null,
+    takebackOffer: null,
   }
 }
 
@@ -89,6 +108,9 @@ function buildResume(m: Msg): LiveGameState {
     reason: null,
     ended: m.status !== 'ongoing',
     opponentOnline: m.opponentOnline !== false,
+    messages: [],
+    drawOffer: null,
+    takebackOffer: null,
   }
 }
 
@@ -171,6 +193,52 @@ class GameSocket {
     this.rawSend({ type: 'resign' })
   }
 
+  // --- draw offers / takebacks / chat ---
+
+  offerDraw() {
+    this.rawSend({ type: 'drawOffer' })
+    this.setOffer('drawOffer', 'mine')
+  }
+
+  /** Accept or decline a standing draw offer from the opponent. */
+  respondDraw(accept: boolean) {
+    this.rawSend({ type: accept ? 'drawAccept' : 'drawDecline' })
+    if (!accept) this.setOffer('drawOffer', null)
+  }
+
+  /** Withdraw our own pending draw offer. */
+  cancelDraw() {
+    this.rawSend({ type: 'drawDecline' })
+    this.setOffer('drawOffer', null)
+  }
+
+  offerTakeback() {
+    this.rawSend({ type: 'takebackOffer' })
+    this.setOffer('takebackOffer', 'mine')
+  }
+
+  respondTakeback(accept: boolean) {
+    this.rawSend({ type: accept ? 'takebackAccept' : 'takebackDecline' })
+    if (!accept) this.setOffer('takebackOffer', null)
+  }
+
+  cancelTakeback() {
+    this.rawSend({ type: 'takebackDecline' })
+    this.setOffer('takebackOffer', null)
+  }
+
+  sendChat(text: string) {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    this.rawSend({ type: 'chat', text: trimmed })
+  }
+
+  private setOffer(key: 'drawOffer' | 'takebackOffer', val: OfferState) {
+    const g = this.state.game
+    if (!g) return
+    this.set({ game: { ...g, [key]: val } })
+  }
+
   /** Leave a finished game and return to an idle lobby state. */
   leave() {
     this.wantQueue = null
@@ -235,6 +303,21 @@ class GameSocket {
       case 'opponentBack':
         this.setOpponentOnline(true)
         break
+      case 'drawOffered':
+        this.onOffer('drawOffer', msg.by)
+        break
+      case 'drawDeclined':
+        this.setOffer('drawOffer', null)
+        break
+      case 'takebackOffered':
+        this.onOffer('takebackOffer', msg.by)
+        break
+      case 'takebackDeclined':
+        this.setOffer('takebackOffer', null)
+        break
+      case 'chat':
+        this.onChat(msg)
+        break
       case 'error':
         this.set({ error: msg.message })
         break
@@ -263,7 +346,12 @@ class GameSocket {
       window.clearTimeout(this.resumeTimer)
       this.resumeTimer = null
     }
-    this.set({ game: buildResume(msg), error: null })
+    const prev = this.state.game
+    const game = buildResume(msg)
+    // Carry the in-memory chat across a reconnect to the same game (offers are
+    // transient and intentionally reset — the hub drops them on disconnect).
+    if (prev && prev.id === game.id) game.messages = prev.messages
+    this.set({ game, error: null })
   }
 
   private setOpponentOnline(online: boolean) {
@@ -272,12 +360,37 @@ class GameSocket {
     this.set({ game: { ...g, opponentOnline: online } })
   }
 
+  // A draw/takeback offer arrived: 'mine' if we sent it (echo), 'theirs' otherwise.
+  private onOffer(key: 'drawOffer' | 'takebackOffer', by: string) {
+    const g = this.state.game
+    if (!g) return
+    this.set({ game: { ...g, [key]: by === g.color ? 'mine' : 'theirs' } })
+  }
+
+  private onChat(msg: Msg) {
+    const g = this.state.game
+    if (!g) return
+    const text = typeof msg.text === 'string' ? msg.text : ''
+    if (!text) return
+    const message: ChatMessage = {
+      id: ++chatSeq,
+      mine: msg.by === g.color,
+      name: typeof msg.name === 'string' ? msg.name : '',
+      text,
+    }
+    this.set({ game: { ...g, messages: [...g.messages, message] } })
+  }
+
   private applyState(msg: Msg) {
     const g = this.state.game
     if (!g) return
     const moves = g.moves.slice()
-    if (typeof msg.ply === 'number' && msg.ply > moves.length && msg.san) {
-      moves.push({ san: msg.san, uci: msg.lastMove })
+    if (typeof msg.ply === 'number') {
+      if (msg.ply < moves.length) {
+        moves.length = msg.ply // takeback: roll the move list back
+      } else if (msg.ply > moves.length && msg.san) {
+        moves.push({ san: msg.san, uci: msg.lastMove })
+      }
     }
     this.set({
       game: {
@@ -291,6 +404,10 @@ class GameSocket {
         clock: msg.clock,
         clockAt: Date.now(),
         moves,
+        // The board changed (move or takeback) → any pending offer is resolved
+        // server-side; clear our local pending UI to match.
+        drawOffer: null,
+        takebackOffer: null,
       },
     })
   }

@@ -153,6 +153,20 @@ func (h *Hub) handle(cmd command) {
 		h.move(c, cmd.msg.Move)
 	case "resign":
 		h.resign(c)
+	case "drawOffer":
+		h.drawOffer(c)
+	case "drawAccept":
+		h.drawAccept(c)
+	case "drawDecline":
+		h.drawDecline(c)
+	case "takebackOffer":
+		h.takebackOffer(c)
+	case "takebackAccept":
+		h.takebackAccept(c)
+	case "takebackDecline":
+		h.takebackDecline(c)
+	case "chat":
+		h.chat(c, cmd.msg.Text)
 	case "watch":
 		h.watchGame(c, cmd.msg.GameID)
 	case "unwatch":
@@ -291,6 +305,154 @@ func (h *Hub) resign(c *Client) {
 		result = "1-0"
 	}
 	h.finish(g, result, "resign")
+}
+
+// --- draw offers, takebacks, chat (human-vs-human niceties) ---
+
+// colorStr renders a color as "w"/"b" for the wire.
+func colorStr(c chess.Color) string {
+	if c == chess.Black {
+		return "b"
+	}
+	return "w"
+}
+
+// broadcastPlayers sends to the two seated players only (not spectators). Offers
+// and chat are private to the participants. A bot side has a nil client, so the
+// offer simply goes unanswered — the frontend never learns the opponent is a bot.
+func (h *Hub) broadcastPlayers(g *game, data []byte) {
+	if g.white.client != nil {
+		g.white.client.trySend(data)
+	}
+	if g.black.client != nil {
+		g.black.client.trySend(data)
+	}
+}
+
+func (h *Hub) drawOffer(c *Client) {
+	g := c.game
+	if g == nil || g.over {
+		return
+	}
+	color, ok := g.colorOf(c)
+	if !ok {
+		return
+	}
+	if g.drawPending && g.drawBy == color {
+		return // already standing
+	}
+	// Offering into a standing opposite offer is an acceptance.
+	if g.drawPending && g.drawBy == color.Opposite() {
+		h.finish(g, "1/2-1/2", "agreement")
+		return
+	}
+	g.drawPending, g.drawBy = true, color
+	h.broadcastPlayers(g, mustJSON(out("drawOffered", map[string]any{"gameId": g.id, "by": colorStr(color)})))
+}
+
+func (h *Hub) drawAccept(c *Client) {
+	g := c.game
+	if g == nil || g.over || !g.drawPending {
+		return
+	}
+	if color, ok := g.colorOf(c); !ok || color == g.drawBy {
+		return // only the side that did NOT offer can accept
+	}
+	h.finish(g, "1/2-1/2", "agreement")
+}
+
+func (h *Hub) drawDecline(c *Client) {
+	g := c.game
+	if g == nil || g.over || !g.drawPending {
+		return
+	}
+	if _, ok := g.colorOf(c); !ok {
+		return // either party (decliner or withdrawer) clears it
+	}
+	g.drawPending = false
+	h.broadcastPlayers(g, mustJSON(out("drawDeclined", map[string]any{"gameId": g.id})))
+}
+
+func (h *Hub) takebackOffer(c *Client) {
+	g := c.game
+	if g == nil || g.over || len(g.moves) == 0 {
+		return
+	}
+	color, ok := g.colorOf(c)
+	if !ok {
+		return
+	}
+	if g.takebackPending && g.takebackBy == color {
+		return
+	}
+	if g.takebackPending && g.takebackBy == color.Opposite() {
+		h.applyTakeback(g)
+		return
+	}
+	g.takebackPending, g.takebackBy = true, color
+	h.broadcastPlayers(g, mustJSON(out("takebackOffered", map[string]any{"gameId": g.id, "by": colorStr(color)})))
+}
+
+func (h *Hub) takebackAccept(c *Client) {
+	g := c.game
+	if g == nil || g.over || !g.takebackPending {
+		return
+	}
+	if color, ok := g.colorOf(c); !ok || color == g.takebackBy {
+		return
+	}
+	h.applyTakeback(g)
+}
+
+func (h *Hub) takebackDecline(c *Client) {
+	g := c.game
+	if g == nil || g.over || !g.takebackPending {
+		return
+	}
+	if _, ok := g.colorOf(c); !ok {
+		return
+	}
+	g.takebackPending = false
+	h.broadcastPlayers(g, mustJSON(out("takebackDeclined", map[string]any{"gameId": g.id})))
+}
+
+// applyTakeback rolls the game back to the requester's most recent turn (1 or 2
+// plies), broadcasts the new position to players and spectators, and reschedules
+// a bot reply if the rolled-back turn belongs to a bot.
+func (h *Hub) applyTakeback(g *game) {
+	target := len(g.moves) - 1
+	if target < 0 {
+		return
+	}
+	requester := g.takebackBy
+	g.rebuildTo(target)
+	if g.pos.SideToMove() != requester && target >= 1 {
+		target--
+		g.rebuildTo(target)
+	}
+	g.clearOffers()
+	h.broadcast(g, mustJSON(out("state", g.snapshot())))
+	h.scheduleBotMove(g)
+}
+
+func (h *Hub) chat(c *Client, text string) {
+	g := c.game
+	if g == nil {
+		return
+	}
+	color, ok := g.colorOf(c)
+	if !ok {
+		return // players only — spectators don't chat
+	}
+	if text = sanitizeChat(text); text == "" {
+		return
+	}
+	h.broadcastPlayers(g, mustJSON(out("chat", map[string]any{
+		"gameId": g.id,
+		"by":     colorStr(color),
+		"name":   c.id.Name,
+		"text":   text,
+	})))
 }
 
 // firstMoveTimeout is how long a side has to make its (untimed) first move
@@ -458,6 +620,16 @@ func (h *Hub) handleDisconnect(c *Client) {
 		return // a newer connection already took over this seat
 	}
 	g.online[color] = false
+	// Drop any pending offer so the still-connected player isn't left staring at a
+	// request the now-absent player can't answer.
+	if g.drawPending {
+		g.drawPending = false
+		h.broadcastPlayers(g, mustJSON(out("drawDeclined", map[string]any{"gameId": g.id})))
+	}
+	if g.takebackPending {
+		g.takebackPending = false
+		h.broadcastPlayers(g, mustJSON(out("takebackDeclined", map[string]any{"gameId": g.id})))
+	}
 	if opp := g.playerFor(color.Opposite()); g.online[color.Opposite()] && opp.client != nil {
 		opp.client.trySend(mustJSON(out("opponentGone", map[string]any{"gameId": g.id})))
 	}

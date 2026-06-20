@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { Box, Button, Typography } from '@mui/material'
-import { Flag, Telescope, User } from 'lucide-react'
+import { Check, Flag, Handshake, Telescope, Undo2, User, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import Board from '../components/Board'
+import ChatPanel from '../components/ChatPanel'
 import Clock from '../components/Clock'
 import LiveModeCard from '../components/LiveModeCard'
 import MoveList from '../components/MoveList'
@@ -168,8 +169,19 @@ export default function LiveGame() {
           mx: 'auto',
         }}
       >
-        <Box sx={{ display: { xs: 'none', md: 'block' }, width: '100%', justifySelf: 'end', alignSelf: 'start' }}>
+        <Box
+          sx={{
+            display: { xs: 'none', md: 'flex' },
+            flexDirection: 'column',
+            gap: 2,
+            minHeight: 0,
+            width: '100%',
+            justifySelf: 'end',
+            alignSelf: 'stretch',
+          }}
+        >
           <LiveModeCard pool={g.pool} rated={g.rated} color={g.color} opponent={g.opponent} />
+          <ChatPanel messages={g.messages} onSend={(t) => gameSocket.sendChat(t)} disabled={g.ended} />
         </Box>
         <Box sx={{ minWidth: 0, alignSelf: 'start', width: '100%' }}>
           <Board
@@ -257,9 +269,56 @@ export default function LiveGame() {
           {/* Moves (fills the panel) */}
           <MoveList fill moves={moveEntries} currentPly={moveEntries.length} onSelectPly={() => {}} />
 
-          {/* Resign while playing, or the result + next actions when over */}
+          {/* Draw / takeback / resign while playing, or the result when over */}
           {!g.ended ? (
-            <Box sx={{ p: 1.25, borderTop: '1px solid var(--line-soft)', bgcolor: 'var(--bg-2)' }}>
+            <Box
+              sx={{
+                p: 1.25,
+                borderTop: '1px solid var(--line-soft)',
+                bgcolor: 'var(--bg-2)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 1,
+              }}
+            >
+              {g.drawOffer === 'theirs' && (
+                <OfferBanner
+                  label="Opponent offers a draw"
+                  onAccept={() => gameSocket.respondDraw(true)}
+                  onDecline={() => gameSocket.respondDraw(false)}
+                />
+              )}
+              {g.takebackOffer === 'theirs' && (
+                <OfferBanner
+                  label="Opponent requests a takeback"
+                  onAccept={() => gameSocket.respondTakeback(true)}
+                  onDecline={() => gameSocket.respondTakeback(false)}
+                />
+              )}
+              <Box sx={{ display: 'flex', gap: 1 }}>
+                {g.drawOffer === 'mine' ? (
+                  <ActionBtn tone="neutral" icon={<Handshake size={15} />} label="Offered…" onClick={() => gameSocket.cancelDraw()} />
+                ) : (
+                  <ActionBtn
+                    tone="neutral"
+                    icon={<Handshake size={15} />}
+                    label="Draw"
+                    onClick={() => gameSocket.offerDraw()}
+                    disabled={g.drawOffer === 'theirs'}
+                  />
+                )}
+                {g.takebackOffer === 'mine' ? (
+                  <ActionBtn tone="neutral" icon={<Undo2 size={15} />} label="Requested…" onClick={() => gameSocket.cancelTakeback()} />
+                ) : (
+                  <ActionBtn
+                    tone="neutral"
+                    icon={<Undo2 size={15} />}
+                    label="Takeback"
+                    onClick={() => gameSocket.offerTakeback()}
+                    disabled={g.takebackOffer === 'theirs' || g.moves.length === 0}
+                  />
+                )}
+              </Box>
               <ActionBtn tone="danger" icon={<Flag size={15} />} label="Resign" onClick={() => gameSocket.resign()} />
             </Box>
           ) : (
@@ -346,10 +405,32 @@ function PlayerBar({
   )
 }
 
+function OfferBanner({ label, onAccept, onDecline }: { label: string; onAccept: () => void; onDecline: () => void }) {
+  return (
+    <Box
+      sx={{
+        p: 1,
+        borderRadius: '10px',
+        bgcolor: 'var(--accent-soft)',
+        border: '1px solid var(--accent-line)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 0.75,
+      }}
+    >
+      <Typography sx={{ fontSize: 12.5, color: 'var(--accent)', fontWeight: 600, textAlign: 'center' }}>{label}</Typography>
+      <Box sx={{ display: 'flex', gap: 0.75 }}>
+        <ActionBtn tone="primary" icon={<Check size={15} />} label="Accept" onClick={onAccept} />
+        <ActionBtn tone="neutral" icon={<X size={15} />} label="Decline" onClick={onDecline} />
+      </Box>
+    </Box>
+  )
+}
+
 function resultText(g: LiveGameState): string {
   if (g.reason === 'aborted' || g.status === 'aborted') return 'Game aborted'
   if (g.status === 'disconnected') return 'Disconnected'
-  if (g.result === '1/2-1/2') return 'Draw'
+  if (g.result === '1/2-1/2') return g.reason === 'agreement' ? 'Draw · by agreement' : 'Draw'
   if (g.result === '1-0' || g.result === '0-1') {
     const winner: Color = g.result === '1-0' ? 'w' : 'b'
     const won = winner === g.color

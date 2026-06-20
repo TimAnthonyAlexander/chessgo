@@ -67,8 +67,9 @@ working defaults:
 - **v1 game features:** resign, move list, board flip, legal-move dots,
   last-move highlight, **premoves** (queue a move during the opponent's turn),
   **right-click arrow/square annotations**, **spectating**, a full **analysis
-  board**, and a **board editor** all shipped. Bot games support **takeback**;
-  live-game draw offers / takebacks / chat and **PGN export** are deferred.
+  board**, and a **board editor** all shipped, plus live-game **draw offers,
+  takebacks, and players-only chat** (§8.7) and bot-game **takeback**. **PGN
+  export** is deferred.
 - **vs-AI UX:** pick **strength by rating** (700–2720, mapped to engine level via
   `levelForRating`) + color before game; eval bar shipped.
 - **Matchmaking:** single ranked pool by Elo proximity (wait-widening bracket);
@@ -543,6 +544,9 @@ opponent's rating in the game's time-control category.
 ```
 client → hub:  { type: "queue", pool: "3+0" } | { type: "cancel" }
                { type: "move", move: "e2e4" }  | { type: "resign" }
+               { type: "drawOffer" } | { type: "drawAccept" } | { type: "drawDecline" }
+               { type: "takebackOffer" } | { type: "takebackAccept" } | { type: "takebackDecline" }
+               { type: "chat", text }
                { type: "watch", gameId }       | { type: "unwatch" }   # spectator
 
 hub → client:  hello   { name, anon, rating }
@@ -554,6 +558,9 @@ hub → client:  hello   { name, anon, rating }
                resume  { …matched fields…, moves:[{uci,san}], opponentOnline }
                end     { gameId, result, reason, status, clock }   # reason "aborted" → result null
                opponentGone | opponentBack | error { message }
+               drawOffered { by } | drawDeclined        # players-only; accept → end (reason "agreement")
+               takebackOffered { by } | takebackDeclined  # players-only; accept → state (rolled-back ply)
+               chat { by, name, text }                  # players-only relay (incl. echo to sender)
                watching { gameId, players, fen, clock, moves, lastMove, ply, status }  # spectator snapshot
                watchEnd                                                                 # game gone/over
 ```
@@ -601,6 +608,40 @@ Read-only spectating of live games, separate from the playing socket.
   In-flight fillers always finish naturally; replenishment stops once watchers leave.
   They DO count toward `activeGames`. CLI: `-watch-fillers`, `-watch-target`,
   `-watch-filler-workers`.
+
+### 8.7 Draw offers, takebacks & in-game chat (shipped)
+
+Three human-vs-human niceties on the live game, all mutated on the hub goroutine
+and **private to the two players** (spectators never see them; chat is players-only).
+
+- **Draw offers:** `drawOffer` records a pending offer (`drawBy` color) and relays
+  `drawOffered {by}` to the opponent. `drawAccept` ends the game `1/2-1/2`
+  reason **`agreement`** (normal `end` flow); `drawDecline` (from either side —
+  decline or withdraw) clears it and relays `drawDeclined`. Offering into a
+  standing opposite offer is an accept. **Any committed move auto-declines a
+  pending offer** (Lichess convention) — handled in `game.applyMove`.
+- **Takebacks:** `takebackOffer` → `takebackOffered {by}`; on `takebackAccept` the
+  hub **rolls the game back to the requester's most recent turn** (1–2 plies) by
+  `rebuildTo` — reconstructing the position + repetition history from `startFen`
+  and replaying the kept moves — then broadcasts a normal `state` (the client
+  truncates its move list when `ply` drops). Clocks are left as-is (consensual)
+  with the turn timer restarted. A bot reply is rescheduled if the rolled-back
+  turn is a bot's.
+- **Chat:** `chat {text}` is sanitized (control chars stripped, trimmed, capped at
+  `maxChatLen` 280 runes) and relayed as `chat {by, name, text}` to **both**
+  players (echo to sender included, so one event feeds every bubble). Rendered as
+  React text (auto-escaped).
+- **Vs a fill-in bot (by design):** the bot side has no client, so offers/chat are
+  simply **never answered** — the bot ignores them and keeps playing, and the
+  frontend never learns the opponent is a bot (buttons always show). A pending
+  offer is cleared when the bot's next move lands. On a player **disconnect** any
+  pending offer is dropped so the remaining player isn't stuck.
+
+Frontend: the socket store (`lib/socket.ts`) tracks `messages`, `drawOffer` and
+`takebackOffer` (`'mine' | 'theirs' | null`) and exposes `offerDraw`/`respondDraw`/
+`cancelDraw` (+ takeback equivalents) and `sendChat`. `LiveGame.tsx` renders the
+Draw/Takeback/Resign buttons + incoming-offer banners and a `ChatPanel` (left
+column). Chat is carried across a same-game reconnect; offers reset.
 
 ---
 
@@ -871,8 +912,11 @@ chessgo/
       reply, then validates it against the next legal-move list and either plays it
       (optimistic + sound + submit) or discards it. Live + bot games; pseudo-legal
       premove targets (`premoveTargets` in `src/lib/chess.ts`), auto-queen promotion.
-- [ ] **Polish** — draw offers, **live-game** takebacks (bot takeback shipped),
-      richer eval terms / opening book.
+- [x] **Live-game social** — **draw offers** (accept → draw by agreement),
+      **takebacks** (consensual position rollback to the requester's turn), and
+      **players-only chat** (§8.7). Hub-side, spectator-private; offers vs a
+      fill-in bot go unanswered by design (the client never learns it's a bot).
+- [ ] **Polish** — richer eval terms / opening book; draw-offer rate-limiting.
 
 ---
 

@@ -36,6 +36,16 @@ type game struct {
 	online    [2]bool // per-color connection presence
 	startFen  string
 
+	// Pending draw / takeback offers. At most one of each may be outstanding; the
+	// `*By` color is the side that made the offer. Any committed move clears both
+	// (Lichess-style: a draw offer is declined by the opponent's reply, and a
+	// stale takeback request is dropped once the position changes). Against a bot
+	// opponent (no client) the offer is simply never answered.
+	drawPending     bool
+	drawBy          chess.Color
+	takebackPending bool
+	takebackBy      chess.Color
+
 	// filler is true for an engine-vs-engine "watch" game: it has no human
 	// players, is never rated, and is NOT reported to onFinish (no persistence,
 	// no Elo). It exists only to populate the spectator lobby.
@@ -159,7 +169,40 @@ func (g *game) applyMove(uci string) (string, bool) {
 	g.moves = append(g.moves, uci)
 	g.sans = append(g.sans, san)
 	g.turnStart = now
+	g.clearOffers() // any move declines a pending draw and drops a stale takeback
 	return san, true
+}
+
+// clearOffers drops any outstanding draw/takeback offer.
+func (g *game) clearOffers() {
+	g.drawPending = false
+	g.takebackPending = false
+}
+
+// rebuildTo truncates the game to its first `plies` moves, reconstructing the
+// position and repetition history from startFen by replaying them. Used to apply
+// an agreed takeback. Clocks are intentionally left as-is (takeback is consensual);
+// the turn timer restarts so neither side is charged for the negotiation.
+func (g *game) rebuildTo(plies int) {
+	pos, err := chess.ParseFEN(g.startFen)
+	if err != nil {
+		return
+	}
+	hist := make([]uint64, 0, plies)
+	for i := 0; i < plies; i++ {
+		m, ok := pos.ParseUCIMove(g.moves[i])
+		if !ok {
+			break
+		}
+		hist = append(hist, pos.Key())
+		var u chess.Undo
+		pos.DoMove(m, &u)
+	}
+	g.pos = pos
+	g.history = hist
+	g.moves = g.moves[:plies]
+	g.sans = g.sans[:plies]
+	g.turnStart = time.Now()
 }
 
 // status adjudicates the current position (checkmate/stalemate/draws/ongoing).

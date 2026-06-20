@@ -6,12 +6,14 @@ import (
 )
 
 // inMsg is a message from a client. Type is one of: queue, cancel, move,
-// resign, watch, unwatch.
+// resign, watch, unwatch, drawOffer, drawAccept, drawDecline, takebackOffer,
+// takebackAccept, takebackDecline, chat.
 type inMsg struct {
 	Type   string `json:"type"`
 	Pool   string `json:"pool,omitempty"`   // time control, e.g. "3+0" (queue)
 	Move   string `json:"move,omitempty"`   // UCI (move)
 	GameID string `json:"gameId,omitempty"` // target game (watch)
+	Text   string `json:"text,omitempty"`   // chat message body (chat)
 }
 
 // timeControl is a base time + per-move increment, both in milliseconds.
@@ -57,6 +59,25 @@ func categoryForPool(pool string) string {
 	default:
 		return "classical"
 	}
+}
+
+const maxChatLen = 280 // runes; longer messages are truncated
+
+// sanitizeChat strips control characters and trims/caps a chat message. The
+// frontend renders chat as React text (auto-escaped), so this guards length and
+// stray control bytes rather than HTML.
+func sanitizeChat(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r < 0x20 && r != '\t' {
+			return -1
+		}
+		return r
+	}, s)
+	s = strings.TrimSpace(s)
+	if r := []rune(s); len(r) > maxChatLen {
+		s = string(r[:maxChatLen])
+	}
+	return s
 }
 
 // out builds a server→client message as a JSON-marshalable map.
