@@ -28,6 +28,13 @@ import { useAuth } from '../lib/auth'
 // How long (ms) each auto-played move lingers before the next one.
 const AUTO_DELAY = 700
 
+// Depth schedule for the analysis board's progressive ("streaming") eval. Each
+// entry is a separate /analyze call at that ply depth; we render the result as it
+// lands, so the panel shows an instant shallow guess that refines as it deepens.
+// Coarsening the steps as they get expensive keeps the round-trip count low (the
+// deepest search dominates the cost anyway) while still feeling like it "ticks up".
+const ANALYSIS_DEPTHS = [6, 9, 12, 14, 16, 18, 20, 22]
+
 type AutoMode = 'off' | 'play' | 'best'
 
 // Play the appropriate sound for the move that leads INTO a node.
@@ -115,19 +122,21 @@ export default function Analysis() {
   const over = useMemo(() => gameOverAt(current), [current.fen])
   const legalMoves = useMemo(() => (over.over ? [] : legalUci(current)), [current.fen, over.over])
 
-  // --- Live engine eval + best line for positions we don't fully have yet ---
-  // A node needs an engine call if it's missing EITHER its eval OR its best line
-  // (PV). Mainline nodes from the persisted whole-game analysis carry an eval and
-  // a single best move but NO principal variation, so the engine panel would
-  // otherwise show "analysing…" forever — fetch the line lazily here, exactly as
-  // we do for a freshly-played branch move.
+  // --- Live engine eval + best line: progressive ("streaming") deepening ---
+  // We can't stream over the wire (no SSE behind Cloudflare), so we emulate it by
+  // POLLING /analyze with an increasing depth and rendering each result as it
+  // lands: an instant shallow guess first, then a refining eval/PV until it
+  // settles — the Stockfish/Lichess feel. The engine keeps its transposition
+  // table warm across these stateless calls, so each deeper step is cheap.
+  //
+  // The whole schedule runs inside ONE effect (an async loop with a `cancelled`
+  // guard) so re-renders from our own annotateEval don't restart it — the effect
+  // re-keys only when the VIEWED position changes (current.id/fen).
   useEffect(() => {
     if (!engineOn) return // engine analysis disabled — no fetching
     // While a game is loading, the tree is still the transient empty root; don't
-    // fire /analyze against it — that races buildFromAnalysis (whichever lands last
-    // wins) and would overwrite the persisted, book-backed game analysis with a
-    // one-off live eval. Once loaded, mainline nodes already carry eval + bestPv, so
-    // the guard below skips them and only user-created branch moves get analyzed.
+    // fire /analyze against it — that races buildFromAnalysis (whichever lands
+    // last wins) and would overwrite the persisted, book-backed game analysis.
     if (loading) return
 
     // Terminal positions: derive the eval locally, no engine call (no line to show).
@@ -140,29 +149,53 @@ export default function Analysis() {
       return
     }
 
-    // Already have both an eval and a best line — nothing left to fetch.
-    if (current.evalWhite !== null && current.bestPv != null) return
+    const nodeId = current.id
+    const fen = current.fen
+    const stm = sideToMove
+    // Honor an existing deeper eval (e.g. a persisted review node that already has
+    // a PV) — skip shallower steps so we never DOWNGRADE the displayed depth. A
+    // node missing its PV is treated as depth 0 so we always fetch a line for it.
+    let achieved = current.bestPv != null ? (current.bestDepth ?? 0) : 0
 
     let cancelled = false
-    analyze(current.fen)
-      .then((r) => {
+    const run = async () => {
+      for (const target of ANALYSIS_DEPTHS) {
         if (cancelled) return
-        // Coalesce a null PV to [] so the node reads as "resolved, no line" — a
-        // null would re-trip the guard above and loop the effect forever.
-        if (!r.eval) {
-          setTree((t) => annotateEval(t, current.id, { type: 'cp', white: 0 }, r.bestmove, r.pv ?? [], r.depth))
-          return
+        if (target <= achieved) continue
+
+        let r: Awaited<ReturnType<typeof analyze>>
+        try {
+          r = await analyze(fen, { depth: target })
+        } catch {
+          return // engine error — keep whatever we already have
         }
-        const white = sideToMove === 'w' ? r.eval.value : -r.eval.value
-        setTree((t) => annotateEval(t, current.id, { type: r.eval!.type, white }, r.bestmove, r.pv ?? [], r.depth))
-      })
-      .catch(() => {
-        /* leave eval unknown on engine error */
-      })
+        if (cancelled) return
+
+        const got = r.depth ?? target
+        if (got <= achieved) continue // don't apply a result that wouldn't deepen
+
+        // Coalesce a null PV to [] so the node reads as "resolved, no line".
+        if (!r.eval) {
+          setTree((t) => annotateEval(t, nodeId, { type: 'cp', white: 0 }, r.bestmove, r.pv ?? [], got))
+        } else {
+          const white = stm === 'w' ? r.eval.value : -r.eval.value
+          setTree((t) => annotateEval(t, nodeId, { type: r.eval!.type, white }, r.bestmove, r.pv ?? [], got))
+        }
+        achieved = got
+
+        if (r.eval?.type === 'mate') return // mate found — deeper won't change it
+        if (got < target) return // engine hit its time ceiling — the opinion has settled
+      }
+    }
+    void run()
+
     return () => {
       cancelled = true
     }
-  }, [engineOn, loading, current.id, current.fen, current.evalWhite, current.bestPv, over.over, over.checkmate, sideToMove])
+    // Keyed on the VIEWED position only — current.bestPv/bestDepth are read at
+    // effect start (above) but deliberately NOT deps: our own setTree updates them
+    // each step, and re-running would abort the in-flight call and re-fetch it.
+  }, [engineOn, loading, current.id, current.fen, over.over, over.checkmate, sideToMove])
 
   // --- Navigation (manual navigation always cancels any auto playback) ---
   const goPrev = useCallback(() => {

@@ -11,19 +11,28 @@ use App\Services\GomachineClient;
  * FEN, returns the engine's best move + evaluation at full power, regardless of
  * any game's bot difficulty.
  *
- *   POST /analyze   { fen: "<FEN>", movetime?: <ms> }
+ *   POST /analyze   { fen: "<FEN>", movetime?: <ms>, depth?: <ply> }
  *   → { eval: {type:"cp"|"mate", value}, bestmove, pv: [uci...], depth }
  *
  * `pv` is the principal variation (the engine's predicted best line) as UCI
  * moves from this position, used by the analysis board's engine line. `movetime`
  * (optional, clamped 50..2000ms) lets a caller trade depth for latency — e.g. the
  * engine-vs-engine watch view polls a fast eval every ply; default is full power.
+ *
+ * `depth` (optional, clamped 1..30) searches to a fixed ply depth instead of by
+ * time. The analysis board polls with increasing depths to "stream" a refining
+ * evaluation (instant shallow guess, then deeper). A time ceiling still applies
+ * so a deep request can't hang; when the returned `depth` is less than requested,
+ * the ceiling cut it short — the caller treats that as "settled". `depth` takes
+ * priority over `movetime`.
  */
 class AnalyzeController extends Controller
 {
     public string $fen = '';
 
     public int $movetime = 0;
+
+    public int $depth = 0;
 
     public function __construct(private readonly GomachineClient $engine)
     {
@@ -35,8 +44,13 @@ class AnalyzeController extends Controller
             'fen' => 'required|string',
         ]);
 
-        $movetime = $this->movetime > 0 ? max(50, min(2000, $this->movetime)) : 1500;
-        $res = $this->engine->analyze($this->fen, $movetime);
+        $depth = $this->depth > 0 ? max(1, min(30, $this->depth)) : 0;
+        // With a depth target, movetime is a safety ceiling (deep request can't
+        // hang the pool); without one it's the search budget.
+        $movetime = $this->movetime > 0
+            ? max(50, min(2000, $this->movetime))
+            : ($depth > 0 ? 4000 : 1500);
+        $res = $this->engine->analyze($this->fen, $movetime, $depth);
 
         return JsonResponse::ok([
             'eval' => $res['eval'] ?? null,

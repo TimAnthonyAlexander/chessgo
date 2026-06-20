@@ -160,7 +160,7 @@ export default function EngineVsEngine() {
       return
     }
     let cancelled = false
-    analyze(fen, 300)
+    analyze(fen, { movetime: 300 })
       .then((r) => {
         if (cancelled || !r.eval) return
         const white = sideToMove === 'w' ? r.eval.value : -r.eval.value

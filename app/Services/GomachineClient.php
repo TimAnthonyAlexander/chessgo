@@ -80,13 +80,24 @@ class GomachineClient
      * power for a fixed time budget, so a level-1 bot game still shows an
      * accurate evaluation.
      *
+     * When `$depth > 0`, search to that fixed ply depth instead of by time —
+     * `$movetimeMs` then acts as a safety ceiling so a deep request can't hang
+     * the engine pool (the search stops at whichever bound hits first). The
+     * analysis board polls this with increasing depths to "stream" a refining
+     * evaluation; the engine's warm transposition table makes each step cheap.
+     *
      * @return array<string, mixed> {bestmove, san, eval, pv, depth, nodes}
      */
-    public function analyze(string $fen, int $movetimeMs = 1500): array
+    public function analyze(string $fen, int $movetimeMs = 1500, int $depth = 0): array
     {
+        $limits = ['movetime' => $movetimeMs];
+        if ($depth > 0) {
+            $limits['depth'] = $depth;
+        }
+
         return $this->post('/bestmove', [
             'fen' => $fen,
-            'limits' => ['movetime' => $movetimeMs],
+            'limits' => $limits,
         ]);
     }
 

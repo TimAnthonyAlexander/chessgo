@@ -129,12 +129,22 @@ export interface Analysis {
 }
 
 /** Full-strength evaluation of a position (drives the eval bar, level-independent).
- * `movetime` (ms) trades depth for latency — omit for the full-power default. */
-export function analyze(fen: string, movetime?: number): Promise<Analysis> {
-  return request<Analysis>('/analyze', {
-    method: 'POST',
-    body: JSON.stringify(movetime ? { fen, movetime } : { fen }),
-  })
+ *
+ * Either bound trades depth for latency:
+ *  - `movetime` (ms): search for a fixed budget — omit for the full-power default.
+ *  - `depth`: search to a fixed ply depth (returns near-instantly at low depths,
+ *    with a server-side time ceiling so a deep request can't hang). This is what
+ *    drives the analysis board's progressive "streaming" deepening: call with
+ *    1, 2, 3 … and render each result as it lands. The engine keeps its
+ *    transposition table warm across these stateless calls, so each deeper step
+ *    is cheap. When the returned `depth` is LESS than the requested depth, the
+ *    time ceiling cut the search short — the opinion has settled; stop deepening.
+ */
+export function analyze(fen: string, opts?: { movetime?: number; depth?: number }): Promise<Analysis> {
+  const body: { fen: string; movetime?: number; depth?: number } = { fen }
+  if (opts?.movetime) body.movetime = opts.movetime
+  if (opts?.depth) body.depth = opts.depth
+  return request<Analysis>('/analyze', { method: 'POST', body: JSON.stringify(body) })
 }
 
 // --- Finished live games + post-game analysis (analysis board) ---
