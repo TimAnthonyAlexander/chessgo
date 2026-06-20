@@ -39,6 +39,8 @@ import {
 import { statusLabel } from '../lib/chess'
 import { useBoardInteraction } from '../lib/useBoardInteraction'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
+import { useAuth } from '../lib/auth'
+import AdminBestMove from '../components/AdminBestMove'
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 const other = (c: Color): Color => (c === 'w' ? 'b' : 'w')
@@ -64,6 +66,9 @@ export default function BotGame() {
   const [sound, setSound] = useState(soundEnabled())
   const [analyzedEval, setAnalyzedEval] = useState<WhiteEval | null>(null)
   const [viewIndex, setViewIndex] = useState<number | null>(null) // null = live
+
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
 
   const humanColor: Color = game?.human_color ?? (colorChoice === 'random' ? 'w' : colorChoice)
   const orientation: Color = flipped ? other(humanColor) : humanColor
@@ -347,6 +352,8 @@ export default function BotGame() {
               setGame(null)
               setStartFen(null)
             }}
+            isAdmin={isAdmin}
+            bestFen={boardFen}
           />
         ) : (
           <>
@@ -395,6 +402,8 @@ function MovePanel({
   onUndo,
   onResign,
   onNewGame,
+  isAdmin,
+  bestFen,
 }: {
   game: Game
   rating: number
@@ -415,6 +424,8 @@ function MovePanel({
   onUndo: () => void
   onResign: () => void
   onNewGame: () => void
+  isAdmin: boolean
+  bestFen: string
 }) {
   return (
     <Box
@@ -483,6 +494,8 @@ function MovePanel({
             {sound ? <Volume2 size={19} /> : <VolumeX size={19} />}
           </NavBtn>
         </Box>
+
+        {isAdmin && <AdminBestMove fen={bestFen} />}
 
         <Box sx={{ display: 'flex', gap: 1 }}>
           {ongoing && (

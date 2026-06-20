@@ -13,7 +13,8 @@ import { type Color, gameSocket, type LiveGameState, liveRemaining } from '../li
 import { useGameSocket } from '../lib/useGameSocket'
 import { useBoardInteraction } from '../lib/useBoardInteraction'
 import { playForSan, sounds } from '../lib/sounds'
-import { authStore } from '../lib/auth'
+import { authStore, useAuth } from '../lib/auth'
+import AdminBestMove from '../components/AdminBestMove'
 
 const other = (c: Color): Color => (c === 'w' ? 'b' : 'w')
 
@@ -55,6 +56,8 @@ export default function LiveGame() {
   const navigate = useNavigate()
   const s = useGameSocket()
   const g = s.game
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
 
   const [, force] = useState(0)
 
@@ -268,6 +271,13 @@ export default function LiveGame() {
 
           {/* Moves (fills the panel) */}
           <MoveList fill moves={moveEntries} currentPly={moveEntries.length} onSelectPly={() => {}} />
+
+          {/* Admin-only: engine best move toggle for the current position */}
+          {isAdmin && (
+            <Box sx={{ px: 1.25, py: 0.75, borderTop: '1px solid var(--line-soft)', bgcolor: 'var(--bg-2)' }}>
+              <AdminBestMove fen={g.fen} />
+            </Box>
+          )}
 
           {/* Draw / takeback / resign while playing, or the result when over */}
           {!g.ended ? (
