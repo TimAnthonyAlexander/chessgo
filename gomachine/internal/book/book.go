@@ -1,18 +1,20 @@
 // Package book is a compiled, versioned, read-only opening book: a sorted array
-// of precomputed (Zobrist -> eval/best-move/depth) records, loaded fully into RAM
-// and binary-searched. It's the ".po -> .mo" artifact — built offline by
-// `gomachine compile-book`, shipped as a sidecar file, consulted by the engine to
-// skip re-searching known positions (the start position above all).
+// of precomputed (Zobrist -> eval / principal-variation / depth) records, loaded
+// fully into RAM and binary-searched. It's the ".po -> .mo" artifact — built
+// offline by `gomachine compile-book`, shipped as a sidecar file, consulted by the
+// engine to skip re-searching known positions (the start position above all).
 //
 // File layout (little-endian):
 //
 //	header (24 bytes): magic "GMBK" | formatVer u32 | engineVer u32 | count u32 | crc32 u32 | pad u32
-//	records (24 bytes each, sorted ascending by Key):
-//	    Key u64 | Score i32 | Mate i16 | Depth i16 | Move [8]byte (UCI, null-padded)
+//	records (112 bytes each, sorted ascending by Key):
+//	    Key u64 | Score i32 | Mate i16 | Depth i16 | PV [96]byte (space-joined UCI, null-padded)
 //
 // Score/Mate are SIDE-TO-MOVE relative (exactly what engine.SearchDirect returns),
-// so a hit can be returned verbatim. The full 64-bit key is stored, so a hit is
-// verified by exact compare — no Zobrist-collision risk — and any returned move is
+// so a hit reproduces /analyze's {eval, bestmove=PV[0], pv=PV, depth} verbatim. The
+// full PV is stored (not just the best move) so the engine line shows a complete
+// line independent of how deep the book reaches. The full 64-bit key is stored, so
+// a hit is verified by exact compare — no Zobrist-collision risk — and the move is
 // still re-validated against movegen by the caller before use.
 package book
 
@@ -22,6 +24,7 @@ import (
 	"hash/crc32"
 	"os"
 	"sort"
+	"strings"
 )
 
 // EngineVersion tags the eval/search generation a book was computed with. BUMP IT
@@ -30,20 +33,21 @@ import (
 const EngineVersion = 1
 
 const (
-	magic       = "GMBK"
-	formatVer   = 1
-	headerSize  = 24
-	recordSize  = 24
-	moveFieldSz = 8
+	magic      = "GMBK"
+	formatVer  = 2 // 2: stores the full PV (1 stored only the best move)
+	headerSize = 24
+	pvFieldSz  = 96 // space-joined UCI; holds ~16 plies
+	recordSize = 8 + 4 + 2 + 2 + pvFieldSz
 )
 
-// Entry is one precomputed position. Move is UCI ("e2e4", "" if none).
+// Entry is one precomputed position. PV is the principal variation as UCI moves
+// (PV[0] is the best move); empty PV means "no entry".
 type Entry struct {
 	Key   uint64
 	Score int
 	Mate  int
 	Depth int
-	Move  string
+	PV    []string
 }
 
 // Book is a loaded, sorted, read-only set of entries.
@@ -83,7 +87,7 @@ func Write(path string, entries []Entry) error {
 		binary.LittleEndian.PutUint32(body[off+8:], uint32(int32(e.Score)))
 		binary.LittleEndian.PutUint16(body[off+12:], uint16(int16(e.Mate)))
 		binary.LittleEndian.PutUint16(body[off+14:], uint16(int16(e.Depth)))
-		copyMove(body[off+16:off+16+moveFieldSz], e.Move)
+		putPV(body[off+16:off+16+pvFieldSz], e.PV)
 	}
 
 	hdr := make([]byte, headerSize)
@@ -131,23 +135,36 @@ func Load(path string) (*Book, error) {
 			Score: int(int32(binary.LittleEndian.Uint32(body[off+8:]))),
 			Mate:  int(int16(binary.LittleEndian.Uint16(body[off+12:]))),
 			Depth: int(int16(binary.LittleEndian.Uint16(body[off+14:]))),
-			Move:  readMove(body[off+16 : off+16+moveFieldSz]),
+			PV:    getPV(body[off+16 : off+16+pvFieldSz]),
 		}
 	}
 	return &Book{entries: entries}, nil
 }
 
-func copyMove(dst []byte, uci string) {
+// putPV writes UCI moves space-joined into dst, keeping whole moves within the cap.
+func putPV(dst []byte, pv []string) {
 	for i := range dst {
 		dst[i] = 0
 	}
-	copy(dst, uci)
+	s := strings.Join(pv, " ")
+	if len(s) > len(dst) {
+		// Truncate at the last space that fits, so we never store a partial move.
+		s = s[:len(dst)]
+		if i := strings.LastIndexByte(s, ' '); i >= 0 {
+			s = s[:i]
+		}
+	}
+	copy(dst, s)
 }
 
-func readMove(b []byte) string {
+// getPV decodes the space-joined, null-padded UCI field back into moves.
+func getPV(b []byte) []string {
 	n := 0
 	for n < len(b) && b[n] != 0 {
 		n++
 	}
-	return string(b[:n])
+	if n == 0 {
+		return nil
+	}
+	return strings.Fields(string(b[:n]))
 }

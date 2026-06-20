@@ -34,47 +34,14 @@ func (s *Server) bookHit(pos *chess.Position) (book.Entry, chess.Move, bool) {
 		return book.Entry{}, chess.NullMove, false
 	}
 	e, ok := s.book.Lookup(pos.Key())
-	if !ok {
+	if !ok || len(e.PV) == 0 {
 		return book.Entry{}, chess.NullMove, false
 	}
-	m, legal := pos.ParseUCIMove(e.Move)
+	m, legal := pos.ParseUCIMove(e.PV[0])
 	if !legal {
 		return book.Entry{}, chess.NullMove, false
 	}
 	return e, m, true
-}
-
-// bookLine reconstructs a principal variation from the book by chaining best moves:
-// play the book move, look up the resulting position, repeat — until a position
-// isn't in the book or the cap is hit. The book stores only one move per position,
-// but opening positions form a connected tree, so this rebuilds the full line for
-// free (all in-RAM). Returns UCI moves, first = the book move for `fen`.
-func (s *Server) bookLine(fen string, maxLen int) []string {
-	pos, err := chess.ParseFEN(fen)
-	if err != nil {
-		return nil
-	}
-	pv := make([]string, 0, maxLen)
-	seen := make(map[uint64]bool, maxLen)
-	for len(pv) < maxLen {
-		key := pos.Key()
-		if seen[key] { // repetition guard
-			break
-		}
-		seen[key] = true
-		e, ok := s.book.Lookup(key)
-		if !ok {
-			break
-		}
-		m, legal := pos.ParseUCIMove(e.Move)
-		if !legal {
-			break
-		}
-		pv = append(pv, m.String())
-		var u chess.Undo
-		pos.DoMove(m, &u)
-	}
-	return pv
 }
 
 // New builds a Server with `workers` engines of ttSizeMB megabytes each, every
@@ -290,7 +257,7 @@ func (s *Server) handleBestMove(w http.ResponseWriter, r *http.Request) {
 				"bestmove": m.String(),
 				"san":      pos.SAN(m),
 				"eval":     bookEval(e),
-				"pv":       s.bookLine(req.FEN, 24),
+				"pv":       e.PV,
 				"depth":    e.Depth,
 				"nodes":    0,
 				"nps":      0,

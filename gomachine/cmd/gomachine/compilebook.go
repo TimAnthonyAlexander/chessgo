@@ -79,10 +79,19 @@ func cmdCompileBook(args []string) {
 				}
 				res := eng.SearchDirect(pos, 0, budget, nil)
 				if res.Move != chess.NullMove {
+					// Store the full principal variation (PV[0] = best move). Guard
+					// against an empty/mismatched PV so PV[0] is always the bestmove.
+					pv := make([]string, 0, len(res.PV))
+					for _, m := range res.PV {
+						pv = append(pv, m.String())
+					}
+					if len(pv) == 0 || pv[0] != res.Move.String() {
+						pv = append([]string{res.Move.String()}, pv...)
+					}
 					mu.Lock()
 					entries = append(entries, book.Entry{
 						Key: j.key, Score: res.Score, Mate: res.MateIn,
-						Depth: res.Depth, Move: res.Move.String(),
+						Depth: res.Depth, PV: pv,
 					})
 					mu.Unlock()
 				}
