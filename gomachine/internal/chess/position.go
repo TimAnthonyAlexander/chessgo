@@ -91,6 +91,20 @@ func (pos *Position) Key() uint64 { return pos.key }
 // HalfmoveClock returns plies since the last capture or pawn move.
 func (pos *Position) HalfmoveClock() uint16 { return pos.halfmove }
 
+// HasCastlingRights reports whether either side retains any castling right.
+// Syzygy tablebases assume no castling, so the prober skips such positions.
+func (pos *Position) HasCastlingRights() bool { return pos.castling != 0 }
+
+// EnPassantSquare returns the en-passant target square, or SqNone when there is
+// none or it is not actually capturable (FIDE 9.2.3 normalization — the same
+// "real ep" test used for hashing). Tablebase probing wants only a real ep target.
+func (pos *Position) EnPassantSquare() Square {
+	if pos.epIsReal() {
+		return pos.epSquare
+	}
+	return SqNone
+}
+
 // PieceOn returns the piece on a square (NoPiece if empty).
 func (pos *Position) PieceOn(s Square) Piece { return pos.board[s] }
 

@@ -29,6 +29,8 @@ type Params struct {
 	KingSafety     bool // evaluation: king pawn-shield term
 	BishopPair     bool // evaluation: bishop-pair bonus
 	TunedEval      bool // evaluation: use the Texel-tuned PSQT + tuned weights
+	UseBook        bool // consult the precomputed opening book before searching (engine must have a book set)
+	UseTablebase   bool // probe Syzygy endgame tablebases at the root (engine must have a tablebase set)
 }
 
 // DefaultParams returns the engine's current full-strength configuration.

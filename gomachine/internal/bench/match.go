@@ -5,9 +5,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/timanthonyalexander/gomachine/internal/book"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 	"github.com/timanthonyalexander/gomachine/internal/engine"
 	"github.com/timanthonyalexander/gomachine/internal/search"
+	"github.com/timanthonyalexander/gomachine/internal/syzygy"
 )
 
 // maxPlies caps a game so a pathological version can never hang the run (the
@@ -41,6 +43,16 @@ type Config struct {
 	Concurrency int     // parallel game-pair workers
 	MaxPairs    int     // hard cap on pairs before giving up
 	Book        []Opening
+
+	// EngineBook is the precomputed opening book attached to BOTH engines; whether
+	// a side consults it is governed solely by its Params.UseBook flag, so it's a
+	// clean controlled A/B (--new "book=on" vs --old "book=off"). nil → no book.
+	EngineBook *book.Book
+
+	// Tablebase is the Syzygy endgame tablebase attached to BOTH engines; whether a
+	// side probes it is governed solely by its Params.UseTablebase flag, so it's a
+	// clean controlled A/B (--new "tb=on" vs --old "tb=off"). nil → no tablebase.
+	Tablebase *syzygy.Tablebase
 
 	NewThreads int // Lazy SMP threads for the patch engine (default 1)
 	OldThreads int // Lazy SMP threads for the baseline engine (default 1)
@@ -200,6 +212,10 @@ func RunSPRT(ctx context.Context, cfg Config, onProgress func(Progress)) Summary
 			defer wg.Done()
 			newP := player{engine.NewWithParams(cfg.TTMB, cfg.NewParams), maxThreads(cfg.NewThreads), newLim, cfg.NewLevel}
 			oldP := player{engine.NewWithParams(cfg.TTMB, cfg.OldParams), maxThreads(cfg.OldThreads), oldLim, cfg.OldLevel}
+			newP.eng.SetBook(cfg.EngineBook)
+			oldP.eng.SetBook(cfg.EngineBook)
+			newP.eng.SetTablebase(cfg.Tablebase)
+			oldP.eng.SetTablebase(cfg.Tablebase)
 			for open := range jobs {
 				r1 := playGame(ctx, newP, oldP, open.FEN)
 				r2 := playGame(ctx, oldP, newP, open.FEN)

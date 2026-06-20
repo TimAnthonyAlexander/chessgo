@@ -9,8 +9,10 @@ import (
 	"sort"
 	"time"
 
+	"github.com/timanthonyalexander/gomachine/internal/book"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 	"github.com/timanthonyalexander/gomachine/internal/search"
+	"github.com/timanthonyalexander/gomachine/internal/syzygy"
 )
 
 // Engine wraps a Searcher (which owns the transposition table). It is safe to
@@ -25,7 +27,27 @@ import (
 type Engine struct {
 	searcher *search.Searcher
 	threads  int
+
+	// book, when set AND useBook is true, is consulted before every full-strength
+	// search (PlayThreads / SearchDirect). A hit returns the book's precomputed
+	// (3s-deep) move for ~zero cost — strictly deeper than the real-time search
+	// would reach in the opening. useBook mirrors search.Params.UseBook captured at
+	// construction, so the SPRT harness can A/B it as a normal param flag.
+	book    *book.Book
+	useBook bool
+
+	// tb, when set AND useTablebase is true, is probed before every full-strength
+	// search (PlayThreads / SearchDirect) for ≤MaxPieces endgames. A hit returns a
+	// provably-optimal DTZ move for ~zero cost. useTablebase mirrors
+	// search.Params.UseTablebase captured at construction, so the SPRT harness can
+	// A/B it as a normal param flag (see internal/engine/tablebase.go).
+	tb           *syzygy.Tablebase
+	useTablebase bool
 }
+
+// SetBook attaches a precomputed opening book. It's consulted only when the
+// engine's params have UseBook set (otherwise it's inert). Pass nil to detach.
+func (e *Engine) SetBook(b *book.Book) { e.book = b }
 
 // New creates a full-strength, single-threaded Engine with a transposition table
 // of ttSizeMB megabytes.
@@ -49,7 +71,30 @@ func NewWithThreads(ttSizeMB, threads int) *Engine {
 // self-play harness uses this to instantiate the "old" and "new" engines from
 // one binary (see internal/bench).
 func NewWithParams(ttSizeMB int, params search.Params) *Engine {
-	return &Engine{searcher: search.NewWithParams(ttSizeMB, params), threads: 1}
+	return &Engine{searcher: search.NewWithParams(ttSizeMB, params), threads: 1, useBook: params.UseBook, useTablebase: params.UseTablebase}
+}
+
+// bookMove returns the opening book's precomputed best move for pos, if the book
+// is enabled (UseBook) and holds an exact, still-legal entry. The stored move was
+// searched offline at a far larger budget than any real-time control, so a hit is
+// a strict upgrade over searching the opening live. Nodes=0 marks the hit; the
+// score/mate/depth are the book's (side-to-move-relative, as SearchDirect returns).
+func (e *Engine) bookMove(pos *chess.Position) (BestResult, bool) {
+	if !e.useBook || e.book == nil {
+		return BestResult{}, false
+	}
+	ent, ok := e.book.Lookup(pos.Key())
+	if !ok || len(ent.PV) == 0 {
+		return BestResult{}, false
+	}
+	m, legal := pos.ParseUCIMove(ent.PV[0])
+	if !legal {
+		return BestResult{}, false
+	}
+	return BestResult{
+		Move: m, Score: ent.Score, Depth: ent.Depth, MateIn: ent.Mate,
+		Nodes: 0, PV: []chess.Move{m}, Level: -1,
+	}, true
 }
 
 // NewGame clears the transposition table so a prior game can't bias the next.
@@ -66,6 +111,12 @@ func (e *Engine) Play(pos *chess.Position, limits search.Limits, history []uint6
 // (threads<=1 is single-threaded). More threads → deeper search at a fixed time
 // budget; use with a MoveTime limit (fixed Nodes does not parallelize meaningfully).
 func (e *Engine) PlayThreads(pos *chess.Position, limits search.Limits, history []uint64, threads int) BestResult {
+	if r, ok := e.tablebaseMove(pos); ok {
+		return r
+	}
+	if r, ok := e.bookMove(pos); ok {
+		return r
+	}
 	r := e.searcher.SearchParallel(pos, limits, history, threads)
 	return BestResult{
 		Move: r.BestMove, Score: r.Score, Depth: r.Depth,
@@ -191,6 +242,12 @@ func (e *Engine) pickWeakened(roots []search.RootMove, cfg LevelConfig, rankDept
 // SearchDirect runs a full-strength search to an explicit depth and/or time
 // budget (depth<=0 means unbounded depth, relying on the time budget).
 func (e *Engine) SearchDirect(pos *chess.Position, depth int, movetime time.Duration, history []uint64) BestResult {
+	if r, ok := e.tablebaseMove(pos); ok {
+		return r
+	}
+	if r, ok := e.bookMove(pos); ok {
+		return r
+	}
 	r := e.searcher.SearchParallel(pos, search.Limits{Depth: depth, MoveTime: movetime}, history, e.threads)
 	return BestResult{
 		Move: r.BestMove, Score: r.Score, Depth: r.Depth,

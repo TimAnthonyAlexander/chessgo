@@ -7,9 +7,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/timanthonyalexander/gomachine/internal/book"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 	"github.com/timanthonyalexander/gomachine/internal/engine"
 	"github.com/timanthonyalexander/gomachine/internal/search"
+	"github.com/timanthonyalexander/gomachine/internal/syzygy"
 )
 
 // GauntletConfig specifies a match of our engine vs an external UCI engine
@@ -30,6 +32,17 @@ type GauntletConfig struct {
 	Games       int // total games (rounded up to whole color-swapped pairs)
 	Concurrency int
 	Book        []Opening
+
+	// EngineBook is the precomputed opening book attached to our engine; consulted
+	// only when OurParams.UseBook is set. nil → no book.
+	EngineBook *book.Book
+
+	// Tablebase is the Syzygy endgame tablebase attached to our engine; probed only
+	// when OurParams.UseTablebase is set. nil → no tablebase. NOTE: Stockfish is run
+	// WITHOUT a SyzygyPath, so a +Elo reading here overstates real-world strength
+	// (an opponent with its own tablebases wouldn't give up these endings) — the
+	// self-play SPRT (tb=on vs tb=off) is the honest gate; this is a rough anchor.
+	Tablebase *syzygy.Tablebase
 }
 
 func (c *GauntletConfig) ourLimits() search.Limits {
@@ -80,6 +93,8 @@ func RunGauntlet(ctx context.Context, cfg GauntletConfig, onProgress func(Gauntl
 		go func() {
 			defer wg.Done()
 			ours := engine.NewWithParams(cfg.TTMB, cfg.OurParams)
+			ours.SetBook(cfg.EngineBook)
+			ours.SetTablebase(cfg.Tablebase)
 			sf, err := StartUCI(cfg.SFPath, cfg.SFOptions)
 			if err != nil {
 				select {

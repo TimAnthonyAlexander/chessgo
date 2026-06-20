@@ -11,10 +11,51 @@ import (
 	"time"
 
 	"github.com/timanthonyalexander/gomachine/internal/bench"
+	"github.com/timanthonyalexander/gomachine/internal/book"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 	"github.com/timanthonyalexander/gomachine/internal/engine"
 	"github.com/timanthonyalexander/gomachine/internal/search"
+	"github.com/timanthonyalexander/gomachine/internal/syzygy"
 )
+
+// loadEngineBook loads the precomputed opening book for the bench engines. An
+// empty path means "no book". A missing/corrupt/version-mismatched file is a
+// warning, not a fatal error — the run continues book-less (so `book=on` is then
+// inert). On success it prints the entry count so it's visible the book is live.
+func loadEngineBook(path string) *book.Book {
+	if path == "" {
+		return nil
+	}
+	b, err := book.Load(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "engine book %q: %v (continuing without it)\n", path, err)
+		return nil
+	}
+	if b == nil {
+		fmt.Fprintf(os.Stderr, "engine book %q: ignored (format/version mismatch) — continuing without it\n", path)
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "engine book: %d positions loaded from %s\n", b.Len(), path)
+	return b
+}
+
+// loadTablebase opens a Syzygy tablebase directory for the bench engines. An
+// empty path means "no tablebase". A failure to open (missing dir, no files, or a
+// cgo-less build) is a warning, not fatal — the run continues tablebase-less (so
+// `tb=on` is then inert). On success it prints the max piece count so it's visible
+// the tablebase is live.
+func loadTablebase(path string) *syzygy.Tablebase {
+	if path == "" {
+		return nil
+	}
+	tb, err := syzygy.Open(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tablebase %q: %v (continuing without it)\n", path, err)
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "tablebase: up to %d-piece Syzygy loaded from %s\n", tb.MaxPieces(), path)
+	return tb
+}
 
 // cmdBench dispatches `gomachine bench <subcommand>`.
 func cmdBench(args []string) {
@@ -79,6 +120,8 @@ func cmdBenchSPRT(args []string) {
 	conc := fs.Int("concurrency", runtime.NumCPU(), "parallel game-pair workers")
 	maxPairs := fs.Int("maxpairs", 40000, "hard cap on game pairs")
 	bookPath := fs.String("book", "", "opening book (.epd/.fen or UCI move-lines); default: embedded")
+	engBookPath := fs.String("engine-book", "data/book.bin", "precomputed engine opening book consulted when a side has book=on (\"\" disables)")
+	tbPath := fs.String("tb-path", "", "Syzygy tablebase directory, probed when a side has tb=on (\"\" disables)")
 	newThreads := fs.Int("new-threads", 1, "Lazy SMP threads for --new (use with --movetime)")
 	oldThreads := fs.Int("old-threads", 1, "Lazy SMP threads for --old")
 	newMovetime := fs.Int("new-movetime", 0, "ms/move for --new only (asymmetric TC; 0 → shared --movetime). Needs --nodes 0")
@@ -124,6 +167,8 @@ func cmdBenchSPRT(args []string) {
 		Concurrency: *conc,
 		MaxPairs:    *maxPairs,
 		Book:        book,
+		EngineBook:  loadEngineBook(*engBookPath),
+		Tablebase:   loadTablebase(*tbPath),
 		NewThreads:  *newThreads,
 		OldThreads:  *oldThreads,
 		NewLevel:    -1, // full strength (SPRT tests search.Params, not levels)
@@ -157,6 +202,8 @@ func cmdBenchStockfish(args []string) {
 	games := fs.Int("games", 60, "number of games (rounded to color-swapped pairs)")
 	conc := fs.Int("concurrency", 4, "parallel games (each spawns its own Stockfish)")
 	bookPath := fs.String("book", "", "opening book (.epd/.fen or UCI move-lines); default: embedded")
+	engBookPath := fs.String("engine-book", "data/book.bin", "precomputed engine opening book consulted when --new has book=on (\"\" disables)")
+	tbPath := fs.String("tb-path", "", "Syzygy tablebase directory, probed when --new has tb=on (\"\" disables)")
 	_ = fs.Parse(args)
 
 	ourParams, err := bench.ParseParams(search.DefaultParams(), *ourSpec)
@@ -205,6 +252,8 @@ func cmdBenchStockfish(args []string) {
 		Games:       *games,
 		Concurrency: *conc,
 		Book:        book,
+		EngineBook:  loadEngineBook(*engBookPath),
+		Tablebase:   loadTablebase(*tbPath),
 	}
 
 	reporter := bench.NewGauntletReporter(anchorElo, sfDesc, ourDesc, budget)

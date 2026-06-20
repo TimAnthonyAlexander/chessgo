@@ -154,6 +154,22 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 			}
 			base.TunedEval = b
 			base.Mobility, base.Pawns, base.KingSafety, base.BishopPair = b, b, b, b
+		case "book", "usebook":
+			// consult the precomputed opening book before searching (the engine
+			// must have a book loaded via --engine-book, else this is inert).
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.UseBook = b
+		case "tb", "tablebase", "usetablebase":
+			// probe Syzygy endgame tablebases at the root (the engine must have a
+			// tablebase loaded via --tb-path, else this is inert).
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.UseTablebase = b
 		default:
 			return base, fmt.Errorf("unknown param %q", key)
 		}
@@ -228,6 +244,12 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.TunedEval != patch.TunedEval {
 		diffs = append(diffs, fmt.Sprintf("tuned: %s→%s", onoff(base.TunedEval), onoff(patch.TunedEval)))
+	}
+	if base.UseBook != patch.UseBook {
+		diffs = append(diffs, fmt.Sprintf("book: %s→%s", onoff(base.UseBook), onoff(patch.UseBook)))
+	}
+	if base.UseTablebase != patch.UseTablebase {
+		diffs = append(diffs, fmt.Sprintf("tb: %s→%s", onoff(base.UseTablebase), onoff(patch.UseTablebase)))
 	}
 	if len(diffs) == 0 {
 		return "(identical — sanity/noise run)"
