@@ -3,7 +3,6 @@ package engine
 import (
 	"os"
 	"testing"
-	"time"
 
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 	"github.com/timanthonyalexander/gomachine/internal/search"
@@ -135,13 +134,12 @@ func TestTablebaseRootScores(t *testing.T) {
 // tablebase the winning side plays provably-optimal DTZ moves on every ply its
 // root probe resolves, so the win is converted to mate within the 50-move rule.
 //
-// Both sides are driven by the engine's normal SearchDirect (tablebase first,
-// search fallback). It is given a time budget — never the unbounded
-// depth=0/movetime=0 form, which would spin forever on a probe miss. We assert the
-// OUTCOME (checkmate) plus that the tablebase actually fired (at least one ply was
-// a TB hit, Nodes==0); requiring a hit on every single ply is wrong, since
-// Fathom's DTZ root probe legitimately returns FAILED for some positions (it needs
-// the opposite side's table perspective), and the engine then searches instead.
+// Both sides are driven by the engine (tablebase first, then a fixed-NODES search
+// fallback — deterministic and fast). We assert the OUTCOME (checkmate) plus that
+// the tablebase actually fired (at least one ply was a TB hit, Nodes==0);
+// requiring a hit on every single ply is wrong, since Fathom's DTZ root probe
+// legitimately returns FAILED for some positions (it needs the opposite side's
+// table perspective), and the engine then searches instead.
 func TestTablebaseMatesKBNvK(t *testing.T) {
 	e := tbEngine(t)
 	if e.tb.MaxPieces() < 4 {
@@ -167,9 +165,12 @@ func TestTablebaseMatesKBNvK(t *testing.T) {
 		if st.State != "ongoing" {
 			t.Fatalf("ply %d: game ended %q (%s), expected progress toward mate", ply, st.State, st.Result)
 		}
-		// Bounded budget so a probe miss falls back to a real search, never the
-		// unbounded depth=0/movetime=0 spin.
-		r := e.SearchDirect(pos, 0, 300*time.Millisecond, history)
+		// Fixed-NODES fallback so a probe miss is resolved by a DETERMINISTIC search
+		// (threads=1 + fixed nodes is byte-identical regardless of CPU load) — never
+		// the unbounded depth=0/movetime=0 spin, nor a movetime budget that could be
+		// starved under contention (which made this test flaky), nor a deep fixed
+		// depth that is far too slow in a piece-sparse endgame.
+		r := e.Play(pos, search.Limits{Nodes: 200000}, history)
 		if r.Nodes == 0 {
 			tbHits++ // Nodes==0 marks a tablebase hit
 		}

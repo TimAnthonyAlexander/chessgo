@@ -80,5 +80,11 @@ func DefaultParams() Params {
 		KingSafety: true,
 		BishopPair: true,
 		TunedEval:  true,
+		// Syzygy endgame tablebase probing at the search root. SPRT-accepted vs
+		// tb=off: +18.8 ± 11.1 Elo @ 100ms/move (2026-06-20, 5-piece set, 109 pairs,
+		// 0 lost pairs); Stockfish anchor held ≈2782 with it on. Inert unless the
+		// engine has a tablebase attached (Engine.SetTablebase) — so the prod
+		// serve/hub paths stay no-ops until --tb-path is plumbed in + files shipped.
+		UseTablebase: true,
 	}
 }
