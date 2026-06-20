@@ -132,6 +132,10 @@ type Searcher struct {
 	useTime  bool
 	nodeCap  uint64
 	keyStack []uint64
+	// rootIdx is the keyStack index of the search root. Indices below it are
+	// pre-root game history; the root and all searched positions sit at/above it.
+	// isRepetition uses this to apply the standard asymmetric repetition rule.
+	rootIdx int
 
 	rootBest  chess.Move
 	rootScore int
@@ -200,6 +204,9 @@ func (s *Searcher) reset(limits Limits, gameHistory []uint64) {
 	}
 	s.nodeCap = limits.Nodes
 	s.keyStack = append(s.keyStack[:0], gameHistory...)
+	// The root key is pushed (by runID) right after reset, so it lands at the
+	// current length — i.e. just past the pre-root game-history keys.
+	s.rootIdx = len(s.keyStack)
 	s.rootBest = chess.NullMove
 	s.rootScore = 0
 }
@@ -219,8 +226,24 @@ func (s *Searcher) checkStop() {
 	}
 }
 
-// isRepetition reports whether the current position (top of keyStack) has
-// occurred earlier within the halfmove window.
+// isRepetition reports whether the current position (top of keyStack) should be
+// scored as a draw by repetition. It applies the standard ASYMMETRIC rule used
+// by Stockfish, Zarkov, et al. (see the Chess Programming Wiki, "Repetitions"):
+//
+//   - A repetition strictly AFTER the root — a cycle inside the search tree — is
+//     a draw on the FIRST occurrence (two-fold). The side to move chose to walk
+//     into it and could force it again, so it's a practical forced draw; this is
+//     also what lets the search recognize perpetual checks and fortresses.
+//   - A repetition reaching into the pre-root GAME HISTORY (at or below rootIdx)
+//     only counts as a draw at a genuine THREEFOLD (the position seen twice
+//     before). The opponent need not cooperate to reach the third occurrence —
+//     so a mere two-fold against the real game is NOT a draw. Treating it as one
+//     was a bug: it let a side getting mated "escape" into an illusory draw the
+//     instant a position recurred in the game (e.g. a king shuffle), masking a
+//     forced mate during full-game analysis.
+//
+// Only same-side-to-move positions can match (scan every 2 plies), bounded by
+// the halfmove clock (the irreversible-move window).
 func (s *Searcher) isRepetition(pos *chess.Position) bool {
 	key := pos.Key()
 	last := len(s.keyStack) - 1
@@ -228,8 +251,17 @@ func (s *Searcher) isRepetition(pos *chess.Position) bool {
 	if start < 0 {
 		start = 0
 	}
+	count := 0
 	for i := last - 2; i >= start; i -= 2 {
-		if s.keyStack[i] == key {
+		if s.keyStack[i] != key {
+			continue
+		}
+		if i > s.rootIdx {
+			return true // cycle inside the search tree: two-fold is a draw
+		}
+		// Match at/below the root → pre-root game history: require threefold.
+		count++
+		if count >= 2 {
 			return true
 		}
 	}
