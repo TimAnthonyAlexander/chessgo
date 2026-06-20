@@ -123,6 +123,12 @@ export default function Analysis() {
   // we do for a freshly-played branch move.
   useEffect(() => {
     if (!engineOn) return // engine analysis disabled — no fetching
+    // While a game is loading, the tree is still the transient empty root; don't
+    // fire /analyze against it — that races buildFromAnalysis (whichever lands last
+    // wins) and would overwrite the persisted, book-backed game analysis with a
+    // one-off live eval. Once loaded, mainline nodes already carry eval + bestPv, so
+    // the guard below skips them and only user-created branch moves get analyzed.
+    if (loading) return
 
     // Terminal positions: derive the eval locally, no engine call (no line to show).
     if (over.over) {
@@ -156,7 +162,7 @@ export default function Analysis() {
     return () => {
       cancelled = true
     }
-  }, [engineOn, current.id, current.fen, current.evalWhite, current.bestPv, over.over, over.checkmate, sideToMove])
+  }, [engineOn, loading, current.id, current.fen, current.evalWhite, current.bestPv, over.over, over.checkmate, sideToMove])
 
   // --- Navigation (manual navigation always cancels any auto playback) ---
   const goPrev = useCallback(() => {
