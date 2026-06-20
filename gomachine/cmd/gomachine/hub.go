@@ -89,12 +89,26 @@ func cmdHub(args []string) {
 	// goroutine via the hub's channel, so this can run concurrently and late.
 	if *watchFillers {
 		go func() {
-			fens := fetchFillerFENs(baseURL, secret, *watchFenTheme, 200)
-			h.SetFillerFENs(fens)
-			if len(fens) > 0 {
-				fmt.Printf("watch fillers: seeded %d midgame FENs (theme=%q) from BaseAPI\n", len(fens), *watchFenTheme)
-			} else {
-				fmt.Println("watch fillers: no midgame FENs fetched; fillers start from the opening")
+			// One-shot at startup, but with retry/backoff: on a deploy the hub can
+			// boot before BaseAPI/PHP-FPM is reachable. A single failed fetch would
+			// otherwise leave fillers on the opening for the whole process lifetime
+			// (the "all starting positions" symptom). Keep trying for a few minutes.
+			backoff := 2 * time.Second
+			for attempt := 1; ; attempt++ {
+				fens := fetchFillerFENs(baseURL, secret, *watchFenTheme, 200)
+				if len(fens) > 0 {
+					h.SetFillerFENs(fens)
+					fmt.Printf("watch fillers: seeded %d midgame FENs (theme=%q) from BaseAPI (attempt %d)\n", len(fens), *watchFenTheme, attempt)
+					return
+				}
+				if attempt >= 10 {
+					fmt.Println("watch fillers: no midgame FENs after 10 attempts; fillers start from the opening")
+					return
+				}
+				time.Sleep(backoff)
+				if backoff < 30*time.Second {
+					backoff *= 2
+				}
 			}
 		}()
 	}
