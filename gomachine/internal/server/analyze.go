@@ -105,16 +105,31 @@ func (s *Server) analyzePosition(fen string, history []string, movetimeMs int) m
 	if pos.SideToMove() == chess.Black {
 		stm = "b"
 	}
-	hist := historyKeys(history)
-
-	eng := s.acquire()
-	res := eng.SearchDirect(pos, 0, time.Duration(movetimeMs)*time.Millisecond, hist)
-	s.release(eng)
 
 	out := map[string]any{
 		"fen":        fen,
 		"sideToMove": stm,
 	}
+
+	// Opening book: serve a precomputed result instantly (start position etc.),
+	// movegen-validated so a stale/wrong record can't inject an illegal move.
+	if e, m, hit := s.bookHit(pos); hit {
+		out["eval"] = bookEval(e)
+		out["bestmove"] = m.String()
+		out["bestSan"] = pos.SAN(m)
+		out["pv"] = []string{m.String()}
+		out["depth"] = e.Depth
+		out["terminal"] = false
+		out["checkmate"] = false
+		out["stalemate"] = false
+		return out
+	}
+
+	hist := historyKeys(history)
+
+	eng := s.acquire()
+	res := eng.SearchDirect(pos, 0, time.Duration(movetimeMs)*time.Millisecond, hist)
+	s.release(eng)
 
 	// No legal move ⇒ the game is over at this position (checkmate or stalemate).
 	if res.Move == chess.NullMove {

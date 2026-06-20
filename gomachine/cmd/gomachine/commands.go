@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/timanthonyalexander/gomachine/internal/book"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 	"github.com/timanthonyalexander/gomachine/internal/engine"
 	"github.com/timanthonyalexander/gomachine/internal/server"
@@ -24,10 +25,23 @@ func cmdServe(args []string) {
 	workers := fs.Int("workers", 4, "number of engine workers (bounds concurrent searches)")
 	searchThreads := fs.Int("search-threads", 1, "Lazy SMP threads per full-strength search (helps only time-bounded searches; keep workers*search-threads <= cores)")
 	pprofAddr := fs.String("pprof", "", "if set (e.g. 127.0.0.1:6480), serve net/http/pprof on this address for profiling")
+	bookPath := fs.String("book", "", "optional opening book file (compile-book output); served on full-strength analysis")
 	_ = fs.Parse(args)
 
 	startPprof(*pprofAddr)
 	srv := server.New(*workers, *tt, *searchThreads)
+	if *bookPath != "" {
+		b, err := book.Load(*bookPath)
+		switch {
+		case err != nil:
+			fmt.Fprintf(os.Stderr, "book: ignoring %s: %v\n", *bookPath, err)
+		case b == nil:
+			fmt.Printf("book: %s ignored (format/engine-version mismatch)\n", *bookPath)
+		default:
+			srv.SetBook(b)
+			fmt.Printf("book: loaded %s (%d positions)\n", *bookPath, b.Len())
+		}
+	}
 	fmt.Printf("gomachine engine listening on http://%s (%d workers, %d MB TT each, %d SMP threads/search)\n", *addr, *workers, *tt, *searchThreads)
 	if err := http.ListenAndServe(*addr, srv.Handler()); err != nil {
 		fmt.Fprintln(os.Stderr, "server error:", err)

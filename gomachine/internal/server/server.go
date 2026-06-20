@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/timanthonyalexander/gomachine/internal/book"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 	"github.com/timanthonyalexander/gomachine/internal/engine"
 )
@@ -17,6 +18,30 @@ import (
 // table). A pool both bounds concurrent search load and keeps tables warm.
 type Server struct {
 	pool chan *engine.Engine
+	book *book.Book // optional precomputed opening book (nil = disabled)
+}
+
+// SetBook attaches a loaded opening book; full-strength analysis paths consult it
+// before searching. nil disables it.
+func (s *Server) SetBook(b *book.Book) { s.book = b }
+
+// bookHit returns a book entry for the position IF the book is loaded, the key is
+// present, and the stored move is still legal here (movegen-validated, so a stale or
+// wrong record can never yield an illegal move). The returned Move is the parsed,
+// validated move.
+func (s *Server) bookHit(pos *chess.Position) (book.Entry, chess.Move, bool) {
+	if s.book == nil {
+		return book.Entry{}, chess.NullMove, false
+	}
+	e, ok := s.book.Lookup(pos.Key())
+	if !ok {
+		return book.Entry{}, chess.NullMove, false
+	}
+	m, legal := pos.ParseUCIMove(e.Move)
+	if !legal {
+		return book.Entry{}, chess.NullMove, false
+	}
+	return e, m, true
 }
 
 // New builds a Server with `workers` engines of ttSizeMB megabytes each, every
@@ -110,6 +135,14 @@ func historyKeys(fens []string) []uint64 {
 		}
 	}
 	return keys
+}
+
+// bookEval builds the side-to-move-relative eval object from a book entry.
+func bookEval(e book.Entry) map[string]any {
+	if e.Mate != 0 {
+		return map[string]any{"type": "mate", "value": e.Mate}
+	}
+	return map[string]any{"type": "cp", "value": e.Score}
 }
 
 func pvStrings(pv []chess.Move) []string {
@@ -215,6 +248,25 @@ func (s *Server) handleBestMove(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+
+	// Full-strength analysis (no bot level/rating) can be served instantly from the
+	// opening book — this is the start position re-searched on every analysis.
+	if req.Limits.Rating == nil && req.Limits.Level == nil {
+		if e, m, hit := s.bookHit(pos); hit {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"bestmove": m.String(),
+				"san":      pos.SAN(m),
+				"eval":     bookEval(e),
+				"pv":       []string{m.String()},
+				"depth":    e.Depth,
+				"nodes":    0,
+				"nps":      0,
+				"level":    -1,
+			})
+			return
+		}
+	}
+
 	hist := historyKeys(req.History)
 
 	eng := s.acquire()
