@@ -140,11 +140,17 @@ export interface Analysis {
  *    is cheap. When the returned `depth` is LESS than the requested depth, the
  *    time ceiling cut the search short — the opinion has settled; stop deepening.
  */
-export function analyze(fen: string, opts?: { movetime?: number; depth?: number }): Promise<Analysis> {
+export function analyze(
+  fen: string,
+  opts?: { movetime?: number; depth?: number; signal?: AbortSignal },
+): Promise<Analysis> {
   const body: { fen: string; movetime?: number; depth?: number } = { fen }
   if (opts?.movetime) body.movetime = opts.movetime
   if (opts?.depth) body.depth = opts.depth
-  return request<Analysis>('/analyze', { method: 'POST', body: JSON.stringify(body) })
+  // `signal` lets a caller abort an in-flight request when it's no longer wanted —
+  // the analysis board cancels the previous position's deepening when you move, so
+  // the trailing deep call doesn't hog a browser connection / engine worker.
+  return request<Analysis>('/analyze', { method: 'POST', body: JSON.stringify(body), signal: opts?.signal })
 }
 
 // --- Finished live games + post-game analysis (analysis board) ---

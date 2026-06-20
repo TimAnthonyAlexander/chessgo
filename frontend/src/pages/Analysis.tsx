@@ -158,6 +158,10 @@ export default function Analysis() {
     let achieved = current.bestPv != null ? (current.bestDepth ?? 0) : 0
 
     let cancelled = false
+    // Abort the in-flight request when we leave this position, so the previous
+    // position's trailing deep call (up to the server's time ceiling) doesn't hog
+    // a browser connection / engine worker and delay the new position's first guess.
+    const ac = new AbortController()
     const run = async () => {
       for (const target of ANALYSIS_DEPTHS) {
         if (cancelled) return
@@ -165,9 +169,9 @@ export default function Analysis() {
 
         let r: Awaited<ReturnType<typeof analyze>>
         try {
-          r = await analyze(fen, { depth: target })
+          r = await analyze(fen, { depth: target, signal: ac.signal })
         } catch {
-          return // engine error — keep whatever we already have
+          return // engine error or aborted — keep whatever we already have
         }
         if (cancelled) return
 
@@ -191,6 +195,7 @@ export default function Analysis() {
 
     return () => {
       cancelled = true
+      ac.abort()
     }
     // Keyed on the VIEWED position only — current.bestPv/bestDepth are read at
     // effect start (above) but deliberately NOT deps: our own setTree updates them
