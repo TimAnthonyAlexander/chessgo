@@ -10,11 +10,29 @@ function formatEval(e: Analysis['eval']): string {
   return `${pawns >= 0 ? '+' : ''}${pawns.toFixed(2)}`
 }
 
+const LS_KEY = 'admin-best-move'
+
+function loadEnabled(): boolean {
+  try {
+    return localStorage.getItem(LS_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function saveEnabled(on: boolean): void {
+  try {
+    localStorage.setItem(LS_KEY, on ? '1' : '0')
+  } catch {
+    // ignore storage failures (private mode, quota)
+  }
+}
+
 // Admin-only inline toggle: when on, fetches the full-strength engine best move
 // for the given position and shows it compactly (move · eval). Self-contained —
 // pages just render it (gated on the admin role) and feed the current FEN.
 export default function AdminBestMove({ fen }: { fen: string }) {
-  const [enabled, setEnabled] = useState(false)
+  const [enabled, setEnabled] = useState(loadEnabled)
   const [best, setBest] = useState<Analysis | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -50,7 +68,14 @@ export default function AdminBestMove({ fen }: { fen: string }) {
           <Sparkles size={14} color={enabled ? 'var(--accent)' : 'var(--text-dim)'} />
         </Box>
       </Tooltip>
-      <Switch size="small" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+      <Switch
+        size="small"
+        checked={enabled}
+        onChange={(e) => {
+          setEnabled(e.target.checked)
+          saveEnabled(e.target.checked)
+        }}
+      />
       {enabled && (
         <Box
           sx={{
