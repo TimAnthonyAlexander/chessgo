@@ -233,9 +233,9 @@ the sign of the result.
 | Lever | Elo (rough) | Effort | Notes |
 |---|---|---|---|
 | **Tuned HCE (shipped)** | **+101 @ movetime** | done | joint Adam on WDL, PSQT tuned in (§5) |
-| **Syzygy 5-piece TB (shipped)** | **+18.8 @ movetime** | done | CGo+Fathom, root probe, `tb` flag; SPRT-accepted (§8 below) — inert until a TB is attached |
+| **Syzygy 5-piece TB (shipped, live)** | **+18.8 @ movetime** | done | CGo+Fathom, root probe, `tb` flag; SPRT-accepted (§9); auto-loads in prod from `data/syzygy` |
 | Richer HCE terms (Phase 2) | +30–80 | medium | king-safety attack-units, rook files, passed-pawn blockers/king-dist, threats — each behind a flag, Texel-tuned + SPRT'd |
-| Ship SMP + Syzygy to prod | +97 (SMP) + the TB to the live bot | small | server/hub threads + `--tb-path` config |
+| Ship SMP to prod | delivers +97 to the live bot | small | server/hub `search-threads` config (Syzygy already live) |
 | Remaining search patches | +50–80 | low | futility, countermove, singular ext, TT-static-eval |
 | **NNUE** (learned non-linear eval) | +200–400 | high (weeks) | the eventual eval answer; the tuner's traced-coefficient dataset is a training-data step |
 | SPSA (Elo-in-the-loop weight tuning) | modest | medium | the *correct* way to tune the few params with no static objective |
@@ -253,9 +253,15 @@ to triangulate, and gate patches on SPRT. Full-strength Stockfish 17.1/18
 `internal/syzygy`, a `!cgo` stub keeps cross-compiles building). The engine probes
 `tb_probe_root` (DTZ) at the search **root only** — same hook as the opening book —
 and on a hit returns the provably-optimal move at zero search cost. Behind the `tb`
-flag (`search.Params.UseTablebase`), now default on but **inert unless a tablebase
-is attached** via `Engine.SetTablebase` (so prod is a no-op until `--tb-path` is
-plumbed into serve/hub).
+flag (`search.Params.UseTablebase`, default on); **inert unless a tablebase is
+attached** via `Engine.SetTablebase`.
+
+**Shipped to prod (auto-load):** `serve` + `hub` auto-discover the set from
+`gomachine/data/syzygy/` (in-repo, gitignored, cwd-relative like `data/book.bin`;
+`SYZYGY_PATH` overrides) and attach it to every pooled engine — no flag/env/deploy
+change. Full-strength bot moves + `/analyze` probe it (weakened bots stay at their
+level — only the no-noise branch probes). See `docs/SYZYGY_PLAN.md` for the
+download command + verification.
 
 **SPRT (2026-06-20):** `--new "tb=on" --old "tb=off" --tb-path <5-piece> --movetime
 100` → accepted H1, **+18.8 ± 11.1 Elo**, 109 pairs, pentanomial `[0 0 97 12 0]`
@@ -267,9 +273,20 @@ vs K+R, wrong-bishop fortresses).
 illegal one (side-not-to-move in check) makes its capture-resolution "capture the
 king" → `lsb(0)` → assert/SIGBUS that masquerades as a table-decode/alignment bug.
 It is none of those. The `pos.Legal()` guard in `tablebaseMove` covers it (real
-game positions are always legal). Also: `tb_probe_root` legitimately returns FAILED
-for some positions (needs the opposite side's table perspective) — the engine just
-searches there; don't assert "every winning move is a TB hit." Details in
+game positions are always legal).
+
+**Why the simple `tb_probe_root`, not `tb_probe_root_dtz`:** the simple probe
+returns FAILED for some positions (the DTZ table is stored from the other side) and
+the engine searches there. The obvious "fix" — `tb_probe_root_dtz`, which ranks
+every move by probing the resulting positions — was tried and **reverted**: its
+`tbRank` is a *filter for a search*, not a standalone picker (it caps at 1000 for
+all comfortably-winning moves, hiding the true DTZ distance), so picking max-rank
+made the **winning** side shuffle among tied moves and **draw a won KBN by fivefold
+repetition** (`TestTablebaseMatesKBNvK` caught it — a thrown win). The simple probe
+reliably hits the side that *matters* (the winner, which needs the exact DTZ move
+to convert); its misses fall mostly on the losing side, where the search fallback
+is safe. So don't assert "every winning move is a TB hit," and don't swap in
+`tb_probe_root_dtz` without a per-move-DTZ tiebreak + re-SPRT. Details in
 `docs/SYZYGY_PLAN.md`.
 
 ---
