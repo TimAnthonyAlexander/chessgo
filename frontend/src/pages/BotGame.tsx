@@ -354,7 +354,7 @@ export default function BotGame() {
             }}
             isAdmin={isAdmin}
             bestFen={boardFen}
-            bestMyTurn={sideToMoveOf(boardFen) === humanColor}
+            bestMyTurn={interactive}
           />
         ) : (
           <>
