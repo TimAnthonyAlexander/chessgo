@@ -115,13 +115,18 @@ export default function Analysis() {
   const over = useMemo(() => gameOverAt(current), [current.fen])
   const legalMoves = useMemo(() => (over.over ? [] : legalUci(current)), [current.fen, over.over])
 
-  // --- Live engine eval for positions we don't already have one for ---
+  // --- Live engine eval + best line for positions we don't fully have yet ---
+  // A node needs an engine call if it's missing EITHER its eval OR its best line
+  // (PV). Mainline nodes from the persisted whole-game analysis carry an eval and
+  // a single best move but NO principal variation, so the engine panel would
+  // otherwise show "analysing…" forever — fetch the line lazily here, exactly as
+  // we do for a freshly-played branch move.
   useEffect(() => {
     if (!engineOn) return // engine analysis disabled — no fetching
-    if (current.evalWhite !== null) return
 
-    // Terminal positions: derive the eval locally, no engine call.
+    // Terminal positions: derive the eval locally, no engine call (no line to show).
     if (over.over) {
+      if (current.evalWhite !== null) return
       let ev: WhiteEval
       if (over.checkmate) ev = { type: 'mate', white: sideToMove === 'w' ? -1 : 1 }
       else ev = { type: 'cp', white: 0 }
@@ -129,16 +134,21 @@ export default function Analysis() {
       return
     }
 
+    // Already have both an eval and a best line — nothing left to fetch.
+    if (current.evalWhite !== null && current.bestPv != null) return
+
     let cancelled = false
     analyze(current.fen)
       .then((r) => {
         if (cancelled) return
+        // Coalesce a null PV to [] so the node reads as "resolved, no line" — a
+        // null would re-trip the guard above and loop the effect forever.
         if (!r.eval) {
-          setTree((t) => annotateEval(t, current.id, { type: 'cp', white: 0 }, r.bestmove, r.pv, r.depth))
+          setTree((t) => annotateEval(t, current.id, { type: 'cp', white: 0 }, r.bestmove, r.pv ?? [], r.depth))
           return
         }
         const white = sideToMove === 'w' ? r.eval.value : -r.eval.value
-        setTree((t) => annotateEval(t, current.id, { type: r.eval!.type, white }, r.bestmove, r.pv, r.depth))
+        setTree((t) => annotateEval(t, current.id, { type: r.eval!.type, white }, r.bestmove, r.pv ?? [], r.depth))
       })
       .catch(() => {
         /* leave eval unknown on engine error */
@@ -146,7 +156,7 @@ export default function Analysis() {
     return () => {
       cancelled = true
     }
-  }, [engineOn, current.id, current.fen, current.evalWhite, over.over, over.checkmate, sideToMove])
+  }, [engineOn, current.id, current.fen, current.evalWhite, current.bestPv, over.over, over.checkmate, sideToMove])
 
   // --- Navigation (manual navigation always cancels any auto playback) ---
   const goPrev = useCallback(() => {
