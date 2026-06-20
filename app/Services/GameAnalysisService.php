@@ -18,7 +18,7 @@ use RuntimeException;
 class GameAnalysisService
 {
     /** Bump when the payload shape or judgment thresholds change (invalidates cache). */
-    private const VERSION = 2;
+    private const VERSION = 3;
 
     // Centipawn-loss thresholds for judging a move (from the mover's perspective).
     private const BLUNDER = 300;

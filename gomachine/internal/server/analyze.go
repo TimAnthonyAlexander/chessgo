@@ -117,7 +117,7 @@ func (s *Server) analyzePosition(fen string, history []string, movetimeMs int) m
 		out["eval"] = bookEval(e)
 		out["bestmove"] = m.String()
 		out["bestSan"] = pos.SAN(m)
-		out["pv"] = []string{m.String()}
+		out["pv"] = s.bookLine(fen, 24)
 		out["depth"] = e.Depth
 		out["terminal"] = false
 		out["checkmate"] = false

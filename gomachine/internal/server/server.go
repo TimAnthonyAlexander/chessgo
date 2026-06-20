@@ -44,6 +44,39 @@ func (s *Server) bookHit(pos *chess.Position) (book.Entry, chess.Move, bool) {
 	return e, m, true
 }
 
+// bookLine reconstructs a principal variation from the book by chaining best moves:
+// play the book move, look up the resulting position, repeat — until a position
+// isn't in the book or the cap is hit. The book stores only one move per position,
+// but opening positions form a connected tree, so this rebuilds the full line for
+// free (all in-RAM). Returns UCI moves, first = the book move for `fen`.
+func (s *Server) bookLine(fen string, maxLen int) []string {
+	pos, err := chess.ParseFEN(fen)
+	if err != nil {
+		return nil
+	}
+	pv := make([]string, 0, maxLen)
+	seen := make(map[uint64]bool, maxLen)
+	for len(pv) < maxLen {
+		key := pos.Key()
+		if seen[key] { // repetition guard
+			break
+		}
+		seen[key] = true
+		e, ok := s.book.Lookup(key)
+		if !ok {
+			break
+		}
+		m, legal := pos.ParseUCIMove(e.Move)
+		if !legal {
+			break
+		}
+		pv = append(pv, m.String())
+		var u chess.Undo
+		pos.DoMove(m, &u)
+	}
+	return pv
+}
+
 // New builds a Server with `workers` engines of ttSizeMB megabytes each, every
 // full-strength search running across `searchThreads` Lazy SMP workers. The pool
 // (workers) parallelizes across concurrent requests; searchThreads parallelizes
@@ -257,7 +290,7 @@ func (s *Server) handleBestMove(w http.ResponseWriter, r *http.Request) {
 				"bestmove": m.String(),
 				"san":      pos.SAN(m),
 				"eval":     bookEval(e),
-				"pv":       []string{m.String()},
+				"pv":       s.bookLine(req.FEN, 24),
 				"depth":    e.Depth,
 				"nodes":    0,
 				"nps":      0,
