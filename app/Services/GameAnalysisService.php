@@ -18,7 +18,7 @@ use RuntimeException;
 class GameAnalysisService
 {
     /** Bump when the payload shape or judgment thresholds change (invalidates cache). */
-    private const VERSION = 1;
+    private const VERSION = 2;
 
     // Centipawn-loss thresholds for judging a move (from the mover's perspective).
     private const BLUNDER = 300;
@@ -87,6 +87,11 @@ class GameAnalysisService
                 'evalWhite' => $this->whiteEval($p, $stm, $game->result),
                 'bestUci' => $this->stringOrNull($p['bestmove'] ?? null),
                 'bestSan' => $this->stringOrNull($p['bestSan'] ?? null),
+                // Engine's predicted best line (UCI, bestUci first) + search depth,
+                // so the board renders the line straight from cache — no per-node
+                // re-analysis just to recover the PV the whole-game pass already found.
+                'bestPv' => $this->pvUci($p['pv'] ?? null),
+                'bestDepth' => $this->intOrNull($p['depth'] ?? null),
             ];
 
             // The move actually played FROM this position (none for the final one).
@@ -279,5 +284,32 @@ class GameAnalysisService
     private function stringOrNull(mixed $v): ?string
     {
         return is_string($v) && $v !== '' ? $v : null;
+    }
+
+    private function intOrNull(mixed $v): ?int
+    {
+        return is_int($v) ? $v : (is_numeric($v) ? (int) $v : null);
+    }
+
+    /**
+     * Normalize the engine's PV to a clean list of UCI strings (empty for a
+     * terminal/missing line — never null, so the client treats it as "resolved").
+     *
+     * @return list<string>
+     */
+    private function pvUci(mixed $v): array
+    {
+        if (!is_array($v)) {
+            return [];
+        }
+
+        $out = [];
+        foreach ($v as $uci) {
+            if (is_string($uci) && $uci !== '') {
+                $out[] = $uci;
+            }
+        }
+
+        return $out;
     }
 }

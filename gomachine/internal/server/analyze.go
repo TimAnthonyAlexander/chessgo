@@ -31,7 +31,7 @@ const (
 // from the side-to-move's perspective (callers flip to White-relative as needed).
 //
 // Response: { positions: [ {ply, fen, sideToMove, eval|null, bestmove|null,
-// bestSan|null, terminal, checkmate, stalemate} ], count }
+// bestSan|null, pv, depth, terminal, checkmate, stalemate} ], count }
 func (s *Server) handleAnalyzeGame(w http.ResponseWriter, r *http.Request) {
 	var req analyzeGameRequest
 	if !decode(w, r, &req) {
@@ -122,6 +122,8 @@ func (s *Server) analyzePosition(fen string, history []string, movetimeMs int) m
 		out["eval"] = nil
 		out["bestmove"] = nil
 		out["bestSan"] = nil
+		out["pv"] = []string{}
+		out["depth"] = 0
 		out["terminal"] = true
 		out["checkmate"] = st.State == "checkmate"
 		out["stalemate"] = st.State == "stalemate"
@@ -135,6 +137,8 @@ func (s *Server) analyzePosition(fen string, history []string, movetimeMs int) m
 	out["eval"] = evalObj
 	out["bestmove"] = res.Move.String()
 	out["bestSan"] = pos.SAN(res.Move)
+	out["pv"] = pvStrings(res.PV)
+	out["depth"] = res.Depth
 	out["terminal"] = false
 	out["checkmate"] = false
 	out["stalemate"] = false

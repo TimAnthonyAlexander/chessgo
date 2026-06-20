@@ -188,6 +188,8 @@ export interface AnalysisPly {
   evalWhite: AnalysisEval | null
   bestUci: string | null
   bestSan: string | null
+  bestPv: string[] // engine's best line from this position (UCI, bestUci first); [] if none
+  bestDepth: number | null
   move?: AnalysisMove
 }
 

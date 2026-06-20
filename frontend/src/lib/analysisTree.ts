@@ -216,6 +216,8 @@ export interface AnalysisPlyDTO {
   evalWhite: WhiteEval | null
   bestUci: string | null
   bestSan: string | null
+  bestPv?: string[] // engine's best line from this position (UCI); [] / absent if none
+  bestDepth?: number | null
   move?: {
     uci: string
     san: string
@@ -235,9 +237,16 @@ export function buildFromAnalysis(startFen: string, plies: AnalysisPlyDTO[]): { 
   let tree = createTree(startFen || START_FEN)
   let curId = tree.rootId
 
-  // Annotate the root (start position) eval + best move.
+  // Annotate the root (start position) eval + best move + line.
   if (plies[0]) {
-    tree = annotateEval(tree, curId, plies[0].evalWhite, plies[0].bestUci)
+    tree = annotateEval(
+      tree,
+      curId,
+      plies[0].evalWhite,
+      plies[0].bestUci,
+      plies[0].bestPv ?? null,
+      plies[0].bestDepth ?? null,
+    )
   }
 
   for (let k = 0; k < plies.length; k++) {
@@ -258,6 +267,8 @@ export function buildFromAnalysis(startFen: string, plies: AnalysisPlyDTO[]): { 
             ...node,
             evalWhite: after ? after.evalWhite : node.evalWhite,
             bestUci: after ? after.bestUci : null,
+            bestPv: after ? (after.bestPv ?? null) : null,
+            bestDepth: after ? (after.bestDepth ?? null) : null,
             judgment: p.move.judgment,
             cpLoss: p.move.cpLoss,
           },
