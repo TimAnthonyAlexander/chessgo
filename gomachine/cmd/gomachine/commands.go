@@ -25,7 +25,10 @@ func cmdServe(args []string) {
 	workers := fs.Int("workers", 4, "number of engine workers (bounds concurrent searches)")
 	searchThreads := fs.Int("search-threads", 1, "Lazy SMP threads per full-strength search (helps only time-bounded searches; keep workers*search-threads <= cores)")
 	pprofAddr := fs.String("pprof", "", "if set (e.g. 127.0.0.1:6480), serve net/http/pprof on this address for profiling")
-	bookPath := fs.String("book", "", "optional opening book file (compile-book output); served on full-strength analysis")
+	// Auto-loaded from this default if present (committed sidecar; the working dir
+	// is gomachine/ in both the dev screen and the systemd unit) — no flag or
+	// deployment change needed. Override the path with -book; -book="" disables it.
+	bookPath := fs.String("book", "data/book.bin", "opening book file, auto-loaded if present (compile-book output); empty disables")
 	_ = fs.Parse(args)
 
 	startPprof(*pprofAddr)
@@ -33,6 +36,8 @@ func cmdServe(args []string) {
 	if *bookPath != "" {
 		b, err := book.Load(*bookPath)
 		switch {
+		case os.IsNotExist(err):
+			// No book on disk yet — fine, the engine just searches everything.
 		case err != nil:
 			fmt.Fprintf(os.Stderr, "book: ignoring %s: %v\n", *bookPath, err)
 		case b == nil:
