@@ -31,14 +31,16 @@ function saveEnabled(on: boolean): void {
 // Admin-only inline toggle: when on, fetches the full-strength engine best move
 // for the given position and shows it compactly (move · eval). Self-contained —
 // pages just render it (gated on the admin role) and feed the current FEN.
-export default function AdminBestMove({ fen }: { fen: string }) {
+export default function AdminBestMove({ fen, myTurn }: { fen: string; myTurn: boolean }) {
   const [enabled, setEnabled] = useState(loadEnabled)
   const [best, setBest] = useState<Analysis | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!enabled || !fen) {
+    // Only compute the best move for the player's own side — no point spending
+    // engine time on the opponent's reply.
+    if (!enabled || !fen || !myTurn) {
       setBest(null)
       setError(null)
       return
@@ -59,7 +61,7 @@ export default function AdminBestMove({ fen }: { fen: string }) {
     return () => {
       cancelled = true
     }
-  }, [enabled, fen])
+  }, [enabled, fen, myTurn])
 
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>

@@ -275,7 +275,7 @@ export default function LiveGame() {
           {/* Admin-only: engine best move toggle for the current position */}
           {isAdmin && (
             <Box sx={{ px: 1.25, py: 0.75, borderTop: '1px solid var(--line-soft)', bgcolor: 'var(--bg-2)' }}>
-              <AdminBestMove fen={g.fen} />
+              <AdminBestMove fen={g.fen} myTurn={!g.ended && g.sideToMove === g.color} />
             </Box>
           )}
 

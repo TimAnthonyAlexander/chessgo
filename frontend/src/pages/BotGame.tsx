@@ -354,6 +354,7 @@ export default function BotGame() {
             }}
             isAdmin={isAdmin}
             bestFen={boardFen}
+            bestMyTurn={sideToMoveOf(boardFen) === humanColor}
           />
         ) : (
           <>
@@ -404,6 +405,7 @@ function MovePanel({
   onNewGame,
   isAdmin,
   bestFen,
+  bestMyTurn,
 }: {
   game: Game
   rating: number
@@ -426,6 +428,7 @@ function MovePanel({
   onNewGame: () => void
   isAdmin: boolean
   bestFen: string
+  bestMyTurn: boolean
 }) {
   return (
     <Box
@@ -495,7 +498,7 @@ function MovePanel({
           </NavBtn>
         </Box>
 
-        {isAdmin && <AdminBestMove fen={bestFen} />}
+        {isAdmin && <AdminBestMove fen={bestFen} myTurn={bestMyTurn} />}
 
         <Box sx={{ display: 'flex', gap: 1 }}>
           {ongoing && (
