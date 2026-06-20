@@ -2,6 +2,15 @@ import { useEffect, useState } from 'react'
 import { Box, Switch, Tooltip, Typography } from '@mui/material'
 import { Sparkles } from 'lucide-react'
 import { analyze, type Analysis } from '../api/client'
+import { pvToSan } from '../lib/analysisTree'
+
+// Convert the engine's UCI best move (e.g. "e2e4", "b1c3") into SAN piece
+// notation ("e4", "Nc3") for display. Falls back to the raw UCI if the move
+// can't be rendered (illegal/garbage — shouldn't happen for an engine reply).
+function bestMoveSan(fen: string, uci: string | null): string {
+  if (!uci) return '—'
+  return pvToSan(fen, [uci])[0]?.san ?? uci
+}
 
 function formatEval(e: Analysis['eval']): string {
   if (!e) return '—'
@@ -97,7 +106,7 @@ export default function AdminBestMove({ fen, myTurn }: { fen: string; myTurn: bo
           ) : best ? (
             <>
               <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 13.5, fontWeight: 700, color: 'var(--accent)' }} noWrap>
-                {best.bestmove ?? '—'}
+                {bestMoveSan(fen, best.bestmove)}
               </Typography>
               <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--text-dim)' }} noWrap>
                 {formatEval(best.eval)}
