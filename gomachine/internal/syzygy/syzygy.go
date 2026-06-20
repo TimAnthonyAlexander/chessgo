@@ -173,3 +173,40 @@ func (tb *Tablebase) ProbeRoot(pos Position) (Result, bool) {
 		EP:       C.go_tb_get_ep(res) != 0,
 	}, true
 }
+
+// ProbeWDL probes the Win-Draw-Loss table at an INTERNAL search node and returns
+// the side-to-move-relative WDL (one of the WDL* constants), ok=false on a miss.
+//
+// Unlike ProbeRoot (DTZ, root-only, mutex-serialized because Fathom's root/DTZ
+// path mutates shared state), this is the WDL path, which Fathom documents as
+// thread-safe — it's lock-free reads of the mmap'd .rtbw tables. That matters:
+// a mutex on every internal node would serialize all Lazy-SMP threads and erase
+// the parallel speedup, whereas this adds ~zero contention. It turns the
+// tablebase into an exact evaluation function at the ≤MaxPieces boundary, so the
+// search SEES a won/drawn/lost trade-down ~15 plies before it happens.
+//
+// It calls tb_probe_wdl_impl directly rather than the inline tb_probe_wdl
+// wrapper: that wrapper returns FAILED whenever rule50 != 0, which is almost
+// always true in a real endgame (the halfmove clock is rarely zero), so it's
+// useless in-search. We pass no rule50 and instead let the caller map cursed-win
+// /blessed-loss to draw — the conservative, 50-move-independent reading (the same
+// mapping ProbeRoot/tbScore use), so the clock can't turn a claimed TB win into a
+// real draw.
+//
+// The caller MUST guarantee: piece count ≤ MaxPieces, no castling rights, and a
+// legal position (side not to move not in check — Fathom assumes this).
+func (tb *Tablebase) ProbeWDL(pos Position) (int, bool) {
+	if tb == nil {
+		return 0, false
+	}
+	res := C.tb_probe_wdl_impl(
+		C.uint64_t(pos.White), C.uint64_t(pos.Black), C.uint64_t(pos.Kings),
+		C.uint64_t(pos.Queens), C.uint64_t(pos.Rooks), C.uint64_t(pos.Bishops),
+		C.uint64_t(pos.Knights), C.uint64_t(pos.Pawns),
+		C.unsigned(pos.EP), C.bool(pos.WhiteToMove),
+	)
+	if res == C.go_tb_failed() {
+		return 0, false
+	}
+	return int(res), true
+}

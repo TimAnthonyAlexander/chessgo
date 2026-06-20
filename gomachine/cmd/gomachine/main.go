@@ -45,6 +45,8 @@ func main() {
 		cmdEngineLoad(os.Args[2:])
 	case "tune":
 		cmdTune(os.Args[2:])
+	case "gen-tb-epd":
+		cmdGenTBEPD(os.Args[2:])
 	case "compile-book":
 		cmdCompileBook(os.Args[2:])
 	case "-h", "--help", "help":

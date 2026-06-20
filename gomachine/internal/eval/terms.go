@@ -11,6 +11,7 @@ type Config struct {
 	Pawns      bool
 	KingSafety bool
 	BishopPair bool
+	KingProx   bool // EG-only king proximity to advanced passers (escort/blockade)
 	UseTuned   bool // select the Texel-tuned PSQT (tuned_tables.go) over PeSTO
 	W          *Weights
 }
@@ -31,6 +32,7 @@ type Weights struct {
 	PassedMG, PassedEG         int // passed pawn base bonus, scaled by advancement (0..5)
 	BishopPairMG, BishopPairEG int // bonus for holding both bishops
 	KingShield                 int // MG penalty per missing pawn in the king's shield
+	KingProxEG                 int // EG: per-rank weight for king proximity to (≥4th-rank) passers
 }
 
 // DefaultWeights is the hand-picked fallback weight set (positive mobility,
@@ -50,6 +52,7 @@ func DefaultWeights() *Weights {
 		PassedMG: 10, PassedEG: 20,
 		BishopPairMG: 25, BishopPairEG: 40,
 		KingShield: -12,
+		KingProxEG: 4,
 	}
 }
 
@@ -185,6 +188,88 @@ func advancement(us chess.Color, r int) int {
 		return r - 1
 	}
 	return 6 - r
+}
+
+// passedKingProximity is the endgame-only king-proximity term: it rewards
+// keeping your own king near your advanced passed pawns and the enemy king far
+// from them. This is the single biggest endgame-knowledge gap in a PeSTO+linear
+// eval — the engine never escorts its own passers nor chases the opponent's, so
+// in a connected-passer race it walks into a lost promotion it can't see at
+// search depth. Returns the White-minus-Black contribution; the caller adds it
+// to the EG score only, so the taper makes it inert in the middlegame.
+//
+// Design (intentionally minimal for the first SPRT, your §6 "don't double-count"
+// rule): the per-passer core is the *centered* race differential
+// (enemyKingDist − ownKingDist) to the pawn's stop square, so two equidistant
+// kings contribute exactly 0 and the term overlaps PassedEG as little as
+// possible. It is rank-weighted (rw = advancement−1) so escorting an almost-queen
+// dominates nudging a home pawn, and only fires for passers on the 4th rank or
+// beyond (where king placement actually decides the race).
+func passedKingProximity(pos *chess.Position, w *Weights) int {
+	if w.KingProxEG == 0 {
+		return 0
+	}
+	return sideKingProx(pos, chess.White, w) - sideKingProx(pos, chess.Black, w)
+}
+
+func sideKingProx(pos *chess.Position, us chess.Color, w *Weights) int {
+	own := pos.PieceBB(chess.MakePiece(us, chess.Pawn))
+	enemy := pos.PieceBB(chess.MakePiece(us.Opposite(), chess.Pawn))
+	ourK := pos.KingSquare(us)
+	enemyK := pos.KingSquare(us.Opposite())
+
+	total := 0
+	bb := own
+	for bb != 0 {
+		sq := bb.PopLSB()
+		if enemy&passedMask[us][sq] != 0 {
+			continue // not passed
+		}
+		adv := advancement(us, int(sq.Rank())) // 0..5
+		if adv < 2 {
+			continue // only 4th-rank-and-beyond passers — king placement decides those
+		}
+		stop := stopSquare(us, sq)
+		ourD := kingDist(ourK, stop)
+		enemyD := kingDist(enemyK, stop)
+		rw := adv - 1 // 1..4: an almost-queen dominates a home-rank passer
+		total += w.KingProxEG * rw * (enemyD - ourD)
+	}
+	return total
+}
+
+// stopSquare is the square directly in front of a pawn (toward promotion) — the
+// blockade/escort square the kings race for. A passer is never on the last rank,
+// so this is always on the board.
+func stopSquare(us chess.Color, sq chess.Square) chess.Square {
+	f, r := int(sq.File()), int(sq.Rank())
+	if us == chess.White {
+		r++
+	} else {
+		r--
+	}
+	return chess.MakeSquare(chess.File(f), chess.Rank(r))
+}
+
+// kingDist is Chebyshev (king-move) distance, capped at 5 to bound far-king noise
+// (mirrors the standard Stockfish king-proximity cap).
+func kingDist(a, b chess.Square) int {
+	df := int(a.File()) - int(b.File())
+	if df < 0 {
+		df = -df
+	}
+	dr := int(a.Rank()) - int(b.Rank())
+	if dr < 0 {
+		dr = -dr
+	}
+	d := df
+	if dr > d {
+		d = dr
+	}
+	if d > 5 {
+		d = 5
+	}
+	return d
 }
 
 func bishopPair(pos *chess.Position, w *Weights) (mg, eg int) {

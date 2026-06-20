@@ -11,11 +11,15 @@ import (
 // value is display-only: a root TB hit returns immediately, bypassing search.
 const tbWinScore = 20000
 
-// SetTablebase attaches a Syzygy endgame tablebase. It's consulted only when the
-// engine's params have UseTablebase set (otherwise it's inert). The same handle
-// is safe to share across engines — Fathom serializes its own probes. Pass nil to
-// detach.
-func (e *Engine) SetTablebase(tb *syzygy.Tablebase) { e.tb = tb }
+// SetTablebase attaches a Syzygy endgame tablebase. It's consulted at the root
+// (DTZ-optimal move) when the engine's params have UseTablebase set, and at
+// internal search nodes (WDL) when Params.TBSearch is set — otherwise inert. The
+// same handle is safe to share across engines and SMP workers: Fathom serializes
+// its own root/DTZ probes and its WDL probe is thread-safe. Pass nil to detach.
+func (e *Engine) SetTablebase(tb *syzygy.Tablebase) {
+	e.tb = tb
+	e.searcher.SetTablebase(tb) // WDL-in-search path (Params.TBSearch)
+}
 
 // tablebaseMove returns a DTZ-optimal move from the Syzygy tablebase when the
 // engine has one enabled (UseTablebase) and the position is in range: at most

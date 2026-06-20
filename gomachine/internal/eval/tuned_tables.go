@@ -139,5 +139,8 @@ func tunedWeightsLiteral() *Weights {
 		PassedMG: -2, PassedEG: 42,
 		BishopPairMG: 17, BishopPairEG: 54,
 		KingShield: -11,
+		// Hand-seeded until the joint re-tune (it is NOT yet in Tunables(), so the
+		// current tuner leaves it untouched). SPRT-gated behind Params.KingProx.
+		KingProxEG: 4,
 	}
 }

@@ -169,8 +169,9 @@ func weightsLiteral(w *eval.Weights) string {
 		PassedMG: %d, PassedEG: %d,
 		BishopPairMG: %d, BishopPairEG: %d,
 		KingShield: %d,
+		KingProxEG: %d,
 	}`, arr4(w.MobMG), arr4(w.MobEG), w.IsolatedMG, w.IsolatedEG, w.DoubledMG, w.DoubledEG,
-		w.PassedMG, w.PassedEG, w.BishopPairMG, w.BishopPairEG, w.KingShield)
+		w.PassedMG, w.PassedEG, w.BishopPairMG, w.BishopPairEG, w.KingShield, w.KingProxEG)
 }
 
 func arr4(a [4]int) string {

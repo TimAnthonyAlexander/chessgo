@@ -33,8 +33,13 @@ func TestTraceReproducesEvaluate(t *testing.T) {
 		"8/8/8/4k3/8/3K4/4P3/8 w - - 0 1",
 		"6k1/5ppp/8/8/8/8/5PPP/6K1 w - - 0 1",
 		"rnbq1rk1/ppp1bppp/4pn2/3p4/2PP4/2N1PN2/PP3PPP/R1BQKB1R w KQ - 0 1",
+		// KingProx-taper coverage: a qualifying (≥4th-rank) passer at NON-zero phase,
+		// so the (24−ph)/24 eg taper is actually exercised (at ph=0 raw==tapered, so
+		// a taper bug would pass silently). d5 is a passed pawn in both.
+		"r1bq1rk1/5ppp/8/3P4/8/8/5PPP/R1BQ1RK1 w - - 0 1", // ph≈18 (high): heavy taper down-weight
+		"6k1/5ppp/8/3P4/8/8/5PPP/3R2K1 w - - 0 1",         // ph≈2 (low): light taper down-weight
 	}
-	cfg := Config{Mobility: true, Pawns: true, KingSafety: true, BishopPair: true}
+	cfg := Config{Mobility: true, Pawns: true, KingSafety: true, BishopPair: true, KingProx: true}
 	θ := DefaultParams()
 	for _, fen := range fens {
 		pos, err := chess.ParseFEN(fen)

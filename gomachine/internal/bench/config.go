@@ -145,6 +145,13 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.Mobility, base.Pawns, base.KingSafety, base.BishopPair = b, b, b, b
+		case "kingprox", "kprox", "kp":
+			// EG-only king proximity to advanced passers (endgame term #1, SPRT).
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.KingProx = b
 		case "tuned", "tunedeval":
 			// the full Texel-tuned eval as a unit: tuned PSQT + tuned weights +
 			// all knowledge terms (what we SPRT against the shipped base eval).
@@ -170,6 +177,14 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.UseTablebase = b
+		case "tbsearch", "tbwdl", "wdl":
+			// probe Syzygy WDL at internal search nodes (horizon extension to the
+			// ≤MaxPieces boundary; engine must have a tablebase loaded via --tb-path).
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.TBSearch = b
 		default:
 			return base, fmt.Errorf("unknown param %q", key)
 		}
@@ -242,6 +257,9 @@ func DiffParams(base, patch search.Params) string {
 	if base.BishopPair != patch.BishopPair {
 		diffs = append(diffs, fmt.Sprintf("bishoppair: %s→%s", onoff(base.BishopPair), onoff(patch.BishopPair)))
 	}
+	if base.KingProx != patch.KingProx {
+		diffs = append(diffs, fmt.Sprintf("kingprox: %s→%s", onoff(base.KingProx), onoff(patch.KingProx)))
+	}
 	if base.TunedEval != patch.TunedEval {
 		diffs = append(diffs, fmt.Sprintf("tuned: %s→%s", onoff(base.TunedEval), onoff(patch.TunedEval)))
 	}
@@ -250,6 +268,9 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.UseTablebase != patch.UseTablebase {
 		diffs = append(diffs, fmt.Sprintf("tb: %s→%s", onoff(base.UseTablebase), onoff(patch.UseTablebase)))
+	}
+	if base.TBSearch != patch.TBSearch {
+		diffs = append(diffs, fmt.Sprintf("tbsearch: %s→%s", onoff(base.TBSearch), onoff(patch.TBSearch)))
 	}
 	if len(diffs) == 0 {
 		return "(identical — sanity/noise run)"

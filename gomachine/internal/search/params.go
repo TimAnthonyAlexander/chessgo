@@ -28,9 +28,11 @@ type Params struct {
 	Pawns          bool // evaluation: pawn structure (isolated/doubled/passed)
 	KingSafety     bool // evaluation: king pawn-shield term
 	BishopPair     bool // evaluation: bishop-pair bonus
+	KingProx       bool // evaluation: EG-only king proximity to advanced passers (endgame term #1, under SPRT)
 	TunedEval      bool // evaluation: use the Texel-tuned PSQT + tuned weights
 	UseBook        bool // consult the precomputed opening book before searching (engine must have a book set)
 	UseTablebase   bool // probe Syzygy endgame tablebases at the root (engine must have a tablebase set)
+	TBSearch       bool // probe Syzygy WDL at internal search nodes (extends the horizon to the ≤MaxPieces boundary; engine must have a tablebase set)
 }
 
 // DefaultParams returns the engine's current full-strength configuration.
@@ -86,5 +88,15 @@ func DefaultParams() Params {
 		// engine has a tablebase attached (Engine.SetTablebase) — so the prod
 		// serve/hub paths stay no-ops until --tb-path is plumbed in + files shipped.
 		UseTablebase: true,
+		// Syzygy WDL probing at INTERNAL search nodes — extends the horizon to the
+		// ≤MaxPieces boundary (turns the TB into an exact eval the moment trades drop
+		// into range). SPRT-accepted vs tbsearch=off: +32.7 ± 14.1 @ 100ms on the
+		// endgame book (endgame-book-scoped, NOT additive with root-DTZ's +18.8 which
+		// was the standard book); standard-book non-regression +29 ± 19.6 (CI excludes
+		// 0 — net-positive, not just safe). Like root-DTZ it's inert until a tablebase
+		// is attached, and it is GATED to full-strength search only (suppressed in
+		// RootScores, the weakened-bot ranking path) so leveled bots keep their level
+		// instead of converting ≤MaxPieces endings perfectly (search.weakenedSearch).
+		TBSearch: true,
 	}
 }

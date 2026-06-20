@@ -134,9 +134,9 @@ func (tt *TT) store(key uint64, move chess.Move, score, depth, ply int, flag ttF
 	}
 
 	sc := score
-	if sc > mateThreshold {
+	if sc > tbThreshold {
 		sc += ply
-	} else if sc < -mateThreshold {
+	} else if sc < -tbThreshold {
 		sc -= ply
 	}
 	data := packData(move, int16(sc), int8(depth), flag, tt.age)
@@ -147,9 +147,9 @@ func (tt *TT) store(key uint64, move chess.Move, score, depth, ply int, flag ttF
 // scoreFromTT converts a stored score back to the current node's ply frame.
 func (e ttEntry) scoreFromTT(ply int) int {
 	sc := int(e.score)
-	if sc > mateThreshold {
+	if sc > tbThreshold {
 		sc -= ply
-	} else if sc < -mateThreshold {
+	} else if sc < -tbThreshold {
 		sc += ply
 	}
 	return sc

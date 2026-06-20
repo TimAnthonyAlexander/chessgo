@@ -80,6 +80,9 @@ func Evaluate(pos *chess.Position, cfg Config) int {
 	if cfg.KingSafety {
 		mg += kingSafety(pos, w) // middlegame term
 	}
+	if cfg.KingProx {
+		eg += passedKingProximity(pos, w) // endgame-only king↔passer proximity
+	}
 	if phase > 24 {
 		phase = 24
 	}

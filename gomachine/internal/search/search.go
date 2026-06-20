@@ -11,6 +11,7 @@ import (
 
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 	"github.com/timanthonyalexander/gomachine/internal/eval"
+	"github.com/timanthonyalexander/gomachine/internal/syzygy"
 )
 
 // lmrTable[depth][moveCount] is the base late-move reduction in plies, the
@@ -31,6 +32,16 @@ const (
 	infinity      = 30000
 	mateScore     = 29000
 	mateThreshold = mateScore - maxPly
+	// Syzygy WDL-in-search scores sit in a band just BELOW the mate band: a TB win
+	// is exact and stronger than any eval, but it is not a forced mate, so it must
+	// rank under real mates and must NOT be reported as one by mateDistance. tbWin
+	// is the (ply-0) magnitude; with the ply adjustment a TB score ranges over
+	// [tbThreshold, tbWin]. The TT ply-adjusts any score above tbThreshold (so both
+	// TB and mate bands are corrected across plies); mateDistance still keys off
+	// mateThreshold, so TB scores read as 0 mate distance. No normal static eval
+	// reaches tbThreshold, so this is inert when TBSearch is off.
+	tbWin       = mateThreshold - 1
+	tbThreshold = tbWin - maxPly
 	// deltaMargin is the safety cushion (centipawns) for quiescence delta pruning.
 	deltaMargin = 200
 	// Reverse futility pruning: margin per depth and the max depth it applies at.
@@ -133,6 +144,16 @@ type Searcher struct {
 	nodeCap  uint64
 	keyStack []uint64
 
+	// Syzygy tablebase for WDL-in-search (Params.TBSearch). Shared, read-only
+	// pointer (Fathom's WDL probe is thread-safe), copied to every SMP worker.
+	tb    *syzygy.Tablebase
+	tbMax int // tb.MaxPieces() cached, 0 when no tablebase
+	// weakenedSearch suppresses the WDL-in-search probe while ranking root moves
+	// for a WEAKENED bot (RootScores). Mirrors how root-DTZ only probes in the
+	// no-noise branch: a leveled bot must keep playing at its level, not suddenly
+	// convert ≤MaxPieces endings perfectly (which would break levelForRating).
+	weakenedSearch bool
+
 	rootBest  chess.Move
 	rootScore int
 }
@@ -152,6 +173,18 @@ func NewWithParams(ttSizeMB int, params Params) *Searcher {
 	}
 }
 
+// SetTablebase attaches the Syzygy handle used for WDL-in-search. The handle is
+// shared read-only across SMP workers (Fathom's WDL probe is thread-safe), so it
+// is only stored, never copied. Pass nil to detach. Inert unless Params.TBSearch.
+func (s *Searcher) SetTablebase(tb *syzygy.Tablebase) {
+	s.tb = tb
+	if tb != nil {
+		s.tbMax = tb.MaxPieces()
+	} else {
+		s.tbMax = 0
+	}
+}
+
 // evalConfig derives the evaluation config (term toggles + weights) from params.
 func evalConfig(p Params) eval.Config {
 	w := eval.DefaultWeights()
@@ -163,6 +196,7 @@ func evalConfig(p Params) eval.Config {
 		Pawns:      p.Pawns,
 		KingSafety: p.KingSafety,
 		BishopPair: p.BishopPair,
+		KingProx:   p.KingProx,
 		UseTuned:   p.TunedEval,
 		W:          w,
 	}
@@ -171,6 +205,36 @@ func evalConfig(p Params) eval.Config {
 // evaluate is the searcher's static evaluation, honoring its enabled eval terms.
 func (s *Searcher) evaluate(pos *chess.Position) int {
 	return eval.Evaluate(pos, s.ec)
+}
+
+// tbProbePosition builds Fathom's bitboard request from a chess.Position (mirrors
+// engine.tbPosition). Piece bitboards are color-agnostic; White/Black are the
+// per-color occupancies. Castling is 0 — the caller only probes positions without
+// castling rights. ep is 0 when there's no en-passant target (a1 is never an ep
+// square, so 0 is unambiguous).
+func tbProbePosition(pos *chess.Position) syzygy.Position {
+	both := func(pt chess.PieceType) uint64 {
+		return uint64(pos.PieceBB(chess.MakePiece(chess.White, pt)) |
+			pos.PieceBB(chess.MakePiece(chess.Black, pt)))
+	}
+	ep := uint(0)
+	if sq := pos.EnPassantSquare(); sq != chess.SqNone {
+		ep = uint(sq)
+	}
+	return syzygy.Position{
+		White:       uint64(pos.ColorBB(chess.White)),
+		Black:       uint64(pos.ColorBB(chess.Black)),
+		Kings:       both(chess.King),
+		Queens:      both(chess.Queen),
+		Rooks:       both(chess.Rook),
+		Bishops:     both(chess.Bishop),
+		Knights:     both(chess.Knight),
+		Pawns:       both(chess.Pawn),
+		Rule50:      uint(pos.HalfmoveClock()),
+		Castling:    0,
+		EP:          ep,
+		WhiteToMove: pos.SideToMove() == chess.White,
+	}
 }
 
 // newWithSharedTT returns a helper Searcher that shares tt with others (Lazy SMP
@@ -271,6 +335,7 @@ func (s *Searcher) SearchParallel(pos *chess.Position, limits Limits, gameHistor
 		worker := s
 		if i > 0 {
 			worker = newWithSharedTT(s.tt, s.params)
+			worker.tb, worker.tbMax = s.tb, s.tbMax // share the read-only TB handle
 		}
 		go func(i int, w *Searcher) {
 			defer wg.Done()
@@ -404,6 +469,12 @@ func (s *Searcher) Nodes() uint64 { return s.nodes }
 func (s *Searcher) RootScores(pos *chess.Position, limits Limits, gameHistory []uint64) []RootMove {
 	s.tt.NewSearchAge()
 	s.reset(limits, gameHistory)
+	// Weakened-bot ranking: suppress WDL-in-search so a leveled bot doesn't play
+	// perfect ≤MaxPieces endgames (same gating root-DTZ gets via the no-noise
+	// branch). Restored on return so the shared searcher's next full-strength call
+	// probes normally.
+	s.weakenedSearch = true
+	defer func() { s.weakenedSearch = false }()
 	s.pushKey(pos.Key())
 
 	depth := limits.Depth
@@ -475,6 +546,30 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 				if sc <= alpha {
 					return sc
 				}
+			}
+		}
+	}
+
+	// Syzygy WDL probe at internal nodes. Once enough pieces have come off that the
+	// position is in tablebase range, return the EXACT game-theoretic value instead
+	// of a heuristic eval — this extends the effective horizon all the way to the
+	// ≤MaxPieces boundary, so a winning/drawn/losing trade-down is seen ~15 plies
+	// early rather than guessed at. Root-only DTZ (engine.tablebaseMove) still owns
+	// move selection when the ROOT itself is in range; this fires only for nodes
+	// BELOW an out-of-range root (ply > 0). Skipped while in check (Fathom assumes
+	// the side not to move isn't in check) and with castling rights (Syzygy assumes
+	// none). The value is ply-adjusted so the search prefers faster wins / slower
+	// losses; cursed-win/blessed-loss map to draw (rule50-independent, safe).
+	if s.params.TBSearch && !s.weakenedSearch && s.tb != nil && ply > 0 && !inCheck &&
+		!pos.HasCastlingRights() && pos.Occupied().Count() <= s.tbMax {
+		if wdl, ok := s.tb.ProbeWDL(tbProbePosition(pos)); ok {
+			switch wdl {
+			case syzygy.WDLWin:
+				return tbWin - ply
+			case syzygy.WDLLoss:
+				return -(tbWin - ply)
+			default: // draw, cursed win, blessed loss → draw
+				return 0
 			}
 		}
 	}

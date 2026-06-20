@@ -60,3 +60,6 @@ type Result struct {
 
 // ProbeRoot always misses in cgo-less builds.
 func (tb *Tablebase) ProbeRoot(pos Position) (Result, bool) { return Result{}, false }
+
+// ProbeWDL always misses in cgo-less builds.
+func (tb *Tablebase) ProbeWDL(pos Position) (int, bool) { return 0, false }

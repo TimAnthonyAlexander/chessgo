@@ -26,7 +26,8 @@ import "github.com/timanthonyalexander/gomachine/internal/chess"
 //	390         passed pawn (scaled by advancement/2, matching Evaluate)
 //	391         bishop pair
 //	392         king shield (mg-only; eg pinned to 0 by the tuner)
-//	393         tempo (frozen by the tuner; kept here so E is exact)
+//	393         king proximity to advanced passers (EG-only; mg pinned to 0)
+//	394         tempo (frozen by the tuner; kept here so E is exact)
 const (
 	NumPSQT        = 6 * 64
 	FeatMob0       = NumPSQT // +0..+3 = N,B,R,Q
@@ -35,8 +36,9 @@ const (
 	FeatPassed     = NumPSQT + 6
 	FeatBishopPair = NumPSQT + 7
 	FeatKingShield = NumPSQT + 8
-	FeatTempo      = NumPSQT + 9
-	NumFeatures    = NumPSQT + 10
+	FeatKingProx   = NumPSQT + 9 // EG-only; the model taper (24−ph)/24 reproduces the live eg term
+	FeatTempo      = NumPSQT + 10
+	NumFeatures    = NumPSQT + 11
 )
 
 // TraceEntry is one non-zero feature coefficient for a position. Coeff is the
@@ -93,6 +95,11 @@ func EvalTrace(pos *chess.Position) Trace {
 	}
 	// King shield (mg-only): net missing shield pawns.
 	acc[FeatKingShield] += int32(missingShield(pos, chess.White) - missingShield(pos, chess.Black))
+	// King proximity to advanced passers (EG-only): raw Σ rw·(enemyD−ownD), White
+	// minus Black. The weight (KingProxEG) and the EG taper both live in the model
+	// (θ eg slot · (24−ph)/24), so the coefficient here carries NEITHER — exactly
+	// mirroring how Evaluate adds the un-weighted, un-tapered sum into eg.
+	traceKingProx(pos, &acc)
 	// Tempo: +1 if White to move, else −1 (White perspective of the stm bonus).
 	if pos.SideToMove() == chess.White {
 		acc[FeatTempo]++
@@ -155,6 +162,38 @@ func tracePawns(pos *chess.Position, acc *[NumFeatures]int32) {
 	}
 }
 
+// traceKingProx accumulates the EG-only king-proximity coefficient, mirroring
+// sideKingProx (in terms.go) term-for-term: same passed/advancement≥2 gate, same
+// rw=adv−1 rank weight, same capped-Chebyshev distances to the stop square, same
+// (enemyD−ownD) differential. It records the RAW per-side sum (no KingProxEG, no
+// taper); the model supplies both.
+func traceKingProx(pos *chess.Position, acc *[NumFeatures]int32) {
+	for _, c := range []chess.Color{chess.White, chess.Black} {
+		sign := int32(1)
+		if c == chess.Black {
+			sign = -1
+		}
+		own := pos.PieceBB(chess.MakePiece(c, chess.Pawn))
+		enemy := pos.PieceBB(chess.MakePiece(c.Opposite(), chess.Pawn))
+		ourK := pos.KingSquare(c)
+		enemyK := pos.KingSquare(c.Opposite())
+		bb := own
+		for bb != 0 {
+			sq := bb.PopLSB()
+			if enemy&passedMask[c][sq] != 0 {
+				continue // not passed
+			}
+			adv := advancement(c, int(sq.Rank()))
+			if adv < 2 {
+				continue
+			}
+			stop := stopSquare(c, sq)
+			rw := adv - 1
+			acc[FeatKingProx] += sign * int32(rw*(kingDist(enemyK, stop)-kingDist(ourK, stop)))
+		}
+	}
+}
+
 func missingShield(pos *chess.Position, c chess.Color) int {
 	ksq := pos.KingSquare(c)
 	own := pos.PieceBB(chess.MakePiece(c, chess.Pawn))
@@ -189,6 +228,7 @@ func DefaultParams() []float64 {
 	set(FeatPassed, w.PassedMG, w.PassedEG)
 	set(FeatBishopPair, w.BishopPairMG, w.BishopPairEG)
 	set(FeatKingShield, w.KingShield, 0) // mg-only
+	set(FeatKingProx, 0, w.KingProxEG)   // eg-only (mg pinned to 0)
 	set(FeatTempo, Tempo, Tempo)
 	return θ
 }
@@ -214,6 +254,7 @@ func ParamsToTables(θ []float64) (mgP, egP [6][64]int, w *Weights) {
 	w.DoubledMG, w.DoubledEG = round(θ[2*FeatDoubled]), round(θ[2*FeatDoubled+1])
 	w.PassedMG, w.PassedEG = round(θ[2*FeatPassed]), round(θ[2*FeatPassed+1])
 	w.BishopPairMG, w.BishopPairEG = round(θ[2*FeatBishopPair]), round(θ[2*FeatBishopPair+1])
+	w.KingProxEG = round(θ[2*FeatKingProx+1]) // eg-only (mg slot unused)
 	return mgP, egP, w
 }
 
