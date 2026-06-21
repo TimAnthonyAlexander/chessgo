@@ -36,11 +36,24 @@
 > Lesson: **the TB masks any eval term whose payoff lives ≤5 men** — which is why
 > PawnRace (acts above the boundary) registered and scale factor didn't.
 >
+> **NNUE — net beats HCE per node, blocked on speed (not shipped):** a
+> `(768→256)×2→1` SCReLU net (bullet on the M3 Pro's Metal GPU, ~40 GB SF data)
+> scores **+171.6 ± 60 vs tuned HCE @ 40k fixed nodes** — the first eval to clear
+> HCE. But the **same net is −156 ± 95 @ 100 ms/move**: it's a non-incremental
+> float accumulator (full 768→256 recompute every node, ≈20–80× HCE's eval cost),
+> so at a real clock it searches far fewer nodes and loses. **`nnue` flag stays
+> default-off — shipping now would regress prod.** Gate to prod = the **incremental
+> accumulator** (update only changed features on make/unmake), then re-SPRT at
+> movetime. Net-quality work (longer/wider training) raises the ceiling but does
+> not fix the speed wall. Full write-up: `docs/ENGINE_STRENGTH.md §11`,
+> `docs/NNUE/PLAN.md`.
+>
 > **Still open (priority order):** (2) NMP **verification** / verified-null in
 > low-material zugzwang (the simple no-non-pawn-material gate already ships; the
 > re-search-on-fail-high variant does not); (7) LMP **`non_pawn_material` gate**
 > (don't move-count-prune the critical pawn move in pure pawn endings) + passed-pawn
-> **push extension** (6th/7th rank); (6) 50-move-clock eval damping; (8) NNUE.
+> **push extension** (6th/7th rank); (6) 50-move-clock eval damping; (8) NNUE
+> **incremental accumulator** (above — the movetime-viability gate).
 > Standalone EG centralization was dropped (folded into KingProx); the passed-pawn
 > race + knight-aware rule-of-the-square (was priority-4) **shipped** as PawnRace.
 >

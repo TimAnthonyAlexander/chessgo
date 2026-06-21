@@ -122,10 +122,11 @@ func DefaultParams() Params {
 		// RootScores, the weakened-bot ranking path) so leveled bots keep their level
 		// instead of converting ≤MaxPieces endings perfectly (search.weakenedSearch).
 		TBSearch: true,
-		// NNUE eval (internal/nnue). Default OFF until a trained net is SPRT-accepted
-		// vs HCE (docs/NNUE/PLAN.md Phase 3). When on, the searcher routes static
-		// eval through the loaded net; with no net loaded it falls back to HCE, so
-		// the flag is inert until data/nnue/net.nnue (or NNUE_PATH) exists.
-		Nnue: false,
+		// NNUE eval (internal/nnue). Default ON: the bullet-trained net is
+		// SPRT-accepted vs HCE (+177.8 ± 41.5 @ 100ms/move, H1 — docs/ENGINE_STRENGTH.md
+		// §11) and runs through the Phase-A incremental accumulator. The searcher
+		// routes static eval through the loaded net; with no net loaded it falls back
+		// to HCE, so this stays inert until data/nnue/net.nnue (or NNUE_PATH) exists.
+		Nnue: true,
 	}
 }

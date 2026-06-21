@@ -251,7 +251,7 @@ the sign of the result.
 | Richer HCE terms (Phase 2, remainder) | +20–60 | medium | NMP verification / verified-null in low-material zugzwang, LMP `non_pawn_material` gate + passed-pawn push extension, 50-move-clock eval damping. (EG scale factors were built but SPRT'd ~0 with the TB — kept default-off, §10.6) |
 | **Ship SMP to prod (shipped, live)** | **part of the +97** (2t on a 4-core box) | done | `serve -search-threads 2` + `hub -bot-search-threads 2` in the systemd units (§4); balanced for the shared box |
 | Remaining search patches | +50–80 | low | futility, countermove, singular ext, TT-static-eval |
-| **NNUE** (learned non-linear eval) | +200–400 | high (weeks) | the eventual eval answer; the tuner's traced-coefficient dataset is a training-data step |
+| **NNUE** (learned non-linear eval) | **+172 @ nodes, −156 @ movetime today** | high | net **beats HCE per node** (bullet on Metal, §11) but the non-incremental float eval is ~20–80× costlier/node → loses at movetime; **blocked on the incremental accumulator** (Phase 4), not on net quality |
 | SPSA (Elo-in-the-loop weight tuning) | modest | medium | the *correct* way to tune the few params with no static objective |
 
 Current strength: **≈2782 ± 84** on Stockfish's UCI_Elo scale (100 games vs
@@ -473,3 +473,39 @@ full SF is ~800 Elo above — but it no longer walks into the mate.
   subset; split by material to confirm no class regressed.
 - **WDL-in-search is endgame-book-scoped**; KingProx accepted on both endgame and
   per-class books with ~0 standard-book regression.
+
+## 11. NNUE — net clears HCE per-node, but is NOT movetime-viable yet
+
+Full build log + phased plan: `docs/NNUE/PLAN.md`. Status as of 2026-06-21:
+
+A `(768→256)×2→1` SCReLU net, trained with **bullet** (jw1912/bullet) on the
+**M3 Pro's Metal GPU** over ~40 GB of decorrelated Stockfish-binpack data
+(~2.7M pos/sec), **decisively beats the tuned HCE per node**:
+
+| Net | vs tuned HCE | book | budget |
+|---|---|---|---|
+| v4, 60-superbatch (6 min, uncalibrated) | **+171.6 ± 60** (W110 L35 D15) | standard | **40 000 fixed nodes** |
+| v4, same net | **−156 ± 95** (W6 L22 D6, H0-trending) | standard | **100 ms/move** |
+
+**The sign flips with the clock — and that is the whole story.** The +172 is a
+*search-quality* result (equal nodes, better eval per node). The −156 is what
+happens when **speed counts**: the net is a **non-incremental float accumulator**
+— it recomputes the full 768→256 forward pass at *every* node (HCE is ~30–60 ns;
+a from-scratch NNUE eval is ~1–5 µs, ≈20–80× costlier), so at a real time budget
+it searches an order of magnitude fewer nodes than HCE and loses badly despite the
+sharper eval.
+
+**Therefore NNUE is NOT shipped and the `nnue` flag stays default-off.** Shipping
+it now would *regress* prod (prod runs at movetime). This is exactly the sequencing
+the plan locked in: prove the float net beats HCE at equal nodes (done, +172)
+**before** the accumulator surgery — so the movetime loss is unambiguously a
+*speed* problem, not a net/training problem.
+
+**The gate to prod is the incremental accumulator** (Phase 4): on make/unmake,
+update only the ~2–4 features that changed instead of recomputing all ~32 → NNUE
+NPS approaches HCE NPS → the +172 per-node edge survives into movetime. Quantized
+int16 inference compounds it. Only then re-SPRT **at movetime**; flip the default
+on H1. Net-quality levers (longer training — a 600-superbatch run is in progress;
+wider 512/1024 nets; more data) raise the per-node ceiling but do **not** fix the
+speed wall — the accumulator does. Until then the staged net at
+`data/nnue/net.nnue` is inert (flag off).

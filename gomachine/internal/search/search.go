@@ -157,7 +157,23 @@ type Searcher struct {
 
 	rootBest  chess.Move
 	rootScore int
+
+	// NNUE incremental accumulator (Phase A). accStack is a per-searcher,
+	// ply-indexed accumulator stack; useNNUE is true only while a net is loaded
+	// AND the eval is routed through NNUE, so HCE searches pay zero overhead.
+	accStack *nnue.Stack
+	useNNUE  bool
+
+	// Diagnostic counters (cheap, like nodes) — used by tests to confirm the
+	// accumulator gate actually covered null-move and quiescence nodes.
+	dbgNullMoves uint64
+	dbgQNodes    uint64
 }
+
+// DbgNullMoves and DbgQNodes report how many null-move and quiescence nodes the
+// last search executed (test/diagnostic only).
+func (s *Searcher) DbgNullMoves() uint64 { return s.dbgNullMoves }
+func (s *Searcher) DbgQNodes() uint64    { return s.dbgQNodes }
 
 // New returns a full-strength Searcher with a transposition table of ttSizeMB
 // megabytes.
@@ -207,16 +223,34 @@ func evalConfig(p Params) eval.Config {
 }
 
 // evaluate is the searcher's static evaluation, honoring its enabled eval terms.
-// When NNUE is enabled and a net is loaded it routes through the net (a
-// side-to-move-relative cp score, same contract as HCE); otherwise, or if no net
-// is loaded, it falls back to the hand-crafted eval.
+// When NNUE is enabled and a net is loaded it reads the incrementally-maintained
+// accumulator (Phase A — a side-to-move-relative cp score, same contract as HCE);
+// otherwise it falls back to the hand-crafted eval.
 func (s *Searcher) evaluate(pos *chess.Position) int {
-	if s.ec.NNUE {
-		if cp, ok := nnue.Eval(pos); ok {
-			return cp
-		}
+	if s.useNNUE {
+		return s.accStack.Eval(pos)
 	}
 	return eval.Evaluate(pos, s.ec)
+}
+
+// nnueBegin prepares the incremental accumulator for a search rooted at pos. It
+// sets useNNUE only when NNUE is on AND a net is loaded, (re)allocating the stack
+// if the default net changed, and rebuilds slot 0 from scratch. Cheap and
+// idempotent — safe to call at every top-level search entry.
+func (s *Searcher) nnueBegin(pos *chess.Position) {
+	s.useNNUE = false
+	if !s.ec.NNUE {
+		return
+	}
+	net := nnue.Default()
+	if net == nil {
+		return
+	}
+	if s.accStack == nil || s.accStack.Net() != net {
+		s.accStack = net.NewStack(maxPly + 8)
+	}
+	s.accStack.Reset(pos)
+	s.useNNUE = true
 }
 
 // tbProbePosition builds Fathom's bitboard request from a chess.Position (mirrors
@@ -267,6 +301,8 @@ func (s *Searcher) ClearTT() { s.tt.Clear() }
 
 func (s *Searcher) reset(limits Limits, gameHistory []uint64) {
 	s.nodes = 0
+	s.dbgNullMoves = 0
+	s.dbgQNodes = 0
 	s.stop = false
 	s.killers = [maxPly][2]chess.Move{}
 	s.history = [12][64]int{}
@@ -372,6 +408,7 @@ func (s *Searcher) SearchParallel(pos *chess.Position, limits Limits, gameHistor
 func (s *Searcher) runID(pos *chess.Position, limits Limits, gameHistory []uint64) Result {
 	s.reset(limits, gameHistory)
 	s.pushKey(pos.Key())
+	s.nnueBegin(pos)
 
 	maxDepth := limits.Depth
 	if maxDepth <= 0 || maxDepth >= maxPly {
@@ -417,6 +454,12 @@ const (
 // set by negamax at ply 0; on a fail-low the root move is not trusted (we
 // re-search), and the caller discards the whole iteration if the clock expires.
 func (s *Searcher) searchRoot(pos *chess.Position, depth, prevScore int) {
+	// Re-anchor the incremental accumulator at the root each iteration (sp→0,
+	// rebuilt from scratch): self-correcting against any push/pop imbalance and
+	// cheap relative to a full-depth search.
+	if s.useNNUE {
+		s.accStack.Reset(pos)
+	}
 	if !s.params.Aspiration || depth < aspMinDepth || absInt(prevScore) >= mateThreshold {
 		s.negamax(pos, depth, 0, -infinity, infinity)
 		return
@@ -488,6 +531,7 @@ func (s *Searcher) RootScores(pos *chess.Position, limits Limits, gameHistory []
 	s.weakenedSearch = true
 	defer func() { s.weakenedSearch = false }()
 	s.pushKey(pos.Key())
+	s.nnueBegin(pos)
 
 	depth := limits.Depth
 	if depth < 1 {
@@ -500,11 +544,17 @@ func (s *Searcher) RootScores(pos *chess.Position, limits Limits, gameHistory []
 	for i := 0; i < ml.Len(); i++ {
 		m := ml.Get(i)
 		var u chess.Undo
+		if s.useNNUE {
+			s.accStack.Push(pos, m)
+		}
 		pos.DoMove(m, &u)
 		s.pushKey(pos.Key())
 		score := -s.negamax(pos, depth-1, 1, -infinity, infinity)
 		s.popKey()
 		pos.UndoMove(m, &u)
+		if s.useNNUE {
+			s.accStack.Pop()
+		}
 		out = append(out, RootMove{Move: m, Score: score})
 	}
 	return out
@@ -626,13 +676,20 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 	// Null-move pruning.
 	if s.params.NullMove && !inCheck && depth >= 3 && ply > 0 && beta < mateThreshold &&
 		pos.NonPawnMaterial(pos.SideToMove()) {
+		s.dbgNullMoves++
 		var u chess.Undo
+		if s.useNNUE {
+			s.accStack.PushNull()
+		}
 		pos.DoNullMove(&u)
 		s.pushKey(pos.Key())
 		r := s.params.NullMoveR + depth/4
 		sc := -s.negamax(pos, depth-1-r, ply+1, -beta, -beta+1)
 		s.popKey()
 		pos.UndoNullMove(&u)
+		if s.useNNUE {
+			s.accStack.Pop()
+		}
 		if s.stop {
 			return 0
 		}
@@ -687,6 +744,9 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 		}
 
 		var u chess.Undo
+		if s.useNNUE {
+			s.accStack.Push(pos, m)
+		}
 		pos.DoMove(m, &u)
 		s.pushKey(pos.Key())
 		givesCheck := pos.InCheck()
@@ -728,6 +788,9 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 
 		s.popKey()
 		pos.UndoMove(m, &u)
+		if s.useNNUE {
+			s.accStack.Pop()
+		}
 		if s.stop {
 			return 0
 		}
@@ -771,6 +834,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 
 func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 	s.nodes++
+	s.dbgQNodes++
 	s.checkStop()
 	if s.stop {
 		return 0
@@ -823,9 +887,15 @@ func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 			}
 		}
 		var u chess.Undo
+		if s.useNNUE {
+			s.accStack.Push(pos, m)
+		}
 		pos.DoMove(m, &u)
 		sc := -s.quiescence(pos, ply+1, -beta, -alpha)
 		pos.UndoMove(m, &u)
+		if s.useNNUE {
+			s.accStack.Pop()
+		}
 		if s.stop {
 			return 0
 		}
