@@ -221,8 +221,9 @@ attached; full-strength bot moves + `/analyze` probe it, weakened bots stay at
 their level. See `docs/SYZYGY_PLAN.md` for the download command, the
 *legal-positions-only* Fathom gotcha, and why the simple `tb_probe_root` (not
 `tb_probe_root_dtz`, whose rank shuffles a won KBN to a draw) is the right probe.
-Next: hub-restart-durable
-resume, puzzle generation pipeline, ship SMP **and Syzygy** to the `serve`/hub prod
-paths, remaining cheap search patches → **NNUE** (the distillation pipeline is its
-data step), precise level↔Elo *calibration*, a true cross-pool ranked queue. See
+**SMP is live in prod** (balanced 2-thread: `serve -workers 2 -search-threads 2`,
+`hub -bot-search-threads 2` in the systemd units; Syzygy already auto-loads). Next:
+hub-restart-durable resume, puzzle generation pipeline, remaining cheap search
+patches → **NNUE** (the distillation pipeline is its data step), precise level↔Elo
+*calibration*, a true cross-pool ranked queue. See
 `docs/SPEC.md` §11 roadmap.

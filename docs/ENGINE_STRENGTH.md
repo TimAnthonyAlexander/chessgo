@@ -59,8 +59,10 @@ gomachine bench sprt --new "see=on" --old "see=off" --nodes 40000 --elo0 0 --elo
 
 If H1: make the flag the default in `DefaultParams()` and re-baseline; if H0: drop
 it. Param spec keys: `tt nullmove nullr lmr checkext see delta asp rfp lmp
-mobility pawns kingsafety bishoppair eval tb` (`eval` toggles all knowledge terms;
-`tb` toggles Syzygy probing — needs `--tb-path` to point at a tablebase dir).
+mobility pawns kingsafety bishoppair kingprox eval tuned tb tbsearch` (`eval`
+toggles all knowledge terms; `kingprox` is the EG king↔passer term (§10); `tb`
+toggles root-DTZ and `tbsearch` toggles WDL-in-search — both need `--tb-path` to
+point at a tablebase dir).
 
 ### 2.2 `bench vs-stockfish` — absolute Elo anchor
 
@@ -147,10 +149,19 @@ measure it at `--movetime`.
 - Driven via `--new-threads`/`--old-threads` (sprt) and `--threads`
   (vs-stockfish, game). Engine API: `Engine.PlayThreads(...)`.
 
-> **Not yet shipped to production.** The engine *supports* threads, but the engine
-> HTTP service (`serve`) and the hub's bot still call it single-threaded. Plumbing
-> a threads config into those (a `workers × threads` balance on the prod box) is
-> the remaining step to deliver this to the live website bot.
+> **Shipped to production (2026-06-21).** Both prod paths take a threads flag:
+> `serve` via `-search-threads` and the hub bot via `-bot-search-threads` (the
+> `serve`/`hub` worker pools route every full-strength search through
+> `SearchParallel(…, threads)`; `threads=1` stays byte-identical to serial). The
+> prod box is **4 cores shared by `serve`+`hub`**, so the live config is the
+> **balanced 2-thread** setting (`serve -workers 2 -search-threads 2`, `hub
+> -bot-search-threads 2`), keeping `workers × threads ≤ cores`. Set in the systemd
+> `ExecStart` lines (see `docs/COMMANDS.md`), **not** the deploy script, so it
+> survives every `chessgo-deploy` (which only `git pull`s + restarts, never
+> `daemon-reload`s the units). The +96.9 figure above is **4t vs 1t**; the live box
+> runs 2t, so it captures a fraction of that — getting the full gain would mean
+> serializing concurrency on 4 cores. The watch-filler pool stays serial (cosmetic;
+> threads hardcoded to 1, no flag).
 
 ---
 
@@ -233,9 +244,11 @@ the sign of the result.
 | Lever | Elo (rough) | Effort | Notes |
 |---|---|---|---|
 | **Tuned HCE (shipped)** | **+101 @ movetime** | done | joint Adam on WDL, PSQT tuned in (§5) |
-| **Syzygy 5-piece TB (shipped, live)** | **+18.8 @ movetime** | done | CGo+Fathom, root probe, `tb` flag; SPRT-accepted (§9); auto-loads in prod from `data/syzygy` |
-| Richer HCE terms (Phase 2) | +30–80 | medium | king-safety attack-units, rook files, passed-pawn blockers/king-dist, threats — each behind a flag, Texel-tuned + SPRT'd |
-| Ship SMP to prod | delivers +97 to the live bot | small | server/hub `search-threads` config (Syzygy already live) |
+| **Syzygy 5-piece root-DTZ (shipped, live)** | **+18.8 @ movetime** (std book) | done | CGo+Fathom, root probe, `tb` flag; SPRT-accepted (§9); auto-loads in prod from `data/syzygy` |
+| **WDL-in-search (shipped, live)** | **+32.7 @ movetime** (endgame book) | done | `tbsearch` flag; lock-free `tb_probe_wdl` at internal nodes; default-on, gated off for weakened bots (§10) |
+| **KingProx eval term (shipped, live)** | **+30.5 @ movetime** (endgame book) | done | EG king-proximity to advanced passers; `kingprox` flag, default-on; rejected a joint re-tune to pair it (§10) |
+| Richer HCE terms (Phase 2) | +30–80 | medium | passed-pawn race comparison + knight-aware rule-of-the-square, NMP-off in low-material zugzwang, EG scale factors, 50-move damping (§10 "what's next") |
+| **Ship SMP to prod (shipped, live)** | **part of the +97** (2t on a 4-core box) | done | `serve -search-threads 2` + `hub -bot-search-threads 2` in the systemd units (§4); balanced for the shared box |
 | Remaining search patches | +50–80 | low | futility, countermove, singular ext, TT-static-eval |
 | **NNUE** (learned non-linear eval) | +200–400 | high (weeks) | the eventual eval answer; the tuner's traced-coefficient dataset is a training-data step |
 | SPSA (Elo-in-the-loop weight tuning) | modest | medium | the *correct* way to tune the few params with no static objective |
@@ -302,3 +315,112 @@ is safe. So don't assert "every winning move is a TB hit," and don't swap in
    in §3. **H0** → drop or rework.
 5. Every ~2–3 accepted patches, re-anchor with `bench vs-stockfish` to watch the
    absolute number move.
+
+---
+
+## 10. Endgame strength push (shipped: WDL-in-search + KingProx)
+
+Triggered by a concrete failure: gomachine, as White with the move, **lost** the
+point-symmetric K+N+3-pawn position `3kn3/5ppp/8/8/8/8/PPP5/3NK3 w` to full
+Stockfish — a **dead draw** (180° rotation maps White onto Black; the move is the
+only asymmetry, worth ~nil here). It scored **1.0/5** (0W-3L-2D), i.e. it walked
+into lost pawn races. Two coupled causes (see `docs/ENGINE_ROADMAP.md` for the
+full diagnosis): **eval blindness** (no king↔passer knowledge) and **horizon** (a
+~6-push race resolves >24 plies out; the engine saw ~depth 18). Two SPRT-gated
+fixes shipped.
+
+### 10.1 WDL-in-search (`tbsearch`, default-on) — +32.7 endgame
+
+`tb_probe_wdl_impl` at **internal** search nodes (not just root DTZ), turning the
+tablebase into an exact eval the moment a position trades into ≤MaxPieces range —
+extending the effective horizon to the 5-man edge.
+
+- **Lock-free.** Fathom's WDL probe is thread-safe (unlike root/DTZ), so it runs
+  with **no mutex** — critical, or it would serialize the Lazy-SMP threads.
+  `go test -race` clean with concurrent probes across workers.
+- **Score band.** A TB hit returns `±(tbWin − ply)`, a band *just below* the mate
+  band (`tbWin = mateThreshold−1`), ply-adjusted to prefer faster wins. The TT
+  ply-adjust threshold was lowered to cover it; `mateDistance` still keys off
+  `mateThreshold` so a TB win is never misreported as a forced mate. Inert when
+  `tbsearch` is off (no normal eval reaches the band).
+- **Cursed/blessed → draw** (rule50-independent, so the 50-move clock can't turn a
+  claimed win into a real draw) — calls `tb_probe_wdl_impl` directly, not the
+  inline `tb_probe_wdl` wrapper (which returns FAILED whenever `rule50 != 0`,
+  useless in-search).
+- **Gated to full strength.** The probe is suppressed in `RootScores`
+  (`search.weakenedSearch`), the weakened-bot ranking path — same gating root-DTZ
+  gets via the no-noise branch — so a 1200 bot doesn't suddenly convert ≤5-man
+  endings perfectly and break `levelForRating`. Verified by test.
+
+**SPRT** (`--new "tbsearch=on" --old "tbsearch=off" --tb-path data/syzygy
+--movetime 100`, mixed endgame book): **+32.7 ± 14.1** (318 pairs). Standard-book
+non-regression: **+29 ± 19.6**, CI excludes 0 — net-positive even from openings
+(decisive games reach ≤5-man more than expected). **Endgame-book-scoped — do NOT
+stack on root-DTZ's +18.8**, which was the *standard* book (~89% draws); different
+scales.
+
+### 10.2 KingProx eval term (`kingprox`, default-on) — +30.5 endgame
+
+EG-only king proximity to advanced passers — rewards escorting your own passer and
+keeping the enemy king off it. Centered, rank-weighted core
+`KingProxEG · rw · (enemyKingDist − ownKingDist)` to each passer's stop square,
+where `rw = advancement−1` (only fires for ≥4th-rank passers, so an almost-queen
+dominates), **Chebyshev** distance capped at 5, EG-gated via the taper. The
+*centered* form (equidistant kings → 0) keeps it near-orthogonal to `PassedEG`, so
+it double-counts as little as possible.
+
+**SPRT** (on the shipped table, `tbsearch` on both sides, endgame book):
+**+30.5 ± 13.6** (392 pairs). **Per-material-class** (the test the symmetric book
+couldn't answer alone — does it *mislead* anywhere?): **rook +33 / minor +36 /
+K+P +24** — every class positive, **including rook endings** (where king-proximity
+is famously nuanced). No structural guard needed. Standard-book non-reg ~0.
+
+### 10.3 The joint re-tune was tried and REJECTED
+
+The plan was to jointly re-tune `KingProxEG` with `PassedEG` and the PSQT (the §6
+"don't bolt terms onto a frozen baseline" lesson). Built the pipeline — TB-labelled
+≤5-man slice (`gomachine gen-tb-epd`, Syzygy-WDL ground truth, **not** self-play, so
+no §6(d) data bias) blended 12% onto the 725k real-game base, joint Adam — and it
+fit cleanly: `KingProxEG 4→13`, `PassedEG 42→57` (both rose; centering held).
+
+**But the table A/B regressed.** `(re-tuned table + kingprox)` vs `(shipped table +
+kingprox off)` came back **≈0** on the endgame book, vs **+30** for KingProx alone
+on the shipped table — the re-tuned PSQT *gave back* the entire gain. Controls
+isolated it: the B/R MG drift was data/K-refit not KingProx (drift identical with
+KingProx pinned out), and a base-only control reproduced the shipped table — so the
+culprit is the **table change itself**, most likely the **TB-label over-optimism**
+(perfect-play 1.0 labels teach a winnability the heuristic eval can't realize).
+
+**Decision:** ship the seeded `KingProxEG=4` on the *existing* table; do **not**
+adopt the re-tuned PSQT. If revisited, the path is an **MG-anchored** re-tune
+(freeze piece values, tune only the endgame terms). Tooling for the A/B (selectable
+`cand` table) was reverted; the `gen-tb-epd` generator + control flags remain.
+
+### 10.4 Result on the original lost position
+
+Re-running `3kn3/5ppp/8/8/8/8/PPP5/3NK3 w` vs **full** Stockfish (Skill 20):
+
+| Setting | W-L-D | Draw-hold |
+|---|---|---|
+| 300ms · 1 thread (was 0W-3L-2D) | **0W-4L-6D** | 60% |
+| 300ms · 8 threads (SMP) | 0W-2L-4D | 67% |
+| 1500ms · 8 threads | **0W-1L-5D** | **83%** |
+
+The losses are a **horizon** problem, as diagnosed — the more *nodes* it gets, the
+more it holds the theoretical draw (SMP beats single-thread at every TC; the
+strongest config loses 1/6). KingProx + WDL-in-search raised the floor (40%→60%
+holds at baseline); compute does the rest. It still can't *win* (it's a draw), and
+full SF is ~800 Elo above — but it no longer walks into the mate.
+
+**Methodology notes worth keeping:**
+- **Endgame SPRT book = point-symmetric positions** (`data/endgame_book*.fen`,
+  generated by `scripts/gen_endgame_book.py`). A 180°-rotated position with White
+  to move is theoretically ≈0.00, so the book is *balanced by construction* — a
+  real gain shows as wins out of a drawn book, not as converting an already-won
+  position. The static eval of such a start is still ~+49 (KingProx inert at the
+  symmetric start; WDL inert at 10 men) — these terms fix **downstream** play, not
+  the start eval.
+- **Per-class SPRT** before trusting an aggregate: a +27 average can hide a −X
+  subset; split by material to confirm no class regressed.
+- **WDL-in-search is endgame-book-scoped**; KingProx accepted on both endgame and
+  per-class books with ~0 standard-book regression.

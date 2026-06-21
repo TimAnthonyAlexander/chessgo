@@ -433,7 +433,7 @@ After=network.target
 
 [Service]
 WorkingDirectory=/var/www/chessgo/gomachine
-ExecStart=/var/www/chessgo/gomachine/bin/gomachine serve -addr 127.0.0.1:6466
+ExecStart=/var/www/chessgo/gomachine/bin/gomachine serve -addr 127.0.0.1:6466 -workers 2 -search-threads 2
 Restart=always
 RestartSec=3
 User=tim
@@ -455,7 +455,7 @@ After=network.target
 [Service]
 WorkingDirectory=/var/www/chessgo/gomachine
 EnvironmentFile=/var/www/chessgo/.env.hub          # contains WS_TICKET_SECRET=...
-ExecStart=/var/www/chessgo/gomachine/bin/gomachine hub -addr 127.0.0.1:6467
+ExecStart=/var/www/chessgo/gomachine/bin/gomachine hub -addr 127.0.0.1:6467 -bot-search-threads 2
 Restart=always
 RestartSec=3
 User=tim
@@ -479,6 +479,18 @@ BASEAPI_URL=https://chessgo-api.timanthonyalexander.de
 - `BASEAPI_URL` is where the hub POSTs finished games. In prod it's the **public
   API URL**, NOT `127.0.0.1:6464` — PHP runs under FPM with no local HTTP port.
   `/internal/games` is secret-gated, so the public round-trip is fine.
+
+> **Lazy SMP is on in prod via those `ExecStart` flags.** The box is **4 cores
+> shared by `serve`+`hub`**, so the balanced config is `serve -workers 2
+> -search-threads 2` (2 concurrent searches, each 2-thread SMP) and `hub
+> -bot-search-threads 2` (the hub bot pool auto-sizes workers to `NumCPU()/2 = 2`,
+> so 2×2 = 4). Keep `workers × search-threads ≤ cores`. These live in the systemd
+> units (above), **not** in `chessgo-deploy` — the deploy only `git pull`s, builds,
+> and `systemctl restart`s, so it never re-reads the units. To change the thread
+> balance: edit the `ExecStart` line, then `sudo systemctl daemon-reload &&
+> sudo systemctl restart chessgo-engine chessgo-hub`. Confirm via
+> `journalctl -u chessgo-engine -n5` (`… N SMP threads/search`). Watch fillers are
+> always serial (cosmetic, no flag).
 
 ```sh
 sudo systemctl daemon-reload

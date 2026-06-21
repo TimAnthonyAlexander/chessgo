@@ -873,16 +873,17 @@ chessgo/
       **Shipped (SPRT-gated, ~+250 Elo @ movetime, now defaults):** SEE (+66),
       delta pruning (+22), aspiration windows (+22), reverse futility pruning (+67),
       late move pruning (+95). **Lazy SMP** (lock-free atomic TT; +97 Elo @ 4
-      threads) — engine supports it; not yet wired into the `serve`/hub prod paths.
+      threads) — **live in prod** at the balanced 2-thread setting (`serve
+      -search-threads 2`, `hub -bot-search-threads 2`) on the shared 4-core box.
       **The Texel-tuned eval is now ON by default** (tuned PSQT + knowledge terms,
       `internal/eval/tuned_tables.go`): **+128 Elo @ fixed nodes, +101 Elo @ 100 ms/
       move**, SPRT-gated. This *replaced* the earlier −148 Elo result, which was a
       broken **method** (coordinate descent on MSE, distilled CP target, frozen PSQT),
       not a verdict on HCE — the rebuilt tuner (joint Adam on WDL, **tuning the PSQT
       itself**, quiet Lichess positions; `internal/tune`) wins. Current strength
-      **≈2720** on the SF-2500 anchor (78%, up from ~2600). Next: ship SMP to prod,
-      remaining cheap search patches, then **NNUE** (the distillation pipeline is its
-      data step) or SPSA.
+      **≈2720** on the SF-2500 anchor (78%, up from ~2600). Next: remaining cheap
+      search patches, then **NNUE** (the distillation pipeline is its data step) or
+      SPSA.
 - [x] **Match bot strength to its rating** — fill-in bot displayed rating is now
       anchored to the human's Elo (±120) and the engine level is derived from it
       (`levelForRating`), so rated bot games are fair. Remaining: precise

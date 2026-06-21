@@ -1,3 +1,41 @@
+> ## STATUS (updated after the endgame push) — read this first
+>
+> The diagnosis below was acted on. Full write-up with SPRT numbers in
+> `docs/ENGINE_STRENGTH.md §10`. Summary:
+>
+> **Shipped (both default-on, SPRT-gated, live in prod via the auto-loaded TB):**
+> - **WDL-in-search** (`tbsearch`) — `tb_probe_wdl` at internal nodes, lock-free,
+>   cursed/blessed→draw, gated off for weakened bots. **+32.7 Elo** (endgame book),
+>   +29 standard-book non-reg. This was "the biggest single gap" in the brief.
+> - **KingProx** (`kingprox`) — EG-only, rank-weighted, *centered* king-to-passer
+>   distance (priority-1 term below). **+30.5 Elo**, per-class rook +33 / minor +36
+>   / K+P +24 (no class regressed). Shipped with the **seeded** weight.
+>
+> **Tried and REJECTED:** the joint re-tune to fit `KingProxEG`+`PassedEG`+PSQT
+> together (priority-4 plumbing). The fit was clean (`KingProxEG 4→13`,
+> `PassedEG 42→57`) but the re-tuned **table** A/B'd at **≈0 vs +30** — it gave back
+> the gain, most likely **TB-label over-optimism** (perfect-play 1.0 labels teach
+> winnability the eval can't realize). Controls confirmed the B/R MG drift was
+> data/K-refit, not KingProx. So we kept the seeded weight on the existing table.
+> If revisited: **MG-anchored** re-tune (freeze piece values, tune only EG terms).
+>
+> **Built and kept:** the point-symmetric endgame SPRT book
+> (`scripts/gen_endgame_book.py`, `data/endgame_book*.fen`), the TB-WDL EPD
+> generator (`gomachine gen-tb-epd`), and EG-only taper gating.
+>
+> **Still open (priority order):** (2) NMP-off / verified-null in low-material
+> zugzwang; (4-remainder) passed-pawn **race-comparison** term + **knight-aware**
+> rule-of-the-square (the over-optimism killer the symmetric race needs); (5) EG
+> drawishness scale factors; (6) 50-move-clock eval damping; (7) soften LMR/LMP at
+> low material + passed-pawn push extension; (8) NNUE. Standalone EG centralization
+> was dropped (folded into KingProx), as advised.
+>
+> **Net on the original lost position vs full Stockfish:** 1.0/5 → 60% draw-hold at
+> baseline, **83% with SMP+time**. The residual losses are horizon, not eval — more
+> nodes ⇒ more holds. It can't *win* a dead draw, but it no longer walks into mate.
+>
+> ---
+
 The lost position is point-symmetric: rotate it 180° and White maps exactly onto Black (Ke1↔Kd8, Nd1↔Ne8, a2/b2/c2↔h7/g7/f7). Two knights, two kings, each side with three connected passers on opposite wings. White even has the move. That is a dead draw, and going 0W-3L-2D *as the side with the tempo* means the engine isn't just failing to win, it's walking into lost pawn races. That points at eval and horizon, not at the tablebase.
 
 Note first what the tablebase can and can't do here. The position has 10 pieces. Your 5-piece Syzygy is completely inert until seven pieces come off the board, and you only probe DTZ at the root, so it contributes nothing to this game until the actual board hits ≤5 men, which is long after it's decided. So this loss is not a TB problem. It's the classic classical-engine endgame problem, which the literature is blunt about: in the endgame chess programs usually have quite a lot of difficulties.
