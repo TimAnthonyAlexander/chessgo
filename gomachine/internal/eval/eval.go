@@ -83,10 +83,19 @@ func Evaluate(pos *chess.Position, cfg Config) int {
 	if cfg.KingProx {
 		eg += passedKingProximity(pos, w) // endgame-only king↔passer proximity
 	}
+	if cfg.PawnRace {
+		eg += passedPawnRace(pos, w) // endgame-only knight-aware unstoppable passer
+	}
 	if phase > 24 {
 		phase = 24
 	}
-	score := (mg*phase + eg*(24-phase)) / 24 // White's perspective
+	// Endgame scale factor (drawishness): worth sf/64 of the eg term. Inert in the
+	// middlegame (eg*(24-phase) → 0) and a no-op when sf == scaleNormal (64).
+	egScaled := eg * (24 - phase)
+	if cfg.ScaleFactor {
+		egScaled = egScaled * scaleFactor(pos, eg) / scaleNormal
+	}
+	score := (mg*phase + egScaled) / 24 // White's perspective
 	if pos.SideToMove() == chess.Black {
 		score = -score
 	}

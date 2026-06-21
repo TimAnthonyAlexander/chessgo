@@ -152,6 +152,21 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.KingProx = b
+		case "pawnrace", "prace", "race":
+			// EG-only knight-aware unstoppable-passer / race term (endgame, SPRT).
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.PawnRace = b
+		case "scalefactor", "sf", "scale":
+			// EG drawishness scale factor (Stockfish-classical): scales the eg term
+			// toward draw in drawish material (endgame correctness term, SPRT).
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.ScaleFactor = b
 		case "tuned", "tunedeval":
 			// the full Texel-tuned eval as a unit: tuned PSQT + tuned weights +
 			// all knowledge terms (what we SPRT against the shipped base eval).
@@ -259,6 +274,12 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.KingProx != patch.KingProx {
 		diffs = append(diffs, fmt.Sprintf("kingprox: %s→%s", onoff(base.KingProx), onoff(patch.KingProx)))
+	}
+	if base.PawnRace != patch.PawnRace {
+		diffs = append(diffs, fmt.Sprintf("pawnrace: %s→%s", onoff(base.PawnRace), onoff(patch.PawnRace)))
+	}
+	if base.ScaleFactor != patch.ScaleFactor {
+		diffs = append(diffs, fmt.Sprintf("scalefactor: %s→%s", onoff(base.ScaleFactor), onoff(patch.ScaleFactor)))
 	}
 	if base.TunedEval != patch.TunedEval {
 		diffs = append(diffs, fmt.Sprintf("tuned: %s→%s", onoff(base.TunedEval), onoff(patch.TunedEval)))

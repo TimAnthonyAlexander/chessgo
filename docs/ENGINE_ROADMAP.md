@@ -3,13 +3,18 @@
 > The diagnosis below was acted on. Full write-up with SPRT numbers in
 > `docs/ENGINE_STRENGTH.md §10`. Summary:
 >
-> **Shipped (both default-on, SPRT-gated, live in prod via the auto-loaded TB):**
+> **Shipped (all default-on, SPRT-gated, live in prod via the auto-loaded TB):**
 > - **WDL-in-search** (`tbsearch`) — `tb_probe_wdl` at internal nodes, lock-free,
 >   cursed/blessed→draw, gated off for weakened bots. **+32.7 Elo** (endgame book),
 >   +29 standard-book non-reg. This was "the biggest single gap" in the brief.
 > - **KingProx** (`kingprox`) — EG-only, rank-weighted, *centered* king-to-passer
 >   distance (priority-1 term below). **+30.5 Elo**, per-class rook +33 / minor +36
 >   / K+P +24 (no class regressed). Shipped with the **seeded** weight.
+> - **PawnRace** (`pawnrace`) — EG-only **knight-aware unstoppable-passer / race**
+>   term (priority-2 below — the "do I queen first?" over-optimism killer).
+>   **+17.4 Elo** (mixed endgame book, TB on both sides). Acts in 6–10-man positions
+>   *above* the 5-man TB boundary, so it isn't TB-masked; returns exactly 0 on the
+>   diagnosed symmetric position. Seeded `PawnRaceEG=700`, not a tuner feature.
 >
 > **Tried and REJECTED:** the joint re-tune to fit `KingProxEG`+`PassedEG`+PSQT
 > together (priority-4 plumbing). The fit was clean (`KingProxEG 4→13`,
@@ -23,12 +28,21 @@
 > (`scripts/gen_endgame_book.py`, `data/endgame_book*.fen`), the TB-WDL EPD
 > generator (`gomachine gen-tb-epd`), and EG-only taper gating.
 >
-> **Still open (priority order):** (2) NMP-off / verified-null in low-material
-> zugzwang; (4-remainder) passed-pawn **race-comparison** term + **knight-aware**
-> rule-of-the-square (the over-optimism killer the symmetric race needs); (5) EG
-> drawishness scale factors; (6) 50-move-clock eval damping; (7) soften LMR/LMP at
-> low material + passed-pawn push extension; (8) NNUE. Standalone EG centralization
-> was dropped (folded into KingProx), as advised.
+> **Built but NOT shipped:** (5) EG drawishness **scale factors** (`scalefactor`,
+> Stockfish-classical port) — correct + safety-guarded, but SPRT'd ~neutral with
+> the TB attached (`+2.7 ± 5.4`, inconclusive): the drawish configs it fixes are the
+> ≤5-man endings the TB already decides, so it only acts in a thin 6–10-man slice.
+> Kept **default-off** (zero-overhead, scaffolding for a future MG-anchored re-tune).
+> Lesson: **the TB masks any eval term whose payoff lives ≤5 men** — which is why
+> PawnRace (acts above the boundary) registered and scale factor didn't.
+>
+> **Still open (priority order):** (2) NMP **verification** / verified-null in
+> low-material zugzwang (the simple no-non-pawn-material gate already ships; the
+> re-search-on-fail-high variant does not); (7) LMP **`non_pawn_material` gate**
+> (don't move-count-prune the critical pawn move in pure pawn endings) + passed-pawn
+> **push extension** (6th/7th rank); (6) 50-move-clock eval damping; (8) NNUE.
+> Standalone EG centralization was dropped (folded into KingProx); the passed-pawn
+> race + knight-aware rule-of-the-square (was priority-4) **shipped** as PawnRace.
 >
 > **Net on the original lost position vs full Stockfish:** 1.0/5 → 60% draw-hold at
 > baseline, **83% with SMP+time**. The residual losses are horizon, not eval — more

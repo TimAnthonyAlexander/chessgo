@@ -244,7 +244,10 @@ func ParamsToTables(θ []float64) (mgP, egP [6][64]int, w *Weights) {
 			egP[pt][pidx] = round(θ[2*f+1]) - egValue[pt]
 		}
 	}
-	w = &Weights{KingShield: round(θ[2*FeatKingShield])}
+	// PawnRaceEG is a seeded, non-linear term (not a trace feature — it can't be
+	// expressed as a single linear coefficient), so it is preserved as the seed
+	// through the round-trip rather than reconstructed from θ.
+	w = &Weights{KingShield: round(θ[2*FeatKingShield]), PawnRaceEG: defaultW.PawnRaceEG}
 	for i := 0; i < 4; i++ {
 		f := FeatMob0 + i
 		w.MobMG[i] = round(θ[2*f])

@@ -129,20 +129,20 @@ type Result struct {
 
 // Searcher holds reusable search state (TT, killers, history).
 type Searcher struct {
-	tt       *TT
-	params   Params
-	ec       eval.Config // evaluation config derived from params
-	killers  [maxPly][2]chess.Move
-	history  [12][64]int
+	tt      *TT
+	params  Params
+	ec      eval.Config // evaluation config derived from params
+	killers [maxPly][2]chess.Move
+	history [12][64]int
 	// staticEvals[ply] is the static eval at that ply (evalNone while in check), so
 	// a node can ask whether its side is "improving" vs two plies ago.
 	staticEvals [maxPly]int
 	nodes       uint64
-	stop     bool
-	deadline time.Time
-	useTime  bool
-	nodeCap  uint64
-	keyStack []uint64
+	stop        bool
+	deadline    time.Time
+	useTime     bool
+	nodeCap     uint64
+	keyStack    []uint64
 
 	// Syzygy tablebase for WDL-in-search (Params.TBSearch). Shared, read-only
 	// pointer (Fathom's WDL probe is thread-safe), copied to every SMP worker.
@@ -192,13 +192,15 @@ func evalConfig(p Params) eval.Config {
 		w = eval.TunedWeights()
 	}
 	return eval.Config{
-		Mobility:   p.Mobility,
-		Pawns:      p.Pawns,
-		KingSafety: p.KingSafety,
-		BishopPair: p.BishopPair,
-		KingProx:   p.KingProx,
-		UseTuned:   p.TunedEval,
-		W:          w,
+		Mobility:    p.Mobility,
+		Pawns:       p.Pawns,
+		KingSafety:  p.KingSafety,
+		BishopPair:  p.BishopPair,
+		KingProx:    p.KingProx,
+		PawnRace:    p.PawnRace,
+		ScaleFactor: p.ScaleFactor,
+		UseTuned:    p.TunedEval,
+		W:           w,
 	}
 }
 

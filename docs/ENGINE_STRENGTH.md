@@ -247,7 +247,8 @@ the sign of the result.
 | **Syzygy 5-piece root-DTZ (shipped, live)** | **+18.8 @ movetime** (std book) | done | CGo+Fathom, root probe, `tb` flag; SPRT-accepted (§9); auto-loads in prod from `data/syzygy` |
 | **WDL-in-search (shipped, live)** | **+32.7 @ movetime** (endgame book) | done | `tbsearch` flag; lock-free `tb_probe_wdl` at internal nodes; default-on, gated off for weakened bots (§10) |
 | **KingProx eval term (shipped, live)** | **+30.5 @ movetime** (endgame book) | done | EG king-proximity to advanced passers; `kingprox` flag, default-on; rejected a joint re-tune to pair it (§10) |
-| Richer HCE terms (Phase 2) | +30–80 | medium | passed-pawn race comparison + knight-aware rule-of-the-square, NMP-off in low-material zugzwang, EG scale factors, 50-move damping (§10 "what's next") |
+| **PawnRace eval term (shipped)** | **+17.4 @ movetime** (endgame book) | done | EG knight-aware unstoppable-passer / race term; `pawnrace` flag, default-on; acts above the 5-man TB boundary so it isn't TB-masked (§10.5) |
+| Richer HCE terms (Phase 2, remainder) | +20–60 | medium | NMP verification / verified-null in low-material zugzwang, LMP `non_pawn_material` gate + passed-pawn push extension, 50-move-clock eval damping. (EG scale factors were built but SPRT'd ~0 with the TB — kept default-off, §10.6) |
 | **Ship SMP to prod (shipped, live)** | **part of the +97** (2t on a 4-core box) | done | `serve -search-threads 2` + `hub -bot-search-threads 2` in the systemd units (§4); balanced for the shared box |
 | Remaining search patches | +50–80 | low | futility, countermove, singular ext, TT-static-eval |
 | **NNUE** (learned non-linear eval) | +200–400 | high (weeks) | the eventual eval answer; the tuner's traced-coefficient dataset is a training-data step |
@@ -395,6 +396,54 @@ culprit is the **table change itself**, most likely the **TB-label over-optimism
 adopt the re-tuned PSQT. If revisited, the path is an **MG-anchored** re-tune
 (freeze piece values, tune only the endgame terms). Tooling for the A/B (selectable
 `cand` table) was reverted; the `gen-tb-epd` generator + control flags remain.
+
+### 10.5 PawnRace eval term (`pawnrace`, default-on) — +17.4 endgame
+
+EG-only **knight-aware unstoppable-passer / race** term — the "do I queen first?"
+over-optimism killer. Emitted as White−Black with a ply-decayed bonus (seeded
+`PawnRaceEG=700`), so symmetric races cancel to ~0 and the term's real value is the
+**negative** it gives the side whose opponent has the unstoppable passer (telling
+an over-optimistic side NOT to race into a lost promotion — the exact diagnosed
+failure). Detection is conservative on every axis and only fires when the
+defender's non-pawn material is **knights-only** (the K+N+P case; bails on B/R/Q):
+clean promotion path, enemy **king** outside the square, and no enemy **knight**
+able to reach the promo/path squares in time (precomputed `knightDist[64][64]`
+BFS). Every tempo is rounded in the defender's favour, so it under-claims
+unstoppability rather than over-claiming it.
+
+- **Not TB-masked** (unlike the scale factor, §10.6): it acts in **6–10-man**
+  positions *above* the 5-man boundary, so the tablebase can't decide them first.
+- On the diagnosed `3kn3/5ppp/8/8/8/8/PPP5/3NK3 w` it returns **exactly 0** — every
+  passer is caught by the nearby enemy king, so no false optimism is added (right
+  for a dead draw). Its payoff is in *other* positions reached during play.
+- Seeded, **not a tuner feature** (the unstoppable detection is non-linear, so it
+  can't be a linear trace coefficient — preserved as a constant through the trace
+  round-trip, never fed to the Texel tuner).
+
+**SPRT** (`--new "pawnrace=on" --old "pawnrace=off" --tb-path data/syzygy
+--movetime 100`, mixed endgame book, TB on both sides): **ACCEPT H1, +17.4 ± 10.6**
+(539 pairs, pentanomial `[9 61 364 77 28]`, LLR +2.95). Standard-book
+non-regression: *in progress.*
+
+### 10.6 The scale-factor term was built but did NOT register (default-off)
+
+A faithful port of Stockfish's classical endgame **ScaleFactor** (`scalefactor`
+flag): scales the eg term by `sf/64` in drawish material — no-pawn ≤minor → 0/4/14,
+opposite bishops → 18+4·passers / 22+3·pieces, lone-queen → 37+3·minors, generic
+pawn-count cap → 36+7·pawns — plus a guard SF doesn't need (a ≥-rook material lead
+returns sf=64, since we have no specialized KXK endgames to return early; a unit
+test caught it scaling a won KRvK to 36). Correct and safety-guarded.
+
+**But it SPRT'd ~neutral with the TB attached:** `+2.7 ± 5.4` (2000 pairs,
+INCONCLUSIVE — hit the pair cap, LLR −0.24). The reason is exactly the TB: the
+drawish configs it most cleanly fixes (KBvK, KNvK, KRvKB, OCB) are the ≤5-man
+endings the tablebase already decides *exactly*, so the term only acts in the
+thinner 6–10-man slice, and in self-play both sides hold those equally → ~0.
+**Decision:** keep the code, **default-off** (correct, zero-overhead when off,
+useful scaffolding for a future MG-anchored endgame re-tune) but do **not** flip
+it on — by the "only ship on a clean H1" rule it doesn't earn the default. The
+lesson — **TB masks any eval term whose payoff lives ≤5 men** — is why PawnRace
+(which acts above the boundary) was the better bet and why it registered.
 
 ### 10.4 Result on the original lost position
 

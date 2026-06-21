@@ -142,5 +142,8 @@ func tunedWeightsLiteral() *Weights {
 		// Hand-seeded until the joint re-tune (it is NOT yet in Tunables(), so the
 		// current tuner leaves it untouched). SPRT-gated behind Params.KingProx.
 		KingProxEG: 4,
+		// Hand-seeded unstoppable-passer bonus (NOT in Tunables(); the tuner leaves
+		// it untouched). SPRT-gated behind Params.PawnRace.
+		PawnRaceEG: 700,
 	}
 }

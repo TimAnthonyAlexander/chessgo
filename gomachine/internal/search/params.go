@@ -29,6 +29,8 @@ type Params struct {
 	KingSafety     bool // evaluation: king pawn-shield term
 	BishopPair     bool // evaluation: bishop-pair bonus
 	KingProx       bool // evaluation: EG-only king proximity to advanced passers (endgame term #1, under SPRT)
+	PawnRace       bool // evaluation: EG-only knight-aware unstoppable-passer / race detection (under SPRT)
+	ScaleFactor    bool // evaluation: EG drawishness scale factor (scales the eg term toward draw in drawish material)
 	TunedEval      bool // evaluation: use the Texel-tuned PSQT + tuned weights
 	UseBook        bool // consult the precomputed opening book before searching (engine must have a book set)
 	UseTablebase   bool // probe Syzygy endgame tablebases at the root (engine must have a tablebase set)
@@ -49,12 +51,13 @@ type Params struct {
 //   - Aspiration: +21.8 ± 12.1 Elo (876 pairs)
 //   - RFP:        +67.2 ± 23.1 Elo (286 pairs)
 //   - LMP:        +94.6 ± 28.5 Elo (124 pairs)
+//
 // History/ordering work (2026-06-19):
 //   - HistMalus:  +90.8 ± 27.6 Elo (131 pairs)
 //   - Improving:  +78.3 ± 25.2 Elo (174 pairs; RFP+LMP margin scaling)
 //   - LMRFormula: +10.8 ± 7.8  Elo (592 pairs; log(d)·log(m) table + history adj,
-//                 replacing the flat 1/2. Small at fixed nodes; the depth-per-sec
-//                 part is a movetime gain this test can't measure.)
+//     replacing the flat 1/2. Small at fixed nodes; the depth-per-sec
+//     part is a movetime gain this test can't measure.)
 //
 // Next under test: richer LMR adjustments (PV/improving/cutNode, earlier onset) →
 // futility pruning → razoring → continuation history → singular extensions.
@@ -89,8 +92,19 @@ func DefaultParams() Params {
 		// standard-book non-reg ~0. A joint eval re-tune was tried and REJECTED — the
 		// re-tuned PSQT gave back the gain (table A/B ≈0 vs +30 here), so we ship the
 		// seeded weight (KingProxEG=4) on the existing table, not a re-tune.
-		KingProx:   true,
-		TunedEval:  true,
+		KingProx: true,
+		// EG-only knight-aware unstoppable-passer / race term (the "do I queen
+		// first?" over-optimism killer). SPRT-accepted vs off on the mixed endgame
+		// book with TB on both sides: +17.4 ± 10.6 Elo (539 pairs, 2026-06-21).
+		// Acts in 6–10-man positions ABOVE the 5-man TB boundary, so it is not
+		// TB-masked. Gated to a knights-only defender (the K+N+P case); seeded
+		// PawnRaceEG=700, not a tuner feature (non-linear). See ENGINE_STRENGTH §10.
+		PawnRace: true,
+		// EG drawishness scale factor (Stockfish-classical): scales the eg term by
+		// sf/64 in drawish material (no-pawn ≤minor → 0/4/14, opposite bishops,
+		// lone-queen, pawn-count cap). UNDER SPRT — default off until accepted.
+		ScaleFactor: false,
+		TunedEval:   true,
 		// Syzygy endgame tablebase probing at the search root. SPRT-accepted vs
 		// tb=off: +18.8 ± 11.1 Elo @ 100ms/move (2026-06-20, 5-piece set, 109 pairs,
 		// 0 lost pairs); Stockfish anchor held ≈2782 with it on. Inert unless the

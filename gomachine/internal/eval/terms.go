@@ -7,13 +7,15 @@ import "github.com/timanthonyalexander/gomachine/internal/chess"
 // is gated so the harness can A/B it; the Texel tuner optimizes W jointly. eval
 // only reads W, so a *Weights may be shared across SMP search threads.
 type Config struct {
-	Mobility   bool
-	Pawns      bool
-	KingSafety bool
-	BishopPair bool
-	KingProx   bool // EG-only king proximity to advanced passers (escort/blockade)
-	UseTuned   bool // select the Texel-tuned PSQT (tuned_tables.go) over PeSTO
-	W          *Weights
+	Mobility    bool
+	Pawns       bool
+	KingSafety  bool
+	BishopPair  bool
+	KingProx    bool // EG-only king proximity to advanced passers (escort/blockade)
+	PawnRace    bool // EG-only knight-aware unstoppable-passer / race detection
+	ScaleFactor bool // EG drawishness scale factor (Stockfish-classical, scales the eg term)
+	UseTuned    bool // select the Texel-tuned PSQT (tuned_tables.go) over PeSTO
+	W           *Weights
 }
 
 // TunedWeights returns the Texel-tuned knowledge weights (tuned_tables.go),
@@ -33,6 +35,7 @@ type Weights struct {
 	BishopPairMG, BishopPairEG int // bonus for holding both bishops
 	KingShield                 int // MG penalty per missing pawn in the king's shield
 	KingProxEG                 int // EG: per-rank weight for king proximity to (≥4th-rank) passers
+	PawnRaceEG                 int // EG: base bonus for an unstoppable passer (knight-aware), decayed by plies-to-queen
 }
 
 // DefaultWeights is the hand-picked fallback weight set (positive mobility,
@@ -53,6 +56,7 @@ func DefaultWeights() *Weights {
 		BishopPairMG: 25, BishopPairEG: 40,
 		KingShield: -12,
 		KingProxEG: 4,
+		PawnRaceEG: 700,
 	}
 }
 
