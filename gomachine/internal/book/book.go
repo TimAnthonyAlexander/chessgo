@@ -109,8 +109,19 @@ func Load(path string) (*Book, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parse(raw, path)
+}
+
+// Parse validates and decodes an in-memory book image — the copy embedded in
+// the binary (see the module-root assets.go). Same semantics as Load: a stale
+// or unknown format yields (nil, nil); corruption yields an error.
+func Parse(raw []byte) (*Book, error) {
+	return parse(raw, "<embedded>")
+}
+
+func parse(raw []byte, name string) (*Book, error) {
 	if len(raw) < headerSize || string(raw[0:4]) != magic {
-		return nil, fmt.Errorf("book %s: bad magic/too short", path)
+		return nil, fmt.Errorf("book %s: bad magic/too short", name)
 	}
 	if binary.LittleEndian.Uint32(raw[4:]) != formatVer {
 		return nil, nil // unknown format → ignore
@@ -121,10 +132,10 @@ func Load(path string) (*Book, error) {
 	count := int(binary.LittleEndian.Uint32(raw[12:]))
 	body := raw[headerSize:]
 	if len(body) != count*recordSize {
-		return nil, fmt.Errorf("book %s: size mismatch (have %d, want %d)", path, len(body), count*recordSize)
+		return nil, fmt.Errorf("book %s: size mismatch (have %d, want %d)", name, len(body), count*recordSize)
 	}
 	if binary.LittleEndian.Uint32(raw[16:]) != crc32.ChecksumIEEE(body) {
-		return nil, fmt.Errorf("book %s: crc mismatch (corrupt)", path)
+		return nil, fmt.Errorf("book %s: crc mismatch (corrupt)", name)
 	}
 
 	entries := make([]Entry, count)

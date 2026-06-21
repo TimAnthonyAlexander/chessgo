@@ -251,15 +251,18 @@ the sign of the result.
 | Richer HCE terms (Phase 2, remainder) | +20–60 | medium | NMP verification / verified-null in low-material zugzwang, LMP `non_pawn_material` gate + passed-pawn push extension, 50-move-clock eval damping. (EG scale factors were built but SPRT'd ~0 with the TB — kept default-off, §10.6) |
 | **Ship SMP to prod (shipped, live)** | **part of the +97** (2t on a 4-core box) | done | `serve -search-threads 2` + `hub -bot-search-threads 2` in the systemd units (§4); balanced for the shared box |
 | Remaining search patches | +50–80 | low | futility, countermove, singular ext, TT-static-eval |
-| **NNUE** (learned non-linear eval) | **+172 @ nodes, −156 @ movetime today** | high | net **beats HCE per node** (bullet on Metal, §11) but the non-incremental float eval is ~20–80× costlier/node → loses at movetime; **blocked on the incremental accumulator** (Phase 4), not on net quality |
+| **NNUE (SHIPPED, default-on)** | **+212 @ movetime** (H1) | done | bullet-trained `(768→256)×2→1` SCReLU on Metal; incremental int16 accumulator (Phases A+B, §11). Replaced HCE as the default eval. Next: v5 maturity net, then SIMD, then a wider net |
 | SPSA (Elo-in-the-loop weight tuning) | modest | medium | the *correct* way to tune the few params with no static objective |
 
-Current strength: **≈2782 ± 84** on Stockfish's UCI_Elo scale (100 games vs
-SF-17.1 @ UCI_Elo 2500, **83.5%**, +282 head-to-head, `tb=on`), up from ~2720
-pre-TB (within the anchor's noise — the +18.8 movetime SPRT is the real figure for
-the tablebase; see §9). The anchor is noisy: a band, not a number; sweep `--sf-elo`
-to triangulate, and gate patches on SPRT. Full-strength Stockfish 17.1/18
-(~3650 CCRL) is still ~870 Elo above us — that gap needs NNUE.
+Current strength (NNUE on): a **~2780-class** engine on Stockfish's UCI_Elo scale
+@ 100 ms/move — **≈2765 ± 128 vs SF-2800** (even match), bracketed by **+241 vs
+SF-2700** (80%) and **−241 vs SF-2900** (20%) at 10–20 games each. The anchor is
+noisy (a band, not a number; small samples) — the **trustworthy** NNUE figure is
+the self-play SPRT, **+212 ± 49 vs HCE @ movetime** (§11). Pre-NNUE this anchor read
+≈2782 ± 84 vs SF-2500; the absolute number barely moves because 10–40 anchor games
+can't resolve a ~100-Elo self-play shift — gate on the SPRT, not the anchor.
+Full-strength Stockfish 17.1/18 (~3650 CCRL) is still hundreds of Elo above us — the
+NNUE levers (maturity net, SIMD, wider net; §11.4) are how that gap narrows.
 
 ## 9. Syzygy endgame tablebases (shipped, +18.8 Elo)
 
@@ -474,38 +477,88 @@ full SF is ~800 Elo above — but it no longer walks into the mate.
 - **WDL-in-search is endgame-book-scoped**; KingProx accepted on both endgame and
   per-class books with ~0 standard-book regression.
 
-## 11. NNUE — net clears HCE per-node, but is NOT movetime-viable yet
+## 11. NNUE — SHIPPED, default-on, +212 Elo @ movetime
 
-Full build log + phased plan: `docs/NNUE/PLAN.md`. Status as of 2026-06-21:
+Full build log + phased plan: `docs/NNUE/PLAN.md`. Status: **live, `nnue` default-ON**
+(2026-06-21).
 
 A `(768→256)×2→1` SCReLU net, trained with **bullet** (jw1912/bullet) on the
 **M3 Pro's Metal GPU** over ~40 GB of decorrelated Stockfish-binpack data
-(~2.7M pos/sec), **decisively beats the tuned HCE per node**:
+(~2.7M pos/sec), now beats the tuned HCE **both** per-node and on the clock. The
+diagnostic arc and the two engineering phases that made it movetime-viable:
 
-| Net | vs tuned HCE | book | budget |
+| Stage | vs tuned HCE | budget | verdict |
 |---|---|---|---|
-| v4, 60-superbatch (6 min, uncalibrated) | **+171.6 ± 60** (W110 L35 D15) | standard | **40 000 fixed nodes** |
-| v4, same net | **−156 ± 95** (W6 L22 D6, H0-trending) | standard | **100 ms/move** |
+| v1–v3 (Go trainer, thin/under-trained data) | −120 to −332 | — | **data-starvation**, not a math bug |
+| v4 net, from-scratch float eval | **+171.6 ± 60** | **40 000 fixed nodes** | net is good per-node… |
+| v4 net, from-scratch float eval | **−156 ± 95** | **100 ms/move** | …but too slow on the clock |
+| **+ Phase A** (incremental float accumulator) | **+177.8 ± 41.5** (H1) | **100 ms/move** | **movetime-positive** |
+| **+ Phase B** (int16 quantized, bit-exact) | **+212.2 ± 49.2** (H1) | **100 ms/move** | **SHIPPED** |
 
-**The sign flips with the clock — and that is the whole story.** The +172 is a
-*search-quality* result (equal nodes, better eval per node). The −156 is what
-happens when **speed counts**: the net is a **non-incremental float accumulator**
-— it recomputes the full 768→256 forward pass at *every* node (HCE is ~30–60 ns;
-a from-scratch NNUE eval is ~1–5 µs, ≈20–80× costlier), so at a real time budget
-it searches an order of magnitude fewer nodes than HCE and loses badly despite the
-sharper eval.
+**The sign-flip was the whole story, and it was a *speed* problem, not a net
+problem.** At equal nodes the float net already won (+172); at movetime it lost
+(−156) because a **from-scratch** NNUE eval recomputes the full 768→256 forward
+pass at *every* node (HCE ~30–60 ns; from-scratch NNUE ~2.7–7.3 µs — measured
+**~100–160× costlier**), so it searched ~10× fewer nodes and lost despite the
+sharper eval. Proving the float net beat HCE at equal nodes *first* made that
+unambiguous — the loss was plumbing, not training.
 
-**Therefore NNUE is NOT shipped and the `nnue` flag stays default-off.** Shipping
-it now would *regress* prod (prod runs at movetime). This is exactly the sequencing
-the plan locked in: prove the float net beats HCE at equal nodes (done, +172)
-**before** the accumulator surgery — so the movetime loss is unambiguously a
-*speed* problem, not a net/training problem.
+### 11.1 Phase A — incremental accumulator (float)
+On make-move, update only the ~2–4 features that changed instead of rebuilding all
+~32. Design (`internal/nnue/accumulator.go`):
+- **Accumulator stored by absolute color** (White-persp + Black-persp), *not*
+  stm/opp — so a **null move touches nothing** (`evalFrom` re-orients via
+  `pos.SideToMove()` at the output dot). This is the load-bearing simplification:
+  plain 768 features (no king-bucketing) → *every* move incl. the king is a small
+  delta, **no refresh path ever** (the worst HalfKP accumulator-bug class doesn't
+  exist for us).
+- **Ply-indexed stack** on the searcher: Push = `copy(parent)+delta`; **Pop = `sp--`**
+  (no reverse-delta on unmake). HCE pays zero overhead (gated on `useNNUE`).
+- **Gate:** a from-scratch-vs-incremental equality assert run *inside real αβ
+  search with null-move + qsearch enabled* (covered 17 966 null-move + 411 552
+  qsearch nodes — proven, not assumed). `-race` clean.
+- **Result:** NNUE NPS 198k→637k (**3.2×**); node deficit vs HCE 6.9×→**2.1×**;
+  **+177.8 ± 41.5 @ movetime, H1**. Shipped, `nnue` flipped default-ON.
 
-**The gate to prod is the incremental accumulator** (Phase 4): on make/unmake,
-update only the ~2–4 features that changed instead of recomputing all ~32 → NNUE
-NPS approaches HCE NPS → the +172 per-node edge survives into movetime. Quantized
-int16 inference compounds it. Only then re-SPRT **at movetime**; flip the default
-on H1. Net-quality levers (longer training — a 600-superbatch run is in progress;
-wider 512/1024 nets; more data) raise the per-node ceiling but do **not** fix the
-speed wall — the accumulator does. Until then the staged net at
-`data/nnue/net.nnue` is inert (flag off).
+### 11.2 Phase B — integer quantization (int16, bit-exact)
+Replace the float forward pass with bullet's native integer math: int16
+accumulator, int8/int16 weights, int32 SCReLU square, int64 dot, round-to-nearest
+descale (QA/QB/Scale = 255/64/400). A new **GNN2** net format stores bullet's ints
+**verbatim** (no float round-trip → exact). `internal/nnue/quant.go`.
+- **Gates:** int-incremental == int-scratch **exactly** (associative int add, no
+  int16 overflow → strictly stronger than Phase A's float-epsilon); int-vs-float
+  reference **0 cp** over 14 FENs (bit-exact); int-vs-float A/B SPRT **−0.0 Elo**
+  (quantization quality-neutral, confirmed); `-race` clean.
+- **Result:** node deficit 2.1×→**1.59×** (int16 = half the memory traffic of
+  float32; scalar int arithmetic itself is ~flat vs float). Notably NNUE-int reaches
+  **depth 15 vs HCE's 14** despite ~37% fewer nodes — a better eval orders moves
+  better, prunes harder, and searches a *narrower, deeper* tree. **+212.2 ± 49.2 @
+  movetime, H1.** Shipped.
+
+### 11.3 Pipeline & prod
+bullet trains on Metal → `gomachine nnue-import-bullet` imports `quantised.bin` →
+**GNN2** net at `data/nnue/net.nnue` (committed, 772 KB; feature indexing identical
+to bullet's Chess768, verified). Auto-loads cwd-relative (`NNUE_PATH` overrides),
+inert if absent (HCE fallback). Prod `git pull` carries the binary + net together
+(keep them in sync — a GNN2 net needs a Phase-B binary). Absolute anchor with NNUE
+on: **≈2765 ± 128 vs SF-2800** (even match; bracketed by +241 vs SF-2700 / −241 vs
+SF-2900, 10–20 games each — a band, ~2780-class @ 100ms).
+
+### 11.4 Levers still unpulled (ordered)
+1. **v5 maturity net** — the shipped net is only ~100 epochs ("competitive but
+   immature", bullet's own rule of thumb is ~400). A ~400-epoch retrain (~4 h on
+   the Metal GPU, LR re-scheduled to anneal late) is **free per-node Elo at zero
+   NPS cost** — same architecture, better weights.
+2. **SIMD** (the next *speed* lever) — `archsimd` on **amd64/server** (Go 1.26,
+   `GOEXPERIMENT=simd`; ARM/NEON lands ~Go 1.27, Aug 2026). Only two loops to
+   vectorize (accumulator add/sub + SCReLU dot); scalar stays the build-tagged
+   fallback, and SIMD output must be **bit-identical** to scalar (same exact gate),
+   so correctness risk is ~zero — the "experimental" risk is API churn, not runtime.
+   Closes 1.59×→~1.1×.
+3. **Wider net** (512/1024) — the big *quality* lever, but width is cheap **only**
+   after int + SIMD (at today's recompute+scalar a 3072-wide net would be ~2400×,
+   not viable). SPRT-gate each width step, exactly as Stockfish climbed
+   1024→1536→2048→2560→3072.
+
+The Go trainer (`internal/nnuetrain`) is now legacy; bullet is the trainer going
+forward.

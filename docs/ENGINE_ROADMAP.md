@@ -36,24 +36,27 @@
 > Lesson: **the TB masks any eval term whose payoff lives ≤5 men** — which is why
 > PawnRace (acts above the boundary) registered and scale factor didn't.
 >
-> **NNUE — net beats HCE per node, blocked on speed (not shipped):** a
-> `(768→256)×2→1` SCReLU net (bullet on the M3 Pro's Metal GPU, ~40 GB SF data)
-> scores **+171.6 ± 60 vs tuned HCE @ 40k fixed nodes** — the first eval to clear
-> HCE. But the **same net is −156 ± 95 @ 100 ms/move**: it's a non-incremental
-> float accumulator (full 768→256 recompute every node, ≈20–80× HCE's eval cost),
-> so at a real clock it searches far fewer nodes and loses. **`nnue` flag stays
-> default-off — shipping now would regress prod.** Gate to prod = the **incremental
-> accumulator** (update only changed features on make/unmake), then re-SPRT at
-> movetime. Net-quality work (longer/wider training) raises the ceiling but does
-> not fix the speed wall. Full write-up: `docs/ENGINE_STRENGTH.md §11`,
-> `docs/NNUE/PLAN.md`.
+> **NNUE — SHIPPED, default-on, +212 Elo @ movetime.** A `(768→256)×2→1` SCReLU
+> net (bullet on the M3 Pro's Metal GPU, ~40 GB SF data) replaced the HCE as the
+> default eval. The arc: +172 vs HCE @ fixed nodes but −156 @ movetime (a
+> non-incremental float accumulator, ~100–160× HCE's eval cost) → **Phase A**
+> incremental accumulator (absolute-color halves so null-move is free, ply-stack,
+> Pop=`sp--`; 3.2× faster, deficit 6.9×→2.1×) → **+177.8 ± 41.5 @ movetime, H1,
+> shipped default-on** → **Phase B** int16 quantization (GNN2 net, bullet ints
+> verbatim, bit-exact gate; deficit →1.59×, reaches depth 15 vs HCE's 14) →
+> **+212.2 ± 49.2 @ movetime, H1, shipped.** Net committed at `data/nnue/net.nnue`,
+> auto-loads. Anchor with NNUE on: ~2780-class (≈2765 ± 128 vs SF-2800, even).
+> **Levers unpulled (ordered):** v5 maturity net (~400-epoch retrain, free per-node
+> Elo, zero NPS) → SIMD (amd64 `archsimd`; only 2 loops, scalar fallback, bit-exact
+> gate → ~zero risk) → wider net (512/1024, cheap only after SIMD). Full write-up:
+> `docs/ENGINE_STRENGTH.md §11`, `docs/NNUE/PLAN.md`.
 >
 > **Still open (priority order):** (2) NMP **verification** / verified-null in
 > low-material zugzwang (the simple no-non-pawn-material gate already ships; the
 > re-search-on-fail-high variant does not); (7) LMP **`non_pawn_material` gate**
 > (don't move-count-prune the critical pawn move in pure pawn endings) + passed-pawn
-> **push extension** (6th/7th rank); (6) 50-move-clock eval damping; (8) NNUE
-> **incremental accumulator** (above — the movetime-viability gate).
+> **push extension** (6th/7th rank); (6) 50-move-clock eval damping; NNUE **v5
+> maturity net → SIMD → wider net** (above — the post-ship strength ladder).
 > Standalone EG centralization was dropped (folded into KingProx); the passed-pawn
 > race + knight-aware rule-of-the-square (was priority-4) **shipped** as PawnRace.
 >

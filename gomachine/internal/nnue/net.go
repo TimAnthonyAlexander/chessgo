@@ -1,6 +1,7 @@
 package nnue
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"sync/atomic"
 
+	assets "github.com/timanthonyalexander/gomachine"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 )
 
@@ -288,13 +290,22 @@ func Eval(pos *chess.Position) (cp int, ok bool) {
 const defaultPath = "data/nnue/net.nnue"
 
 func init() {
+	// An explicit file (NNUE_PATH, else the cwd-relative default) wins, so a
+	// freshly trained net can be dropped in without a rebuild.
 	path := os.Getenv("NNUE_PATH")
 	if path == "" {
 		path = defaultPath
 	}
-	// Inert if absent/unreadable (Phase 1: no net exists yet) — the nnue flag
-	// then falls back to HCE, exactly like an unattached tablebase.
 	if n, err := LoadNet(path); err == nil {
 		defaultNet.Store(n)
+		return
+	}
+	// No file on disk — fall back to the net embedded in the binary, so a bare
+	// `go install` build is full strength from any working directory. Still
+	// inert (HCE fallback, like an unattached tablebase) if no net is embedded.
+	if len(assets.NNUENet) > 0 {
+		if n, err := ReadNet(bytes.NewReader(assets.NNUENet)); err == nil {
+			defaultNet.Store(n)
+		}
 	}
 }

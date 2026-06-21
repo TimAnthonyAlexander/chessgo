@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	assets "github.com/timanthonyalexander/gomachine"
 	"github.com/timanthonyalexander/gomachine/internal/book"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 	"github.com/timanthonyalexander/gomachine/internal/engine"
@@ -41,7 +42,12 @@ func cmdServe(args []string) {
 		b, err := book.Load(*bookPath)
 		switch {
 		case os.IsNotExist(err):
-			// No book on disk yet — fine, the engine just searches everything.
+			// No book file (e.g. an installed binary run outside gomachine/) —
+			// fall back to the copy embedded in the binary.
+			if eb, eerr := book.Parse(assets.Book); eerr == nil && eb != nil {
+				srv.SetBook(eb)
+				fmt.Printf("book: loaded embedded (%d positions)\n", eb.Len())
+			}
 		case err != nil:
 			fmt.Fprintf(os.Stderr, "book: ignoring %s: %v\n", *bookPath, err)
 		case b == nil:

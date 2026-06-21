@@ -78,6 +78,14 @@ func TestAspirationMatchesFullWindow(t *testing.T) {
 	pure := func() Params {
 		p := DefaultParams()
 		p.UseTT, p.NullMove, p.LMR, p.RFP, p.LMP, p.DeltaPrune = false, false, false, false, false, false
+		// Pin the eval: this isolates the aspiration window, and the move+score
+		// equality below only holds on an eval without frequent exact-score ties
+		// (the HCE — "tuned and base" — per the doc above). NNUE produces exact
+		// integer ties on some positions where a narrow re-search legitimately
+		// keeps a different, equally-scored move; that's tie resolution, not an
+		// aspiration bug. The net is now embedded so it auto-loads in tests too,
+		// hence pinning here keeps this test independent of net presence.
+		p.Nnue = false
 		return p
 	}
 	off := pure()
