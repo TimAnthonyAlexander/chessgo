@@ -69,11 +69,18 @@ func TestAnalyzeGameRepeatedPositionIsObjective(t *testing.T) {
 
 	ta, va := evalOf(a)
 	tb, vb := evalOf(b)
-	if ta != tb || va != vb {
-		t.Fatalf("identical position got different evals: ply %d = {%s %g}, ply %d = {%s %g}",
+	// The objectivity a parallel, movetime-bounded search can actually guarantee:
+	// the recurring position is consistently a forced mate for the SAME side. The
+	// exact mate DISTANCE may differ between the two analyses (each runs on its own
+	// pooled engine under its own node budget / CPU contention), so we assert same
+	// type + same sign, not identical magnitude. This still catches the bug it
+	// guards — a recurred position scoring 0.00 (draw) instead of mate (see
+	// analyzePosition's comment on not threading game-history repetitions in).
+	if ta != "mate" || tb != "mate" {
+		t.Fatalf("recurring position should be a forced mate both times, got ply %d = {%s %g}, ply %d = {%s %g}",
 			a, ta, va, b, tb, vb)
 	}
-	if ta != "mate" {
-		t.Fatalf("expected a forced mate at the recurring position, got {%s %g}", ta, va)
+	if (va > 0) != (vb > 0) {
+		t.Fatalf("forced mate flipped winning side: ply %d = %g, ply %d = %g", a, va, b, vb)
 	}
 }

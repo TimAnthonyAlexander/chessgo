@@ -81,6 +81,15 @@ func DefaultParams() Params {
 		Pawns:      true,
 		KingSafety: true,
 		BishopPair: true,
+		// EG-only king proximity to advanced (≥4th-rank) passers — rewards escorting
+		// your own passers and keeping the enemy king off theirs (the gap that had
+		// the engine walk into lost connected-passer races). SPRT-accepted on the
+		// shipped table with TBSearch on: +30.5 ± 13.6 @ 100ms (endgame book), and
+		// per-material-class +33 rook / +36 minor / +24 K+P (no class regressed);
+		// standard-book non-reg ~0. A joint eval re-tune was tried and REJECTED — the
+		// re-tuned PSQT gave back the gain (table A/B ≈0 vs +30 here), so we ship the
+		// seeded weight (KingProxEG=4) on the existing table, not a re-tune.
+		KingProx:   true,
 		TunedEval:  true,
 		// Syzygy endgame tablebase probing at the search root. SPRT-accepted vs
 		// tb=off: +18.8 ± 11.1 Elo @ 100ms/move (2026-06-20, 5-piece set, 109 pairs,
