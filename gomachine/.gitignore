@@ -1,4 +1,5 @@
 bin/
 dist/
 data/syzygy/
-data/nnue/
+data/nnue/*
+!data/nnue/net.nnue
