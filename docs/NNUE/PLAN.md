@@ -16,8 +16,8 @@
 | Decision | Choice | Why |
 |---|---|---|
 | **Feature set** | **768 piece-square, dual perspective** (6 types × 2 colors × 64) | King is an ordinary piece → **no king-relative refresh**, the worst accumulator-bug source. Every move is a single remove+add delta. Fits our ~1.6M positions (HalfKP's 40,960 sparse features are under-determined at this data size). Clears current HCE comfortably. The trainer, loaders, accumulator stack, and invariant test **all transfer to HalfKA later** — this is a base, not throwaway. |
-| **Trainer** | **Go-native** (hand-rolled backprop, mirrors `internal/tune` Adam) | 768→256→1 on 1.6M positions is tiny; CPU on the M3 Pro is minutes–low hours, a GPU buys nothing here. Keeps the pure-Go, single-dependency repo + exact net-format control. PyTorch+MPS / Rust `bullet` held in reserve for the Phase-5 scale-up (wider L1, HalfKA, more data) where CPU becomes the limiter. |
-| **First architecture** | `(768 → 256)×2 → 1`, ClippedReLU, float32 v1 | Simplest net that beats linear HCE. One feature transformer (shared weights, two perspectives), concat stm-first → 512, single output layer. |
+| **Trainer** | ~~Go-native~~ → **`bullet` on Metal GPU** *(superseded — see §4 v4)* | The Go-native bet (CPU is fine at 1.6M positions) was right *at that data size* but the real lever turned out to be **far more data** (40 GB), where CPU is the limiter. `bullet` reads our SF binpack at ~2.7M pos/sec on the M3 Pro's Metal GPU (~7× the Go trainer) and trained the shipped net. The Go trainer (`internal/nnuetrain`) is legacy; its gradient-check correctness is what *proved* the failures were data, not math. |
+| **First architecture** | `(768 → 256)×2 → 1`, ~~ClippedReLU~~ **SCReLU**, float32→**int16** *(SCReLU/int shipped)* | Simplest net that beats linear HCE. One feature transformer (shared weights, two perspectives), concat stm-first → 512, single output. SCReLU (clamp²) replaced ClippedReLU (near-free Elo, matches bullet); float32 v1 → int16 GNN2 in Phase 4b. |
 | **Inference language** | **Pure Go** (`internal/nnue`) | Engine stays one binary. `nnue` imports only `internal/chess` (no cycle: `eval → nnue → chess`). |
 
 **Hard prerequisite (Phase 2):** a finite-difference gradient check
@@ -78,9 +78,13 @@ b1       [1]      float32
 cpScale  float32              // raw output → centipawns
 ```
 
-Loaded cwd-relative from `data/nnue/net.nnue` (gitignored, like `data/book.bin`
-/ `data/syzygy`); `NNUE_PATH` overrides. Quantized `v2` format defined in Phase 4.
-Final shipping net may be `go:embed`-ed; during dev we iterate on the file.
+Loaded cwd-relative from `data/nnue/net.nnue`; `NNUE_PATH` overrides. **The shipped
+net is now `GNN2`** (version 2, integer): same header, then int16/int8 weights +
+`QA/QB/Scale` (Phase 4b, `internal/nnue/quant.go`) — bullet's quantised.bin ints
+stored **verbatim**. The float `GNN1` layout above is still readable (the legacy/
+reference path). The net file is **committed** (un-gitignored, 772 KB; `data/syzygy`
++ training scratch stay ignored) so prod `git pull` carries it — keep net + binary
+in sync (a GNN2 net needs a Phase-4b binary).
 
 ---
 
@@ -141,14 +145,17 @@ Deliverables:
 the gradient check passed, so suspect data volume / cpScale / λ — iterate the net,
 not the plumbing. Do **not** advance to Phase 4 until H1.
 
-### Phase 4 — Incremental accumulator + int quantization
+### Phase 4 — Incremental accumulator + int quantization  ⟵ *DONE & SHIPPED — see §4 (4a float, 4b int) for the as-built record; spec below kept for context*
 **Goal:** the real-time speed (and the bulk of the real Elo). Pure engineering;
 behavior must not change beyond rounding.
 
 - Searcher-side accumulator stack mirroring `pushKey`/`popKey` (NOT inside
-  `Position` — keeps it a cheap value type). Hook deltas at the three chokepoints
-  (`addPiece`/`removePiece`/`movePiece`) right beside the Zobrist XORs. Null move:
-  no piece change → only the stm perspective flips.
+  `Position` — keeps it a cheap value type). **As built:** the accumulator is stored
+  **by absolute color** (White-persp + Black-persp), so **null move doesn't touch
+  the accumulator at all** — orientation to the side-to-move happens at the output dot
+  (`evalFrom`), not by flipping a perspective. (The original "only the stm
+  perspective flips" plan assumed a stm/opp layout; the absolute-color layout is
+  simpler and makes null-move a genuine no-op.)
 - **Invariant test (critical):** incrementally-maintained accumulator ==
   from-scratch recompute **at every node** (mirror `computeKey()`'s validator
   role). Run under `go test -race` (Lazy-SMP shares nothing here, but prove it).
@@ -160,12 +167,13 @@ behavior must not change beyond rounding.
 
 **Gate:** invariant holds at every node; quantized re-SPRT ≥ float net; race-clean.
 
-### Phase 5 — Grow (each SPRT-gated, independent)
+### Phase 5 — Grow (each SPRT-gated, independent)  ⟵ *not started; concrete near-term order in §4 Phase 5*
 Wider L1 (512/768/1024), output buckets by piece count, PSQT side-output, then
 **HalfKA + mirroring + SIMD** of the two hot loops (accumulator update, output
-layer). This is where PyTorch+MPS / `bullet` come off the bench if CPU training
-becomes the limiter and where the data pipeline scales (self-play teacher cp via
-`GenerateSelfPlay`, deeper labels). Re-SPRT every step; flip defaults only on H1.
+layer). `bullet` already came off the bench (it trains the shipped net); the data
+pipeline already scaled to the full 40 GB. **Near-term order (see §4):** v5 maturity
+net (free per-node Elo) → SIMD (amd64 `archsimd`, the 2 hot loops) → wider net.
+Re-SPRT every step; flip defaults only on H1.
 
 ---
 
@@ -266,16 +274,40 @@ becomes the limiter and where the data pipeline scales (self-play teacher cp via
       −120 vs HCE is **data-starvation**: trained on a **50 MB / 0.12% slice** of the 40.3 GB
       file, correlated + White-skewed (data mean White-rel score +331 / 74% pos, but STM-rel
       +24 / 50.2% — training target correctly centered; offset is OOD + data-slice, traced).
-    - [ ] **Net v3 — the data jump (highest leverage):**
-      1. **Diverse full-file sample** (~800× volume + decorrelation): stride/seek across the
-         whole 40 GB (binpack→plain in chunks; don't materialize all plain at once).
-      2. **Include openings** — relax `min-ply` so the net sees opening positions (recovers
-         the ~64 Elo OOD loss).
-      3. **On-scale training** — set `scaling_factor` = our engine's 50%-win cp so the net
-         comes out on-scale with **no post-hoc CpScale/B1 surgery**; fix the offset at source.
-      4. **Quality metric = teacher (SF) validation loss**, NOT R²-vs-HCE.
-      5. Bigger net (512/1024 L1) is a later lever — GPU trainer (`bullet`/PyTorch) when CPU
-         becomes the limit. Then re-SPRT vs HCE: **clearing HCE on full data is the realistic
-         target** (currently PeSTO-level on 0.12% of the data — large lever unpulled).
-- [ ] Phase 4 — incremental accumulator + quantization
-- [ ] Phase 5 — grow
+    - [~] **Net v3 (Go trainer, 150M decorrelated) — abandoned mid-convert.** The data-jump
+      plan was correct, but while it converted, **v4 on `bullet` succeeded outright** (below),
+      making the slow Go-CPU path moot. Root cause of v1/v2/v3 confirmed: **data-starvation**,
+      not a math bug — the Go trainer was always gradient-check-correct.
+- [x] **★ Net v4 — NNUE CLEARS HCE (2026-06-21).** Pivoted training to **`bullet`**
+  (jw1912/bullet) on the **M3 Pro's Metal GPU** (`--features metal`; 1-line upstream fix
+  adding the metal `DefaultDevice` arm, else silent MockGpu). bullet reads our 40 GB SF
+  binpack directly at **~2.7M pos/sec (~7× the Go CPU trainer)**. A 60-superbatch (6 min)
+  net scored **+171.6 @ 40k fixed nodes** vs HCE; a 600-superbatch (~1 h, ~10B positions,
+  annealed LR) net is the shipped one. `gomachine nnue-import-bullet`
+  (`internal/nnue/bulletimport.go`) imports `quantised.bin` → our net (indexing identical to
+  bullet's Chess768, verified; gate: our eval reproduces bullet's within 1cp). The Go trainer
+  (`internal/nnuetrain`) is now **legacy**; bullet is the trainer going forward.
+- [x] **Phase 4a — incremental accumulator (float), SHIPPED default-on.**
+  `internal/nnue/accumulator.go`: accumulator stored **by absolute color** (null-move touches
+  nothing), **ply-indexed stack** (Push=`copy+delta`, Pop=`sp--`, no reverse-delta). Gate: a
+  from-scratch-vs-incremental equality assert run *inside real αβ search with null-move +
+  qsearch* (17 966 null + 411 552 qsearch nodes covered). NNUE NPS 198k→637k (**3.2×**),
+  deficit 6.9×→2.1×. **+177.8 ± 41.5 @ 100 ms/move, H1.** `nnue` flag flipped **default-on**;
+  net committed at `data/nnue/net.nnue` (un-gitignored, 772 KB).
+- [x] **Phase 4b — int16 quantization (bit-exact), SHIPPED.** `internal/nnue/quant.go`:
+  int16 accumulator, int8/int16 weights, int32 SCReLU square, int64 dot, round-to-nearest
+  descale (QA/QB/Scale = 255/64/400). New **GNN2** net format stores bullet's ints **verbatim**
+  (no float round-trip → exact). Gates: int-incremental == int-scratch **exactly**;
+  int-vs-float reference **0 cp** / 14 FENs; int-vs-float A/B SPRT **−0.0 Elo** (quality-neutral);
+  `-race` clean. Deficit 2.1×→**1.59×** (int16 = half the memory traffic; reaches depth 15 vs
+  HCE's 14). **+212.2 ± 49.2 @ 100 ms/move, H1.** Note: now that NNUE is default-on, SPRT HCE
+  baseline is `--old "nnue=off"` (bare `--old ""` = NNUE).
+- [ ] **Phase 5 — grow (each SPRT-gated, ordered):** (1) **v5 maturity net** — shipped net is
+  only ~100 epochs ("competitive but immature"; bullet matures ~400), a ~400-epoch retrain
+  (~4 h Metal, LR annealed late) is free per-node Elo at zero NPS. (2) **SIMD** — `archsimd` on
+  amd64/server (Go 1.26 `GOEXPERIMENT=simd`; ARM ~Go 1.27, Aug 2026); 2 loops, scalar
+  build-tag fallback, bit-exact gate → ~zero risk; closes 1.59×→~1.1×. (3) **Wider net**
+  (512/1024) — cheap only after int+SIMD; SPRT-gate each width step.
+
+Full shipped write-up: `docs/ENGINE_STRENGTH.md §11`. Anchor with NNUE on: ~2780-class
+(≈2765 ± 128 vs SF-2800, even).
