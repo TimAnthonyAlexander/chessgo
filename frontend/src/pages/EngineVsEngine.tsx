@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Box, Slider, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material'
-import { Bot, Cpu, Pause, Play, RotateCcw, Telescope, Volume2, VolumeX } from 'lucide-react'
+import { Bot, Cpu, Pause, Play, RotateCcw, SquarePen, Telescope, Volume2, VolumeX } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import Board from '../components/Board'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
@@ -292,6 +292,13 @@ export default function EngineVsEngine() {
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
               <Typography sx={{ fontSize: 13, fontWeight: 600, color: 'var(--text-dim)' }}>{caption}</Typography>
               <Box sx={{ flex: 1 }} />
+              <NavBtn
+                label="Edit start position"
+                onClick={() => navigate('/editor', { state: { fen: startFen } })}
+                disabled={running}
+              >
+                <SquarePen size={18} />
+              </NavBtn>
               <NavBtn
                 label="Analyse"
                 onClick={() => navigate('/analysis', { state: { moves: moves.map((m) => m.uci), startFen } })}
