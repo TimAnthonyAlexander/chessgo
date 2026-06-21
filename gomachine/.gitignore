@@ -3,3 +3,4 @@ dist/
 data/syzygy/
 data/nnue/*
 !data/nnue/net.nnue
+data/blunders/

@@ -594,8 +594,12 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 
 	// Transposition table probe.
 	ttMove := chess.NullMove
+	ttHit := false
+	ttEvalCached := ttEvalNone
 	if e, ok := s.tt.probe(pos.Key()); s.params.UseTT && ok {
 		ttMove = e.move
+		ttHit = true
+		ttEvalCached = e.eval
 		if ply > 0 && int(e.depth) >= depth {
 			sc := e.scoreFromTT(ply)
 			switch e.flag {
@@ -643,7 +647,16 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 	// futility pruning and the "improving" heuristic.
 	var staticEval int
 	if !inCheck {
-		staticEval = s.evaluate(pos)
+		// TT static-eval cache: a TT hit that did not cut off (shallower depth, or
+		// a bound that didn't prune) still carries this node's static eval from a
+		// prior visit. Reusing it skips the NNUE/HCE recompute. The eval is
+		// deterministic, so the reused value equals a fresh one — speed only, no
+		// behavior change (hence measured at movetime, gated for SPRT).
+		if s.params.TTEval && ttHit && ttEvalCached != ttEvalNone {
+			staticEval = int(ttEvalCached)
+		} else {
+			staticEval = s.evaluate(pos)
+		}
 		s.staticEvals[ply] = staticEval
 	} else {
 		s.staticEvals[ply] = evalNone
@@ -828,7 +841,14 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 		flag = ttLower
 	}
 	if s.params.UseTT {
-		s.tt.store(pos.Key(), bestMove, bestScore, depth, ply, flag)
+		// Cache the static eval (ttEvalNone when in check, or when it falls outside
+		// the int16 band — a real static eval never does, but a corrupt truncation
+		// would feed RFP a bogus value, so we simply don't cache it).
+		ev := ttEvalNone
+		if !inCheck && staticEval > -32000 && staticEval < 32000 {
+			ev = int16(staticEval)
+		}
+		s.tt.store(pos.Key(), bestMove, bestScore, depth, ply, flag, ev)
 	}
 	return bestScore
 }

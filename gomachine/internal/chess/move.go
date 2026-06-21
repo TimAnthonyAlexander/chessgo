@@ -22,8 +22,14 @@ const (
 	Castling
 )
 
-// promoCode maps a promotion piece type to its 2-bit code.
-func promoCode(pt PieceType) uint32 { return uint32(pt - Knight) }
+// promoCode maps a promotion piece type to its 2-bit code. The &0x3 mask matters
+// for the non-promotion case: callers pass Pawn as a placeholder, and Pawn-Knight
+// underflows the unsigned subtraction to 255, which without the mask would shift
+// garbage into bits 16-21 of the move (above the documented 16-bit field). Masking
+// keeps every Move canonically 16 bits — so the low-16-bit accessors are unchanged
+// while raw Move equality (TT move, killers, PV) is exact. Promotion codes (0..3)
+// are unaffected.
+func promoCode(pt PieceType) uint32 { return uint32(pt-Knight) & 0x3 }
 
 // NewMove builds a move. promo is only meaningful when mt == Promotion.
 func NewMove(from, to Square, mt MoveType, promo PieceType) Move {

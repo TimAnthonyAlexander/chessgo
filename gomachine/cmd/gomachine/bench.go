@@ -97,6 +97,8 @@ func cmdBench(args []string) {
 		cmdBenchStockfish(args[1:])
 	case "game":
 		cmdBenchGame(args[1:])
+	case "blunders", "blunder", "mine":
+		cmdBenchBlunders(args[1:])
 	case "calibrate", "levels":
 		cmdBenchCalibrate(args[1:])
 	case "-h", "--help", "help":
@@ -114,6 +116,7 @@ func benchUsage() {
 Usage:
   gomachine bench sprt          [flags]   self-play: does --new beat --old?
   gomachine bench vs-stockfish  [flags]   absolute Elo anchor vs Stockfish
+  gomachine bench blunders      [flags]   mine gomachine's eval blind spots vs SF → EPD
 
 A patch is a search.Params diff. --old is the baseline config, --new is the
 patch; both are built from the same binary and play game pairs (reversed colors,

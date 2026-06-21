@@ -217,6 +217,15 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.NnueFloat = b
+		case "tteval", "ttstatic":
+			// reuse the TT-cached static eval instead of recomputing it on TT hits
+			// that don't cut off — a movetime speed feature (eval is deterministic,
+			// so it's behavior-preserving at fixed nodes). SPRT at --movetime.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.TTEval = b
 		default:
 			return base, fmt.Errorf("unknown param %q", key)
 		}
@@ -312,6 +321,9 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.Nnue != patch.Nnue {
 		diffs = append(diffs, fmt.Sprintf("nnue: %s→%s", onoff(base.Nnue), onoff(patch.Nnue)))
+	}
+	if base.TTEval != patch.TTEval {
+		diffs = append(diffs, fmt.Sprintf("tteval: %s→%s", onoff(base.TTEval), onoff(patch.TTEval)))
 	}
 	if len(diffs) == 0 {
 		return "(identical — sanity/noise run)"

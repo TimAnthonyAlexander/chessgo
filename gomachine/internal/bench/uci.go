@@ -183,6 +183,78 @@ func (e *UCIEngine) Evaluate(openFEN string, moves []string, b UCIBudget) (int, 
 	return cp, io.EOF
 }
 
+// Analysis is a judge engine's verdict on a position: its score (centipawns,
+// side-to-move POV, mate mapped to a large bounded value), the move it would play,
+// and the principal variation it expects (UCI moves). Used by the blunder hunter
+// to score each position and capture the refutation line.
+type Analysis struct {
+	Cp       int      // side-to-move POV; mate → ±(20000 − dist)
+	IsMate   bool     // the score came from a `mate` token
+	BestMove string   // UCI (e.g. "e2e4"); "" if none reported
+	PV       []string // UCI principal variation (best line), may be empty
+}
+
+// AnalyzeBest searches the position (openFEN + moves) under budget and returns the
+// engine's full verdict (score + best move + PV). It reads every `info` line and
+// keeps the last (deepest) one, then returns on `bestmove`. Same cp/mate mapping as
+// Evaluate so the two are directly comparable.
+func (e *UCIEngine) AnalyzeBest(openFEN string, moves []string, b UCIBudget) (Analysis, error) {
+	pos := "position fen " + openFEN
+	if len(moves) > 0 {
+		pos += " moves " + strings.Join(moves, " ")
+	}
+	if err := e.send(pos); err != nil {
+		return Analysis{}, err
+	}
+	if err := e.send(b.goLine()); err != nil {
+		return Analysis{}, err
+	}
+	var a Analysis
+	for e.out.Scan() {
+		f := strings.Fields(e.out.Text())
+		if len(f) == 0 {
+			continue
+		}
+		switch f[0] {
+		case "info":
+			for i := 0; i+2 < len(f); i++ {
+				switch f[i] {
+				case "score":
+					switch f[i+1] {
+					case "cp":
+						if v, err := strconv.Atoi(f[i+2]); err == nil {
+							a.Cp, a.IsMate = v, false
+						}
+					case "mate":
+						if v, err := strconv.Atoi(f[i+2]); err == nil {
+							if v >= 0 {
+								a.Cp = 20000 - v
+							} else {
+								a.Cp = -20000 - v
+							}
+							a.IsMate = true
+						}
+					}
+				case "pv":
+					a.PV = append([]string(nil), f[i+1:]...)
+					if len(a.PV) > 0 {
+						a.BestMove = a.PV[0]
+					}
+				}
+			}
+		case "bestmove":
+			if len(f) >= 2 && f[1] != "(none)" {
+				a.BestMove = f[1]
+			}
+			return a, nil
+		}
+	}
+	if err := e.out.Err(); err != nil {
+		return a, err
+	}
+	return a, io.EOF
+}
+
 // Close terminates the engine process.
 func (e *UCIEngine) Close() error {
 	_ = e.send("quit")

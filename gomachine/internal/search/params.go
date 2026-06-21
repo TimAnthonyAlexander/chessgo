@@ -37,6 +37,7 @@ type Params struct {
 	TBSearch       bool // probe Syzygy WDL at internal search nodes (extends the horizon to the ≤MaxPieces boundary; engine must have a tablebase set)
 	Nnue           bool // evaluation: route static eval through the NNUE net (internal/nnue); inert (falls back to HCE) if no net is loaded
 	NnueFloat      bool // evaluation: when NNUE is on, use the float from-scratch eval instead of the int incremental path (int-vs-float A/B only)
+	TTEval         bool // reuse the TT-stored static eval instead of recomputing it (skips the NNUE/HCE eval on TT hits that don't cut off); behavior-preserving speed-only (eval is deterministic), measured at movetime
 }
 
 // DefaultParams returns the engine's current full-strength configuration.

@@ -96,6 +96,54 @@ for watching, not measuring.
 gomachine bench game --sf-skill 20 --movetime 300 --color white --threads 4
 ```
 
+### 2.4 `bench blunders` — mine eval blind spots → training data
+
+Answers the question "gomachine just made a move and the eval bar cratered — how
+did it not see that?" at scale, and turns the answer into **hard-example training
+data**. gomachine plays N games vs Stockfish; a **separate full-strength Stockfish
+"judge"** (its own process, deeper budget — never the handicapped opponent) scores
+the position **before and after every gomachine move**. The drop is measured in
+**win probability** (Lichess-style, `winProb(cp)=1/(1+10^(−cp/400))`), *not* raw
+centipawns — so a "mate → still winning" move barely registers while an "equal →
+losing" move is huge, and mate scores stop polluting the ranking.
+
+```sh
+gomachine bench blunders --sf /opt/homebrew/bin/stockfish \
+  --games 200 --judge-movetime 200 --movetime 100 --sf-elo 2600 \
+  --epd-out data/blunders/mined.epd --json-out data/blunders/mined.json
+```
+
+The load-bearing idea: every flagged blunder is classified **blind spot** vs
+**horizon** using gomachine's *own* reported search score.
+
+- **Blind spot** — gomachine's eval said "I'm fine" (high win-prob) but the position
+  was actually lost. The **eval** is wrong → eval-trainable.
+- **Horizon** — gomachine's own eval *already* saw the drop; it just couldn't avoid
+  it (a deep tactic). More data won't fix this — it's a **search** problem. Filtered
+  out of the training set.
+
+Output: a JSON dump of every blunder (for scripting), and — the headline — an EPD
+training set of the **blind-spot** positions. Respecting §6's hardest lesson, the
+judge's cp only **selects** which positions to mine; the **label is the eventual
+game result (WDL)**, never the distilled cp. It emits the position *after* the
+blunder (genuinely bad — labelling the pre-blunder position, which was fine, with the
+loss would poison the eval), gated to quiet, no-longer-winning positions so the label
+is meaningful. The file drops straight into the existing tuner:
+
+```sh
+gomachine tune --epd data/blunders/mined.epd --out internal/eval/tuned_tables.go
+# …then SPRT-gate as always — mined data is no exception to §8.
+```
+
+Flags worth knowing: `--blunder-wp` (win-prob drop to flag, default 0.30 = Lichess
+blunder), `--blind-wp` (overestimate → blind spot, default 0.20), `--train-max-cp`
+(EPD only if the result is ≤ this for gomachine, default 0), `--quiet-only`,
+`--confirm-loss` (only blunders in games gomachine didn't win). **Cost note:** two
+judge calls per gomachine move (~2 × moves × games), so it's compute-heavy — scale
+`--games`/`--judge-movetime` to taste. This is hard-example mining, the data lever in
+§7: it complements bullet's bulk Stockfish data with gomachine's *own* specific
+weaknesses, the positions where the current eval is most wrong.
+
 ---
 
 ## 3. Search improvements (all SPRT-gated, now defaults)
