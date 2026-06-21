@@ -1,10 +1,12 @@
 package nnuetrain
 
 import (
+	"sort"
 	"testing"
 
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 	"github.com/timanthonyalexander/gomachine/internal/nnue"
+	"github.com/timanthonyalexander/gomachine/internal/nnuedata"
 )
 
 // fixedBatch builds a small, deterministic batch directly from FENs + labels so
@@ -47,6 +49,93 @@ func fixedBatch(t *testing.T) []sample {
 		})
 	}
 	return out
+}
+
+// sortedU16 returns a sorted copy of s so feature multisets can be compared as
+// sets regardless of emission order.
+func sortedU16(s []uint16) []uint16 {
+	c := append([]uint16(nil), s...)
+	sort.Slice(c, func(i, j int) bool { return c[i] < c[j] })
+	return c
+}
+
+func equalU16(a, b []uint16) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestRawDecodeMatchesFEN is the load-bearing correctness gate for the low-memory
+// raw-record training path: the fast per-record decoder (decodeRecord, pure
+// bit-ops over the 32-byte record) must produce EXACTLY the features and labels
+// the proven FEN path produces. For a spread of positions (startpos, kiwipete,
+// en-passant, castling, an endgame, Black-to-move) we encode FEN→record, decode
+// it the fast way, and assert featsStm/featsOpp equal nnue.AppendFeatures (as
+// sets) and the stm-relative score/result match the FEN-path label flip.
+func TestRawDecodeMatchesFEN(t *testing.T) {
+	type row struct {
+		fen        string
+		whiteScore int16
+		result     uint8 // 0=loss 1=draw 2=win (White-relative)
+	}
+	rows := []row{
+		{"rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", 12, 1},                  // startpos, White to move
+		{"r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1", 87, 2},      // kiwipete, full castling
+		{"rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1", -45, 0},              // en-passant, Black to move
+		{"r3k2r/8/8/8/8/8/8/R3K2R b KQkq - 0 1", 0, 1},                                       // castling rights, Black to move
+		{"8/2k5/3p4/p2P1p2/P2P1P2/8/8/4K3 w - - 0 1", -210, 0},                               // pawn endgame, White to move
+		{"2kr3r/pp1q1ppp/2n1pn2/8/3P4/2N1PN2/PP1Q1PPP/2KR3R b - - 0 1", 5, 2},                // Black to move, no castling
+	}
+
+	for _, r := range rows {
+		rec, err := nnuedata.Encode(r.fen, r.whiteScore, r.result)
+		if err != nil {
+			t.Fatalf("Encode(%q): %v", r.fen, err)
+		}
+
+		// Fast path: decode the raw record directly to features + labels.
+		gotStm, gotOpp, gotScore, gotWP := decodeRecord(rec[:], make([]uint16, 0, 32), make([]uint16, 0, 32))
+
+		// Proven path: parse the FEN and extract features via nnue.AppendFeatures.
+		pos, err := chess.ParseFEN(r.fen)
+		if err != nil {
+			t.Fatalf("ParseFEN(%q): %v", r.fen, err)
+		}
+		stm := pos.SideToMove()
+		wantStm := nnue.AppendFeatures(nil, pos, stm)
+		wantOpp := nnue.AppendFeatures(nil, pos, stm.Opposite())
+
+		if !equalU16(sortedU16(gotStm), sortedU16(wantStm)) {
+			t.Errorf("%q: featsStm mismatch\n got %v\nwant %v", r.fen, sortedU16(gotStm), sortedU16(wantStm))
+		}
+		if !equalU16(sortedU16(gotOpp), sortedU16(wantOpp)) {
+			t.Errorf("%q: featsOpp mismatch\n got %v\nwant %v", r.fen, sortedU16(gotOpp), sortedU16(wantOpp))
+		}
+
+		// Label flip: stm-relative score/result (same convention as LoadFlat).
+		white := stm == chess.White
+		wantScore := float64(r.whiteScore)
+		if !white {
+			wantScore = -wantScore
+		}
+		whiteWP := float64(r.result) / 2.0
+		wantWP := whiteWP
+		if !white {
+			wantWP = 1 - whiteWP
+		}
+		if gotScore != wantScore {
+			t.Errorf("%q: stmScore got %v want %v", r.fen, gotScore, wantScore)
+		}
+		if gotWP != wantWP {
+			t.Errorf("%q: stmResultWP got %v want %v", r.fen, gotWP, wantWP)
+		}
+	}
 }
 
 // TestTrainInferConsistency asserts the trainer's float64 SCReLU forward

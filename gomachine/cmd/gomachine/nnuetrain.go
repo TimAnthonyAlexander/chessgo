@@ -50,50 +50,61 @@ func cmdNNUETrain(args []string) {
 		return
 	}
 
-	var samples []nnuetrain.Sample
-	var samplePath string
-	if *flat != "" {
-		fmt.Printf("Loading .flat from %s (limit %d)…\n", *flat, *limit)
-		t0 := time.Now()
-		s, read, skipped, err := nnuetrain.LoadFlat(*flat, *limit)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "flat:", err)
-			os.Exit(1)
-		}
-		samples = s
-		samplePath = *flat
-		fmt.Printf("  %d samples (%d records read, %d skipped) in %s\n",
-			len(samples), read, skipped, time.Since(t0).Round(time.Millisecond))
-	} else {
-		paths := strings.Split(*epd, ",")
-		fmt.Printf("Loading EPD from %s…\n", *epd)
-		t0 := time.Now()
-		s, lines, skipped, err := nnuetrain.LoadEPD(paths)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "epd:", err)
-			os.Exit(1)
-		}
-		samples = s
-		samplePath = paths[0]
-		fmt.Printf("  %d samples (%d lines, %d skipped) in %s\n",
-			len(samples), lines, skipped, time.Since(t0).Round(time.Millisecond))
-	}
-	if len(samples) < 100 {
-		fmt.Fprintln(os.Stderr, "too few samples; check --flat/--epd")
-		os.Exit(1)
-	}
-
 	opt := nnuetrain.DefaultOptions()
 	opt.Epochs, opt.Batch, opt.LR, opt.Gamma = *epochs, *batch, *lr, *gamma
 	opt.Holdout, opt.Seed = *holdout, *seed
 	opt.ScalingFactor, opt.StartLambda, opt.EndLambda = *scaling, *startLambda, *endLambda
-	fmt.Printf("Training %d epochs, batch %d, lr %g, gamma %g, sf %g, λ %g→%g, holdout %.2f, seed %d…\n",
-		opt.Epochs, opt.Batch, opt.LR, opt.Gamma, opt.ScalingFactor,
-		opt.StartLambda, opt.EndLambda, opt.Holdout, opt.Seed)
 
-	t1 := time.Now()
-	best := nnuetrain.Train(samples, opt, func(s string) { fmt.Println("  " + s) })
-	fmt.Printf("Trained in %s.\n", time.Since(t1).Round(time.Second))
+	// The .flat path uses the raw-record loader: it holds only the compact 32-byte
+	// records in RAM (~4.8 GB for 150M positions) and decodes features per-batch,
+	// instead of pre-extracting samples (~168 B/pos → OOM at scale). The EPD path
+	// is small, so it keeps the in-RAM sample loader.
+	var samplePath string
+	var best *nnuetrain.Model
+	if *flat != "" {
+		fmt.Printf("Loading .flat from %s (limit %d, raw-record path)…\n", *flat, *limit)
+		t0 := time.Now()
+		d, n, err := nnuetrain.LoadFlatRaw(*flat, *limit)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "flat:", err)
+			os.Exit(1)
+		}
+		samplePath = *flat
+		fmt.Printf("  %d records (%.0f MB raw, %.2f GB est. @150M) in %s\n",
+			n, float64(n)*32/(1<<20), 150e6*32/(1<<30), time.Since(t0).Round(time.Millisecond))
+		if n < 100 {
+			fmt.Fprintln(os.Stderr, "too few records; check --flat")
+			os.Exit(1)
+		}
+		fmt.Printf("Training %d epochs, batch %d, lr %g, gamma %g, sf %g, λ %g→%g, holdout %.2f, seed %d…\n",
+			opt.Epochs, opt.Batch, opt.LR, opt.Gamma, opt.ScalingFactor,
+			opt.StartLambda, opt.EndLambda, opt.Holdout, opt.Seed)
+		t1 := time.Now()
+		best = nnuetrain.TrainRaw(d, opt, func(s string) { fmt.Println("  " + s) })
+		fmt.Printf("Trained in %s.\n", time.Since(t1).Round(time.Second))
+	} else {
+		paths := strings.Split(*epd, ",")
+		fmt.Printf("Loading EPD from %s…\n", *epd)
+		t0 := time.Now()
+		samples, lines, skipped, err := nnuetrain.LoadEPD(paths)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "epd:", err)
+			os.Exit(1)
+		}
+		samplePath = paths[0]
+		fmt.Printf("  %d samples (%d lines, %d skipped) in %s\n",
+			len(samples), lines, skipped, time.Since(t0).Round(time.Millisecond))
+		if len(samples) < 100 {
+			fmt.Fprintln(os.Stderr, "too few samples; check --epd")
+			os.Exit(1)
+		}
+		fmt.Printf("Training %d epochs, batch %d, lr %g, gamma %g, sf %g, λ %g→%g, holdout %.2f, seed %d…\n",
+			opt.Epochs, opt.Batch, opt.LR, opt.Gamma, opt.ScalingFactor,
+			opt.StartLambda, opt.EndLambda, opt.Holdout, opt.Seed)
+		t1 := time.Now()
+		best = nnuetrain.Train(samples, opt, func(s string) { fmt.Println("  " + s) })
+		fmt.Printf("Trained in %s.\n", time.Since(t1).Round(time.Second))
+	}
 
 	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
 		fmt.Fprintln(os.Stderr, "mkdir:", err)

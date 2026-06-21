@@ -3,7 +3,9 @@ import { Box, CircularProgress, Typography } from '@mui/material'
 import { Eye, Radio } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import MiniBoard from '../components/MiniBoard'
-import { getLiveGames, type LiveGameSummary, type LiveSide } from '../api/client'
+import EvalBar, { type WhiteEval } from '../components/EvalBar'
+import { analyze, getLiveGames, type LiveGameSummary, type LiveSide } from '../api/client'
+import { useAuth } from '../lib/auth'
 
 const POLL_MS = 2500 // steady cadence once games are flowing
 const WARM_MS = 800 // fast cadence while the lobby is still warming up
@@ -11,6 +13,10 @@ const WARM_POLLS = 5 // empty responses to see before we declare the lobby truly
 
 export default function Watch() {
   const navigate = useNavigate()
+  const { user } = useAuth()
+  // Admins get a full-strength eval bar on each card; everyone else sees the
+  // board as-is (no analyze traffic for ordinary spectators).
+  const isAdmin = user?.role === 'admin'
   const [games, setGames] = useState<LiveGameSummary[] | null>(null)
   const [max, setMax] = useState(5)
   // Until we've either seen games or confirmed the lobby is genuinely empty
@@ -115,7 +121,7 @@ export default function Watch() {
             }}
           >
             {games.map((g) => (
-              <GameCard key={g.id} game={g} onClick={() => navigate(`/watch/${g.id}`)} />
+              <GameCard key={g.id} game={g} showEval={isAdmin} onClick={() => navigate(`/watch/${g.id}`)} />
             ))}
           </Box>
         )}
@@ -147,9 +153,31 @@ function Placeholder({ text, spinner }: { text: string; spinner?: boolean }) {
   )
 }
 
-function GameCard({ game, onClick }: { game: LiveGameSummary; onClick: () => void }) {
+function GameCard({ game, showEval, onClick }: { game: LiveGameSummary; showEval: boolean; onClick: () => void }) {
   const whiteActive = game.sideToMove === 'w' && game.ply >= 2
   const blackActive = game.sideToMove === 'b' && game.ply >= 2
+
+  // Admin-only eval: re-read the position (full strength, snappy 300ms) whenever
+  // this card's FEN changes — i.e. only when a move lands, not on every poll.
+  // The engine reports from the side-to-move's view, so flip to White's.
+  const [whiteEval, setWhiteEval] = useState<WhiteEval | null>(null)
+  useEffect(() => {
+    if (!showEval) return
+    let cancelled = false
+    const ctrl = new AbortController()
+    analyze(game.fen, { movetime: 300, signal: ctrl.signal })
+      .then((r) => {
+        if (cancelled || !r.eval) return
+        const white = game.sideToMove === 'w' ? r.eval.value : -r.eval.value
+        setWhiteEval({ type: r.eval.type, white })
+      })
+      .catch(() => {}) // aborted / transient failure → keep last shown eval
+    return () => {
+      cancelled = true
+      ctrl.abort()
+    }
+  }, [game.fen, game.sideToMove, showEval])
+
   return (
     <Box
       onClick={onClick}
@@ -167,39 +195,42 @@ function GameCard({ game, onClick }: { game: LiveGameSummary; onClick: () => voi
       }}
     >
       <PlayerRow side={game.black} ms={game.clockB} active={blackActive} />
-      <Box sx={{ position: 'relative', my: 0.75 }}>
-        <MiniBoard fen={game.fen} lastMove={game.lastMove} />
-        <Box
-          className="watch-cta"
-          sx={{
-            position: 'absolute',
-            inset: 0,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            opacity: 0,
-            transition: 'opacity .12s ease',
-            background: 'rgba(10,11,14,0.32)',
-            borderRadius: '8px',
-            pointerEvents: 'none',
-          }}
-        >
+      <Box sx={{ my: 0.75, display: 'flex', gap: 0.75 }}>
+        {showEval && <EvalBar ev={whiteEval} orientation="w" />}
+        <Box sx={{ position: 'relative', flex: 1, minWidth: 0 }}>
+          <MiniBoard fen={game.fen} lastMove={game.lastMove} />
           <Box
+            className="watch-cta"
             sx={{
+              position: 'absolute',
+              inset: 0,
               display: 'flex',
               alignItems: 'center',
-              gap: 0.75,
-              px: 1.5,
-              py: 0.75,
-              borderRadius: '999px',
-              bgcolor: 'var(--accent)',
-              color: '#15171c',
-              fontFamily: 'var(--font-display)',
-              fontWeight: 700,
-              fontSize: 12.5,
+              justifyContent: 'center',
+              opacity: 0,
+              transition: 'opacity .12s ease',
+              background: 'rgba(10,11,14,0.32)',
+              borderRadius: '8px',
+              pointerEvents: 'none',
             }}
           >
-            <Eye size={14} /> Spectate
+            <Box
+              sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.75,
+                px: 1.5,
+                py: 0.75,
+                borderRadius: '999px',
+                bgcolor: 'var(--accent)',
+                color: '#15171c',
+                fontFamily: 'var(--font-display)',
+                fontWeight: 700,
+                fontSize: 12.5,
+              }}
+            >
+              <Eye size={14} /> Spectate
+            </Box>
           </Box>
         </Box>
       </Box>

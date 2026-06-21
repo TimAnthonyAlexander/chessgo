@@ -49,6 +49,8 @@ func main() {
 		cmdNNUETrain(os.Args[2:])
 	case "nnue-convert":
 		cmdNNUEConvert(os.Args[2:])
+	case "nnue-import-bullet":
+		cmdNNUEImportBullet(os.Args[2:])
 	case "nnue-verify-labels":
 		cmdNNUEVerifyLabels(os.Args[2:])
 	case "gen-tb-epd":

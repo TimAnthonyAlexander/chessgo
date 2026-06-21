@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/timanthonyalexander/gomachine/internal/nnue"
+	"github.com/timanthonyalexander/gomachine/internal/nnuedata"
 )
 
 // Options controls the Adam minibatch trainer.
@@ -129,6 +130,199 @@ func Train(samples []sample, opt Options, log func(string)) *Model {
 		lr *= opt.Gamma
 	}
 	return best
+}
+
+// TrainRaw is the low-memory twin of Train: it fits the same net on a raw-record
+// dataset, decoding each 32-byte record to features on the fly per minibatch
+// (decodeRecord) instead of holding pre-extracted samples. This keeps RAM at
+// ~32 B/position (≈4.8 GB for 150M) so very large flat files fit. The loss /
+// backprop / Adam are byte-for-byte the same code paths Train uses (it builds the
+// same `sample` per record), so the gradient check still covers them.
+//
+// The holdout split and per-epoch shuffle operate on a permutation of record
+// indices — never on the 4.8 GB buffer itself.
+func TrainRaw(d *RawData, opt Options, log func(string)) *Model {
+	rng := rand.New(rand.NewSource(opt.Seed))
+
+	// Permutation of all record indices; the validation block is the first nVal of
+	// a one-time shuffle (so val isn't a correlated tail), the rest is train.
+	perm := make([]int, d.n)
+	for i := range perm {
+		perm[i] = i
+	}
+	rng.Shuffle(len(perm), func(i, j int) { perm[i], perm[j] = perm[j], perm[i] })
+
+	nVal := int(float64(d.n) * opt.Holdout)
+	if nVal < 1 && d.n > 50 {
+		nVal = 1
+	}
+	valIdx := perm[:nVal]
+	trainIdx := perm[nVal:]
+	if log != nil {
+		log(fmt.Sprintf("split: %d train, %d val (raw-record path, %d B/pos, %.2f GB resident)",
+			len(trainIdx), len(valIdx), 32, float64(d.n)*32/(1<<30)))
+	}
+
+	m := NewModel()
+	m.InitRandom(opt.Seed)
+	adam := newAdamState()
+
+	best := cloneModel(m)
+	bestVal := math.Inf(1)
+
+	// Order indexes INTO trainIdx (shuffled each epoch); trainIdx itself is stable.
+	order := make([]int, len(trainIdx))
+	for i := range order {
+		order[i] = i
+	}
+
+	lr := opt.LR
+	for epoch := 1; epoch <= opt.Epochs; epoch++ {
+		rng.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
+
+		lp := lossParams{lambda: lambdaAt(opt, epoch), sf: opt.ScalingFactor}
+		epochOpt := opt
+		epochOpt.LR = lr
+
+		for start := 0; start < len(order); start += opt.Batch {
+			end := start + opt.Batch
+			if end > len(order) {
+				end = len(order)
+			}
+			grad := batchGradientRaw(m, d, trainIdx, order[start:end], lp)
+			grad.Scale(1.0 / float64(end-start))
+			adamStep(m, grad, adam, epochOpt)
+		}
+
+		trainLoss := meanLossRaw(m, d, trainIdx, lp)
+		valLoss := meanLossRaw(m, d, valIdx, lp)
+		if valLoss < bestVal {
+			bestVal = valLoss
+			best = cloneModel(m)
+		}
+		if log != nil {
+			log(fmt.Sprintf("epoch %3d  λ %.4f  lr %.3e  train %.6f  val %.6f%s",
+				epoch, lp.lambda, lr, trainLoss, valLoss, bestMarker(valLoss, bestVal)))
+		}
+		lr *= opt.Gamma
+	}
+	return best
+}
+
+// recScratch bundles the gradient scratch with two feature buffers reused across
+// decodeRecord calls in one worker (so per-record decode never allocates).
+type recScratch struct {
+	sc      *scratch
+	featStm []uint16
+	featOpp []uint16
+}
+
+func newRecScratch() *recScratch {
+	return &recScratch{
+		sc:      newScratch(),
+		featStm: make([]uint16, 0, 32),
+		featOpp: make([]uint16, 0, 32),
+	}
+}
+
+// sampleAt decodes the record at base-index idx (an index into `base`, which is
+// itself a list of record indices) into a sample, reusing rs's feature buffers.
+func (rs *recScratch) sampleAt(d *RawData, recIdx int) sample {
+	off := recIdx * nnuedata.RecordSize
+	rec := d.records[off : off+nnuedata.RecordSize]
+	fs, fo, score, wp := decodeRecord(rec, rs.featStm[:0], rs.featOpp[:0])
+	return sample{featsStm: fs, featsOpp: fo, stmScore: score, stmResultWP: wp}
+}
+
+// batchGradientRaw is batchGradient over raw records: `base` is the stable list of
+// train record indices, `sel` indexes into base for this minibatch. Each worker
+// decodes its records on the fly into a reused sample before accumulate.
+func batchGradientRaw(m *Model, d *RawData, base, sel []int, lp lossParams) *Grad {
+	workers := runtime.NumCPU()
+	if workers > len(sel) {
+		workers = len(sel)
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	chunk := (len(sel) + workers - 1) / workers
+
+	partials := make([]*Grad, workers)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		lo := w * chunk
+		hi := lo + chunk
+		if hi > len(sel) {
+			hi = len(sel)
+		}
+		if lo >= hi {
+			break
+		}
+		wg.Add(1)
+		go func(w, lo, hi int) {
+			defer wg.Done()
+			g := NewGrad()
+			rs := newRecScratch()
+			for _, k := range sel[lo:hi] {
+				s := rs.sampleAt(d, base[k])
+				m.accumulate(s, g, rs.sc, lp)
+			}
+			partials[w] = g
+		}(w, lo, hi)
+	}
+	wg.Wait()
+
+	total := NewGrad()
+	for _, g := range partials {
+		if g != nil {
+			total.Add(g)
+		}
+	}
+	return total
+}
+
+// meanLossRaw is meanLoss over raw records named directly by recIdx.
+func meanLossRaw(m *Model, d *RawData, recIdx []int, lp lossParams) float64 {
+	if len(recIdx) == 0 {
+		return 0
+	}
+	workers := runtime.NumCPU()
+	if workers > len(recIdx) {
+		workers = len(recIdx)
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	chunk := (len(recIdx) + workers - 1) / workers
+	sums := make([]float64, workers)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		lo := w * chunk
+		hi := lo + chunk
+		if hi > len(recIdx) {
+			hi = len(recIdx)
+		}
+		if lo >= hi {
+			break
+		}
+		wg.Add(1)
+		go func(w, lo, hi int) {
+			defer wg.Done()
+			rs := newRecScratch()
+			var s float64
+			for _, ri := range recIdx[lo:hi] {
+				smp := rs.sampleAt(d, ri)
+				s += m.loss(smp, rs.sc, lp)
+			}
+			sums[w] = s
+		}(w, lo, hi)
+	}
+	wg.Wait()
+	var total float64
+	for _, s := range sums {
+		total += s
+	}
+	return total / float64(len(recIdx))
 }
 
 func bestMarker(valLoss, bestVal float64) string {

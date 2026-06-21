@@ -34,12 +34,16 @@ import (
 // Kept blocks are flipped to White's perspective before encoding.
 func cmdNNUEConvert(args []string) {
 	fs := flag.NewFlagSet("nnue-convert", flag.ExitOnError)
-	plain := fs.String("plain", "", "comma-separated SF .plain input file(s)")
+	plain := fs.String("plain", "", "comma-separated SF .plain input file(s); use \"-\" for stdin (stream)")
 	out := fs.String("out", "", "output flat .bin file")
 	scoreLimit := fs.Int("score-limit", 30000, "skip blocks with |score| >= this")
 	minPly := fs.Int("min-ply", 8, "skip blocks with ply < this")
+	sampleRate := fs.Int("sample-rate", 1, "keep 1 of every N blocks (uniform downsample of the whole stream; 1 = keep all)")
 	noInCheck := fs.Bool("no-incheck-filter", false, "keep in-check positions (default: filter them)")
 	_ = fs.Parse(args)
+	if *sampleRate < 1 {
+		*sampleRate = 1
+	}
 
 	if *plain == "" || *out == "" {
 		fmt.Fprintln(os.Stderr, "nnue-convert: --plain and --out are required")
@@ -60,7 +64,7 @@ func cmdNNUEConvert(args []string) {
 		if path == "" {
 			continue
 		}
-		if err := convertFile(path, bw, *scoreLimit, *minPly, !*noInCheck, &st); err != nil {
+		if err := convertFile(path, bw, *scoreLimit, *minPly, *sampleRate, !*noInCheck, &st); err != nil {
 			fmt.Fprintf(os.Stderr, "nnue-convert: %s: %v\n", path, err)
 			os.Exit(1)
 		}
@@ -98,13 +102,21 @@ func (s *convStats) print(out string) {
 	fmt.Printf("  malformed block  %d\n", s.skipMalfblck)
 }
 
-// convertFile streams one .plain file block-by-block into bw.
-func convertFile(path string, bw *bufio.Writer, scoreLimit, minPly int, filterInCheck bool, st *convStats) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
+// convertFile streams one .plain file (or stdin when path == "-") block-by-block
+// into bw. With sampleRate>1 it keeps only every Nth block — uniformly across the
+// whole stream, so piping the entire (unseekable) binpack through with a low keep
+// rate yields a decorrelated sample. Sampling happens BEFORE the parse/filter, so
+// the expensive ParseFEN is paid only on kept blocks.
+func convertFile(path string, bw *bufio.Writer, scoreLimit, minPly, sampleRate int, filterInCheck bool, st *convStats) error {
+	f := os.Stdin
+	if path != "-" {
+		var err error
+		f, err = os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
 	}
-	defer f.Close()
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -129,7 +141,12 @@ func convertFile(path string, bw *bufio.Writer, scoreLimit, minPly int, filterIn
 			b.result, b.hasResult = parseInt(val)
 		case "e":
 			st.read++
-			processBlock(b, bw, scoreLimit, minPly, filterInCheck, st)
+			if st.read%sampleRate == 0 {
+				processBlock(b, bw, scoreLimit, minPly, filterInCheck, st)
+			}
+			if st.read%20000000 == 0 {
+				fmt.Fprintf(os.Stderr, "  …%dM blocks read, %d kept\n", st.read/1000000, st.kept)
+			}
 			b = plainBlock{}
 		}
 	}
