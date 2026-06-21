@@ -2,6 +2,7 @@ package engine
 
 import (
 	"testing"
+	"time"
 
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 )
@@ -44,6 +45,33 @@ func TestConfigForRatingMonotonic(t *testing.T) {
 			t.Errorf("rating %d: blunder %.3f < previous %.3f (not monotonic)", r, c.Blunder, prevBlunder)
 		}
 		prevNoise, prevBlunder = c.NoiseCp, c.Blunder
+	}
+}
+
+// TestConfigForRatingNoFlatZone: the bug we just fixed — every step UP the ladder
+// must buy MORE search budget (time and/or depth), so the numbers mean something.
+// The old fixed-100ms design flat-lined above ~2650 (all the same full strength);
+// here, across the clean top band, move time must STRICTLY increase each step.
+func TestConfigForRatingNoFlatZone(t *testing.T) {
+	// Across the whole ladder, search budget is non-decreasing with rating.
+	prevTime, prevDepth := time.Duration(-1), -1
+	for r := RatingMin; r <= RatingMax; r += 50 {
+		c := configForRating(r)
+		if prevTime >= 0 && c.MoveTime < prevTime {
+			t.Errorf("rating %d: movetime %v < previous %v (strength went down)", r, c.MoveTime, prevTime)
+		}
+		if prevDepth >= 0 && c.Depth < prevDepth {
+			t.Errorf("rating %d: depth %d < previous %d (strength went down)", r, c.Depth, prevDepth)
+		}
+		prevTime, prevDepth = c.MoveTime, c.Depth
+	}
+	// No flat top: in the clean band (no noise/blunder), each 50-pt step must be
+	// genuinely stronger via move time — else the slider lies up there.
+	for r := ratingCleanFloor; r+50 <= RatingMax; r += 50 {
+		lo, hi := configForRating(r), configForRating(r+50)
+		if hi.MoveTime <= lo.MoveTime {
+			t.Errorf("flat zone at %d→%d: movetime %v not > %v", r, r+50, hi.MoveTime, lo.MoveTime)
+		}
 	}
 }
 

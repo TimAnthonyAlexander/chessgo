@@ -19,7 +19,7 @@ use BaseApi\Models\BaseModel;
  */
 class BotGame extends BaseModel
 {
-    /** AI strength as a target Elo (RatingMin..RatingMax ≈ 700..2720). The
+    /** AI strength as a target Elo (RatingMin..RatingMax ≈ 700..2900). The
      *  engine maps this to a weakening config; see gomachine internal/engine
      *  rating.go. Replaces the old 0..10 level. */
     public int $rating = 1500;

@@ -389,7 +389,7 @@ function Controls({
       <Box>
         <Label>gomachine rating</Label>
         <SettingValue>~{gomaRating} Elo</SettingValue>
-        <Slider value={gomaRating} onChange={(_, v) => onRating(v as number)} min={700} max={2700} step={50} disabled={disabledSettings} sx={sliderSx} />
+        <Slider value={gomaRating} onChange={(_, v) => onRating(v as number)} min={700} max={2900} step={50} disabled={disabledSettings} sx={sliderSx} />
       </Box>
 
       <Box>

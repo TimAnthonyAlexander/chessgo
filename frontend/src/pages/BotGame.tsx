@@ -569,7 +569,7 @@ function Setup({
             value={rating}
             onChange={(_, v) => onRating(v as number)}
             min={700}
-            max={2700}
+            max={2900}
             step={50}
             valueLabelDisplay="auto"
             sx={sliderSx}

@@ -15,7 +15,7 @@ class BotGameService
 {
     /** Bot strength bounds (mirror gomachine engine rating.go RatingMin/Max). */
     public const RATING_MIN = 700;
-    public const RATING_MAX = 2720;
+    public const RATING_MAX = 2900;
 
     public function __construct(private readonly GomachineClient $engine)
     {
