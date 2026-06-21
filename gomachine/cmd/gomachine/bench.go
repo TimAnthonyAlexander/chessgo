@@ -310,6 +310,7 @@ func cmdBenchGame(args []string) {
 	ourColor := fs.String("color", "white", "gomachine's color: white|black")
 	threads := fs.Int("threads", 1, "gomachine Lazy SMP threads")
 	fenFlag := fs.String("fen", chess.StartFEN, "starting FEN")
+	tbPath := fs.String("tb-path", "data/syzygy", "Syzygy tablebase dir to attach (empty disables; needed for root-DTZ + WDL-in-search)")
 	_ = fs.Parse(args)
 
 	pos, err := chess.ParseFEN(*fenFlag)
@@ -335,6 +336,9 @@ func cmdBenchGame(args []string) {
 	defer sf.Close()
 
 	ours := engine.New(64)
+	if tb := loadTablebase(*tbPath); tb != nil {
+		ours.SetTablebase(tb) // enables root-DTZ + WDL-in-search (Params default-on)
+	}
 	ourSide := chess.White
 	if strings.HasPrefix(strings.ToLower(*ourColor), "b") {
 		ourSide = chess.Black
