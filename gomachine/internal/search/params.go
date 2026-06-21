@@ -35,6 +35,7 @@ type Params struct {
 	UseBook        bool // consult the precomputed opening book before searching (engine must have a book set)
 	UseTablebase   bool // probe Syzygy endgame tablebases at the root (engine must have a tablebase set)
 	TBSearch       bool // probe Syzygy WDL at internal search nodes (extends the horizon to the ≤MaxPieces boundary; engine must have a tablebase set)
+	Nnue           bool // evaluation: route static eval through the NNUE net (internal/nnue); inert (falls back to HCE) if no net is loaded
 }
 
 // DefaultParams returns the engine's current full-strength configuration.
@@ -121,5 +122,10 @@ func DefaultParams() Params {
 		// RootScores, the weakened-bot ranking path) so leveled bots keep their level
 		// instead of converting ≤MaxPieces endings perfectly (search.weakenedSearch).
 		TBSearch: true,
+		// NNUE eval (internal/nnue). Default OFF until a trained net is SPRT-accepted
+		// vs HCE (docs/NNUE/PLAN.md Phase 3). When on, the searcher routes static
+		// eval through the loaded net; with no net loaded it falls back to HCE, so
+		// the flag is inert until data/nnue/net.nnue (or NNUE_PATH) exists.
+		Nnue: false,
 	}
 }

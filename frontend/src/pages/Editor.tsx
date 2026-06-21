@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Box, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material'
 import { Bot, Check, Copy, Cpu, Eraser, FlipVertical2, Microscope, RotateCcw } from 'lucide-react'
 import BoardEditor, { type Brush, EditorPalette } from '../components/BoardEditor'
+import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import { ActionBtn } from '../components/PanelUI'
-import type { Color } from '../api/client'
+import { analyze, type Color } from '../api/client'
 import { useAuth } from '../lib/auth'
 import { parseFen } from '../lib/chess'
 import {
@@ -40,6 +41,30 @@ export default function Editor() {
   const castling = castlingOf(fen)
   const avail = useMemo(() => castlingAvailability(parseFen(fen)), [fen])
   const valid = useMemo(() => validateSetup(fen), [fen])
+
+  // Live balance read-out: full-strength eval of the position being edited, shown
+  // on the EvalBar so you can see how lopsided your setup is. Debounced (editing
+  // fires many FEN changes) and only run on legal positions; while invalid the bar
+  // just keeps its last known value rather than flickering.
+  const [whiteEval, setWhiteEval] = useState<WhiteEval | null>(null)
+  useEffect(() => {
+    if (!valid.ok) return
+    const ctrl = new AbortController()
+    const id = setTimeout(() => {
+      analyze(fen, { movetime: 300, signal: ctrl.signal })
+        .then((r) => {
+          if (!r.eval) return
+          // Engine reports from side-to-move's perspective; flip to White's.
+          const white = active === 'w' ? r.eval.value : -r.eval.value
+          setWhiteEval({ type: r.eval.type, white })
+        })
+        .catch(() => {}) // aborted / transient failure → keep last shown eval
+    }, 250)
+    return () => {
+      ctrl.abort()
+      clearTimeout(id)
+    }
+  }, [fen, active, valid.ok])
 
   const setActive = (a: Active) => setFen(withActive(fen, a))
   const toggleCastle = (code: string) => {
@@ -102,9 +127,12 @@ export default function Editor() {
           <PaletteCard brush={brush} onPick={setBrush} />
         </Box>
 
-        {/* Center — the editor board. */}
-        <Box sx={{ minWidth: 0, width: { xs: 'min(94vw, 64vh)', md: '100%' }, mx: 'auto' }}>
-          <BoardEditor fen={fen} orientation={orientation} brush={brush} onChange={setFen} />
+        {/* Center — the editor board, with a live balance read-out alongside. */}
+        <Box sx={{ minWidth: 0, width: { xs: 'min(94vw, 64vh)', md: '100%' }, mx: 'auto', display: 'flex', gap: 1.25 }}>
+          <EvalBar ev={whiteEval} orientation={orientation} />
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <BoardEditor fen={fen} orientation={orientation} brush={brush} onChange={setFen} />
+          </Box>
         </Box>
 
         {/* Right — controls + actions. */}

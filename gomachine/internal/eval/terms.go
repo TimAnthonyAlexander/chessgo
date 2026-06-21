@@ -15,6 +15,7 @@ type Config struct {
 	PawnRace    bool // EG-only knight-aware unstoppable-passer / race detection
 	ScaleFactor bool // EG drawishness scale factor (Stockfish-classical, scales the eg term)
 	UseTuned    bool // select the Texel-tuned PSQT (tuned_tables.go) over PeSTO
+	NNUE        bool // route static eval through the NNUE net instead of HCE; READ BY THE SEARCHER (eval.Evaluate ignores it), so eval keeps no dependency on internal/nnue
 	W           *Weights
 }
 

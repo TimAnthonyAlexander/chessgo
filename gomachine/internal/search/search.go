@@ -11,6 +11,7 @@ import (
 
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 	"github.com/timanthonyalexander/gomachine/internal/eval"
+	"github.com/timanthonyalexander/gomachine/internal/nnue"
 	"github.com/timanthonyalexander/gomachine/internal/syzygy"
 )
 
@@ -200,12 +201,21 @@ func evalConfig(p Params) eval.Config {
 		PawnRace:    p.PawnRace,
 		ScaleFactor: p.ScaleFactor,
 		UseTuned:    p.TunedEval,
+		NNUE:        p.Nnue,
 		W:           w,
 	}
 }
 
 // evaluate is the searcher's static evaluation, honoring its enabled eval terms.
+// When NNUE is enabled and a net is loaded it routes through the net (a
+// side-to-move-relative cp score, same contract as HCE); otherwise, or if no net
+// is loaded, it falls back to the hand-crafted eval.
 func (s *Searcher) evaluate(pos *chess.Position) int {
+	if s.ec.NNUE {
+		if cp, ok := nnue.Eval(pos); ok {
+			return cp
+		}
+	}
 	return eval.Evaluate(pos, s.ec)
 }
 

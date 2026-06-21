@@ -200,6 +200,15 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.TBSearch = b
+		case "nnue":
+			// route static eval through the NNUE net (internal/nnue) instead of HCE;
+			// inert (falls back to HCE) unless a net is loaded via NNUE_PATH or the
+			// cwd-relative data/nnue/net.nnue. The Phase-3 go/no-go SPRT vs HCE.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.Nnue = b
 		default:
 			return base, fmt.Errorf("unknown param %q", key)
 		}
@@ -292,6 +301,9 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.TBSearch != patch.TBSearch {
 		diffs = append(diffs, fmt.Sprintf("tbsearch: %s→%s", onoff(base.TBSearch), onoff(patch.TBSearch)))
+	}
+	if base.Nnue != patch.Nnue {
+		diffs = append(diffs, fmt.Sprintf("nnue: %s→%s", onoff(base.Nnue), onoff(patch.Nnue)))
 	}
 	if len(diffs) == 0 {
 		return "(identical — sanity/noise run)"
