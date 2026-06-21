@@ -1,6 +1,6 @@
 // Package nnue implements the engine's NNUE (efficiently-updatable neural
 // network) evaluation: a 768-input, dual-perspective, piece-square feature set
-// feeding a (768→256)×2→1 network that returns a side-to-move-relative
+// feeding a (768→256)×2→1 SCReLU network that returns a side-to-move-relative
 // centipawn score — the same contract as the hand-crafted eval it replaces.
 //
 // Phase 1 is a correct-but-slow FLOAT forward pass that recomputes the whole

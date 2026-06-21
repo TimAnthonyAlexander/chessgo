@@ -197,7 +197,85 @@ becomes the limiter and where the data pipeline scales (self-play teacher cp via
   SPRT smoke with a random net (`nnue: off→on` header, net auto-loaded, lost
   0–6 to HCE as expected — proves the net drives move selection). `nnue=off`
   (default) is byte-identical to HCE. `data/nnue/` gitignored.
-- [ ] Phase 2 — Go-native trainer (+ gradient check gate)  ← *next*
-- [ ] Phase 3 — SPRT vs HCE (go/no-go)
+- [x] **Phase 2 — Go-native trainer** (2026-06-21). `internal/nnuetrain` (float64
+  model/forward/backprop, minibatch Adam, 2% holdout, `ToNet()` float32 cast) +
+  `gomachine nnue-train`. **Gradient check passes at 3.678e-13** (gate <1e-6),
+  re-verified independently + backprop read by hand. Full run: 1.65M rows, 40
+  epochs, 2m41s, val MSE 0.149→0.0673 monotonic (no overfit). Net materially
+  sane (queen-up +749 both perspectives, pawn +253, startpos +4, sign/perspective
+  correct), HCE corr r=0.865. **Caveat surfaced in Phase 3:** pure-WDL target
+  (λ=0) + small/quiet/duplicated data → see Phase 3.
+- [~] **Phase 3 — SPRT vs HCE (go/no-go): FAILED at the first net → PIVOT.**
+  Fixed-nodes (40k) NNUE-float vs tuned-HCE → **−332 ± 99 (H0)**, not a speed
+  artifact. Diagnosed (cheap experiments): (1) **cp-scale mismatch** — training
+  `sigmoid(y/400)` makes the net learn `y≈400·logit(wp)` while HCE is Texel-
+  calibrated to `K_hce≈160`, a *structurally predicted* ~2.5× inflation (pawn
+  reads 253cp vs ~100). Post-hoc `cpScale=0.78` (least-squares) recovered −332→
+  −220; the 0.78≠0.40 gap proves the inflation is **non-uniform**, so a scalar is
+  only a patch. (2) **Thin eval signal (dominant)** — pure-WDL λ=0 on ~1.6M quiet,
+  heavily-duplicated positions is low-resolution; still −220 vs HCE after scaling.
+  **Decision (2026-06-21): pivot net v2 to distillation from public Stockfish/
+  Leela training data** (binpack) — a far stronger teacher than our own HCE+search,
+  feature-set-agnostic (we extract our own 768 features downstream), which deletes
+  the generate-and-label pipeline. Net v2 plan: **(a)** Go reader for SF `.bin`/
+  binpack (convert via `gochess`/SF tools); **(b)** trainer changes — **SCReLU**
+  (clamp²; near-free Elo), **λ-schedule loss** (cross-entropy in win-prob:
+  `λ·eval_loss+(1−λ)·result_loss`, λ 1.0→0.75), **sigmoid constant from
+  Stockfish's WDL model** so the net is on-scale by construction (0.78/0.40 both
+  vanish); **(c)** start from a few-GB SF/Leela dataset, not self-gen. Refs:
+  `adamtwiss/gochess` (binpack reader, convert-binpack, check-net eval-scale tool),
+  `saisree27/Maelstrom` ((768→512)×2→1 SCReLU in Go — proof the approach works).
+  Full spec from research → `docs/NNUE/DATA_PIPELINE.md`. Do NOT advance to Phase 4
+  until a net accepts H1.
+  - **Net v2 progress:**
+    - [x] **Go data pipeline** (`internal/nnuedata` + `nnue-convert`/`nnue-verify-labels`).
+      Flat 32-byte codec (occupancy+nibbles, White-relative labels), `.plain→.flat`
+      converter (SF C++ owns binpack→.plain; we never parse binpack/Huffman) with
+      STM→White flip + in-check/mate/score-limit/min-ply filtering. **Two gates green:**
+      format round-trip (FEN→encode→decode→FEN, perft@3 equal, race-clean) + label
+      semantics (queen-up flips sign correctly, in-check filtered) — verified
+      independently. Spec: `DATA_PIPELINE.md §7-9`.
+    - [x] **Data acquired + label gate PASSED on real SF data.** Built SF `tools`-branch
+      `convert` (M3: drop dead `-lstdc++fs` link flag). `nodes5000pv2_UHO.binpack` is
+      **40.3 GB** (~32× plain expansion!), so a **50 MB prefix already = 18.4M positions**.
+      Converted → **16,735,338 positions** at `data/nnue/train.flat` (robust: skips
+      kingless/illegal via `pos.Legal()` + in-check filter). `nnue-verify-labels`
+      stride-samples the file: **89.9% score-sign consistency on decisive-material
+      positions** (reversed flip would be ~10%) → STM→White flip verified correct.
+      (More/diverse data is a later lever if v2 SPRT is marginal.)
+    - [x] **Trainer + inference changes** (one agent owns both → identical forward).
+      **SCReLU** (`clamp²`) in `nnue` inference *and* `nnuetrain`; **λ-schedule CE loss**
+      (`λ·CE(q,p_eval)+(1−λ)·CE(q,p_res)`, λ 1.0→0.75, grad `[λ(q−p_eval)+(1−λ)(q−p_res)]/sf`);
+      `.flat` reader with White→stm label flip (`whiteWP=result/2`, mirror if Black);
+      `scaling_factor` flag (default 200), lr 8.75e-4, gamma 0.992, batch 16384, CpScale=1.
+      **Gates green (verified independently):** gradient check **6.9e-13** (covers SCReLU
+      `2z` deriv + CE `(q−p)/sf` grad), **train/infer consistency** <1cp, all unit tests.
+      Note: SCReLU int quant needs `(v·w)·v` ordering (Phase-4 concern).
+    - [x] **Net v2 trained + evaluated** (2026-06-21). 60 epochs / 16.7M SF positions,
+      val CE 0.587→0.501 (converged). Sanity: material scaling correct (Q +937, R +594,
+      P +235), sign/perspective correct. **SPRT results (fixed 40k nodes):**
+      - as-trained (CpScale=1) vs HCE: **−145** (vs v1's −332 — big lift from the strong teacher)
+      - affine-calibrated (`B1−=137.8, CpScale=0.751`) vs HCE: **−120 ± 39** (R²(net,HCE)=0.68,
+        so linear calib only recovered +25; the ~32% non-linear residual is the net diverging
+        toward SF + thin-data noise — NOT a quality verdict, HCE isn't ground truth)
+      - calibrated vs **bare PeSTO**: **−64** from opening book, but **−0.0 ± 33** from
+        **in-distribution midgame** starts (a **+64 swing**). → **OOD-opening confirmed:**
+        net never trained on openings (`min-ply 8` + UHO books exclude the start), loses
+        games before the midgame it knows. In-distribution it only *ties* PeSTO (not beats).
+    - **Diagnosis (no bug):** v2 is a real eval, ~PeSTO-level in midgame, opening-blind.
+      −120 vs HCE is **data-starvation**: trained on a **50 MB / 0.12% slice** of the 40.3 GB
+      file, correlated + White-skewed (data mean White-rel score +331 / 74% pos, but STM-rel
+      +24 / 50.2% — training target correctly centered; offset is OOD + data-slice, traced).
+    - [ ] **Net v3 — the data jump (highest leverage):**
+      1. **Diverse full-file sample** (~800× volume + decorrelation): stride/seek across the
+         whole 40 GB (binpack→plain in chunks; don't materialize all plain at once).
+      2. **Include openings** — relax `min-ply` so the net sees opening positions (recovers
+         the ~64 Elo OOD loss).
+      3. **On-scale training** — set `scaling_factor` = our engine's 50%-win cp so the net
+         comes out on-scale with **no post-hoc CpScale/B1 surgery**; fix the offset at source.
+      4. **Quality metric = teacher (SF) validation loss**, NOT R²-vs-HCE.
+      5. Bigger net (512/1024 L1) is a later lever — GPU trainer (`bullet`/PyTorch) when CPU
+         becomes the limit. Then re-SPRT vs HCE: **clearing HCE on full data is the realistic
+         target** (currently PeSTO-level on 0.12% of the data — large lever unpulled).
 - [ ] Phase 4 — incremental accumulator + quantization
 - [ ] Phase 5 — grow

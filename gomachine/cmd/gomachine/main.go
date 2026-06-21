@@ -45,6 +45,12 @@ func main() {
 		cmdEngineLoad(os.Args[2:])
 	case "tune":
 		cmdTune(os.Args[2:])
+	case "nnue-train":
+		cmdNNUETrain(os.Args[2:])
+	case "nnue-convert":
+		cmdNNUEConvert(os.Args[2:])
+	case "nnue-verify-labels":
+		cmdNNUEVerifyLabels(os.Args[2:])
 	case "gen-tb-epd":
 		cmdGenTBEPD(os.Args[2:])
 	case "compile-book":

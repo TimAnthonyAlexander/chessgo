@@ -17,8 +17,8 @@ import (
 // transformer stored feature-major (W0[feat*L1 : feat*L1+L1] is one feature's
 // column, so an accumulator add is a contiguous slice add — the shape the
 // Phase-4 incremental update wants). The downstream layer W1/B1 maps the
-// concatenated [stm, opp] accumulator (after ClippedReLU) to one scalar, which
-// CpScale converts to centipawns.
+// concatenated [stm, opp] accumulator (after SCReLU — clamp to [0,1] then square)
+// to one scalar, which CpScale converts to centipawns.
 type Net struct {
 	W0      []float32 // InputDim*L1, feature-major
 	B0      []float32 // L1
@@ -81,13 +81,13 @@ func (n *Net) Eval(pos *chess.Position) int {
 
 	y := n.B1
 	for i := 0; i < ConcatDim; i++ {
-		h := acc[i] // ClippedReLU: clamp(x, 0, 1)
+		h := acc[i] // SCReLU: clamp(x, 0, 1) then square
 		if h < 0 {
 			h = 0
 		} else if h > 1 {
 			h = 1
 		}
-		y += h * n.W1[i]
+		y += h * h * n.W1[i]
 	}
 	return int(math.Round(float64(y * n.CpScale)))
 }

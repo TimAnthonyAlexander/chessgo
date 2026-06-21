@@ -53,12 +53,14 @@ func TestFeatureIndexKings(t *testing.T) {
 	}
 }
 
-// Hand-computed forward pass. Net: biases 0, CpScale 1, all W1=1, W0 zero except
-// two cells. Position = two kings, White to move.
+// Hand-computed forward pass (SCReLU: clamp(x,0,1) then SQUARE). Net: biases 0,
+// CpScale 1, all W1=1, W0 zero except two cells. Position = two kings, White to
+// move.
 //   active(stm=White)  = {324, 764};  active(opp=Black) = {764, 324}
 //   set W0[324][0]=0.5, W0[764][0]=0.3
 //   acc[stm][0]  = 0.5+0.3 = 0.8 ; acc[opp][0] = 0.3+0.5 = 0.8 ; all else 0
-//   clamp → 0.8 at indices {0, 256}; y = 1*0.8 + 1*0.8 = 1.6 ; eval = round(1.6) = 2
+//   SCReLU: 0.8 → 0.8² = 0.64 at indices {0, 256}
+//   y = 1*0.64 + 1*0.64 = 1.28 ; eval = round(1.28) = 1
 func TestForwardHandComputed(t *testing.T) {
 	n := NewNet()
 	n.CpScale = 1
@@ -69,14 +71,14 @@ func TestForwardHandComputed(t *testing.T) {
 	n.W0[764*L1+0] = 0.3
 
 	pos := mustFEN(t, "4k3/8/8/8/8/8/8/4K3 w - - 0 1")
-	if got := n.Eval(pos); got != 2 {
-		t.Fatalf("Eval = %d, want 2", got)
+	if got := n.Eval(pos); got != 1 {
+		t.Fatalf("Eval = %d, want 1", got)
 	}
 
-	// ClippedReLU upper clamp: bump the cell so acc[0] = 2.3 → clamps to 1.
-	// Now y = 1(index0) + 0.8(index256) = 1.8 → eval = round(1.8) = 2 as well;
-	// raise the opp side too to make the clamp observable.
-	n.W0[324*L1+0] = 2.0 // acc[stm][0] = 2.3 → clamp 1 ; acc[opp][0] = 2.3 → clamp 1
+	// SCReLU upper clamp: bump the cell so acc[0] = 2.3 → clamps to 1, and 1² = 1.
+	// Now y = 1(index0) + 1(index256) = 2 → eval = round(2) = 2; raise the opp side
+	// too to make the clamp observable.
+	n.W0[324*L1+0] = 2.0 // acc[stm][0] = 2.3 → clamp 1 → 1² = 1 ; acc[opp][0] same
 	if got := n.Eval(pos); got != 2 { // y = 1 + 1 = 2
 		t.Fatalf("clamped Eval = %d, want 2", got)
 	}

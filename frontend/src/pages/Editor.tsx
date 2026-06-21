@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Box, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from '@mui/material'
-import { Bot, Check, Copy, Cpu, Eraser, FlipVertical2, Microscope, RotateCcw } from 'lucide-react'
+import { Bot, Check, Copy, Cpu, Dices, Eraser, FlipVertical2, Microscope, RotateCcw } from 'lucide-react'
 import BoardEditor, { type Brush, EditorPalette } from '../components/BoardEditor'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import { ActionBtn } from '../components/PanelUI'
-import { analyze, type Color } from '../api/client'
+import { analyze, type Color, nextPuzzle } from '../api/client'
 import { useAuth } from '../lib/auth'
 import { parseFen } from '../lib/chess'
 import {
@@ -80,6 +80,23 @@ export default function Editor() {
       setTimeout(() => setCopied(false), 1400)
     } catch {
       /* clipboard blocked — no-op */
+    }
+  }
+
+  // Drop in a real, balanced position from the puzzle corpus (~200k). We use the
+  // puzzle's `start_fen` (Lichess convention: BEFORE the setup blunder, so it's a
+  // believable middlegame) rather than the post-blunder tactic position.
+  const [loadingRandom, setLoadingRandom] = useState(false)
+  const loadRandom = async () => {
+    if (loadingRandom) return
+    setLoadingRandom(true)
+    try {
+      const p = await nextPuzzle()
+      setFen(p.start_fen)
+    } catch {
+      /* transient fetch failure — leave the current position untouched */
+    } finally {
+      setLoadingRandom(false)
     }
   }
 
@@ -189,6 +206,12 @@ export default function Editor() {
             {/* Tools */}
             <Box sx={{ display: 'flex', gap: 1 }}>
               <ToolBtn icon={<RotateCcw size={15} />} label="Start position" onClick={() => setFen(START_FEN)} />
+              <ToolBtn
+                icon={<Dices size={15} />}
+                label={loadingRandom ? 'Loading…' : 'Random'}
+                onClick={loadRandom}
+                disabled={loadingRandom}
+              />
               <ToolBtn icon={<Eraser size={15} />} label="Clear board" onClick={() => setFen(withClearedBoard(fen))} />
               <ToolBtn
                 icon={<FlipVertical2 size={15} />}
@@ -413,11 +436,22 @@ function CastleChip({
   )
 }
 
-function ToolBtn({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
+function ToolBtn({
+  icon,
+  label,
+  onClick,
+  disabled = false,
+}: {
+  icon: React.ReactNode
+  label: string
+  onClick: () => void
+  disabled?: boolean
+}) {
   return (
     <Box
       component="button"
       onClick={onClick}
+      disabled={disabled}
       sx={{
         flex: 1,
         display: 'flex',
@@ -426,7 +460,7 @@ function ToolBtn({ icon, label, onClick }: { icon: React.ReactNode; label: strin
         justifyContent: 'center',
         gap: 0.4,
         height: 52,
-        cursor: 'pointer',
+        cursor: disabled ? 'default' : 'pointer',
         fontFamily: 'var(--font-display)',
         fontSize: 11.5,
         fontWeight: 600,
@@ -434,9 +468,10 @@ function ToolBtn({ icon, label, onClick }: { icon: React.ReactNode; label: strin
         bgcolor: 'var(--surface-2)',
         border: '1px solid var(--line)',
         borderRadius: '9px',
+        opacity: disabled ? 0.55 : 1,
         transition: 'color .15s, background-color .15s, border-color .15s, transform .05s',
-        '&:hover': { color: 'var(--accent)', bgcolor: 'var(--line)', borderColor: 'var(--accent-line)' },
-        '&:active': { transform: 'translateY(1px)' },
+        '&:hover': disabled ? {} : { color: 'var(--accent)', bgcolor: 'var(--line)', borderColor: 'var(--accent-line)' },
+        '&:active': disabled ? {} : { transform: 'translateY(1px)' },
       }}
     >
       {icon}
