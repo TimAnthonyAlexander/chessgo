@@ -2,37 +2,38 @@ package nnue
 
 import (
 	"fmt"
-	"math"
 	"os"
 
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 )
 
-// Phase A: the eager incremental accumulator. The slow path (Net.Eval) rebuilds
-// both perspective sums from scratch on every call; here we keep them updated
-// across make/unmake so each node pays only a tiny per-move delta plus the
-// output dot.
+// The eager incremental accumulator. The slow path (Net.Eval) rebuilds both
+// perspective sums from scratch on every call; here we keep them updated across
+// make/unmake so each node pays only a tiny per-move delta plus the output dot.
 //
-// Key design choice: the accumulator is stored by ABSOLUTE color (a White-
-// perspective half and a Black-perspective half), NOT by stm/opp. A move only
-// changes piece placement, so both halves take a small delta; a NULL move
-// changes no placement at all, so the accumulator is untouched and eval simply
-// re-orients to the new side to move. (If we stored stm/opp we'd have to swap
-// the halves on every ply — exactly the kind of book-keeping this avoids.)
+// Phase B: the accumulator is INT16 (the QA-scaled feature-transformer sum), and
+// the output dot is integer SCReLU + descale (see quant.go). Integer adds are
+// associative, so the incremental sum is *bit-identical* to a from-scratch
+// rebuild — the G1 gate below asserts exact equality, strictly stronger than the
+// float epsilon Phase A used.
+//
+// Key design choice (unchanged from Phase A): the accumulator is stored by
+// ABSOLUTE color (a White-perspective half and a Black-perspective half), NOT by
+// stm/opp. A move only changes piece placement, so both halves take a small
+// delta; a NULL move changes no placement at all, so the accumulator is untouched
+// and eval simply re-orients to the new side to move.
 
 // assertAccumulator enables the load-bearing correctness gate (G1): on every
 // eval, rebuild the accumulator from scratch and compare it to the incrementally
-// maintained one. Off by default (one bool test per eval when off). Turn on with
-// NNUE_ASSERT=1.
+// maintained one (exact). Off by default. Turn on with NNUE_ASSERT=1.
 var assertAccumulator = os.Getenv("NNUE_ASSERT") != ""
 
 // SetDebugAssert toggles the incremental-vs-from-scratch accumulator gate at
 // runtime (tests use it so CI catches desyncs without needing the env var).
 func SetDebugAssert(b bool) { assertAccumulator = b }
 
-// forceScratch makes the searcher's eval take the slow from-scratch path even
-// while the accumulator stack is maintained — used only to A/B the speedup
-// (G3). NNUE_NOINCREMENTAL=1.
+// forceScratch makes the searcher's eval take the slow from-scratch path (still
+// integer) — used only to A/B the incremental speedup (G5). NNUE_NOINCREMENTAL=1.
 var forceScratch = os.Getenv("NNUE_NOINCREMENTAL") != ""
 
 // ForceScratch reports whether the from-scratch eval path is forced (perf A/B).
@@ -41,11 +42,12 @@ func ForceScratch() bool { return forceScratch }
 // SetForceScratch toggles the from-scratch eval path at runtime (perf A/B tests).
 func SetForceScratch(b bool) { forceScratch = b }
 
-// Accumulator holds the two absolute-color first-layer sums. Each is B0 plus the
-// W0 columns of that color's active piece features. ~2 KB; copied per ply.
+// Accumulator holds the two absolute-color first-layer sums (int16, QA-scaled).
+// Each is B0i plus the W0i columns of that color's active piece features. ~1 KB;
+// copied per ply.
 type Accumulator struct {
-	w [L1]float32 // White-perspective half
-	b [L1]float32 // Black-perspective half
+	w [L1]int16 // White-perspective half
+	b [L1]int16 // Black-perspective half
 }
 
 // featChange is one piece appearing (add) or disappearing (!add) on a square.
@@ -55,20 +57,20 @@ type featChange struct {
 	add bool
 }
 
-// build fills acc from scratch for pos — same arithmetic and order as Net.Eval,
-// so a from-scratch accumulator yields a bit-identical eval to Net.Eval.
+// build fills acc from scratch for pos — same arithmetic and order as the int
+// forward, so a from-scratch accumulator yields a bit-identical eval.
 func (n *Net) build(acc *Accumulator, pos *chess.Position) {
-	copy(acc.w[:], n.B0)
-	copy(acc.b[:], n.B0)
+	copy(acc.w[:], n.B0i)
+	copy(acc.b[:], n.B0i)
 	var buf [maxActive]uint16
 	for _, f := range AppendFeatures(buf[:0], pos, chess.White) {
-		col := n.W0[int(f)*L1 : int(f)*L1+L1]
+		col := n.W0i[int(f)*L1 : int(f)*L1+L1]
 		for j := 0; j < L1; j++ {
 			acc.w[j] += col[j]
 		}
 	}
 	for _, f := range AppendFeatures(buf[:0], pos, chess.Black) {
-		col := n.W0[int(f)*L1 : int(f)*L1+L1]
+		col := n.W0i[int(f)*L1 : int(f)*L1+L1]
 		for j := 0; j < L1; j++ {
 			acc.b[j] += col[j]
 		}
@@ -79,8 +81,8 @@ func (n *Net) build(acc *Accumulator, pos *chess.Position) {
 func (n *Net) apply(acc *Accumulator, c featChange) {
 	iw := int(FeatureIndex(chess.White, c.pc, c.sq)) * L1
 	ib := int(FeatureIndex(chess.Black, c.pc, c.sq)) * L1
-	cw := n.W0[iw : iw+L1]
-	cb := n.W0[ib : ib+L1]
+	cw := n.W0i[iw : iw+L1]
+	cb := n.W0i[ib : ib+L1]
 	if c.add {
 		for j := 0; j < L1; j++ {
 			acc.w[j] += cw[j]
@@ -94,33 +96,33 @@ func (n *Net) apply(acc *Accumulator, c featChange) {
 	}
 }
 
-// evalFrom evaluates acc oriented to stm — identical math to Net.Eval, just
-// reading the two precomputed halves instead of rebuilding them.
+// evalFrom evaluates acc oriented to stm — integer SCReLU dot + descale.
 func (n *Net) evalFrom(acc *Accumulator, stm chess.Color) int {
 	stmHalf, oppHalf := &acc.w, &acc.b
 	if stm == chess.Black {
 		stmHalf, oppHalf = &acc.b, &acc.w
 	}
-	y := n.B1
+	qa := n.QA
+	var out int64
 	for i := 0; i < L1; i++ {
-		h := stmHalf[i]
-		if h < 0 {
-			h = 0
-		} else if h > 1 {
-			h = 1
+		c := int32(stmHalf[i])
+		if c < 0 {
+			c = 0
+		} else if c > qa {
+			c = qa
 		}
-		y += h * h * n.W1[i]
+		out += int64(c*c) * int64(n.W1i[i])
 	}
 	for i := 0; i < L1; i++ {
-		h := oppHalf[i]
-		if h < 0 {
-			h = 0
-		} else if h > 1 {
-			h = 1
+		c := int32(oppHalf[i])
+		if c < 0 {
+			c = 0
+		} else if c > qa {
+			c = qa
 		}
-		y += h * h * n.W1[L1+i]
+		out += int64(c*c) * int64(n.W1i[L1+i])
 	}
-	return int(math.Round(float64(y * n.CpScale)))
+	return n.descale(out)
 }
 
 // moveChanges decodes the per-move feature deltas from the PRE-move position
@@ -191,9 +193,10 @@ func moveChanges(pos *chess.Position, m chess.Move, ch *[4]featChange) int {
 // from its parent plus the move delta; Pop is a pointer decrement (the parent's
 // accumulator is left in place and reused — no reverse-delta on unmake).
 type Stack struct {
-	net  *Net
-	data []Accumulator
-	sp   int
+	net       *Net
+	data      []Accumulator
+	sp        int
+	floatMode bool // route Eval through the float from-scratch path (int-vs-float A/B)
 }
 
 // NewStack allocates a stack deep enough for maxDepth plies.
@@ -204,6 +207,10 @@ func (n *Net) NewStack(maxDepth int) *Stack {
 // Net returns the net this stack was built for (so the searcher can detect a
 // hot-swapped default net and rebuild).
 func (st *Stack) Net() *Net { return st.net }
+
+// SetFloatMode makes Eval use the float from-scratch path (the NnueFloat param's
+// int-vs-float quality SPRT). The integer accumulator is still maintained.
+func (st *Stack) SetFloatMode(b bool) { st.floatMode = b }
 
 // Reset rebuilds slot 0 from scratch for pos and points the stack at it.
 func (st *Stack) Reset(pos *chess.Position) {
@@ -242,33 +249,36 @@ func (st *Stack) Eval(pos *chess.Position) int {
 	if assertAccumulator {
 		st.assertConsistent(pos)
 	}
-	if forceScratch {
+	if st.floatMode {
 		return st.net.Eval(pos)
+	}
+	if forceScratch {
+		var fresh Accumulator
+		st.net.build(&fresh, pos)
+		return st.net.evalFrom(&fresh, pos.SideToMove())
 	}
 	return st.net.evalFrom(&st.data[st.sp], pos.SideToMove())
 }
 
-// assertConsistent panics if the incrementally-maintained top accumulator drifts
-// from a from-scratch rebuild by more than float rounding. A genuine delta bug
-// (wrong piece/square/sign) shows up as a difference ~the column magnitude
-// (0.1–1.0), orders of magnitude above the ~1e-5 float32 summation-order noise.
+// assertConsistent panics if the incrementally-maintained top accumulator
+// differs from a from-scratch rebuild AT ALL (integer adds are associative, so a
+// correct incremental sum is bit-identical). Also flags any value that strays
+// outside a safe int16 band (overflow guard).
 func (st *Stack) assertConsistent(pos *chess.Position) {
 	var fresh Accumulator
 	st.net.build(&fresh, pos)
 	top := &st.data[st.sp]
-	const eps = 1e-2
 	for j := 0; j < L1; j++ {
-		if absf(top.w[j]-fresh.w[j]) > eps || absf(top.b[j]-fresh.b[j]) > eps {
+		if top.w[j] != fresh.w[j] || top.b[j] != fresh.b[j] {
 			panic(fmt.Sprintf(
-				"nnue accumulator desync at sp=%d j=%d: w(inc=%g fresh=%g) b(inc=%g fresh=%g) stm=%v fen=%q",
+				"nnue accumulator desync at sp=%d j=%d: w(inc=%d fresh=%d) b(inc=%d fresh=%d) stm=%v fen=%q",
 				st.sp, j, top.w[j], fresh.w[j], top.b[j], fresh.b[j], pos.SideToMove(), pos.FEN()))
 		}
+		// Overflow guard: legal positions sum well inside int16; anything near the
+		// rail means weights/feature counts could wrap silently in production.
+		if top.w[j] > 30000 || top.w[j] < -30000 || top.b[j] > 30000 || top.b[j] < -30000 {
+			panic(fmt.Sprintf("nnue accumulator near int16 overflow at sp=%d j=%d: w=%d b=%d fen=%q",
+				st.sp, j, top.w[j], top.b[j], pos.FEN()))
+		}
 	}
-}
-
-func absf(x float32) float32 {
-	if x < 0 {
-		return -x
-	}
-	return x
 }

@@ -249,6 +249,7 @@ func (s *Searcher) nnueBegin(pos *chess.Position) {
 	if s.accStack == nil || s.accStack.Net() != net {
 		s.accStack = net.NewStack(maxPly + 8)
 	}
+	s.accStack.SetFloatMode(s.params.NnueFloat)
 	s.accStack.Reset(pos)
 	s.useNNUE = true
 }

@@ -20,18 +20,22 @@ var moveTypeFENs = []string{
 	"4k3/8/8/2pP4/8/8/8/4K3 w - c6 0 1",                                    // en-passant available (dxc6)
 }
 
-// TestAccumulatorEvalMatchesScratch confirms a from-scratch accumulator yields a
-// bit-identical eval to the legacy Net.Eval (orientation + dot are correct).
+// TestAccumulatorEvalMatchesScratch confirms the integer from-scratch eval
+// (evalFrom) matches the float reference eval (Net.Eval) within float-rounding
+// (≤2cp). We first dequantize so both views describe the SAME quantized weights —
+// then the only difference is int-vs-float arithmetic, i.e. the ≤1–2cp drift, not
+// quantization error.
 func TestAccumulatorEvalMatchesScratch(t *testing.T) {
 	net := RandomNet(7)
+	net.dequantizeToFloat() // float view == dequantized int view (same weights)
 	for _, fen := range moveTypeFENs {
 		pos := mustFEN(t, fen)
 		var acc Accumulator
 		net.build(&acc, pos)
-		got := net.evalFrom(&acc, pos.SideToMove())
-		want := net.Eval(pos)
-		if got != want {
-			t.Fatalf("evalFrom != Eval (%d vs %d) for %q", got, want, fen)
+		gotInt := net.evalFrom(&acc, pos.SideToMove())
+		gotFloat := net.Eval(pos)
+		if d := gotInt - gotFloat; d > 2 || d < -2 {
+			t.Fatalf("int evalFrom %d vs float Eval %d (diff %d > 2cp) for %q", gotInt, gotFloat, d, fen)
 		}
 	}
 }
@@ -42,7 +46,6 @@ func TestAccumulatorEvalMatchesScratch(t *testing.T) {
 // wrong piece/square/sign in any delta path fails here.
 func TestIncrementalDeltaMatchesScratch(t *testing.T) {
 	net := RandomNet(11)
-	const eps = float32(1e-2)
 	seen := map[chess.MoveType]int{}
 	for _, fen := range moveTypeFENs {
 		pos := mustFEN(t, fen)
@@ -62,9 +65,11 @@ func TestIncrementalDeltaMatchesScratch(t *testing.T) {
 			net.build(&fresh, pos)
 			top := &st.data[st.sp]
 			for j := 0; j < L1; j++ {
-				if absf(top.w[j]-fresh.w[j]) > eps || absf(top.b[j]-fresh.b[j]) > eps {
+				// Integer adds are associative: incremental MUST equal from-scratch
+				// exactly (bit-identical), strictly stronger than Phase A's epsilon.
+				if top.w[j] != fresh.w[j] || top.b[j] != fresh.b[j] {
 					pos.UndoMove(m, &u)
-					t.Fatalf("delta desync %q move %s j=%d: w(inc=%g fresh=%g) b(inc=%g fresh=%g)",
+					t.Fatalf("delta desync %q move %s j=%d: w(inc=%d fresh=%d) b(inc=%d fresh=%d)",
 						fen, m.String(), j, top.w[j], fresh.w[j], top.b[j], fresh.b[j])
 				}
 			}

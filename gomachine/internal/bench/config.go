@@ -209,6 +209,14 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.Nnue = b
+		case "nnuefloat":
+			// with NNUE on, use the float from-scratch eval instead of the int
+			// incremental path — for the Phase-B int-vs-float quality A/B only.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.NnueFloat = b
 		default:
 			return base, fmt.Errorf("unknown param %q", key)
 		}

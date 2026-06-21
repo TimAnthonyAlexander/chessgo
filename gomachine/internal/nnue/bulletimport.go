@@ -66,43 +66,25 @@ func ImportBulletNet(path string) (*Net, error) {
 	l1b := vals[l0wCount+l0bCount+l1wCount]                  // scalar
 
 	n := NewNet()
+	n.QA, n.QB, n.Scale = bulletQA, bulletQB, bulletSCALE
 
+	// Phase B: store bullet's quantised ints VERBATIM (no float round-trip) so the
+	// integer forward reproduces bullet's quantised eval bit-for-bit. The float
+	// view is then derived by dequantising (the reference/comparison path).
+	//
 	// --- Feature transformer (l0w): bullet column-major [HIDDEN x 768] ---
-	//
-	// bullet's l0w is the affine "l0" weight, shape (out=HIDDEN, in=768), stored
-	// column-major. For an input affine the saved layout is feature-as-column:
-	// the weights for feature f occupy l0w[f*HIDDEN : f*HIDDEN + HIDDEN] (the same
-	// `[Accumulator; 768]` view the Rust Network uses — feature_weights[f].vals is
-	// a contiguous HIDDEN block). Our W0 is also feature-major
-	// (W0[f*L1 : f*L1+L1]), so per feature this is a straight contiguous copy.
-	//
-	// We rebuild it via the identity permutation: bulletIdx == ourIdx for every
-	// physical (perspective, pieceType, square). Walk our index space; copy the
-	// matching bullet column.
+	// bullet stores feature f as the contiguous block l0w[f*HIDDEN : ...]; our W0i
+	// is also feature-major and bulletIdx == ourIdx (identity permutation, proven
+	// by the verification gate), so per feature this is a straight copy.
 	for ourIdx := 0; ourIdx < InputDim; ourIdx++ {
-		bulletIdx := ourIdx // identity permutation (proven by the verification gate)
-		src := l0w[bulletIdx*L1 : bulletIdx*L1+L1]
-		dst := n.W0[ourIdx*L1 : ourIdx*L1+L1]
-		for j := 0; j < L1; j++ {
-			dst[j] = float32(src[j]) / bulletQA
-		}
+		bulletIdx := ourIdx
+		copy(n.W0i[ourIdx*L1:ourIdx*L1+L1], l0w[bulletIdx*L1:bulletIdx*L1+L1])
 	}
+	copy(n.B0i, l0b)   // feature bias
+	copy(n.W1i, l1w)   // output weights, concat [stm, opp]
+	n.B1i = int32(l1b) // output bias (scaled by QA*QB)
+	n.quantized = true
 
-	// --- Feature bias (l0b): /QA ---
-	for j := 0; j < L1; j++ {
-		n.B0[j] = float32(l0b[j]) / bulletQA
-	}
-
-	// --- Output weights (l1w): concat [stm, opp], /QB. Same order as ours. ---
-	for i := 0; i < ConcatDim; i++ {
-		n.W1[i] = float32(l1w[i]) / bulletQB
-	}
-
-	// --- Output bias (l1b): /(QA*QB) ---
-	n.B1 = float32(l1b) / float32(bulletQA*bulletQB)
-
-	// --- Output scale: reproduces bullet's centipawns. ---
-	n.CpScale = bulletSCALE
-
+	n.dequantizeToFloat() // float reference view (≤1cp from the exact int forward)
 	return n, nil
 }

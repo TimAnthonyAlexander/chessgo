@@ -36,6 +36,7 @@ type Params struct {
 	UseTablebase   bool // probe Syzygy endgame tablebases at the root (engine must have a tablebase set)
 	TBSearch       bool // probe Syzygy WDL at internal search nodes (extends the horizon to the ≤MaxPieces boundary; engine must have a tablebase set)
 	Nnue           bool // evaluation: route static eval through the NNUE net (internal/nnue); inert (falls back to HCE) if no net is loaded
+	NnueFloat      bool // evaluation: when NNUE is on, use the float from-scratch eval instead of the int incremental path (int-vs-float A/B only)
 }
 
 // DefaultParams returns the engine's current full-strength configuration.
