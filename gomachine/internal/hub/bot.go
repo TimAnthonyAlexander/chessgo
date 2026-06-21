@@ -28,8 +28,9 @@ type botSnapshot struct {
 	ply         int
 	fen         string
 	history     []uint64
-	level       int
-	tc          timeControl // pacing scales with the time control
+	rating      int           // target Elo (rating-first ladder)
+	moveTimeCap time.Duration // >0 overrides the ladder budget (fillers: cheap, cosmetic)
+	tc          timeControl   // pacing scales with the time control
 	remainingMs int64
 	legalCount  int
 }
@@ -106,7 +107,6 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool string) {
 	}
 	displayed := botDisplayRating(userRating)
 	bot := newBotIdentity(displayed)
-	botLevel := levelForRating(displayed)
 	pos, _ := chess.ParseFEN(chess.StartFEN)
 	g := &game{
 		id:   newID(),
@@ -129,9 +129,9 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool string) {
 	}
 	if humanColor == chess.White {
 		g.white = &player{client: human, id: human.id}
-		g.black = &player{id: bot, isBot: true, level: botLevel}
+		g.black = &player{id: bot, isBot: true, rating: displayed}
 	} else {
-		g.white = &player{id: bot, isBot: true, level: botLevel}
+		g.white = &player{id: bot, isBot: true, rating: displayed}
 		g.black = &player{client: human, id: human.id}
 	}
 
@@ -156,8 +156,10 @@ func (h *Hub) scheduleBotMove(g *game) {
 		return
 	}
 	engines := h.engines
+	moveTimeCap := time.Duration(0) // human bot-fill: full rating ladder
 	if g.filler {
 		engines = h.fillerEngines
+		moveTimeCap = fillerMoveTimeCap // cosmetic self-play: cheap, capped think time
 	}
 	if engines == nil {
 		return // the relevant pool isn't enabled
@@ -167,7 +169,8 @@ func (h *Hub) scheduleBotMove(g *game) {
 		ply:         len(g.moves),
 		fen:         g.pos.FEN(),
 		history:     append([]uint64(nil), g.history...),
-		level:       bot.level,
+		rating:      bot.rating,
+		moveTimeCap: moveTimeCap,
 		tc:          g.tc,
 		remainingMs: g.remainingMs(botColor),
 		legalCount:  len(g.pos.LegalMoveStrings(chess.SqNone)),
@@ -185,7 +188,7 @@ func (h *Hub) computeBotMove(s botSnapshot, engines chan *engineHandle) {
 	}
 	start := time.Now()
 	eng := <-engines
-	res := eng.BestMove(pos, s.level, s.history)
+	res := eng.BestMoveForRatingTimed(pos, s.rating, s.moveTimeCap, s.history)
 	engines <- eng
 	if res.Move == chess.NullMove {
 		return
@@ -334,24 +337,10 @@ func botDisplayRating(userRating int) int {
 	return r
 }
 
-// levelForRating maps a displayed Elo to an engine level 0..10 so the bot plays
-// roughly at the strength it advertises. Heuristic and monotonic — the engine's
-// levels aren't yet precisely Elo-calibrated (SPEC §11), so this is an
-// approximation that will tighten as the levels are calibrated. ~600→0, 1500→5,
-// ≥2400→10.
-func levelForRating(rating int) int {
-	lvl := (rating - 600) / 180
-	if lvl < 0 {
-		lvl = 0
-	}
-	if lvl > 10 {
-		lvl = 10
-	}
-	return lvl
-}
-
-// ratingForLevel is the rough inverse, used to anchor a bot when the human has no
-// rating (anonymous): pick a displayed rating typical of a given engine level.
+// ratingForLevel converts the configured `-bot-level` flag (0..10, the anonymous
+// fallback) into a nominal displayed Elo, since bots are now rating-driven
+// (engine.BestMoveForRating / configForRating) rather than level-driven. Only the
+// CLI fallback level still needs this bridge; logged-in players supply a real Elo.
 func ratingForLevel(level int) int {
 	return 600 + 180*level
 }

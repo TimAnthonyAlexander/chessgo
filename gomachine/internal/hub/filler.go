@@ -82,6 +82,12 @@ const (
 	fillerRatingMax  = 2300
 	fillerPairJitter = 110 // how far the two opponents' ratings may diverge
 
+	// fillerMoveTimeCap bounds a filler's per-move search. Fillers are cosmetic
+	// Watch-page eye-candy on a dedicated pool — they display a believable rating
+	// but must stay cheap, so we cap think time well below the rating ladder's
+	// budget (which reaches ~1.9s at the top). Their moves still look plausible.
+	fillerMoveTimeCap = 250 * time.Millisecond
+
 	// fillerPuzzleChance is the share of fillers seeded from a realistic midgame
 	// position (a puzzle FEN) rather than the opening — when a FEN pool is loaded.
 	// Two near-equal engines from the start position tend to drawish, samey games;
@@ -126,8 +132,8 @@ func (h *Hub) startFillerGame() {
 	}
 	g := &game{
 		id:    newID(),
-		white: &player{id: newBotIdentity(rW), isBot: true, level: levelForRating(rW)},
-		black: &player{id: newBotIdentity(rB), isBot: true, level: levelForRating(rB)},
+		white: &player{id: newBotIdentity(rW), isBot: true, rating: rW},
+		black: &player{id: newBotIdentity(rB), isBot: true, rating: rB},
 		pos:   pos,
 		tc:    tc,
 		pool:  pool,

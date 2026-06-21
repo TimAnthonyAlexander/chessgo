@@ -46,26 +46,6 @@ func TestPairAcceptable(t *testing.T) {
 	}
 }
 
-func TestLevelForRating(t *testing.T) {
-	cases := []struct{ rating, want int }{
-		{0, 0}, {600, 0}, {1500, 5}, {2400, 10}, {5000, 10}, {-100, 0},
-	}
-	for _, c := range cases {
-		if got := levelForRating(c.rating); got != c.want {
-			t.Errorf("levelForRating(%d) = %d, want %d", c.rating, got, c.want)
-		}
-	}
-	// Monotonic non-decreasing.
-	prev := -1
-	for r := 0; r <= 3000; r += 50 {
-		l := levelForRating(r)
-		if l < prev {
-			t.Fatalf("levelForRating not monotonic at %d: %d < %d", r, l, prev)
-		}
-		prev = l
-	}
-}
-
 func TestBotDisplayRating(t *testing.T) {
 	for _, base := range []int{1200, 1500, 1900} {
 		for i := 0; i < 50; i++ {

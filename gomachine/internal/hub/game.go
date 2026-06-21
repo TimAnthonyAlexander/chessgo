@@ -9,12 +9,13 @@ import (
 )
 
 // player is one side of a live game. A bot opponent has isBot=true and a nil
-// client (no socket); the hub plays its moves via the engine at `level`.
+// client (no socket); the hub plays its moves via the engine at `rating` (the
+// rating-first ladder, engine.BestMoveForRating).
 type player struct {
 	client *Client
 	id     auth.Identity
 	isBot  bool
-	level  int // engine level (0..10) for a bot side; unused for humans
+	rating int // target Elo for a bot side (drives configForRating); unused for humans
 }
 
 // game is a single live game held entirely in memory. The clock is server-
