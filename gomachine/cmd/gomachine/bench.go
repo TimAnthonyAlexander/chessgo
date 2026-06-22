@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math/rand"
 	"context"
 	"flag"
 	"fmt"
@@ -167,6 +168,7 @@ func cmdBenchSPRT(args []string) {
 	conc := fs.Int("concurrency", runtime.NumCPU(), "parallel game-pair workers")
 	maxPairs := fs.Int("maxpairs", 40000, "hard cap on game pairs")
 	bookPath := fs.String("book", "", "opening book (.epd/.fen or UCI move-lines); default: embedded")
+	seed := fs.Int("seed", 0, "shuffle opening-book order with this seed (0=none); give parallel SPRT processes distinct seeds to decorrelate their games")
 	engBookPath := fs.String("engine-book", "data/book.bin", "precomputed engine opening book consulted when a side has book=on (\"\" disables)")
 	tbPath := fs.String("tb-path", "", "Syzygy tablebase directory, probed when a side has tb=on (\"\" disables)")
 	newThreads := fs.Int("new-threads", 1, "Lazy SMP threads for --new (use with --movetime)")
@@ -195,6 +197,10 @@ func cmdBenchSPRT(args []string) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "book:", err)
 		os.Exit(1)
+	}
+	if *seed != 0 {
+		rng := rand.New(rand.NewSource(int64(*seed)))
+		rng.Shuffle(len(book), func(i, j int) { book[i], book[j] = book[j], book[i] })
 	}
 
 	newNetP := loadNetOrExit(*newNet)
