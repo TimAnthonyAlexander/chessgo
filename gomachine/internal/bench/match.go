@@ -8,6 +8,7 @@ import (
 	"github.com/timanthonyalexander/gomachine/internal/book"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 	"github.com/timanthonyalexander/gomachine/internal/engine"
+	"github.com/timanthonyalexander/gomachine/internal/nnue"
 	"github.com/timanthonyalexander/gomachine/internal/search"
 	"github.com/timanthonyalexander/gomachine/internal/syzygy"
 )
@@ -54,6 +55,14 @@ type Config struct {
 	// clean controlled A/B (--new "tb=on" vs --old "tb=off"). nil → no tablebase.
 	Tablebase *syzygy.Tablebase
 
+	// NewNet/OldNet give each side its OWN NNUE net file — a net-vs-net A/B (e.g.
+	// v5 vs v4), which the Params flags can't express (they only toggle nnue on/off
+	// against the single process-global net). When either is set, the run is FORCED
+	// to Concurrency=1 and the active net is swapped (nnue.SetNet) before each side's
+	// search; the searcher's nnueBegin rebuilds its accumulator on the change. nil →
+	// that side uses the process default net (data/nnue/net.nnue).
+	NewNet, OldNet *nnue.Net
+
 	NewThreads int // Lazy SMP threads for the patch engine (default 1)
 	OldThreads int // Lazy SMP threads for the baseline engine (default 1)
 
@@ -73,9 +82,13 @@ type player struct {
 	threads int
 	lim     search.Limits
 	level   int
+	net     *nnue.Net // per-side NNUE net; when non-nil, made active before each search (requires Concurrency==1, since the net is a process global)
 }
 
 func (p player) play(pos *chess.Position, history []uint64) engine.BestResult {
+	if p.net != nil {
+		nnue.SetNet(p.net) // searcher's nnueBegin rebuilds its accumulator when the net changes
+	}
 	if p.level >= 0 {
 		return p.eng.BestMove(pos, p.level, history)
 	}
@@ -188,6 +201,11 @@ func RunSPRT(ctx context.Context, cfg Config, onProgress func(Progress)) Summary
 	if cfg.Concurrency < 1 {
 		cfg.Concurrency = 1
 	}
+	// Per-side net A/B swaps a process-global (nnue.SetNet) before each search, so
+	// parallel workers would clobber each other's net — force sequential.
+	if cfg.NewNet != nil || cfg.OldNet != nil {
+		cfg.Concurrency = 1
+	}
 	newLim := cfg.limitsFor(cfg.NewMoveTime, cfg.NewDepth)
 	oldLim := cfg.limitsFor(cfg.OldMoveTime, cfg.OldDepth)
 	lower, upper := Bounds(cfg.Alpha, cfg.Beta)
@@ -210,8 +228,8 @@ func RunSPRT(ctx context.Context, cfg Config, onProgress func(Progress)) Summary
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			newP := player{engine.NewWithParams(cfg.TTMB, cfg.NewParams), maxThreads(cfg.NewThreads), newLim, cfg.NewLevel}
-			oldP := player{engine.NewWithParams(cfg.TTMB, cfg.OldParams), maxThreads(cfg.OldThreads), oldLim, cfg.OldLevel}
+			newP := player{eng: engine.NewWithParams(cfg.TTMB, cfg.NewParams), threads: maxThreads(cfg.NewThreads), lim: newLim, level: cfg.NewLevel, net: cfg.NewNet}
+			oldP := player{eng: engine.NewWithParams(cfg.TTMB, cfg.OldParams), threads: maxThreads(cfg.OldThreads), lim: oldLim, level: cfg.OldLevel, net: cfg.OldNet}
 			newP.eng.SetBook(cfg.EngineBook)
 			oldP.eng.SetBook(cfg.EngineBook)
 			newP.eng.SetTablebase(cfg.Tablebase)

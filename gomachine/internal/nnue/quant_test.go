@@ -67,7 +67,7 @@ func TestGNN2IntMatchesFloat(t *testing.T) {
 		if err != nil {
 			t.Fatalf("bad fen %q: %v", fen, err)
 		}
-		var acc Accumulator
+		acc := net.newAccumulator()
 		net.build(&acc, pos)
 		gotInt := net.evalFrom(&acc, pos.SideToMove())
 		gotFloat := net.Eval(pos)

@@ -1,5 +1,12 @@
 # NNUE net v2 — distillation data pipeline (spec)
 
+> ⚠️ **Historical (v2, Go trainer).** This documents the Go-native CPU pipeline
+> (`internal/nnuedata`) that fed nets **v1–v3**. From **v4 on we train with
+> `bullet`** on the Metal GPU, which reads the SF binpack **directly** — so this
+> Go convert/label pipeline is **no longer on the critical path** (kept for the
+> binpack-format notes + the data-starvation diagnosis that justified the pivot).
+> Current trainer: `BULLET_SETUP.md`. Lineage: `PLAN.md` → Trainer lineage banner.
+>
 > Build spec for net v2: distill from public Stockfish/Leela training data instead
 > of our own ~1.6M WDL positions (net v1 failed Phase 3 — see PLAN.md §4). All byte
 > offsets/formulas quoted from primary sources, linked inline. Net v2 = same 768

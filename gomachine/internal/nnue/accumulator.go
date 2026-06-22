@@ -43,11 +43,23 @@ func ForceScratch() bool { return forceScratch }
 func SetForceScratch(b bool) { forceScratch = b }
 
 // Accumulator holds the two absolute-color first-layer sums (int16, QA-scaled).
-// Each is B0i plus the W0i columns of that color's active piece features. ~1 KB;
-// copied per ply.
+// Each is B0i plus the W0i columns of that color's active piece features.
+//
+// w/b are slices (not fixed arrays) so a net of ANY hidden width works; in the
+// hot path they are sub-slices of a single contiguous backing array owned by the
+// Stack (so there is no per-ply heap allocation, and slots stay cache-adjacent).
+// A standalone Accumulator (debug/perf paths) gets its own slices via
+// (*Net).newAccumulator. NOTE: because the fields are slices, a plain struct copy
+// (`*dst = *src`) aliases the backing — Push/PushNull copy the CONTENTS instead.
 type Accumulator struct {
-	w [L1]int16 // White-perspective half
-	b [L1]int16 // Black-perspective half
+	w []int16 // White-perspective half (len == net HL)
+	b []int16 // Black-perspective half (len == net HL)
+}
+
+// newAccumulator returns a standalone accumulator sized for this net's width.
+// Used by the debug (assert) and perf (forceScratch) paths, not the hot loop.
+func (n *Net) newAccumulator() Accumulator {
+	return Accumulator{w: make([]int16, n.HL), b: make([]int16, n.HL)}
 }
 
 // featChange is one piece appearing (add) or disappearing (!add) on a square.
@@ -60,18 +72,19 @@ type featChange struct {
 // build fills acc from scratch for pos — same arithmetic and order as the int
 // forward, so a from-scratch accumulator yields a bit-identical eval.
 func (n *Net) build(acc *Accumulator, pos *chess.Position) {
-	copy(acc.w[:], n.B0i)
-	copy(acc.b[:], n.B0i)
+	hl := n.HL
+	copy(acc.w, n.B0i)
+	copy(acc.b, n.B0i)
 	var buf [maxActive]uint16
 	for _, f := range AppendFeatures(buf[:0], pos, chess.White) {
-		col := n.W0i[int(f)*L1 : int(f)*L1+L1]
-		for j := 0; j < L1; j++ {
+		col := n.W0i[int(f)*hl : int(f)*hl+hl]
+		for j := 0; j < hl; j++ {
 			acc.w[j] += col[j]
 		}
 	}
 	for _, f := range AppendFeatures(buf[:0], pos, chess.Black) {
-		col := n.W0i[int(f)*L1 : int(f)*L1+L1]
-		for j := 0; j < L1; j++ {
+		col := n.W0i[int(f)*hl : int(f)*hl+hl]
+		for j := 0; j < hl; j++ {
 			acc.b[j] += col[j]
 		}
 	}
@@ -79,17 +92,18 @@ func (n *Net) build(acc *Accumulator, pos *chess.Position) {
 
 // apply adds or subtracts one feature's column from both perspective halves.
 func (n *Net) apply(acc *Accumulator, c featChange) {
-	iw := int(FeatureIndex(chess.White, c.pc, c.sq)) * L1
-	ib := int(FeatureIndex(chess.Black, c.pc, c.sq)) * L1
-	cw := n.W0i[iw : iw+L1]
-	cb := n.W0i[ib : ib+L1]
+	hl := n.HL
+	iw := int(FeatureIndex(chess.White, c.pc, c.sq)) * hl
+	ib := int(FeatureIndex(chess.Black, c.pc, c.sq)) * hl
+	cw := n.W0i[iw : iw+hl]
+	cb := n.W0i[ib : ib+hl]
 	if c.add {
-		for j := 0; j < L1; j++ {
+		for j := 0; j < hl; j++ {
 			acc.w[j] += cw[j]
 			acc.b[j] += cb[j]
 		}
 	} else {
-		for j := 0; j < L1; j++ {
+		for j := 0; j < hl; j++ {
 			acc.w[j] -= cw[j]
 			acc.b[j] -= cb[j]
 		}
@@ -98,13 +112,14 @@ func (n *Net) apply(acc *Accumulator, c featChange) {
 
 // evalFrom evaluates acc oriented to stm — integer SCReLU dot + descale.
 func (n *Net) evalFrom(acc *Accumulator, stm chess.Color) int {
-	stmHalf, oppHalf := &acc.w, &acc.b
+	hl := n.HL
+	stmHalf, oppHalf := acc.w, acc.b
 	if stm == chess.Black {
-		stmHalf, oppHalf = &acc.b, &acc.w
+		stmHalf, oppHalf = acc.b, acc.w
 	}
 	qa := n.QA
 	var out int64
-	for i := 0; i < L1; i++ {
+	for i := 0; i < hl; i++ {
 		c := int32(stmHalf[i])
 		if c < 0 {
 			c = 0
@@ -113,14 +128,14 @@ func (n *Net) evalFrom(acc *Accumulator, stm chess.Color) int {
 		}
 		out += int64(c*c) * int64(n.W1i[i])
 	}
-	for i := 0; i < L1; i++ {
+	for i := 0; i < hl; i++ {
 		c := int32(oppHalf[i])
 		if c < 0 {
 			c = 0
 		} else if c > qa {
 			c = qa
 		}
-		out += int64(c*c) * int64(n.W1i[L1+i])
+		out += int64(c*c) * int64(n.W1i[hl+i])
 	}
 	return n.descale(out)
 }
@@ -195,13 +210,26 @@ func moveChanges(pos *chess.Position, m chess.Move, ch *[4]featChange) int {
 type Stack struct {
 	net       *Net
 	data      []Accumulator
+	backing   []int16 // one contiguous buffer; each slot's w/b sub-slice it
 	sp        int
 	floatMode bool // route Eval through the float from-scratch path (int-vs-float A/B)
 }
 
-// NewStack allocates a stack deep enough for maxDepth plies.
+// NewStack allocates a stack deep enough for maxDepth plies. The per-ply
+// accumulators (w/b halves) are carved from a single contiguous backing buffer
+// sized to the net's width — so there is no per-node heap allocation regardless
+// of hidden size, and adjacent plies stay cache-friendly.
 func (n *Net) NewStack(maxDepth int) *Stack {
-	return &Stack{net: n, data: make([]Accumulator, maxDepth+1)}
+	hl := n.HL
+	slots := maxDepth + 1
+	backing := make([]int16, slots*2*hl)
+	data := make([]Accumulator, slots)
+	for i := 0; i < slots; i++ {
+		off := i * 2 * hl
+		data[i].w = backing[off : off+hl : off+hl]
+		data[i].b = backing[off+hl : off+2*hl : off+2*hl]
+	}
+	return &Stack{net: n, data: data, backing: backing}
 }
 
 // Net returns the net this stack was built for (so the searcher can detect a
@@ -223,7 +251,9 @@ func (st *Stack) Reset(pos *chess.Position) {
 func (st *Stack) Push(pos *chess.Position, m chess.Move) {
 	src := &st.data[st.sp]
 	dst := &st.data[st.sp+1]
-	*dst = *src
+	// Copy CONTENTS, not the slice headers (which would alias src's backing).
+	copy(dst.w, src.w)
+	copy(dst.b, src.b)
 	var ch [4]featChange
 	n := moveChanges(pos, m, &ch)
 	for k := 0; k < n; k++ {
@@ -235,7 +265,10 @@ func (st *Stack) Push(pos *chess.Position, m chess.Move) {
 // PushNull duplicates the top slot (a null move changes no placement). Call it
 // immediately BEFORE pos.DoNullMove.
 func (st *Stack) PushNull() {
-	st.data[st.sp+1] = st.data[st.sp]
+	src := &st.data[st.sp]
+	dst := &st.data[st.sp+1]
+	copy(dst.w, src.w)
+	copy(dst.b, src.b)
 	st.sp++
 }
 
@@ -253,7 +286,7 @@ func (st *Stack) Eval(pos *chess.Position) int {
 		return st.net.Eval(pos)
 	}
 	if forceScratch {
-		var fresh Accumulator
+		fresh := st.net.newAccumulator()
 		st.net.build(&fresh, pos)
 		return st.net.evalFrom(&fresh, pos.SideToMove())
 	}
@@ -265,10 +298,10 @@ func (st *Stack) Eval(pos *chess.Position) int {
 // correct incremental sum is bit-identical). Also flags any value that strays
 // outside a safe int16 band (overflow guard).
 func (st *Stack) assertConsistent(pos *chess.Position) {
-	var fresh Accumulator
+	fresh := st.net.newAccumulator()
 	st.net.build(&fresh, pos)
 	top := &st.data[st.sp]
-	for j := 0; j < L1; j++ {
+	for j := 0; j < st.net.HL; j++ {
 		if top.w[j] != fresh.w[j] || top.b[j] != fresh.b[j] {
 			panic(fmt.Sprintf(
 				"nnue accumulator desync at sp=%d j=%d: w(inc=%d fresh=%d) b(inc=%d fresh=%d) stm=%v fen=%q",

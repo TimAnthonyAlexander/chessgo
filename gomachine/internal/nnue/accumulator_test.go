@@ -30,7 +30,7 @@ func TestAccumulatorEvalMatchesScratch(t *testing.T) {
 	net.dequantizeToFloat() // float view == dequantized int view (same weights)
 	for _, fen := range moveTypeFENs {
 		pos := mustFEN(t, fen)
-		var acc Accumulator
+		acc := net.newAccumulator()
 		net.build(&acc, pos)
 		gotInt := net.evalFrom(&acc, pos.SideToMove())
 		gotFloat := net.Eval(pos)
@@ -61,10 +61,10 @@ func TestIncrementalDeltaMatchesScratch(t *testing.T) {
 
 			var u chess.Undo
 			pos.DoMove(m, &u)
-			var fresh Accumulator
+			fresh := net.newAccumulator()
 			net.build(&fresh, pos)
 			top := &st.data[st.sp]
-			for j := 0; j < L1; j++ {
+			for j := 0; j < net.HL; j++ {
 				// Integer adds are associative: incremental MUST equal from-scratch
 				// exactly (bit-identical), strictly stronger than Phase A's epsilon.
 				if top.w[j] != fresh.w[j] || top.b[j] != fresh.b[j] {

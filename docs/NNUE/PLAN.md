@@ -11,6 +11,26 @@
 
 ---
 
+## ⚙️ Trainer lineage — read this first
+
+**We train with `bullet`, not our own trainer.** Two generations exist; don't
+confuse them:
+
+| Nets | Trainer | Hardware | Status |
+|---|---|---|---|
+| **v1–v3** | Go-native CPU (`internal/nnuetrain`, this repo) | M3 Pro CPU | **Legacy.** Gradient-check-correct but **data-starved** (−120 to −332 vs HCE). Kept only as a correctness oracle — *not* used to train shipped nets. |
+| **v4 (shipped), v5 (maturity)** | **`bullet`** (jw1912/bullet, Rust) | **M3 Pro Metal GPU** | **Current — the trainer going forward.** Reads our 38–40 GB SF binpack at ~2.7M pos/sec (~7× the Go trainer). v4 is the shipped net (+212 Elo @ movetime); v5 is the longer "maturity" retrain. |
+
+The Go trainer's only lasting value: its finite-difference gradient check
+*proved* the v1–v3 failures were **data**, not math — which is what justified the
+pivot to bullet + 40 GB of Stockfish data. bullet itself is **third-party,
+out-of-repo** (`~/nnue-training/bullet`); only our **importer**
+(`internal/nnue/bulletimport.go`, `nnue-import-bullet`) and the net file
+(`data/nnue/net.nnue`) live here. Rig setup, configs, patches, and the v5 run
+command: **`BULLET_SETUP.md`**. As-built record: §4 below + `../ENGINE_STRENGTH.md §11`.
+
+---
+
 ## 0. Decisions locked (2026-06-21)
 
 | Decision | Choice | Why |
@@ -113,8 +133,11 @@ Deliverables:
 - `go build ./... && go test ./... && go vet`; perft still green; `nnue=off` is
   byte-identical to today (HCE path untouched).
 
-### Phase 2 — Go-native training pipeline
-**Goal:** produce `net.nnue` from the existing EPD corpora.
+### Phase 2 — Go-native training pipeline  ⟵ *LEGACY (v1–v3 only) — superseded by `bullet`, see §4 v4*
+**Goal:** produce `net.nnue` from the existing EPD corpora. *(This is the Go CPU
+trainer that produced nets v1–v3; it was data-starved and is no longer used to
+train shipped nets — bullet on Metal replaced it from v4 on. Kept as a
+gradient-check correctness oracle. See the Trainer lineage banner above.)*
 
 Deliverables:
 - `internal/nnue/train.go` — minibatch Adam (mirror `internal/tune/texel.go`),

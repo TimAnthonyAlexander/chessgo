@@ -29,9 +29,16 @@ import (
 // floats; a GNN1 (float) net loads its floats and quantizes them into the ints.
 // quantized records which side is authoritative (true → ints are bullet-exact).
 type Net struct {
-	W0      []float32 // InputDim*L1, feature-major
-	B0      []float32 // L1
-	W1      []float32 // ConcatDim
+	// HL is this net's hidden-layer width (the per-perspective accumulator size).
+	// It is NOT a compile-time constant: nets of different widths (e.g. a 256-wide
+	// and a 512-wide net) can be loaded into the same process at once (the
+	// net-vs-net SPRT does exactly this). All per-net inference derives its loop
+	// bounds and slice sizes from HL, never from the package L1 default.
+	HL int
+
+	W0      []float32 // InputDim*HL, feature-major
+	B0      []float32 // HL
+	W1      []float32 // 2*HL
 	B1      float32
 	CpScale float32 // raw output → centipawns
 
@@ -49,28 +56,37 @@ type Net struct {
 	quantized bool // true when the ints came straight from bullet (G2 bit-exact)
 }
 
-// NewNet allocates a zeroed net of the fixed architecture (weights left at 0;
-// the trainer fills them). CpScale defaults to 1; the integer view defaults to
+// NewNet allocates a zeroed net of the DEFAULT width (L1=256), for back-compat
+// with existing tests and the legacy Go trainer. New code that may see other
+// widths should use NewNetSize.
+func NewNet() *Net { return NewNetSize(L1) }
+
+// NewNetSize allocates a zeroed net with hidden-layer width hl (weights left at
+// 0; the trainer fills them). CpScale defaults to 1; the integer view defaults to
 // bullet's scales so a freshly-quantized net is self-consistent.
-func NewNet() *Net {
+func NewNetSize(hl int) *Net {
 	return &Net{
-		W0:      make([]float32, InputDim*L1),
-		B0:      make([]float32, L1),
-		W1:      make([]float32, ConcatDim),
+		HL:      hl,
+		W0:      make([]float32, InputDim*hl),
+		B0:      make([]float32, hl),
+		W1:      make([]float32, 2*hl),
 		CpScale: 1,
-		W0i:     make([]int16, InputDim*L1),
-		B0i:     make([]int16, L1),
-		W1i:     make([]int16, ConcatDim),
+		W0i:     make([]int16, InputDim*hl),
+		B0i:     make([]int16, hl),
+		W1i:     make([]int16, 2*hl),
 		QA:      bulletQA,
 		QB:      bulletQB,
 		Scale:   bulletSCALE,
 	}
 }
 
-// RandomNet returns a small-random-weight net for tests (no training needed).
-func RandomNet(seed int64) *Net {
+// RandomNet returns a small-random-weight net of the default width (256).
+func RandomNet(seed int64) *Net { return RandomNetSize(seed, L1) }
+
+// RandomNetSize returns a small-random-weight net of width hl for tests.
+func RandomNetSize(seed int64, hl int) *Net {
 	rng := rand.New(rand.NewSource(seed))
-	n := NewNet()
+	n := NewNetSize(hl)
 	for i := range n.W0 {
 		n.W0[i] = float32(rng.NormFloat64()) * 0.1
 	}
@@ -89,28 +105,29 @@ func RandomNet(seed int64) *Net {
 // side-to-move's perspective (negamax convention). This is the slow Phase-1
 // path: it rebuilds both accumulators from scratch every call.
 func (n *Net) Eval(pos *chess.Position) int {
-	var acc [ConcatDim]float32
-	copy(acc[:L1], n.B0)  // stm half
-	copy(acc[L1:], n.B0)  // opp half
+	hl := n.HL
+	acc := make([]float32, 2*hl)
+	copy(acc[:hl], n.B0)  // stm half
+	copy(acc[hl:], n.B0)  // opp half
 
 	stm := pos.SideToMove()
 	var buf [maxActive]uint16
 
 	for _, f := range AppendFeatures(buf[:0], pos, stm) {
-		col := n.W0[int(f)*L1 : int(f)*L1+L1]
-		for j := 0; j < L1; j++ {
+		col := n.W0[int(f)*hl : int(f)*hl+hl]
+		for j := 0; j < hl; j++ {
 			acc[j] += col[j]
 		}
 	}
 	for _, f := range AppendFeatures(buf[:0], pos, stm.Opposite()) {
-		col := n.W0[int(f)*L1 : int(f)*L1+L1]
-		for j := 0; j < L1; j++ {
-			acc[L1+j] += col[j]
+		col := n.W0[int(f)*hl : int(f)*hl+hl]
+		for j := 0; j < hl; j++ {
+			acc[hl+j] += col[j]
 		}
 	}
 
 	y := n.B1
-	for i := 0; i < ConcatDim; i++ {
+	for i := 0; i < 2*hl; i++ {
 		h := acc[i] // SCReLU: clamp(x, 0, 1) then square
 		if h < 0 {
 			h = 0
@@ -146,7 +163,7 @@ func (n *Net) Write(w io.Writer) error {
 	if n.quantized {
 		return n.writeGNN2(w)
 	}
-	hdr := fileHeader{Magic: magic, Version: 1, Arch: 0, InDim: InputDim, L1: L1}
+	hdr := fileHeader{Magic: magic, Version: 1, Arch: 0, InDim: InputDim, L1: uint32(n.HL)}
 	if err := binary.Write(w, binary.LittleEndian, hdr); err != nil {
 		return err
 	}
@@ -163,7 +180,7 @@ func (n *Net) Write(w io.Writer) error {
 
 // writeGNN2 serializes the integer view (bit-exact bullet weights).
 func (n *Net) writeGNN2(w io.Writer) error {
-	hdr := fileHeader{Magic: magic, Version: 2, Arch: 1, InDim: InputDim, L1: L1}
+	hdr := fileHeader{Magic: magic, Version: 2, Arch: 1, InDim: InputDim, L1: uint32(n.HL)}
 	if err := binary.Write(w, binary.LittleEndian, hdr); err != nil {
 		return err
 	}
@@ -202,22 +219,26 @@ func ReadNet(r io.Reader) (*Net, error) {
 	if hdr.Magic != magic {
 		return nil, errors.New("nnue: bad magic (not a GNN net file)")
 	}
-	if hdr.InDim != InputDim || hdr.L1 != L1 {
-		return nil, fmt.Errorf("nnue: arch mismatch in=%d l1=%d (want %d/%d)", hdr.InDim, hdr.L1, InputDim, L1)
+	if hdr.InDim != InputDim {
+		return nil, fmt.Errorf("nnue: input-dim mismatch in=%d (want %d)", hdr.InDim, InputDim)
+	}
+	hl := int(hdr.L1)
+	if hl <= 0 || hl > 8192 { // sanity: any real hidden width is well within this
+		return nil, fmt.Errorf("nnue: implausible hidden width L1=%d", hdr.L1)
 	}
 	switch hdr.Version {
 	case 1:
-		return readGNN1(r)
+		return readGNN1(r, hl)
 	case 2:
-		return readGNN2(r)
+		return readGNN2(r, hl)
 	default:
 		return nil, fmt.Errorf("nnue: unsupported version %d", hdr.Version)
 	}
 }
 
 // readGNN1 reads the float format, then quantises so the int path runs too.
-func readGNN1(r io.Reader) (*Net, error) {
-	n := NewNet()
+func readGNN1(r io.Reader, hl int) (*Net, error) {
+	n := NewNetSize(hl)
 	for _, blob := range [][]float32{n.W0, n.B0, n.W1} {
 		if err := binary.Read(r, binary.LittleEndian, blob); err != nil {
 			return nil, err
@@ -235,8 +256,8 @@ func readGNN1(r io.Reader) (*Net, error) {
 }
 
 // readGNN2 reads the integer format (bullet-exact), then dequantises to floats.
-func readGNN2(r io.Reader) (*Net, error) {
-	n := NewNet()
+func readGNN2(r io.Reader, hl int) (*Net, error) {
+	n := NewNetSize(hl)
 	var scales [4]int32 // QA, QB, Scale, B1i
 	if err := binary.Read(r, binary.LittleEndian, &scales); err != nil {
 		return nil, err

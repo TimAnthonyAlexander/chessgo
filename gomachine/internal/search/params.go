@@ -130,5 +130,14 @@ func DefaultParams() Params {
 		// routes static eval through the loaded net; with no net loaded it falls back
 		// to HCE, so this stays inert until data/nnue/net.nnue (or NNUE_PATH) exists.
 		Nnue: true,
+		// TT static-eval cache: reuse the TT-stored static eval on a hit that doesn't
+		// cut off, skipping the NNUE/HCE recompute (saves the SCReLU output dot). A
+		// movetime-only speed feature — behavior-preserving at fixed nodes (the eval
+		// is deterministic, proven byte-identical), so it is invisible to fixed-nodes
+		// SPRT and measured at movetime. SPRT vs tteval=off @ 100ms/move (2026-06-22):
+		// Elo +14.8 ± 10.8, LLR +2.32 at 998 pairs (W575 L490 D931) — a clear, stable
+		// positive (lower CI bound +4.0); stopped just shy of the formal H1 cross and
+		// accepted on the trend. See ENGINE_STRENGTH.md §7.
+		TTEval: true,
 	}
 }

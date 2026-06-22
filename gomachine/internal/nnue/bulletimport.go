@@ -42,17 +42,37 @@ func ImportBulletNet(path string) (*Net, error) {
 		return nil, fmt.Errorf("nnue: read bullet net: %w", err)
 	}
 
-	const (
-		l0wCount = InputDim * L1 // 768*256, column-major (HIDDEN x 768)
-		l0bCount = L1            // 256
-		l1wCount = ConcatDim     // 512
-		l1bCount = 1
-	)
-	wantI16 := l0wCount + l0bCount + l1wCount + l1bCount // 197377
-	if len(raw) < wantI16*2 {
-		return nil, fmt.Errorf("nnue: bullet net too small: have %d bytes, need >= %d (%d i16)",
-			len(raw), wantI16*2, wantI16)
+	// INFER the hidden width from the file. The content is
+	//   l0w(768·HL) + l0b(HL) + l1w(2·HL) + l1b(1) = 771·HL + 1  int16,
+	// then bullet pads the file up to a multiple of 64 bytes (a few leftover i16).
+	// A wrong HL would change the content by ≥771 i16 — far more than the <771 i16
+	// of padding — so floor((nI16-1)/771) recovers HL uniquely.
+	if len(raw) == 0 || len(raw)%64 != 0 {
+		return nil, fmt.Errorf("nnue: bullet net is %d bytes; expected a non-empty multiple of 64 (bullet pads to 64)", len(raw))
 	}
+	nI16 := len(raw) / 2
+	if nI16 < 772 {
+		return nil, fmt.Errorf("nnue: bullet net too small: %d bytes (%d i16) — not even one HL=1 net", len(raw), nI16)
+	}
+	hl := (nI16 - 1) / 771
+	if hl <= 0 || hl > 8192 {
+		return nil, fmt.Errorf("nnue: implausible inferred hidden width HL=%d from %d bytes", hl, len(raw))
+	}
+	// The content is 771·HL+1 int16, padded UP to a multiple of 64 bytes. Require
+	// the file to be EXACTLY that padded size for the inferred HL — this rejects any
+	// file that isn't a clean 771·HL+1 net (a wrong HL or a non-bullet file).
+	contentBytes := (771*hl + 1) * 2
+	wantBytes := (contentBytes + 63) / 64 * 64
+	if len(raw) != wantBytes {
+		return nil, fmt.Errorf(
+			"nnue: bullet net size %d bytes doesn't match 771·HL+1 padded-to-64 for inferred HL=%d (want %d bytes)",
+			len(raw), hl, wantBytes)
+	}
+
+	l0wCount := InputDim * hl
+	l0bCount := hl
+	l1wCount := 2 * hl
+	wantI16 := l0wCount + l0bCount + l1wCount + 1
 
 	// Decode the i16 stream (we only need the first wantI16; the rest is padding).
 	vals := make([]int16, wantI16)
@@ -60,12 +80,12 @@ func ImportBulletNet(path string) (*Net, error) {
 		vals[i] = int16(binary.LittleEndian.Uint16(raw[i*2 : i*2+2]))
 	}
 
-	l0w := vals[0:l0wCount]                                  // [HIDDEN x 768] column-major
-	l0b := vals[l0wCount : l0wCount+l0bCount]                // [256]
-	l1w := vals[l0wCount+l0bCount : l0wCount+l0bCount+l1wCount] // [512]
-	l1b := vals[l0wCount+l0bCount+l1wCount]                  // scalar
+	l0w := vals[0:l0wCount]                                     // [HL x 768] column-major
+	l0b := vals[l0wCount : l0wCount+l0bCount]                   // [HL]
+	l1w := vals[l0wCount+l0bCount : l0wCount+l0bCount+l1wCount] // [2·HL]
+	l1b := vals[l0wCount+l0bCount+l1wCount]                     // scalar
 
-	n := NewNet()
+	n := NewNetSize(hl)
 	n.QA, n.QB, n.Scale = bulletQA, bulletQB, bulletSCALE
 
 	// Phase B: store bullet's quantised ints VERBATIM (no float round-trip) so the
@@ -78,7 +98,7 @@ func ImportBulletNet(path string) (*Net, error) {
 	// by the verification gate), so per feature this is a straight copy.
 	for ourIdx := 0; ourIdx < InputDim; ourIdx++ {
 		bulletIdx := ourIdx
-		copy(n.W0i[ourIdx*L1:ourIdx*L1+L1], l0w[bulletIdx*L1:bulletIdx*L1+L1])
+		copy(n.W0i[ourIdx*hl:ourIdx*hl+hl], l0w[bulletIdx*hl:bulletIdx*hl+hl])
 	}
 	copy(n.B0i, l0b)   // feature bias
 	copy(n.W1i, l1w)   // output weights, concat [stm, opp]

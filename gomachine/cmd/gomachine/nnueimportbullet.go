@@ -36,5 +36,5 @@ func cmdNNUEImportBullet(args []string) {
 	}
 
 	fmt.Printf("imported bullet net %s -> %s (768x%d x2 -> 1, CpScale=%.0f)\n",
-		*in, *out, nnue.L1, net.CpScale)
+		*in, *out, net.HL, net.CpScale)
 }

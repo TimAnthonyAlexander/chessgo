@@ -14,6 +14,7 @@ import (
 	"github.com/timanthonyalexander/gomachine/internal/book"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 	"github.com/timanthonyalexander/gomachine/internal/engine"
+	"github.com/timanthonyalexander/gomachine/internal/nnue"
 	"github.com/timanthonyalexander/gomachine/internal/search"
 	"github.com/timanthonyalexander/gomachine/internal/syzygy"
 )
@@ -55,6 +56,22 @@ func loadTablebase(path string) *syzygy.Tablebase {
 	}
 	fmt.Fprintf(os.Stderr, "tablebase: up to %d-piece Syzygy loaded from %s\n", tb.MaxPieces(), path)
 	return tb
+}
+
+// loadNetOrExit loads an NNUE net file for a per-side net-vs-net A/B. Empty path →
+// nil (that side uses the process default net). A bad path is fatal: a silent
+// fallback would make the A/B secretly compare a net against itself.
+func loadNetOrExit(path string) *nnue.Net {
+	if path == "" {
+		return nil
+	}
+	net, err := nnue.LoadNet(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "net %q: %v\n", path, err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "net: loaded %s\n", path)
+	return net
 }
 
 // loadTablebaseDefault auto-discovers a Syzygy tablebase for the prod serve/hub
@@ -158,6 +175,8 @@ func cmdBenchSPRT(args []string) {
 	oldMovetime := fs.Int("old-movetime", 0, "ms/move for --old only (asymmetric TC; 0 → shared --movetime)")
 	newDepth := fs.Int("new-depth", 0, "max search depth for --new (0 → unbounded; caps on top of the time budget)")
 	oldDepth := fs.Int("old-depth", 0, "max search depth for --old (0 → unbounded)")
+	newNet := fs.String("new-net", "", "NNUE net file for --new only (net-vs-net A/B, e.g. a new net vs the shipped one); forces --concurrency 1")
+	oldNet := fs.String("old-net", "", "NNUE net file for --old only (e.g. data/nnue/net.nnue.bak-pre-v5)")
 	_ = fs.Parse(args)
 
 	base := search.DefaultParams()
@@ -176,6 +195,12 @@ func cmdBenchSPRT(args []string) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "book:", err)
 		os.Exit(1)
+	}
+
+	newNetP := loadNetOrExit(*newNet)
+	oldNetP := loadNetOrExit(*oldNet)
+	if (newNetP != nil || oldNetP != nil) && *conc != 1 {
+		fmt.Fprintln(os.Stderr, "note: --new-net/--old-net force --concurrency 1 (the NNUE net is a process global)")
 	}
 
 	cfg := bench.Config{
@@ -199,6 +224,8 @@ func cmdBenchSPRT(args []string) {
 		Book:        book,
 		EngineBook:  loadEngineBook(*engBookPath),
 		Tablebase:   loadTablebase(*tbPath),
+		NewNet:      newNetP,
+		OldNet:      oldNetP,
 		NewThreads:  *newThreads,
 		OldThreads:  *oldThreads,
 		NewLevel:    -1, // full strength (SPRT tests search.Params, not levels)
