@@ -357,6 +357,8 @@ Re-SPRT every step; flip defaults only on H1.
     toolchain. **Net + SIMD build ship together** (v6 scalar = movetime wash). See
     `docs/NNUE/BULLET_SETUP.md`.
   - [ ] **Next NNUE width step: 1024** — now cheap behind SIMD; SPRT-gate it.
+    Full researched, sourced plan for everything after v6 (width / output buckets /
+    data / king-buckets vs the no-refresh invariant): **`docs/NNUE/NEXT_STEPS.md`**.
 
 Full shipped write-up: `docs/ENGINE_STRENGTH.md §11`. Anchor with NNUE v6 on (2026-06-22):
 **≈2882** — band 2847–2935 vs SF-2700/2800/2900 (30 games @ 100ms), confirming the
