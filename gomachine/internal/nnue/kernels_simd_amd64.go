@@ -1,4 +1,4 @@
-//go:build goexperiment.simd && amd64 && !nnue_neon
+//go:build goexperiment.simd && amd64 && !amd64.v4 && !nnue_neon
 
 package nnue
 
@@ -8,6 +8,11 @@ package nnue
 // screluDot in kernels.go) at AVX2-vectorized implementations in init(). This is
 // the amd64 counterpart to kernels_simd_arm64.go (NEON); same three kernels,
 // same bit-exact semantics, amd64 archsimd intrinsics instead of NEON.
+//
+// This is the 256-bit AVX2 path, selected for GOAMD64 ≤ v3 (the `!amd64.v4`
+// clause). Under GOAMD64=v4 the wider 512-bit AVX-512 backend in
+// kernels_simd_amd64_v4.go binds the seam instead; exactly one of the two
+// compiles in any build, so they never double-bind.
 //
 // Build / test / bench (Go 1.26 + experiment REQUIRED; GOAMD64=v3 for AVX2):
 //
