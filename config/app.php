@@ -89,6 +89,8 @@ return [
         'ws_ticket_secret'  => $_ENV['WS_TICKET_SECRET'] ?? 'dev-insecure-secret',
         'ws_ticket_ttl'     => (int)($_ENV['WS_TICKET_TTL'] ?? 60),
         'stats_padding'     => (int)($_ENV['STATS_PADDING'] ?? 0),
+        'stats_peak_utc'    => (float)($_ENV['STATS_PEAK_UTC'] ?? 18),
+        'stats_trough_frac' => (float)($_ENV['STATS_TROUGH_FRAC'] ?? 0.35),
     ],
 
     /*
