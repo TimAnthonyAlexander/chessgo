@@ -46,18 +46,41 @@
 > verbatim, bit-exact gate; deficit →1.59×, reaches depth 15 vs HCE's 14) →
 > **+212.2 ± 49.2 @ movetime, H1, shipped.** Net committed at `data/nnue/net.nnue`,
 > auto-loads. Anchor with NNUE on: ~2780-class (≈2765 ± 128 vs SF-2800, even).
-> **Levers unpulled (ordered):** v5 maturity net (~400-epoch retrain, free per-node
-> Elo, zero NPS) → SIMD (amd64 `archsimd`; only 2 loops, scalar fallback, bit-exact
-> gate → ~zero risk) → wider net (512/1024, cheap only after SIMD). Full write-up:
-> `docs/ENGINE_STRENGTH.md §11`, `docs/NNUE/PLAN.md`.
+>
+> **NNUE v6 (512-wide) + SIMD — SHIPPED to prod.** The post-NNUE ladder
+> (v5-maturity → SIMD → wider net) is now resolved, and **width was the lever**:
+> - **v5 maturity net (256, 2400 SB) = dud.** Loss floored at 0.0317 = the 256
+>   net's **capacity ceiling** (v4 hit it in 600 SB; v5 just took 4× longer to the
+>   same floor). v5-vs-v4 @ fixed nodes **−25 ± 31 (wash)**. Reverted. More epochs
+>   don't help a saturated width.
+> - **v6 (512-wide)** = same arch, doubled hidden. @ fixed nodes **+124.5 ± 50 vs
+>   v4** (width works). **The anneal is everything:** the un-annealed lowest-loss
+>   early checkpoint scored **−96**, the final annealed v6 (HIGHER loss) **+124** —
+>   a **+220 swing from the cosine anneal alone** (loss≠strength; never early-stop a
+>   cosine run). @ movetime *scalar* it was a **wash (+13 ± 53)** — 512's ~2× eval
+>   cost ate the edge → SIMD-gated.
+> - **SIMD (`archsimd`) unlocked it.** Scalar seam (`kernels.go`) with bit-exact
+>   NEON/AVX2 backends repointed in `init()`; default build stays scalar. amd64
+>   AVX2 (Go 1.26.4 **stable**, `GOAMD64=v3`): per-node eval **6.5×**, dot 7×.
+>   arm64 NEON (Go 1.27rc1): **4.16×**, dot 5×. With SIMD the +124 survives at
+>   movetime (laptop ~+124; prod SPRT climbing ~+100, CI clears 0, still tightening).
+> - **A latent bug fixed en route:** NNUE inference was hardcoded `L1=256` (silently
+>   mis-read a 512 net as garbage). Now **dynamic width** (`Net.HL`, slice
+>   accumulator, importer infers width from file size) — 256 path byte-identical.
+> - **Live on prod** (lairner, **amd64** Ubuntu — not ARM as once assumed):
+>   `net.nnue`→v6, binary built with `GOEXPERIMENT=simd GOAMD64=v3 go1.26.4`,
+>   `chessgo-deploy` hardened to the SIMD toolchain. **Net + SIMD build must ship
+>   together** (v6 is a movetime wash without SIMD). Full write-up:
+>   `docs/ENGINE_STRENGTH.md §11–12`, `docs/NNUE/PLAN.md`, `docs/NNUE/BULLET_SETUP.md`.
 >
 > **Still open (priority order):** (2) NMP **verification** / verified-null in
 > low-material zugzwang (the simple no-non-pawn-material gate already ships; the
 > re-search-on-fail-high variant does not); (7) LMP **`non_pawn_material` gate**
 > (don't move-count-prune the critical pawn move in pure pawn endings) + passed-pawn
-> **push extension** (6th/7th rank); (6) 50-move-clock eval damping; NNUE **v5
-> maturity net → SIMD → wider net** (above — the post-ship strength ladder).
-> Standalone EG centralization was dropped (folded into KingProx); the passed-pawn
+> **push extension** (6th/7th rank); (6) 50-move-clock eval damping. (The NNUE
+> post-ship ladder — v5 maturity → SIMD → wider net — is now **resolved**: v5 was a
+> dud, SIMD shipped, v6 512-wide shipped; next NNUE width step is 1024, now cheap
+> behind SIMD.) Standalone EG centralization was dropped (folded into KingProx); the passed-pawn
 > race + knight-aware rule-of-the-square (was priority-4) **shipped** as PawnRace.
 >
 > **Net on the original lost position vs full Stockfish:** 1.0/5 → 60% draw-hold at

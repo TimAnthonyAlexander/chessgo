@@ -325,12 +325,38 @@ Re-SPRT every step; flip defaults only on H1.
   `-race` clean. Deficit 2.1×→**1.59×** (int16 = half the memory traffic; reaches depth 15 vs
   HCE's 14). **+212.2 ± 49.2 @ 100 ms/move, H1.** Note: now that NNUE is default-on, SPRT HCE
   baseline is `--old "nnue=off"` (bare `--old ""` = NNUE).
-- [ ] **Phase 5 — grow (each SPRT-gated, ordered):** (1) **v5 maturity net** — shipped net is
-  only ~100 epochs ("competitive but immature"; bullet matures ~400), a ~400-epoch retrain
-  (~4 h Metal, LR annealed late) is free per-node Elo at zero NPS. (2) **SIMD** — `archsimd` on
-  amd64/server (Go 1.26 `GOEXPERIMENT=simd`; ARM ~Go 1.27, Aug 2026); 2 loops, scalar
-  build-tag fallback, bit-exact gate → ~zero risk; closes 1.59×→~1.1×. (3) **Wider net**
-  (512/1024) — cheap only after int+SIMD; SPRT-gate each width step.
+- [x] **Phase 5 — grow: DONE through 512 + SIMD, SHIPPED to prod.** The ordered ladder
+  (v5 → SIMD → wider) resolved; **width was the lever**, not training length. Full write-up:
+  `docs/ENGINE_STRENGTH.md §12`.
+  - [~] **v5 maturity net (256-wide) — DUD, reverted.** 2400-superbatch retrain (7h9m) floored
+    at loss **0.0317 = v4's** (the 256 net's capacity ceiling; v4 hit it in 600 SB, v5 just took
+    4× longer via a stretched LR schedule). SPRT v5-vs-v4 @ fixed nodes **−25 ± 31 (wash)**.
+    More epochs can't lower a saturated width's floor. (Also corrected: bullet's canonical
+    superbatch = **6104 batches/~100M pos**; our old 1020-batch "superbatches" made "600/2400"
+    counts ~6× smaller than standard.)
+  - [x] **Dynamic hidden width (bug fix prerequisite).** NNUE inference was hardcoded `L1=256`
+    (const + fixed `[256]int16` accumulator arrays + importer), which **silently mis-read a 512
+    net as garbage** (no header on quantised.bin + a `<`-only size check). Fixed: `Net.HL` field,
+    `NewNetSize`/`RandomNetSize`, accumulator `w`/`b` are slices off one contiguous per-`Stack`
+    buffer, importer **infers width from file size** (`771·HL+1` int16), GNN2 loader allocates
+    per-header L1. Gates: bit-exact incremental==scratch @512, `-race`, perft, **256 byte-identical**.
+    New tool: `bench sprt --new-net X --old-net Y` (net-vs-net A/B; forces `--concurrency 1`).
+  - [x] **v6 (512-wide) — SHIPPED.** Researched config (HIDDEN 512, bpsb 6104, **320 SB**,
+    `CosineDecayLR 0.001→2.43e-6` no warmup, WDL 0.6, SCALE 400; 4h21m). **+124.5 ± 50 vs v4 @
+    fixed nodes.** *The anneal is everything:* the un-annealed lowest-loss early checkpoint scored
+    **−96**, the final annealed (higher-loss) net **+124** — **+220 swing from the cosine anneal**
+    (never early-stop on the loss plateau). @ movetime *scalar* it was a wash (**+13 ± 53**) — 512's
+    ~2× eval cost → SIMD-gated.
+  - [x] **SIMD (`archsimd`) — SHIPPED both backends, bit-exact.** Scalar seam (`kernels.go`:
+    `addCol`/`subCol`/`screluDot` func vars) repointed in `init()` behind `//go:build goexperiment.simd`;
+    default build stays scalar. **amd64 AVX2** (Go **1.26.4 stable**, `Int16x16`, `GOAMD64=v3`,
+    AVX2-only): per-node eval **6.5×**, dot 7×. **arm64 NEON** (Go **1.27rc1**, `Int16x8`): **4.16×**,
+    dot 5×. With SIMD the +124 survives at movetime (laptop ~+124; prod SPRT climbing ~+100,
+    CI clears 0, *still tightening*). **Live in prod** (lairner = amd64 Ubuntu): `net.nnue`→v6,
+    binary built `GOEXPERIMENT=simd GOAMD64=v3 go1.26.4`, `chessgo-deploy` hardened to the SIMD
+    toolchain. **Net + SIMD build ship together** (v6 scalar = movetime wash). See
+    `docs/NNUE/BULLET_SETUP.md`.
+  - [ ] **Next NNUE width step: 1024** — now cheap behind SIMD; SPRT-gate it.
 
 Full shipped write-up: `docs/ENGINE_STRENGTH.md §11`. Anchor with NNUE on: ~2780-class
 (≈2765 ± 128 vs SF-2800, even).

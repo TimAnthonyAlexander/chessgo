@@ -108,7 +108,13 @@ reproduces bullet's within 1 cp — `bulletimport.go`). `CpScale = SCALE = 400`.
 
 ---
 
-## v5 maturity net — ready to run (don't start without intent)
+## v5 maturity net — RAN, was a DUD (kept for the record)
+
+> **Outcome: v5 was a wash and was reverted.** A 2400-superbatch 256-wide retrain
+> floored at the **same loss as v4 (0.0317)** — the 256 net's capacity ceiling — and
+> SPRT'd **−25 ± 31 vs v4 @ fixed nodes**. Lesson: more epochs can't lower a
+> saturated width's floor. The lever was **width**, not training length → see v6
+> (512) below, which shipped. The config notes below are kept for reference.
 
 The shipped net is only ~600 superbatches ("competitive but immature"; bullet
 matures ~2400). v5 = **same architecture, trained 4× longer with LR annealed
@@ -143,3 +149,50 @@ non-cutoff TT hits skip re-evaluating — with NNUE default-on that's the expens
 node cost, narrowing the 1.59× NPS deficit. A per-node-stronger v5 net therefore
 converts *more* cleanly to movetime Elo. Measure on the current binary to capture
 that interaction.
+
+---
+
+## v6 (512-wide) + SIMD — SHIPPED to prod ★
+
+Width was the lever v5 wasn't. v6 = `chessgo_v6.rs` (HIDDEN **512**, bpsb **6104**,
+**320 superbatches**, `CosineDecayLR 0.001→2.43e-6` no warmup, WDL 0.6, SCALE 400;
+~4h21m on the M3). **+124.5 ± 50 vs v4 @ fixed nodes.** At movetime it needs SIMD
+(512's ~2× eval cost is a scalar wash; SIMD recovers the full +124). Full arc:
+`docs/ENGINE_STRENGTH.md §12`.
+
+```sh
+cd ~/nnue-training/bullet
+cargo r -r --features metal --example chessgo_v6     # ~4.5h on the M3
+```
+
+**Anneal warning:** the lowest-*loss* checkpoint is an *un-annealed* early one and
+plays **−96** vs v4; the fully-annealed final net plays **+124**. **Never import a
+mid-run checkpoint** or stop the cosine on the loss plateau — take `chessgo_v6-320`.
+
+### SIMD build (`archsimd`) — required for v6 to win at movetime
+
+The engine ships a scalar **seam** (`internal/nnue/kernels.go`); SIMD backends
+(`kernels_simd_{amd64,arm64}.go`) repoint it behind `//go:build goexperiment.simd`.
+The **default build stays scalar** — SIMD only compiles with the experiment flag.
+Bit-exact to scalar (gated by `TestKernelsMatchScalar`).
+
+| Target | Go toolchain | build command |
+|---|---|---|
+| **prod (amd64)** | **1.26.4 stable** (amd64 archsimd is GA) | `GOEXPERIMENT=simd GOAMD64=v3 ~/go/bin/go1.26.4 build -o bin/gomachine ./cmd/gomachine` |
+| **dev (arm64/M3)** | **1.27rc1** (arm64 NEON needs Go 1.27) | `GOEXPERIMENT=simd ~/go/bin/go1.27rc1 build -o bin/gomachine ./cmd/gomachine` |
+
+Per-node eval speedup @512: **6.5× (amd64 AVX2) / 4.16× (arm64 NEON)**.
+
+**Prod (lairner, amd64 Ubuntu) is live on v6+SIMD.** `chessgo-deploy()` (in
+`~/.zshrc`) was hardened to use the amd64 SIMD build line above (was `go1.25`,
+scalar). `net.nnue` is promoted to v6. **Net + SIMD build must ship together** —
+a v6 net on a scalar binary is a movetime wash. Rollback backups on the box:
+`bin/gomachine.scalar-backup`, `data/nnue/net.nnue.v4-prod-backup`.
+
+**A/B any two nets** (e.g. v6 vs v4) with the net-vs-net SPRT (forces concurrency 1):
+```sh
+./bin/gomachine bench sprt --new "" --old "" \
+  --new-net data/nnue/net.nnue.v6-320 --old-net data/nnue/net.nnue.v4-prod-backup \
+  --movetime 100 --nodes 0 --elo0 0 --elo1 6 --maxpairs 200
+```
+(Stop a run with **Ctrl-\**, not Ctrl-C — `bench sprt` traps the first SIGINT.)

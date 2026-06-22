@@ -300,7 +300,8 @@ the sign of the result.
 | **Ship SMP to prod (shipped, live)** | **part of the +97** (2t on a 4-core box) | done | `serve -search-threads 2` + `hub -bot-search-threads 2` in the systemd units (§4); balanced for the shared box |
 | **TT static-eval cache (shipped)** | **+14.8 @ movetime** (stopped early) | done | `tteval` flag, default-on; reuse the TT-cached static eval on non-cutoff hits → skips the NNUE SCReLU dot. Behavior-preserving at fixed nodes (byte-identical), so movetime-only. SPRT vs off @ 100ms: Elo +14.8 ± 10.8, LLR +2.32 @ 998 pairs (lower CI +4.0) — stopped just shy of the formal H1 cross, accepted on the stable trend. Also fixed a latent move-encoding bug (`promoCode` underflow leaked garbage into move bits 16-21) so moves are canonically 16-bit |
 | Remaining search patches | +50–80 | low | futility, countermove, singular ext |
-| **NNUE (SHIPPED, default-on)** | **+212 @ movetime** (H1) | done | bullet-trained `(768→256)×2→1` SCReLU on Metal; incremental int16 accumulator (Phases A+B, §11). Replaced HCE as the default eval. Next: v5 maturity net, then SIMD, then a wider net |
+| **NNUE 256-wide (SHIPPED, default-on)** | **+212 @ movetime** (H1) | done | bullet-trained `(768→256)×2→1` SCReLU on Metal; incremental int16 accumulator (Phases A+B, §11). Replaced HCE as the default eval |
+| **NNUE v6 512-wide + SIMD (SHIPPED, live)** | **+124 @ fixed nodes** vs the 256 net; recovered @ movetime by SIMD | done | width was the lever (v5 maturity-retrain of 256 was a wash); `archsimd` AVX2/NEON kernels bit-exact, **6.5×/4.16×** eval. Live in prod (§12). Next width step: 1024 |
 | SPSA (Elo-in-the-loop weight tuning) | modest | medium | the *correct* way to tune the few params with no static objective |
 
 Current strength (NNUE on): a **~2780-class** engine on Stockfish's UCI_Elo scale
@@ -312,6 +313,12 @@ the self-play SPRT, **+212 ± 49 vs HCE @ movetime** (§11). Pre-NNUE this ancho
 can't resolve a ~100-Elo self-play shift — gate on the SPRT, not the anchor.
 Full-strength Stockfish 17.1/18 (~3650 CCRL) is still hundreds of Elo above us — the
 NNUE levers (maturity net, SIMD, wider net; §11.4) are how that gap narrows.
+
+**Update — v6 (512-wide) + SIMD now live (§12):** the wider net adds **+124.5 ± 50
+@ fixed nodes** over the 256 net, and `archsimd` SIMD (6.5× eval on amd64) lets that
+survive at movetime (laptop ~+124; prod SPRT climbing ~+100, still tightening). So
+current prod strength is the ~2780-class NNUE **plus** the v6 eval-quality jump on
+top — a meaningful step up, pending the prod movetime SPRT firming to a final number.
 
 ## 9. Syzygy endgame tablebases (shipped, +18.8 Elo)
 
@@ -593,21 +600,116 @@ inert if absent (HCE fallback). Prod `git pull` carries the binary + net togethe
 on: **≈2765 ± 128 vs SF-2800** (even match; bracketed by +241 vs SF-2700 / −241 vs
 SF-2900, 10–20 games each — a band, ~2780-class @ 100ms).
 
-### 11.4 Levers still unpulled (ordered)
-1. **v5 maturity net** — the shipped net is only ~100 epochs ("competitive but
-   immature", bullet's own rule of thumb is ~400). A ~400-epoch retrain (~4 h on
-   the Metal GPU, LR re-scheduled to anneal late) is **free per-node Elo at zero
-   NPS cost** — same architecture, better weights.
-2. **SIMD** (the next *speed* lever) — `archsimd` on **amd64/server** (Go 1.26,
-   `GOEXPERIMENT=simd`; ARM/NEON lands ~Go 1.27, Aug 2026). Only two loops to
-   vectorize (accumulator add/sub + SCReLU dot); scalar stays the build-tagged
-   fallback, and SIMD output must be **bit-identical** to scalar (same exact gate),
-   so correctness risk is ~zero — the "experimental" risk is API churn, not runtime.
-   Closes 1.59×→~1.1×.
-3. **Wider net** (512/1024) — the big *quality* lever, but width is cheap **only**
-   after int + SIMD (at today's recompute+scalar a 3072-wide net would be ~2400×,
-   not viable). SPRT-gate each width step, exactly as Stockfish climbed
-   1024→1536→2048→2560→3072.
+### 11.4 The post-ship ladder — RESOLVED (see §12)
+The three levers below were ordered v5 → SIMD → wider net. Outcome: **v5 was a
+dud, SIMD shipped, and the wider net (v6, 512) shipped behind it.** Full arc in §12.
+1. **v5 maturity net (256-wide) — tried, dud.** A 2400-superbatch retrain floored
+   at the **same 0.0317 loss as v4** (the 256 net's capacity ceiling) and SPRT'd
+   **−25 ± 31 vs v4 @ fixed nodes (a wash)**. More epochs don't help a saturated
+   width — **width, not training length, was the lever.**
+2. **SIMD — shipped** (§12). `archsimd`: amd64 AVX2 (Go 1.26.4 **stable**), arm64
+   NEON (Go 1.27rc1). Bit-exact to scalar; scalar stays the default build.
+   Per-node eval **6.5× (amd64) / 4.16× (arm64)**.
+3. **Wider net (512) — shipped as v6** (§12): **+124.5 ± 50 vs v4 @ fixed nodes**,
+   recovered at movetime by SIMD. Next width step (1024) is now cheap behind SIMD.
 
 The Go trainer (`internal/nnuetrain`) is now legacy; bullet is the trainer going
 forward.
+
+---
+
+## 12. NNUE v6 (512-wide) + SIMD — SHIPPED to prod
+
+The §11.4 ladder, executed. Net-net: **the 256-wide net was capacity-saturated;
+doubling to 512 bought +124 Elo of eval quality, and `archsimd` SIMD paid the
+inference cost so that edge survives at movetime.** Now live in prod.
+
+### 12.1 v5 (256-wide maturity) — the dud that proved the point
+Retrained 256-wide for **2400 superbatches** (7 h 9 m). Training loss floored at
+**0.0317 — identical to v4's**, which v4 reached in just 600 SB. v5's stretched LR
+schedule merely took 4× longer to the **same capacity ceiling**. SPRT (the new
+net-vs-net A/B, §12.3) **v5 vs v4 @ fixed nodes: −25 ± 31 (wash, slightly
+negative)**. Reverted (`net.nnue.v5` archived). **Lesson: more epochs cannot
+lower a saturated width's floor — go wider.**
+
+### 12.2 v6 (512-wide) — config researched, not guessed
+Sourced from real bullet-trained engines, not invented. Also corrected a
+long-standing unit confusion: **bullet's canonical superbatch is 6104 batches
+(~100 M positions)**; our prior configs used 1020, so old "600/2400" superbatch
+counts were ~6× smaller than everyone else's. v6 config: **HIDDEN 512**, batch
+16384, **bpsb 6104**, **320 superbatches** (bullet's own 512-wide example),
+**`CosineDecayLR` 0.001 → 2.43e-6, no warmup**, **WDL 0.6**, SCReLU, SCALE 400.
+Trained 320 SB in 4 h 21 m.
+
+**Results:**
+| Test | Budget | Elo | Reading |
+|---|---|---|---|
+| v6 vs v4 | 40k fixed nodes | **+124.5 ± 50** | eval quality — **width works** |
+| v6 vs v4 | 100 ms/move, **scalar** | **+13 ± 53 (wash)** | 512's ~2× eval cost ate the edge → SIMD-gated |
+| v6 vs v4 | 100 ms/move, **SIMD** | **~+124 (laptop); prod climbing ~+100** | SIMD recovered the full edge |
+
+**The anneal is everything (loss ≠ strength, hardest proof yet):** the
+*un-annealed* lowest-loss early checkpoint (sb121, loss **0.022**) scored **−96 vs
+v4**; the *final annealed* v6 (HIGHER loss **0.0229**) scored **+124** — a **+220
+Elo swing from the cosine anneal alone**. Never early-stop a cosine run on the loss
+plateau: the last low-LR superbatches do the load-bearing work.
+
+### 12.3 The hardcoded-256 bug + dynamic width
+Evaluating v6 surfaced a latent bug: **NNUE inference was hardcoded to `L1=256`**
+(a `feature.go` const, fixed `[256]int16` accumulator arrays, and the importer). It
+**silently mis-read a 512 net as garbage** — `quantised.bin` has no header and the
+size check was `<`-only, so an oversized file sailed through reading the first
+256-net's worth. Fix = **dynamic hidden width**: `Net.HL` field,
+`NewNetSize`/`RandomNetSize`, the per-ply accumulator `w`/`b` are now slices carved
+from **one contiguous per-`Stack` backing buffer** (no per-node alloc), the importer
+**infers width from file size** (`771·HL + 1` int16s), and the GNN2 loader allocates
+per the header's L1. Gates green: bit-exact incremental == from-scratch @ 512,
+`-race`, perft, and **256-wide byte-identical** (no regression).
+
+**New tool — net-vs-net A/B.** `bench sprt --new-net X --old-net Y` compares two net
+*files* of any width (the param flags only toggle nnue on/off against one global
+net). It **forces `--concurrency 1`** — the net is a process global, so each side's
+`nnue.SetNet` before its search would race otherwise; `nnueBegin` rebuilds the
+accumulator when the net changes. Use fixed-nodes for eval quality, movetime for the
+cost-aware verdict.
+
+### 12.4 SIMD (`archsimd`) — both backends bit-exact
+A scalar **seam** (`internal/nnue/kernels.go`) exposes the two hot loops as
+function vars — `addCol`/`subCol` (int16 add/sub) and `screluDot` (clamp→square→
+×weight→int64) — defaulting to scalar. A SIMD file repoints them in `init()` behind
+`//go:build goexperiment.simd`, so **the default build (no experiment) stays scalar
+and untouched**; SIMD output must be **bit-identical** to scalar (gated by
+`TestKernelsMatchScalar` across widths `{1,7,8,15,16,31,256,512,513}`).
+
+| Arch | Go | Vector | Per-node eval @512 | SCReLU dot | backend |
+|---|---|---|---|---|---|
+| **amd64 (prod)** | **1.26.4 stable** | `Int16x16` AVX2, `GOAMD64=v3` | **4676 → 724 ns (6.5×)** | 7× | `simd/archsimd-avx2-amd64(...)` |
+| **arm64 (M3 dev)** | **1.27rc1** | `Int16x8` NEON | **1864 → 448 ns (4.16×)** | 5× | `simd/archsimd-neon-arm64(...)` |
+
+amd64 `archsimd` shipped in **Go 1.26 stable** (no RC needed in prod); arm64 NEON
+needed **Go 1.27** (RC1 released 2026-06-18). The amd64 dot is **AVX2-only** by
+design — it avoids AVX-512 ops (`MulEvenWiden` + `VPSRLQ` even/odd construction for
+the int16→int64 widening multiply) so the binary runs on any AVX2 CPU. `-race`
+clean on both.
+
+### 12.5 Shipped to prod
+**lairner is amd64 Ubuntu 24.04** (not ARM/Arch, as had been assumed — that
+mismatch is why the *laptop* needed Go 1.27rc1 while *prod* runs Go 1.26 stable).
+Live: `bin/gomachine` built with `GOEXPERIMENT=simd GOAMD64=v3 ~/go/bin/go1.26.4`,
+`net.nnue` promoted to v6 (512), `chessgo-engine`+`chessgo-hub` restarted (healthy,
+no SIGILL). `chessgo-deploy()` (in `~/.zshrc`) hardened to build with the SIMD
+toolchain so a future deploy doesn't silently revert to the scalar wash. Rollback
+backups on the box: `bin/gomachine.scalar-backup`, `data/nnue/net.nnue.v4-prod-backup`.
+**The v6 net and the SIMD build must ship together** — v6 on a scalar build is a
+movetime wash.
+
+### 12.6 Lessons (process)
+- **A `fork` inheriting full context autonomously launched orphan SPRTs** that
+  pegged a box and polluted movetime timing. Clean up stray `bench` processes;
+  scope subagents tightly.
+- **`bench sprt` traps the first SIGINT** for graceful shutdown, so Ctrl-C gets
+  swallowed (it once stranded a run that pegged prod and blocked SSH). Stop it with
+  **Ctrl-\ (SIGQUIT)** or `pkill -9 -f "gomachine bench"`; cap runs with `--maxpairs`
+  + `timeout`.
+- **Prod architecture matters for SIMD:** amd64 → Go 1.26 stable `archsimd`; ARM →
+  Go 1.27. Verify the box (`uname -m`) before picking a toolchain.
