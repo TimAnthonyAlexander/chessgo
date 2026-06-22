@@ -178,10 +178,25 @@ Bit-exact to scalar (gated by `TestKernelsMatchScalar`).
 
 | Target | Go toolchain | build command |
 |---|---|---|
-| **prod (amd64)** | **1.26.4 stable** (amd64 archsimd is GA) | `GOEXPERIMENT=simd GOAMD64=v3 ~/go/bin/go1.26.4 build -o bin/gomachine ./cmd/gomachine` |
+| **prod (amd64)** | **1.26.4 stable** (amd64 archsimd is GA) | `GOEXPERIMENT=simd GOAMD64=v4 ~/go/bin/go1.26.4 build -o bin/gomachine ./cmd/gomachine` |
 | **dev (arm64/M3)** | **1.27rc1** (arm64 NEON needs Go 1.27) | `GOEXPERIMENT=simd ~/go/bin/go1.27rc1 build -o bin/gomachine ./cmd/gomachine` |
 
-Per-node eval speedup @512: **6.5× (amd64 AVX2) / 4.16× (arm64 NEON)**.
+Per-node eval speedup @512 (vs scalar): **6.5× (amd64 AVX2) / 4.16× (arm64 NEON)**.
+
+**AVX-512 (`GOAMD64=v4`) — SHIPPED to prod (2026-06-23).** A 512-bit-wide backend
+(`kernels_simd_amd64_v4.go`, bound under the `amd64.v4` build tag; the AVX2 file
+now carries `!amd64.v4` so exactly one binds). 32 int16 lanes/iter for the
+accumulator add/sub, 16 elem/iter for the SCReLU dot (`Int16x16`→`Int32x16`, with
+`Int64x8.Mul`/VPMULLQ for the int32×int32→int64 widen — cleaner than AVX2's
+even/odd VPMULDQ trick). **Bit-exact** vs scalar (same `TestKernelsMatchScalar`
+gate), `-race` clean (nnue+search). On the **AMD Zen 4 (EPYC) prod box**: **~5%
+faster eval @ HL=512** (accumulator update **−30%**, dot ~flat — the dot is
+multiply-bound), and the accumulator win **scales with width** so a 1024 net
+benefits more. Needs an AVX-512 CPU (avx512f/bw/vl/dq) — both lairner and coalla
+(Zen 4) have it incl. `avx512_vnni`. `chessgo-deploy()` now builds with
+`GOAMD64=v4` (was v3); rollback binary on the box: `bin/gomachine.v3-backup`.
+Note: Go's `simd/archsimd` does **not** expose VNNI int8 (`VPDPBUSD`) yet, so the
+further int8/VNNI step would need hand-written asm — deferred.
 
 **Prod (lairner, amd64 Ubuntu) is live on v6+SIMD.** `chessgo-deploy()` (in
 `~/.zshrc`) was hardened to use the amd64 SIMD build line above (was `go1.25`,
