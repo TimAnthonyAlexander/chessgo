@@ -222,8 +222,17 @@ their level. See `docs/SYZYGY_PLAN.md` for the download command, the
 *legal-positions-only* Fathom gotcha, and why the simple `tb_probe_root` (not
 `tb_probe_root_dtz`, whose rank shuffles a won KBN to a draw) is the right probe.
 **SMP is live in prod** (balanced 2-thread: `serve -workers 2 -search-threads 2`,
-`hub -bot-search-threads 2` in the systemd units; Syzygy already auto-loads). Next:
-hub-restart-durable resume, puzzle generation pipeline, remaining cheap search
-patches → **NNUE** (the distillation pipeline is its data step), precise level↔Elo
-*calibration*, a true cross-pool ranked queue. See
-`docs/SPEC.md` §11 roadmap.
+`hub -bot-search-threads 2` in the systemd units; Syzygy already auto-loads).
+Then **NNUE replaced HCE as the default eval** (`docs/NNUE/PLAN.md`): a
+`(768→256)×2→1` SCReLU net trained with **bullet** on the M3 Pro's Metal GPU over
+~40 GB of Stockfish data, made movetime-viable by an incremental int16 accumulator
+— **+212 Elo @ movetime** over HCE (v4), shipped default-on. Then **v6 (512-wide) +
+`archsimd` AVX2/NEON SIMD** (bit-exact kernels; 6.5×/4.16× eval): **+124 @ fixed
+nodes / +101 @ movetime** over v4, **live in prod** (lairner = amd64, Go 1.26.4
+`GOEXPERIMENT=simd GOAMD64=v3`; the v6 net + SIMD build ship together — v6 on a
+scalar build is a movetime wash). Current strength **~2880-class** — **anchored ≈2882**
+(band 2847–2935 vs SF-2700/2800/2900, 30 games @ 100ms, 2026-06-22; the upward drift
+with the SF setting is UCI_Elo non-linearity, so the band is the honest read). Next:
+NNUE width → **1024** (cheap behind SIMD), hub-restart-durable resume, puzzle generation
+pipeline, remaining cheap search patches (futility/countermove/singular ext), **SPSA**,
+precise level↔Elo *calibration*, a true cross-pool ranked queue. See `docs/SPEC.md` §11 roadmap.

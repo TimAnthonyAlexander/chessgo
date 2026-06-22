@@ -327,8 +327,8 @@ pawns kingsafety bishoppair eval` (`eval` toggles all knowledge terms at once).
 
 ```sh
 # Anchor our strength against Stockfish (handicapped via UCI_Elo). NOISY — a band,
-# not a number; gate patches on the SPRT, not this. Latest: ≈2720 ± 79 vs SF-2500
-# (100 games, 78%, 2026-06-19, post-tuned-eval).
+# not a number; gate patches on the SPRT, not this. Latest (v6 SIMD, 2026-06-22):
+# ≈2882 — 2847/2870/2935 vs SF-2700/2800/2900, 10 games each @ 100ms.
 ./bin/gomachine bench vs-stockfish --sf /opt/homebrew/bin/stockfish \
   --sf-elo 2500 --movetime 100 --games 60 --threads 4
 

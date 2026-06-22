@@ -2,7 +2,8 @@
 
 ## What this project is
 
-`gomachine` — a Go chess engine (~2780 Elo vs SF-2500 anchor). Engine core in
+`gomachine` — a Go chess engine (**~2880-class**: NNUE v6 + SIMD, default eval;
+anchored ≈2882 vs SF-2700/2800/2900, 2026-06-22). Engine core in
 `internal/{chess,eval,search,engine}`. Strength improvements go behind a
 `search.Params` flag (default off), then SPRT-gated via `gomachine bench sprt`.
 See `docs/ENGINE_STRENGTH.md` for the full picture.

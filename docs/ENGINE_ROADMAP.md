@@ -45,7 +45,8 @@
 > shipped default-on** → **Phase B** int16 quantization (GNN2 net, bullet ints
 > verbatim, bit-exact gate; deficit →1.59×, reaches depth 15 vs HCE's 14) →
 > **+212.2 ± 49.2 @ movetime, H1, shipped.** Net committed at `data/nnue/net.nnue`,
-> auto-loads. Anchor with NNUE on: ~2780-class (≈2765 ± 128 vs SF-2800, even).
+> auto-loads. Anchor with NNUE v6 on (2026-06-22): **≈2882** — band 2847–2935 vs
+> SF-2700/2800/2900 (30 games @ 100ms); confirms the v6-vs-v4 +101 movetime SPRT.
 >
 > **NNUE v6 (512-wide) + SIMD — SHIPPED to prod.** The post-NNUE ladder
 > (v5-maturity → SIMD → wider net) is now resolved, and **width was the lever**:
@@ -63,7 +64,7 @@
 >   NEON/AVX2 backends repointed in `init()`; default build stays scalar. amd64
 >   AVX2 (Go 1.26.4 **stable**, `GOAMD64=v3`): per-node eval **6.5×**, dot 7×.
 >   arm64 NEON (Go 1.27rc1): **4.16×**, dot 5×. With SIMD the +124 survives at
->   movetime (laptop ~+124; prod SPRT climbing ~+100, CI clears 0, still tightening).
+>   movetime: the v6-vs-v4 movetime SPRT firmed to **+101 Elo @ 100 ms/move**.
 > - **A latent bug fixed en route:** NNUE inference was hardcoded `L1=256` (silently
 >   mis-read a 512 net as garbage). Now **dynamic width** (`Net.HL`, slice
 >   accumulator, importer infers width from file size) — 256 path byte-identical.

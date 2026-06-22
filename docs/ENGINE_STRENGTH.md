@@ -75,10 +75,17 @@ gomachine bench vs-stockfish --sf /opt/homebrew/bin/stockfish --sf-elo 2500 \
   --movetime 100 --games 60 --threads 4
 ```
 
-**Latest reading (2026-06-19, post-tuned-eval):** **≈2720 ± 79** — 100 games vs
-**SF-17.1 @ UCI_Elo 2500**, scoring **78%** (W75 D6 L19, +220 head-to-head). Up
-from ~2600 before the tuned eval; the anchor's ~+90 jump independently
-corroborates the eval's +101-Elo movetime SPRT (§5).
+**Latest reading (2026-06-22, NNUE v6 + SIMD):** **≈2882** across three settings —
+**2847 ± 205 vs SF-2700** (70%, W6 D2 L2), **2870 ± 168 vs SF-2800** (60%, W4 D4 L2),
+**2935 ± 205 vs SF-2900** (55%, W5 D1 L4), 10 games each @ 100ms on the prod amd64 box.
+Inverse-variance pooled **≈2882 ± 110**; the monotonic rise with the SF setting is the
+UCI_Elo non-linearity, so the honest read is the **band 2847–2935**, not the point. It
+confirms the v6-vs-v4 self-play SPRT (+101 @ movetime, §12) and the v4-anchor-plus-SPRT
+projection (~2780 + 101 ≈ 2881 — measured 2882).
+
+**Prior reading (2026-06-19, tuned HCE):** **≈2720 ± 79** — 100 games vs **SF-17.1 @
+UCI_Elo 2500**, scoring **78%** (W75 D6 L19, +220 head-to-head). Up from ~2600 before the
+tuned eval; the anchor's ~+90 jump corroborated the eval's +101-Elo movetime SPRT (§5).
 
 **Caveat (important):** this anchor is *noisy and biased*. Stockfish's UCI_Elo
 scale isn't logistic-linear and it plays erratically when handicapped, so
@@ -304,9 +311,12 @@ the sign of the result.
 | **NNUE v6 512-wide + SIMD (SHIPPED, live)** | **+124 @ fixed nodes** vs the 256 net; recovered @ movetime by SIMD | done | width was the lever (v5 maturity-retrain of 256 was a wash); `archsimd` AVX2/NEON kernels bit-exact, **6.5×/4.16×** eval. Live in prod (§12). Next width step: 1024 |
 | SPSA (Elo-in-the-loop weight tuning) | modest | medium | the *correct* way to tune the few params with no static objective |
 
-Current strength (NNUE on): a **~2780-class** engine on Stockfish's UCI_Elo scale
-@ 100 ms/move — **≈2765 ± 128 vs SF-2800** (even match), bracketed by **+241 vs
-SF-2700** (80%) and **−241 vs SF-2900** (20%) at 10–20 games each. The anchor is
+Current strength: a **~2880-class** engine on Stockfish's UCI_Elo scale @ 100 ms/move.
+**Independently anchored 2026-06-22** (v6 SIMD build, 30 games @ 100ms): **≈2882**, a
+band of **2847 / 2870 / 2935** vs **SF-2700 / 2800 / 2900** (the upward drift with the
+SF setting is the known UCI_Elo non-linearity — §2.2). This **confirms** the earlier
+projection (the v4-era ~2780 anchor + v6's **+101 Elo @ movetime** self-play SPRT, §12);
+the "never re-anchored" caveat is now retired. The anchor is
 noisy (a band, not a number; small samples) — the **trustworthy** NNUE figure is
 the self-play SPRT, **+212 ± 49 vs HCE @ movetime** (§11). Pre-NNUE this anchor read
 ≈2782 ± 84 vs SF-2500; the absolute number barely moves because 10–40 anchor games
@@ -316,9 +326,9 @@ NNUE levers (maturity net, SIMD, wider net; §11.4) are how that gap narrows.
 
 **Update — v6 (512-wide) + SIMD now live (§12):** the wider net adds **+124.5 ± 50
 @ fixed nodes** over the 256 net, and `archsimd` SIMD (6.5× eval on amd64) lets that
-survive at movetime (laptop ~+124; prod SPRT climbing ~+100, still tightening). So
-current prod strength is the ~2780-class NNUE **plus** the v6 eval-quality jump on
-top — a meaningful step up, pending the prod movetime SPRT firming to a final number.
+survive at movetime — the v6-vs-v4 movetime SPRT firmed to **+101 Elo @ 100 ms/move**.
+So current strength is **~2880-class**, now **directly anchored** at **≈2882** (band
+2847–2935 vs SF-2700/2800/2900, §2.2) — matching the v4-anchor-plus-SPRT projection.
 
 ## 9. Syzygy endgame tablebases (shipped, +18.8 Elo)
 
@@ -598,7 +608,9 @@ to bullet's Chess768, verified). Auto-loads cwd-relative (`NNUE_PATH` overrides)
 inert if absent (HCE fallback). Prod `git pull` carries the binary + net together
 (keep them in sync — a GNN2 net needs a Phase-B binary). Absolute anchor with NNUE
 on: **≈2765 ± 128 vs SF-2800** (even match; bracketed by +241 vs SF-2700 / −241 vs
-SF-2900, 10–20 games each — a band, ~2780-class @ 100ms).
+SF-2900, 10–20 games each — a band, ~2780-class @ 100ms). **This anchor is v4-era;**
+v6 later added **+101 Elo @ movetime** (SPRT, §12) and was **directly anchored
+2026-06-22 at ≈2882** (band 2847–2935 vs SF-2700/2800/2900, §2.2).
 
 ### 11.4 The post-ship ladder — RESOLVED (see §12)
 The three levers below were ordered v5 → SIMD → wider net. Outcome: **v5 was a
@@ -646,7 +658,7 @@ Trained 320 SB in 4 h 21 m.
 |---|---|---|---|
 | v6 vs v4 | 40k fixed nodes | **+124.5 ± 50** | eval quality — **width works** |
 | v6 vs v4 | 100 ms/move, **scalar** | **+13 ± 53 (wash)** | 512's ~2× eval cost ate the edge → SIMD-gated |
-| v6 vs v4 | 100 ms/move, **SIMD** | **~+124 (laptop); prod climbing ~+100** | SIMD recovered the full edge |
+| v6 vs v4 | 100 ms/move, **SIMD** | **+101** | SIMD recovered the edge (firm SPRT) |
 
 **The anneal is everything (loss ≠ strength, hardest proof yet):** the
 *un-annealed* lowest-loss early checkpoint (sb121, loss **0.022**) scored **−96 vs

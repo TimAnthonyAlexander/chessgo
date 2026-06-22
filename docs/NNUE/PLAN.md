@@ -351,12 +351,13 @@ Re-SPRT every step; flip defaults only on H1.
     `addCol`/`subCol`/`screluDot` func vars) repointed in `init()` behind `//go:build goexperiment.simd`;
     default build stays scalar. **amd64 AVX2** (Go **1.26.4 stable**, `Int16x16`, `GOAMD64=v3`,
     AVX2-only): per-node eval **6.5×**, dot 7×. **arm64 NEON** (Go **1.27rc1**, `Int16x8`): **4.16×**,
-    dot 5×. With SIMD the +124 survives at movetime (laptop ~+124; prod SPRT climbing ~+100,
-    CI clears 0, *still tightening*). **Live in prod** (lairner = amd64 Ubuntu): `net.nnue`→v6,
+    dot 5×. With SIMD the +124 survives at movetime — the v6-vs-v4 movetime SPRT firmed to
+    **+101 Elo @ 100 ms/move**. **Live in prod** (lairner = amd64 Ubuntu): `net.nnue`→v6,
     binary built `GOEXPERIMENT=simd GOAMD64=v3 go1.26.4`, `chessgo-deploy` hardened to the SIMD
     toolchain. **Net + SIMD build ship together** (v6 scalar = movetime wash). See
     `docs/NNUE/BULLET_SETUP.md`.
   - [ ] **Next NNUE width step: 1024** — now cheap behind SIMD; SPRT-gate it.
 
-Full shipped write-up: `docs/ENGINE_STRENGTH.md §11`. Anchor with NNUE on: ~2780-class
-(≈2765 ± 128 vs SF-2800, even).
+Full shipped write-up: `docs/ENGINE_STRENGTH.md §11`. Anchor with NNUE v6 on (2026-06-22):
+**≈2882** — band 2847–2935 vs SF-2700/2800/2900 (30 games @ 100ms), confirming the
+v6-vs-v4 **+101 Elo @ movetime** SPRT.

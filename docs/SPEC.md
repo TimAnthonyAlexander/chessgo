@@ -6,9 +6,9 @@
 > product decisions, the architecture, and the research that informs both.
 >
 > **Status:** v1 in progress. **Last updated:** 2026-06-20.
-> Built & working: the Go engine (`gomachine`, perft-verified, **≈2720** vs
-> handicapped Stockfish after the SPRT-gated search + Lazy-SMP work **and the
-> Texel-tuned eval (now on by default)** — see `docs/ENGINE_STRENGTH.md`), bot
+> Built & working: the Go engine (`gomachine`, perft-verified, **~2880-class** vs
+> handicapped Stockfish after the SPRT-gated search, Lazy-SMP, Texel eval **and
+> NNUE v6 (512-wide) + SIMD, now the default eval** — see `docs/ENGINE_STRENGTH.md`), bot
 > games + eval bar + takeback, the lobby, **live human-vs-human play**
 > (WebSocket hub, rating-proximity matchmaking, server clocks, reconnect/resume),
 > **bot backfill** (a fill-in bot when no human is found), **accounts**
@@ -880,10 +880,16 @@ chessgo/
       move**, SPRT-gated. This *replaced* the earlier −148 Elo result, which was a
       broken **method** (coordinate descent on MSE, distilled CP target, frozen PSQT),
       not a verdict on HCE — the rebuilt tuner (joint Adam on WDL, **tuning the PSQT
-      itself**, quiet Lichess positions; `internal/tune`) wins. Current strength
-      **≈2720** on the SF-2500 anchor (78%, up from ~2600). Next: remaining cheap
-      search patches, then **NNUE** (the distillation pipeline is its data step) or
-      SPSA.
+      itself**, quiet Lichess positions; `internal/tune`) wins. Then **Syzygy 5-piece
+      tablebases** (+18.8 @ movetime) and an **endgame push** (WDL-in-search +32.7,
+      KingProx +30.5, PawnRace +17.4 — all default-on, SPRT-gated). Then **NNUE
+      replaced HCE as the default eval**: a `(768→256)×2→1` SCReLU net (bullet on the
+      M3's Metal GPU, ~40 GB SF data), made movetime-viable by an incremental int16
+      accumulator — **+212 Elo @ movetime** (v4) — then **v6 (512-wide) + AVX2/NEON
+      SIMD**, **+124 @ fixed nodes / +101 @ movetime** over v4, live in prod. Current
+      strength **~2880-class** — **anchored ≈2882** (band 2847–2935 vs SF-2700/2800/2900,
+      30 games @ 100ms, 2026-06-22). Next: NNUE width → **1024** (cheap behind SIMD),
+      remaining cheap search patches, **SPSA**.
 - [x] **Match bot strength to its rating** — fill-in bot displayed rating is now
       anchored to the human's Elo (±120) and the engine level is derived from it
       (`levelForRating`), so rated bot games are fair. Remaining: precise
