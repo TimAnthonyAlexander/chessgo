@@ -77,16 +77,10 @@ func (n *Net) build(acc *Accumulator, pos *chess.Position) {
 	copy(acc.b, n.B0i)
 	var buf [maxActive]uint16
 	for _, f := range AppendFeatures(buf[:0], pos, chess.White) {
-		col := n.W0i[int(f)*hl : int(f)*hl+hl]
-		for j := 0; j < hl; j++ {
-			acc.w[j] += col[j]
-		}
+		addCol(acc.w, n.W0i[int(f)*hl:int(f)*hl+hl])
 	}
 	for _, f := range AppendFeatures(buf[:0], pos, chess.Black) {
-		col := n.W0i[int(f)*hl : int(f)*hl+hl]
-		for j := 0; j < hl; j++ {
-			acc.b[j] += col[j]
-		}
+		addCol(acc.b, n.W0i[int(f)*hl:int(f)*hl+hl])
 	}
 }
 
@@ -98,15 +92,11 @@ func (n *Net) apply(acc *Accumulator, c featChange) {
 	cw := n.W0i[iw : iw+hl]
 	cb := n.W0i[ib : ib+hl]
 	if c.add {
-		for j := 0; j < hl; j++ {
-			acc.w[j] += cw[j]
-			acc.b[j] += cb[j]
-		}
+		addCol(acc.w, cw)
+		addCol(acc.b, cb)
 	} else {
-		for j := 0; j < hl; j++ {
-			acc.w[j] -= cw[j]
-			acc.b[j] -= cb[j]
-		}
+		subCol(acc.w, cw)
+		subCol(acc.b, cb)
 	}
 }
 
@@ -118,25 +108,8 @@ func (n *Net) evalFrom(acc *Accumulator, stm chess.Color) int {
 		stmHalf, oppHalf = acc.b, acc.w
 	}
 	qa := n.QA
-	var out int64
-	for i := 0; i < hl; i++ {
-		c := int32(stmHalf[i])
-		if c < 0 {
-			c = 0
-		} else if c > qa {
-			c = qa
-		}
-		out += int64(c*c) * int64(n.W1i[i])
-	}
-	for i := 0; i < hl; i++ {
-		c := int32(oppHalf[i])
-		if c < 0 {
-			c = 0
-		} else if c > qa {
-			c = qa
-		}
-		out += int64(c*c) * int64(n.W1i[hl+i])
-	}
+	out := screluDot(stmHalf, n.W1i[:hl], qa)
+	out += screluDot(oppHalf, n.W1i[hl:2*hl], qa)
 	return n.descale(out)
 }
 
