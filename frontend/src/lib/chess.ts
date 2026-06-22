@@ -99,11 +99,13 @@ export function targetsFrom(legalMoves: string[], from: Square): Set<Square> {
  * Pseudo-legal destination squares for a PREMOVE — the moves a piece could make
  * by its own geometry, evaluated while it isn't your turn (so the real legal-move
  * list isn't available). Deliberately permissive, Chess.com-style: it ignores
- * check, whose turn it is, and pins; sliders ignore blockers along the ray (a
- * blocking piece may move first), pawns include both diagonals (a capture may
- * appear). Own-occupied squares are excluded so we never dot a friendly piece.
- * The queued move is still validated against the real legal moves before it's
- * played, so anything illegal is simply discarded.
+ * check, whose turn it is, and pins; sliders may reach THROUGH a single
+ * intervening piece (it could move or be captured by the time it's your turn) but
+ * stop at a second, pawns include both diagonals (a capture may appear).
+ * Own-occupied squares ARE included: premoving onto a friendly piece is valid
+ * play (it executes only if the opponent first captures/vacates that square). The
+ * queued move is still validated against the real legal moves before it's played,
+ * so anything still illegal on your turn is simply discarded.
  */
 export function premoveTargets(board: BoardMap, from: Square): Set<Square> {
   const out = new Set<Square>()
@@ -113,20 +115,28 @@ export function premoveTargets(board: BoardMap, from: Square): Set<Square> {
   const type = piece.toLowerCase()
   const f = fileOf(from)
   const r = rankOf(from)
-  const mine = (sq: Square) => board[sq] && isWhitePiece(board[sq]) === white
 
-  // Add a single square if on-board and not our own piece; return whether a ray
-  // may continue through it (only empty squares don't stop a ray).
-  const step = (file: number, rank: number): boolean => {
-    if (file < 0 || file > 7 || rank < 0 || rank > 7) return false
-    const sq = squareAt(file, rank)
-    if (mine(sq)) return false
-    out.add(sq)
-    return !board[sq]
+  // Add a single on-board square (for the non-sliding knight/king hops).
+  const step = (file: number, rank: number) => {
+    if (file < 0 || file > 7 || rank < 0 || rank > 7) return
+    out.add(squareAt(file, rank))
   }
+  // Walk a slider ray, passing through AT MOST ONE occupant: the first blocker is
+  // added (it may be captured/move) and we continue one stretch past it; a second
+  // occupant is added then stops the ray (anything behind two pieces is out of
+  // reach even if one clears).
   const ray = (df: number, dr: number) => {
-    for (let i = 1; step(f + df * i, r + dr * i); i++) {
-      /* walk until blocked / off-board */
+    let passedBlocker = false
+    for (let i = 1; i <= 7; i++) {
+      const file = f + df * i
+      const rank = r + dr * i
+      if (file < 0 || file > 7 || rank < 0 || rank > 7) break
+      const sq = squareAt(file, rank)
+      out.add(sq)
+      if (board[sq]) {
+        if (passedBlocker) break
+        passedBlocker = true
+      }
     }
   }
 
