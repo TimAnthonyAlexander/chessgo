@@ -1,22 +1,90 @@
 import { useEffect, useRef, useState } from 'react'
-import { Box, Button, Typography } from '@mui/material'
-import { ArrowLeft, User } from 'lucide-react'
+import { Box, Button, Switch, Tooltip, Typography } from '@mui/material'
+import { ArrowLeft, Gauge, Target, User } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router-dom'
 import Board from '../components/Board'
 import Clock from '../components/Clock'
+import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveList from '../components/MoveList'
 import { Avatar, PANEL_SHADOW } from '../components/PanelUI'
-import type { MoveEntry } from '../api/client'
+import { analyze, type MoveEntry } from '../api/client'
+import { pvToSan } from '../lib/analysisTree'
 import { type SpectateGame, type SpectateSide, spectateRemaining, spectateSocket } from '../lib/spectate'
 import { useSpectate } from '../lib/useSpectate'
+import { useAuth } from '../lib/auth'
 import { playForSan, sounds } from '../lib/sounds'
+
+// Admins get a full-strength eval bar + best-move arrow over the spectated board,
+// each independently toggleable (persisted in localStorage). Ordinary spectators
+// see the board as-is — no analyze traffic for them.
+const LS_EVAL = 'spectate-eval-bar'
+const LS_ARROW = 'spectate-best-arrow'
+
+function loadFlag(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === '1'
+  } catch {
+    return false
+  }
+}
+
+function saveFlag(key: string, on: boolean): void {
+  try {
+    localStorage.setItem(key, on ? '1' : '0')
+  } catch {
+    // ignore storage failures (private mode, quota)
+  }
+}
 
 export default function Spectate() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const isAdmin = user?.role === 'admin'
   const s = useSpectate()
   const g = s.game
   const [, force] = useState(0)
+
+  // Admin-only engine overlay: an eval bar and a best-move arrow, each toggled
+  // independently (like the Analysis board). We re-read the position at full
+  // strength whenever the FEN changes — i.e. only when a move lands, not on every
+  // clock tick — and convert the side-to-move eval to White's perspective.
+  const [showEval, setShowEval] = useState(() => loadFlag(LS_EVAL))
+  const [showArrow, setShowArrow] = useState(() => loadFlag(LS_ARROW))
+  const engineOn = isAdmin && (showEval || showArrow)
+  const [whiteEval, setWhiteEval] = useState<WhiteEval | null>(null)
+  const [bestUci, setBestUci] = useState<string | null>(null)
+
+  const fen = g?.fen
+  const sideToMove = g?.sideToMove
+  const over = g?.over
+  useEffect(() => {
+    if (!engineOn || !fen || over) {
+      setBestUci(null)
+      return
+    }
+    let cancelled = false
+    const ctrl = new AbortController()
+    analyze(fen, { movetime: 500, signal: ctrl.signal })
+      .then((r) => {
+        if (cancelled) return
+        if (r.eval) {
+          const white = sideToMove === 'w' ? r.eval.value : -r.eval.value
+          setWhiteEval({ type: r.eval.type, white })
+        }
+        setBestUci(r.bestmove)
+      })
+      .catch(() => {}) // aborted / transient failure → keep last shown eval
+    return () => {
+      cancelled = true
+      ctrl.abort()
+    }
+  }, [engineOn, fen, sideToMove, over])
+
+  const arrow =
+    isAdmin && showArrow && bestUci && !over
+      ? { from: bestUci.slice(0, 2), to: bestUci.slice(2, 4) }
+      : null
 
   // Open the spectator stream for this game; tear it down on leave.
   useEffect(() => {
@@ -106,17 +174,21 @@ export default function Spectate() {
           mx: 'auto',
         }}
       >
-        <Box sx={{ minWidth: 0, alignSelf: 'start', width: '100%' }}>
-          <Board
-            fen={g.fen}
-            orientation="w"
-            sideToMove={g.sideToMove}
-            legalMoves={[]}
-            lastMove={g.lastMove}
-            inCheck={g.check}
-            interactive={false}
-            onMove={() => {}}
-          />
+        <Box sx={{ minWidth: 0, alignSelf: 'start', width: '100%', display: 'flex', gap: 1, alignItems: 'stretch' }}>
+          {isAdmin && showEval && <EvalBar ev={whiteEval} orientation="w" />}
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Board
+              fen={g.fen}
+              orientation="w"
+              sideToMove={g.sideToMove}
+              legalMoves={[]}
+              lastMove={g.lastMove}
+              inCheck={g.check}
+              interactive={false}
+              onMove={() => {}}
+              arrow={arrow}
+            />
+          </Box>
         </Box>
 
         <Box
@@ -185,6 +257,18 @@ export default function Spectate() {
               {g.rated ? 'Rated' : 'Casual'}
             </Box>
           </Box>
+
+          {/* Admin engine overlay controls */}
+          {isAdmin && (
+            <AdminControls
+              showEval={showEval}
+              showArrow={showArrow}
+              onToggleEval={() => setShowEval((v) => { saveFlag(LS_EVAL, !v); return !v })}
+              onToggleArrow={() => setShowArrow((v) => { saveFlag(LS_ARROW, !v); return !v })}
+              bestSan={bestUci && !g.over ? bestMoveSan(g.fen, bestUci) : null}
+              whiteEval={engineOn ? whiteEval : null}
+            />
+          )}
 
           {/* Black (top) */}
           <PlayerBar
@@ -287,6 +371,91 @@ function PlayerBar({
         <Clock ms={ms} active={active} />
       </Box>
     </Box>
+  )
+}
+
+// Render the engine's UCI best move ("e2e4") as SAN ("e4") for the readout.
+function bestMoveSan(fen: string, uci: string): string {
+  return pvToSan(fen, [uci])[0]?.san ?? uci
+}
+
+// Short eval from White's view: "+0.34", "-1.20", or "#3" / "-#2" for mate.
+function evalText(ev: WhiteEval): string {
+  if (ev.type === 'mate') return (ev.white < 0 ? '-' : '') + '#' + Math.abs(ev.white)
+  const v = ev.white / 100
+  return (v > 0 ? '+' : '') + v.toFixed(2)
+}
+
+// Admin-only control strip: two independent toggles (eval bar + best-move arrow)
+// plus a compact readout of the current best move and eval.
+function AdminControls({
+  showEval,
+  showArrow,
+  onToggleEval,
+  onToggleArrow,
+  bestSan,
+  whiteEval,
+}: {
+  showEval: boolean
+  showArrow: boolean
+  onToggleEval: () => void
+  onToggleArrow: () => void
+  bestSan: string | null
+  whiteEval: WhiteEval | null
+}) {
+  return (
+    <Box
+      sx={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 1.5,
+        px: 1.75,
+        py: 1,
+        bgcolor: 'var(--bg-2)',
+        borderBottom: '1px solid var(--line-soft)',
+      }}
+    >
+      <AdminToggle label="Eval bar" icon={<Gauge size={14} />} on={showEval} onChange={onToggleEval} />
+      <AdminToggle label="Best move" icon={<Target size={14} />} on={showArrow} onChange={onToggleArrow} />
+      {(showEval || showArrow) && (bestSan || whiteEval) && (
+        <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'baseline', gap: 0.75, minWidth: 0, overflow: 'hidden' }}>
+          {bestSan && (
+            <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 13.5, fontWeight: 700, color: 'var(--accent)' }} noWrap>
+              {bestSan}
+            </Typography>
+          )}
+          {whiteEval && (
+            <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--text-dim)' }} noWrap>
+              {evalText(whiteEval)}
+            </Typography>
+          )}
+        </Box>
+      )}
+    </Box>
+  )
+}
+
+function AdminToggle({
+  label,
+  icon,
+  on,
+  onChange,
+}: {
+  label: string
+  icon: React.ReactNode
+  on: boolean
+  onChange: () => void
+}) {
+  return (
+    <Tooltip title={`${label} (admin)`} placement="top">
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.4 }}>
+        <Box sx={{ display: 'flex', color: on ? 'var(--accent)' : 'var(--text-dim)' }}>{icon}</Box>
+        <Typography sx={{ fontSize: 12, color: 'var(--text-dim)' }} noWrap>
+          {label}
+        </Typography>
+        <Switch size="small" checked={on} onChange={onChange} />
+      </Box>
+    </Tooltip>
   )
 }
 
