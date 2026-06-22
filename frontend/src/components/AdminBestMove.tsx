@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Box, Switch, Tooltip, Typography } from '@mui/material'
 import { Sparkles } from 'lucide-react'
-import { analyze, type Analysis } from '../api/client'
+import { analyze, type Analysis, type Color } from '../api/client'
 import { pvToSan } from '../lib/analysisTree'
 
 // Convert the engine's UCI best move (e.g. "e2e4", "b1c3") into SAN piece
@@ -12,11 +12,20 @@ function bestMoveSan(fen: string, uci: string | null): string {
   return pvToSan(fen, [uci])[0]?.san ?? uci
 }
 
-function formatEval(e: Analysis['eval']): string {
+// The engine reports its eval from the side-to-move's perspective; convert to
+// White-relative so the sign matches every other bar/pill (+ = White, − = Black)
+// instead of flipping with whose turn it is.
+function formatEval(e: Analysis['eval'], stm: Color): string {
   if (!e) return '—'
-  if (e.type === 'mate') return `#${e.value}`
-  const pawns = e.value / 100
+  const white = stm === 'w' ? e.value : -e.value
+  if (e.type === 'mate') return (white < 0 ? '-' : '') + '#' + Math.abs(white)
+  const pawns = white / 100
   return `${pawns >= 0 ? '+' : ''}${pawns.toFixed(2)}`
+}
+
+// The active-color field of a FEN ('w' unless it's explicitly Black to move).
+function fenSideToMove(fen: string): Color {
+  return fen.split(' ')[1] === 'b' ? 'b' : 'w'
 }
 
 const LS_KEY = 'admin-best-move'
@@ -109,7 +118,7 @@ export default function AdminBestMove({ fen, myTurn }: { fen: string; myTurn: bo
                 {bestMoveSan(fen, best.bestmove)}
               </Typography>
               <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, color: 'var(--text-dim)' }} noWrap>
-                {formatEval(best.eval)}
+                {formatEval(best.eval, fenSideToMove(fen))}
                 {best.depth != null ? ` · d${best.depth}` : ''}
               </Typography>
             </>

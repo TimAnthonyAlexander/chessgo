@@ -46,6 +46,10 @@ const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 const other = (c: Color): Color => (c === 'w' ? 'b' : 'w')
 type ColorChoice = 'w' | 'b' | 'random'
 
+// Eval-bar depth ladder: a shallow first guess lands in a few ms (so the bar
+// tracks the live position instead of lagging a full move behind), then deepens.
+const EVAL_DEPTHS = [4, 8, 12, 16]
+
 // The side to move encoded in a FEN's active-color field (defaults to White).
 const sideToMoveOf = (fen: string): Color => (fen.split(' ')[1] === 'b' ? 'b' : 'w')
 
@@ -124,6 +128,10 @@ export default function BotGame() {
         : null
 
   // Eval bar — full-strength analysis of the live position, level-independent.
+  // Streams in layers (shallow depth first, then deeper) so a number lands almost
+  // immediately and refines, instead of holding the previous position's eval for a
+  // full ~1.5s search and only then snapping to the new one. The value is always
+  // White-relative (+ = White better, − = Black better), matching every other bar.
   useEffect(() => {
     if (!game) {
       setAnalyzedEval(null)
@@ -138,16 +146,33 @@ export default function BotGame() {
       }
       return
     }
+    const fen = game.fen
+    const stm = game.side_to_move
     let cancelled = false
-    analyze(game.fen)
-      .then((r) => {
-        if (cancelled || !r.eval) return
-        const white = game.side_to_move === 'w' ? r.eval.value : -r.eval.value
+    // Abort the in-flight search when we leave this position, so the previous
+    // position's trailing deep call doesn't hog an engine worker and delay the
+    // new position's first shallow guess.
+    const ac = new AbortController()
+    const run = async () => {
+      for (const depth of EVAL_DEPTHS) {
+        if (cancelled) return
+        let r: Awaited<ReturnType<typeof analyze>>
+        try {
+          r = await analyze(fen, { depth, signal: ac.signal })
+        } catch {
+          return // aborted or engine error — keep the last shown eval
+        }
+        if (cancelled || !r.eval) continue
+        const white = stm === 'w' ? r.eval.value : -r.eval.value
         setAnalyzedEval({ type: r.eval.type, white })
-      })
-      .catch(() => {})
+        if (r.eval.type === 'mate') return // mate found — deeper won't change it
+        if (r.depth != null && r.depth < depth) return // hit time ceiling — settled
+      }
+    }
+    void run()
     return () => {
       cancelled = true
+      ac.abort()
     }
   }, [game?.fen, game?.status, game?.side_to_move])
 
