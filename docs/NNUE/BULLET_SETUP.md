@@ -189,14 +189,29 @@ now carries `!amd64.v4` so exactly one binds). 32 int16 lanes/iter for the
 accumulator add/sub, 16 elem/iter for the SCReLU dot (`Int16x16`→`Int32x16`, with
 `Int64x8.Mul`/VPMULLQ for the int32×int32→int64 widen — cleaner than AVX2's
 even/odd VPMULDQ trick). **Bit-exact** vs scalar (same `TestKernelsMatchScalar`
-gate), `-race` clean (nnue+search). On the **AMD Zen 4 (EPYC) prod box**: **~5%
-faster eval @ HL=512** (accumulator update **−30%**, dot ~flat — the dot is
-multiply-bound), and the accumulator win **scales with width** so a 1024 net
-benefits more. Needs an AVX-512 CPU (avx512f/bw/vl/dq) — both lairner and coalla
-(Zen 4) have it incl. `avx512_vnni`. `chessgo-deploy()` now builds with
-`GOAMD64=v4` (was v3); rollback binary on the box: `bin/gomachine.v3-backup`.
-Note: Go's `simd/archsimd` does **not** expose VNNI int8 (`VPDPBUSD`) yet, so the
-further int8/VNNI step would need hand-written asm — deferred.
+gate), `-race` clean (nnue+search). Needs an AVX-512 CPU (avx512f/bw/vl/dq) —
+both lairner and coalla (Zen 4) have it incl. `avx512_vnni`. `chessgo-deploy()`
+now builds with `GOAMD64=v4` (was v3); rollback binary on the box:
+`bin/gomachine.v3-backup`. Go's `simd/archsimd` does **not** expose VNNI int8
+(`VPDPBUSD`) yet, so the further int8/VNNI step would need hand-written asm —
+deferred.
+
+**Honest impact numbers (measured at fixed depth on lairner, same node count):**
+the AVX-512 *kernel* is ~5% faster eval @ HL=512 in isolation (accumulator −30%,
+dot flat), but **at the full-engine level AVX-512-over-AVX2 is only ~0.6%** (eval
+is a fraction of total search time). The *real* win was a discovery: the binary
+actually serving prod had regressed to **scalar** (22.0s vs 6.6s SIMD on a
+3.07M-node depth-16 search = **~3.3× slower**). So scalar→SIMD ≈ **3.3×**;
+AVX2→AVX-512 ≈ 0.6%. The v6 net had been running at scalar speed = the very
+"movetime wash" this doc warns a v6-on-scalar build is.
+
+> **Deploy gotcha that caused the scalar regression:** editing the
+> `chessgo-deploy()` body in `~/.zshrc` does nothing for a shell that already has
+> the old function in memory — it ran the stale (pre-SIMD-hardening) function and
+> built scalar. **ALWAYS `source ~/.zshrc` (or use a fresh shell) before running
+> `chessgo-deploy` after editing it**, or it silently builds the old way. A build
+> self-check (assert the binary isn't scalar before restarting services) would
+> prevent this class of bug — see TODO.
 
 **Prod (lairner, amd64 Ubuntu) is live on v6+SIMD.** `chessgo-deploy()` (in
 `~/.zshrc`) was hardened to use the amd64 SIMD build line above (was `go1.25`,
