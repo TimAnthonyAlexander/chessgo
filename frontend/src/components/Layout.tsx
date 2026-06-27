@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
 import { Box, Button, Divider, Typography } from '@mui/material'
-import { ChevronDown, LogOut, Search, UserRound } from 'lucide-react'
+import { ChevronDown, LogOut, UserRound } from 'lucide-react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { gameSocket } from '../lib/socket'
 import { authStore, useAuth } from '../lib/auth'
 import AuthDialog from './AuthDialog'
 import Logo from './Logo'
+import Footer from './Footer'
+import MobileNavDrawer, { type MobileNavSection } from './MobileNavDrawer'
 import type { RatingCategory, User } from '../api/client'
 
 // Nav model. A `link` is a plain top-level destination; a `menu` is a hover
@@ -60,6 +62,13 @@ export default function Layout() {
   const { user } = useAuth()
   const [authOpen, setAuthOpen] = useState(false)
 
+  // The same nav model the desktop bar uses, flattened for the mobile drawer.
+  const sections: MobileNavSection[] = navItems(user?.role === 'admin').map((item) =>
+    item.kind === 'link'
+      ? { label: item.label, to: item.to }
+      : { label: item.label, to: item.to, items: item.items },
+  )
+
   // Open the realtime socket + resolve the session once on load.
   useEffect(() => {
     void gameSocket.connect()
@@ -106,7 +115,12 @@ export default function Layout() {
         </Box>
 
         <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 1.5 }}>
-          <Search size={18} color="var(--muted)" />
+          <MobileNavDrawer
+            sections={sections}
+            user={user ? { name: user.name } : null}
+            onLogin={() => setAuthOpen(true)}
+            onLogout={() => void authStore.logout()}
+          />
           {user ? (
             <UserMenu user={user} />
           ) : (
@@ -126,6 +140,8 @@ export default function Layout() {
       <Box component="main" sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
         <Outlet />
       </Box>
+
+      <Footer />
 
       <AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} />
     </Box>

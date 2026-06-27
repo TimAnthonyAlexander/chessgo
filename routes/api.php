@@ -26,6 +26,8 @@ use App\Controllers\GameAnalysisController;
 use App\Controllers\ProfileController;
 use App\Controllers\ProfileGamesController;
 use App\Controllers\PuzzleController;
+use App\Controllers\DailyPuzzleController;
+use App\Controllers\LeaderboardController;
 use BaseApi\Http\Middleware\RateLimitMiddleware;
 use BaseApi\Http\SessionStartMiddleware;
 use BaseApi\Permissions\PermissionsMiddleware;
@@ -104,6 +106,12 @@ $router->get('/watch', [
     WatchController::class,
 ]);
 
+// Public leaderboard — top players for one rating category (?category=blitz)
+$router->get('/leaderboard', [
+    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    LeaderboardController::class,
+]);
+
 // Internal: the realtime hub persists finished games here (secret-gated, no session)
 $router->post('/internal/games', [GameResultController::class]);
 
@@ -142,6 +150,12 @@ $router->get('/users/{name}/games', [
 // ================================
 // Session is OPTIONAL: a logged-in user gets rating-matched + de-duped puzzles
 // and an isolated rating_puzzle update; anonymous still solves casually.
+
+// Puzzle of the day — one deterministic puzzle, same for everyone all UTC day
+$router->get('/puzzles/daily', [
+    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    DailyPuzzleController::class,
+]);
 
 // Serve the next puzzle near the solver's rating (solution withheld): ?theme=
 $router->get('/puzzles/next', [

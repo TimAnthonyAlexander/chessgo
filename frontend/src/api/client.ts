@@ -500,4 +500,48 @@ export function getProfileGames(name: string, offset: number): Promise<ProfileGa
   return request<ProfileGamesPage>(`/users/${encodeURIComponent(name)}/games?offset=${offset}`)
 }
 
+// --- Leaderboard (per-category top players) ---
+
+/** One leaderboard row (public-safe; no email). `provisional` = RD still high. */
+export interface LeaderboardEntry {
+  rank: number
+  id: string
+  name: string
+  rating: number
+  games: number
+  provisional: boolean
+}
+
+export interface LeaderboardResult {
+  category: RatingCategory | 'puzzle'
+  entries: LeaderboardEntry[]
+}
+
+/** Top players for a single rating category (bullet/blitz/rapid/classical/puzzle). */
+export function getLeaderboard(category: RatingCategory | 'puzzle'): Promise<LeaderboardResult> {
+  return request<LeaderboardResult>(`/leaderboard?category=${encodeURIComponent(category)}`)
+}
+
+// --- Daily puzzle (one stable puzzle per day, for the homepage widget) ---
+
+/** The puzzle of the day. Same shape as a served `PuzzleNext` (the opponent's
+ * setup move is already applied into `fen`; the solution line is never sent),
+ * plus the puzzle's themes for display. Solve via `submitPuzzleMove`. */
+export interface DailyPuzzle {
+  id: string
+  rating: number
+  start_fen: string
+  opponent_move: string
+  fen: string
+  color: Color
+  legal_moves: string[]
+  ply: number
+  themes: string[]
+}
+
+/** The same puzzle for everyone for the whole UTC day (deterministic by date). */
+export function getDailyPuzzle(): Promise<DailyPuzzle> {
+  return request<DailyPuzzle>('/puzzles/daily')
+}
+
 export { ApiError }
