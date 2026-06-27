@@ -11,9 +11,8 @@ export function Panel({ children, sx }: { children: ReactNode; sx?: SxProps<Them
         {
           bgcolor: 'var(--surface)',
           border: '1px solid var(--line-soft)',
-          borderRadius: '16px',
+          borderRadius: '14px',
           p: { xs: 2, md: 2.5 },
-          boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
         },
         ...(Array.isArray(sx) ? sx : [sx]),
       ]}

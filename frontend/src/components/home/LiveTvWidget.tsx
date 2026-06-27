@@ -152,7 +152,7 @@ export default function LiveTvWidget() {
   }
 
   const cat = categoryFor(game.pool)
-  const { color, Icon } = CATEGORY_META[cat]
+  const { Icon } = CATEGORY_META[cat]
 
   return (
     <Panel
@@ -172,9 +172,9 @@ export default function LiveTvWidget() {
         sx={{ outline: 'none' }}
       >
         {head}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1 }}>
-          <Icon size={14} color={color} />
-          <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 11, letterSpacing: 0.5, color, fontWeight: 700 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 1, color: 'var(--text-dim)' }}>
+          <Icon size={14} />
+          <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 11, letterSpacing: 0.5, fontWeight: 600 }}>
             {cat.toUpperCase()} · {game.pool}
           </Typography>
         </Box>

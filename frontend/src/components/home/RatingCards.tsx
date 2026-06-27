@@ -57,11 +57,8 @@ export default function RatingCards() {
               border: '1px solid var(--line-soft)',
               borderRadius: '12px',
               p: 1.5,
-              transition: 'transform 120ms ease, border-color 120ms ease',
-              '&:hover': {
-                transform: 'translateY(-2px)',
-                borderColor: 'var(--accent-line)',
-              },
+              transition: 'border-color 120ms ease',
+              '&:hover': { borderColor: 'var(--line)' },
             }}
           >
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, color }}>

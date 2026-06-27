@@ -3,7 +3,7 @@ import { Box, Typography } from '@mui/material'
 import { useNavigate } from 'react-router-dom'
 import { Panel, PanelHead } from './Panel'
 import { getLeaderboard, type LeaderboardEntry } from '../../api/client'
-import { CATEGORY_META, type Category } from '../../lib/timeControl'
+import type { Category } from '../../lib/timeControl'
 
 const CATEGORIES: Category[] = ['Bullet', 'Blitz', 'Rapid', 'Classical']
 const DEFAULT_CATEGORY: Category = 'Blitz'
@@ -42,13 +42,10 @@ export default function LeaderboardWidget() {
     }
   }, [category])
 
-  const accent = CATEGORY_META[category].color
-
   const toggle = (
-    <Box sx={{ display: 'flex', gap: 0.5 }}>
+    <Box sx={{ display: 'flex', gap: 2 }}>
       {CATEGORIES.map((cat) => {
         const active = cat === category
-        const c = CATEGORY_META[cat].color
         return (
           <Box
             key={cat}
@@ -59,19 +56,15 @@ export default function LeaderboardWidget() {
               appearance: 'none',
               cursor: 'pointer',
               font: 'inherit',
-              fontFamily: 'var(--font-display)',
-              fontSize: 12,
-              fontWeight: 600,
+              background: 'none',
+              border: 'none',
+              p: 0,
+              fontSize: 12.5,
+              fontWeight: active ? 700 : 500,
               lineHeight: 1,
-              px: 1,
-              py: 0.6,
-              borderRadius: '999px',
-              border: '1px solid',
-              borderColor: active ? c : 'var(--line)',
-              bgcolor: active ? `${c}22` : 'transparent',
-              color: active ? c : 'var(--text-dim)',
-              transition: 'all 120ms ease',
-              '&:hover': { borderColor: active ? c : 'var(--line-soft)', color: active ? c : 'var(--text)' },
+              color: active ? 'var(--accent)' : 'var(--muted)',
+              transition: 'color 120ms ease',
+              '&:hover': { color: active ? 'var(--accent)' : 'var(--text)' },
             }}
           >
             {cat}
@@ -96,68 +89,62 @@ export default function LeaderboardWidget() {
         </Typography>
       )}
       {state.kind === 'ready' && state.entries.length > 0 && (
-        <Box>
-          {state.entries.map((e) => {
-            const top = e.rank === 1
-            return (
-              <Box
-                key={e.id}
-                component="button"
-                type="button"
-                onClick={() => navigate(`/@/${encodeURIComponent(e.name)}`)}
+        <Box sx={{ mx: { xs: -2, md: -2.5 } }}>
+          {state.entries.map((e, i) => (
+            <Box
+              key={e.id}
+              component="button"
+              type="button"
+              onClick={() => navigate(`/@/${encodeURIComponent(e.name)}`)}
+              sx={{
+                appearance: 'none',
+                cursor: 'pointer',
+                font: 'inherit',
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1.5,
+                px: { xs: 2, md: 2.5 },
+                py: 0.9,
+                border: 'none',
+                borderTop: i === 0 ? 'none' : '1px solid var(--line-soft)',
+                bgcolor: 'transparent',
+                textAlign: 'left',
+                transition: 'background-color 120ms ease',
+                '&:hover': { bgcolor: 'var(--surface-2)' },
+              }}
+            >
+              <Typography
                 sx={{
-                  appearance: 'none',
-                  cursor: 'pointer',
-                  font: 'inherit',
-                  width: '100%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 1.25,
-                  px: 0.75,
-                  py: 0.85,
-                  border: 'none',
-                  borderLeft: '2px solid',
-                  borderLeftColor: top ? accent : 'transparent',
-                  borderRadius: '8px',
-                  bgcolor: 'transparent',
-                  textAlign: 'left',
-                  transition: 'background-color 120ms ease',
-                  '&:hover': { bgcolor: 'var(--surface-2)' },
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 12.5,
+                  color: 'var(--muted)',
+                  minWidth: 18,
+                  textAlign: 'right',
                 }}
               >
-                <Typography
-                  sx={{
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: 12,
-                    color: top ? accent : 'var(--muted)',
-                    minWidth: 20,
-                    textAlign: 'right',
-                  }}
-                >
-                  {e.rank}
-                </Typography>
-                <Typography
-                  sx={{
-                    flex: 1,
-                    minWidth: 0,
-                    fontSize: 14,
-                    color: 'var(--text)',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {e.name}
-                </Typography>
-                <Typography
-                  sx={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 700, color: 'var(--text)' }}
-                >
-                  {e.rating}
-                  {e.provisional && <Box component="span" sx={{ color: 'var(--text-dim)' }}>?</Box>}
-                </Typography>
-              </Box>
-            )
-          })}
+                {e.rank}
+              </Typography>
+              <Typography
+                sx={{
+                  flex: 1,
+                  minWidth: 0,
+                  fontSize: 14,
+                  fontWeight: e.rank === 1 ? 600 : 400,
+                  color: 'var(--text)',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {e.name}
+              </Typography>
+              <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 13.5, fontWeight: 600, color: 'var(--text)' }}>
+                {e.rating}
+                {e.provisional && <Box component="span" sx={{ color: 'var(--muted)' }}>?</Box>}
+              </Typography>
+            </Box>
+          ))}
         </Box>
       )}
     </Panel>
@@ -169,10 +156,10 @@ function SkeletonRows() {
   return (
     <Box>
       {Array.from({ length: 8 }).map((_, i) => (
-        <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 0.75, py: 0.85 }}>
-          <Box sx={{ width: 14, height: 12, borderRadius: '4px', bgcolor: 'var(--surface-2)' }} />
-          <Box sx={{ flex: 1, height: 12, borderRadius: '4px', bgcolor: 'var(--surface-2)' }} />
-          <Box sx={{ width: 34, height: 12, borderRadius: '4px', bgcolor: 'var(--surface-2)' }} />
+        <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 0.9 }}>
+          <Box sx={{ width: 14, height: 12, borderRadius: '3px', bgcolor: 'var(--surface-2)' }} />
+          <Box sx={{ flex: 1, height: 12, borderRadius: '3px', bgcolor: 'var(--surface-2)' }} />
+          <Box sx={{ width: 34, height: 12, borderRadius: '3px', bgcolor: 'var(--surface-2)' }} />
         </Box>
       ))}
     </Box>

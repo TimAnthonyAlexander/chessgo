@@ -12,7 +12,6 @@ import LiveTvWidget from '../components/home/LiveTvWidget'
 import DailyPuzzleWidget from '../components/home/DailyPuzzleWidget'
 import LeaderboardWidget from '../components/home/LeaderboardWidget'
 import RatingCards from '../components/home/RatingCards'
-import ResumeTiles from '../components/home/ResumeTiles'
 import ChallengeDialog from '../components/ChallengeDialog'
 import CustomTimeDialog from '../components/CustomTimeDialog'
 
@@ -75,41 +74,21 @@ export default function Home() {
     return () => { cancelled = true; window.clearInterval(id) }
   }, [])
 
-  return (
-    <Box sx={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
-      {/* Atmosphere: a warm glow up top + an oversized faint knight off to the side */}
-      <Box
-        aria-hidden
-        sx={{
-          position: 'absolute',
-          inset: 0,
-          pointerEvents: 'none',
-          background: 'radial-gradient(ellipse 70% 50% at 50% -8%, rgba(216,166,87,0.10), transparent 62%)',
-        }}
-      />
-      <Box
-        aria-hidden
-        sx={{
-          position: 'absolute',
-          right: { xs: '-14vw', md: '2vw' },
-          top: '6vh',
-          pointerEvents: 'none',
-          fontSize: 'min(58vh, 560px)',
-          lineHeight: 1,
-          color: 'var(--text)',
-          opacity: 0.018,
-        }}
-      >
-        ♞
-      </Box>
+  const actions = [
+    { icon: <Cpu size={19} />, title: 'Play the computer', sub: 'Eleven levels, gentle to merciless', onClick: () => navigate('/bot') },
+    { icon: <Target size={19} />, title: 'Puzzles', sub: 'Rated tactics trainer', onClick: () => navigate('/puzzles') },
+    { icon: <Telescope size={19} />, title: 'Analysis board', sub: 'Explore lines with the engine', onClick: () => navigate('/analysis') },
+    { icon: <UserPlus size={19} />, title: 'Challenge a friend', sub: 'Private game by link', onClick: () => setChallengeOpen(true) },
+  ]
 
+  return (
+    <Box sx={{ flex: 1 }}>
       <Box
         sx={{
-          position: 'relative',
           maxWidth: 1320,
           mx: 'auto',
           px: { xs: 2, md: 3 },
-          py: { xs: 3, md: 4.5 },
+          py: { xs: 2.5, md: 3.5 },
         }}
       >
         {/* Hero */}
@@ -119,23 +98,25 @@ export default function Home() {
             flexDirection: { xs: 'column', md: 'row' },
             alignItems: { md: 'flex-end' },
             justifyContent: 'space-between',
-            gap: { xs: 2.5, md: 3 },
-            mb: { xs: 3, md: 3.5 },
+            gap: { xs: 2, md: 3 },
+            mb: { xs: 2.5, md: 3 },
           }}
         >
           <Box sx={{ minWidth: 0 }}>
-            <Typography
-              sx={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: 12,
-                letterSpacing: '0.2em',
-                textTransform: 'uppercase',
-                color: 'var(--accent)',
-                mb: 1.25,
-              }}
-            >
-              {user ? `Welcome back, ${user.name}` : 'Online chess'}
-            </Typography>
+            {user && (
+              <Typography
+                sx={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: 12,
+                  letterSpacing: '0.2em',
+                  textTransform: 'uppercase',
+                  color: 'var(--accent)',
+                  mb: 1,
+                }}
+              >
+                Welcome back, {user.name}
+              </Typography>
+            )}
             <Typography
               sx={{
                 fontFamily: 'var(--font-display)',
@@ -145,32 +126,31 @@ export default function Home() {
                 letterSpacing: '-0.02em',
               }}
             >
-              Find your next game.
+              Your move.
             </Typography>
-            <Typography sx={{ mt: 1.5, fontSize: { xs: 14.5, md: 15.5 }, color: 'var(--text-dim)', maxWidth: 540 }}>
-              Pick a time control to get matched instantly — or take on the engine, solve tactics, and review your games.
+            <Typography sx={{ mt: 1, fontSize: { xs: 14.5, md: 15.5 }, color: 'var(--text-dim)', maxWidth: 540 }}>
+              Pick a time control below to get matched, or play the computer.
             </Typography>
           </Box>
 
           {/* Live counters */}
           <Box sx={{ display: 'flex', gap: 1.25, flexShrink: 0 }}>
-            <StatPill icon={<Users size={15} />} value={stats?.playersOnline} label="players online" pulse />
+            <StatPill icon={<Users size={15} />} value={stats?.playersOnline} label="players online" />
             <StatPill icon={<Swords size={15} />} value={stats?.activeGames} label="games in play" />
           </Box>
         </Box>
 
-        {/* Personalization (logged-in only; both self-gate to null for anonymous).
-            Anonymous players with a game in progress still get the resume banner. */}
-        {user ? (
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: { xs: 2, md: 2.5 }, mb: { xs: 2.5, md: 3 } }}>
+        {/* A game in progress is the most urgent thing on the page — for anyone. */}
+        {live && !live.ended && <ResumeBanner game={live} />}
+
+        {/* Logged-in: your ratings at a glance (renders nothing for anonymous). */}
+        {user && (
+          <Box sx={{ mb: { xs: 2.5, md: 3 } }}>
             <RatingCards />
-            <ResumeTiles />
           </Box>
-        ) : (
-          live && !live.ended && <ResumeBanner game={live} />
         )}
 
-        {/* Dashboard: quick pairing + ways to play + live/community widgets */}
+        {/* Dashboard: quick pairing + play + live/community widgets */}
         <Box
           sx={{
             display: 'grid',
@@ -200,36 +180,16 @@ export default function Home() {
             </Box>
           </Panel>
 
-          {/* Column B: ways to play + leaderboard */}
+          {/* Column B: play + leaderboard */}
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: { xs: 2.5, lg: 2.5 } }}>
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
-              <SectionLabel>Ways to play</SectionLabel>
-              <ModeCard
-                icon={<Cpu size={20} />}
-                title="Play the Computer"
-                sub="Eleven levels, from gentle to merciless"
-                highlight
-                onClick={() => navigate('/bot')}
-              />
-              <ModeCard
-                icon={<Target size={20} />}
-                title="Puzzles"
-                sub="Sharpen your tactics, rated"
-                onClick={() => navigate('/puzzles')}
-              />
-              <ModeCard
-                icon={<Telescope size={20} />}
-                title="Analysis board"
-                sub="Explore lines with the engine"
-                onClick={() => navigate('/analysis')}
-              />
-              <ModeCard
-                icon={<UserPlus size={20} />}
-                title="Challenge a friend"
-                sub="Private games"
-                onClick={() => setChallengeOpen(true)}
-              />
-            </Box>
+            <Panel>
+              <PanelHead title="Play" sub="Train, analyse, or take on a friend" />
+              <Box sx={{ mx: { xs: -2, md: -2.5 } }}>
+                {actions.map((a, i) => (
+                  <ActionRow key={a.title} icon={a.icon} title={a.title} sub={a.sub} onClick={a.onClick} first={i === 0} />
+                ))}
+              </Box>
+            </Panel>
             <LeaderboardWidget />
           </Box>
 
@@ -278,23 +238,6 @@ export default function Home() {
       />
       <ChallengeDialog open={challengeOpen} onClose={() => setChallengeOpen(false)} />
     </Box>
-  )
-}
-
-function SectionLabel({ children }: { children: ReactNode }) {
-  return (
-    <Typography
-      sx={{
-        fontFamily: 'var(--font-mono)',
-        fontSize: 11.5,
-        letterSpacing: '0.18em',
-        textTransform: 'uppercase',
-        color: 'var(--muted)',
-        ml: 0.25,
-      }}
-    >
-      {children}
-    </Typography>
   )
 }
 
@@ -386,27 +329,15 @@ function TimeCell({ preset, onClick }: { preset: Preset; onClick: () => void }) 
         borderRadius: '12px',
         cursor: 'pointer',
         overflow: 'hidden',
-        transition: 'transform .12s ease, border-color .12s ease, background .12s ease',
+        transition: 'border-color .12s ease, background .12s ease',
         '&:hover': {
-          transform: 'translateY(-2px)',
           borderColor: 'var(--accent-line)',
           bgcolor: 'var(--surface)',
         },
-        // top accent wash in the category colour, on hover
-        '&::before': {
-          content: '""',
-          position: 'absolute',
-          inset: 0,
-          background: `radial-gradient(ellipse 80% 60% at 50% 0%, ${color}22, transparent 70%)`,
-          opacity: 0,
-          transition: 'opacity .15s ease',
-        },
-        '&:hover::before': { opacity: 1 },
       }}
     >
       <Typography
         sx={{
-          position: 'relative',
           fontFamily: 'var(--font-display)',
           fontSize: { xs: 25, md: 30 },
           fontWeight: 500,
@@ -416,7 +347,7 @@ function TimeCell({ preset, onClick }: { preset: Preset; onClick: () => void }) 
       >
         {preset.time}
       </Typography>
-      <Box sx={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 0.6 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
         <Box component="span" sx={{ display: 'flex', color }}>
           <Icon size={13} />
         </Box>
@@ -448,18 +379,18 @@ function CustomCell({ onClick }: { onClick: () => void }) {
   )
 }
 
-function ModeCard({
+function ActionRow({
   icon,
   title,
   sub,
   onClick,
-  highlight,
+  first,
 }: {
   icon: ReactNode
   title: string
   sub: string
   onClick: () => void
-  highlight?: boolean
+  first?: boolean
 }) {
   return (
     <Box
@@ -468,44 +399,39 @@ function ModeCard({
         display: 'flex',
         alignItems: 'center',
         gap: 1.5,
-        p: 1.5,
-        borderRadius: '14px',
+        px: { xs: 2, md: 2.5 },
+        py: 1.4,
         cursor: 'pointer',
-        bgcolor: 'var(--surface)',
-        border: highlight ? '1px solid var(--accent-line)' : '1px solid var(--line-soft)',
-        boxShadow: highlight ? '0 0 26px -10px rgba(216,166,87,0.55)' : 'none',
-        transition: 'transform .12s ease, border-color .12s ease, background .12s ease',
+        borderTop: first ? 'none' : '1px solid var(--line-soft)',
+        transition: 'background-color .12s ease',
         '&:hover': {
-          transform: 'translateY(-2px)',
-          borderColor: 'var(--accent-line)',
           bgcolor: 'var(--surface-2)',
-          '& .mode-chevron': { color: 'var(--accent)', transform: 'translateX(2px)' },
+          '& .action-chevron': { color: 'var(--accent)', transform: 'translateX(2px)' },
         },
       }}
     >
       <Box
         sx={{
-          width: 46,
-          height: 46,
+          width: 38,
+          height: 38,
           flexShrink: 0,
-          borderRadius: '12px',
+          borderRadius: '10px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          bgcolor: highlight ? 'var(--accent-soft)' : 'var(--surface-2)',
-          border: '1px solid',
-          borderColor: highlight ? 'var(--accent-line)' : 'var(--line)',
-          color: 'var(--accent)',
+          bgcolor: 'var(--surface-2)',
+          border: '1px solid var(--line)',
+          color: 'var(--text-dim)',
         }}
       >
         {icon}
       </Box>
       <Box sx={{ minWidth: 0, flex: 1 }}>
-        <Typography sx={{ fontWeight: 700, fontSize: 15.5, fontFamily: 'var(--font-display)' }}>{title}</Typography>
-        <Typography sx={{ fontSize: 12.5, color: 'var(--muted)', mt: 0.25 }}>{sub}</Typography>
+        <Typography sx={{ fontWeight: 600, fontSize: 15, fontFamily: 'var(--font-display)' }}>{title}</Typography>
+        <Typography sx={{ fontSize: 12.5, color: 'var(--muted)', mt: 0.1 }}>{sub}</Typography>
       </Box>
       <Box
-        className="mode-chevron"
+        className="action-chevron"
         sx={{ display: 'flex', color: 'var(--text-dim)', flexShrink: 0, transition: 'color .12s, transform .12s' }}
       >
         <ChevronRight size={18} />
@@ -514,7 +440,7 @@ function ModeCard({
   )
 }
 
-function StatPill({ icon, value, label, pulse }: { icon: ReactNode; value?: number; label: string; pulse?: boolean }) {
+function StatPill({ icon, value, label }: { icon: ReactNode; value?: number; label: string }) {
   return (
     <Box
       sx={{
@@ -528,28 +454,7 @@ function StatPill({ icon, value, label, pulse }: { icon: ReactNode; value?: numb
         border: '1px solid var(--line-soft)',
       }}
     >
-      <Box sx={{ position: 'relative', display: 'flex', color: 'var(--accent)' }}>
-        {icon}
-        {pulse && (
-          <Box
-            sx={{
-              position: 'absolute',
-              top: -2,
-              right: -3,
-              width: 7,
-              height: 7,
-              borderRadius: '50%',
-              bgcolor: '#7bb661',
-              animation: 'hpulse 2s infinite',
-              '@keyframes hpulse': {
-                '0%': { boxShadow: '0 0 0 0 rgba(123,182,97,0.5)' },
-                '70%': { boxShadow: '0 0 0 6px rgba(123,182,97,0)' },
-                '100%': { boxShadow: '0 0 0 0 rgba(123,182,97,0)' },
-              },
-            }}
-          />
-        )}
-      </Box>
+      <Box sx={{ display: 'flex', color: 'var(--accent)' }}>{icon}</Box>
       <Box sx={{ lineHeight: 1.1 }}>
         <Typography
           component="div"
