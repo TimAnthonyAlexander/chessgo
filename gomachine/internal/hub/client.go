@@ -32,10 +32,11 @@ type Client struct {
 	spectator bool
 
 	// Touched only by the hub goroutine:
-	game     *game
-	pool     string    // current queue pool, "" if not queued
-	queuedAt time.Time // when the client entered its current pool (for bot backfill)
-	watching *game     // the game this client is spectating, if any
+	game          *game
+	pool          string    // current queue pool, "" if not queued
+	queuedAt      time.Time // when the client entered its current pool (for bot backfill)
+	watching      *game     // the game this client is spectating, if any
+	challengeCode string    // code of a pending private challenge this client created, "" if none
 }
 
 func (c *Client) readPump() {

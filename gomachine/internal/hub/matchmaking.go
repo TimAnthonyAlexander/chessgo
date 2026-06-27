@@ -10,9 +10,9 @@ import "time"
 // the bot-fill delay and get a rating-matched fill-in bot instead.
 const (
 	startRating     = 1500 // fallback rating for anonymous/unrated players (EloService::START)
-	baseRatingGap   = 100   // acceptable Elo gap at queue time
-	ratingGapPerSec = 50    // how fast the acceptable gap widens per second waited
-	maxRatingGap    = 400   // hard ceiling: two players further apart never pair as humans
+	baseRatingGap   = 100  // acceptable Elo gap at queue time
+	ratingGapPerSec = 50   // how fast the acceptable gap widens per second waited
+	maxRatingGap    = 400  // hard ceiling: two players further apart never pair as humans
 )
 
 // ratingTolerance is the largest Elo gap a player who has waited `wait` will

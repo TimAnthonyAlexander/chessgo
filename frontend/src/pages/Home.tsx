@@ -18,6 +18,7 @@ import { gameSocket, type LiveGameState } from '../lib/socket'
 import { useGameSocket } from '../lib/useGameSocket'
 import { useAuth } from '../lib/auth'
 import { getStats, type LobbyStats } from '../api/client'
+import ChallengeDialog from '../components/ChallengeDialog'
 
 // Quick-pairing presets, grouped by time-control category.
 interface Preset {
@@ -53,6 +54,7 @@ export default function Home() {
   const { user } = useAuth()
   const [search, setSearch] = useState<string | null>(null)
   const [snack, setSnack] = useState<string | null>(null)
+  const [challengeOpen, setChallengeOpen] = useState(false)
 
   // When the hub matches us, jump into the live game.
   useEffect(() => {
@@ -222,8 +224,7 @@ export default function Home() {
               icon={<UserPlus size={20} />}
               title="Challenge a friend"
               sub="Private games"
-              soon
-              onClick={() => setSnack('Friend challenges are coming soon.')}
+              onClick={() => setChallengeOpen(true)}
             />
           </Box>
         </Box>
@@ -266,6 +267,8 @@ export default function Home() {
         message={snack}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       />
+
+      <ChallengeDialog open={challengeOpen} onClose={() => setChallengeOpen(false)} />
     </Box>
   )
 }

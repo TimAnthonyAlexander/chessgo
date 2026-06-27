@@ -7,13 +7,17 @@ import (
 
 // inMsg is a message from a client. Type is one of: queue, cancel, move,
 // resign, watch, unwatch, drawOffer, drawAccept, drawDecline, takebackOffer,
-// takebackAccept, takebackDecline, chat.
+// takebackAccept, takebackDecline, chat, createChallenge, joinChallenge,
+// cancelChallenge.
 type inMsg struct {
 	Type   string `json:"type"`
-	Pool   string `json:"pool,omitempty"`   // time control, e.g. "3+0" (queue)
+	Pool   string `json:"pool,omitempty"`   // time control, e.g. "3+0" (queue, createChallenge)
 	Move   string `json:"move,omitempty"`   // UCI (move)
 	GameID string `json:"gameId,omitempty"` // target game (watch)
 	Text   string `json:"text,omitempty"`   // chat message body (chat)
+	Color  string `json:"color,omitempty"`  // "w"|"b"|"random" creator side (createChallenge)
+	Rated  bool   `json:"rated,omitempty"`  // creator's rated preference (createChallenge)
+	Code   string `json:"code,omitempty"`   // private invite code (joinChallenge)
 }
 
 // timeControl is a base time + per-move increment, both in milliseconds.

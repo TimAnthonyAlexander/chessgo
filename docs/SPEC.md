@@ -912,7 +912,18 @@ chessgo/
 - [x] **Profiles + game history** — public `/@/:name` profile by display name
       (§10.3): per-category ratings + W/L/D record + paginated history
       (`GET /users/{name}` + `/users/{name}/games`). PGN export still TODO.
-- [ ] **More lobby features** — Challenge-a-friend (private link), Custom games,
+- [x] **Challenge a friend (private games)** — the lobby's "Challenge a friend"
+      card opens a dialog to create a private invite (time control incl. **custom**
+      base+inc, color preference W/B/random, rated toggle gated on being logged in)
+      or **join by 6-char code**. The hub holds the invite in-memory keyed by an
+      unambiguous code (`internal/hub/challenge.go`), pairs exactly the two players
+      with `startGameWith` (no rating bracket — any gap is fine), and is rated only
+      if the creator asked AND both sides are accounts. Share via copyable
+      code **or** link (`/challenge/:code` → `ChallengeJoin` page). Ephemeral like
+      the queue: a creator disconnect or a 30-min TTL drops it. Protocol:
+      `createChallenge`/`joinChallenge`/`cancelChallenge` →
+      `challengeCreated`/`challengeExpired`/`matched`.
+- [ ] **More lobby features** — Custom games beyond private invites,
       correspondence; **PGN export** (history is shipped, PGN is not).
 - [x] **Premoves** — queue a move during the opponent's turn; the shared board
       controller (`src/lib/useBoardInteraction.ts`) holds it across the opponent's

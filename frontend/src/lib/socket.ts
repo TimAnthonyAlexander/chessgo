@@ -44,11 +44,22 @@ export interface LiveGameState {
 
 let chatSeq = 0
 
+// A pending private "challenge a friend" invite this client created. Present
+// while we wait for the friend to join via the shared code/link; cleared once a
+// game starts (matched), the invite is cancelled, or it expires.
+export interface ChallengeState {
+  code: string
+  pool: string
+  color: 'w' | 'b' | 'random'
+  rated: boolean
+}
+
 export interface SocketState {
   conn: 'closed' | 'connecting' | 'open'
   status: 'idle' | 'queued' | 'matched'
   pool: string | null
   game: LiveGameState | null
+  challenge: ChallengeState | null
   error: string | null
 }
 
@@ -115,7 +126,7 @@ function buildResume(m: Msg): LiveGameState {
 }
 
 class GameSocket {
-  private state: SocketState = { conn: 'closed', status: 'idle', pool: null, game: null, error: null }
+  private state: SocketState = { conn: 'closed', status: 'idle', pool: null, game: null, challenge: null, error: null }
   private ws: WebSocket | null = null
   private listeners = new Set<() => void>()
   private reconnectTimer: number | null = null
@@ -123,6 +134,10 @@ class GameSocket {
   private attempts = 0
   private intentional = false
   private wantQueue: string | null = null
+  // Private-challenge intents, replayed on (re)connect like wantQueue: the
+  // creator's pending invite and a join-by-code attempt.
+  private wantChallenge: { pool: string; color: 'w' | 'b' | 'random'; rated: boolean } | null = null
+  private wantJoin: string | null = null
 
   getState = (): SocketState => this.state
 
@@ -155,7 +170,11 @@ class GameSocket {
       ws.onopen = () => {
         this.attempts = 0
         this.set({ conn: 'open' })
+        // Replay whatever lobby intent we hold (only one of queue/create can be
+        // active; a join may ride alongside on a fresh deep-link connection).
         if (this.wantQueue) this.rawSend({ type: 'queue', pool: this.wantQueue })
+        else if (this.wantChallenge) this.rawSend({ type: 'createChallenge', ...this.wantChallenge })
+        if (this.wantJoin) this.rawSend({ type: 'joinChallenge', code: this.wantJoin })
       }
       ws.onmessage = (e) => {
         try {
@@ -183,6 +202,44 @@ class GameSocket {
     this.wantQueue = null
     this.rawSend({ type: 'cancel' })
     this.set({ status: 'idle', pool: null })
+  }
+
+  // --- private "challenge a friend" invites ---
+
+  /** Create a private invite; the hub replies with `challengeCreated` carrying a
+   * shareable code. Only one of queue/challenge can be pending at a time. */
+  async createChallenge(pool: string, color: 'w' | 'b' | 'random', rated: boolean): Promise<void> {
+    this.wantQueue = null
+    this.wantJoin = null
+    this.wantChallenge = { pool, color, rated }
+    this.set({ status: 'idle', pool: null, game: null, challenge: null, error: null })
+    await this.connect()
+    this.rawSend({ type: 'createChallenge', pool, color, rated })
+  }
+
+  /** Join a friend's private invite by its code. On success the hub sends
+   * `matched`; an unknown/expired code yields an `error`. */
+  async joinChallenge(code: string): Promise<void> {
+    const c = code.trim().toUpperCase()
+    if (!c) return
+    this.wantQueue = null
+    this.wantChallenge = null
+    this.wantJoin = c
+    this.set({ game: null, challenge: null, error: null })
+    await this.connect()
+    this.rawSend({ type: 'joinChallenge', code: c })
+  }
+
+  /** Withdraw our own pending invite. */
+  cancelChallenge() {
+    this.wantChallenge = null
+    this.rawSend({ type: 'cancelChallenge' })
+    this.set({ challenge: null })
+  }
+
+  /** Clear a transient lobby error (e.g. when reopening the challenge dialog). */
+  clearError() {
+    if (this.state.error !== null) this.set({ error: null })
   }
 
   move(uci: string) {
@@ -242,7 +299,9 @@ class GameSocket {
   /** Leave a finished game and return to an idle lobby state. */
   leave() {
     this.wantQueue = null
-    this.set({ status: 'idle', pool: null, game: null, error: null })
+    this.wantChallenge = null
+    this.wantJoin = null
+    this.set({ status: 'idle', pool: null, game: null, challenge: null, error: null })
   }
 
   /** Re-open the socket so a fresh ws-ticket (new account identity) is minted —
@@ -283,10 +342,25 @@ class GameSocket {
         this.set({ status: 'queued', pool: msg.pool })
         break
       case 'idle':
-        this.set({ status: 'idle', pool: null })
+        this.set({ status: 'idle', pool: null, challenge: null })
         break
       case 'matched':
-        this.set({ status: 'matched', pool: msg.pool, game: buildGame(msg), error: null })
+        // A game started (public match or accepted private challenge): all
+        // pending lobby intents are now resolved.
+        this.wantQueue = null
+        this.wantChallenge = null
+        this.wantJoin = null
+        this.set({ status: 'matched', pool: msg.pool, game: buildGame(msg), challenge: null, error: null })
+        break
+      case 'challengeCreated':
+        this.set({
+          challenge: { code: msg.code, pool: msg.pool, color: msg.color, rated: !!msg.rated },
+          error: null,
+        })
+        break
+      case 'challengeExpired':
+        this.wantChallenge = null
+        this.set({ challenge: null, error: 'Your invite expired before anyone joined.' })
         break
       case 'resume':
         this.onResume(msg)
@@ -319,6 +393,8 @@ class GameSocket {
         this.onChat(msg)
         break
       case 'error':
+        // A failed join (bad/expired code) shouldn't be retried on reconnect.
+        this.wantJoin = null
         this.set({ error: msg.message })
         break
       default:

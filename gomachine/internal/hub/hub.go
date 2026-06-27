@@ -34,7 +34,8 @@ type Hub struct {
 	commands    chan command
 	pools       map[string][]*Client // waiting clients per time-control pool
 	games       map[string]*game
-	playerGames map[string]*game // identity id -> active game (for reconnect)
+	playerGames map[string]*game      // identity id -> active game (for reconnect)
+	challenges  map[string]*challenge // pending private invites, keyed by short code
 	onFinish    func(FinishedGame)
 
 	// Bot backfill: if a player waits longer than botDelay with no human match,
@@ -102,6 +103,7 @@ func New(secret string) *Hub {
 		pools:       map[string][]*Client{},
 		games:       map[string]*game{},
 		playerGames: map[string]*game{},
+		challenges:  map[string]*challenge{},
 		botMoves:    make(chan botMoveResult, 64),
 	}
 }
@@ -143,6 +145,7 @@ func (h *Hub) Run() {
 			h.matchWaiting()
 			h.checkBotFill()
 			h.checkFillers()
+			h.checkChallenges()
 			h.publishLobby()
 		}
 	}
@@ -178,6 +181,12 @@ func (h *Hub) handle(cmd command) {
 		h.watchGame(c, cmd.msg.GameID)
 	case "unwatch":
 		h.unwatchGame(c)
+	case "createChallenge":
+		h.createChallenge(c, cmd.msg.Pool, cmd.msg.Color, cmd.msg.Rated)
+	case "joinChallenge":
+		h.joinChallenge(c, cmd.msg.Code)
+	case "cancelChallenge":
+		h.cancelChallenge(c)
 	}
 }
 
@@ -228,6 +237,14 @@ func (h *Hub) startGame(a, b *Client, tc timeControl, pool string) {
 	if mrand.IntN(2) == 1 {
 		white, black = b, a
 	}
+	// Public pairing is rated only if both sides are accounts.
+	h.startGameWith(white, black, tc, pool, !white.id.Anon && !black.id.Anon)
+}
+
+// startGameWith creates a game between two clients with explicit colors and a
+// caller-decided rated flag. Shared by public matchmaking (random colors, rated
+// iff both accounts) and private challenges (creator's color/rated preference).
+func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, rated bool) {
 	pos, _ := chess.ParseFEN(chess.StartFEN)
 	g := &game{
 		id:        newID(),
@@ -236,7 +253,7 @@ func (h *Hub) startGame(a, b *Client, tc timeControl, pool string) {
 		pos:       pos,
 		tc:        tc,
 		pool:      pool,
-		rated:     !white.id.Anon && !black.id.Anon, // rated only if both are accounts
+		rated:     rated,
 		clockMs:   [2]int64{tc.Base, tc.Base},
 		turnStart: time.Now(),
 		online:    [2]bool{true, true},
@@ -617,7 +634,8 @@ func (h *Hub) resumeMsg(g *game, color chess.Color) map[string]any {
 // absent player still flags normally.
 func (h *Hub) handleDisconnect(c *Client) {
 	h.dequeue(c)
-	h.unwatchGame(c) // a spectator (or a player who was also watching) leaving
+	h.dropChallenge(c) // tear down any pending private invite this client created
+	h.unwatchGame(c)   // a spectator (or a player who was also watching) leaving
 	g := c.game
 	if g == nil || g.over {
 		return
