@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Box, Typography } from '@mui/material'
 import { BookOpen } from 'lucide-react'
 import { candidates, type Candidates, type CandidateMove } from '../api/client'
-import { gameOverAt, pathToNode, turnAt, type Tree } from '../lib/analysisTree'
+import { gameOverAt, pathToNode, START_FEN, type Tree } from '../lib/analysisTree'
 
 // How many candidate rows to request/show. The engine ranks best-first.
 const MAX_ROWS = 8
@@ -74,8 +74,10 @@ function useCandidates(tree: Tree, currentId: number, engineOn: boolean) {
         }
     }, [engineOn, over, fen, history])
 
-    // stale = the viewed position changed but its response hasn't arrived yet.
-    return { data, loading, stale: dataFen !== fen }
+    // We return the last loaded data AND the fen it was computed for: the panel
+    // keeps showing that (frozen, with its own side-to-move) until the new call
+    // lands, so making a move never blanks or reshapes the sidebar.
+    return { data, loading, dataFen }
 }
 
 /**
@@ -95,21 +97,21 @@ export default function OpeningPanel({
     engineOn: boolean
     onMove: (uci: string) => void
 }) {
-    const { data, loading, stale } = useCandidates(tree, currentId, engineOn)
-    const node = tree.nodes[currentId] ?? tree.nodes[tree.rootId]
-    const stm = turnAt(node)
-    // At the root (no moves played) the position simply isn't a named opening yet —
-    // it's the starting position, NOT "out of book".
-    const atStart = (node?.ply ?? 0) === 0
+    const { data, dataFen } = useCandidates(tree, currentId, engineOn)
 
     if (!engineOn) return null
 
+    // Render the LAST loaded result, with the side-to-move IT was computed for —
+    // so the bars stay correct and frozen while the next call is in flight (no
+    // re-flip, no blanking, no layout shift). It swaps to the new data on arrival.
     const opening = data?.opening ?? null
-    // Only render bars for the CURRENT position — never another position's evals
-    // (re-flipping a stale move's score by the new side-to-move makes every bar
-    // jump to a wrong value during the load gap).
-    const moves = stale ? [] : (data?.moves ?? [])
-    const busy = loading || stale
+    const moves = data?.moves ?? []
+    const displayStm: 'w' | 'b' = dataFen.split(' ')[1] === 'b' ? 'b' : 'w'
+    // Is the shown data the starting position? (board layout matches the start)
+    const dataAtStart = dataFen.split(' ')[0] === START_FEN.split(' ')[0]
+    // Header fallback when there's no named opening: distinguish the genuine start
+    // from a real out-of-book position, and the very first load (no data yet).
+    const fallbackLabel = !data ? 'Exploring…' : dataAtStart ? 'Starting position' : 'Out of book'
 
     return (
         <Box sx={{ borderTop: '1px solid var(--line-soft)', bgcolor: 'var(--bg-2)' }}>
@@ -163,7 +165,7 @@ export default function OpeningPanel({
                     </>
                 ) : (
                     <Typography sx={{ fontSize: 12.5, color: 'var(--muted)', fontStyle: 'italic' }}>
-                        {atStart ? 'Starting position' : busy ? 'Exploring…' : 'Out of book'}
+                        {fallbackLabel}
                     </Typography>
                 )}
             </Box>
@@ -174,10 +176,12 @@ export default function OpeningPanel({
                     <Typography
                         sx={{ fontSize: 12, color: 'var(--muted)', fontStyle: 'italic', px: 0.5, py: 0.75 }}
                     >
-                        {busy ? 'Exploring moves…' : 'No moves'}
+                        {data ? 'No moves' : 'Exploring moves…'}
                     </Typography>
                 ) : (
-                    moves.map((m) => <MoveRow key={m.uci} move={m} stm={stm} onPlay={() => onMove(m.uci)} />)
+                    moves.map((m) => (
+                        <MoveRow key={m.uci} move={m} stm={displayStm} onPlay={() => onMove(m.uci)} />
+                    ))
                 )}
             </Box>
         </Box>

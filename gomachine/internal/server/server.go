@@ -19,8 +19,9 @@ import (
 // Server holds a bounded pool of engines (each with its own transposition
 // table). A pool both bounds concurrent search load and keeps tables warm.
 type Server struct {
-	pool chan *engine.Engine
-	book *book.Book // optional precomputed opening book (nil = disabled)
+	pool      chan *engine.Engine
+	book      *book.Book // optional precomputed opening book (nil = disabled)
+	candCache *candCache // memoizes /candidates MultiPV results per position+budget
 }
 
 // SetBook attaches a loaded opening book; full-strength analysis paths consult it
@@ -72,7 +73,7 @@ func New(workers, ttSizeMB, searchThreads int) *Server {
 	for i := 0; i < workers; i++ {
 		pool <- engine.NewWithThreads(ttSizeMB, searchThreads)
 	}
-	return &Server{pool: pool}
+	return &Server{pool: pool, candCache: newCandCache(4096)}
 }
 
 func (s *Server) acquire() *engine.Engine  { return <-s.pool }
@@ -215,15 +216,24 @@ func (s *Server) handleCandidates(w http.ResponseWriter, r *http.Request) {
 	}
 
 	depth := req.Limits.Depth
-	movetime := time.Duration(req.Limits.MoveTime) * time.Millisecond
-	if depth <= 0 && movetime == 0 {
-		movetime = 300 * time.Millisecond // sensible default for an interactive panel
+	movetimeMs := req.Limits.MoveTime
+	if depth <= 0 && movetimeMs == 0 {
+		movetimeMs = 300 // sensible default for an interactive panel
 	}
 
-	eng := s.acquire()
-	defer s.release(eng)
-
-	cands := eng.MultiPV(pos, depth, movetime, historyKeys(req.History))
+	// Serve a previously-computed result for this exact position+budget straight
+	// from memory (the analysis board re-requests the same positions constantly —
+	// the start position on every page load above all). A MultiPV search is the
+	// expensive part; the cache key ignores multipv (we always search all moves and
+	// just slice for display) and history (position-determined), maximizing hits.
+	key := candKey{pos: pos.Key(), depth: depth, movetime: movetimeMs}
+	cands, ok := s.candCache.get(key)
+	if !ok {
+		eng := s.acquire()
+		cands = eng.MultiPV(pos, depth, time.Duration(movetimeMs)*time.Millisecond, historyKeys(req.History))
+		s.release(eng)
+		s.candCache.put(key, cands)
+	}
 	if n := req.Limits.MultiPV; n > 0 && n < len(cands) {
 		cands = cands[:n]
 	}
