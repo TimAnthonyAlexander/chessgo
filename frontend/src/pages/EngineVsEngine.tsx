@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Slider, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material'
 import {
     Bot,
@@ -15,6 +15,8 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import Board from '../components/Board'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveList from '../components/MoveList'
+import OpeningPanel from '../components/OpeningPanel'
+import { buildFromMoves } from '../lib/analysisTree'
 import { ActionBtn, ErrorBanner, NavBtn } from '../components/PanelUI'
 import {
     analyze,
@@ -31,6 +33,8 @@ import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 const MAX_PLIES = 400 // hard stop so two shuffling engines can't loop forever
 const MOVE_DELAY = 550 // ms between plies, so it's watchable
+// Blue board arrow drawn when hovering a candidate (book) move (matches Analysis).
+const BOOK_ARROW_COLOR = '#4c8bf5'
 
 const sideToMoveOf = (fen: string): Color => (fen.split(' ')[1] === 'b' ? 'b' : 'w')
 
@@ -106,6 +110,19 @@ export default function EngineVsEngine() {
     const over = status !== 'ongoing'
     const sideToMove = sideToMoveOf(fen)
     const moverSide: EngineSide = sideToMove === gomaSide ? 'gomachine' : 'stockfish'
+
+    // Book panel: a tree of the game line so far, so the engine-owned OpeningPanel
+    // can name the opening + show candidate-move eval bars for the live position.
+    const { tree: bookTree, lastId: bookNodeId } = useMemo(
+        () => buildFromMoves(startFen, moves.map((m) => m.uci)),
+        [startFen, moves],
+    )
+    // UCI of the hovered book move → a blue arrow on the board (cleared each ply).
+    const [hoverUci, setHoverUci] = useState<string | null>(null)
+    useEffect(() => setHoverUci(null), [ply])
+    const arrow = hoverUci
+        ? { from: hoverUci.slice(0, 2), to: hoverUci.slice(2, 4), color: BOOK_ARROW_COLOR }
+        : null
 
     // The engine loop: when running, fetch the side-to-move's move after a delay,
     // apply it (server returns the new FEN), and let the ply change re-trigger us.
@@ -320,6 +337,7 @@ export default function EngineVsEngine() {
                             inCheck={false}
                             interactive={false}
                             onMove={() => {}}
+                            arrow={arrow}
                         />
                     </Box>
                 </Box>
@@ -382,6 +400,30 @@ export default function EngineVsEngine() {
                     {error && <ErrorBanner>{error}</ErrorBanner>}
                     <Box sx={{ height: 420, display: 'flex' }}>
                         <MoveList fill moves={moves} currentPly={ply} onSelectPly={() => {}} />
+                    </Box>
+
+                    {/* Book info: opening name + candidate-move eval bars for the live
+                        position (engine-owned). Hover a move for its arrow + opening;
+                        click to open that line in the analysis board. */}
+                    <Box
+                        sx={{
+                            bgcolor: 'var(--surface)',
+                            border: '1px solid var(--line-soft)',
+                            borderRadius: '14px',
+                            overflow: 'hidden',
+                        }}
+                    >
+                        <OpeningPanel
+                            tree={bookTree}
+                            currentId={bookNodeId}
+                            engineOn
+                            onMove={(uci) =>
+                                navigate('/analysis', {
+                                    state: { moves: [...moves.map((m) => m.uci), uci], startFen },
+                                })
+                            }
+                            onHoverMove={setHoverUci}
+                        />
                     </Box>
                 </Box>
             </Box>
