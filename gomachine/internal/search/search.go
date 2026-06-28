@@ -805,7 +805,10 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 	// search first, so a full-depth search wastes effort on poor ordering. Reduce a
 	// ply — cheaper, and it seeds the TT with a move. Skipped inside a singular
 	// verification (excludedMove set) so that search's depth stays intact.
-	if s.params.IIR && depth >= iirMinDepth && ttMove == chess.NullMove &&
+	// PV-only: the all-nodes variant SPRT'd −33.7 Elo (over-broad). Standard IIR
+	// fires on PV (and expected-cut) nodes; we have no cutnode flag, so PV-only
+	// (beta-alpha > 1, same predicate as isPV computed below).
+	if s.params.IIR && beta-alpha > 1 && depth >= iirMinDepth && ttMove == chess.NullMove &&
 		excludedMove == chess.NullMove {
 		depth--
 	}
@@ -1014,10 +1017,10 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 	// multi-cut (fail high) immediately.
 	extension := 0
 	if s.params.Singular && !inCheck && ply > 0 && excludedMove == chess.NullMove &&
-		ttHit && ttMove != chess.NullMove && depth >= singularMinDepth &&
+		ttHit && ttMove != chess.NullMove && depth >= s.params.SingularMinDepth &&
 		ttDepth >= depth-3 && (ttFlag == ttLower || ttFlag == ttExact) &&
 		absInt(ttScore) < tbThreshold {
-		singularBeta := ttScore - singularMargin*depth
+		singularBeta := ttScore - s.params.SingularMargin*depth
 		rDepth := (depth - 1) / 2
 		s.excluded[ply] = ttMove
 		prevVerify := s.inSingularVerify

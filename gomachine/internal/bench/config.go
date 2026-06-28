@@ -54,6 +54,18 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("nullr: %q is not an int", val)
 			}
 			base.NullMoveR = n
+		case "singularmargin", "smargin":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("singularmargin: %q is not an int", val)
+			}
+			base.SingularMargin = n
+		case "singulardepth", "sdepth":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("singulardepth: %q is not an int", val)
+			}
+			base.SingularMinDepth = n
 		case "lmr":
 			b, err := parseBool(val)
 			if err != nil {
@@ -431,6 +443,12 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.Razor != patch.Razor {
 		diffs = append(diffs, fmt.Sprintf("razor: %s→%s", onoff(base.Razor), onoff(patch.Razor)))
+	}
+	if base.SingularMargin != patch.SingularMargin {
+		diffs = append(diffs, fmt.Sprintf("singularmargin: %d→%d", base.SingularMargin, patch.SingularMargin))
+	}
+	if base.SingularMinDepth != patch.SingularMinDepth {
+		diffs = append(diffs, fmt.Sprintf("singulardepth: %d→%d", base.SingularMinDepth, patch.SingularMinDepth))
 	}
 	if len(diffs) == 0 {
 		return "(identical — sanity/noise run)"

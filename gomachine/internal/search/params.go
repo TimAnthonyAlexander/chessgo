@@ -11,43 +11,45 @@ package search
 // pruning, aspiration windows, …). Only wired flags appear; toggling a flag the
 // search doesn't yet read would silently do nothing, so we don't expose those.
 type Params struct {
-	UseTT          bool // transposition-table probe/store + TT move ordering
-	NullMove       bool // null-move pruning (zugzwang-guarded)
-	NullMoveR      int  // null-move base reduction R (effective R = NullMoveR + depth/4)
-	LMR            bool // late move reductions
-	CheckExtension bool // extend search by one ply when in check
-	SEE            bool // order captures by SEE; prune losing captures in quiescence
-	DeltaPrune     bool // delta pruning in quiescence (skip captures that can't raise alpha)
-	Aspiration     bool // aspiration windows around the previous iteration's score
-	RFP            bool // reverse futility pruning (static null move) near leaves
-	LMP            bool // late move pruning (move-count pruning) of late quiets near leaves
-	HistMalus      bool // history gravity update + bonus cap + malus to non-cutoff quiets
-	Improving      bool // "improving" heuristic scales RFP margin + LMP move count
-	LMRFormula     bool // log(d)·log(m) LMR table + PV/improving/history adjustments
-	Mobility       bool // evaluation: piece mobility term
-	Pawns          bool // evaluation: pawn structure (isolated/doubled/passed)
-	KingSafety     bool // evaluation: king pawn-shield term
-	BishopPair     bool // evaluation: bishop-pair bonus
-	KingProx       bool // evaluation: EG-only king proximity to advanced passers (endgame term #1, under SPRT)
-	PawnRace       bool // evaluation: EG-only knight-aware unstoppable-passer / race detection (under SPRT)
-	ScaleFactor    bool // evaluation: EG drawishness scale factor (scales the eg term toward draw in drawish material)
-	TunedEval      bool // evaluation: use the Texel-tuned PSQT + tuned weights
-	UseBook        bool // consult the precomputed opening book before searching (engine must have a book set)
-	UseTablebase   bool // probe Syzygy endgame tablebases at the root (engine must have a tablebase set)
-	TBSearch       bool // probe Syzygy WDL at internal search nodes (extends the horizon to the ≤MaxPieces boundary; engine must have a tablebase set)
-	Nnue           bool // evaluation: route static eval through the NNUE net (internal/nnue); inert (falls back to HCE) if no net is loaded
-	NnueFloat      bool // evaluation: when NNUE is on, use the float from-scratch eval instead of the int incremental path (int-vs-float A/B only)
-	TTEval         bool // reuse the TT-stored static eval instead of recomputing it (skips the NNUE/HCE eval on TT hits that don't cut off); behavior-preserving speed-only (eval is deterministic), measured at movetime
-	CorrHist       bool // correction history: learn the per-pattern (pawn / per-color non-pawn) static-eval-vs-search-result bias and correct the static eval by it (improves every eval-gated decision: RFP, null-move, improving, qsearch stand-pat)
-	ContHist       bool // continuation history: 1-ply (countermove) + 2-ply history keyed by the preceding move(s); feeds quiet ordering + the LMR reduction term (sharpens every reduction/late-move prune)
-	LMR2           bool // aggressive LMR: reduce captures/promotions too, earlier onset, PV/improving/ordering-trust/SEE reduction adjustments (supersedes LMR when on)
-	Singular       bool // singular extensions: verify the TT move against all alternatives at reduced depth; extend it a ply if singular, multi-cut if a second move also beats beta
-	MultiCut       bool // singular: allow the verification's multi-cut early-return (return singularBeta when a second move also beats beta). DEFAULT TRUE; flip off to isolate fragile multi-cut from the rest of singular
-	CleanVerify    bool // singular: run the verification subtree with conservative LMR (not LMR2), even when LMR2 is on globally — so over-reduced alternatives don't pollute the singular decision. Inert unless LMR2 is on
-	IIR            bool // internal iterative reduction: at a deep node with no TT move, search a ply shallower (cheaper, and seeds the TT with a move)
-	Futility       bool // frontier futility pruning: skip a late quiet whose static eval + depth margin can't reach alpha (the fail-low side; distinct from RFP)
-	ProbCut        bool // probcut: if a capture's reduced-depth search beats a raised beta, the node is almost surely a fail-high — prune it
-	Razor          bool // razoring: at very shallow depth, if static eval + margin < alpha, drop to qsearch and prune if it confirms we're below alpha
+	UseTT            bool // transposition-table probe/store + TT move ordering
+	NullMove         bool // null-move pruning (zugzwang-guarded)
+	NullMoveR        int  // null-move base reduction R (effective R = NullMoveR + depth/4)
+	LMR              bool // late move reductions
+	CheckExtension   bool // extend search by one ply when in check
+	SEE              bool // order captures by SEE; prune losing captures in quiescence
+	DeltaPrune       bool // delta pruning in quiescence (skip captures that can't raise alpha)
+	Aspiration       bool // aspiration windows around the previous iteration's score
+	RFP              bool // reverse futility pruning (static null move) near leaves
+	LMP              bool // late move pruning (move-count pruning) of late quiets near leaves
+	HistMalus        bool // history gravity update + bonus cap + malus to non-cutoff quiets
+	Improving        bool // "improving" heuristic scales RFP margin + LMP move count
+	LMRFormula       bool // log(d)·log(m) LMR table + PV/improving/history adjustments
+	Mobility         bool // evaluation: piece mobility term
+	Pawns            bool // evaluation: pawn structure (isolated/doubled/passed)
+	KingSafety       bool // evaluation: king pawn-shield term
+	BishopPair       bool // evaluation: bishop-pair bonus
+	KingProx         bool // evaluation: EG-only king proximity to advanced passers (endgame term #1, under SPRT)
+	PawnRace         bool // evaluation: EG-only knight-aware unstoppable-passer / race detection (under SPRT)
+	ScaleFactor      bool // evaluation: EG drawishness scale factor (scales the eg term toward draw in drawish material)
+	TunedEval        bool // evaluation: use the Texel-tuned PSQT + tuned weights
+	UseBook          bool // consult the precomputed opening book before searching (engine must have a book set)
+	UseTablebase     bool // probe Syzygy endgame tablebases at the root (engine must have a tablebase set)
+	TBSearch         bool // probe Syzygy WDL at internal search nodes (extends the horizon to the ≤MaxPieces boundary; engine must have a tablebase set)
+	Nnue             bool // evaluation: route static eval through the NNUE net (internal/nnue); inert (falls back to HCE) if no net is loaded
+	NnueFloat        bool // evaluation: when NNUE is on, use the float from-scratch eval instead of the int incremental path (int-vs-float A/B only)
+	TTEval           bool // reuse the TT-stored static eval instead of recomputing it (skips the NNUE/HCE eval on TT hits that don't cut off); behavior-preserving speed-only (eval is deterministic), measured at movetime
+	CorrHist         bool // correction history: learn the per-pattern (pawn / per-color non-pawn) static-eval-vs-search-result bias and correct the static eval by it (improves every eval-gated decision: RFP, null-move, improving, qsearch stand-pat)
+	ContHist         bool // continuation history: 1-ply (countermove) + 2-ply history keyed by the preceding move(s); feeds quiet ordering + the LMR reduction term (sharpens every reduction/late-move prune)
+	LMR2             bool // aggressive LMR: reduce captures/promotions too, earlier onset, PV/improving/ordering-trust/SEE reduction adjustments (supersedes LMR when on)
+	Singular         bool // singular extensions: verify the TT move against all alternatives at reduced depth; extend it a ply if singular, multi-cut if a second move also beats beta
+	SingularMargin   int  // singular: verification window = ttScore - SingularMargin*depth (default 2; lower = fire singular more often)
+	SingularMinDepth int  // singular: minimum remaining depth to attempt verification (default 8)
+	MultiCut         bool // singular: allow the verification's multi-cut early-return (return singularBeta when a second move also beats beta). DEFAULT TRUE; flip off to isolate fragile multi-cut from the rest of singular
+	CleanVerify      bool // singular: run the verification subtree with conservative LMR (not LMR2), even when LMR2 is on globally — so over-reduced alternatives don't pollute the singular decision. Inert unless LMR2 is on
+	IIR              bool // internal iterative reduction: at a deep node with no TT move, search a ply shallower (cheaper, and seeds the TT with a move)
+	Futility         bool // frontier futility pruning: skip a late quiet whose static eval + depth margin can't reach alpha (the fail-low side; distinct from RFP)
+	ProbCut          bool // probcut: if a capture's reduced-depth search beats a raised beta, the node is almost surely a fail-high — prune it
+	Razor            bool // razoring: at very shallow depth, if static eval + margin < alpha, drop to qsearch and prune if it confirms we're below alpha
 }
 
 // DefaultParams returns the engine's current full-strength configuration.
@@ -177,6 +179,10 @@ func DefaultParams() Params {
 		// is positive alone: lmr2 +9.7, singular +22.2) — an anti-synergy under
 		// investigation; do NOT enable LMR2 on top of this without fixing it.
 		Singular: true,
+		// Singular verification knobs, promoted from consts so they're SPRT-tunable.
+		// Defaults (margin 2·depth, min-depth 8) preserve the banked +22.2 exactly.
+		SingularMargin:   singularMargin,
+		SingularMinDepth: singularMinDepth,
 		// Multi-cut early-return inside the singular verification. DEFAULT TRUE =
 		// current behavior. Diagnostic: flip off (multicut=off) to test whether the
 		// fragile multi-cut is what makes lmr2+singular toxic (research lead).

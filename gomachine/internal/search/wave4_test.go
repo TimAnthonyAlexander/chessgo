@@ -26,9 +26,11 @@ func TestWave4OffPathDeterministic(t *testing.T) {
 			t.Fatalf("%s: non-deterministic default search: (%d,%v,%d) vs (%d,%v,%d)",
 				fen, a.Nodes, a.BestMove, a.Score, b.Nodes, b.BestMove, b.Score)
 		}
-		// All four explicitly off must equal the default (they ARE the default-off set).
+		// The DEFAULT-OFF flags (IIR/ProbCut/Razor — futility is now default-ON, +21
+		// banked) must be no-ops when explicitly set off: setting them off equals the
+		// default engine. (Futility is left at its default so this stays meaningful.)
 		p := DefaultParams()
-		p.IIR, p.Futility, p.ProbCut, p.Razor = false, false, false, false
+		p.IIR, p.ProbCut, p.Razor = false, false, false
 		c := NewWithParams(16, p).Search(pos, Limits{Depth: 11}, nil)
 		if c.Nodes != a.Nodes {
 			t.Fatalf("%s: explicit-off node count %d != default %d", fen, c.Nodes, a.Nodes)
@@ -55,10 +57,23 @@ func TestWave4FlagsAreWired(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse %q: %v", fen, err)
 			}
-			off := NewWithParams(16, DefaultParams()).Search(pos, Limits{Depth: 12}, nil).Nodes
-			p := DefaultParams()
-			f.set(&p)
-			on := NewWithParams(16, p).Search(pos, Limits{Depth: 12}, nil).Nodes
+			// Build explicit OFF and ON variants of just this flag (robust to whether
+			// the flag is default-on or default-off — futility is now default-on).
+			poff := DefaultParams()
+			pon := DefaultParams()
+			f.set(&pon)
+			switch f.name {
+			case "iir":
+				poff.IIR = false
+			case "futility":
+				poff.Futility = false
+			case "probcut":
+				poff.ProbCut = false
+			case "razor":
+				poff.Razor = false
+			}
+			off := NewWithParams(16, poff).Search(pos, Limits{Depth: 12}, nil).Nodes
+			on := NewWithParams(16, pon).Search(pos, Limits{Depth: 12}, nil).Nodes
 			t.Logf("%-9s %-50.50s off=%d on=%d delta=%+d", f.name, fen, off, on, int64(on)-int64(off))
 			if on != off {
 				changed = true
