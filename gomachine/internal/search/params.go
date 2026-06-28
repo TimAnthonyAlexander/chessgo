@@ -38,6 +38,16 @@ type Params struct {
 	Nnue           bool // evaluation: route static eval through the NNUE net (internal/nnue); inert (falls back to HCE) if no net is loaded
 	NnueFloat      bool // evaluation: when NNUE is on, use the float from-scratch eval instead of the int incremental path (int-vs-float A/B only)
 	TTEval         bool // reuse the TT-stored static eval instead of recomputing it (skips the NNUE/HCE eval on TT hits that don't cut off); behavior-preserving speed-only (eval is deterministic), measured at movetime
+	CorrHist       bool // correction history: learn the per-pattern (pawn / per-color non-pawn) static-eval-vs-search-result bias and correct the static eval by it (improves every eval-gated decision: RFP, null-move, improving, qsearch stand-pat)
+	ContHist       bool // continuation history: 1-ply (countermove) + 2-ply history keyed by the preceding move(s); feeds quiet ordering + the LMR reduction term (sharpens every reduction/late-move prune)
+	LMR2           bool // aggressive LMR: reduce captures/promotions too, earlier onset, PV/improving/ordering-trust/SEE reduction adjustments (supersedes LMR when on)
+	Singular       bool // singular extensions: verify the TT move against all alternatives at reduced depth; extend it a ply if singular, multi-cut if a second move also beats beta
+	MultiCut       bool // singular: allow the verification's multi-cut early-return (return singularBeta when a second move also beats beta). DEFAULT TRUE; flip off to isolate fragile multi-cut from the rest of singular
+	CleanVerify    bool // singular: run the verification subtree with conservative LMR (not LMR2), even when LMR2 is on globally — so over-reduced alternatives don't pollute the singular decision. Inert unless LMR2 is on
+	IIR            bool // internal iterative reduction: at a deep node with no TT move, search a ply shallower (cheaper, and seeds the TT with a move)
+	Futility       bool // frontier futility pruning: skip a late quiet whose static eval + depth margin can't reach alpha (the fail-low side; distinct from RFP)
+	ProbCut        bool // probcut: if a capture's reduced-depth search beats a raised beta, the node is almost surely a fail-high — prune it
+	Razor          bool // razoring: at very shallow depth, if static eval + margin < alpha, drop to qsearch and prune if it confirms we're below alpha
 }
 
 // DefaultParams returns the engine's current full-strength configuration.
@@ -139,5 +149,55 @@ func DefaultParams() Params {
 		// positive (lower CI bound +4.0); stopped just shy of the formal H1 cross and
 		// accepted on the trend. See ENGINE_STRENGTH.md §7.
 		TTEval: true,
+		// Correction history (pawn + per-color non-pawn keyed tables). Learns the
+		// systematic static-eval-vs-search-result error per board pattern within a
+		// game and corrects the static eval by it, sharpening every eval-gated
+		// decision (RFP, null-move, improving, qsearch stand-pat). SPRT-accepted
+		// vs corrhist=off: +66.9 ± 22.9 Elo @ 40k nodes [0,6] (174 pairs,
+		// 2026-06-28, pentanomial [0 21 87 44 22], zero LL). Default ON.
+		CorrHist: true,
+		// Continuation history (1-ply countermove + 2-ply), blended into quiet move
+		// ordering and the LMR reduction term alongside butterfly history. DEFAULT
+		// OFF — under SPRT (best tested bundled with aggressive LMR, where better
+		// quiet ordering pays off through reductions).
+		ContHist: false,
+		// Aggressive LMR (supersedes LMR when on): reduces captures/promotions too,
+		// earlier onset (non-PV from the 2nd move), with PV / improving /
+		// ordering-trust / SEE reduction adjustments; over-reductions are caught by
+		// the existing zero-window re-search. DEFAULT OFF — under SPRT, coupled with
+		// Singular (aggressive reductions need singular extensions to re-extend the
+		// forced moves they over-cut).
+		LMR2: false,
+		// Singular extensions: a TT move that is much better than every alternative
+		// at a reduced-depth verification search is extended a ply (and a second move
+		// beating beta triggers a multi-cut). Conservative: depth≥8, single ply, no
+		// double extensions. SPRT-accepted vs singular=off: +22.2 ± 12.2 Elo @ 40k
+		// nodes [0,6] (186 pairs, 2026-06-28, [0 11 140 35 0], zero LL). Default ON.
+		// NOTE: toxic in combination with LMR2 (lmr2+singular SPRT'd −67 although each
+		// is positive alone: lmr2 +9.7, singular +22.2) — an anti-synergy under
+		// investigation; do NOT enable LMR2 on top of this without fixing it.
+		Singular: true,
+		// Multi-cut early-return inside the singular verification. DEFAULT TRUE =
+		// current behavior. Diagnostic: flip off (multicut=off) to test whether the
+		// fragile multi-cut is what makes lmr2+singular toxic (research lead).
+		MultiCut: true,
+		// Run the singular verification subtree with conservative LMR instead of
+		// LMR2. DEFAULT FALSE = current behavior (LMR2 everywhere). Diagnostic: flip
+		// on (cleanverify=on) with lmr2+singular to test the over-reduced-verify lead.
+		CleanVerify: false,
+		// Wave 4 cheap top-ups (each behind its own flag, DEFAULT OFF — under SPRT):
+		// IIR (reduce a ply at a deep node with no TT move), frontier futility
+		// (skip late quiets that can't reach alpha), ProbCut (capture-driven
+		// fail-high prune), razoring (shallow drop-to-qsearch). All gated so the
+		// off-path is byte-identical to the current default engine.
+		// IIR REJECTED: -33.7 Elo as implemented (fires on ALL node types — standard
+		// IIR is PV + expected-cut only; ours over-prunes). Kept off; rework to
+		// selective placement before retrying.
+		IIR: false,
+		// Frontier futility SPRT-accepted vs futility=off: +21.3 ± 12.0 Elo @ 40k
+		// nodes [0,6] (495 pairs, 2026-06-28, zero LL). Default ON.
+		Futility: true,
+		ProbCut:  false,
+		Razor:    false,
 	}
 }

@@ -78,6 +78,12 @@ func TestAspirationMatchesFullWindow(t *testing.T) {
 	pure := func() Params {
 		p := DefaultParams()
 		p.UseTT, p.NullMove, p.LMR, p.RFP, p.LMP, p.DeltaPrune = false, false, false, false, false, false
+		// Correction/continuation history are PATH-dependent (their tables mutate as
+		// the search runs), so an aspiration re-search updates them and shifts the
+		// eval by a hair vs a single full-window pass — the same class of effect as
+		// the window-sensitive pruning disabled above. Pin them off so the only
+		// variable is the aspiration window itself.
+		p.CorrHist, p.ContHist = false, false
 		// Pin the eval: this isolates the aspiration window, and the move+score
 		// equality below only holds on an eval without frequent exact-score ties
 		// (the HCE — "tuned and base" — per the doc above). NNUE produces exact

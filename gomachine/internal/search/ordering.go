@@ -61,7 +61,14 @@ func (s *Searcher) moveScore(pos *chess.Position, m, ttMove chess.Move, ply int)
 	if m == s.killers[ply][1] {
 		return scoreKiller1
 	}
-	return s.history[pos.PieceOn(m.From())][m.To()]
+	mover := pos.PieceOn(m.From())
+	h := s.history[mover][m.To()]
+	// Continuation history: a quiet that refuted the parent/grandparent move scores
+	// higher. Added to the butterfly term; both stay well below the killer tier.
+	if s.params.ContHist && s.cont != nil {
+		h += s.contScore(ply, mover, m.To())
+	}
+	return h
 }
 
 // captureScore ranks a capture: winning/equal captures (or all captures when SEE

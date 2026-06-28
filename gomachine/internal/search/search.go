@@ -63,6 +63,32 @@ const (
 	// evalNone marks a ply whose static eval is undefined (the side was in check),
 	// so the "improving" comparison skips it. Outside any real eval range.
 	evalNone = infinity + 1
+	// Singular extensions (Params.Singular): the minimum remaining depth at which we
+	// attempt a verification search, and the per-depth margin for the singular
+	// window singularBeta = ttScore − singularMargin·depth. The verification search
+	// runs at reduced depth (depth−1)/2 with the TT move excluded; if every other
+	// move fails low under singularBeta the TT move is "singular" and is extended a
+	// ply. Margin/depth follow Stockfish-class defaults (depth≥~6–8, margin ~2–3·d).
+	singularMinDepth = 8
+	singularMargin   = 2
+	// Internal iterative reduction (Params.IIR): at a node this deep with no TT
+	// move to guide ordering, search a ply shallower (seeds the TT, cheaper redo).
+	iirMinDepth = 4
+	// Frontier futility pruning (Params.Futility): max depth it applies at and the
+	// per-depth centipawn margin. A late quiet is skipped when staticEval +
+	// futilityMargin·depth ≤ alpha (it almost surely can't raise alpha).
+	futilityMaxDepth = 6
+	futilityMargin   = 100
+	// ProbCut (Params.ProbCut): min depth, the raised-beta margin (cp), and the
+	// reduced search depth = depth − probcutReduction.
+	probcutMinDepth  = 5
+	probcutMargin    = 180
+	probcutReduction = 4
+	// Razoring (Params.Razor): max depth and per-depth margin (cp). If staticEval +
+	// razorMargin·depth < alpha at a shallow non-PV node, fall to qsearch and prune
+	// if it confirms the score is below alpha.
+	razorMaxDepth = 3
+	razorMargin   = 250
 )
 
 // statBonus is the depth-scaled history bonus/malus magnitude (capped). Used both
@@ -166,15 +192,46 @@ type Searcher struct {
 	useNNUE  bool
 
 	// Diagnostic counters (cheap, like nodes) — used by tests to confirm the
-	// accumulator gate actually covered null-move and quiescence nodes.
+	// accumulator gate actually covered null-move and quiescence nodes, and that the
+	// singular-extension paths fire.
 	dbgNullMoves uint64
 	dbgQNodes    uint64
+	dbgSingular  uint64 // singular extensions applied (TT move extended a ply)
+	dbgMultiCut  uint64 // singular verification multi-cuts (early fail-high)
+
+	// Correction history tables (Params.CorrHist). Persist across moves within a
+	// game; cleared in ClearTT() between games, NOT in reset(). See corrhist.go.
+	corr corrTables
+
+	// Continuation history (Params.ContHist). cont holds the two keyed tables
+	// (allocated only when ContHist is on); contMove[ply] records the move played
+	// to descend from that ply, so a child can key off its parent/grandparent.
+	// Cleared per-search in reset() (mirrors butterfly history). See conthist.go.
+	cont     *contHist
+	contMove [maxPly]contEntry
+
+	// excluded[ply] is the move barred from the search at that ply during a
+	// singular-extension verification search (Params.Singular); NullMove outside a
+	// verification. A node with an excluded move set skips its own TT cutoff and TT
+	// store (the stored entry describes the full move set, not the restricted one).
+	excluded [maxPly]chess.Move
+
+	// inSingularVerify is true while we are inside a singular-extension
+	// verification subtree (Params.CleanVerify): it makes that subtree fall back to
+	// conservative LMR instead of LMR2, so over-reduced alternatives don't pollute
+	// the singular decision. Save/restore around the verify call so nesting is safe.
+	inSingularVerify bool
 }
 
 // DbgNullMoves and DbgQNodes report how many null-move and quiescence nodes the
 // last search executed (test/diagnostic only).
 func (s *Searcher) DbgNullMoves() uint64 { return s.dbgNullMoves }
 func (s *Searcher) DbgQNodes() uint64    { return s.dbgQNodes }
+
+// DbgSingular and DbgMultiCut report how many singular extensions and singular
+// multi-cuts the last search performed (test/diagnostic only).
+func (s *Searcher) DbgSingular() uint64 { return s.dbgSingular }
+func (s *Searcher) DbgMultiCut() uint64 { return s.dbgMultiCut }
 
 // New returns a full-strength Searcher with a transposition table of ttSizeMB
 // megabytes.
@@ -228,6 +285,21 @@ func evalConfig(p Params) eval.Config {
 // accumulator (Phase A — a side-to-move-relative cp score, same contract as HCE);
 // otherwise it falls back to the hand-crafted eval.
 func (s *Searcher) evaluate(pos *chess.Position) int {
+	raw := s.rawEvaluate(pos)
+	// Correction history: shift the raw static eval by the learned per-pattern bias
+	// (bounded). Gated on the flag so an off-search is byte-identical to before.
+	if s.params.CorrHist {
+		raw += s.correction(pos)
+	}
+	return raw
+}
+
+// rawEvaluate is the position-deterministic static eval (NNUE accumulator or HCE)
+// WITHOUT the correction-history shift. The TT static-eval cache stores this raw
+// value (not the corrected one): the correction depends on the evolving corrhist
+// tables, so caching the corrected eval would make TTEval reuse a stale value and
+// stop being behavior-preserving. Callers apply the fresh correction on top.
+func (s *Searcher) rawEvaluate(pos *chess.Position) int {
 	if s.useNNUE {
 		return s.accStack.Eval(pos)
 	}
@@ -299,15 +371,23 @@ func newWithSharedTT(tt *TT, params Params) *Searcher {
 
 // ClearTT empties the transposition table. The match driver calls this between
 // games so a finished game's entries never bias the next one.
-func (s *Searcher) ClearTT() { s.tt.Clear() }
+func (s *Searcher) ClearTT() {
+	s.tt.Clear()
+	s.corr = corrTables{} // correction history is per-game; reset it with the TT
+}
 
 func (s *Searcher) reset(limits Limits, gameHistory []uint64) {
 	s.nodes = 0
 	s.dbgNullMoves = 0
 	s.dbgQNodes = 0
+	s.dbgSingular = 0
+	s.dbgMultiCut = 0
 	s.stop = false
 	s.killers = [maxPly][2]chess.Move{}
 	s.history = [12][64]int{}
+	s.excluded = [maxPly]chess.Move{} // always NullMove outside a verification; reset for safety
+	s.inSingularVerify = false
+	s.contBegin() // continuation history: clear tables + path, per-search like butterfly
 	s.useTime = limits.MoveTime > 0
 	if s.useTime {
 		s.deadline = time.Now().Add(limits.MoveTime)
@@ -685,15 +765,26 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 		return s.quiescence(pos, ply, alpha, beta)
 	}
 
+	// excludedMove: set on a singular-extension verification search at this ply. Such
+	// a node must not take a TT cutoff or store to the TT (its result describes the
+	// move set minus the excluded move, not the full position).
+	excludedMove := s.excluded[ply]
+
 	// Transposition table probe.
 	ttMove := chess.NullMove
 	ttHit := false
 	ttEvalCached := ttEvalNone
+	ttDepth := 0
+	ttFlag := ttNone
+	ttScore := 0
 	if e, ok := s.tt.probe(pos.Key()); s.params.UseTT && ok {
 		ttMove = e.move
 		ttHit = true
 		ttEvalCached = e.eval
-		if ply > 0 && int(e.depth) >= depth {
+		ttDepth = int(e.depth)
+		ttFlag = e.flag
+		ttScore = e.scoreFromTT(ply)
+		if ply > 0 && excludedMove == chess.NullMove && int(e.depth) >= depth {
 			sc := e.scoreFromTT(ply)
 			switch e.flag {
 			case ttExact:
@@ -708,6 +799,15 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 				}
 			}
 		}
+	}
+
+	// Internal iterative reduction: a deep node with no TT move has no good move to
+	// search first, so a full-depth search wastes effort on poor ordering. Reduce a
+	// ply — cheaper, and it seeds the TT with a move. Skipped inside a singular
+	// verification (excludedMove set) so that search's depth stays intact.
+	if s.params.IIR && depth >= iirMinDepth && ttMove == chess.NullMove &&
+		excludedMove == chess.NullMove {
+		depth--
 	}
 
 	// Syzygy WDL probe at internal nodes. Once enough pieces have come off that the
@@ -737,18 +837,24 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 	isPV := beta-alpha > 1
 
 	// Static evaluation at this node (meaningless while in check); used by reverse
-	// futility pruning and the "improving" heuristic.
-	var staticEval int
+	// futility pruning and the "improving" heuristic. rawEval is the cacheable,
+	// position-deterministic part; staticEval adds the fresh correction-history
+	// shift on top (kept out of the TT so TTEval stays behavior-preserving).
+	var staticEval, rawEval int
 	if !inCheck {
 		// TT static-eval cache: a TT hit that did not cut off (shallower depth, or
-		// a bound that didn't prune) still carries this node's static eval from a
-		// prior visit. Reusing it skips the NNUE/HCE recompute. The eval is
+		// a bound that didn't prune) still carries this node's RAW static eval from a
+		// prior visit. Reusing it skips the NNUE/HCE recompute. The raw eval is
 		// deterministic, so the reused value equals a fresh one — speed only, no
 		// behavior change (hence measured at movetime, gated for SPRT).
 		if s.params.TTEval && ttHit && ttEvalCached != ttEvalNone {
-			staticEval = int(ttEvalCached)
+			rawEval = int(ttEvalCached)
 		} else {
-			staticEval = s.evaluate(pos)
+			rawEval = s.rawEvaluate(pos)
+		}
+		staticEval = rawEval
+		if s.params.CorrHist {
+			staticEval += s.correction(pos) // applied fresh, never cached
 		}
 		s.staticEvals[ply] = staticEval
 	} else {
@@ -765,6 +871,20 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 	impInt := 0
 	if improving {
 		impInt = 1
+	}
+
+	// Razoring: at a very shallow non-PV node, if the static eval plus a depth-scaled
+	// margin still can't reach alpha, drop straight to quiescence; if qsearch confirms
+	// the score is below alpha, fail low immediately. Guarded off the mate band.
+	if s.params.Razor && !inCheck && !isPV && depth <= razorMaxDepth &&
+		absInt(alpha) < mateThreshold && staticEval+razorMargin*depth < alpha {
+		score := s.quiescence(pos, ply, alpha, beta)
+		if s.stop {
+			return 0
+		}
+		if score < alpha {
+			return score
+		}
 	}
 
 	// Reverse futility pruning (static null move): at a non-PV node near the
@@ -790,6 +910,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 		}
 		pos.DoNullMove(&u)
 		s.pushKey(pos.Key())
+		s.contMove[ply] = contEntry{} // null move: child has no continuation parent
 		r := s.params.NullMoveR + depth/4
 		sc := -s.negamax(pos, depth-1-r, ply+1, -beta, -beta+1)
 		s.popKey()
@@ -817,6 +938,53 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 	var scores [256]int
 	s.scoreMoves(pos, &ml, ttMove, ply, &scores)
 
+	// ProbCut: before searching the node properly, try good captures at a reduced
+	// depth against a beta raised by a margin. If one already beats that raised beta,
+	// the node is almost certainly a fail-high, so prune. Non-PV, deep enough, off the
+	// mate band, never inside a singular verification. Scans captures linearly so it
+	// does not disturb the main loop's lazy (selectMove) ordering.
+	if s.params.ProbCut && !isPV && !inCheck && excludedMove == chess.NullMove &&
+		depth >= probcutMinDepth && beta < tbThreshold-probcutMargin {
+		probcutBeta := beta + probcutMargin
+		probcutDepth := depth - probcutReduction
+		if probcutDepth < 1 {
+			probcutDepth = 1
+		}
+		for i := 0; i < ml.Len(); i++ {
+			m := ml.Get(i)
+			if !isCapture(pos, m) && m.Type() != chess.Promotion {
+				continue
+			}
+			if s.params.SEE && !pos.SEEGE(m, 0) {
+				continue // only winning/equal captures are worth a probcut try
+			}
+			mover := pos.PieceOn(m.From())
+			var u chess.Undo
+			if s.useNNUE {
+				s.accStack.Push(pos, m)
+			}
+			pos.DoMove(m, &u)
+			s.pushKey(pos.Key())
+			s.contMove[ply] = contEntry{pc: mover, to: m.To(), ok: true}
+			// Cheap qsearch filter first, then confirm with a reduced-depth search.
+			score := -s.quiescence(pos, ply+1, -probcutBeta, -probcutBeta+1)
+			if score >= probcutBeta {
+				score = -s.negamax(pos, probcutDepth, ply+1, -probcutBeta, -probcutBeta+1)
+			}
+			s.popKey()
+			pos.UndoMove(m, &u)
+			if s.useNNUE {
+				s.accStack.Pop()
+			}
+			if s.stop {
+				return 0
+			}
+			if score >= probcutBeta {
+				return probcutBeta // fail high — prune the node
+			}
+		}
+	}
+
 	bestScore := -infinity
 	bestMove := chess.NullMove
 	origAlpha := alpha
@@ -834,9 +1002,47 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 		lmpLimit = (3 + depth*depth) / (2 - impInt)
 	}
 
+	// Singular extension: if the TT move is, at a shallower search, much better than
+	// every alternative, it is the only good move — extend it a ply so the one move
+	// that matters isn't under-searched. We verify by searching all moves EXCEPT the
+	// TT move (s.excluded[ply]) to a reduced depth in a null window just below the
+	// TT score; if they all fail low the TT move is "singular". Conservative and
+	// explosion-safe: depth-gated, single ply only, requires a deep-enough TT entry
+	// with a lower/exact bound and a non-mate/non-TB score. extension is applied to
+	// the TT move's search inside the loop (newDepth). When the verification itself
+	// already beats beta with the TT move excluded, a second move is also good, so we
+	// multi-cut (fail high) immediately.
+	extension := 0
+	if s.params.Singular && !inCheck && ply > 0 && excludedMove == chess.NullMove &&
+		ttHit && ttMove != chess.NullMove && depth >= singularMinDepth &&
+		ttDepth >= depth-3 && (ttFlag == ttLower || ttFlag == ttExact) &&
+		absInt(ttScore) < tbThreshold {
+		singularBeta := ttScore - singularMargin*depth
+		rDepth := (depth - 1) / 2
+		s.excluded[ply] = ttMove
+		prevVerify := s.inSingularVerify
+		s.inSingularVerify = true // CleanVerify: verify subtree uses conservative LMR
+		singScore := s.negamax(pos, rDepth, ply, singularBeta-1, singularBeta)
+		s.inSingularVerify = prevVerify
+		s.excluded[ply] = chess.NullMove
+		if s.stop {
+			return 0
+		}
+		if singScore < singularBeta {
+			extension = 1
+			s.dbgSingular++
+		} else if s.params.MultiCut && singularBeta >= beta {
+			s.dbgMultiCut++
+			return singularBeta // multi-cut: another move also beats beta
+		}
+	}
+
 	for i := 0; i < ml.Len(); i++ {
 		selectMove(&ml, &scores, i)
 		m := ml.Get(i)
+		if m == excludedMove { // singular verification: skip the move under test
+			continue
+		}
 		quiet := !isCapture(pos, m) && m.Type() != chess.Promotion
 		mover := pos.PieceOn(m.From()) // captured before DoMove empties m.From()
 
@@ -850,26 +1056,96 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 			continue
 		}
 
+		// Frontier futility pruning: at a shallow non-PV node, skip a late quiet whose
+		// static eval plus a depth-scaled margin still can't reach alpha — it almost
+		// surely won't raise it. The fail-low counterpart to RFP. Quiet only (captures
+		// /promotions excluded), never the first move, never when getting mated.
+		if s.params.Futility && quiet && !isPV && !inCheck && searched > 0 &&
+			depth <= futilityMaxDepth && bestScore > -mateThreshold &&
+			staticEval+futilityMargin*depth <= alpha {
+			continue
+		}
+
 		var u chess.Undo
 		if s.useNNUE {
 			s.accStack.Push(pos, m)
 		}
 		pos.DoMove(m, &u)
 		s.pushKey(pos.Key())
+		// Record the move played to descend into the child, so the child can key its
+		// continuation history off this (and its grandparent) move.
+		s.contMove[ply] = contEntry{pc: mover, to: m.To(), ok: true}
 		givesCheck := pos.InCheck()
+
+		// Singular extension applies to the TT move only (extension is 0 otherwise,
+		// so newDepth == depth-1 and the off-path is byte-identical).
+		newDepth := depth - 1
+		if extension != 0 && m == ttMove {
+			newDepth += extension
+		}
 
 		var sc int
 		if searched == 0 {
-			sc = -s.negamax(pos, depth-1, ply+1, -beta, -alpha)
+			sc = -s.negamax(pos, newDepth, ply+1, -beta, -alpha)
 		} else {
 			reduction := 0
-			if s.params.LMR && depth >= 3 && quiet && !inCheck && !givesCheck && searched >= 4 {
+			// CleanVerify: while inside a singular verification subtree, fall back to
+			// the conservative LMR path so over-reduced alternatives don't pollute the
+			// singular decision. Inert unless LMR2 + CleanVerify are both on.
+			if s.params.LMR2 && !(s.params.CleanVerify && s.inSingularVerify) {
+				// Aggressive LMR: reduce earlier and in more cases (captures/promotions
+				// too), adjusted by PV / improving / ordering-trust / SEE. The
+				// zero-window re-search at full newDepth below catches over-reductions.
+				minSearched := 2
+				if !isPV {
+					minSearched = 1
+				}
+				if depth >= 2 && !inCheck && !givesCheck && searched >= minSearched {
+					r := lmrTable[minInt(depth, 63)][minInt(searched, 63)]
+					if quiet {
+						hist := s.history[mover][m.To()]
+						if s.params.ContHist && s.cont != nil {
+							hist += s.contScore(ply, mover, m.To())
+						}
+						r -= hist / lmrHistoryDiv
+					} else {
+						r-- // noisy move: reduce less than a quiet
+						if s.params.SEE && isCapture(pos, m) && pos.SEEGE(m, 0) {
+							r-- // winning/equal capture: reduce even less
+						}
+					}
+					if isPV {
+						r-- // PV nodes reduce less
+					} else {
+						r++ // non-PV nodes reduce more
+					}
+					if !improving {
+						r++
+					}
+					if m == ttMove || m == s.killers[ply][0] || m == s.killers[ply][1] {
+						r-- // don't over-reduce ordering-trusted moves
+					}
+					if maxR := newDepth - 1; maxR >= 1 {
+						if r < 1 {
+							r = 1
+						}
+						if r > maxR {
+							r = maxR
+						}
+						reduction = r
+					}
+				}
+			} else if s.params.LMR && depth >= 3 && quiet && !inCheck && !givesCheck && searched >= 4 {
 				if s.params.LMRFormula {
 					// Smooth log(d)·log(m) base in place of the flat 1/2; reduce
 					// less for good-history quiets, more for malus'd ones. Clamped
 					// to [1, depth-1] so a reduced move still searches ≥1 ply.
 					r := lmrTable[minInt(depth, 63)][minInt(searched, 63)]
-					r -= s.history[mover][m.To()] / lmrHistoryDiv
+					hist := s.history[mover][m.To()]
+					if s.params.ContHist && s.cont != nil {
+						hist += s.contScore(ply, mover, m.To())
+					}
+					r -= hist / lmrHistoryDiv
 					if r < 1 {
 						r = 1
 					}
@@ -884,12 +1160,12 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 					}
 				}
 			}
-			sc = -s.negamax(pos, depth-1-reduction, ply+1, -alpha-1, -alpha)
+			sc = -s.negamax(pos, newDepth-reduction, ply+1, -alpha-1, -alpha)
 			if sc > alpha && reduction > 0 {
-				sc = -s.negamax(pos, depth-1, ply+1, -alpha-1, -alpha)
+				sc = -s.negamax(pos, newDepth, ply+1, -alpha-1, -alpha)
 			}
 			if sc > alpha && sc < beta {
-				sc = -s.negamax(pos, depth-1, ply+1, -beta, -alpha)
+				sc = -s.negamax(pos, newDepth, ply+1, -beta, -alpha)
 			}
 		}
 
@@ -920,6 +1196,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 					if quiet {
 						s.recordKiller(ply, m)
 						s.updateQuietStats(pos, m, triedQuiets[:nQuiets], depth)
+						s.updateContHist(pos, m, triedQuiets[:nQuiets], depth, ply)
 					}
 					break
 				}
@@ -933,13 +1210,36 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 	} else if bestScore >= beta {
 		flag = ttLower
 	}
+
+	// A singular-verification node (excludedMove set) describes only the restricted
+	// move set, so it must neither teach correction history nor write the TT.
+	if excludedMove != chess.NullMove {
+		return bestScore
+	}
+
+	// Correction history update: teach the tables the static-eval-vs-search error at
+	// this node. Only when the signal is trustworthy: out of check (static defined),
+	// a non-noisy best move (not a capture/promotion), a non-mate/non-TB score, and
+	// the bound agrees with the direction of the error (an exact score always; a
+	// lower bound only if search beat static; an upper bound only if it fell short).
+	if s.params.CorrHist && !inCheck && bestMove != chess.NullMove &&
+		absInt(bestScore) < tbThreshold {
+		dir := flag == ttExact ||
+			(flag == ttLower && bestScore > staticEval) ||
+			(flag == ttUpper && bestScore < staticEval)
+		if dir && !isCapture(pos, bestMove) && bestMove.Type() != chess.Promotion {
+			s.updateCorrHist(pos, staticEval, bestScore, depth)
+		}
+	}
+
 	if s.params.UseTT {
-		// Cache the static eval (ttEvalNone when in check, or when it falls outside
-		// the int16 band — a real static eval never does, but a corrupt truncation
-		// would feed RFP a bogus value, so we simply don't cache it).
+		// Cache the RAW static eval (ttEvalNone when in check, or when it falls
+		// outside the int16 band — a real static eval never does, but a corrupt
+		// truncation would feed RFP a bogus value, so we simply don't cache it). The
+		// corrhist correction is intentionally NOT cached (see rawEvaluate).
 		ev := ttEvalNone
-		if !inCheck && staticEval > -32000 && staticEval < 32000 {
-			ev = int16(staticEval)
+		if !inCheck && rawEval > -32000 && rawEval < 32000 {
+			ev = int16(rawEval)
 		}
 		s.tt.store(pos.Key(), bestMove, bestScore, depth, ply, flag, ev)
 	}

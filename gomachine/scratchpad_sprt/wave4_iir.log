@@ -1,0 +1,1062 @@
+engine book: 5429 positions loaded from data/book.bin
+
+  ♟  gomachine SPRT  ·  self-play strength test
+  iir=on  vs  baseline  (new vs old)
+  patch: iir: off→on
+  budget: 40000 nodes/move   · SPRT[0, 6] α=0.05 β=0.05   · 11×TT 16MB
+
+  1 pairs   2 games   0 g/s · 23s
+  W 0   L 0   D 2     Elo -0.0 ± 175.8
+  -2.9 ───────────────●┊··············· +2.9  LLR -0.00
+  pentanomial [LL LDg DD WD WW]:  [0 0 1 0 0]
+  running…
+  2 pairs   4 games   0 g/s · 28s
+  W 1   L 1   D 2     Elo -0.0 ± 131.9
+  -2.9 ───────────────●┊··············· +2.9  LLR -0.00
+  pentanomial [LL LDg DD WD WW]:  [0 0 2 0 0]
+  running…
+  3 pairs   6 games   0 g/s · 30s
+  W 2   L 2   D 2     Elo -0.0 ± 105.5
+  -2.9 ───────────────●┊··············· +2.9  LLR -0.01
+  pentanomial [LL LDg DD WD WW]:  [0 0 3 0 0]
+  running…
+  4 pairs   8 games   0 g/s · 31s
+  W 2   L 2   D 4     Elo -0.0 ± 87.9
+  -2.9 ───────────────●┊··············· +2.9  LLR -0.01
+  pentanomial [LL LDg DD WD WW]:  [0 0 4 0 0]
+  running…
+  5 pairs   10 games   0 g/s · 31s
+  W 3   L 3   D 4     Elo -0.0 ± 75.4
+  -2.9 ───────────────●┊··············· +2.9  LLR -0.01
+  pentanomial [LL LDg DD WD WW]:  [0 0 5 0 0]
+  running…
+  6 pairs   12 games   0 g/s · 32s
+  W 3   L 4   D 5     Elo -21.7 ± 77.3
+  -2.9 ───────────────●┊··············· +2.9  LLR -0.10
+  pentanomial [LL LDg DD WD WW]:  [0 1 5 0 0]
+  running…
+  7 pairs   14 games   0 g/s · 33s
+  W 3   L 4   D 7     Elo -19.3 ± 68.8
+  -2.9 ───────────────●┊··············· +2.9  LLR -0.11
+  pentanomial [LL LDg DD WD WW]:  [0 1 6 0 0]
+  running…
+  8 pairs   16 games   0 g/s · 33s
+  W 3   L 4   D 9     Elo -17.4 ± 62.0
+  -2.9 ───────────────●┊··············· +2.9  LLR -0.12
+  pentanomial [LL LDg DD WD WW]:  [0 1 7 0 0]
+  running…
+  9 pairs   18 games   1 g/s · 35s
+  W 3   L 4   D 11     Elo -15.8 ± 56.4
+  -2.9 ───────────────●┊··············· +2.9  LLR -0.14
+  pentanomial [LL LDg DD WD WW]:  [0 1 8 0 0]
+  running…
+  10 pairs   20 games   1 g/s · 38s
+  W 4   L 4   D 12     Elo -0.0 ± 59.5
+  -2.9 ───────────────●┊··············· +2.9  LLR -0.02
+  pentanomial [LL LDg DD WD WW]:  [0 1 8 1 0]
+  running…
+  11 pairs   22 games   1 g/s · 44s
+  W 4   L 6   D 12     Elo -26.8 ± 74.9
+  -2.9 ───────────────●┊··············· +2.9  LLR -0.12
+  pentanomial [LL LDg DD WD WW]:  [1 1 8 1 0]
+  running…
+  12 pairs   24 games   0 g/s · 52s
+  W 4   L 7   D 13     Elo -37.4 ± 72.8
+  -2.9 ───────────────●┊··············· +2.9  LLR -0.18
+  pentanomial [LL LDg DD WD WW]:  [1 2 8 1 0]
+  running…
+  13 pairs   26 games   0 g/s · 57s
+  W 4   L 7   D 15     Elo -34.9 ± 68.0
+  -2.9 ──────────────●·┊··············· +2.9  LLR -0.19
+  pentanomial [LL LDg DD WD WW]:  [1 2 9 1 0]
+  running…
+  14 pairs   28 games   0 g/s · 1m00s
+  W 4   L 7   D 17     Elo -32.7 ± 63.8
+  -2.9 ──────────────●·┊··············· +2.9  LLR -0.20
+  pentanomial [LL LDg DD WD WW]:  [1 2 10 1 0]
+  running…
+  15 pairs   30 games   0 g/s · 1m02s
+  W 4   L 7   D 19     Elo -30.7 ± 60.1
+  -2.9 ──────────────●·┊··············· +2.9  LLR -0.22
+  pentanomial [LL LDg DD WD WW]:  [1 2 11 1 0]
+  running…
+  16 pairs   32 games   1 g/s · 1m04s
+  W 4   L 8   D 20     Elo -38.8 ± 59.1
+  -2.9 ──────────────●·┊··············· +2.9  LLR -0.28
+  pentanomial [LL LDg DD WD WW]:  [1 3 11 1 0]
+  running…
+  17 pairs   34 games   1 g/s · 1m04s
+  W 4   L 9   D 21     Elo -46.0 ± 57.9
+  -2.9 ──────────────●·┊··············· +2.9  LLR -0.35
+  pentanomial [LL LDg DD WD WW]:  [1 4 11 1 0]
+  running…
+  18 pairs   36 games   1 g/s · 1m05s
+  W 5   L 10   D 21     Elo -43.7 ± 55.1
+  -2.9 ──────────────●·┊··············· +2.9  LLR -0.36
+  pentanomial [LL LDg DD WD WW]:  [1 4 12 1 0]
+  running…
+  19 pairs   38 games   1 g/s · 1m07s
+  W 6   L 10   D 22     Elo -33.2 ± 55.8
+  -2.9 ──────────────●·┊··············· +2.9  LLR -0.27
+  pentanomial [LL LDg DD WD WW]:  [1 4 12 2 0]
+  running…
+  20 pairs   40 games   1 g/s · 1m07s
+  W 6   L 10   D 24     Elo -31.7 ± 53.3
+  -2.9 ──────────────●·┊··············· +2.9  LLR -0.29
+  pentanomial [LL LDg DD WD WW]:  [1 4 13 2 0]
+  running…
+  21 pairs   42 games   1 g/s · 1m16s
+  W 6   L 12   D 24     Elo -45.6 ± 58.0
+  -2.9 ──────────────●·┊··············· +2.9  LLR -0.34
+  pentanomial [LL LDg DD WD WW]:  [2 4 13 2 0]
+  running…
+  22 pairs   44 games   1 g/s · 1m17s
+  W 6   L 12   D 26     Elo -43.7 ± 55.6
+  -2.9 ──────────────●·┊··············· +2.9  LLR -0.36
+  pentanomial [LL LDg DD WD WW]:  [2 4 14 2 0]
+  running…
+  23 pairs   46 games   1 g/s · 1m23s
+  W 6   L 12   D 28     Elo -41.9 ± 53.4
+  -2.9 ──────────────●·┊··············· +2.9  LLR -0.37
+  pentanomial [LL LDg DD WD WW]:  [2 4 15 2 0]
+  running…
+  24 pairs   48 games   1 g/s · 1m28s
+  W 6   L 12   D 30     Elo -40.3 ± 51.4
+  -2.9 ─────────────●··┊··············· +2.9  LLR -0.39
+  pentanomial [LL LDg DD WD WW]:  [2 4 16 2 0]
+  running…
+  25 pairs   50 games   1 g/s · 1m31s
+  W 7   L 13   D 30     Elo -38.8 ± 49.6
+  -2.9 ─────────────●··┊··············· +2.9  LLR -0.40
+  pentanomial [LL LDg DD WD WW]:  [2 4 17 2 0]
+  running…
+  26 pairs   52 games   1 g/s · 1m32s
+  W 7   L 14   D 31     Elo -43.7 ± 48.9
+  -2.9 ─────────────●··┊··············· +2.9  LLR -0.46
+  pentanomial [LL LDg DD WD WW]:  [2 5 17 2 0]
+  running…
+  28 pairs   56 games   1 g/s · 1m35s
+  W 9   L 15   D 32     Elo -34.9 ± 47.5
+  -2.9 ─────────────●··┊··············· +2.9  LLR -0.39
+  pentanomial [LL LDg DD WD WW]:  [2 5 18 3 0]
+  running…
+  29 pairs   58 games   1 g/s · 1m35s
+  W 9   L 15   D 34     Elo -33.7 ± 46.0
+  -2.9 ─────────────●··┊··············· +2.9  LLR -0.41
+  pentanomial [LL LDg DD WD WW]:  [2 5 19 3 0]
+  running…
+  30 pairs   60 games   1 g/s · 1m39s
+  W 9   L 16   D 35     Elo -38.2 ± 45.5
+  -2.9 ─────────────●··┊··············· +2.9  LLR -0.47
+  pentanomial [LL LDg DD WD WW]:  [2 6 19 3 0]
+  running…
+  31 pairs   62 games   1 g/s · 1m44s
+  W 10   L 16   D 36     Elo -31.7 ± 45.7
+  -2.9 ─────────────●··┊··············· +2.9  LLR -0.39
+  pentanomial [LL LDg DD WD WW]:  [2 6 19 4 0]
+  running…
+  32 pairs   64 games   1 g/s · 1m46s
+  W 10   L 16   D 38     Elo -30.7 ± 44.4
+  -2.9 ─────────────●··┊··············· +2.9  LLR -0.40
+  pentanomial [LL LDg DD WD WW]:  [2 6 20 4 0]
+  running…
+  33 pairs   66 games   1 g/s · 1m51s
+  W 10   L 16   D 40     Elo -29.9 ± 43.1
+  -2.9 ─────────────●··┊··············· +2.9  LLR -0.41
+  pentanomial [LL LDg DD WD WW]:  [2 6 21 4 0]
+  running…
+  34 pairs   68 games   1 g/s · 1m53s
+  W 10   L 16   D 42     Elo -29.0 ± 41.9
+  -2.9 ─────────────●··┊··············· +2.9  LLR -0.42
+  pentanomial [LL LDg DD WD WW]:  [2 6 22 4 0]
+  running…
+  35 pairs   70 games   1 g/s · 1m58s
+  W 11   L 17   D 42     Elo -28.2 ± 40.8
+  -2.9 ─────────────●··┊··············· +2.9  LLR -0.44
+  pentanomial [LL LDg DD WD WW]:  [2 6 23 4 0]
+  running…
+  37 pairs   74 games   1 g/s · 2m05s
+  W 11   L 20   D 43     Elo -40.3 ± 42.7
+  -2.9 ─────────────●··┊··············· +2.9  LLR -0.56
+  pentanomial [LL LDg DD WD WW]:  [3 7 23 4 0]
+  running…
+  38 pairs   76 games   1 g/s · 2m05s
+  W 11   L 20   D 45     Elo -39.3 ± 41.7
+  -2.9 ────────────●···┊··············· +2.9  LLR -0.57
+  pentanomial [LL LDg DD WD WW]:  [3 7 24 4 0]
+  running…
+  39 pairs   78 games   1 g/s · 2m05s
+  W 11   L 20   D 47     Elo -38.3 ± 40.7
+  -2.9 ────────────●···┊··············· +2.9  LLR -0.59
+  pentanomial [LL LDg DD WD WW]:  [3 7 25 4 0]
+  running…
+  40 pairs   80 games   1 g/s · 2m06s
+  W 11   L 20   D 49     Elo -37.4 ± 39.7
+  -2.9 ────────────●···┊··············· +2.9  LLR -0.60
+  pentanomial [LL LDg DD WD WW]:  [3 7 26 4 0]
+  running…
+  41 pairs   82 games   1 g/s · 2m13s
+  W 12   L 21   D 49     Elo -36.5 ± 38.8
+  -2.9 ────────────●···┊··············· +2.9  LLR -0.62
+  pentanomial [LL LDg DD WD WW]:  [3 7 27 4 0]
+  running…
+  42 pairs   84 games   1 g/s · 2m14s
+  W 13   L 21   D 50     Elo -31.7 ± 39.0
+  -2.9 ─────────────●··┊··············· +2.9  LLR -0.53
+  pentanomial [LL LDg DD WD WW]:  [3 7 27 5 0]
+  running…
+  43 pairs   86 games   1 g/s · 2m14s
+  W 14   L 22   D 50     Elo -31.0 ± 38.1
+  -2.9 ─────────────●··┊··············· +2.9  LLR -0.55
+  pentanomial [LL LDg DD WD WW]:  [3 7 28 5 0]
+  running…
+  44 pairs   88 games   1 g/s · 2m18s
+  W 14   L 23   D 51     Elo -34.1 ± 37.8
+  -2.9 ────────────●···┊··············· +2.9  LLR -0.61
+  pentanomial [LL LDg DD WD WW]:  [3 8 28 5 0]
+  running…
+  45 pairs   90 games   1 g/s · 2m23s
+  W 14   L 23   D 53     Elo -33.4 ± 37.0
+  -2.9 ────────────●···┊··············· +2.9  LLR -0.62
+  pentanomial [LL LDg DD WD WW]:  [3 8 29 5 0]
+  running…
+  46 pairs   92 games   1 g/s · 2m31s
+  W 14   L 24   D 54     Elo -36.3 ± 36.8
+  -2.9 ────────────●···┊··············· +2.9  LLR -0.68
+  pentanomial [LL LDg DD WD WW]:  [3 9 29 5 0]
+  running…
+  47 pairs   94 games   1 g/s · 2m35s
+  W 14   L 24   D 56     Elo -35.6 ± 36.1
+  -2.9 ────────────●···┊··············· +2.9  LLR -0.70
+  pentanomial [LL LDg DD WD WW]:  [3 9 30 5 0]
+  running…
+  48 pairs   96 games   1 g/s · 2m35s
+  W 15   L 24   D 57     Elo -31.4 ± 36.2
+  -2.9 ────────────●···┊··············· +2.9  LLR -0.61
+  pentanomial [LL LDg DD WD WW]:  [3 9 30 6 0]
+  running…
+  49 pairs   98 games   1 g/s · 2m36s
+  W 15   L 24   D 59     Elo -30.7 ± 35.5
+  -2.9 ────────────●···┊··············· +2.9  LLR -0.63
+  pentanomial [LL LDg DD WD WW]:  [3 9 31 6 0]
+  running…
+  50 pairs   100 games   1 g/s · 2m37s
+  W 15   L 25   D 60     Elo -33.5 ± 35.3
+  -2.9 ────────────●···┊··············· +2.9  LLR -0.69
+  pentanomial [LL LDg DD WD WW]:  [3 10 31 6 0]
+  running…
+  51 pairs   102 games   1 g/s · 2m40s
+  W 15   L 25   D 62     Elo -32.9 ± 34.6
+  -2.9 ────────────●···┊··············· +2.9  LLR -0.70
+  pentanomial [LL LDg DD WD WW]:  [3 10 32 6 0]
+  running…
+  52 pairs   104 games   1 g/s · 2m41s
+  W 16   L 26   D 62     Elo -32.3 ± 34.0
+  -2.9 ────────────●···┊··············· +2.9  LLR -0.71
+  pentanomial [LL LDg DD WD WW]:  [3 10 33 6 0]
+  running…
+  53 pairs   106 games   1 g/s · 2m48s
+  W 16   L 28   D 62     Elo -38.1 ± 35.3
+  -2.9 ───────────●····┊··············· +2.9  LLR -0.77
+  pentanomial [LL LDg DD WD WW]:  [4 10 33 6 0]
+  running…
+  54 pairs   108 games   1 g/s · 2m48s
+  W 16   L 28   D 64     Elo -37.4 ± 34.7
+  -2.9 ───────────●····┊··············· +2.9  LLR -0.79
+  pentanomial [LL LDg DD WD WW]:  [4 10 34 6 0]
+  running…
+  55 pairs   110 games   1 g/s · 2m49s
+  W 16   L 28   D 66     Elo -36.7 ± 34.1
+  -2.9 ───────────●····┊··············· +2.9  LLR -0.80
+  pentanomial [LL LDg DD WD WW]:  [4 10 35 6 0]
+  running…
+  56 pairs   112 games   1 g/s · 2m54s
+  W 16   L 28   D 68     Elo -36.1 ± 33.5
+  -2.9 ───────────●····┊··············· +2.9  LLR -0.82
+  pentanomial [LL LDg DD WD WW]:  [4 10 36 6 0]
+  running…
+  57 pairs   114 games   1 g/s · 3m03s
+  W 17   L 29   D 68     Elo -35.5 ± 33.0
+  -2.9 ───────────●····┊··············· +2.9  LLR -0.83
+  pentanomial [LL LDg DD WD WW]:  [4 10 37 6 0]
+  running…
+  58 pairs   116 games   1 g/s · 3m03s
+  W 17   L 30   D 69     Elo -37.8 ± 32.8
+  -2.9 ───────────●····┊··············· +2.9  LLR -0.89
+  pentanomial [LL LDg DD WD WW]:  [4 11 37 6 0]
+  running…
+  59 pairs   118 games   1 g/s · 3m04s
+  W 18   L 31   D 69     Elo -37.2 ± 32.2
+  -2.9 ───────────●····┊··············· +2.9  LLR -0.91
+  pentanomial [LL LDg DD WD WW]:  [4 11 38 6 0]
+  running…
+  60 pairs   120 games   1 g/s · 3m06s
+  W 19   L 31   D 70     Elo -33.7 ± 32.4
+  -2.9 ───────────●····┊··············· +2.9  LLR -0.82
+  pentanomial [LL LDg DD WD WW]:  [4 11 38 7 0]
+  running…
+  61 pairs   122 games   1 g/s · 3m07s
+  W 19   L 31   D 72     Elo -33.2 ± 31.9
+  -2.9 ───────────●····┊··············· +2.9  LLR -0.83
+  pentanomial [LL LDg DD WD WW]:  [4 11 39 7 0]
+  running…
+  62 pairs   124 games   1 g/s · 3m13s
+  W 19   L 32   D 73     Elo -35.4 ± 31.7
+  -2.9 ───────────●····┊··············· +2.9  LLR -0.90
+  pentanomial [LL LDg DD WD WW]:  [4 12 39 7 0]
+  running…
+  63 pairs   126 games   1 g/s · 3m16s
+  W 20   L 32   D 74     Elo -32.2 ± 31.8
+  -2.9 ───────────●····┊··············· +2.9  LLR -0.81
+  pentanomial [LL LDg DD WD WW]:  [4 12 39 8 0]
+  running…
+  64 pairs   128 games   1 g/s · 3m17s
+  W 20   L 32   D 76     Elo -31.7 ± 31.3
+  -2.9 ───────────●····┊··············· +2.9  LLR -0.83
+  pentanomial [LL LDg DD WD WW]:  [4 12 40 8 0]
+  running…
+  65 pairs   130 games   1 g/s · 3m22s
+  W 20   L 32   D 78     Elo -31.2 ± 30.8
+  -2.9 ───────────●····┊··············· +2.9  LLR -0.84
+  pentanomial [LL LDg DD WD WW]:  [4 12 41 8 0]
+  running…
+  66 pairs   132 games   1 g/s · 3m25s
+  W 20   L 33   D 79     Elo -33.3 ± 30.7
+  -2.9 ───────────●····┊··············· +2.9  LLR -0.90
+  pentanomial [LL LDg DD WD WW]:  [4 13 41 8 0]
+  running…
+  67 pairs   134 games   1 g/s · 3m25s
+  W 20   L 33   D 81     Elo -32.8 ± 30.3
+  -2.9 ───────────●····┊··············· +2.9  LLR -0.92
+  pentanomial [LL LDg DD WD WW]:  [4 13 42 8 0]
+  running…
+  68 pairs   136 games   1 g/s · 3m30s
+  W 21   L 34   D 81     Elo -32.4 ± 29.8
+  -2.9 ───────────●····┊··············· +2.9  LLR -0.93
+  pentanomial [LL LDg DD WD WW]:  [4 13 43 8 0]
+  running…
+  69 pairs   138 games   1 g/s · 3m31s
+  W 21   L 36   D 81     Elo -36.8 ± 30.8
+  -2.9 ──────────●·····┊··············· +2.9  LLR -0.99
+  pentanomial [LL LDg DD WD WW]:  [5 13 43 8 0]
+  running…
+  70 pairs   140 games   1 g/s · 3m37s
+  W 21   L 36   D 83     Elo -36.3 ± 30.3
+  -2.9 ──────────●·····┊··············· +2.9  LLR -1.00
+  pentanomial [LL LDg DD WD WW]:  [5 13 44 8 0]
+  running…
+  71 pairs   142 games   1 g/s · 3m37s
+  W 21   L 36   D 85     Elo -35.8 ± 29.9
+  -2.9 ──────────●·····┊··············· +2.9  LLR -1.02
+  pentanomial [LL LDg DD WD WW]:  [5 13 45 8 0]
+  running…
+  72 pairs   144 games   1 g/s · 3m37s
+  W 21   L 36   D 87     Elo -35.3 ± 29.5
+  -2.9 ──────────●·····┊··············· +2.9  LLR -1.03
+  pentanomial [LL LDg DD WD WW]:  [5 13 46 8 0]
+  running…
+  73 pairs   146 games   1 g/s · 3m45s
+  W 22   L 37   D 87     Elo -34.9 ± 29.1
+  -2.9 ──────────●·····┊··············· +2.9  LLR -1.04
+  pentanomial [LL LDg DD WD WW]:  [5 13 47 8 0]
+  running…
+  74 pairs   148 games   1 g/s · 3m46s
+  W 23   L 38   D 87     Elo -34.4 ± 28.8
+  -2.9 ──────────●·····┊··············· +2.9  LLR -1.06
+  pentanomial [LL LDg DD WD WW]:  [5 13 48 8 0]
+  running…
+  75 pairs   150 games   1 g/s · 3m48s
+  W 24   L 38   D 88     Elo -31.7 ± 28.8
+  -2.9 ──────────●·····┊··············· +2.9  LLR -0.97
+  pentanomial [LL LDg DD WD WW]:  [5 13 48 9 0]
+  running…
+  76 pairs   152 games   1 g/s · 3m49s
+  W 24   L 39   D 89     Elo -33.5 ± 28.7
+  -2.9 ──────────●·····┊··············· +2.9  LLR -1.04
+  pentanomial [LL LDg DD WD WW]:  [5 14 48 9 0]
+  running…
+  77 pairs   154 games   1 g/s · 3m55s
+  W 24   L 39   D 91     Elo -33.1 ± 28.4
+  -2.9 ──────────●·····┊··············· +2.9  LLR -1.05
+  pentanomial [LL LDg DD WD WW]:  [5 14 49 9 0]
+  running…
+  78 pairs   156 games   1 g/s · 4m02s
+  W 24   L 40   D 92     Elo -34.9 ± 28.3
+  -2.9 ──────────●·····┊··············· +2.9  LLR -1.11
+  pentanomial [LL LDg DD WD WW]:  [5 15 49 9 0]
+  running…
+  79 pairs   158 games   1 g/s · 4m02s
+  W 25   L 40   D 93     Elo -32.3 ± 28.3
+  -2.9 ──────────●·····┊··············· +2.9  LLR -1.03
+  pentanomial [LL LDg DD WD WW]:  [5 15 49 10 0]
+  running…
+  80 pairs   160 games   1 g/s · 4m05s
+  W 25   L 40   D 95     Elo -31.9 ± 28.0
+  -2.9 ──────────●·····┊··············· +2.9  LLR -1.04
+  pentanomial [LL LDg DD WD WW]:  [5 15 50 10 0]
+  running…
+  81 pairs   162 games   1 g/s · 4m06s
+  W 25   L 40   D 97     Elo -31.5 ± 27.6
+  -2.9 ──────────●·····┊··············· +2.9  LLR -1.05
+  pentanomial [LL LDg DD WD WW]:  [5 15 51 10 0]
+  running…
+  82 pairs   164 games   1 g/s · 4m06s
+  W 25   L 40   D 99     Elo -31.1 ± 27.3
+  -2.9 ──────────●·····┊··············· +2.9  LLR -1.07
+  pentanomial [LL LDg DD WD WW]:  [5 15 52 10 0]
+  running…
+  83 pairs   166 games   1 g/s · 4m08s
+  W 25   L 41   D 100     Elo -32.8 ± 27.2
+  -2.9 ──────────●·····┊··············· +2.9  LLR -1.13
+  pentanomial [LL LDg DD WD WW]:  [5 16 52 10 0]
+  running…
+  84 pairs   168 games   1 g/s · 4m13s
+  W 26   L 42   D 100     Elo -32.4 ± 26.9
+  -2.9 ─────────●······┊··············· +2.9  LLR -1.14
+  pentanomial [LL LDg DD WD WW]:  [5 16 53 10 0]
+  running…
+  85 pairs   170 games   1 g/s · 4m19s
+  W 26   L 44   D 100     Elo -36.1 ± 27.6
+  -2.9 ─────────●······┊··············· +2.9  LLR -1.20
+  pentanomial [LL LDg DD WD WW]:  [6 16 53 10 0]
+  running…
+  86 pairs   172 games   1 g/s · 4m19s
+  W 26   L 44   D 102     Elo -35.7 ± 27.3
+  -2.9 ─────────●······┊··············· +2.9  LLR -1.22
+  pentanomial [LL LDg DD WD WW]:  [6 16 54 10 0]
+  running…
+  87 pairs   174 games   1 g/s · 4m20s
+  W 26   L 44   D 104     Elo -35.3 ± 27.0
+  -2.9 ─────────●······┊··············· +2.9  LLR -1.23
+  pentanomial [LL LDg DD WD WW]:  [6 16 55 10 0]
+  running…
+  88 pairs   176 games   1 g/s · 4m26s
+  W 26   L 44   D 106     Elo -34.9 ± 26.7
+  -2.9 ─────────●······┊··············· +2.9  LLR -1.25
+  pentanomial [LL LDg DD WD WW]:  [6 16 56 10 0]
+  running…
+  89 pairs   178 games   1 g/s · 4m32s
+  W 27   L 45   D 106     Elo -34.5 ± 26.4
+  -2.9 ─────────●······┊··············· +2.9  LLR -1.26
+  pentanomial [LL LDg DD WD WW]:  [6 16 57 10 0]
+  running…
+  90 pairs   180 games   1 g/s · 4m33s
+  W 28   L 46   D 106     Elo -34.1 ± 26.1
+  -2.9 ─────────●······┊··············· +2.9  LLR -1.27
+  pentanomial [LL LDg DD WD WW]:  [6 16 58 10 0]
+  running…
+  91 pairs   182 games   1 g/s · 4m33s
+  W 28   L 47   D 107     Elo -35.6 ± 26.0
+  -2.9 ────────●·······┊··············· +2.9  LLR -1.34
+  pentanomial [LL LDg DD WD WW]:  [6 17 58 10 0]
+  running…
+  92 pairs   184 games   1 g/s · 4m36s
+  W 29   L 47   D 108     Elo -33.4 ± 26.1
+  -2.9 ─────────●······┊··············· +2.9  LLR -1.25
+  pentanomial [LL LDg DD WD WW]:  [6 17 58 11 0]
+  running…
+  94 pairs   188 games   1 g/s · 4m44s
+  W 30   L 47   D 111     Elo -30.8 ± 25.9
+  -2.9 ─────────●······┊··············· +2.9  LLR -1.18
+  pentanomial [LL LDg DD WD WW]:  [6 17 59 12 0]
+  running…
+  95 pairs   190 games   1 g/s · 4m44s
+  W 30   L 48   D 112     Elo -32.3 ± 25.8
+  -2.9 ─────────●······┊··············· +2.9  LLR -1.24
+  pentanomial [LL LDg DD WD WW]:  [6 18 59 12 0]
+  running…
+  96 pairs   192 games   1 g/s · 4m49s
+  W 30   L 48   D 114     Elo -32.0 ± 25.5
+  -2.9 ─────────●······┊··············· +2.9  LLR -1.26
+  pentanomial [LL LDg DD WD WW]:  [6 18 60 12 0]
+  running…
+  97 pairs   194 games   1 g/s · 4m53s
+  W 30   L 48   D 116     Elo -31.7 ± 25.3
+  -2.9 ─────────●······┊··············· +2.9  LLR -1.27
+  pentanomial [LL LDg DD WD WW]:  [6 18 61 12 0]
+  running…
+  98 pairs   196 games   1 g/s · 4m53s
+  W 30   L 48   D 118     Elo -31.4 ± 25.0
+  -2.9 ─────────●······┊··············· +2.9  LLR -1.28
+  pentanomial [LL LDg DD WD WW]:  [6 18 62 12 0]
+  running…
+  99 pairs   198 games   1 g/s · 4m56s
+  W 30   L 49   D 119     Elo -32.8 ± 25.0
+  -2.9 ────────●·······┊··············· +2.9  LLR -1.34
+  pentanomial [LL LDg DD WD WW]:  [6 19 62 12 0]
+  running…
+  100 pairs   200 games   1 g/s · 4m59s
+  W 31   L 50   D 119     Elo -32.5 ± 24.7
+  -2.9 ────────●·······┊··············· +2.9  LLR -1.36
+  pentanomial [LL LDg DD WD WW]:  [6 19 63 12 0]
+  running…
+  101 pairs   202 games   1 g/s · 5m02s
+  W 31   L 52   D 119     Elo -35.5 ± 25.2
+  -2.9 ────────●·······┊··············· +2.9  LLR -1.42
+  pentanomial [LL LDg DD WD WW]:  [7 19 63 12 0]
+  running…
+  102 pairs   204 games   1 g/s · 5m06s
+  W 31   L 52   D 121     Elo -35.2 ± 25.0
+  -2.9 ────────●·······┊··············· +2.9  LLR -1.43
+  pentanomial [LL LDg DD WD WW]:  [7 19 64 12 0]
+  running…
+  103 pairs   206 games   1 g/s · 5m07s
+  W 31   L 52   D 123     Elo -34.9 ± 24.8
+  -2.9 ────────●·······┊··············· +2.9  LLR -1.45
+  pentanomial [LL LDg DD WD WW]:  [7 19 65 12 0]
+  running…
+  104 pairs   208 games   1 g/s · 5m07s
+  W 31   L 52   D 125     Elo -34.5 ± 24.5
+  -2.9 ────────●·······┊··············· +2.9  LLR -1.46
+  pentanomial [LL LDg DD WD WW]:  [7 19 66 12 0]
+  running…
+  105 pairs   210 games   1 g/s · 5m14s
+  W 32   L 53   D 125     Elo -34.2 ± 24.3
+  -2.9 ────────●·······┊··············· +2.9  LLR -1.47
+  pentanomial [LL LDg DD WD WW]:  [7 19 67 12 0]
+  running…
+  106 pairs   212 games   1 g/s · 5m17s
+  W 33   L 54   D 125     Elo -33.9 ± 24.1
+  -2.9 ────────●·······┊··············· +2.9  LLR -1.49
+  pentanomial [LL LDg DD WD WW]:  [7 19 68 12 0]
+  running…
+  107 pairs   214 games   1 g/s · 5m19s
+  W 34   L 54   D 126     Elo -32.0 ± 24.1
+  -2.9 ────────●·······┊··············· +2.9  LLR -1.40
+  pentanomial [LL LDg DD WD WW]:  [7 19 68 13 0]
+  running…
+  108 pairs   216 games   1 g/s · 5m20s
+  W 34   L 55   D 127     Elo -33.3 ± 24.1
+  -2.9 ────────●·······┊··············· +2.9  LLR -1.46
+  pentanomial [LL LDg DD WD WW]:  [7 20 68 13 0]
+  running…
+  109 pairs   218 games   1 g/s · 5m24s
+  W 34   L 55   D 129     Elo -33.0 ± 23.9
+  -2.9 ────────●·······┊··············· +2.9  LLR -1.48
+  pentanomial [LL LDg DD WD WW]:  [7 20 69 13 0]
+  running…
+  110 pairs   220 games   1 g/s · 5m32s
+  W 34   L 56   D 130     Elo -34.2 ± 23.8
+  -2.9 ───────●········┊··············· +2.9  LLR -1.54
+  pentanomial [LL LDg DD WD WW]:  [7 21 69 13 0]
+  running…
+  112 pairs   224 games   1 g/s · 5m34s
+  W 35   L 56   D 133     Elo -32.1 ± 23.6
+  -2.9 ────────●·······┊··············· +2.9  LLR -1.47
+  pentanomial [LL LDg DD WD WW]:  [7 21 70 14 0]
+  running…
+  113 pairs   226 games   1 g/s · 5m36s
+  W 35   L 56   D 135     Elo -31.8 ± 23.4
+  -2.9 ────────●·······┊··············· +2.9  LLR -1.48
+  pentanomial [LL LDg DD WD WW]:  [7 21 71 14 0]
+  running…
+  114 pairs   228 games   1 g/s · 5m36s
+  W 35   L 57   D 136     Elo -33.0 ± 23.4
+  -2.9 ───────●········┊··············· +2.9  LLR -1.55
+  pentanomial [LL LDg DD WD WW]:  [7 22 71 14 0]
+  running…
+  116 pairs   232 games   1 g/s · 5m43s
+  W 36   L 58   D 138     Elo -32.5 ± 23.0
+  -2.9 ───────●········┊··············· +2.9  LLR -1.57
+  pentanomial [LL LDg DD WD WW]:  [7 22 73 14 0]
+  running…
+  117 pairs   234 games   1 g/s · 5m48s
+  W 36   L 60   D 138     Elo -35.2 ± 23.4
+  -2.9 ───────●········┊··············· +2.9  LLR -1.63
+  pentanomial [LL LDg DD WD WW]:  [8 22 73 14 0]
+  running…
+  118 pairs   236 games   1 g/s · 5m50s
+  W 36   L 60   D 140     Elo -34.9 ± 23.2
+  -2.9 ───────●········┊··············· +2.9  LLR -1.65
+  pentanomial [LL LDg DD WD WW]:  [8 22 74 14 0]
+  running…
+  119 pairs   238 games   1 g/s · 5m52s
+  W 36   L 60   D 142     Elo -34.6 ± 23.0
+  -2.9 ───────●········┊··············· +2.9  LLR -1.66
+  pentanomial [LL LDg DD WD WW]:  [8 22 75 14 0]
+  running…
+  120 pairs   240 games   1 g/s · 5m54s
+  W 36   L 60   D 144     Elo -34.3 ± 22.8
+  -2.9 ───────●········┊··············· +2.9  LLR -1.67
+  pentanomial [LL LDg DD WD WW]:  [8 22 76 14 0]
+  running…
+  121 pairs   242 games   1 g/s · 6m02s
+  W 37   L 61   D 144     Elo -34.0 ± 22.7
+  -2.9 ───────●········┊··············· +2.9  LLR -1.69
+  pentanomial [LL LDg DD WD WW]:  [8 22 77 14 0]
+  running…
+  122 pairs   244 games   1 g/s · 6m02s
+  W 38   L 62   D 144     Elo -33.7 ± 22.5
+  -2.9 ───────●········┊··············· +2.9  LLR -1.70
+  pentanomial [LL LDg DD WD WW]:  [8 22 78 14 0]
+  running…
+  123 pairs   246 games   1 g/s · 6m04s
+  W 38   L 63   D 145     Elo -34.9 ± 22.4
+  -2.9 ──────●·········┊··············· +2.9  LLR -1.77
+  pentanomial [LL LDg DD WD WW]:  [8 23 78 14 0]
+  running…
+  124 pairs   248 games   1 g/s · 6m06s
+  W 39   L 63   D 146     Elo -33.2 ± 22.5
+  -2.9 ───────●········┊··············· +2.9  LLR -1.68
+  pentanomial [LL LDg DD WD WW]:  [8 23 78 15 0]
+  running…
+  125 pairs   250 games   1 g/s · 6m07s
+  W 39   L 63   D 148     Elo -32.9 ± 22.3
+  -2.9 ───────●········┊··············· +2.9  LLR -1.69
+  pentanomial [LL LDg DD WD WW]:  [8 23 79 15 0]
+  running…
+  126 pairs   252 games   1 g/s · 6m13s
+  W 40   L 63   D 149     Elo -31.3 ± 22.3
+  -2.9 ───────●········┊··············· +2.9  LLR -1.61
+  pentanomial [LL LDg DD WD WW]:  [8 23 79 16 0]
+  running…
+  127 pairs   254 games   1 g/s · 6m15s
+  W 40   L 64   D 150     Elo -32.4 ± 22.3
+  -2.9 ───────●········┊··············· +2.9  LLR -1.67
+  pentanomial [LL LDg DD WD WW]:  [8 24 79 16 0]
+  running…
+  128 pairs   256 games   1 g/s · 6m19s
+  W 40   L 64   D 152     Elo -32.2 ± 22.1
+  -2.9 ───────●········┊··············· +2.9  LLR -1.68
+  pentanomial [LL LDg DD WD WW]:  [8 24 80 16 0]
+  running…
+  129 pairs   258 games   1 g/s · 6m23s
+  W 40   L 64   D 154     Elo -31.9 ± 21.9
+  -2.9 ───────●········┊··············· +2.9  LLR -1.70
+  pentanomial [LL LDg DD WD WW]:  [8 24 81 16 0]
+  running…
+  130 pairs   260 games   1 g/s · 6m24s
+  W 40   L 64   D 156     Elo -31.7 ± 21.8
+  -2.9 ──────●·········┊··············· +2.9  LLR -1.71
+  pentanomial [LL LDg DD WD WW]:  [8 24 82 16 0]
+  running…
+  131 pairs   262 games   1 g/s · 6m25s
+  W 40   L 65   D 157     Elo -32.8 ± 21.7
+  -2.9 ──────●·········┊··············· +2.9  LLR -1.77
+  pentanomial [LL LDg DD WD WW]:  [8 25 82 16 0]
+  running…
+  132 pairs   264 games   1 g/s · 6m28s
+  W 41   L 66   D 157     Elo -32.5 ± 21.6
+  -2.9 ──────●·········┊··············· +2.9  LLR -1.79
+  pentanomial [LL LDg DD WD WW]:  [8 25 83 16 0]
+  running…
+  133 pairs   266 games   1 g/s · 6m34s
+  W 41   L 68   D 157     Elo -34.9 ± 21.9
+  -2.9 ──────●·········┊··············· +2.9  LLR -1.85
+  pentanomial [LL LDg DD WD WW]:  [9 25 83 16 0]
+  running…
+  134 pairs   268 games   1 g/s · 6m37s
+  W 41   L 68   D 159     Elo -34.6 ± 21.8
+  -2.9 ──────●·········┊··············· +2.9  LLR -1.86
+  pentanomial [LL LDg DD WD WW]:  [9 25 84 16 0]
+  running…
+  135 pairs   270 games   1 g/s · 6m38s
+  W 41   L 68   D 161     Elo -34.3 ± 21.6
+  -2.9 ──────●·········┊··············· +2.9  LLR -1.88
+  pentanomial [LL LDg DD WD WW]:  [9 25 85 16 0]
+  running…
+  137 pairs   274 games   1 g/s · 6m45s
+  W 42   L 69   D 163     Elo -33.9 ± 21.3
+  -2.9 ─────●··········┊··············· +2.9  LLR -1.90
+  pentanomial [LL LDg DD WD WW]:  [9 25 87 16 0]
+  running…
+  138 pairs   276 games   1 g/s · 6m47s
+  W 43   L 70   D 163     Elo -33.6 ± 21.1
+  -2.9 ─────●··········┊··············· +2.9  LLR -1.92
+  pentanomial [LL LDg DD WD WW]:  [9 25 88 16 0]
+  running…
+  139 pairs   278 games   1 g/s · 6m47s
+  W 44   L 70   D 164     Elo -32.1 ± 21.2
+  -2.9 ──────●·········┊··············· +2.9  LLR -1.83
+  pentanomial [LL LDg DD WD WW]:  [9 25 88 17 0]
+  running…
+  140 pairs   280 games   1 g/s · 6m50s
+  W 44   L 71   D 165     Elo -33.1 ± 21.1
+  -2.9 ──────●·········┊··············· +2.9  LLR -1.89
+  pentanomial [LL LDg DD WD WW]:  [9 26 88 17 0]
+  running…
+  141 pairs   282 games   1 g/s · 6m54s
+  W 44   L 71   D 167     Elo -32.9 ± 21.0
+  -2.9 ─────●··········┊··············· +2.9  LLR -1.91
+  pentanomial [LL LDg DD WD WW]:  [9 26 89 17 0]
+  running…
+  142 pairs   284 games   1 g/s · 6m59s
+  W 44   L 72   D 168     Elo -33.9 ± 20.9
+  -2.9 ─────●··········┊··············· +2.9  LLR -1.97
+  pentanomial [LL LDg DD WD WW]:  [9 27 89 17 0]
+  running…
+  143 pairs   286 games   1 g/s · 7m00s
+  W 45   L 72   D 169     Elo -32.4 ± 21.0
+  -2.9 ──────●·········┊··············· +2.9  LLR -1.89
+  pentanomial [LL LDg DD WD WW]:  [9 27 89 18 0]
+  running…
+  144 pairs   288 games   1 g/s · 7m06s
+  W 45   L 72   D 171     Elo -32.2 ± 20.8
+  -2.9 ──────●·········┊··············· +2.9  LLR -1.90
+  pentanomial [LL LDg DD WD WW]:  [9 27 90 18 0]
+  running…
+  145 pairs   290 games   1 g/s · 7m07s
+  W 45   L 72   D 173     Elo -32.0 ± 20.7
+  -2.9 ─────●··········┊··············· +2.9  LLR -1.91
+  pentanomial [LL LDg DD WD WW]:  [9 27 91 18 0]
+  running…
+  146 pairs   292 games   1 g/s · 7m08s
+  W 45   L 73   D 174     Elo -33.0 ± 20.6
+  -2.9 ─────●··········┊··············· +2.9  LLR -1.97
+  pentanomial [LL LDg DD WD WW]:  [9 28 91 18 0]
+  running…
+  147 pairs   294 games   1 g/s · 7m09s
+  W 45   L 73   D 176     Elo -32.7 ± 20.5
+  -2.9 ─────●··········┊··············· +2.9  LLR -1.99
+  pentanomial [LL LDg DD WD WW]:  [9 28 92 18 0]
+  running…
+  148 pairs   296 games   1 g/s · 7m13s
+  W 46   L 74   D 176     Elo -32.5 ± 20.4
+  -2.9 ─────●··········┊··············· +2.9  LLR -2.00
+  pentanomial [LL LDg DD WD WW]:  [9 28 93 18 0]
+  running…
+  149 pairs   298 games   1 g/s · 7m19s
+  W 46   L 76   D 176     Elo -34.6 ± 20.7
+  -2.9 ─────●··········┊··············· +2.9  LLR -2.06
+  pentanomial [LL LDg DD WD WW]:  [10 28 93 18 0]
+  running…
+  150 pairs   300 games   1 g/s · 7m20s
+  W 46   L 76   D 178     Elo -34.4 ± 20.5
+  -2.9 ─────●··········┊··············· +2.9  LLR -2.08
+  pentanomial [LL LDg DD WD WW]:  [10 28 94 18 0]
+  running…
+  151 pairs   302 games   1 g/s · 7m21s
+  W 46   L 76   D 180     Elo -34.2 ± 20.4
+  -2.9 ────●···········┊··············· +2.9  LLR -2.09
+  pentanomial [LL LDg DD WD WW]:  [10 28 95 18 0]
+  running…
+  152 pairs   304 games   1 g/s · 7m24s
+  W 46   L 76   D 182     Elo -33.9 ± 20.3
+  -2.9 ────●···········┊··············· +2.9  LLR -2.10
+  pentanomial [LL LDg DD WD WW]:  [10 28 96 18 0]
+  running…
+  153 pairs   306 games   1 g/s · 7m30s
+  W 47   L 77   D 182     Elo -33.7 ± 20.2
+  -2.9 ────●···········┊··············· +2.9  LLR -2.12
+  pentanomial [LL LDg DD WD WW]:  [10 28 97 18 0]
+  running…
+  154 pairs   308 games   1 g/s · 7m34s
+  W 48   L 78   D 182     Elo -33.5 ± 20.0
+  -2.9 ────●···········┊··············· +2.9  LLR -2.13
+  pentanomial [LL LDg DD WD WW]:  [10 28 98 18 0]
+  running…
+  155 pairs   310 games   1 g/s · 7m34s
+  W 49   L 78   D 183     Elo -32.2 ± 20.1
+  -2.9 ─────●··········┊··············· +2.9  LLR -2.05
+  pentanomial [LL LDg DD WD WW]:  [10 28 98 19 0]
+  running…
+  156 pairs   312 games   1 g/s · 7m34s
+  W 49   L 79   D 184     Elo -33.1 ± 20.0
+  -2.9 ────●···········┊··············· +2.9  LLR -2.11
+  pentanomial [LL LDg DD WD WW]:  [10 29 98 19 0]
+  running…
+  157 pairs   314 games   1 g/s · 7m38s
+  W 49   L 79   D 186     Elo -32.9 ± 19.9
+  -2.9 ────●···········┊··············· +2.9  LLR -2.12
+  pentanomial [LL LDg DD WD WW]:  [10 29 99 19 0]
+  running…
+  158 pairs   316 games   1 g/s · 7m45s
+  W 49   L 80   D 187     Elo -33.8 ± 19.9
+  -2.9 ────●···········┊··············· +2.9  LLR -2.18
+  pentanomial [LL LDg DD WD WW]:  [10 30 99 19 0]
+  running…
+  159 pairs   318 games   1 g/s · 7m45s
+  W 50   L 80   D 188     Elo -32.5 ± 19.9
+  -2.9 ────●···········┊··············· +2.9  LLR -2.10
+  pentanomial [LL LDg DD WD WW]:  [10 30 99 20 0]
+  running…
+  160 pairs   320 games   1 g/s · 7m49s
+  W 50   L 80   D 190     Elo -32.3 ± 19.8
+  -2.9 ────●···········┊··············· +2.9  LLR -2.11
+  pentanomial [LL LDg DD WD WW]:  [10 30 100 20 0]
+  running…
+  161 pairs   322 games   1 g/s · 7m52s
+  W 50   L 80   D 192     Elo -32.1 ± 19.6
+  -2.9 ────●···········┊··············· +2.9  LLR -2.13
+  pentanomial [LL LDg DD WD WW]:  [10 30 101 20 0]
+  running…
+  162 pairs   324 games   1 g/s · 7m54s
+  W 50   L 80   D 194     Elo -31.9 ± 19.5
+  -2.9 ────●···········┊··············· +2.9  LLR -2.14
+  pentanomial [LL LDg DD WD WW]:  [10 30 102 20 0]
+  running…
+  163 pairs   326 games   1 g/s · 7m54s
+  W 50   L 81   D 195     Elo -32.7 ± 19.5
+  -2.9 ────●···········┊··············· +2.9  LLR -2.20
+  pentanomial [LL LDg DD WD WW]:  [10 31 102 20 0]
+  running…
+  164 pairs   328 games   1 g/s · 8m00s
+  W 51   L 82   D 195     Elo -32.5 ± 19.4
+  -2.9 ────●···········┊··············· +2.9  LLR -2.22
+  pentanomial [LL LDg DD WD WW]:  [10 31 103 20 0]
+  running…
+  165 pairs   330 games   1 g/s · 8m03s
+  W 51   L 84   D 195     Elo -34.4 ± 19.6
+  -2.9 ────●···········┊··············· +2.9  LLR -2.28
+  pentanomial [LL LDg DD WD WW]:  [11 31 103 20 0]
+  running…
+  166 pairs   332 games   1 g/s · 8m05s
+  W 51   L 84   D 197     Elo -34.2 ± 19.5
+  -2.9 ───●············┊··············· +2.9  LLR -2.29
+  pentanomial [LL LDg DD WD WW]:  [11 31 104 20 0]
+  running…
+  167 pairs   334 games   1 g/s · 8m07s
+  W 51   L 84   D 199     Elo -34.0 ± 19.4
+  -2.9 ───●············┊··············· +2.9  LLR -2.30
+  pentanomial [LL LDg DD WD WW]:  [11 31 105 20 0]
+  running…
+  168 pairs   336 games   1 g/s · 8m07s
+  W 51   L 84   D 201     Elo -33.8 ± 19.3
+  -2.9 ───●············┊··············· +2.9  LLR -2.32
+  pentanomial [LL LDg DD WD WW]:  [11 31 106 20 0]
+  running…
+  169 pairs   338 games   1 g/s · 8m14s
+  W 52   L 85   D 201     Elo -33.6 ± 19.2
+  -2.9 ───●············┊··············· +2.9  LLR -2.33
+  pentanomial [LL LDg DD WD WW]:  [11 31 107 20 0]
+  running…
+  170 pairs   340 games   1 g/s · 8m17s
+  W 53   L 86   D 201     Elo -33.4 ± 19.1
+  -2.9 ───●············┊··············· +2.9  LLR -2.35
+  pentanomial [LL LDg DD WD WW]:  [11 31 108 20 0]
+  running…
+  171 pairs   342 games   1 g/s · 8m20s
+  W 54   L 86   D 202     Elo -32.2 ± 19.1
+  -2.9 ────●···········┊··············· +2.9  LLR -2.26
+  pentanomial [LL LDg DD WD WW]:  [11 31 108 21 0]
+  running…
+  172 pairs   344 games   1 g/s · 8m20s
+  W 54   L 87   D 203     Elo -33.0 ± 19.1
+  -2.9 ───●············┊··············· +2.9  LLR -2.32
+  pentanomial [LL LDg DD WD WW]:  [11 32 108 21 0]
+  running…
+  173 pairs   346 games   1 g/s · 8m24s
+  W 54   L 87   D 205     Elo -32.9 ± 18.9
+  -2.9 ───●············┊··············· +2.9  LLR -2.34
+  pentanomial [LL LDg DD WD WW]:  [11 32 109 21 0]
+  running…
+  174 pairs   348 games   1 g/s · 8m31s
+  W 55   L 87   D 206     Elo -31.7 ± 19.0
+  -2.9 ────●···········┊··············· +2.9  LLR -2.25
+  pentanomial [LL LDg DD WD WW]:  [11 32 109 22 0]
+  running…
+  175 pairs   350 games   1 g/s · 8m33s
+  W 55   L 88   D 207     Elo -32.5 ± 18.9
+  -2.9 ───●············┊··············· +2.9  LLR -2.31
+  pentanomial [LL LDg DD WD WW]:  [11 33 109 22 0]
+  running…
+  176 pairs   352 games   1 g/s · 8m35s
+  W 55   L 88   D 209     Elo -32.3 ± 18.8
+  -2.9 ───●············┊··············· +2.9  LLR -2.33
+  pentanomial [LL LDg DD WD WW]:  [11 33 110 22 0]
+  running…
+  177 pairs   354 games   1 g/s · 8m36s
+  W 55   L 88   D 211     Elo -32.1 ± 18.7
+  -2.9 ───●············┊··············· +2.9  LLR -2.34
+  pentanomial [LL LDg DD WD WW]:  [11 33 111 22 0]
+  running…
+  178 pairs   356 games   1 g/s · 8m36s
+  W 55   L 88   D 213     Elo -31.9 ± 18.6
+  -2.9 ───●············┊··············· +2.9  LLR -2.35
+  pentanomial [LL LDg DD WD WW]:  [11 33 112 22 0]
+  running…
+  179 pairs   358 games   1 g/s · 8m37s
+  W 55   L 89   D 214     Elo -32.7 ± 18.6
+  -2.9 ───●············┊··············· +2.9  LLR -2.42
+  pentanomial [LL LDg DD WD WW]:  [11 34 112 22 0]
+  running…
+  180 pairs   360 games   1 g/s · 8m44s
+  W 56   L 90   D 214     Elo -32.5 ± 18.5
+  -2.9 ───●············┊··············· +2.9  LLR -2.43
+  pentanomial [LL LDg DD WD WW]:  [11 34 113 22 0]
+  running…
+  181 pairs   362 games   1 g/s · 8m49s
+  W 56   L 92   D 214     Elo -34.3 ± 18.7
+  -2.9 ──●·············┊··············· +2.9  LLR -2.49
+  pentanomial [LL LDg DD WD WW]:  [12 34 113 22 0]
+  running…
+  182 pairs   364 games   1 g/s · 8m51s
+  W 56   L 92   D 216     Elo -34.1 ± 18.6
+  -2.9 ──●·············┊··············· +2.9  LLR -2.51
+  pentanomial [LL LDg DD WD WW]:  [12 34 114 22 0]
+  running…
+  183 pairs   366 games   1 g/s · 8m52s
+  W 56   L 92   D 218     Elo -33.9 ± 18.5
+  -2.9 ──●·············┊··············· +2.9  LLR -2.52
+  pentanomial [LL LDg DD WD WW]:  [12 34 115 22 0]
+  running…
+  184 pairs   368 games   1 g/s · 8m55s
+  W 56   L 92   D 220     Elo -33.7 ± 18.4
+  -2.9 ──●·············┊··············· +2.9  LLR -2.53
+  pentanomial [LL LDg DD WD WW]:  [12 34 116 22 0]
+  running…
+  185 pairs   370 games   1 g/s · 9m02s
+  W 57   L 93   D 220     Elo -33.5 ± 18.3
+  -2.9 ──●·············┊··············· +2.9  LLR -2.55
+  pentanomial [LL LDg DD WD WW]:  [12 34 117 22 0]
+  running…
+  186 pairs   372 games   1 g/s · 9m03s
+  W 58   L 94   D 220     Elo -33.4 ± 18.2
+  -2.9 ──●·············┊··············· +2.9  LLR -2.56
+  pentanomial [LL LDg DD WD WW]:  [12 34 118 22 0]
+  running…
+  187 pairs   374 games   1 g/s · 9m04s
+  W 58   L 95   D 221     Elo -34.1 ± 18.2
+  -2.9 ──●·············┊··············· +2.9  LLR -2.62
+  pentanomial [LL LDg DD WD WW]:  [12 35 118 22 0]
+  running…
+  188 pairs   376 games   1 g/s · 9m06s
+  W 59   L 95   D 222     Elo -33.0 ± 18.2
+  -2.9 ──●·············┊··············· +2.9  LLR -2.54
+  pentanomial [LL LDg DD WD WW]:  [12 35 118 23 0]
+  running…
+  189 pairs   378 games   1 g/s · 9m07s
+  W 59   L 95   D 224     Elo -32.8 ± 18.1
+  -2.9 ──●·············┊··············· +2.9  LLR -2.55
+  pentanomial [LL LDg DD WD WW]:  [12 35 119 23 0]
+  running…
+  190 pairs   380 games   1 g/s · 9m13s
+  W 60   L 95   D 225     Elo -31.8 ± 18.1
+  -2.9 ───●············┊··············· +2.9  LLR -2.47
+  pentanomial [LL LDg DD WD WW]:  [12 35 119 24 0]
+  running…
+  191 pairs   382 games   1 g/s · 9m16s
+  W 60   L 96   D 226     Elo -32.5 ± 18.1
+  -2.9 ──●·············┊··············· +2.9  LLR -2.53
+  pentanomial [LL LDg DD WD WW]:  [12 36 119 24 0]
+  running…
+  192 pairs   384 games   1 g/s · 9m20s
+  W 60   L 96   D 228     Elo -32.3 ± 18.0
+  -2.9 ──●·············┊··············· +2.9  LLR -2.54
+  pentanomial [LL LDg DD WD WW]:  [12 36 120 24 0]
+  running…
+  193 pairs   386 games   1 g/s · 9m23s
+  W 60   L 96   D 230     Elo -32.2 ± 17.9
+  -2.9 ──●·············┊··············· +2.9  LLR -2.56
+  pentanomial [LL LDg DD WD WW]:  [12 36 121 24 0]
+  running…
+  194 pairs   388 games   1 g/s · 9m24s
+  W 60   L 96   D 232     Elo -32.0 ± 17.8
+  -2.9 ──●·············┊··············· +2.9  LLR -2.57
+  pentanomial [LL LDg DD WD WW]:  [12 36 122 24 0]
+  running…
+  195 pairs   390 games   1 g/s · 9m25s
+  W 60   L 97   D 233     Elo -32.7 ± 17.8
+  -2.9 ──●·············┊··············· +2.9  LLR -2.63
+  pentanomial [LL LDg DD WD WW]:  [12 37 122 24 0]
+  running…
+  196 pairs   392 games   1 g/s · 9m29s
+  W 61   L 98   D 233     Elo -32.6 ± 17.7
+  -2.9 ──●·············┊··············· +2.9  LLR -2.65
+  pentanomial [LL LDg DD WD WW]:  [12 37 123 24 0]
+  running…
+  197 pairs   394 games   1 g/s · 9m34s
+  W 61   L 100   D 233     Elo -34.2 ± 17.9
+  -2.9 ─●··············┊··············· +2.9  LLR -2.71
+  pentanomial [LL LDg DD WD WW]:  [13 37 123 24 0]
+  running…
+  198 pairs   396 games   1 g/s · 9m36s
+  W 61   L 100   D 235     Elo -34.0 ± 17.8
+  -2.9 ─●··············┊··············· +2.9  LLR -2.72
+  pentanomial [LL LDg DD WD WW]:  [13 37 124 24 0]
+  running…
+  199 pairs   398 games   1 g/s · 9m37s
+  W 61   L 100   D 237     Elo -33.8 ± 17.8
+  -2.9 ─●··············┊··············· +2.9  LLR -2.73
+  pentanomial [LL LDg DD WD WW]:  [13 37 125 24 0]
+  running…
+  200 pairs   400 games   1 g/s · 9m38s
+  W 61   L 100   D 239     Elo -33.6 ± 17.7
+  -2.9 ─●··············┊··············· +2.9  LLR -2.75
+  pentanomial [LL LDg DD WD WW]:  [13 37 126 24 0]
+  running…
+  201 pairs   402 games   1 g/s · 9m46s
+  W 62   L 101   D 239     Elo -33.5 ± 17.6
+  -2.9 ─●··············┊··············· +2.9  LLR -2.76
+  pentanomial [LL LDg DD WD WW]:  [13 37 127 24 0]
+  running…
+  202 pairs   404 games   1 g/s · 9m48s
+  W 63   L 102   D 239     Elo -33.3 ± 17.5
+  -2.9 ─●··············┊··············· +2.9  LLR -2.78
+  pentanomial [LL LDg DD WD WW]:  [13 37 128 24 0]
+  running…
+  203 pairs   406 games   1 g/s · 9m48s
+  W 64   L 102   D 240     Elo -32.3 ± 17.5
+  -2.9 ─●··············┊··············· +2.9  LLR -2.69
+  pentanomial [LL LDg DD WD WW]:  [13 37 128 25 0]
+  running…
+  204 pairs   408 games   1 g/s · 9m50s
+  W 64   L 103   D 241     Elo -33.0 ± 17.5
+  -2.9 ─●··············┊··············· +2.9  LLR -2.75
+  pentanomial [LL LDg DD WD WW]:  [13 38 128 25 0]
+  running…
+  205 pairs   410 games   1 g/s · 9m54s
+  W 64   L 103   D 243     Elo -32.8 ± 17.4
+  -2.9 ─●··············┊··············· +2.9  LLR -2.77
+  pentanomial [LL LDg DD WD WW]:  [13 38 129 25 0]
+  running…
+  206 pairs   412 games   1 g/s · 10m01s
+  W 64   L 104   D 244     Elo -33.5 ± 17.4
+  -2.9 ─●··············┊··············· +2.9  LLR -2.83
+  pentanomial [LL LDg DD WD WW]:  [13 39 129 25 0]
+  running…
+  207 pairs   414 games   1 g/s · 10m01s
+  W 65   L 104   D 245     Elo -32.5 ± 17.4
+  -2.9 ─●··············┊··············· +2.9  LLR -2.74
+  pentanomial [LL LDg DD WD WW]:  [13 39 129 26 0]
+  running…
+  208 pairs   416 games   1 g/s · 10m05s
+  W 65   L 104   D 247     Elo -32.4 ± 17.3
+  -2.9 ─●··············┊··············· +2.9  LLR -2.76
+  pentanomial [LL LDg DD WD WW]:  [13 39 130 26 0]
+  running…
+  209 pairs   418 games   1 g/s · 10m08s
+  W 65   L 105   D 248     Elo -33.0 ± 17.3
+  -2.9 ─●··············┊··············· +2.9  LLR -2.82
+  pentanomial [LL LDg DD WD WW]:  [13 40 130 26 0]
+  running…
+  210 pairs   420 games   1 g/s · 10m08s
+  W 65   L 105   D 250     Elo -32.9 ± 17.2
+  -2.9 ─●··············┊··············· +2.9  LLR -2.83
+  pentanomial [LL LDg DD WD WW]:  [13 40 131 26 0]
+  running…
+  211 pairs   422 games   1 g/s · 10m08s
+  W 65   L 105   D 252     Elo -32.7 ± 17.1
+  -2.9 ─●··············┊··············· +2.9  LLR -2.85
+  pentanomial [LL LDg DD WD WW]:  [13 40 132 26 0]
+  running…
+  212 pairs   424 games   1 g/s · 10m14s
+  W 66   L 106   D 252     Elo -32.6 ± 17.1
+  -2.9 ●···············┊··············· +2.9  LLR -2.86
+  pentanomial [LL LDg DD WD WW]:  [13 40 133 26 0]
+  running…
+  213 pairs   426 games   1 g/s · 10m20s
+  W 66   L 108   D 252     Elo -34.0 ± 17.2
+  -2.9 ●···············┊··············· +2.9  LLR -2.92
+  pentanomial [LL LDg DD WD WW]:  [14 40 133 26 0]
+  running…
+  214 pairs   428 games   1 g/s · 10m21s
+  W 66   L 108   D 254     Elo -33.9 ± 17.2
+  -2.9 ●···············┊··············· +2.9  LLR -2.93
+  pentanomial [LL LDg DD WD WW]:  [14 40 134 26 0]
+  running…
+  215 pairs   430 games   1 g/s · 10m21s
+  W 66   L 108   D 256     Elo -33.7 ± 17.1
+  -2.9 ●···············┊··············· +2.9  LLR -2.95
+  pentanomial [LL LDg DD WD WW]:  [14 40 135 26 0]
+  ✗ H0 — patch is not stronger
+  215 pairs   430 games   1 g/s · 10m21s
+  W 66   L 108   D 256     Elo -33.7 ± 17.1
+  -2.9 ●···············┊··············· +2.9  LLR -2.95
+  pentanomial [LL LDg DD WD WW]:  [14 40 135 26 0]
+  ✗ H0 — patch is not stronger
+
+  ✗  REJECT   — the patch is not an improvement
+     → Elo -33.7 ± 17.1   over 215 pairs   in 10m21s
+     Drop or rework it. The Elo gain (if any) is below the H1 threshold.
+

@@ -226,6 +226,83 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.TTEval = b
+		case "corrhist", "ch":
+			// correction history: learn the per-pattern (pawn / per-color non-pawn)
+			// static-eval-vs-search-result bias within a game and correct the static
+			// eval by it. Sharpens every eval-gated decision; SPRT at fixed nodes.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.CorrHist = b
+		case "conthist", "cont", "cmh":
+			// continuation history: 1-ply (countermove) + 2-ply history keyed by the
+			// preceding move(s); feeds quiet ordering + the LMR reduction term.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.ContHist = b
+		case "lmr2":
+			// aggressive LMR: reduce captures/promotions too, earlier onset, with
+			// PV/improving/ordering-trust/SEE adjustments (supersedes LMR when on).
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.LMR2 = b
+		case "singular", "se":
+			// singular extensions: verify the TT move vs all alternatives at reduced
+			// depth; extend a ply if singular, multi-cut if a second move beats beta.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.Singular = b
+		case "multicut", "mc":
+			// singular: allow the verification's multi-cut early-return (diagnostic;
+			// default on — flip off to isolate fragile multi-cut from the rest of singular).
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.MultiCut = b
+		case "cleanverify", "cv":
+			// singular: run the verification subtree with conservative LMR, not LMR2
+			// (diagnostic for the lmr2+singular anti-synergy; inert unless LMR2 is on).
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.CleanVerify = b
+		case "iir":
+			// internal iterative reduction: reduce a ply at a deep node with no TT move.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.IIR = b
+		case "futility", "fut":
+			// frontier futility pruning: skip late quiets that can't reach alpha.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.Futility = b
+		case "probcut", "pc":
+			// probcut: capture-driven reduced-depth fail-high prune.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.ProbCut = b
+		case "razor", "razoring":
+			// razoring: shallow drop-to-qsearch fail-low prune.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.Razor = b
 		default:
 			return base, fmt.Errorf("unknown param %q", key)
 		}
@@ -324,6 +401,36 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.TTEval != patch.TTEval {
 		diffs = append(diffs, fmt.Sprintf("tteval: %s→%s", onoff(base.TTEval), onoff(patch.TTEval)))
+	}
+	if base.CorrHist != patch.CorrHist {
+		diffs = append(diffs, fmt.Sprintf("corrhist: %s→%s", onoff(base.CorrHist), onoff(patch.CorrHist)))
+	}
+	if base.ContHist != patch.ContHist {
+		diffs = append(diffs, fmt.Sprintf("conthist: %s→%s", onoff(base.ContHist), onoff(patch.ContHist)))
+	}
+	if base.LMR2 != patch.LMR2 {
+		diffs = append(diffs, fmt.Sprintf("lmr2: %s→%s", onoff(base.LMR2), onoff(patch.LMR2)))
+	}
+	if base.Singular != patch.Singular {
+		diffs = append(diffs, fmt.Sprintf("singular: %s→%s", onoff(base.Singular), onoff(patch.Singular)))
+	}
+	if base.MultiCut != patch.MultiCut {
+		diffs = append(diffs, fmt.Sprintf("multicut: %s→%s", onoff(base.MultiCut), onoff(patch.MultiCut)))
+	}
+	if base.CleanVerify != patch.CleanVerify {
+		diffs = append(diffs, fmt.Sprintf("cleanverify: %s→%s", onoff(base.CleanVerify), onoff(patch.CleanVerify)))
+	}
+	if base.IIR != patch.IIR {
+		diffs = append(diffs, fmt.Sprintf("iir: %s→%s", onoff(base.IIR), onoff(patch.IIR)))
+	}
+	if base.Futility != patch.Futility {
+		diffs = append(diffs, fmt.Sprintf("futility: %s→%s", onoff(base.Futility), onoff(patch.Futility)))
+	}
+	if base.ProbCut != patch.ProbCut {
+		diffs = append(diffs, fmt.Sprintf("probcut: %s→%s", onoff(base.ProbCut), onoff(patch.ProbCut)))
+	}
+	if base.Razor != patch.Razor {
+		diffs = append(diffs, fmt.Sprintf("razor: %s→%s", onoff(base.Razor), onoff(patch.Razor)))
 	}
 	if len(diffs) == 0 {
 		return "(identical — sanity/noise run)"
