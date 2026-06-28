@@ -247,6 +247,29 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.CorrHist = b
+		case "corrhistminor", "chm":
+			// extra corrhist key on the minor-piece (N+B) skeleton (requires corrhist).
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.CorrHistMinor = b
+		case "corrhistcont", "chc":
+			// extra corrhist key: continuation correction from the stm's prior moves
+			// at ply-2/-4 (requires corrhist).
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.CorrHistCont = b
+		case "capthist", "caph":
+			// capture history: (piece,to,victim) stats refine capture ordering within
+			// the SEE good/bad tier.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.CaptHist = b
 		case "conthist", "cont", "cmh":
 			// continuation history: 1-ply (countermove) + 2-ply history keyed by the
 			// preceding move(s); feeds quiet ordering + the LMR reduction term.
@@ -417,6 +440,12 @@ func DiffParams(base, patch search.Params) string {
 	if base.CorrHist != patch.CorrHist {
 		diffs = append(diffs, fmt.Sprintf("corrhist: %s→%s", onoff(base.CorrHist), onoff(patch.CorrHist)))
 	}
+	if base.CorrHistMinor != patch.CorrHistMinor {
+		diffs = append(diffs, fmt.Sprintf("corrhistminor: %s→%s", onoff(base.CorrHistMinor), onoff(patch.CorrHistMinor)))
+	}
+	if base.CorrHistCont != patch.CorrHistCont {
+		diffs = append(diffs, fmt.Sprintf("corrhistcont: %s→%s", onoff(base.CorrHistCont), onoff(patch.CorrHistCont)))
+	}
 	if base.ContHist != patch.ContHist {
 		diffs = append(diffs, fmt.Sprintf("conthist: %s→%s", onoff(base.ContHist), onoff(patch.ContHist)))
 	}
@@ -449,6 +478,9 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.SingularMinDepth != patch.SingularMinDepth {
 		diffs = append(diffs, fmt.Sprintf("singulardepth: %d→%d", base.SingularMinDepth, patch.SingularMinDepth))
+	}
+	if base.CaptHist != patch.CaptHist {
+		diffs = append(diffs, fmt.Sprintf("capthist: %s→%s", onoff(base.CaptHist), onoff(patch.CaptHist)))
 	}
 	if len(diffs) == 0 {
 		return "(identical — sanity/noise run)"

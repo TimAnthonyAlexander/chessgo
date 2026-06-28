@@ -72,12 +72,19 @@ func (s *Searcher) moveScore(pos *chess.Position, m, ttMove chess.Move, ply int)
 }
 
 // captureScore ranks a capture: winning/equal captures (or all captures when SEE
-// is off) sort by MVV-LVA above killers; SEE-losing captures sort last.
+// is off) sort by MVV-LVA above killers; SEE-losing captures sort last. With
+// CaptHist on, the (piece,to,victim) capture-history score is added WITHIN the
+// chosen tier — bounded by ±maxHistory (≪ the ~1M tier gap), so it only reorders
+// captures relative to each other, never crosses the good/bad SEE split.
 func (s *Searcher) captureScore(pos *chess.Position, m chess.Move, mvvlva int) int {
+	base := scoreCapture
 	if s.params.SEE && pos.SEE(m) < 0 {
-		return scoreLosingCapture + mvvlva
+		base = scoreLosingCapture
 	}
-	return scoreCapture + mvvlva
+	if s.params.CaptHist {
+		return base + mvvlva + s.captureHist[pos.PieceOn(m.From())][m.To()][captureVictim(pos, m)]
+	}
+	return base + mvvlva
 }
 
 // selectMove performs one step of a selection sort: it finds the highest-scored

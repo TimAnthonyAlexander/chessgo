@@ -40,12 +40,16 @@ const (
 	corrWDen  = corrWPawn + corrWNP + corrWNP
 )
 
-// corrTables holds the three correction-history tables. Kept in one struct so the
-// whole set clears with a single assignment.
+// corrTables holds the correction-history tables. Kept in one struct so the whole
+// set clears with a single assignment. The pawn + per-color non-pawn tables are
+// always active (Params.CorrHist); minor and continuation are extra keys behind
+// their own flags (Params.CorrHistMinor / Params.CorrHistCont).
 type corrTables struct {
-	pawn [2][corrSize]int32 // [stm][pawnKey]
-	wnp  [2][corrSize]int32 // [stm][white non-pawn key]
-	bnp  [2][corrSize]int32 // [stm][black non-pawn key]
+	pawn  [2][corrSize]int32 // [stm][pawnKey]
+	wnp   [2][corrSize]int32 // [stm][white non-pawn key]
+	bnp   [2][corrSize]int32 // [stm][black non-pawn key]
+	minor [2][corrSize]int32 // [stm][minor-piece (N+B, both colors) key] — CorrHistMinor
+	contn [12][64]int32      // [movedPiece][toSquare] continuation correction — CorrHistCont
 }
 
 // mix is a splitmix64 finalizer — cheap, good avalanche for folding bitboards.
@@ -77,6 +81,17 @@ func nonPawnKey(pos *chess.Position, c chess.Color) uint64 {
 	return mix(mix(n) ^ mix(b*0x9e3779b97f4a7c15) ^ mix(r*0xc2b2ae3d27d4eb4f) ^ mix(q*0x165667b19e3779f9))
 }
 
+// minorKey hashes the minor-piece skeleton (knights + bishops, both colors) — a
+// separate pattern from the per-color non-pawn keys (Stockfish keeps a dedicated
+// minor-piece corrhist; major-piece corrhist was tried and removed there).
+func minorKey(pos *chess.Position) uint64 {
+	wn := uint64(pos.PieceBB(chess.MakePiece(chess.White, chess.Knight)))
+	wb := uint64(pos.PieceBB(chess.MakePiece(chess.White, chess.Bishop)))
+	bn := uint64(pos.PieceBB(chess.MakePiece(chess.Black, chess.Knight)))
+	bb := uint64(pos.PieceBB(chess.MakePiece(chess.Black, chess.Bishop)))
+	return mix(mix(wn) ^ mix(wb*0x9e3779b97f4a7c15) ^ mix(bn*0xc2b2ae3d27d4eb4f) ^ mix(bb*0x165667b19e3779f9))
+}
+
 // correction returns the blended, clamped correction (centipawns, side-to-move
 // perspective) to add to the raw static eval. Callers must already hold CorrHist.
 func (s *Searcher) correction(pos *chess.Position) int {
@@ -85,10 +100,40 @@ func (s *Searcher) correction(pos *chess.Position) int {
 	w := s.corr.wnp[stm][nonPawnKey(pos, chess.White)&corrMask]
 	b := s.corr.bnp[stm][nonPawnKey(pos, chess.Black)&corrMask]
 	c := (int(p)*corrWPawn + int(w)*corrWNP + int(b)*corrWNP) / (corrScale * corrWDen)
+	// Minor-piece key (extra, behind CorrHistMinor). Added on top with a non-pawn
+	// table's weight; gated so the off-path is byte-identical.
+	if s.params.CorrHistMinor {
+		m := s.corr.minor[stm][minorKey(pos)&corrMask]
+		c += int(m) * corrWNP / (corrScale * corrWDen)
+	}
 	if c > corrMaxApply {
 		c = corrMaxApply
 	} else if c < -corrMaxApply {
 		c = -corrMaxApply
+	}
+	return c
+}
+
+// contCorrection returns the continuation correction (centipawns, side-to-move
+// perspective) from the side-to-move's own prior moves at ply-2 and ply-4, behind
+// CorrHistCont. Applied ONLY at the negamax static-eval site (where contMove is
+// reliably maintained by ancestors); not in qsearch, whose ply slots may hold
+// stale move records. Caller has already checked CorrHistCont.
+func (s *Searcher) contCorrection(ply int) int {
+	c := 0
+	if ply >= 2 && s.contMove[ply-2].ok {
+		e := s.corr.contn[s.contMove[ply-2].pc][s.contMove[ply-2].to]
+		c += int(e) / (corrScale * corrWDen * 2)
+	}
+	if ply >= 4 && s.contMove[ply-4].ok {
+		e := s.corr.contn[s.contMove[ply-4].pc][s.contMove[ply-4].to]
+		c += int(e) / (corrScale * corrWDen * 2)
+	}
+	lim := corrMaxApply / 2
+	if c > lim {
+		c = lim
+	} else if c < -lim {
+		c = -lim
 	}
 	return c
 }
@@ -109,7 +154,7 @@ func updateCorrEntry(e *int32, target, w int) {
 // staticEval). Caller has already verified the signal is trustworthy (out of
 // check, defined static eval, non-noisy best move, bound agrees with direction,
 // non-mate/TB score).
-func (s *Searcher) updateCorrHist(pos *chess.Position, staticEval, bestScore, depth int) {
+func (s *Searcher) updateCorrHist(pos *chess.Position, staticEval, bestScore, depth, ply int) {
 	diff := bestScore - staticEval
 	if diff > corrMaxApply {
 		diff = corrMaxApply
@@ -125,4 +170,15 @@ func (s *Searcher) updateCorrHist(pos *chess.Position, staticEval, bestScore, de
 	updateCorrEntry(&s.corr.pawn[stm][pawnKey(pos)&corrMask], target, w)
 	updateCorrEntry(&s.corr.wnp[stm][nonPawnKey(pos, chess.White)&corrMask], target, w)
 	updateCorrEntry(&s.corr.bnp[stm][nonPawnKey(pos, chess.Black)&corrMask], target, w)
+	if s.params.CorrHistMinor {
+		updateCorrEntry(&s.corr.minor[stm][minorKey(pos)&corrMask], target, w)
+	}
+	if s.params.CorrHistCont {
+		if ply >= 2 && s.contMove[ply-2].ok {
+			updateCorrEntry(&s.corr.contn[s.contMove[ply-2].pc][s.contMove[ply-2].to], target, w)
+		}
+		if ply >= 4 && s.contMove[ply-4].ok {
+			updateCorrEntry(&s.corr.contn[s.contMove[ply-4].pc][s.contMove[ply-4].to], target, w)
+		}
+	}
 }

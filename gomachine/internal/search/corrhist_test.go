@@ -76,7 +76,7 @@ func TestCorrHistDirection(t *testing.T) {
 		base := sUp.evaluate(pos) // cold → no correction
 		static := base
 		for i := 0; i < 64; i++ {
-			sUp.updateCorrHist(pos, static, static+120, 8)
+			sUp.updateCorrHist(pos, static, static+120, 8, 0)
 		}
 		up := sUp.evaluate(pos)
 		if up <= base {
@@ -87,7 +87,7 @@ func TestCorrHistDirection(t *testing.T) {
 		sDn := NewWithParams(16, p)
 		base2 := sDn.evaluate(pos)
 		for i := 0; i < 64; i++ {
-			sDn.updateCorrHist(pos, base2, base2-120, 8)
+			sDn.updateCorrHist(pos, base2, base2-120, 8, 0)
 		}
 		dn := sDn.evaluate(pos)
 		if dn >= base2 {
@@ -105,7 +105,7 @@ func TestCorrHistClearedByClearTT(t *testing.T) {
 	pos, _ := chess.ParseFEN(corrFENs[0])
 	static := s.evaluate(pos)
 	for i := 0; i < 64; i++ {
-		s.updateCorrHist(pos, static, static+120, 8)
+		s.updateCorrHist(pos, static, static+120, 8, 0)
 	}
 	if s.correction(pos) == 0 {
 		t.Fatalf("expected a non-zero correction after training")

@@ -39,6 +39,8 @@ type Params struct {
 	NnueFloat        bool // evaluation: when NNUE is on, use the float from-scratch eval instead of the int incremental path (int-vs-float A/B only)
 	TTEval           bool // reuse the TT-stored static eval instead of recomputing it (skips the NNUE/HCE eval on TT hits that don't cut off); behavior-preserving speed-only (eval is deterministic), measured at movetime
 	CorrHist         bool // correction history: learn the per-pattern (pawn / per-color non-pawn) static-eval-vs-search-result bias and correct the static eval by it (improves every eval-gated decision: RFP, null-move, improving, qsearch stand-pat)
+	CorrHistMinor    bool // extra corrhist key on the minor-piece (N+B) skeleton; additive eval adjustment (requires CorrHist)
+	CorrHistCont     bool // extra corrhist key: continuation correction from the stm's own prior moves at ply-2/-4 (requires CorrHist)
 	ContHist         bool // continuation history: 1-ply (countermove) + 2-ply history keyed by the preceding move(s); feeds quiet ordering + the LMR reduction term (sharpens every reduction/late-move prune)
 	LMR2             bool // aggressive LMR: reduce captures/promotions too, earlier onset, PV/improving/ordering-trust/SEE reduction adjustments (supersedes LMR when on)
 	Singular         bool // singular extensions: verify the TT move against all alternatives at reduced depth; extend it a ply if singular, multi-cut if a second move also beats beta
@@ -50,6 +52,7 @@ type Params struct {
 	Futility         bool // frontier futility pruning: skip a late quiet whose static eval + depth margin can't reach alpha (the fail-low side; distinct from RFP)
 	ProbCut          bool // probcut: if a capture's reduced-depth search beats a raised beta, the node is almost surely a fail-high — prune it
 	Razor            bool // razoring: at very shallow depth, if static eval + margin < alpha, drop to qsearch and prune if it confirms we're below alpha
+	CaptHist         bool // capture history: per (piece,to,victim) stats refine capture ordering WITHIN the SEE good/bad tier (orthogonal to quiet butterfly history)
 }
 
 // DefaultParams returns the engine's current full-strength configuration.
@@ -158,6 +161,11 @@ func DefaultParams() Params {
 		// vs corrhist=off: +66.9 ± 22.9 Elo @ 40k nodes [0,6] (174 pairs,
 		// 2026-06-28, pentanomial [0 21 87 44 22], zero LL). Default ON.
 		CorrHist: true,
+		// Extra corrhist keys (minor-piece + continuation), behind their own flags.
+		// DEFAULT OFF — under SPRT. Additive eval adjustment (cannot over-prune);
+		// require CorrHist on.
+		CorrHistMinor: false,
+		CorrHistCont:  false,
 		// Continuation history (1-ply countermove + 2-ply), blended into quiet move
 		// ordering and the LMR reduction term alongside butterfly history. DEFAULT
 		// OFF — under SPRT (best tested bundled with aggressive LMR, where better
@@ -205,5 +213,8 @@ func DefaultParams() Params {
 		Futility: true,
 		ProbCut:  false,
 		Razor:    false,
+		// Capture history: refines capture ordering within the SEE tier. DEFAULT OFF
+		// — under SPRT.
+		CaptHist: false,
 	}
 }

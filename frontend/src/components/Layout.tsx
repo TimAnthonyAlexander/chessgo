@@ -49,7 +49,7 @@ const isActive = (to: string, pathname: string): boolean =>
 // Pages built around a large board need the full viewport — the footer would
 // either push the board up or add an awkward scroll, so we drop it on them:
 // live play, bot play, puzzles, watch/spectate, and analysis.
-const BOARD_ROUTE_PREFIXES = ['/game', '/bot', '/puzzles', '/watch', '/analysis']
+const BOARD_ROUTE_PREFIXES = ['/game', '/bot', '/puzzles', '/watch', '/analysis', '/admin/engine-vs']
 const hideFooter = (pathname: string): boolean =>
     BOARD_ROUTE_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))
 

@@ -134,6 +134,43 @@ func (s *Searcher) updateQuietStats(pos *chess.Position, best chess.Move, tried 
 	}
 }
 
+// captureVictim returns the captured piece type of a capture move m on the
+// (current) position. En-passant captures a pawn; otherwise it's the piece on the
+// destination square. Caller must only pass capture moves.
+func captureVictim(pos *chess.Position, m chess.Move) chess.PieceType {
+	if m.Type() == chess.EnPassant {
+		return chess.Pawn
+	}
+	return pos.PieceOn(m.To()).Type()
+}
+
+// updateCaptureHistory applies the same bounded "gravity" update as updateHistory,
+// keyed by (moved piece, to-square, victim type). pos must be the position the
+// capture is made FROM (so m.From()/m.To() resolve the mover and victim).
+func (s *Searcher) updateCaptureHistory(pos *chess.Position, m chess.Move, bonus int) {
+	if bonus > maxHistory {
+		bonus = maxHistory
+	} else if bonus < -maxHistory {
+		bonus = -maxHistory
+	}
+	pc := pos.PieceOn(m.From())
+	e := &s.captureHist[pc][m.To()][captureVictim(pos, m)]
+	*e += bonus - (*e)*absInt(bonus)/maxHistory
+}
+
+// updateCaptureStats credits a capture that caused a beta cutoff (+bonus) and
+// penalizes the captures tried before it that did not (−bonus), using the gravity
+// scheme. pos must be restored to the node position (after UndoMove).
+func (s *Searcher) updateCaptureStats(pos *chess.Position, best chess.Move, tried []chess.Move, depth int) {
+	bonus := statBonus(depth)
+	s.updateCaptureHistory(pos, best, bonus)
+	for _, c := range tried {
+		if c != best {
+			s.updateCaptureHistory(pos, c, -bonus)
+		}
+	}
+}
+
 // pieceOrderVal is a coarse piece value used by MVV-LVA move ordering.
 var pieceOrderVal = [6]int{100, 320, 330, 500, 900, 20000}
 
@@ -162,6 +199,10 @@ type Searcher struct {
 	ec      eval.Config // evaluation config derived from params
 	killers [maxPly][2]chess.Move
 	history [12][64]int
+	// captureHist[movedPiece][toSquare][victimType] is the capture-history table
+	// (Params.CaptHist): gravity-updated stats that refine capture ordering within
+	// the SEE good/bad tier. Per-search, like the butterfly history.
+	captureHist [12][64][6]int
 	// staticEvals[ply] is the static eval at that ply (evalNone while in check), so
 	// a node can ask whether its side is "improving" vs two plies ago.
 	staticEvals [maxPly]int
@@ -385,6 +426,7 @@ func (s *Searcher) reset(limits Limits, gameHistory []uint64) {
 	s.stop = false
 	s.killers = [maxPly][2]chess.Move{}
 	s.history = [12][64]int{}
+	s.captureHist = [12][64][6]int{}
 	s.excluded = [maxPly]chess.Move{} // always NullMove outside a verification; reset for safety
 	s.inSingularVerify = false
 	s.contBegin() // continuation history: clear tables + path, per-search like butterfly
@@ -858,6 +900,9 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 		staticEval = rawEval
 		if s.params.CorrHist {
 			staticEval += s.correction(pos) // applied fresh, never cached
+			if s.params.CorrHistCont {
+				staticEval += s.contCorrection(ply) // continuation keys (ply-2/-4)
+			}
 		}
 		s.staticEvals[ply] = staticEval
 	} else {
@@ -998,6 +1043,11 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 	var triedQuiets [256]chess.Move
 	nQuiets := 0
 
+	// Captures searched at this node (in order), so a capture beta cutoff can reward
+	// the cutting capture and penalize earlier captures that failed (CaptHist).
+	var triedCaptures [256]chess.Move
+	nCaptures := 0
+
 	// Late-move-pruning move-count limit. Improving lets more late quiets through
 	// (2−improving halves the budget when the position is not trending our way).
 	lmpLimit := 3 + depth*depth
@@ -1046,7 +1096,8 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 		if m == excludedMove { // singular verification: skip the move under test
 			continue
 		}
-		quiet := !isCapture(pos, m) && m.Type() != chess.Promotion
+		capture := isCapture(pos, m) // before DoMove, while the victim is still on m.To()
+		quiet := !capture && m.Type() != chess.Promotion
 		mover := pos.PieceOn(m.From()) // captured before DoMove empties m.From()
 
 		// Late move pruning: at a non-PV node near the leaves, once enough quiet
@@ -1184,6 +1235,9 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 		if quiet {
 			triedQuiets[nQuiets] = m
 			nQuiets++
+		} else if s.params.CaptHist && capture {
+			triedCaptures[nCaptures] = m
+			nCaptures++
 		}
 
 		if sc > bestScore {
@@ -1200,6 +1254,8 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 						s.recordKiller(ply, m)
 						s.updateQuietStats(pos, m, triedQuiets[:nQuiets], depth)
 						s.updateContHist(pos, m, triedQuiets[:nQuiets], depth, ply)
+					} else if s.params.CaptHist && capture {
+						s.updateCaptureStats(pos, m, triedCaptures[:nCaptures], depth)
 					}
 					break
 				}
@@ -1231,7 +1287,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 			(flag == ttLower && bestScore > staticEval) ||
 			(flag == ttUpper && bestScore < staticEval)
 		if dir && !isCapture(pos, bestMove) && bestMove.Type() != chess.Promotion {
-			s.updateCorrHist(pos, staticEval, bestScore, depth)
+			s.updateCorrHist(pos, staticEval, bestScore, depth, ply)
 		}
 	}
 
