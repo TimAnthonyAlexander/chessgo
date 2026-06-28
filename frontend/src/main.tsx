@@ -40,5 +40,5 @@ createRoot(document.getElementById('root')!).render(
     <ThemeProvider theme={theme}>
         <CssBaseline />
         <RouterProvider router={router} />
-    </ThemeProvider>
+    </ThemeProvider>,
 )

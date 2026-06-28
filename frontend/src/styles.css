@@ -1,113 +1,113 @@
 :root {
-  /* Canvas — near-black, faintly cool */
-  --bg: #131419;
-  --bg-2: #181a21;
-  --surface: #1d2029;
-  --surface-2: #242834;
-  --line: #2c313d;
-  --line-soft: #23262f;
+    /* Canvas — near-black, faintly cool */
+    --bg: #131419;
+    --bg-2: #181a21;
+    --surface: #1d2029;
+    --surface-2: #242834;
+    --line: #2c313d;
+    --line-soft: #23262f;
 
-  /* Ink — warm off-white */
-  --text: #ece9e1;
-  --text-dim: #9fa1ac;
-  --muted: #6c6f7d;
+    /* Ink — warm off-white */
+    --text: #ece9e1;
+    --text-dim: #9fa1ac;
+    --muted: #6c6f7d;
 
-  /* Single accent — brass / amber */
-  --accent: #d8a657;
-  --accent-soft: rgba(216, 166, 87, 0.14);
-  --accent-line: rgba(216, 166, 87, 0.4);
+    /* Single accent — brass / amber */
+    --accent: #d8a657;
+    --accent-soft: rgba(216, 166, 87, 0.14);
+    --accent-line: rgba(216, 166, 87, 0.4);
 
-  /* Board — Lichess-style cool grey-blue two-tone */
-  --board-light: #dde2e6;
-  --board-dark: #8198a6;
-  --board-frame: #0e0f13;
-  --last-move: rgba(188, 203, 128, 0.62); /* soft olive/yellow-green */
-  --select: rgba(174, 196, 110, 0.72);
-  --dot: rgba(40, 54, 64, 0.3);
-  --dot-light: rgba(40, 54, 64, 0.22);
-  --check: rgba(202, 74, 74, 0.66);
-  --coord-on-light: #6f828f;
-  --coord-on-dark: #e4eaef;
+    /* Board — Lichess-style cool grey-blue two-tone */
+    --board-light: #dde2e6;
+    --board-dark: #8198a6;
+    --board-frame: #0e0f13;
+    --last-move: rgba(188, 203, 128, 0.62); /* soft olive/yellow-green */
+    --select: rgba(174, 196, 110, 0.72);
+    --dot: rgba(40, 54, 64, 0.3);
+    --dot-light: rgba(40, 54, 64, 0.22);
+    --check: rgba(202, 74, 74, 0.66);
+    --coord-on-light: #6f828f;
+    --coord-on-dark: #e4eaef;
 
-  --font-display: 'Fraunces', Georgia, serif;
-  --font-ui: 'Hanken Grotesk', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+    --font-display: 'Fraunces', Georgia, serif;
+    --font-ui: 'Hanken Grotesk', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
-  color-scheme: dark;
+    color-scheme: dark;
 }
 
 * {
-  box-sizing: border-box;
+    box-sizing: border-box;
 }
 
 html,
 body,
 #root {
-  height: 100%;
-  margin: 0;
+    height: 100%;
+    margin: 0;
 }
 
 body {
-  background: var(--bg);
-  /* Faint atmospheric depth — a single soft radial, no gradients-on-white cliché */
-  background-image:
-    radial-gradient(1100px 620px at 50% -8%, rgba(216, 166, 87, 0.06), transparent 70%),
-    radial-gradient(900px 600px at 88% 110%, rgba(79, 111, 104, 0.08), transparent 70%);
-  background-attachment: fixed;
-  color: var(--text);
-  font-family: var(--font-ui);
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
+    background: var(--bg);
+    /* Faint atmospheric depth — a single soft radial, no gradients-on-white cliché */
+    background-image:
+        radial-gradient(1100px 620px at 50% -8%, rgba(216, 166, 87, 0.06), transparent 70%),
+        radial-gradient(900px 600px at 88% 110%, rgba(79, 111, 104, 0.08), transparent 70%);
+    background-attachment: fixed;
+    color: var(--text);
+    font-family: var(--font-ui);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
 }
 
 a {
-  color: inherit;
-  text-decoration: none;
+    color: inherit;
+    text-decoration: none;
 }
 
 ::selection {
-  background: var(--accent-soft);
+    background: var(--accent-soft);
 }
 
 /* Thin, unobtrusive scrollbars */
 * {
-  scrollbar-width: thin;
-  scrollbar-color: var(--line) transparent;
+    scrollbar-width: thin;
+    scrollbar-color: var(--line) transparent;
 }
 *::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+    width: 8px;
+    height: 8px;
 }
 *::-webkit-scrollbar-thumb {
-  background: var(--line);
-  border-radius: 8px;
+    background: var(--line);
+    border-radius: 8px;
 }
 
 @keyframes rise {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 @keyframes pieceIn {
-  from {
-    opacity: 0;
-    transform: scale(0.82);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
+    from {
+        opacity: 0;
+        transform: scale(0.82);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  * {
-    animation-duration: 0.001ms !important;
-    transition-duration: 0.001ms !important;
-  }
+    * {
+        animation-duration: 0.001ms !important;
+        transition-duration: 0.001ms !important;
+    }
 }

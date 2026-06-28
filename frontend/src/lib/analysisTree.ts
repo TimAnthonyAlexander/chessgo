@@ -9,93 +9,93 @@ import type { WhiteEval } from '../components/EvalBar'
 export type Judgment = 'best' | 'good' | 'inaccuracy' | 'mistake' | 'blunder'
 
 export interface TreeMove {
-  uci: string
-  san: string
-  from: string
-  to: string
+    uci: string
+    san: string
+    from: string
+    to: string
 }
 
 export interface TreeNode {
-  id: number
-  fen: string
-  ply: number // half-moves from the root position (root = 0)
-  parent: number | null
-  children: number[] // children[0] is the mainline continuation
-  move: TreeMove | null // the move leading INTO this node (null at root)
-  evalWhite: WhiteEval | null // eval at this position, White-relative (null = unknown)
-  bestUci: string | null // engine's best move FROM this position (for the arrow)
-  bestPv: string[] | null // engine's principal variation FROM this position (UCI), bestUci first
-  bestDepth: number | null // search depth the eval/PV were computed at
-  judgment: Judgment | null // judgment of `move` (set for a loaded game's mainline)
-  cpLoss: number | null
+    id: number
+    fen: string
+    ply: number // half-moves from the root position (root = 0)
+    parent: number | null
+    children: number[] // children[0] is the mainline continuation
+    move: TreeMove | null // the move leading INTO this node (null at root)
+    evalWhite: WhiteEval | null // eval at this position, White-relative (null = unknown)
+    bestUci: string | null // engine's best move FROM this position (for the arrow)
+    bestPv: string[] | null // engine's principal variation FROM this position (UCI), bestUci first
+    bestDepth: number | null // search depth the eval/PV were computed at
+    judgment: Judgment | null // judgment of `move` (set for a loaded game's mainline)
+    cpLoss: number | null
 }
 
 export interface Tree {
-  nodes: Record<number, TreeNode>
-  rootId: number
-  nextId: number
+    nodes: Record<number, TreeNode>
+    rootId: number
+    nextId: number
 }
 
 export const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 
 function emptyNode(id: number, fen: string, ply: number, parent: number | null): TreeNode {
-  return {
-    id,
-    fen,
-    ply,
-    parent,
-    children: [],
-    move: null,
-    evalWhite: null,
-    bestUci: null,
-    bestPv: null,
-    bestDepth: null,
-    judgment: null,
-    cpLoss: null,
-  }
+    return {
+        id,
+        fen,
+        ply,
+        parent,
+        children: [],
+        move: null,
+        evalWhite: null,
+        bestUci: null,
+        bestPv: null,
+        bestDepth: null,
+        judgment: null,
+        cpLoss: null,
+    }
 }
 
 export function createTree(startFen: string = START_FEN): Tree {
-  const root = emptyNode(0, startFen, 0, null)
-  return { nodes: { 0: root }, rootId: 0, nextId: 1 }
+    const root = emptyNode(0, startFen, 0, null)
+    return { nodes: { 0: root }, rootId: 0, nextId: 1 }
 }
 
 /** Side to move at a node ('w' | 'b'), read from its FEN. */
 export function turnAt(node: TreeNode): 'w' | 'b' {
-  return node.fen.split(' ')[1] === 'b' ? 'b' : 'w'
+    return node.fen.split(' ')[1] === 'b' ? 'b' : 'w'
 }
 
 /** Legal moves from a node, as UCI strings, for feeding the Board. */
 export function legalUci(node: TreeNode): string[] {
-  try {
-    const c = new Chess(node.fen)
-    return c.moves({ verbose: true }).map((m) => m.from + m.to + (m.promotion ?? ''))
-  } catch {
-    return []
-  }
+    try {
+        const c = new Chess(node.fen)
+        return c.moves({ verbose: true }).map((m) => m.from + m.to + (m.promotion ?? ''))
+    } catch {
+        return []
+    }
 }
 
 export interface GameOver {
-  over: boolean
-  checkmate: boolean
-  stalemate: boolean
-  draw: boolean
-  check: boolean
+    over: boolean
+    checkmate: boolean
+    stalemate: boolean
+    draw: boolean
+    check: boolean
 }
 
 export function gameOverAt(node: TreeNode): GameOver {
-  try {
-    const c = new Chess(node.fen)
-    return {
-      over: c.isGameOver(),
-      checkmate: c.isCheckmate(),
-      stalemate: c.isStalemate(),
-      draw: c.isDraw(),
-      check: c.isCheck(),
+    try {
+        const c = new Chess(node.fen)
+        return {
+            over: c.isGameOver(),
+            checkmate: c.isCheckmate(),
+            stalemate: c.isStalemate(),
+            draw: c.isDraw(),
+            check: c.isCheck(),
+        }
+    } catch {
+        return { over: false, checkmate: false, stalemate: false, draw: false, check: false }
     }
-  } catch {
-    return { over: false, checkmate: false, stalemate: false, draw: false, check: false }
-  }
 }
 
 /**
@@ -103,36 +103,44 @@ export function gameOverAt(node: TreeNode): GameOver {
  * creates a new branch. Returns the (possibly new) tree and the resulting node id.
  * Returns the original node id unchanged if the move is illegal.
  */
-export function playMove(tree: Tree, fromId: number, uci: string): { tree: Tree; nodeId: number; created: boolean } {
-  const node = tree.nodes[fromId]
-  if (!node) return { tree, nodeId: fromId, created: false }
+export function playMove(
+    tree: Tree,
+    fromId: number,
+    uci: string,
+): { tree: Tree; nodeId: number; created: boolean } {
+    const node = tree.nodes[fromId]
+    if (!node) return { tree, nodeId: fromId, created: false }
 
-  // Already explored this move from here? Reuse the child (no duplicate branch).
-  for (const childId of node.children) {
-    if (tree.nodes[childId]?.move?.uci === uci) {
-      return { tree, nodeId: childId, created: false }
+    // Already explored this move from here? Reuse the child (no duplicate branch).
+    for (const childId of node.children) {
+        if (tree.nodes[childId]?.move?.uci === uci) {
+            return { tree, nodeId: childId, created: false }
+        }
     }
-  }
 
-  let c: Chess
-  let mv: { san: string; from: string; to: string } | null = null
-  try {
-    c = new Chess(node.fen)
-    const from = uci.slice(0, 2)
-    const to = uci.slice(2, 4)
-    const promotion = uci.length > 4 ? uci[4] : undefined
-    const res = c.move({ from, to, promotion })
-    mv = { san: res.san, from: res.from, to: res.to }
-  } catch {
-    return { tree, nodeId: fromId, created: false }
-  }
+    let c: Chess
+    let mv: { san: string; from: string; to: string } | null = null
+    try {
+        c = new Chess(node.fen)
+        const from = uci.slice(0, 2)
+        const to = uci.slice(2, 4)
+        const promotion = uci.length > 4 ? uci[4] : undefined
+        const res = c.move({ from, to, promotion })
+        mv = { san: res.san, from: res.from, to: res.to }
+    } catch {
+        return { tree, nodeId: fromId, created: false }
+    }
 
-  const id = tree.nextId
-  const child = emptyNode(id, c.fen(), node.ply + 1, fromId)
-  child.move = { uci, san: mv.san, from: mv.from, to: mv.to }
+    const id = tree.nextId
+    const child = emptyNode(id, c.fen(), node.ply + 1, fromId)
+    child.move = { uci, san: mv.san, from: mv.from, to: mv.to }
 
-  const nodes = { ...tree.nodes, [id]: child, [fromId]: { ...node, children: [...node.children, id] } }
-  return { tree: { ...tree, nodes, nextId: id + 1 }, nodeId: id, created: true }
+    const nodes = {
+        ...tree.nodes,
+        [id]: child,
+        [fromId]: { ...node, children: [...node.children, id] },
+    }
+    return { tree: { ...tree, nodes, nextId: id + 1 }, nodeId: id, created: true }
 }
 
 /**
@@ -141,47 +149,50 @@ export function playMove(tree: Tree, fromId: number, uci: string): { tree: Tree;
  * persisted) into the analysis board. Stops at the first illegal move.
  */
 export function buildFromMoves(startFen: string, ucis: string[]): { tree: Tree; lastId: number } {
-  let tree = createTree(startFen || START_FEN)
-  let curId = tree.rootId
-  for (const uci of ucis) {
-    const res = playMove(tree, curId, uci)
-    if (res.nodeId === curId) break // illegal move — stop importing here
-    tree = res.tree
-    curId = res.nodeId
-  }
-  return { tree, lastId: curId }
+    let tree = createTree(startFen || START_FEN)
+    let curId = tree.rootId
+    for (const uci of ucis) {
+        const res = playMove(tree, curId, uci)
+        if (res.nodeId === curId) break // illegal move — stop importing here
+        tree = res.tree
+        curId = res.nodeId
+    }
+    return { tree, lastId: curId }
 }
 
 /** Ancestor chain root→node (inclusive), used for the move list of the current line. */
 export function pathToNode(tree: Tree, nodeId: number): TreeNode[] {
-  const out: TreeNode[] = []
-  let cur: number | null = nodeId
-  while (cur !== null) {
-    const n: TreeNode | undefined = tree.nodes[cur]
-    if (!n) break
-    out.push(n)
-    cur = n.parent
-  }
-  return out.reverse()
+    const out: TreeNode[] = []
+    let cur: number | null = nodeId
+    while (cur !== null) {
+        const n: TreeNode | undefined = tree.nodes[cur]
+        if (!n) break
+        out.push(n)
+        cur = n.parent
+    }
+    return out.reverse()
 }
 
 /** Store an eval (and optional best move + principal variation + depth) on a node immutably. */
 export function annotateEval(
-  tree: Tree,
-  nodeId: number,
-  evalWhite: WhiteEval | null,
-  bestUci: string | null,
-  bestPv: string[] | null = null,
-  bestDepth: number | null = null,
+    tree: Tree,
+    nodeId: number,
+    evalWhite: WhiteEval | null,
+    bestUci: string | null,
+    bestPv: string[] | null = null,
+    bestDepth: number | null = null,
 ): Tree {
-  const node = tree.nodes[nodeId]
-  if (!node) return tree
-  return { ...tree, nodes: { ...tree.nodes, [nodeId]: { ...node, evalWhite, bestUci, bestPv, bestDepth } } }
+    const node = tree.nodes[nodeId]
+    if (!node) return tree
+    return {
+        ...tree,
+        nodes: { ...tree.nodes, [nodeId]: { ...node, evalWhite, bestUci, bestPv, bestDepth } },
+    }
 }
 
 export interface PvMove {
-  san: string
-  ply: number // half-move index within the PV (0-based)
+    san: string
+    ply: number // half-move index within the PV (0-based)
 }
 
 /**
@@ -190,42 +201,46 @@ export interface PvMove {
  * illegal (defensive — the engine should only ever return a legal line).
  */
 export function pvToSan(fen: string, pvUci: string[]): PvMove[] {
-  const out: PvMove[] = []
-  let c: Chess
-  try {
-    c = new Chess(fen)
-  } catch {
-    return out
-  }
-  for (let i = 0; i < pvUci.length; i++) {
-    const uci = pvUci[i]
+    const out: PvMove[] = []
+    let c: Chess
     try {
-      const res = c.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci.length > 4 ? uci[4] : undefined })
-      out.push({ san: res.san, ply: i })
+        c = new Chess(fen)
     } catch {
-      break
+        return out
     }
-  }
-  return out
+    for (let i = 0; i < pvUci.length; i++) {
+        const uci = pvUci[i]
+        try {
+            const res = c.move({
+                from: uci.slice(0, 2),
+                to: uci.slice(2, 4),
+                promotion: uci.length > 4 ? uci[4] : undefined,
+            })
+            out.push({ san: res.san, ply: i })
+        } catch {
+            break
+        }
+    }
+    return out
 }
 
 export interface AnalysisPlyDTO {
-  ply: number
-  fen: string
-  sideToMove: 'w' | 'b'
-  evalWhite: WhiteEval | null
-  bestUci: string | null
-  bestSan: string | null
-  bestPv?: string[] // engine's best line from this position (UCI); [] / absent if none
-  bestDepth?: number | null
-  move?: {
-    uci: string
-    san: string
-    color: 'w' | 'b'
-    cpLoss: number
-    isBest: boolean
-    judgment: Judgment
-  }
+    ply: number
+    fen: string
+    sideToMove: 'w' | 'b'
+    evalWhite: WhiteEval | null
+    bestUci: string | null
+    bestSan: string | null
+    bestPv?: string[] // engine's best line from this position (UCI); [] / absent if none
+    bestDepth?: number | null
+    move?: {
+        uci: string
+        san: string
+        color: 'w' | 'b'
+        cpLoss: number
+        isBest: boolean
+        judgment: Judgment
+    }
 }
 
 /**
@@ -233,49 +248,52 @@ export interface AnalysisPlyDTO {
  * the mainline annotated with cached evals, best moves, and move judgments. The
  * user can branch off any node afterward.
  */
-export function buildFromAnalysis(startFen: string, plies: AnalysisPlyDTO[]): { tree: Tree; lastId: number } {
-  let tree = createTree(startFen || START_FEN)
-  let curId = tree.rootId
+export function buildFromAnalysis(
+    startFen: string,
+    plies: AnalysisPlyDTO[],
+): { tree: Tree; lastId: number } {
+    let tree = createTree(startFen || START_FEN)
+    let curId = tree.rootId
 
-  // Annotate the root (start position) eval + best move + line.
-  if (plies[0]) {
-    tree = annotateEval(
-      tree,
-      curId,
-      plies[0].evalWhite,
-      plies[0].bestUci,
-      plies[0].bestPv ?? null,
-      plies[0].bestDepth ?? null,
-    )
-  }
-
-  for (let k = 0; k < plies.length; k++) {
-    const p = plies[k]
-    if (!p.move) continue
-    const res = playMove(tree, curId, p.move.uci)
-    tree = res.tree
-    curId = res.nodeId
-    // The resulting position's eval/best come from the NEXT ply entry.
-    const after = plies[k + 1]
-    const node = tree.nodes[curId]
-    if (node) {
-      tree = {
-        ...tree,
-        nodes: {
-          ...tree.nodes,
-          [curId]: {
-            ...node,
-            evalWhite: after ? after.evalWhite : node.evalWhite,
-            bestUci: after ? after.bestUci : null,
-            bestPv: after ? (after.bestPv ?? null) : null,
-            bestDepth: after ? (after.bestDepth ?? null) : null,
-            judgment: p.move.judgment,
-            cpLoss: p.move.cpLoss,
-          },
-        },
-      }
+    // Annotate the root (start position) eval + best move + line.
+    if (plies[0]) {
+        tree = annotateEval(
+            tree,
+            curId,
+            plies[0].evalWhite,
+            plies[0].bestUci,
+            plies[0].bestPv ?? null,
+            plies[0].bestDepth ?? null,
+        )
     }
-  }
 
-  return { tree, lastId: curId }
+    for (let k = 0; k < plies.length; k++) {
+        const p = plies[k]
+        if (!p.move) continue
+        const res = playMove(tree, curId, p.move.uci)
+        tree = res.tree
+        curId = res.nodeId
+        // The resulting position's eval/best come from the NEXT ply entry.
+        const after = plies[k + 1]
+        const node = tree.nodes[curId]
+        if (node) {
+            tree = {
+                ...tree,
+                nodes: {
+                    ...tree.nodes,
+                    [curId]: {
+                        ...node,
+                        evalWhite: after ? after.evalWhite : node.evalWhite,
+                        bestUci: after ? after.bestUci : null,
+                        bestPv: after ? (after.bestPv ?? null) : null,
+                        bestDepth: after ? (after.bestDepth ?? null) : null,
+                        judgment: p.move.judgment,
+                        cpLoss: p.move.cpLoss,
+                    },
+                },
+            }
+        }
+    }
+
+    return { tree, lastId: curId }
 }
