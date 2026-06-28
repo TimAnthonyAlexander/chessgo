@@ -171,6 +171,7 @@ export interface CandidateMove {
     eval: { type: 'cp' | 'mate'; value: number }
     pv: string[]
     depth: number
+    opening: Opening | null // the opening this move leads to (null if unnamed)
 }
 
 /** Opening explorer payload: the line's opening name + ranked candidate moves. */

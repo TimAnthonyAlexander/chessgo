@@ -238,14 +238,31 @@ func (s *Server) handleCandidates(w http.ResponseWriter, r *http.Request) {
 		cands = cands[:n]
 	}
 
+	// Keys of the line up to and including the current position, reused to name the
+	// opening EACH candidate move leads to (deepest match including that move).
+	baseKeys := historyKeys(req.History)
+	baseKeys = append(baseKeys, pos.Key())
+
 	moves := make([]map[string]any, len(cands))
 	for i, c := range cands {
+		child := *pos // Position is a value type → cheap copy; play the move on it
+		var u chess.Undo
+		child.DoMove(c.Move, &u)
+		keys := make([]uint64, len(baseKeys)+1)
+		copy(keys, baseKeys)
+		keys[len(baseKeys)] = child.Key()
+		var moveOpening *openings.Opening
+		if o, ok := openings.Classify(keys); ok {
+			moveOpening = &o
+		}
+
 		moves[i] = map[string]any{
-			"uci":   c.Move.String(),
-			"san":   pos.SAN(c.Move),
-			"eval":  evalObject(c.Score, c.MateIn),
-			"pv":    pvStrings(c.PV),
-			"depth": c.Depth,
+			"uci":     c.Move.String(),
+			"san":     pos.SAN(c.Move),
+			"eval":    evalObject(c.Score, c.MateIn),
+			"pv":      pvStrings(c.PV),
+			"depth":   c.Depth,
+			"opening": moveOpening, // opening this move leads to (null if unnamed)
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

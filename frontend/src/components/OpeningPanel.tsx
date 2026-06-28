@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Box, Typography } from '@mui/material'
+import { Box, Tooltip, Typography } from '@mui/material'
 import { BookOpen } from 'lucide-react'
 import { candidates, type Candidates, type CandidateMove } from '../api/client'
 import { gameOverAt, pathToNode, START_FEN, type Tree } from '../lib/analysisTree'
@@ -91,11 +91,15 @@ export default function OpeningPanel({
     currentId,
     engineOn,
     onMove,
+    onHoverMove,
 }: {
     tree: Tree
     currentId: number
     engineOn: boolean
     onMove: (uci: string) => void
+    // Hovering a candidate row reports its UCI (null on leave) so the board can
+    // draw an arrow for it.
+    onHoverMove?: (uci: string | null) => void
 }) {
     const { data, dataFen } = useCandidates(tree, currentId, engineOn)
 
@@ -180,7 +184,13 @@ export default function OpeningPanel({
                     </Typography>
                 ) : (
                     moves.map((m) => (
-                        <MoveRow key={m.uci} move={m} stm={displayStm} onPlay={() => onMove(m.uci)} />
+                        <MoveRow
+                            key={m.uci}
+                            move={m}
+                            stm={displayStm}
+                            onPlay={() => onMove(m.uci)}
+                            onHover={onHoverMove}
+                        />
                     ))
                 )}
             </Box>
@@ -195,20 +205,27 @@ function MoveRow({
     move,
     stm,
     onPlay,
+    onHover,
 }: {
     move: CandidateMove
     stm: 'w' | 'b'
     onPlay: () => void
+    onHover?: (uci: string | null) => void
 }) {
     const white = stm === 'w' ? move.eval.value : -move.eval.value
     const whitePct = whiteWinPercent(move.eval.type, white)
     const text = evalText(move.eval.type, white)
     const whiteBetter = white > 0
+    // Tooltip = the opening this move leads to; empty (no tooltip) when unnamed.
+    const tip = move.opening ? `${move.opening.eco} · ${move.opening.name}` : ''
 
     return (
+        <Tooltip title={tip} placement="left" arrow disableInteractive>
         <Box
             role="button"
             onClick={onPlay}
+            onMouseEnter={() => onHover?.(move.uci)}
+            onMouseLeave={() => onHover?.(null)}
             sx={{
                 display: 'grid',
                 gridTemplateColumns: '46px 1fr 48px',
@@ -269,5 +286,6 @@ function MoveRow({
                 {text}
             </Typography>
         </Box>
+        </Tooltip>
     )
 }

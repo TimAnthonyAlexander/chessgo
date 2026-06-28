@@ -39,6 +39,10 @@ import { useAuth } from '../lib/auth'
 // How long (ms) each auto-played move lingers before the next one.
 const AUTO_DELAY = 700
 
+// Color of the board arrow drawn when hovering a candidate (book) move — a clear
+// blue, distinct from the gold engine best-move arrow.
+const BOOK_ARROW_COLOR = '#4c8bf5'
+
 // Depth schedule for the analysis board's progressive ("streaming") eval. Each
 // entry is a separate /analyze call at that ply depth; we render the result as it
 // lands, so the panel shows an instant shallow guess that refines as it deepens.
@@ -73,6 +77,9 @@ export default function Analysis() {
     const [loadError, setLoadError] = useState<string | null>(null)
     const [loading, setLoading] = useState<boolean>(!!id)
     const [autoMode, setAutoMode] = useState<AutoMode>('off')
+    // UCI of the candidate (book) move currently hovered in the OpeningPanel, drawn
+    // as a blue arrow on the board. Cleared whenever the viewed node changes.
+    const [hoverUci, setHoverUci] = useState<string | null>(null)
 
     // --- Load a finished game's analysis (review mode) ---
     useEffect(() => {
@@ -127,6 +134,10 @@ export default function Analysis() {
             cancelled = true
         }
     }, [id, importMoves, importStartFen])
+
+    // A hovered candidate move only makes sense for the position it was listed for;
+    // drop it when the viewed node changes (the row also unmounts on navigation).
+    useEffect(() => setHoverUci(null), [currentId])
 
     const current = tree.nodes[currentId] ?? tree.nodes[tree.rootId]
     const sideToMove = turnAt(current)
@@ -348,8 +359,15 @@ export default function Analysis() {
 
     // The board arrow needs the engine on and the arrow toggle enabled — even while
     // Auto Best Move is driving, we honor the user's arrow preference.
-    const arrow =
-        engineOn && showArrow && current.bestUci
+    // A hovered candidate (book) move wins over the gold engine arrow, drawn in
+    // blue. It shows on hover regardless of the best-move arrow toggle.
+    const arrow = hoverUci
+        ? {
+              from: hoverUci.slice(0, 2),
+              to: hoverUci.slice(2, 4),
+              color: BOOK_ARROW_COLOR,
+          }
+        : engineOn && showArrow && current.bestUci
             ? { from: current.bestUci.slice(0, 2), to: current.bestUci.slice(2, 4) }
             : null
 
@@ -520,6 +538,7 @@ export default function Analysis() {
                         currentId={currentId}
                         engineOn={engineOn}
                         onMove={onMove}
+                        onHoverMove={setHoverUci}
                     />
                 </Box>
             </Box>

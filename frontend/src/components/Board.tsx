@@ -39,8 +39,9 @@ interface BoardProps {
     onMove: (uci: string) => void
     /** Optional display-only board override for optimistic move feedback. */
     overrideBoard?: BoardMap
-    /** Optional move arrow (e.g. the engine's best move) drawn over the board. */
-    arrow?: { from: Square; to: Square } | null
+    /** Optional move arrow (e.g. the engine's best move, or a hovered candidate)
+     * drawn over the board. `color` defaults to the accent (gold) best-move hue. */
+    arrow?: { from: Square; to: Square; color?: string } | null
     /** The local player's own color — enables premove input while it isn't their
      * turn (i.e. while `interactive` is false). Omit/null to disable premoves. */
     premoveColor?: Color | null
@@ -140,6 +141,7 @@ export default function Board({
         return { x: col * 10 + 5, y: row * 10 + 5 }
     }
     const arrowGeom = arrow ? { a: center(arrow.from), b: center(arrow.to) } : null
+    const arrowColor = arrow?.color ?? 'var(--accent)'
 
     const ranks = orientation === 'w' ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7]
     const files = orientation === 'w' ? [0, 1, 2, 3, 4, 5, 6, 7] : [7, 6, 5, 4, 3, 2, 1, 0]
@@ -381,7 +383,7 @@ export default function Board({
                                 refY="2"
                                 orient="auto"
                             >
-                                <path d="M0,0 L4,2 L0,4 z" fill="var(--accent)" />
+                                <path d="M0,0 L4,2 L0,4 z" fill={arrowColor} />
                             </marker>
                         </defs>
                         <line
@@ -389,7 +391,7 @@ export default function Board({
                             y1={arrowGeom.a.y}
                             x2={arrowGeom.b.x}
                             y2={arrowGeom.b.y}
-                            stroke="var(--accent)"
+                            stroke={arrowColor}
                             strokeWidth={1.7}
                             strokeLinecap="round"
                             markerEnd="url(#bm-head)"
