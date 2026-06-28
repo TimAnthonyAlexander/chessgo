@@ -103,20 +103,6 @@ export default function Home() {
           }}
         >
           <Box sx={{ minWidth: 0 }}>
-            {user && (
-              <Typography
-                sx={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 12,
-                  letterSpacing: '0.2em',
-                  textTransform: 'uppercase',
-                  color: 'var(--accent)',
-                  mb: 1,
-                }}
-              >
-                Welcome back, {user.name}
-              </Typography>
-            )}
             <Typography
               sx={{
                 fontFamily: 'var(--font-display)',
