@@ -16,6 +16,7 @@ import AnalysisAside from '../components/AnalysisAside'
 import Board from '../components/Board'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveTree from '../components/MoveTree'
+import OpeningPanel from '../components/OpeningPanel'
 import { analyze, getGameAnalysis, type GameAnalysis } from '../api/client'
 import type { Color } from '../api/client'
 import {
@@ -513,6 +514,13 @@ export default function Analysis() {
                             </NavBtn>
                         </Box>
                     </Box>
+
+                    <OpeningPanel
+                        tree={tree}
+                        currentId={currentId}
+                        engineOn={engineOn}
+                        onMove={onMove}
+                    />
                 </Box>
             </Box>
         </Box>

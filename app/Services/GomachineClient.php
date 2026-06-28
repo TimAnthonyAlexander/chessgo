@@ -102,6 +102,34 @@ class GomachineClient
     }
 
     /**
+     * Opening explorer for the analysis board: the opening NAME of the current
+     * line plus a full-strength eval for EVERY legal move (ranked best-first),
+     * so the UI can draw a per-move eval bar. The engine owns all of it — naming
+     * (its native-Zobrist opening table) and the MultiPV search.
+     *
+     * @param string[] $history Prior-position FENs (root→previous), so the engine
+     *   resolves the DEEPEST named opening along the line, not just the current
+     *   position.
+     * @return array<string, mixed> {opening: {eco,name}|null, moves: list<{uci,san,eval,pv,depth}>}
+     */
+    public function candidates(string $fen, array $history = [], int $multipv = 0, int $movetimeMs = 300, int $depth = 0): array
+    {
+        $limits = ['movetime' => $movetimeMs];
+        if ($multipv > 0) {
+            $limits['multipv'] = $multipv;
+        }
+        if ($depth > 0) {
+            $limits['depth'] = $depth;
+        }
+
+        return $this->post('/candidates', [
+            'fen' => $fen,
+            'history' => array_values($history),
+            'limits' => $limits,
+        ]);
+    }
+
+    /**
      * Full-game analysis: replay UCI `moves` from `startFen` (null = standard
      * start) and evaluate every resulting position at full strength. The engine
      * fans the positions out across its worker pool, so this is one HTTP call;

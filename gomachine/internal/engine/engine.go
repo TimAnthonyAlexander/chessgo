@@ -269,6 +269,32 @@ func (e *Engine) SearchDirect(pos *chess.Position, depth int, movetime time.Dura
 	}
 }
 
+// Candidate is one root move with its full-strength eval, for the analysis
+// board's per-move eval bars. Score/MateIn are from the side-to-move's
+// perspective (exactly like BestResult), so the HTTP layer can render them the
+// same way it renders a single search result.
+type Candidate struct {
+	Move   chess.Move
+	Score  int
+	MateIn int
+	PV     []chess.Move
+	Depth  int
+}
+
+// MultiPV evaluates every legal move from pos at full strength (depth/movetime
+// bounded) and returns them ranked best-first — the engine side of the analysis
+// board's candidate-move list. Unlike SearchDirect it does NOT short-circuit on
+// the book/tablebase: the point is to score ALL moves, not return one precomputed
+// best, so the eval bars are real per-move searches.
+func (e *Engine) MultiPV(pos *chess.Position, depth int, movetime time.Duration, history []uint64) []Candidate {
+	lines := e.searcher.MultiPV(pos, search.Limits{Depth: depth, MoveTime: movetime}, history)
+	out := make([]Candidate, len(lines))
+	for i, l := range lines {
+		out[i] = Candidate{Move: l.Move, Score: l.Score, MateIn: l.MateIn, PV: l.PV, Depth: l.Depth}
+	}
+	return out
+}
+
 // --- Rules operations (delegate to the chess core) ---
 
 // Status classifies the position per FIDE rules (SPEC §5.4). history holds the

@@ -57,6 +57,8 @@ func main() {
 		cmdGenTBEPD(os.Args[2:])
 	case "compile-book":
 		cmdCompileBook(os.Args[2:])
+	case "compile-openings":
+		cmdCompileOpenings(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:

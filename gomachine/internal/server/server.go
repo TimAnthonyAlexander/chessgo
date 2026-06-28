@@ -12,6 +12,7 @@ import (
 	"github.com/timanthonyalexander/gomachine/internal/book"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 	"github.com/timanthonyalexander/gomachine/internal/engine"
+	"github.com/timanthonyalexander/gomachine/internal/openings"
 	"github.com/timanthonyalexander/gomachine/internal/syzygy"
 )
 
@@ -83,6 +84,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /move", s.handleMove)
 	mux.HandleFunc("POST /legal-moves", s.handleLegalMoves)
 	mux.HandleFunc("POST /bestmove", s.handleBestMove)
+	mux.HandleFunc("POST /candidates", s.handleCandidates)
 	mux.HandleFunc("POST /sf-bestmove", s.handleStockfishMove)
 	mux.HandleFunc("POST /analyze-game", s.handleAnalyzeGame)
 	mux.HandleFunc("POST /status", s.handleStatus)
@@ -165,6 +167,81 @@ func pvStrings(pv []chess.Move) []string {
 		out[i] = m.String()
 	}
 	return out
+}
+
+// openingFor names the line ending at pos given the prior-position FENs (root→
+// previous), using our native-Zobrist opening table. Returns nil when no position
+// along the line is a named opening (so the caller emits a null/absent field).
+func openingFor(pos *chess.Position, historyFens []string) *openings.Opening {
+	keys := historyKeys(historyFens)
+	keys = append(keys, pos.Key())
+	if o, ok := openings.Classify(keys); ok {
+		return &o
+	}
+	return nil
+}
+
+// evalObject builds the {type, value} eval the frontend renders, from a
+// side-to-move-relative score + signed mate distance (mate wins over cp).
+func evalObject(score, mateIn int) map[string]any {
+	if mateIn != 0 {
+		return map[string]any{"type": "mate", "value": mateIn}
+	}
+	return map[string]any{"type": "cp", "value": score}
+}
+
+type candidatesRequest struct {
+	FEN     string   `json:"fen"`
+	History []string `json:"history"`
+	Limits  struct {
+		MultiPV  int `json:"multipv"`  // cap on returned moves (0 = all legal)
+		Depth    int `json:"depth"`    // per-move search depth (0 = time-bounded)
+		MoveTime int `json:"movetime"` // total budget, milliseconds
+	} `json:"limits"`
+}
+
+// handleCandidates is the analysis board's "opening explorer": it returns the
+// opening NAME for the current line plus a full-strength eval for EVERY legal move
+// (ranked best-first), so the UI can draw a per-move eval bar. Stateless (FEN-in),
+// like the rest of the engine API.
+func (s *Server) handleCandidates(w http.ResponseWriter, r *http.Request) {
+	var req candidatesRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	pos, ok := parseLegal(w, req.FEN)
+	if !ok {
+		return
+	}
+
+	depth := req.Limits.Depth
+	movetime := time.Duration(req.Limits.MoveTime) * time.Millisecond
+	if depth <= 0 && movetime == 0 {
+		movetime = 300 * time.Millisecond // sensible default for an interactive panel
+	}
+
+	eng := s.acquire()
+	defer s.release(eng)
+
+	cands := eng.MultiPV(pos, depth, movetime, historyKeys(req.History))
+	if n := req.Limits.MultiPV; n > 0 && n < len(cands) {
+		cands = cands[:n]
+	}
+
+	moves := make([]map[string]any, len(cands))
+	for i, c := range cands {
+		moves[i] = map[string]any{
+			"uci":   c.Move.String(),
+			"san":   pos.SAN(c.Move),
+			"eval":  evalObject(c.Score, c.MateIn),
+			"pv":    pvStrings(c.PV),
+			"depth": c.Depth,
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"opening": openingFor(pos, req.History),
+		"moves":   moves,
+	})
 }
 
 // --- handlers ---
@@ -276,6 +353,7 @@ func (s *Server) handleBestMove(w http.ResponseWriter, r *http.Request) {
 				"nodes":    0,
 				"nps":      0,
 				"level":    -1,
+				"opening":  openingFor(pos, req.History),
 			})
 			return
 		}
@@ -323,6 +401,7 @@ func (s *Server) handleBestMove(w http.ResponseWriter, r *http.Request) {
 		"nodes":    res.Nodes,
 		"nps":      nps,
 		"level":    res.Level,
+		"opening":  openingFor(pos, req.History),
 	})
 }
 

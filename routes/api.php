@@ -15,6 +15,7 @@ use App\Controllers\BotGameController;
 use App\Controllers\BotMoveController;
 use App\Controllers\BotUndoController;
 use App\Controllers\AnalyzeController;
+use App\Controllers\CandidatesController;
 use App\Controllers\EngineMatchController;
 use App\Controllers\WsTicketController;
 use App\Controllers\StatsController;
@@ -77,6 +78,13 @@ $router->post('/bot-games/{id}/undo', [
 $router->post('/analyze', [
     RateLimitMiddleware::class => ['limit' => '120/1m'],
     AnalyzeController::class,
+]);
+
+// Opening explorer for the analysis board: opening name + per-move eval
+// (MultiPV): { fen, history?, multipv?, movetime?, depth? }
+$router->post('/candidates', [
+    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    CandidatesController::class,
 ]);
 
 // Admin-only "engine vs engine" — one ply of gomachine(rating) vs Stockfish(elo).

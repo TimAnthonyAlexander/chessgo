@@ -157,6 +157,59 @@ export function analyze(
     })
 }
 
+/** The opening of a line: ECO code + full name (e.g. "B90", "Sicilian … Najdorf"). */
+export interface Opening {
+    eco: string
+    name: string
+}
+
+/** One candidate move with the engine's full-strength eval, for a per-move eval bar.
+ * `eval` is from the side-to-move's perspective (like the engine line). */
+export interface CandidateMove {
+    uci: string
+    san: string
+    eval: { type: 'cp' | 'mate'; value: number }
+    pv: string[]
+    depth: number
+}
+
+/** Opening explorer payload: the line's opening name + ranked candidate moves. */
+export interface Candidates {
+    opening: Opening | null
+    moves: CandidateMove[]
+}
+
+/** Opening explorer for the analysis board — the engine owns naming AND the
+ * per-move MultiPV eval. `history` is the prior-position FENs (root→previous) so
+ * the engine resolves the DEEPEST named opening along the line. */
+export function candidates(
+    fen: string,
+    opts?: {
+        history?: string[]
+        multipv?: number
+        movetime?: number
+        depth?: number
+        signal?: AbortSignal
+    },
+): Promise<Candidates> {
+    const body: {
+        fen: string
+        history?: string[]
+        multipv?: number
+        movetime?: number
+        depth?: number
+    } = { fen }
+    if (opts?.history && opts.history.length > 0) body.history = opts.history
+    if (opts?.multipv) body.multipv = opts.multipv
+    if (opts?.movetime) body.movetime = opts.movetime
+    if (opts?.depth) body.depth = opts.depth
+    return request<Candidates>('/candidates', {
+        method: 'POST',
+        body: JSON.stringify(body),
+        signal: opts?.signal,
+    })
+}
+
 // --- Finished live games + post-game analysis (analysis board) ---
 
 /** A persisted finished live game (GET /games/{id} by hub id). */

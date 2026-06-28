@@ -6,6 +6,7 @@ package search
 
 import (
 	"math"
+	"sort"
 	"sync"
 	"time"
 
@@ -559,6 +560,98 @@ func (s *Searcher) RootScores(pos *chess.Position, limits Limits, gameHistory []
 		out = append(out, RootMove{Move: m, Score: score})
 	}
 	return out
+}
+
+// RootLine is one candidate root move with its full-strength evaluation: score,
+// signed mate distance, principal variation, and the depth it was searched to.
+type RootLine struct {
+	Move   chess.Move
+	Score  int // root side-to-move's perspective (centipawns, or mate-encoded)
+	MateIn int // signed mate distance in moves (0 = none)
+	PV     []chess.Move
+	Depth  int
+}
+
+// MultiPV evaluates EVERY legal root move at full strength and returns them ranked
+// best-first, each with its exact score/mate and PV. This is the engine side of
+// the analysis board's "candidate moves + an eval bar per move".
+//
+// Unlike RootScores (which powers bot weakening and deliberately suppresses the
+// tablebase probe), MultiPV is a full-strength analysis primitive — WDL-in-search
+// stays on. It runs iterative deepening at the root; each iteration scores all
+// root moves with a full (-inf,inf) window so every move gets an exact score (not
+// just the best), and honours limits.Depth / MoveTime / Nodes via the shared stop
+// machinery. Only the deepest FULLY-completed iteration is returned, so a partial
+// iteration cut off by time can't leave some moves deeper than others.
+func (s *Searcher) MultiPV(pos *chess.Position, limits Limits, gameHistory []uint64) []RootLine {
+	s.tt.NewSearchAge()
+	s.reset(limits, gameHistory)
+	s.pushKey(pos.Key())
+	s.nnueBegin(pos)
+
+	var ml chess.MoveList
+	pos.GenerateLegal(&ml)
+	n := ml.Len()
+	if n == 0 {
+		return nil
+	}
+	moves := make([]chess.Move, n)
+	for i := 0; i < n; i++ {
+		moves[i] = ml.Get(i)
+	}
+
+	maxDepth := limits.Depth
+	if maxDepth <= 0 || maxDepth > maxPly {
+		maxDepth = maxPly
+	}
+
+	// scoreAll scores every root move at one depth, returning the per-move results
+	// and whether the whole iteration completed before the stop flag fired. When
+	// force is set it ignores time (a guaranteed shallow pass so we always return
+	// something even under a tiny budget).
+	scoreAll := func(depth int, force bool) ([]RootLine, bool) {
+		iter := make([]RootLine, n)
+		for i, m := range moves {
+			if !force && s.stop {
+				return iter, false
+			}
+			var u chess.Undo
+			if s.useNNUE {
+				s.accStack.Push(pos, m)
+			}
+			pos.DoMove(m, &u)
+			s.pushKey(pos.Key())
+			score := -s.negamax(pos, depth-1, 1, -infinity, infinity)
+			pv := append([]chess.Move{m}, s.extractPV(pos, depth)...)
+			s.popKey()
+			pos.UndoMove(m, &u)
+			if s.useNNUE {
+				s.accStack.Pop()
+			}
+			if !force && s.stop {
+				return iter, false // this move's score is unreliable — discard the iteration
+			}
+			iter[i] = RootLine{Move: m, Score: score, MateIn: mateDistance(score), PV: pv, Depth: depth}
+		}
+		return iter, true
+	}
+
+	var committed []RootLine
+	for depth := 1; depth <= maxDepth; depth++ {
+		iter, done := scoreAll(depth, false)
+		if !done {
+			break
+		}
+		committed = iter
+	}
+	if committed == nil {
+		// Budget too small for even depth 1 to complete — force one shallow pass.
+		s.stop = false
+		committed, _ = scoreAll(1, true)
+	}
+
+	sort.SliceStable(committed, func(i, j int) bool { return committed[i].Score > committed[j].Score })
+	return committed
 }
 
 func mateDistance(score int) int {
