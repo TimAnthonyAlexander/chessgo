@@ -46,6 +46,13 @@ function navItems(isAdmin: boolean): NavItem[] {
 const isActive = (to: string, pathname: string): boolean =>
     to === '/' ? pathname === '/' : pathname.startsWith(to)
 
+// Pages built around a large board need the full viewport — the footer would
+// either push the board up or add an awkward scroll, so we drop it on them:
+// live play, bot play, puzzles, watch/spectate, and analysis.
+const BOARD_ROUTE_PREFIXES = ['/game', '/bot', '/puzzles', '/watch', '/analysis']
+const hideFooter = (pathname: string): boolean =>
+    BOARD_ROUTE_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))
+
 const linkSx = (active: boolean, real: boolean) => ({
     fontSize: 12.5,
     fontWeight: 600,
@@ -156,7 +163,7 @@ export default function Layout() {
                 <Outlet />
             </Box>
 
-            <Footer />
+            {!hideFooter(pathname) && <Footer />}
 
             <AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} />
         </Box>
