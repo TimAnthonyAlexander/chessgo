@@ -30,6 +30,10 @@ function evalText(type: 'cp' | 'mate', white: number): string {
  * the engine toggle changes; stays quiet while the engine is off or game is over. */
 function useCandidates(tree: Tree, currentId: number, engineOn: boolean) {
     const [data, setData] = useState<Candidates | null>(null)
+    // The fen the current `data` was computed for, so we can tell when it's stale
+    // (the position changed but the new response hasn't landed yet) and avoid
+    // rendering another position's evals.
+    const [dataFen, setDataFen] = useState('')
     const [loading, setLoading] = useState(false)
 
     // The viewed node's fen + the prior-position fens (root→previous) for the
@@ -57,6 +61,7 @@ function useCandidates(tree: Tree, currentId: number, engineOn: boolean) {
             .then((res) => {
                 if (alive) {
                     setData(res)
+                    setDataFen(fen)
                     setLoading(false)
                 }
             })
@@ -69,7 +74,8 @@ function useCandidates(tree: Tree, currentId: number, engineOn: boolean) {
         }
     }, [engineOn, over, fen, history])
 
-    return { data, loading }
+    // stale = the viewed position changed but its response hasn't arrived yet.
+    return { data, loading, stale: dataFen !== fen }
 }
 
 /**
@@ -89,7 +95,7 @@ export default function OpeningPanel({
     engineOn: boolean
     onMove: (uci: string) => void
 }) {
-    const { data, loading } = useCandidates(tree, currentId, engineOn)
+    const { data, loading, stale } = useCandidates(tree, currentId, engineOn)
     const node = tree.nodes[currentId] ?? tree.nodes[tree.rootId]
     const stm = turnAt(node)
     // At the root (no moves played) the position simply isn't a named opening yet —
@@ -99,7 +105,11 @@ export default function OpeningPanel({
     if (!engineOn) return null
 
     const opening = data?.opening ?? null
-    const moves = data?.moves ?? []
+    // Only render bars for the CURRENT position — never another position's evals
+    // (re-flipping a stale move's score by the new side-to-move makes every bar
+    // jump to a wrong value during the load gap).
+    const moves = stale ? [] : (data?.moves ?? [])
+    const busy = loading || stale
 
     return (
         <Box sx={{ borderTop: '1px solid var(--line-soft)', bgcolor: 'var(--bg-2)' }}>
@@ -153,7 +163,7 @@ export default function OpeningPanel({
                     </>
                 ) : (
                     <Typography sx={{ fontSize: 12.5, color: 'var(--muted)', fontStyle: 'italic' }}>
-                        {atStart ? 'Starting position' : 'Out of book'}
+                        {atStart ? 'Starting position' : busy ? 'Exploring…' : 'Out of book'}
                     </Typography>
                 )}
             </Box>
@@ -164,7 +174,7 @@ export default function OpeningPanel({
                     <Typography
                         sx={{ fontSize: 12, color: 'var(--muted)', fontStyle: 'italic', px: 0.5, py: 0.75 }}
                     >
-                        {loading ? 'Exploring moves…' : 'No moves'}
+                        {busy ? 'Exploring moves…' : 'No moves'}
                     </Typography>
                 ) : (
                     moves.map((m) => <MoveRow key={m.uci} move={m} stm={stm} onPlay={() => onMove(m.uci)} />)
