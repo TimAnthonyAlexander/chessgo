@@ -44,8 +44,14 @@ patch is an improvement) or H0 (it isn't). Key design choices:
 - **A patch is a `search.Params` diff.** Because both engines live in one binary,
   a change is a feature flag (e.g. `lmr=off`), and `--new`/`--old` select the two
   configs. This *is* the per-feature gating workflow.
-- **Fixed nodes** (`--nodes`) → reproducible, hardware-independent. (Use
-  `--movetime` only for time-dependent features like Lazy SMP, §4.)
+- **Fixed nodes** (`--nodes`) → reproducible, hardware-independent — **but valid
+  only for SEARCH features.** Fixed-nodes *inflates EVAL changes*: it stops
+  mid-iteration at the node cutoff and rewards whichever eval converged to the
+  better move *first within* that iteration, an edge a completed-iteration search
+  erases. It inflated a v8 output-bucket net to **+90 that was ≈0 at movetime**
+  (§14.4). **Test eval at `--movetime` or fixed `--new-depth`/`--old-depth`**
+  (completed iterations), never fixed-nodes alone. Use `--movetime` too for
+  time-dependent features like Lazy SMP, §4.
 - **Pentanomial GSPRT.** Game *pairs* (reversed colors, shared opening) give 5
   outcomes per pair; the pentanomial model has lower variance than win/draw/loss
   trinomial, so it converges faster. The LLR is the quadratic/normal-approximation
@@ -290,7 +296,14 @@ the sign of the result.
    aspiration, SMP) are speed gains: SMP is invisible at fixed nodes; SEE's CPU
    cost is "free" at fixed nodes but real at movetime — so fixed-nodes Elo
    slightly *overstates* the real-time gain. The movetime/Stockfish numbers are
-   the honest real-world check.
+   the honest real-world check. **For EVAL changes the overstatement is not
+   slight — it can be total** (§14.4, the expensive lesson of 2026-06-29): a v8
+   output-bucket net read **+90 @ fixed nodes but ≈0 @ both movetime AND fixed
+   depth.** Fixed-nodes rewards faster *within-iteration convergence* at the
+   arbitrary node cutoff; a completed-iteration search (movetime or fixed-depth)
+   lets the weaker eval reach the same move and erases the edge. **Gate eval at
+   movetime or fixed-depth, never fixed-nodes alone.** (Search features are
+   unaffected — they help per unit of work, completed iteration or not.)
 
 ---
 
@@ -309,9 +322,12 @@ the sign of the result.
 | **Correction history (shipped)** | **+66.9 @ 40k nodes** | done | per-pattern static-eval-vs-search bias correction; `corrhist` flag, default-on (§13) |
 | **Singular extensions (shipped)** | **+22.2 @ 40k nodes** | done | extend the lone forcing TT move; `singular`+`multicut`, default-on; toxic with aggressive LMR (§13) |
 | **Frontier futility (shipped)** | **+21.3 @ 40k nodes** | done | skip hopeless late quiets near leaves; `futility` flag, default-on (§13) |
+| **SEE/history late-leaf pruning (shipped)** | **+86.8 / +75.9 / +97 @ 40k nodes** | done | HistPrune + SEEQuiet(margin 150) + CaptSEE(margin 25), default-on; shallow non-PV pruning with retuned margins (§13.5). CaptSEE peak=25 — margin 0 lost −86.6, sweep complete |
 | Remaining search patches | +20–50 | low | countermove/conthist (rework), double extensions, fractional LMR — the cheap-pruning long tail mostly SPRT'd flat/negative on our already-heavily-pruned baseline (§13) |
 | **NNUE 256-wide (SHIPPED, default-on)** | **+212 @ movetime** (H1) | done | bullet-trained `(768→256)×2→1` SCReLU on Metal; incremental int16 accumulator (Phases A+B, §11). Replaced HCE as the default eval |
 | **NNUE v6 512-wide + SIMD (SHIPPED, live)** | **+124 @ fixed nodes** vs the 256 net; recovered @ movetime by SIMD | done | width was the lever (v5 maturity-retrain of 256 was a wash); `archsimd` AVX2/NEON kernels bit-exact, **6.5×/4.16×** eval. Live in prod (§12). Next width step: 1024 |
+| **NPS push (shipped)** | **+23% NPS** (un-anchored) | done | PGO (+3%) × pin-aware legal movegen (+20%), compounded; movetime strength, not yet re-anchored (§14.1) |
+| **Output buckets (tested — WASH)** | **≈0 @ movetime** | done | v8 net: +90 @ fixed-nodes but ≈0 @ movetime & fixed-depth — a fixed-nodes mirage (§14.3–14.4). Infra (GNN3 + buckets) banked in code; v8 net **not promoted** |
 | SPSA (Elo-in-the-loop weight tuning) | modest | medium | the *correct* way to tune the few params with no static objective |
 
 Current strength: a **~2880-class** engine on Stockfish's UCI_Elo scale @ 100 ms/move.
@@ -777,11 +793,13 @@ and a **strong NNUE eval**. So the long-tail candidates (conthist, IIR, probcut,
 razor, capthist, extra corrhist keys) are largely **redundant or over-pruning** →
 flat or negative. The wins were the features that add a *new* kind of information:
 corrhist (a per-game eval-error signal nothing else carried) and singular/futility
-(SPRT-standard patches we simply hadn't shipped yet). **The cheap-search-patch well
-is now mostly dry** at this baseline — future search Elo more likely comes from
-reworking the rejected ideas to be selective (PV-only IIR, properly-scaled capthist,
-conthist that doesn't double-count our history) or from SPSA tuning the knobs we
-already have, not from bolting on more pruning.
+(SPRT-standard patches we simply hadn't shipped yet). **The *redundant* long tail is
+dry** at this baseline — but a later sub-wave of shallow-node SEE/history **pruning**
+with retuned margins (HistPrune/SEEQuiet/CaptSEE, §13.5) still paid three more times,
+so "no Elo left in pruning" would be too strong. Future search Elo more likely comes
+from those retuned margins, reworking the rejected ideas to be selective (PV-only IIR,
+properly-scaled capthist, conthist that doesn't double-count our history), or SPSA
+tuning the knobs we already have — not from bolting on *more* pruning rules.
 
 ### 13.4 Process notes
 - **Verify, don't trust** (the user's standing rule, repeatedly load-bearing here):
@@ -796,3 +814,140 @@ already have, not from bolting on more pruning.
 - The rejected flags + their toggle plumbing remain in `params.go` /
   `internal/bench/config.go` (default-off, byte-identical off-path) as scaffolding
   for the selective reworks above.
+
+### 13.5 SEE/history late-leaf pruning trio (2026-06-29) — §13.3 was overstated
+
+A follow-on sub-wave landed three more default-on shallow-node pruning patches.
+All **self-play @ 40k fixed nodes, [0,6]**, the same ruler as §13.1 — these are
+**search** features, so fixed-nodes is valid (§14.4 only indicts *eval* changes).
+
+| Feature | Flag | Self-play Elo @ 40k | Knobs | What it does |
+|---|---|---|---|---|
+| **History pruning** | `HistPrune` | **+86.8 ± 26.8** (94 pairs, [0 6 41 41 6]) | maxDepth 6, margin −1000 | skip a late quiet whose history score is strongly negative near the leaves — a *magnitude* signal, distinct from LMP's move-count and Futility's static-eval |
+| **Quiet-SEE pruning** | `SEEQuiet` | **+75.9 ± 24.8** retuned (150 beats the 50 seed; H1, 205 pairs) | maxDepth 6, margin 150 | skip a quiet that hangs material to the recapture (`SEE < −margin·depth`) |
+| **Capture-SEE pruning** | `CaptSEE` | **+77.7 ± 25.2** vs off, then **+97** down the margin chain (`93681ba`) | maxDepth 6, margin 25 | the capture analog — captures were SEE-*ordered* but not SEE-*pruned* in the main search; skip a clearly-losing capture |
+
+Two lessons:
+
+- **Retune the seed.** SEEQuiet shipped +21 at its margin=50 seed but **+76 once
+  retuned to 150**; CaptSEE's margin chain (100→50→25) was pure profit. Hand-picked
+  margins leave big Elo on the table — which is the concrete case *for* SPSA.
+- **Quiets and captures want opposite margins, and CaptSEE *cliffs*.** Quiets want a
+  *loose* margin (150: prune only clearly-hanging pieces — 50 over-pruned safe
+  quiets and *grew* the tree 45%). Captures want a *tight* one (25: a losing-SEE
+  capture genuinely loses material). But aggression has a floor — the full CaptSEE
+  sweep was `150<100 (−32.5), 50>100 (+32.8), 25>50 (+64.8), 0≪25 (−86.6)`: **margin
+  0 (prune every losing capture) loses −86.6** because it discards real sacrifices.
+  **Peak = 25, sweep complete.** The 25→0 gap is steep and unsampled (a candidate
+  for a *joint* SPSA pass, not another hand-sweep). *(This corrects a stale
+  `params.go` comment that read "peak search ongoing, probing 0" — 0 was tested and
+  lost.)*
+
+So §13.3's "the cheap-search-patch well is now mostly dry" was **overstated**: the
+*redundant* long tail (conthist/IIR/probcut/razor/capthist-ordering) was dry, but
+shallow-node SEE/history **pruning** with retuned margins still had real gains in it.
+
+---
+
+## 14. NPS push + the output-bucket experiment (2026-06-29)
+
+Two threads this session: real NPS wins (banked), and an output-bucket NNUE
+experiment that surfaced **the most important measurement finding since §6 —
+fixed-nodes self-play inflates *eval* changes, sometimes totally — and nearly
+shipped a +90 mirage.**
+
+### 14.1 NPS wins — +23% compounded (shipped, committed)
+
+| Win | Commit | NPS | How |
+|---|---|---:|---|
+| **PGO build** | `c77ccb5` | **+3%** | `-pgo` from a `BenchmarkSearch` profile, committed at `cmd/gomachine/default.pgo`; **auto-detected by every build**, behavior-identical. |
+| **Pin-aware legal movegen** | `a7c4884` | **+20%** | replaced the make/unmake legality filter (DoMove → king-attack test → UndoMove for *every* pseudo-move) with a generator that computes checkers + the pinned set **once** per position (`generateLegalFast`, `internal/chess/movegen_legal.go`; ray tables `rays.go`). |
+
+Compounded ≈ **+23%** (movetime strength gain, **un-anchored** — no fresh
+Stockfish re-anchor run yet; the "~2880-class" §7 figure is not updated for it).
+
+The movegen win was **3–4× the +6–9% profiling estimate** because the
+make/unmake legality cost was *distributed* across `GenerateLegal` + `DoMove` +
+`UndoMove` + `attackedBy` and never appeared as one fat leaf — `GenerateLegal`
+sat at **15.7% cumulative** the whole time. Lesson (memory
+`dont-trust-dry-well-perf`): a high-**cum%** / low-**flat%** function is cost
+hiding in its callees; `pprof list` it, don't dismiss a "no perf left" verdict.
+
+**Correctness:** `generateLegalFast` is differential-tested **order-sensitively**
+against the retained make/unmake oracle (`generateLegalSlow`) over every perft
+tree + tricky EP/pin/double-check FENs + 400 random games
+(`movegen_legal_test.go`) → byte-identical move lists → identical search tree →
+the A/B is pure speed. perft stays green.
+
+### 14.2 Lazy/deferred accumulator — TESTED, flat (NOT shipped)
+
+The headline NPS rec from the input analysis (see `ENGINE_ROADMAP.md`): drop the
+per-`Push` 2 KB `copy(parent)` + delta, store deltas and resolve lazily from the
+nearest computed ancestor (Stockfish-style), skipping the work for
+TT-cut/pruned/in-check nodes that never call `Eval`. **Implemented** behind
+`NNUE_LAZY` (`accumulator.go`, commit `484685c`), **bit-identical** (proven via
+the existing `NNUE_ASSERT` scratch-vs-incremental gate). **Result: flat to
+slightly negative — NOT a win.** The deferred path's walk-back cost cancels the
+saved copy on our heavily-pruned / high-TT-hit tree. Kept default-off as
+scaffolding. (The "−60 last session" recalled at the outset has **no record** in
+git/stash/logs/docs — most likely a different experiment; the careful caching
+impl breaks even, it does not lose 60.)
+
+### 14.3 Output buckets (v8 net) — +90 fixed-nodes, **≈0 movetime** (a WASH)
+
+Built full output-bucket support (commit `860f3ef`): **8 piece-count buckets**,
+bullet's `MaterialCount<8>` selection **`bucket = (popcount − 2) / 4`** (divisor
+`ceil(32/N) = 4`; **`−2`, not `−1`** — drops both kings; corrected from the
+session handoff), a per-bucket output layer over a **shared trunk**, a new
+**GNN3** net format, and an importer `nb` param. NPS-neutral by construction (one
+popcount + a slice offset per eval). Pinned by `buckets_test.go` (the
+`(popcount−2)/4` formula for every count 2..32, GNN3 round-trip, distinct-head
+selection). Trained a v8 net in bullet (v6 config + `.output_buckets(MaterialCount::<8>)`),
+imported to `data/nnue/net.nnue.v8`.
+
+**SPRT vs v6** (net-vs-net → forced `--concurrency 1`; 5429-position `book.bin`):
+
+| Regime | Effort | v8 vs v6 | Notes |
+|---|---|---:|---|
+| **Fixed 100k nodes** | ~depth 11 | **+90 ± 32** | real, ~160 pairs over an independent book |
+| **Movetime 100 ms** | ~depth 11, ~100k nodes | **≈ 0 ± 30** | both arms straddle 0 (−19 / +12); the earlier "+5" was an over-read |
+| **Fixed depth 11** (completed iters) | depth 11 | **−1.5 ± 27** | ~115 pairs — the discriminator |
+| Fixed 100k, **endgame** book | pure endgame | **≈ flat** (−17, wide band) | gain is NOT endgame-concentrated; ~41 unique pairs (fixed-nodes is deterministic → seeds just replay) |
+
+**Verdict: v8 is a movetime wash.** The +90 exists only at fixed *nodes*; it
+vanishes the moment iterations *complete* (movetime **and** fixed-depth both ≈0).
+
+**v8 was NOT promoted** — `data/nnue/net.nnue` stays **v6** (the proven net). The
+value banked is the **infra**: GNN3 format + bucket support in the loader /
+importer / kernels (committed, tested), so the *next* net — especially a wider
+1024 — can be bucketed for free **if** buckets ever pay at movetime. The v8 file
+itself buys nothing at our clock.
+
+### 14.4 Why +90 → 0: fixed-nodes inflates eval changes (THE lesson)
+
+The two regimes are the **same effort**: at movetime 100 ms the engine searches
+**~100k nodes at depth 11**, identical to the fixed-100k regime, at **identical
+NPS** (~1.3M — v6 and v8 measured equal at fixed depth). So this is **not**
+depth-discount and **not** per-node speed — both ruled out by direct measurement.
+The cause is **partial-iteration cutoff**:
+
+- **Fixed-nodes** stops at *exactly* node 100,000 — almost always
+  **mid-iteration** — and plays whatever the half-finished search currently
+  prefers. A better eval *converges to the right move sooner within* that
+  iteration, so it wins a photo-finish at an artificial boundary.
+- **Movetime and fixed-depth** let the iteration **complete**. Once v6 finishes
+  the same iteration it reaches the same move v8 found → the edge evaporates. It
+  was never extra strength, only faster convergence to an answer both reach.
+
+**Update your priors:**
+- **Fixed-nodes is NOT a valid ruler for EVAL changes on this engine.** It
+  inflated a wash to +90 (a ~94% haircut — far outside this engine's real
+  eval-discount history: Texel ~21%, NNUE v6 ~0%). Test eval at **movetime** or
+  fixed **depth**.
+- This is **eval-specific.** Fixed-nodes stays correct for **search** features
+  (SEE/RFP/LMP/singular…; §3/§13 numbers stand) — those are genuine
+  per-unit-work gains that hold whether or not the iteration completes.
+- **The ruler was validated.** A v6-vs-v6 control read ≈ −2.3 clean and the +90's
+  two arms agreed (no harness bias) — so +90 was a *correct measurement of the
+  wrong thing*, not a bug. When a number looks too good, re-measure under the
+  regime that matches prod (movetime) before believing it.

@@ -72,6 +72,14 @@ type Params struct {
 // are fixed-nodes self-play numbers (the real-time / absolute gain is smaller; see
 // the Stockfish anchor in ENGINE_STRENGTH.md, which is the only absolute check).
 //
+// NOTE: these are all SEARCH features, for which fixed-nodes is a valid ruler
+// (a better-pruning patch finds a better move in the same node budget). This does
+// NOT hold for EVAL changes — fixed-nodes *inflates* them (it rewards faster
+// within-iteration convergence at the mid-iteration node cutoff, which a
+// completed-iteration search erases: a v8 output-bucket net read +90 @ fixed nodes
+// but ≈0 @ movetime/fixed-depth). Gate any EVAL change at --movetime or fixed
+// --new-depth/--old-depth, never fixed-nodes alone. See ENGINE_STRENGTH.md §14.4.
+//
 // Earlier work (2026-06-18):
 //   - SEE:        +66.2 ± 22.9 Elo (468 pairs)
 //   - DeltaPrune: +22.0 ± 12.2 Elo (473 pairs, on top of SEE)
@@ -248,8 +256,10 @@ func DefaultParams() Params {
 		// through the recapture sequence near the leaves). The capture analog of
 		// SEEQuiet. DEFAULT ON — margin=100 SPRT'd +77.7 ± 25.2 @ 40k nodes vs off
 		// (148 pairs, [0 27 37 75 9]); margin retune showed AGGRESSIVE wins (unlike
-		// SEEQuiet): 150<100 (−32.5), 50>100 (+32.8), 25>50 (+64.8 ± 22.6, H1, gain
-		// accelerating). Peak search ongoing (probing 0 = prune all losing captures).
+		// SEEQuiet): 150<100 (−32.5), 50>100 (+32.8), 25>50 (+64.8 ± 22.6, H1) — but
+		// then 0 lost to 25 by −86.6: pruning EVERY losing capture discards real
+		// sacrifices, so the gain cliffs just past 25. SWEEP COMPLETE — peak = margin
+		// 25; the 25→0 gap is steep + unsampled, so leave any fine-tune to joint SPSA.
 		// maxDepth=6.
 		CaptSEE:         true,
 		CaptSEEMaxDepth: 6,

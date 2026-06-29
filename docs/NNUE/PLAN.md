@@ -356,9 +356,25 @@ Re-SPRT every step; flip defaults only on H1.
     binary built `GOEXPERIMENT=simd GOAMD64=v3 go1.26.4`, `chessgo-deploy` hardened to the SIMD
     toolchain. **Net + SIMD build ship together** (v6 scalar = movetime wash). See
     `docs/NNUE/BULLET_SETUP.md`.
-  - [ ] **Next NNUE width step: 1024** — now cheap behind SIMD; SPRT-gate it.
-    Full researched, sourced plan for everything after v6 (width / output buckets /
-    data / king-buckets vs the no-refresh invariant): **`docs/NNUE/NEXT_STEPS.md`**.
+  - [x] **Output buckets — BUILT & TESTED (2026-06-29): movetime WASH, infra kept.**
+    8 piece-count buckets, `bucket=(popcount−2)/4` (`MaterialCount<8>`), shared trunk
+    + per-bucket output, new **GNN3** format, importer `nb` (commit `860f3ef`;
+    `buckets_test.go`). v8 net (`data/nnue/net.nnue.v8`) SPRT vs v6: **+90 @ fixed
+    100k nodes but ≈0 @ movetime AND −1.5 @ fixed depth 11** — the +90 is a
+    fixed-nodes mid-iteration artifact, not strength. **v8 NOT promoted** (`net.nnue`
+    stays v6); the GNN3/bucket infra is retained so a future wider net can be bucketed
+    free. Full write-up: `ENGINE_STRENGTH.md §14.3–14.4`, `NEXT_STEPS.md §2`.
+  - [x] **NPS push (2026-06-29): +23% compounded, shipped.** PGO build (+3%,
+    `c77ccb5`, `cmd/gomachine/default.pgo`) × pin-aware legal movegen (+20%,
+    `a7c4884`, `internal/chess/movegen_legal.go`, order-sensitively diff-tested vs
+    the make/unmake oracle). Lazy/deferred accumulator (`NNUE_LAZY`, `484685c`) tested
+    bit-identical but **flat — not shipped**. `ENGINE_STRENGTH.md §14.1–14.2`.
+  - [ ] **Next NNUE width step: 1024** — now cheap behind SIMD; **SPRT-gate it at
+    MOVETIME, not fixed-nodes** (the bucket experiment proved fixed-nodes inflates
+    eval changes — `ENGINE_STRENGTH.md §14.4`). Buckets can be layered on 1024 for
+    free (infra built) if a movetime SPRT ever shows they pay. Full researched plan
+    for everything after v6 (width / buckets / data / king-buckets vs the no-refresh
+    invariant): **`docs/NNUE/NEXT_STEPS.md`**.
 
 Full shipped write-up: `docs/ENGINE_STRENGTH.md §11`. Anchor with NNUE v6 on (2026-06-22):
 **≈2882** — band 2847–2935 vs SF-2700/2800/2900 (30 games @ 100ms), confirming the

@@ -19,15 +19,26 @@
 | # | Step | Class | Elo (source) | Effort | Compute | Touches no-refresh accumulator? |
 |---|---|---|---|---|---|---|
 | 1 | **Width 512 → 1024** | **free win** | positive, diminishing (see §1) | low | ~2× v6 | **No** |
-| 2 | **Output buckets (8, piece-count) + small deeper head** | **free win** | standard practice; per-engine Elo unquantified | low | ~flat | **No** |
+| 2 | **Output buckets (8, piece-count)** | **TESTED — movetime WASH** | **≈0 @ movetime** (was +90 @ fixed-nodes — a mirage; §2) | done | ~flat | **No** |
 | 3 | **Data scale-up + eval-distribution rebalance** | enabler | gates everything > 1024 | low–med | n/a | **No** |
 | 4 | **Width 1024 → 1536** | conditional | +27 @25k nodes but **failed STC/LTC** in SF | low | ~3× v6 | **No** |
 | 5 | **King-bucketed inputs (HalfKAv2_hm or small custom scheme)** | **structural project** | +15–40 (Alexandria) | **high** | more data-hungry | **YES — abandons the invariant** |
 
-**Free wins = steps 1–2** (pure bullet config + retrain, no engine-side refresh change;
-our SIMD kernels are already width-agnostic and `Net.HL` is dynamic). **Structural =
-step 5** — the only step that forces giving up the no-refresh absolute-color design.
-**Step 3 (data) is the gate** that decides how far 1/4/5 can actually go.
+**Free win = step 1** (pure bullet config + retrain, no engine-side refresh change;
+our SIMD kernels are already width-agnostic and `Net.HL` is dynamic). **Step 2
+(output buckets) is now DONE and was a movetime WASH** (§2) — the *infra* is built
+and committed, so a future net can be bucketed for free, but buckets alone buy ~0
+Elo at our clock. **Structural = step 5** — the only step that forces giving up the
+no-refresh absolute-color design. **Step 3 (data) is the gate** that decides how far
+1/4/5 can actually go.
+
+> **⚠ Hard-won testing rule (2026-06-29, the bucket experiment):** **gate every NNUE
+> change at MOVETIME (or fixed *depth*), never fixed-nodes alone.** Fixed-nodes
+> *inflates eval changes* — it rewards faster within-iteration convergence at the
+> mid-iteration node cutoff, an edge a completed-iteration search erases. The v8
+> bucket net read **+90 @ fixed-nodes but ≈0 @ both movetime and fixed-depth.** Full
+> mechanism: `docs/ENGINE_STRENGTH.md §14.4`. This applies to **width 1024 too** —
+> the fixed-nodes win will flatter it; only the movetime number counts.
 
 ---
 
@@ -65,19 +76,35 @@ step 5** — the only step that forces giving up the no-refresh absolute-color d
 
 ---
 
-## 2. Output buckets + small deeper output head (FREE WIN, cheap)
+## 2. Output buckets — BUILT & TESTED (2026-06-29): movetime WASH, infra retained
 
-- **What:** replace the single `2·HL→1` output with **8 piece-count output buckets**,
-  each a small head, selecting the bucket by `(popcount(pieces)-1)/4` per eval. Optionally
-  deepen the head (e.g. `2·HL→16→32→1`).
-- **Precedent:** Stockfish uses **8 output-bucket subnetworks (`512x2-16-32-1`)** + 8 PSQT
-  values; Stormphrax mirrors **8 buckets + `16x2-32-1`** head. Standard in modern
-  bullet-trained engines.
-- **Elo:** **standard practice but per-engine isolated Elo is unquantified** — the specific
-  Alexandria "+26.46 (buckets)" and "+28.84 (multi-layer head)" numbers were **refuted in
-  split votes (1-2)**, so don't quote them. Expect a modest-but-real gain (a handful of
-  Elo); SPRT to find the real number.
-- **Effort:** low — bullet config; inference-cheap (one bucket evaluated per position).
+**Outcome: a wash at our clock, but the plumbing is banked.** Implemented full
+8-bucket support and a v8 net; the eval edge that looked huge at fixed-nodes did
+**not** survive at movetime. Do **not** expect buckets to add Elo on their own here.
+
+- **What was built** (commit `860f3ef`): **8 piece-count buckets**, selection
+  **`bucket = (popcount − 2) / 4`** (bullet `MaterialCount<8>`, divisor `ceil(32/8)=4`;
+  **`−2` drops both kings — the handoff's `(popcount−1)/4` was wrong**, would
+  silently train head X / eval head Y), a per-bucket output layer over a **shared
+  trunk**, a new **GNN3** net format, importer `nb` param. NPS-neutral. Tests:
+  `internal/nnue/buckets_test.go` (formula across counts 2..32, GNN3 round-trip,
+  distinct-head selection). v8 net at `data/nnue/net.nnue.v8` (bullet v6 config +
+  `.output_buckets(MaterialCount::<8>)`, l1 out dim 8, `.select(output_buckets)`,
+  l1w `.transpose()`).
+- **SPRT vs v6** (net-vs-net, 5429-pos book): **+90 ± 32 @ fixed 100k nodes**, but
+  **≈0 @ movetime** (arms −19 / +12) and **−1.5 ± 27 @ fixed depth 11**. The +90 is
+  a **fixed-nodes mid-iteration artifact**, not strength — see `ENGINE_STRENGTH.md
+  §14.3–14.4` for the full mechanism.
+- **Decision:** v8 net **NOT promoted** (`net.nnue` stays v6). **Infra retained** —
+  GNN3 + bucket support is committed and tested, so when width 1024 is trained it
+  can be bucketed at zero marginal cost *if* a movetime SPRT ever shows buckets pay.
+- **Why they don't pay here (hypothesis):** buckets refine a *marginal* per-phase
+  eval nudge on an already-strong NNUE; our depth-11 movetime search resolves that
+  nudge on its own (deep search substitutes for marginal eval). Structural capacity
+  (width) survives at movetime where marginal refinements don't.
+- **Precedent (unchanged):** SF/Stormphrax ship 8 buckets — but at much longer TC
+  than our 100ms, where the marginal eval gain isn't search-substituted away. The
+  refuted Alexandria "+26.46 / +28.84" numbers were never trustworthy anyway.
 - **Accumulator:** untouched.
 
 ---

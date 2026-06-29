@@ -88,6 +88,21 @@
 > singular +22.2). Lesson: the cheap-search-patch well is mostly dry here; the next
 > search Elo is reworked-selective versions of the rejects or SPSA, not more pruning.
 >
+> **NPS push + output buckets — 2026-06-29 (full write-up `ENGINE_STRENGTH.md §14`).**
+> Banked **+23% NPS** (un-anchored): **PGO** build (+3%, `c77ccb5`) × **pin-aware legal
+> movegen** (+20%, `a7c4884` — compute checkers+pins once instead of make/unmake per
+> pseudo-move; order-sensitively diff-tested vs the old oracle, perft green). The
+> movegen win was 3–4× its profiling estimate (cost was *distributed*, not a fat leaf —
+> the `dont-trust-dry-well-perf` lesson). **Lazy/deferred accumulator** built bit-exact
+> (`NNUE_LAZY`, `484685c`) but SPRT'd **flat — not shipped** (no trace of the recalled
+> "−60"). **Output buckets** (8 piece-count heads, GNN3 format, `860f3ef`) built + a v8
+> net trained: **+90 @ fixed-nodes but ≈0 @ movetime AND fixed-depth** — a **fixed-nodes
+> mid-iteration artifact, not strength.** v8 **NOT promoted** (`net.nnue` stays v6); GNN3
+> + bucket infra retained for a future wider net. **The lesson that outlives all of it:**
+> **fixed-nodes self-play inflates EVAL changes** (it rewards faster within-iteration
+> convergence at the node cutoff) — **gate eval at movetime or fixed-depth, never
+> fixed-nodes alone** (search features are unaffected). `ENGINE_STRENGTH.md §14.4`.
+>
 > **Still open (priority order):** (2) NMP **verification** / verified-null in
 > low-material zugzwang (the simple no-non-pawn-material gate already ships; the
 > re-search-on-fail-high variant does not); (7) LMP **`non_pawn_material` gate**
@@ -193,3 +208,90 @@ Priority:
 4. The plumbing that makes 1 through 3 real and measurable: re-tune passers jointly, EG-only gating, endgame-heavy tuning data, endgame SPRT book.
 
 Drop standalone EG centralization. Connected-passer and the search-pruning audit are secondary.
+
+
+---
+
+> **⟵ OUTCOMES (2026-06-29) — this analysis block was acted on; here's what held.**
+> The Tier-1 recs below were implemented and SPRT-tested. Scorecard:
+> - **PGO (#2): ✅ shipped, +3% NPS** (`c77ccb5`).
+> - **Pin-aware movegen (implied by "already-pruned" NPS): ✅ shipped, +20% NPS**
+>   (`a7c4884`) — the single biggest win, 3–4× the estimate.
+> - **Lazy/deferred accumulator (#1, "biggest confirmed unrealized NPS win"): ❌
+>   built bit-exact, SPRT'd FLAT.** The 2 KB-copy waste is real, but the deferred
+>   walk-back cancels it on our heavily-pruned/high-TT-hit tree. Not shipped.
+> - **Output buckets (#4): ❌ built (GNN3, v8 net), but a MOVETIME WASH** — +90 @
+>   fixed-nodes collapsed to ≈0 @ movetime & fixed-depth (a mid-iteration artifact).
+>   Infra kept; net not promoted. **This refutes the "free Elo" label below.**
+> - **The multilayer → int8/VNNI → width chain (#7–#8): UNTOUCHED** — still the
+>   plausible structural path, but note buckets (its first rung) didn't pay at our
+>   clock, so re-validate each rung at **movetime** before investing.
+> - **Biggest meta-lesson, not in the analysis:** fixed-nodes SPRT *inflates eval
+>   changes* — gate eval at movetime/fixed-depth. Full write-up `ENGINE_STRENGTH.md
+>   §14`. Read the recs below as the *input hypothesis*, the scorecard as the *result*.
+
+## The reframe (the one causal chain that ties all three reports together)
+
+The single most important finding: **int8/VNNI — the technique you'd most expect to cut your 40%-eval cost — is architecturally impossible on your current net shape.** `VPDPBUSD` needs a *plain* ClippedReLU (output in `[0,127]`) feeding a *hidden affine layer*. Your **SCReLU→1** net squares the activation (up to QA²=65025), so the output dot is mathematically forced into int16 `VPMADDWD` forever. There is no int8 path for a single-SCReLU→scalar net.
+
+This is *why* Stockfish/Stormphrax/Viridithas/Obsidian all went **multilayer** — the extra hidden layer is what unlocks int8. So the levers aren't independent; they chain:
+
+> **output buckets → multilayer tail (LayerStacks) → int8/VNNI → affordable width**
+
+Each step enables the next. You can't shortcut to "1024-wide" (you proved it's movetime-negative) because the eval is int16-bound. You make eval *cheaper per FLOP* first, then width becomes affordable.
+
+---
+
+## What I verified in YOUR code (ground truth, not generic advice)
+
+| Agent's top rec                                                | Status in gomachine                                                                                                                                                                                                                                                                          | Verdict                                                    |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| **"Never eval in check"** (free NPS)                           | **Already done.** `search.go:921` `if !inCheck { rawEval = ... }` and qsearch `1409`.                                                                                                                                                                                                        | ✅ Drop it — banked.                                       |
+| **"Lazy/deferred accumulator updates"** (the headline NPS win) | **NOT done — and worse than generic.** `accumulator.go:224` `Push` does a full `copy(dst.w, src.w); copy(dst.b, src.b)` (2×HL int16 = **2 KB memcpy at HL=512**) **plus** the deltas, eagerly, on **every** move push — even for nodes that TT-cut or get pruned before ever calling `Eval`. | 🎯 **Biggest confirmed unrealized NPS win.**               |
+| **Output buckets** = single bucket today                       | Confirmed: `net.go` `B1 float32` scalar, `W1i []int16` of `2*HL`.                                                                                                                                                                                                                            | 🎯 Free Elo, ~0 NPS.                                       |
+| Output dot already uses int16 SIMD                             | Confirmed: `screluDot` in kernels (archsimd `VPMADDWD`).                                                                                                                                                                                                                                     | ✅ No asm needed for current net.                          |
+| Formula correction                                             | Handoff says `(popcount−1)/4`; **bullet's actual `MaterialCount<8>` is `(popcount−2)/4`** (drops both kings).                                                                                                                                                                                | ⚠️ Fix before implementing or training/inference disagree. |
+
+The lazy-accumulator gap is **doubly** wasteful in your code: Stockfish never copies the parent (it stores deltas and resolves lazily from the nearest computed ancestor). You pay a full 2 KB copy *and* the delta on every node, and discard it whenever the node TT-cuts or is pruned before eval — which on a heavily-pruned, high-TT-hit engine like yours is a large fraction of nodes.
+
+---
+
+## The ranked plan (tiered by confidence × NPS/Elo ÷ effort)
+
+### Tier 1 — cheap, high-confidence, do these first
+
+| #   | Item                                                                                                                                                                | Win                                                                       | Effort                                                                     | Evidence                                |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------- | --------------------------------------- |
+| 1   | **Lazy/deferred accumulator** — mark dirty + store deltas on Push, resolve only when `Eval` is actually called; skip the 2 KB copy for TT-cut/pruned/in-check nodes | Attacks the 40% directly. All top engines do it.                          | Medium (per-ply dirty stack + walk-back)                                   | CPW NNUE; SF `AccumulatorCaches`        |
+| 2   | **PGO build** from a real search profile                                                                                                                            | **2–14% NPS**, zero code change                                           | Trivial (`-pgo=default.pgo`)                                               | Go blog; Datadog 14%                    |
+| 3   | **GOGC↑ / GOMEMLIMIT** + confirm zero allocs in make/movegen hot loop (`-benchmem`, `-gcflags=-m`)                                                                  | A few % if GC fires in search; free + reversible                          | Low                                                                        | Go gc-guide                             |
+| 4   | **Output buckets `MaterialCount<8>`**                                                                                                                               | ~+8–20 Elo, **~0 NPS**                                                    | Low (3 bullet lines + bucket index in `evalFrom`; new net format `arch=2`) | bullet `outputs.rs`; universal adoption |
+| 5   | **64-byte align accumulators + weights**; BCE pass on movegen/kernels                                                                                               | ~8% (register/align) + ~7–9% (BCE); matters more for AVX-512 on your EPYC | Low                                                                        | cosmo; Sourcegraph slow-to-SIMD         |
+| 6   | **TT cache-line alignment + prefetch-on-key** (issue prefetch in make, the instant the child key is known)                                                          | ~1–3%                                                                     | Low                                                                        | SF PR #5770                             |
+
+### Tier 2 — the strength engine, but real work
+
+| #   | Item                                                                                        | Win                                                                                                      | Effort                                                | Note                                                |
+| --- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- | --------------------------------------------------- |
+| 7   | **Multilayer tail** (`512×2 → 16 → 32 → 1`, LayerStacks over the 8 buckets, CReLU→pairwise) | Tens of Elo (Viridithas v13→v14 headline); **costs a few % NPS** — SPRT at **movetime**, not fixed nodes | High (new SIMD kernels + retrain)                     | The gateway to #8                                   |
+| 8   | **int8/VNNI hidden layer** (only possible *after* #7)                                       | Kernel-level ~3×; engine-level single-digit–15%; real payoff = "bigger net at equal speed"               | High (hand Plan9 `VPDPBUSD` — archsimd can't emit it) | Where your Zen4 EPYC's `avx512_vnni` headroom lives |
+| 9   | **More corrhist dimensions** (`CorrHistMinor`/`Cont` are scaffolded, default-off)           | ~+10 Elo-class each via sharper pruning → fewer nodes                                                    | Low (just SPRT them)                                  | SF +10.57 per dim                                   |
+
+### Explicitly DROP (the report killed these)
+
+- **Staged movegen / Gigantua / copy-make rewrites** — net ~nil NPS on an already-pruned engine; Gigantua's gigamoves/sec is a *perft* artifact that doesn't survive a real search. Your skepticism was right.
+- **PEXT bitboards** — ~2–3% movegen only, needs Go asm, marginal. Last.
+- **Dual small/big net** — Stockfish added it (2024) then *removed* it (2025). Skip.
+- **`see_ge` early-exit** — SEE is 2.5%, already correctly shelved.
+
+---
+
+## My recommendation for the first build
+
+**Two parallel tracks, both Tier 1, both low-risk:**
+
+1. **Lazy accumulator** (NPS) — the confirmed 40%-cost win, and it's a prerequisite mindset for everything bigger. It's pure algorithm, zero Elo risk (bit-identical eval), and your `NNUE_ASSERT` gate + `forceScratch` A/B harness already exist to validate it.
+2. **Output buckets** (Elo) — free strength, tiny diff, and it's the structural gateway to the multilayer→VNNI→width chain that's the *only* way past your movetime wall.
+
+Then re-anchor at movetime and decide whether to commit to the multilayer tail (the big lever, but the one that actually costs NPS).
+
