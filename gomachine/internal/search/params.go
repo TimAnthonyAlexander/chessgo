@@ -246,12 +246,14 @@ func DefaultParams() Params {
 		SEEQuietMargin:   150,
 		// Capture-move SEE pruning (skip a clearly-losing capture that hangs material
 		// through the recapture sequence near the leaves). The capture analog of
-		// SEEQuiet. DEFAULT ON — SPRT-accepted +77.7 ± 25.2 @ 40k nodes (148 pairs,
-		// pentanomial [0 27 37 75 9]); shrinks the tree (deeper search at fixed nodes).
-		// maxDepth=6 / margin=100 (margin retune in progress to confirm the peak).
+		// SEEQuiet. DEFAULT ON — margin=100 SPRT'd +77.7 ± 25.2 @ 40k nodes vs off
+		// (148 pairs, [0 27 37 75 9]); margin retune showed AGGRESSIVE wins (unlike
+		// SEEQuiet): 150<100 (−32.5), 50>100 (+32.8), 25>50 (+64.8 ± 22.6, H1, gain
+		// accelerating). Peak search ongoing (probing 0 = prune all losing captures).
+		// maxDepth=6.
 		CaptSEE:         true,
 		CaptSEEMaxDepth: 6,
-		CaptSEEMargin:   100,
+		CaptSEEMargin:   25,
 		ProbCut:  false,
 		Razor:    false,
 		// Capture history: refines capture ordering within the SEE tier. DEFAULT OFF
