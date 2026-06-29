@@ -3,10 +3,75 @@ package nnue
 import (
 	"bytes"
 	"math/rand"
+	"strings"
 	"testing"
 
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 )
+
+// fenWithPieceCount builds a (rules-illegal but parseable) position with exactly
+// k pieces on the board: two kings plus (k-2) knights, so outputBucket can be
+// checked across the whole popcount range.
+func fenWithPieceCount(k int) string {
+	var sq [64]byte
+	sq[0] = 'K'  // a1
+	sq[63] = 'k' // h8
+	placed := 2
+	for i := 1; i < 63 && placed < k; i++ {
+		if sq[i] == 0 {
+			sq[i] = 'N'
+			placed++
+		}
+	}
+	var b strings.Builder
+	for r := 7; r >= 0; r-- {
+		empty := 0
+		for f := 0; f < 8; f++ {
+			c := sq[r*8+f]
+			if c == 0 {
+				empty++
+				continue
+			}
+			if empty > 0 {
+				b.WriteByte(byte('0' + empty))
+				empty = 0
+			}
+			b.WriteByte(c)
+		}
+		if empty > 0 {
+			b.WriteByte(byte('0' + empty))
+		}
+		if r > 0 {
+			b.WriteByte('/')
+		}
+	}
+	b.WriteString(" w - - 0 1")
+	return b.String()
+}
+
+// TestOutputBucketFullRange pins the bucket index against bullet's
+// MaterialCount<8> for EVERY legal piece count (2..32), not just a few samples.
+// A mismatch here is the silent-corruption class: the net trains head X for a
+// position the engine evaluates with head Y — passes other unit tests, quietly
+// costs Elo. bullet: divisor = ceil(32/8) = 4, bucket = (popcount-2)/4.
+func TestOutputBucketFullRange(t *testing.T) {
+	const nb = 8
+	n := NewNetSizeBuckets(64, nb)
+	for k := 2; k <= 32; k++ {
+		fen := fenWithPieceCount(k)
+		pos, err := chess.ParseFEN(fen)
+		if err != nil {
+			t.Fatalf("k=%d: ParseFEN(%q): %v", k, fen, err)
+		}
+		if got := pos.Occupied().Count(); got != k {
+			t.Fatalf("k=%d: built a position with %d pieces", k, got)
+		}
+		want := (k - 2) / 4 // bullet MaterialCount<8>
+		if got := n.outputBucket(pos); got != want {
+			t.Errorf("piece count %d: outputBucket=%d, want (k-2)/4=%d", k, got, want)
+		}
+	}
+}
 
 // randomBucketNet builds a deterministic random NB-bucket net of width hl, with
 // the integer view populated and marked quantized (so Write emits GNN3 for NB>1).
