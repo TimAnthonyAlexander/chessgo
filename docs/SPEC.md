@@ -203,10 +203,12 @@ pure Go so a single `go build` cross-compiles to any target.
 ### 4.5 Search (ordered by Elo-per-effort)
 
 > **Implemented & SPRT-measured:** all of the below, plus **SEE-ordered captures,
-> delta pruning, reverse futility pruning, late move pruning, and Lazy SMP**
-> (multithreading via a lock-free TT). See `docs/ENGINE_STRENGTH.md` §3–4 for the
-> per-feature Elo and the lock-free TT design. The list here is the original
-> design order.
+> delta pruning, reverse futility pruning, late move pruning, Lazy SMP**
+> (multithreading via a lock-free TT), and a later wave of **correction history,
+> singular extensions, and frontier futility**. See `docs/ENGINE_STRENGTH.md` §3–4
+> for the per-feature Elo and the lock-free TT design, and §13 for the corrhist/
+> singular/futility wave (and the cheap long tail that SPRT'd flat on this
+> already-pruned baseline). The list here is the original design order.
 
 1. **Negamax + alpha-beta** (foundation; ~√b branching with good ordering).
 2. **Quiescence search** (mandatory; resolves captures/promotions, stand-pat,
@@ -886,10 +888,15 @@ chessgo/
       replaced HCE as the default eval**: a `(768→256)×2→1` SCReLU net (bullet on the
       M3's Metal GPU, ~40 GB SF data), made movetime-viable by an incremental int16
       accumulator — **+212 Elo @ movetime** (v4) — then **v6 (512-wide) + AVX2/NEON
-      SIMD**, **+124 @ fixed nodes / +101 @ movetime** over v4, live in prod. Current
+      SIMD**, **+124 @ fixed nodes / +101 @ movetime** over v4, live in prod. Then a
+      **search-feature wave** (§13): **correction history +66.9**, **singular extensions
+      +22.2**, **frontier futility +21.3** (@ 40k nodes, all default-on; bundle owes a
+      movetime re-anchor) — and a rejected cheap long tail (conthist/IIR/capthist/probcut/
+      razor flat-or-negative; aggressive-LMR-on-singular −67 anti-synergy), which is why
+      the cheap-search-patch well is now mostly dry on this baseline. Current
       strength **~2880-class** — **anchored ≈2882** (band 2847–2935 vs SF-2700/2800/2900,
       30 games @ 100ms, 2026-06-22). Next: NNUE width → **1024** (cheap behind SIMD),
-      remaining cheap search patches, **SPSA**.
+      reworked-selective versions of the rejected search patches, **SPSA**.
 - [x] **Match bot strength to its rating** — fill-in bot displayed rating is now
       anchored to the human's Elo (±120) and the engine level is derived from it
       (`levelForRating`), so rated bot games are fair. Remaining: precise

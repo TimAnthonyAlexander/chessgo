@@ -90,7 +90,10 @@ php mason migrate:generate && php mason migrate:apply -y                     # D
   playing strength: implement behind a `search.Params`/`eval.Config` flag
   (default off), then `gomachine bench sprt --new "flag=on" --old "flag=off"`; only
   flip the default if it accepts H1. Search patches (SEE/delta/aspiration/RFP/LMP)
-  + **Lazy SMP** are shipped (~+250/+97 Elo). **The Texel-tuned eval is ON by
+  + **Lazy SMP** are shipped (~+250/+97 Elo), plus a later wave —
+  **corrhist/singular/futility** (+66.9/+22.2/+21.3 @ 40k nodes, `docs/ENGINE_STRENGTH.md
+  §13`; the cheap long tail — conthist/IIR/capthist/probcut/razor + lmr2-on-singular —
+  all SPRT'd flat/negative on our already-heavily-pruned baseline). **The Texel-tuned eval is ON by
   default** (tuned PSQT + knowledge terms, `internal/eval/tuned_tables.go`):
   +128 Elo @ fixed nodes, **+101 Elo @ 100ms/move**, SPRT-gated. This *replaced*
   the old result: the earlier −148 Elo loss was a broken *method* (coordinate
@@ -230,9 +233,14 @@ Then **NNUE replaced HCE as the default eval** (`docs/NNUE/PLAN.md`): a
 `archsimd` AVX2/NEON SIMD** (bit-exact kernels; 6.5×/4.16× eval): **+124 @ fixed
 nodes / +101 @ movetime** over v4, **live in prod** (lairner = amd64, Go 1.26.4
 `GOEXPERIMENT=simd GOAMD64=v3`; the v6 net + SIMD build ship together — v6 on a
-scalar build is a movetime wash). Current strength **~2880-class** — **anchored ≈2882**
+scalar build is a movetime wash). Then a **search-feature wave** (`docs/ENGINE_STRENGTH.md
+§13`) shipped **corrhist + singular + futility** (+66.9/+22.2/+21.3 @ 40k nodes; owes a
+movetime re-anchor) and rejected the cheap long tail (conthist/IIR/capthist/probcut/razor
+flat-or-negative; lmr2-on-singular −67 anti-synergy) — the cheap-search-patch well is now
+mostly dry on this baseline. Current strength **~2880-class** — **anchored ≈2882**
 (band 2847–2935 vs SF-2700/2800/2900, 30 games @ 100ms, 2026-06-22; the upward drift
 with the SF setting is UCI_Elo non-linearity, so the band is the honest read). Next:
 NNUE width → **1024** (cheap behind SIMD), hub-restart-durable resume, puzzle generation
-pipeline, remaining cheap search patches (futility/countermove/singular ext), **SPSA**,
+pipeline, reworked-selective versions of the rejected search patches (PV-only IIR,
+scaled capthist, conthist that doesn't double-count history), **SPSA**,
 precise level↔Elo *calibration*, a true cross-pool ranked queue. See `docs/SPEC.md` §11 roadmap.

@@ -74,6 +74,20 @@
 >   together** (v6 is a movetime wash without SIMD). Full write-up:
 >   `docs/ENGINE_STRENGTH.md §11–12`, `docs/NNUE/PLAN.md`, `docs/NNUE/BULLET_SETUP.md`.
 >
+> **Search-feature wave — SHIPPED (2026-06-28, default-on, full write-up
+> `docs/ENGINE_STRENGTH.md §13`).** Three SPRT-gated search patches landed:
+> **correction history** (`corrhist`, **+66.9 @ 40k nodes** — per-pattern
+> eval-error correction), **singular extensions** (`singular`, **+22.2**), and
+> **frontier futility** (`futility`, **+21.3**). Fixed-nodes self-play; the bundle
+> owes a movetime SPRT + fresh anchor before "~2880-class" moves (self-play
+> inflation + corrhist's per-node cost). **Tried and REJECTED** (default-off): the
+> cheap long tail mostly washed on our already-heavily-pruned baseline — conthist
+> (flat, wiring-verified), IIR (−33.7, fired on all node types), capthist (≈−33,
+> scaling), probcut/razor (flat), extra corrhist keys (flat), and **aggressive LMR
+> stacked on singular (−67 anti-synergy** — each positive alone: lmr2 +9.7,
+> singular +22.2). Lesson: the cheap-search-patch well is mostly dry here; the next
+> search Elo is reworked-selective versions of the rejects or SPSA, not more pruning.
+>
 > **Still open (priority order):** (2) NMP **verification** / verified-null in
 > low-material zugzwang (the simple no-non-pawn-material gate already ships; the
 > re-search-on-fail-high variant does not); (7) LMP **`non_pawn_material` gate**

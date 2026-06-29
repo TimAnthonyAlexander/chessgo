@@ -306,7 +306,10 @@ the sign of the result.
 | Richer HCE terms (Phase 2, remainder) | +20–60 | medium | NMP verification / verified-null in low-material zugzwang, LMP `non_pawn_material` gate + passed-pawn push extension, 50-move-clock eval damping. (EG scale factors were built but SPRT'd ~0 with the TB — kept default-off, §10.6) |
 | **Ship SMP to prod (shipped, live)** | **part of the +97** (2t on a 4-core box) | done | `serve -search-threads 2` + `hub -bot-search-threads 2` in the systemd units (§4); balanced for the shared box |
 | **TT static-eval cache (shipped)** | **+14.8 @ movetime** (stopped early) | done | `tteval` flag, default-on; reuse the TT-cached static eval on non-cutoff hits → skips the NNUE SCReLU dot. Behavior-preserving at fixed nodes (byte-identical), so movetime-only. SPRT vs off @ 100ms: Elo +14.8 ± 10.8, LLR +2.32 @ 998 pairs (lower CI +4.0) — stopped just shy of the formal H1 cross, accepted on the stable trend. Also fixed a latent move-encoding bug (`promoCode` underflow leaked garbage into move bits 16-21) so moves are canonically 16-bit |
-| Remaining search patches | +50–80 | low | futility, countermove, singular ext |
+| **Correction history (shipped)** | **+66.9 @ 40k nodes** | done | per-pattern static-eval-vs-search bias correction; `corrhist` flag, default-on (§13) |
+| **Singular extensions (shipped)** | **+22.2 @ 40k nodes** | done | extend the lone forcing TT move; `singular`+`multicut`, default-on; toxic with aggressive LMR (§13) |
+| **Frontier futility (shipped)** | **+21.3 @ 40k nodes** | done | skip hopeless late quiets near leaves; `futility` flag, default-on (§13) |
+| Remaining search patches | +20–50 | low | countermove/conthist (rework), double extensions, fractional LMR — the cheap-pruning long tail mostly SPRT'd flat/negative on our already-heavily-pruned baseline (§13) |
 | **NNUE 256-wide (SHIPPED, default-on)** | **+212 @ movetime** (H1) | done | bullet-trained `(768→256)×2→1` SCReLU on Metal; incremental int16 accumulator (Phases A+B, §11). Replaced HCE as the default eval |
 | **NNUE v6 512-wide + SIMD (SHIPPED, live)** | **+124 @ fixed nodes** vs the 256 net; recovered @ movetime by SIMD | done | width was the lever (v5 maturity-retrain of 256 was a wash); `archsimd` AVX2/NEON kernels bit-exact, **6.5×/4.16×** eval. Live in prod (§12). Next width step: 1024 |
 | SPSA (Elo-in-the-loop weight tuning) | modest | medium | the *correct* way to tune the few params with no static objective |
@@ -725,3 +728,71 @@ movetime wash.
   + `timeout`.
 - **Prod architecture matters for SIMD:** amd64 → Go 1.26 stable `archsimd`; ARM →
   Go 1.27. Verify the box (`uname -m`) before picking a toolchain.
+
+---
+
+## 13. Search-feature wave (2026-06-28) — corrhist + singular + futility shipped
+
+An unattended wave loop (fork implements a default-off flag + config key + tests;
+the main loop SPRTs; H1 → flip default + re-baseline). All numbers are **self-play
+@ 40k fixed nodes, [0,6] bounds, pentanomial GSPRT** — so they compound, do **not**
+sum, and the real-time/absolute gain is smaller (self-play inflation + the per-node
+compute cost; §6.4). **A movetime/anchor re-measure of the bundle is still owed** —
+the honest estimate is ~+50–70 Elo @ movetime, not the ~+110 the fixed-nodes figures
+add to. Gate the *next* eval/net change on a fresh anchor, not on these.
+
+### 13.1 Accepted (all default-on)
+
+| Feature | Flag | Self-play Elo @ 40k | Pairs | What it does |
+|---|---|---|---:|---|
+| **Correction history** | `corrhist` | **+66.9 ± 22.9** | 174 | learns the per-pattern (pawn + per-color non-pawn) static-eval-vs-search-result bias *within a game* and corrects the static eval by it — sharpens **every** eval-gated decision (RFP, null-move, improving, qsearch stand-pat) |
+| **Singular extensions** | `singular` (+`multicut`) | **+22.2 ± 12.2** | 186 | verify the TT move vs all alternatives at reduced depth (`ttScore − 2·depth`, min-depth 8); extend a ply if singular, multi-cut early-return if a second move also beats beta. Conservative — single ply, no double extensions |
+| **Frontier futility** | `futility` | **+21.3 ± 12.0** | 495 | skip a late quiet whose `staticEval + depth-margin` can't reach alpha (the fail-low side; distinct from RFP's fail-high) |
+
+- **corrhist is memory-only and per-search**, like the TT — learned tables, not a
+  trained net; reset each game. It's the SF18-standard "eval multiplier."
+- **The corrhist TT-caching bug (the expensive lesson here).** The first cut cached
+  the *corrected* eval into the TT, which broke TTEval's behavior-preservation and
+  aspiration exactness (two unit tests went red). Fix = split **`rawEvaluate()`**
+  (deterministic, the value cached in the TT) from **`evaluate()`** (applies the
+  correction *fresh on every read*). Re-validated at +66.9 on the fixed code — so the
+  banked number is the fixed engine vs corrhist-off, not broken-vs-fixed.
+
+### 13.2 Rejected (kept behind default-off flags, dead-but-harmless)
+
+| Feature | Flag | Result | Root cause (verified, not guessed) |
+|---|---|---|---|
+| Aggressive LMR **+ singular together** | `lmr2`+`singular` | **−67** | anti-synergy: each is positive *alone* (lmr2 **+9.7**, singular +22.2) but toxic together — multicut false-prunes on an LMR2-corrupted verification subtree. Node/firing-count tests **refuted** the "singular over-fires" and "interaction explosion" hypotheses; the multicut-on-over-reduced-verify lead held. `cleanverify` was added to test conservative-LMR-in-verify; the bundle stayed net-negative, so **do not enable `lmr2` on top of `singular`.** |
+| Continuation / countermove history | `conthist` | flat → negative | redundant with our mature ordering (history gravity + malus + killers); a wiring-check test (`conthist_wiring_check_test.go`) **proved it does change the tree** (not a no-op), so the flat result is real, not a plumbing bug. Best chance was bundled with lmr2 (better quiet ordering pays off through reductions) — but lmr2 itself doesn't ship. |
+| Internal iterative reduction | `iir` | **−33.7** | fired on **all** node types; canonical IIR is PV + expected-cut only → ours over-pruned. Reworked to PV-only → ~flat. Kept off pending selective placement. |
+| Capture history | `capthist` | **≈−33** | the ±8192 scaling could override the MVV-LVA base and cross the SEE good/bad split. Diagnosed as a scaling problem (the term must stay ≪ the ~1M tier gap); dropped rather than re-tuned. |
+| Extra corrhist keys (minor-piece, continuation) | `corrhistminor`, `corrhistcont` | flat | the pawn + non-pawn keys already capture the signal; extra keys are redundant additive adjustments. |
+| ProbCut, razoring | `probcut`, `razor` | flat/negative | over-pruning on a baseline that already runs RFP + LMP + null-move + singular + futility. |
+
+### 13.3 The theme (why the long tail was mostly flat)
+
+Our baseline was **already heavily pruned** (RFP + LMP + null-move + singular +
+futility) with **mature move ordering** (history gravity + malus + killers + SEE)
+and a **strong NNUE eval**. So the long-tail candidates (conthist, IIR, probcut,
+razor, capthist, extra corrhist keys) are largely **redundant or over-pruning** →
+flat or negative. The wins were the features that add a *new* kind of information:
+corrhist (a per-game eval-error signal nothing else carried) and singular/futility
+(SPRT-standard patches we simply hadn't shipped yet). **The cheap-search-patch well
+is now mostly dry** at this baseline — future search Elo more likely comes from
+reworking the rejected ideas to be selective (PV-only IIR, properly-scaled capthist,
+conthist that doesn't double-count our history) or from SPSA tuning the knobs we
+already have, not from bolting on more pruning.
+
+### 13.4 Process notes
+- **Verify, don't trust** (the user's standing rule, repeatedly load-bearing here):
+  every pasted "this is why it's negative" analysis was checked against node/firing
+  counts before acting — two singular hypotheses were *refuted* this way, and the
+  real cause (multicut on over-reduced verify) only surfaced because we instrumented
+  it. `DbgSingular()`/`DbgMultiCut()` counters + the `*_check_test.go` files exist
+  for exactly this.
+- **Self-play inflation is real and unmeasured here.** Fixed-nodes overstates the
+  real-time gain (corrhist adds per-node compute); the bundle owes a movetime SPRT
+  and a fresh Stockfish anchor before the "~2880-class" figure (§7) is updated.
+- The rejected flags + their toggle plumbing remain in `params.go` /
+  `internal/bench/config.go` (default-off, byte-identical off-path) as scaffolding
+  for the selective reworks above.
