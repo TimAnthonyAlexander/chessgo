@@ -376,6 +376,8 @@ Re-SPRT every step; flip defaults only on H1.
     for everything after v6 (width / buckets / data / king-buckets vs the no-refresh
     invariant): **`docs/NNUE/NEXT_STEPS.md`**.
 
-Full shipped write-up: `docs/ENGINE_STRENGTH.md §11`. Anchor with NNUE v6 on (2026-06-22):
-**≈2882** — band 2847–2935 vs SF-2700/2800/2900 (30 games @ 100ms), confirming the
-v6-vs-v4 **+101 Elo @ movetime** SPRT.
+Full shipped write-up: `docs/ENGINE_STRENGTH.md §11`. **CCRL anchor (2026-06-29): ≈3260
+"dirty" CCRL Blitz** (two NNUE anchors — Starzix 5.0 3276±83 / Viridithas 17 3245±94 @
+100ms; ENGINE_STRENGTH.md §15), superseding the SF-UCI_Elo **≈2882** reading (band
+2847–2935 vs SF-2700/2800/2900, 2026-06-22) — the two consistent via the ~390
+CCRL-over-FIDE offset.

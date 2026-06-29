@@ -6,8 +6,8 @@
 > product decisions, the architecture, and the research that informs both.
 >
 > **Status:** v1 in progress. **Last updated:** 2026-06-20.
-> Built & working: the Go engine (`gomachine`, perft-verified, **~2880-class** vs
-> handicapped Stockfish after the SPRT-gated search, Lazy-SMP, Texel eval **and
+> Built & working: the Go engine (`gomachine`, perft-verified, **≈3260 "dirty" CCRL
+> Blitz** / ≈2882 on the SF-UCI_Elo scale after the SPRT-gated search, Lazy-SMP, Texel eval **and
 > NNUE v6 (512-wide) + SIMD, now the default eval** — see `docs/ENGINE_STRENGTH.md`), bot
 > games + eval bar + takeback, the lobby, **live human-vs-human play**
 > (WebSocket hub, rating-proximity matchmaking, server clocks, reconnect/resume),
@@ -894,8 +894,9 @@ chessgo/
       movetime re-anchor) — and a rejected cheap long tail (conthist/IIR/capthist/probcut/
       razor flat-or-negative; aggressive-LMR-on-singular −67 anti-synergy), which is why
       the cheap-search-patch well is now mostly dry on this baseline. Current
-      strength **~2880-class** — **anchored ≈2882** (band 2847–2935 vs SF-2700/2800/2900,
-      30 games @ 100ms, 2026-06-22). Next: NNUE width → **1024** (cheap behind SIMD),
+      strength **≈3260 "dirty" CCRL Blitz** (2026-06-29, two-NNUE-anchor agreement;
+      ENGINE_STRENGTH.md §15) — supersedes the SF-UCI_Elo **≈2882** reading (~390 below
+      on a FIDE-ish scale; 2882+390≈3270). Next: NNUE width → **1024** (cheap behind SIMD),
       reworked-selective versions of the rejected search patches, **SPSA**.
 - [x] **Match bot strength to its rating** — fill-in bot displayed rating is now
       anchored to the human's Elo (±120) and the engine level is derived from it

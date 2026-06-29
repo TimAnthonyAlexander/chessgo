@@ -45,8 +45,10 @@
 > shipped default-on** → **Phase B** int16 quantization (GNN2 net, bullet ints
 > verbatim, bit-exact gate; deficit →1.59×, reaches depth 15 vs HCE's 14) →
 > **+212.2 ± 49.2 @ movetime, H1, shipped.** Net committed at `data/nnue/net.nnue`,
-> auto-loads. Anchor with NNUE v6 on (2026-06-22): **≈2882** — band 2847–2935 vs
-> SF-2700/2800/2900 (30 games @ 100ms); confirms the v6-vs-v4 +101 movetime SPRT.
+> auto-loads. **CCRL anchor (2026-06-29): ≈3260 "dirty" CCRL Blitz** (two NNUE anchors —
+> Starzix 5.0 3276±83 / Viridithas 17 3245±94 @ 100ms; ENGINE_STRENGTH.md §15),
+> superseding the SF-UCI_Elo **≈2882** reading (band 2847–2935 vs SF-2700/2800/2900,
+> 2026-06-22) — the two consistent via the ~390 CCRL-over-FIDE offset.
 >
 > **NNUE v6 (512-wide) + SIMD — SHIPPED to prod.** The post-NNUE ladder
 > (v5-maturity → SIMD → wider net) is now resolved, and **width was the lever**:
@@ -79,7 +81,8 @@
 > **correction history** (`corrhist`, **+66.9 @ 40k nodes** — per-pattern
 > eval-error correction), **singular extensions** (`singular`, **+22.2**), and
 > **frontier futility** (`futility`, **+21.3**). Fixed-nodes self-play; the bundle
-> owes a movetime SPRT + fresh anchor before "~2880-class" moves (self-play
+> owes a movetime SPRT before the headline figure (now **≈3260 "dirty" CCRL Blitz**,
+> §15) moves (self-play
 > inflation + corrhist's per-node cost). **Tried and REJECTED** (default-off): the
 > cheap long tail mostly washed on our already-heavily-pruned baseline — conthist
 > (flat, wiring-verified), IIR (−33.7, fired on all node types), capthist (≈−33,

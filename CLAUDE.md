@@ -237,9 +237,10 @@ scalar build is a movetime wash). Then a **search-feature wave** (`docs/ENGINE_S
 §13`) shipped **corrhist + singular + futility** (+66.9/+22.2/+21.3 @ 40k nodes; owes a
 movetime re-anchor) and rejected the cheap long tail (conthist/IIR/capthist/probcut/razor
 flat-or-negative; lmr2-on-singular −67 anti-synergy) — the cheap-search-patch well is now
-mostly dry on this baseline. Current strength **~2880-class** — **anchored ≈2882**
-(band 2847–2935 vs SF-2700/2800/2900, 30 games @ 100ms, 2026-06-22; the upward drift
-with the SF setting is UCI_Elo non-linearity, so the band is the honest read). Next:
+mostly dry on this baseline. Current strength **≈3260 "dirty" CCRL Blitz**
+(2026-06-29, two-NNUE-anchor agreement: Starzix 5.0 3276±83 / Viridithas 17 3245±94 @
+100ms — ENGINE_STRENGTH.md §15), which **supersedes** the old SF-UCI_Elo **≈2882**
+reading (that scale sits ~390 below CCRL; 2882+390≈3270, so the two agree). Next:
 NNUE width → **1024** (cheap behind SIMD), hub-restart-durable resume, puzzle generation
 pipeline, reworked-selective versions of the rejected search patches (PV-only IIR,
 scaled capthist, conthist that doesn't double-count history), **SPSA**,

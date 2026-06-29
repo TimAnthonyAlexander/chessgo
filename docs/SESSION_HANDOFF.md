@@ -10,7 +10,7 @@
 ## 0. TL;DR
 
 - **gomachine** = the Go chess engine for chessgo (rules + AI). NNUE eval, αβ search, Lazy SMP.
-- **Current strength: ~2930-class @ 100ms.** (SIMD + 2 threads vs Stockfish 17.1 @ UCI_Elo 3000 ≈ **2934**. The older "~2880" figure is stale — predates this session.)
+- **Current strength: ≈3260 "dirty" CCRL Blitz @ 100ms** (2026-06-29, two-NNUE-anchor agreement: Starzix 5.0 3276±83 / Viridithas 17 3245±94; ENGINE_STRENGTH.md §15). Supersedes ALL SF-UCI_Elo figures (~2880 / ~2934) — that scale runs ~390 below CCRL (2882+390≈3270, so they agree).
 - **This session shipped 3 search patches** (history pruning, quiet-SEE pruning, capture-SEE pruning) = **+71.8 ± 23.9 Elo @ movetime** combined, all committed.
 - **Investigated the NNUE 1024-wide net (v7)** → **shelved**: +95 fixed-nodes but movetime-blocked by NPS.
 - **Recommended next step: NNUE output buckets** (free Elo, no NPS tax — unlike width).
@@ -263,7 +263,7 @@ GOEXPERIMENT=simd ~/go/bin/go1.27rc1 test ./internal/search/ -run='^$' -bench=Be
 
 ## 7. THE ONE-PARAGRAPH SUMMARY (if you read nothing else)
 
-gomachine is a ~2930-class NNUE chess engine. This session shipped three SPRT-gated search prunes
+gomachine is a **≈3260 "dirty" CCRL Blitz** NNUE chess engine (2026-06-29 two-NNUE-anchor agreement; ≈2882 on the older SF-UCI_Elo scale). This session shipped three SPRT-gated search prunes
 (history / quiet-SEE / capture-SEE pruning, +71.8 movetime Elo, committed) and proved — via a fixed
 NPS profile — that there's no cheap node-count win left (SEE is 2.5%, NNUE eval is ~40% and already
 SIMD'd). The big finding: a trained **1024-wide net is +95 fixed-nodes but movetime-negative** — its

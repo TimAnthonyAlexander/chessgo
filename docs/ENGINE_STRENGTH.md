@@ -81,7 +81,22 @@ gomachine bench vs-stockfish --sf /opt/homebrew/bin/stockfish --sf-elo 2500 \
   --movetime 100 --games 60 --threads 4
 ```
 
-**Latest reading (2026-06-22, NNUE v6 + SIMD):** **≈2882** across three settings —
+**Latest reading (2026-06-29, CCRL Blitz anchor — this is now the headline strength
+figure, superseding the SF-UCI_Elo number):** **≈3260 "dirty" CCRL Blitz.** Measured by
+playing the prod v6+SIMD build at 100 ms/move vs **full-strength, officially-rated NNUE
+engines**, anchoring to each opponent's CCRL Blitz rating (not the handicapped-SF
+UCI_Elo scale). Two NNUE anchors agree: **3276 ± 83** vs Starzix 5.0 (~3622, scored 12%)
+and **3245 ± 94** vs Viridithas 17.0.0 (~3708, scored 6.5%), pooled **≈3260**. It's
+"dirty" — 100 ms/move (not CCRL's 2′+1″) and both scores are blowouts (a below-3622
+~50% match is pending to tighten the CI) — but two engines 86 Elo apart estimating only
+31 apart is real convergence. It **reconciles** the old SF number rather than refuting
+it: CCRL runs ~390 above the FIDE/Lichess-ish scale SF's UCI_Elo approximates, so
+2882 + ~390 ≈ 3270 — **SF was on a lower scale, not lying.** Full write-up §15. (A first
+attempt used **Stash** as the anchor — wrong on two counts: HCE, and its "3399" was an
+*unofficial estimate*, not a ranked CCRL entry — set aside, §15.)
+
+**Prior reading (2026-06-22, SF-UCI_Elo anchor — now a lower-scale cross-check):**
+**≈2882** across three settings —
 **2847 ± 205 vs SF-2700** (70%, W6 D2 L2), **2870 ± 168 vs SF-2800** (60%, W4 D4 L2),
 **2935 ± 205 vs SF-2900** (55%, W5 D1 L4), 10 games each @ 100ms on the prod amd64 box.
 Inverse-variance pooled **≈2882 ± 110**; the monotonic rise with the SF setting is the
@@ -330,24 +345,23 @@ the sign of the result.
 | **Output buckets (tested — WASH)** | **≈0 @ movetime** | done | v8 net: +90 @ fixed-nodes but ≈0 @ movetime & fixed-depth — a fixed-nodes mirage (§14.3–14.4). Infra (GNN3 + buckets) banked in code; v8 net **not promoted** |
 | SPSA (Elo-in-the-loop weight tuning) | modest | medium | the *correct* way to tune the few params with no static objective |
 
-Current strength: a **~2880-class** engine on Stockfish's UCI_Elo scale @ 100 ms/move.
-**Independently anchored 2026-06-22** (v6 SIMD build, 30 games @ 100ms): **≈2882**, a
-band of **2847 / 2870 / 2935** vs **SF-2700 / 2800 / 2900** (the upward drift with the
-SF setting is the known UCI_Elo non-linearity — §2.2). This **confirms** the earlier
-projection (the v4-era ~2780 anchor + v6's **+101 Elo @ movetime** self-play SPRT, §12);
-the "never re-anchored" caveat is now retired. The anchor is
-noisy (a band, not a number; small samples) — the **trustworthy** NNUE figure is
-the self-play SPRT, **+212 ± 49 vs HCE @ movetime** (§11). Pre-NNUE this anchor read
-≈2782 ± 84 vs SF-2500; the absolute number barely moves because 10–40 anchor games
-can't resolve a ~100-Elo self-play shift — gate on the SPRT, not the anchor.
-Full-strength Stockfish 17.1/18 (~3650 CCRL) is still hundreds of Elo above us — the
-NNUE levers (maturity net, SIMD, wider net; §11.4) are how that gap narrows.
+Current strength: **≈3260 "dirty" CCRL Blitz** (2026-06-29, §15) — anchored against
+full-strength, officially-CCRL-rated **NNUE** opponents at 100 ms/move (Starzix 5.0
+**3276 ± 83** / Viridithas 17.0.0 **3245 ± 94**, pooled **≈3260**). This is the headline
+strength figure, **superseding** the old SF-UCI_Elo "~2880-class" reading — which wasn't
+wrong, just on a ~390-lower scale (2882 + ~390 ≈ 3270, §15). For reference the SF-UCI_Elo
+anchor read **≈2882** (band 2847–2935 vs SF-2700/2800/2900, 2026-06-22, §2.2); the
+**trustworthy relative** figure remains the self-play SPRT (**+212 ± 49 vs HCE @
+movetime**, §11), not any absolute anchor. Full-strength Stockfish 17.1 (**~4080 CCRL
+Blitz**) is still **~800 CCRL above us** — the NNUE width/data levers (§11.4) are how
+that gap narrows.
 
 **Update — v6 (512-wide) + SIMD now live (§12):** the wider net adds **+124.5 ± 50
 @ fixed nodes** over the 256 net, and `archsimd` SIMD (6.5× eval on amd64) lets that
 survive at movetime — the v6-vs-v4 movetime SPRT firmed to **+101 Elo @ 100 ms/move**.
-So current strength is **~2880-class**, now **directly anchored** at **≈2882** (band
-2847–2935 vs SF-2700/2800/2900, §2.2) — matching the v4-anchor-plus-SPRT projection.
+So current strength on the SF-UCI_Elo scale is **≈2882** (band 2847–2935 vs
+SF-2700/2800/2900, §2.2) — which the 2026-06-29 CCRL anchor later re-expressed as
+**≈3260 "dirty" CCRL Blitz** (§15), the two consistent via the ~390 CCRL-over-FIDE offset.
 
 ## 9. Syzygy endgame tablebases (shipped, +18.8 Elo)
 
@@ -951,3 +965,75 @@ The cause is **partial-iteration cutoff**:
   two arms agreed (no harness bias) — so +90 was a *correct measurement of the
   wrong thing*, not a bug. When a number looks too good, re-measure under the
   regime that matches prod (movetime) before believing it.
+
+---
+
+## 15. CCRL Blitz anchor (2026-06-29) — ≈3260 "dirty", replacing the SF-UCI_Elo number
+
+For weeks the headline strength figure was **≈2882 on Stockfish's UCI_Elo scale**
+(§2.2) — a scale that is *not* logistic-linear, plays erratically when handicapped,
+and (we now understand) sits **~390 Elo below** the CCRL scale everyone else quotes.
+This section re-anchors against **real, officially-CCRL-rated opponents at full
+strength**, which is the honest way to state a CCRL number.
+
+### 15.1 Result
+
+**gomachine ≈ 3260 "dirty" CCRL Blitz.** Two NNUE anchors, prod v6+SIMD build (amd64,
+`GOAMD64=v4`), 100 ms/move each side, 100 games, opponent Hash=64:
+
+| Opponent | CCRL Blitz | gomachine score | Estimate |
+|---|---:|---:|---:|
+| **Starzix 5.0** | ~3622 | 12.0% (W4 D16 L80) | **3276 ± 83** |
+| **Viridithas 17.0.0** | ~3708 | 6.5% (W0 D13 L87) | **3245 ± 94** |
+| **pooled** | | | **≈3260** |
+
+Two engines **86 Elo apart** giving estimates **31 apart** is genuine convergence —
+the internal-consistency check that the single-opponent Stash run (§15.3) lacked.
+
+### 15.2 Why "dirty" (the honest caveats)
+
+- **TC mismatch.** Played at **100 ms/move**, not CCRL's **2′+1″**. Since both sides
+  are NNUE (symmetric eval cost), the offset is far smaller than it would be vs HCE,
+  but it's nonzero — so this is a *ballpark*, not a list-grade rating.
+- **Both scores are blowouts** (6–12%). Tail-of-the-Elo-curve estimates are more
+  sensitive to the opponent's exact rating than a 50/50 match. **A below-3622 NNUE
+  anchor (target ~3150/3300/3450) for a ~50% match is the pending step** to tighten
+  the CI and confirm ~3260 isn't a model-tail artifact.
+- **Opponent ratings are "the list's number," not re-measured here.** Confirm each is
+  a *ranked* CCRL Blitz entry (not an estimate) before quoting it — see §15.3.
+
+### 15.3 The Stash mistake (what NOT to do)
+
+The first attempt anchored against **Stash** (v25/v36/v37), chosen off a third-party
+"calibration ladder" guide. **Two errors, both mine:**
+1. **Stash is HCE**, all the way through its latest release (v37 — verified: no
+   `nnue` source, only `Hash` as a UCI option, author confirmed no net). gomachine
+   (NNUE) beat Stash v36 **20-0**, which looked like ">3399" but is just NNUE
+   crushing HCE at fast TC — **non-transitive**, not a rating.
+2. **Stash's "3399" was an *unofficial estimate***, flagged "not ranked by CCRL" —
+   not a comparable number at all. Mixing an unofficial HCE estimate with an official
+   NNUE rating is apples-to-oranges, and produced a contradiction (20-0 vs "3399"
+   ⇒ ≥3800; 12% vs 3622 ⇒ 3276) that no single rating can satisfy.
+
+**Lesson:** an anchor is only as good as (a) it being a **ranked** CCRL entry and
+(b) **architecture parity** (NNUE-vs-NNUE). Verify both *before* running. The
+multi-NNUE-anchor agreement (§15.1) is the trustworthy signal; the Stash domination
+is set aside.
+
+### 15.4 Reconciliation with the SF number (it was never wrong)
+
+CCRL ratings run **~390 above** the FIDE/Lichess-ish scale SF's UCI_Elo approximates.
+So **2882 (SF-UCI_Elo) + ~390 ≈ 3270 (CCRL)** — the old anchor and the new one *agree*
+once put on the same scale. SF wasn't "misleading us for weeks"; we were reading a
+lower-scale number as if it were CCRL. The genuinely misleading data point was the
+*Stash* run, not Stockfish.
+
+### 15.5 Tooling
+
+`bench vs-stockfish` gained `--full-strength` (run the UCI opponent unhandicapped;
+`--sf-elo` becomes *only* the anchor rating) and `--opp-opts "Hash=64,Threads=1,…"`
+(fair opponent options / external-net `EvalFile`). Any UCI engine works as the
+opponent — `--sf` is just a binary path. Reference engines are built/downloaded on the
+prod box (amd64); opponents that ship prebuilt Linux binaries with **embedded** nets
+(Starzix, Viridithas, Stormphrax) are drop-in. **Use only *ranked* CCRL Blitz
+opponents with NNUE eval, and prefer a spread that brackets us 40–65%.**
