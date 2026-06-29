@@ -260,6 +260,7 @@ func cmdBenchStockfish(args []string) {
 	sfMovetime := fs.Int("sf-movetime", 100, "Stockfish ms per move")
 	fullStrength := fs.Bool("full-strength", false, "run the opponent at FULL strength (skip UCI_LimitStrength/Skill); --sf-elo is then ONLY the anchor rating — use for a CCRL-rated reference engine, e.g. --sf ./stash --full-strength --sf-elo 2880 --opp-name 'Stash v24'")
 	oppName := fs.String("opp-name", "", "opponent label for the report (e.g. \"Stash v24\"); blank → a generic name")
+	oppOpts := fs.String("opp-opts", "", "extra opponent UCI options as Name=Value,Name=Value (e.g. \"Hash=64,Threads=1,EvalFile=net.nnue\"); merged AFTER strength options — set hash/threads/net for a fair anchor")
 	ourNodes := fs.Uint64("nodes", 0, "our fixed nodes per move (0 → use --movetime)")
 	ourMovetime := fs.Int("movetime", 100, "our ms per move (if --nodes 0)")
 	ourThreads := fs.Int("threads", 1, "our Lazy SMP threads")
@@ -305,6 +306,16 @@ func cmdBenchStockfish(args []string) {
 		sfOpts["UCI_LimitStrength"] = "true"
 		sfOpts["UCI_Elo"] = fmt.Sprintf("%d", *sfElo)
 		sfDesc = fmt.Sprintf("Stockfish (UCI_Elo %d)", *sfElo)
+	}
+	// Extra opponent UCI options (Hash/Threads/EvalFile/…), merged last so a fair
+	// anchor can match CCRL-ish conditions or point a separate-net engine at its net.
+	for _, kv := range strings.Split(*oppOpts, ",") {
+		if kv = strings.TrimSpace(kv); kv == "" {
+			continue
+		}
+		if k, v, ok := strings.Cut(kv, "="); ok {
+			sfOpts[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		}
 	}
 
 	ourDesc := "gomachine"
