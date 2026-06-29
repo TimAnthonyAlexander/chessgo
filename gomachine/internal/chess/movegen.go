@@ -136,8 +136,17 @@ func (pos *Position) genCastling(ml *MoveList, us Color) {
 	}
 }
 
-// GenerateLegal fills ml with the fully-legal moves for the side to move.
+// GenerateLegal fills ml with the fully-legal moves for the side to move, using
+// the pin-aware generator (generateLegalFast). generateLegalSlow is retained as
+// the differential-test oracle; perft (TestPerft) guards the node counts.
 func (pos *Position) GenerateLegal(ml *MoveList) {
+	pos.generateLegalFast(ml)
+}
+
+// generateLegalSlow generates pseudo-legal moves and filters each with a
+// make/unmake king-attack test. It is the simple, obviously-correct reference
+// kept as the differential-test oracle for generateLegalFast.
+func (pos *Position) generateLegalSlow(ml *MoveList) {
 	var pseudo MoveList
 	pos.generatePseudo(&pseudo)
 	mover := pos.side
