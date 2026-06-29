@@ -91,7 +91,7 @@ func TestWidth512NullMove(t *testing.T) {
 func TestBulletWidthInference(t *testing.T) {
 	for _, hl := range []int{256, 512} {
 		path := writeSyntheticBulletNet(t, hl)
-		n, err := ImportBulletNet(path)
+		n, err := ImportBulletNet(path, 1)
 		if err != nil {
 			t.Fatalf("hl=%d: ImportBulletNet: %v", hl, err)
 		}
@@ -104,7 +104,7 @@ func TestBulletWidthInference(t *testing.T) {
 	if err := os.WriteFile(bad, make([]byte, 12345), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ImportBulletNet(bad); err == nil {
+	if _, err := ImportBulletNet(bad, 1); err == nil {
 		t.Fatal("expected error for mismatched bullet net size, got nil")
 	}
 }

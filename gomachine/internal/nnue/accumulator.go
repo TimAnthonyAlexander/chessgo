@@ -100,17 +100,19 @@ func (n *Net) apply(acc *Accumulator, c featChange) {
 	}
 }
 
-// evalFrom evaluates acc oriented to stm — integer SCReLU dot + descale.
-func (n *Net) evalFrom(acc *Accumulator, stm chess.Color) int {
+// evalFrom evaluates acc oriented to stm using the given output bucket — integer
+// SCReLU dot over that bucket's weight block + descale.
+func (n *Net) evalFrom(acc *Accumulator, stm chess.Color, bucket int) int {
 	hl := n.HL
 	stmHalf, oppHalf := acc.w, acc.b
 	if stm == chess.Black {
 		stmHalf, oppHalf = acc.b, acc.w
 	}
 	qa := n.QA
-	out := screluDot(stmHalf, n.W1i[:hl], qa)
-	out += screluDot(oppHalf, n.W1i[hl:2*hl], qa)
-	return n.descale(out)
+	base := bucket * 2 * hl
+	out := screluDot(stmHalf, n.W1i[base:base+hl], qa)
+	out += screluDot(oppHalf, n.W1i[base+hl:base+2*hl], qa)
+	return n.descale(out, bucket)
 }
 
 // moveChanges decodes the per-move feature deltas from the PRE-move position
@@ -258,12 +260,13 @@ func (st *Stack) Eval(pos *chess.Position) int {
 	if st.floatMode {
 		return st.net.Eval(pos)
 	}
+	bucket := st.net.outputBucket(pos)
 	if forceScratch {
 		fresh := st.net.newAccumulator()
 		st.net.build(&fresh, pos)
-		return st.net.evalFrom(&fresh, pos.SideToMove())
+		return st.net.evalFrom(&fresh, pos.SideToMove(), bucket)
 	}
-	return st.net.evalFrom(&st.data[st.sp], pos.SideToMove())
+	return st.net.evalFrom(&st.data[st.sp], pos.SideToMove(), bucket)
 }
 
 // assertConsistent panics if the incrementally-maintained top accumulator

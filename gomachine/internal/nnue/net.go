@@ -36,11 +36,18 @@ type Net struct {
 	// bounds and slice sizes from HL, never from the package L1 default.
 	HL int
 
+	// NB is the number of output buckets (phase heads selected by piece count).
+	// NB==1 is the legacy single-head net (GNN1/GNN2); NB>1 is the bucketed net
+	// (GNN3). The feature transformer (W0/B0) is shared across buckets; only the
+	// output layer (W1/B1) is per-bucket, so inference selects one bucket's weights
+	// and costs the same as a single head (no NPS tax).
+	NB int
+
 	W0      []float32 // InputDim*HL, feature-major
 	B0      []float32 // HL
-	W1      []float32 // 2*HL
-	B1      float32
-	CpScale float32 // raw output → centipawns
+	W1      []float32 // NB*2*HL, bucket-contiguous (bucket b at [b*2*HL : (b+1)*2*HL])
+	B1      []float32 // NB (one output bias per bucket)
+	CpScale float32   // raw output → centipawns
 
 	// Integer view (Phase B). QA scales the feature transformer (W0i/B0i), QB the
 	// output weights (W1i); B1i is the raw output bias (scaled by QA*QB); Scale is
@@ -48,8 +55,8 @@ type Net struct {
 	//   A[i]=B0i[i]+ΣW0i[f][i]; c=clamp(A,0,QA); OUT=Σc²·W1i; eval=round(Scale·(B1i·QA+OUT)/(QA²·QB)).
 	W0i       []int16 // InputDim*L1, feature-major
 	B0i       []int16 // L1
-	W1i       []int16 // ConcatDim
-	B1i       int32
+	W1i       []int16 // NB*2*HL, bucket-contiguous (matches W1)
+	B1i       []int32 // NB (one output bias per bucket, scaled by QA*QB)
 	QA        int32
 	QB        int32
 	Scale     int32
@@ -61,23 +68,50 @@ type Net struct {
 // widths should use NewNetSize.
 func NewNet() *Net { return NewNetSize(L1) }
 
-// NewNetSize allocates a zeroed net with hidden-layer width hl (weights left at
-// 0; the trainer fills them). CpScale defaults to 1; the integer view defaults to
-// bullet's scales so a freshly-quantized net is self-consistent.
-func NewNetSize(hl int) *Net {
+// NewNetSize allocates a zeroed single-bucket net with hidden-layer width hl.
+func NewNetSize(hl int) *Net { return NewNetSizeBuckets(hl, 1) }
+
+// NewNetSizeBuckets allocates a zeroed net with hidden-layer width hl and nb
+// output buckets (weights left at 0; the trainer/importer fills them). CpScale
+// defaults to 1; the integer view defaults to bullet's scales so a freshly-
+// quantized net is self-consistent.
+func NewNetSizeBuckets(hl, nb int) *Net {
+	if nb < 1 {
+		nb = 1
+	}
 	return &Net{
 		HL:      hl,
+		NB:      nb,
 		W0:      make([]float32, InputDim*hl),
 		B0:      make([]float32, hl),
-		W1:      make([]float32, 2*hl),
+		W1:      make([]float32, nb*2*hl),
+		B1:      make([]float32, nb),
 		CpScale: 1,
 		W0i:     make([]int16, InputDim*hl),
 		B0i:     make([]int16, hl),
-		W1i:     make([]int16, 2*hl),
+		W1i:     make([]int16, nb*2*hl),
+		B1i:     make([]int32, nb),
 		QA:      bulletQA,
 		QB:      bulletQB,
 		Scale:   bulletSCALE,
 	}
+}
+
+// outputBucket selects pos's piece-count output bucket, matching bullet's
+// MaterialCount<NB>: divisor = ceil(32/NB), bucket = (popcount(occ)-2)/divisor,
+// clamped to [0, NB-1]. NB<=1 always returns bucket 0.
+func (n *Net) outputBucket(pos *chess.Position) int {
+	if n.NB <= 1 {
+		return 0
+	}
+	divisor := (32 + n.NB - 1) / n.NB // ceil(32/NB); =4 for NB=8
+	b := (pos.Occupied().Count() - 2) / divisor
+	if b < 0 {
+		b = 0
+	} else if b >= n.NB {
+		b = n.NB - 1
+	}
+	return b
 }
 
 // RandomNet returns a small-random-weight net of the default width (256).
@@ -126,7 +160,9 @@ func (n *Net) Eval(pos *chess.Position) int {
 		}
 	}
 
-	y := n.B1
+	bucket := n.outputBucket(pos)
+	w1 := n.W1[bucket*2*hl : bucket*2*hl+2*hl]
+	y := n.B1[bucket]
 	for i := 0; i < 2*hl; i++ {
 		h := acc[i] // SCReLU: clamp(x, 0, 1) then square
 		if h < 0 {
@@ -134,7 +170,7 @@ func (n *Net) Eval(pos *chess.Position) int {
 		} else if h > 1 {
 			h = 1
 		}
-		y += h * h * n.W1[i]
+		y += h * h * w1[i]
 	}
 	return int(math.Round(float64(y * n.CpScale)))
 }
@@ -161,8 +197,12 @@ type fileHeader struct {
 // preserving bit-exact bullet weights; a float-only net is written as GNN1.
 func (n *Net) Write(w io.Writer) error {
 	if n.quantized {
+		if n.NB > 1 {
+			return n.writeGNN3(w)
+		}
 		return n.writeGNN2(w)
 	}
+	// GNN1 float format is single-bucket only (the legacy Go-trainer / test path).
 	hdr := fileHeader{Magic: magic, Version: 1, Arch: 0, InDim: InputDim, L1: uint32(n.HL)}
 	if err := binary.Write(w, binary.LittleEndian, hdr); err != nil {
 		return err
@@ -172,7 +212,7 @@ func (n *Net) Write(w io.Writer) error {
 			return err
 		}
 	}
-	if err := binary.Write(w, binary.LittleEndian, n.B1); err != nil {
+	if err := binary.Write(w, binary.LittleEndian, n.B1[0]); err != nil {
 		return err
 	}
 	return binary.Write(w, binary.LittleEndian, n.CpScale)
@@ -184,7 +224,29 @@ func (n *Net) writeGNN2(w io.Writer) error {
 	if err := binary.Write(w, binary.LittleEndian, hdr); err != nil {
 		return err
 	}
-	if err := binary.Write(w, binary.LittleEndian, []int32{n.QA, n.QB, n.Scale, n.B1i}); err != nil {
+	if err := binary.Write(w, binary.LittleEndian, []int32{n.QA, n.QB, n.Scale, n.B1i[0]}); err != nil {
+		return err
+	}
+	for _, blob := range [][]int16{n.W0i, n.B0i, n.W1i} {
+		if err := binary.Write(w, binary.LittleEndian, blob); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeGNN3 serializes a bucketed integer net (NB>1). Layout after the fixed
+// header: [NB, QA, QB, Scale] int32, then NB int32 output biases (B1i), then the
+// int16 blobs W0i (InputDim*HL), B0i (HL), W1i (NB*2*HL bucket-contiguous).
+func (n *Net) writeGNN3(w io.Writer) error {
+	hdr := fileHeader{Magic: magic, Version: 3, Arch: 1, InDim: InputDim, L1: uint32(n.HL)}
+	if err := binary.Write(w, binary.LittleEndian, hdr); err != nil {
+		return err
+	}
+	if err := binary.Write(w, binary.LittleEndian, []int32{int32(n.NB), n.QA, n.QB, n.Scale}); err != nil {
+		return err
+	}
+	if err := binary.Write(w, binary.LittleEndian, n.B1i); err != nil { // NB int32
 		return err
 	}
 	for _, blob := range [][]int16{n.W0i, n.B0i, n.W1i} {
@@ -231,6 +293,8 @@ func ReadNet(r io.Reader) (*Net, error) {
 		return readGNN1(r, hl)
 	case 2:
 		return readGNN2(r, hl)
+	case 3:
+		return readGNN3(r, hl)
 	default:
 		return nil, fmt.Errorf("nnue: unsupported version %d", hdr.Version)
 	}
@@ -244,7 +308,7 @@ func readGNN1(r io.Reader, hl int) (*Net, error) {
 			return nil, err
 		}
 	}
-	if err := binary.Read(r, binary.LittleEndian, &n.B1); err != nil {
+	if err := binary.Read(r, binary.LittleEndian, &n.B1[0]); err != nil {
 		return nil, err
 	}
 	if err := binary.Read(r, binary.LittleEndian, &n.CpScale); err != nil {
@@ -262,7 +326,7 @@ func readGNN2(r io.Reader, hl int) (*Net, error) {
 	if err := binary.Read(r, binary.LittleEndian, &scales); err != nil {
 		return nil, err
 	}
-	n.QA, n.QB, n.Scale, n.B1i = scales[0], scales[1], scales[2], scales[3]
+	n.QA, n.QB, n.Scale, n.B1i[0] = scales[0], scales[1], scales[2], scales[3]
 	if n.QA == 0 || n.QB == 0 {
 		return nil, fmt.Errorf("nnue: GNN2 bad scales QA=%d QB=%d", n.QA, n.QB)
 	}
@@ -272,6 +336,35 @@ func readGNN2(r io.Reader, hl int) (*Net, error) {
 		}
 	}
 	n.dequantizeToFloat() // populate the float view (reference / comparison path)
+	n.quantized = true
+	return n, nil
+}
+
+// readGNN3 reads the bucketed integer format (see writeGNN3), then dequantises to
+// floats for the reference view.
+func readGNN3(r io.Reader, hl int) (*Net, error) {
+	var head [4]int32 // NB, QA, QB, Scale
+	if err := binary.Read(r, binary.LittleEndian, &head); err != nil {
+		return nil, err
+	}
+	nb := int(head[0])
+	if nb <= 0 || nb > 64 {
+		return nil, fmt.Errorf("nnue: GNN3 implausible bucket count NB=%d", nb)
+	}
+	n := NewNetSizeBuckets(hl, nb)
+	n.QA, n.QB, n.Scale = head[1], head[2], head[3]
+	if n.QA == 0 || n.QB == 0 {
+		return nil, fmt.Errorf("nnue: GNN3 bad scales QA=%d QB=%d", n.QA, n.QB)
+	}
+	if err := binary.Read(r, binary.LittleEndian, n.B1i); err != nil { // NB int32
+		return nil, err
+	}
+	for _, blob := range [][]int16{n.W0i, n.B0i, n.W1i} {
+		if err := binary.Read(r, binary.LittleEndian, blob); err != nil {
+			return nil, err
+		}
+	}
+	n.dequantizeToFloat()
 	n.quantized = true
 	return n, nil
 }

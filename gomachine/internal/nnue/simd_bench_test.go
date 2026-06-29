@@ -38,7 +38,7 @@ func BenchmarkEvalFromScratch(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				n.build(&acc, pos)
-				sink += n.evalFrom(&acc, pos.SideToMove())
+				sink += n.evalFrom(&acc, pos.SideToMove(), n.outputBucket(pos))
 			}
 			_ = sink
 		})
@@ -62,7 +62,7 @@ func BenchmarkEvalIncremental(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				st.Push(pos, m)
-				sink += n.evalFrom(&st.data[st.sp], pos.SideToMove())
+				sink += n.evalFrom(&st.data[st.sp], pos.SideToMove(), n.outputBucket(pos))
 				st.Pop()
 			}
 			_ = sink
@@ -104,7 +104,7 @@ func BenchmarkSCReLUDot(b *testing.B) {
 		b.Run(widthName("Dot", hl), func(b *testing.B) {
 			var sink int
 			for i := 0; i < b.N; i++ {
-				sink += n.evalFrom(&acc, pos.SideToMove())
+				sink += n.evalFrom(&acc, pos.SideToMove(), n.outputBucket(pos))
 			}
 			_ = sink
 		})

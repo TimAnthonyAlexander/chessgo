@@ -27,6 +27,7 @@ func (n *Net) quantizeFromFloat() {
 		n.W0i = make([]int16, len(n.W0))
 		n.B0i = make([]int16, len(n.B0))
 		n.W1i = make([]int16, len(n.W1))
+		n.B1i = make([]int32, len(n.B1))
 	}
 	qa, qb := float32(n.QA), float32(n.QB)
 	for i, v := range n.W0 {
@@ -38,7 +39,9 @@ func (n *Net) quantizeFromFloat() {
 	for i, v := range n.W1 {
 		n.W1i[i] = roundClampI16(v * qb)
 	}
-	n.B1i = int32(roundF32(n.B1 * qa * qb))
+	for b, v := range n.B1 {
+		n.B1i[b] = int32(roundF32(v * qa * qb))
+	}
 	if n.CpScale != 0 {
 		n.Scale = int32(roundF32(n.CpScale))
 	}
@@ -58,14 +61,16 @@ func (n *Net) dequantizeToFloat() {
 	for i, v := range n.W1i {
 		n.W1[i] = float32(v) / qb
 	}
-	n.B1 = float32(n.B1i) / (qa * qb)
+	for b, v := range n.B1i {
+		n.B1[b] = float32(v) / (qa * qb)
+	}
 	n.CpScale = float32(n.Scale)
 }
 
-// descale converts the raw integer output (B1i·QA + OUT) into centipawns with
-// round-to-nearest, matching the float path's math.Round.
-func (n *Net) descale(out int64) int {
-	num := (int64(n.B1i)*int64(n.QA) + out) * int64(n.Scale)
+// descale converts bucket's raw integer output (B1i[bucket]·QA + OUT) into
+// centipawns with round-to-nearest, matching the float path's math.Round.
+func (n *Net) descale(out int64, bucket int) int {
+	num := (int64(n.B1i[bucket])*int64(n.QA) + out) * int64(n.Scale)
 	den := int64(n.QA) * int64(n.QA) * int64(n.QB)
 	return int(roundDivI64(num, den))
 }

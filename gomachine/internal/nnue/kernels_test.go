@@ -61,8 +61,8 @@ func TestEvalFromMatchesReference(t *testing.T) {
 		pos := mustFEN(t, fen)
 		acc := net.newAccumulator()
 		net.build(&acc, pos)
-		got := net.evalFrom(&acc, pos.SideToMove())
-		want := net.descale(evalFromReference(net, &acc, pos.SideToMove()))
+		got := net.evalFrom(&acc, pos.SideToMove(), net.outputBucket(pos))
+		want := net.descale(evalFromReference(net, &acc, pos.SideToMove()), net.outputBucket(pos))
 		if got != want {
 			t.Fatalf("evalFrom %q: got %d, want %d", fen, got, want)
 		}

@@ -469,7 +469,7 @@ func (m *Model) ToNet() *nnue.Net {
 	for i, v := range m.W1 {
 		n.W1[i] = float32(v)
 	}
-	n.B1 = float32(m.B1)
+	n.B1[0] = float32(m.B1) // legacy Go trainer is single-bucket (NB=1)
 	n.CpScale = 1.0
 	return n
 }

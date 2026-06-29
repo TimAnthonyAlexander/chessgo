@@ -32,7 +32,7 @@ func TestAccumulatorEvalMatchesScratch(t *testing.T) {
 		pos := mustFEN(t, fen)
 		acc := net.newAccumulator()
 		net.build(&acc, pos)
-		gotInt := net.evalFrom(&acc, pos.SideToMove())
+		gotInt := net.evalFrom(&acc, pos.SideToMove(), net.outputBucket(pos))
 		gotFloat := net.Eval(pos)
 		if d := gotInt - gotFloat; d > 2 || d < -2 {
 			t.Fatalf("int evalFrom %d vs float Eval %d (diff %d > 2cp) for %q", gotInt, gotFloat, d, fen)

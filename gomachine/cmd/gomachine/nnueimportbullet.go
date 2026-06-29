@@ -16,7 +16,8 @@ import (
 func cmdNNUEImportBullet(args []string) {
 	fs := flag.NewFlagSet("nnue-import-bullet", flag.ExitOnError)
 	in := fs.String("in", "", "bullet quantised.bin checkpoint to import")
-	out := fs.String("out", "", "output net path (GNN1, e.g. data/nnue/net.nnue)")
+	out := fs.String("out", "", "output net path (e.g. data/nnue/net.nnue)")
+	buckets := fs.Int("buckets", 1, "output buckets the net was trained with (MaterialCount<N>; 1 = single-head)")
 	_ = fs.Parse(args)
 
 	if *in == "" || *out == "" {
@@ -24,7 +25,7 @@ func cmdNNUEImportBullet(args []string) {
 		os.Exit(2)
 	}
 
-	net, err := nnue.ImportBulletNet(*in)
+	net, err := nnue.ImportBulletNet(*in, *buckets)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "nnue-import-bullet:", err)
 		os.Exit(1)
@@ -35,6 +36,6 @@ func cmdNNUEImportBullet(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("imported bullet net %s -> %s (768x%d x2 -> 1, CpScale=%.0f)\n",
-		*in, *out, net.HL, net.CpScale)
+	fmt.Printf("imported bullet net %s -> %s (768x%d x2 -> %d bucket(s), CpScale=%.0f)\n",
+		*in, *out, net.HL, net.NB, net.CpScale)
 }

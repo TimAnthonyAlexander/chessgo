@@ -23,9 +23,9 @@ func TestGNN2RoundTrip(t *testing.T) {
 	if !got.quantized {
 		t.Fatal("reloaded net not marked quantized")
 	}
-	if got.QA != net.QA || got.QB != net.QB || got.Scale != net.Scale || got.B1i != net.B1i {
-		t.Fatalf("scales drifted: QA %d/%d QB %d/%d Scale %d/%d B1i %d/%d",
-			got.QA, net.QA, got.QB, net.QB, got.Scale, net.Scale, got.B1i, net.B1i)
+	if got.QA != net.QA || got.QB != net.QB || got.Scale != net.Scale || got.NB != net.NB || got.B1i[0] != net.B1i[0] {
+		t.Fatalf("scales drifted: QA %d/%d QB %d/%d Scale %d/%d NB %d/%d B1i[0] %d/%d",
+			got.QA, net.QA, got.QB, net.QB, got.Scale, net.Scale, got.NB, net.NB, got.B1i[0], net.B1i[0])
 	}
 	for i := range net.W0i {
 		if got.W0i[i] != net.W0i[i] {
@@ -69,7 +69,7 @@ func TestGNN2IntMatchesFloat(t *testing.T) {
 		}
 		acc := net.newAccumulator()
 		net.build(&acc, pos)
-		gotInt := net.evalFrom(&acc, pos.SideToMove())
+		gotInt := net.evalFrom(&acc, pos.SideToMove(), net.outputBucket(pos))
 		gotFloat := net.Eval(pos)
 		d := gotInt - gotFloat
 		if d < 0 {
