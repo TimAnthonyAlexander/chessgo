@@ -911,7 +911,7 @@ imported to `data/nnue/net.nnue.v8`.
 |---|---|---:|---|
 | **Fixed 100k nodes** | ~depth 11 | **+90 ± 32** | real, ~160 pairs over an independent book |
 | **Movetime 100 ms** | ~depth 11, ~100k nodes | **≈ 0 ± 30** | both arms straddle 0 (−19 / +12); the earlier "+5" was an over-read |
-| **Fixed depth 11** (completed iters) | depth 11 | **−1.5 ± 27** | ~115 pairs — the discriminator |
+| **Fixed depth 11** (completed iters) | depth 11 | **≈0** (arms +1.4 / −1.4) | 240 pairs both arms, perfectly mirror-symmetric → **zero arm bias** — the discriminator |
 | Fixed 100k, **endgame** book | pure endgame | **≈ flat** (−17, wide band) | gain is NOT endgame-concentrated; ~41 unique pairs (fixed-nodes is deterministic → seeds just replay) |
 
 **Verdict: v8 is a movetime wash.** The +90 exists only at fixed *nodes*; it

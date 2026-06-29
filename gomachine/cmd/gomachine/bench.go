@@ -258,6 +258,8 @@ func cmdBenchStockfish(args []string) {
 	sfElo := fs.Int("sf-elo", 1500, "Stockfish UCI_Elo (1320..3190); the anchor for our estimate")
 	sfSkill := fs.Int("sf-skill", -1, "Stockfish Skill Level 0..20 (overrides --sf-elo if ≥0)")
 	sfMovetime := fs.Int("sf-movetime", 100, "Stockfish ms per move")
+	fullStrength := fs.Bool("full-strength", false, "run the opponent at FULL strength (skip UCI_LimitStrength/Skill); --sf-elo is then ONLY the anchor rating — use for a CCRL-rated reference engine, e.g. --sf ./stash --full-strength --sf-elo 2880 --opp-name 'Stash v24'")
+	oppName := fs.String("opp-name", "", "opponent label for the report (e.g. \"Stash v24\"); blank → a generic name")
 	ourNodes := fs.Uint64("nodes", 0, "our fixed nodes per move (0 → use --movetime)")
 	ourMovetime := fs.Int("movetime", 100, "our ms per move (if --nodes 0)")
 	ourThreads := fs.Int("threads", 1, "our Lazy SMP threads")
@@ -280,16 +282,26 @@ func cmdBenchStockfish(args []string) {
 		os.Exit(1)
 	}
 
-	// Stockfish strength options + a description for the report.
+	// Opponent strength options + a description for the report.
 	sfOpts := map[string]string{}
 	sfDesc := ""
 	anchorElo := *sfElo
-	if *sfSkill >= 0 {
+	switch {
+	case *fullStrength:
+		// Opponent runs UNHANDICAPPED; --sf-elo is purely the anchor (its known
+		// rating on an external scale, e.g. CCRL Blitz). No strength-limiting
+		// options are sent, so our estimate = anchor + head-to-head Elo diff.
+		name := *oppName
+		if name == "" {
+			name = "opponent"
+		}
+		sfDesc = fmt.Sprintf("%s (full strength · anchor %d)", name, *sfElo)
+	case *sfSkill >= 0:
 		sfOpts["Skill Level"] = fmt.Sprintf("%d", *sfSkill)
 		sfDesc = fmt.Sprintf("Stockfish (Skill %d)", *sfSkill)
 		// Skill Level has no clean Elo anchor; we still report head-to-head vs the
 		// nominal --sf-elo, but label it as skill-based.
-	} else {
+	default:
 		sfOpts["UCI_LimitStrength"] = "true"
 		sfOpts["UCI_Elo"] = fmt.Sprintf("%d", *sfElo)
 		sfDesc = fmt.Sprintf("Stockfish (UCI_Elo %d)", *sfElo)

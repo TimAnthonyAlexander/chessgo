@@ -360,7 +360,7 @@ Re-SPRT every step; flip defaults only on H1.
     8 piece-count buckets, `bucket=(popcount−2)/4` (`MaterialCount<8>`), shared trunk
     + per-bucket output, new **GNN3** format, importer `nb` (commit `860f3ef`;
     `buckets_test.go`). v8 net (`data/nnue/net.nnue.v8`) SPRT vs v6: **+90 @ fixed
-    100k nodes but ≈0 @ movetime AND −1.5 @ fixed depth 11** — the +90 is a
+    100k nodes but ≈0 @ movetime AND ≈0 @ fixed depth 11** (240 pairs, zero arm bias) — the +90 is a
     fixed-nodes mid-iteration artifact, not strength. **v8 NOT promoted** (`net.nnue`
     stays v6); the GNN3/bucket infra is retained so a future wider net can be bucketed
     free. Full write-up: `ENGINE_STRENGTH.md §14.3–14.4`, `NEXT_STEPS.md §2`.

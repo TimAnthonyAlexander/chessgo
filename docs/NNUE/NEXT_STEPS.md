@@ -92,7 +92,8 @@ no-refresh absolute-color design. **Step 3 (data) is the gate** that decides how
   `.output_buckets(MaterialCount::<8>)`, l1 out dim 8, `.select(output_buckets)`,
   l1w `.transpose()`).
 - **SPRT vs v6** (net-vs-net, 5429-pos book): **+90 ± 32 @ fixed 100k nodes**, but
-  **≈0 @ movetime** (arms −19 / +12) and **−1.5 ± 27 @ fixed depth 11**. The +90 is
+  **≈0 @ movetime** (arms −19 / +12) and **≈0 @ fixed depth 11** (arms +1.4 / −1.4,
+  240 pairs, mirror-symmetric → zero arm bias). The +90 is
   a **fixed-nodes mid-iteration artifact**, not strength — see `ENGINE_STRENGTH.md
   §14.3–14.4` for the full mechanism.
 - **Decision:** v8 net **NOT promoted** (`net.nnue` stays v6). **Infra retained** —
