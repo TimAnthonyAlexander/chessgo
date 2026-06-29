@@ -201,10 +201,14 @@ func DefaultParams() Params {
 		// current behavior. Diagnostic: flip off (multicut=off) to test whether the
 		// fragile multi-cut is what makes lmr2+singular toxic (research lead).
 		MultiCut: true,
-		// Double extensions on top of singular. DEFAULT FALSE = current behavior
-		// (singular extends exactly 1 ply). When on, a TT move that is singular by a
-		// wide margin at a non-PV node is extended 2 plies. DoubleExtMargin 16 = how
-		// far below singularBeta the verification must fail to qualify.
+		// Double extensions on top of singular. DEFAULT FALSE — SPRT-REJECTED: a dry
+		// hole on this baseline (singular already ships; the tree is already heavily
+		// extended/pruned). margin=16 SPRT'd -11.1 ± 10.6 @ 40k nodes (LLR -2.88,
+		// ~H0, fires too eagerly), and a retune to margin=64 was dead flat -0.0 ± 8.5
+		// (600 pairs, pentanomial [0 113 374 113 0]). No positive operating point
+		// found. Kept default-off scaffolding (off-path byte-identical), like the §13
+		// rejects. When on, a TT move singular by a wide margin at a non-PV node is
+		// extended 2 plies; DoubleExtMargin = how far below singularBeta to qualify.
 		DoubleExt:       false,
 		DoubleExtMargin: 16,
 		// Run the singular verification subtree with conservative LMR instead of
