@@ -66,6 +66,12 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("singulardepth: %q is not an int", val)
 			}
 			base.SingularMinDepth = n
+		case "doubleextmargin", "dextm":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("doubleextmargin: %q is not an int", val)
+			}
+			base.DoubleExtMargin = n
 		case "lmr":
 			b, err := parseBool(val)
 			if err != nil {
@@ -294,6 +300,14 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.Singular = b
+		case "doubleext", "dext":
+			// double extensions: when the TT move is singular by a wide margin at a
+			// non-PV node, extend it 2 plies instead of 1 (DEFAULT OFF).
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.DoubleExt = b
 		case "multicut", "mc":
 			// singular: allow the verification's multi-cut early-return (diagnostic;
 			// default on — flip off to isolate fragile multi-cut from the rest of singular).
@@ -324,6 +338,32 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.Futility = b
+		case "histprune", "hp":
+			// history pruning: skip late quiets whose history score is strongly negative.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.HistPrune = b
+		case "seequiet", "seeq":
+			// quiet-move SEE pruning: skip a quiet move that hangs material to the recapture.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.SEEQuiet = b
+		case "seequietmargin", "sqm":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("seequietmargin: %q is not an int", val)
+			}
+			base.SEEQuietMargin = n
+		case "seequietmaxdepth", "sqd":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("seequietmaxdepth: %q is not an int", val)
+			}
+			base.SEEQuietMaxDepth = n
 		case "probcut", "pc":
 			// probcut: capture-driven reduced-depth fail-high prune.
 			b, err := parseBool(val)
@@ -455,6 +495,9 @@ func DiffParams(base, patch search.Params) string {
 	if base.Singular != patch.Singular {
 		diffs = append(diffs, fmt.Sprintf("singular: %s→%s", onoff(base.Singular), onoff(patch.Singular)))
 	}
+	if base.DoubleExt != patch.DoubleExt {
+		diffs = append(diffs, fmt.Sprintf("doubleext: %s→%s", onoff(base.DoubleExt), onoff(patch.DoubleExt)))
+	}
 	if base.MultiCut != patch.MultiCut {
 		diffs = append(diffs, fmt.Sprintf("multicut: %s→%s", onoff(base.MultiCut), onoff(patch.MultiCut)))
 	}
@@ -467,6 +510,18 @@ func DiffParams(base, patch search.Params) string {
 	if base.Futility != patch.Futility {
 		diffs = append(diffs, fmt.Sprintf("futility: %s→%s", onoff(base.Futility), onoff(patch.Futility)))
 	}
+	if base.HistPrune != patch.HistPrune {
+		diffs = append(diffs, fmt.Sprintf("histprune: %s→%s", onoff(base.HistPrune), onoff(patch.HistPrune)))
+	}
+	if base.SEEQuiet != patch.SEEQuiet {
+		diffs = append(diffs, fmt.Sprintf("seequiet: %s→%s", onoff(base.SEEQuiet), onoff(patch.SEEQuiet)))
+	}
+	if base.SEEQuietMargin != patch.SEEQuietMargin {
+		diffs = append(diffs, fmt.Sprintf("seequietmargin: %d→%d", base.SEEQuietMargin, patch.SEEQuietMargin))
+	}
+	if base.SEEQuietMaxDepth != patch.SEEQuietMaxDepth {
+		diffs = append(diffs, fmt.Sprintf("seequietmaxdepth: %d→%d", base.SEEQuietMaxDepth, patch.SEEQuietMaxDepth))
+	}
 	if base.ProbCut != patch.ProbCut {
 		diffs = append(diffs, fmt.Sprintf("probcut: %s→%s", onoff(base.ProbCut), onoff(patch.ProbCut)))
 	}
@@ -478,6 +533,9 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.SingularMinDepth != patch.SingularMinDepth {
 		diffs = append(diffs, fmt.Sprintf("singulardepth: %d→%d", base.SingularMinDepth, patch.SingularMinDepth))
+	}
+	if base.DoubleExtMargin != patch.DoubleExtMargin {
+		diffs = append(diffs, fmt.Sprintf("doubleextmargin: %d→%d", base.DoubleExtMargin, patch.DoubleExtMargin))
 	}
 	if base.CaptHist != patch.CaptHist {
 		diffs = append(diffs, fmt.Sprintf("capthist: %s→%s", onoff(base.CaptHist), onoff(patch.CaptHist)))

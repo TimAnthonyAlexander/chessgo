@@ -79,6 +79,14 @@ const (
 	// futilityMargin·depth ≤ alpha (it almost surely can't raise alpha).
 	futilityMaxDepth = 6
 	futilityMargin   = 100
+	// History pruning (Params.HistPrune): max depth it applies at and the per-depth
+	// history threshold. A late quiet is skipped when its history score (butterfly,
+	// plus continuation history when ContHist is on) is below histPruneMargin·depth.
+	// The threshold is negative and grows more negative with depth (deeper = prune
+	// only the very worst-ranked quiets). Distinct from LMP (move count) and
+	// Frontier futility (static eval) — this keys off history magnitude.
+	histPruneMaxDepth = 6
+	histPruneMargin   = -1000
 	// ProbCut (Params.ProbCut): min depth, the raised-beta margin (cp), and the
 	// reduced search depth = depth − probcutReduction.
 	probcutMinDepth  = 5
@@ -238,7 +246,10 @@ type Searcher struct {
 	dbgNullMoves uint64
 	dbgQNodes    uint64
 	dbgSingular  uint64 // singular extensions applied (TT move extended a ply)
+	dbgDoubleExt uint64 // double extensions applied (TT move extended 2 plies; Params.DoubleExt)
 	dbgMultiCut  uint64 // singular verification multi-cuts (early fail-high)
+	dbgHistPrune uint64 // late quiets skipped by history pruning (Params.HistPrune)
+	dbgSEEQuiet  uint64 // quiets skipped by quiet-move SEE pruning (Params.SEEQuiet)
 
 	// Correction history tables (Params.CorrHist). Persist across moves within a
 	// game; cleared in ClearTT() between games, NOT in reset(). See corrhist.go.
@@ -273,6 +284,18 @@ func (s *Searcher) DbgQNodes() uint64    { return s.dbgQNodes }
 // multi-cuts the last search performed (test/diagnostic only).
 func (s *Searcher) DbgSingular() uint64 { return s.dbgSingular }
 func (s *Searcher) DbgMultiCut() uint64 { return s.dbgMultiCut }
+
+// DbgDoubleExt reports how many double extensions the last search applied
+// (Params.DoubleExt; test/diagnostic only).
+func (s *Searcher) DbgDoubleExt() uint64 { return s.dbgDoubleExt }
+
+// DbgHistPrune reports how many late quiets the last search skipped via history
+// pruning (Params.HistPrune; test/diagnostic only).
+func (s *Searcher) DbgHistPrune() uint64 { return s.dbgHistPrune }
+
+// DbgSEEQuiet reports how many quiets the last search skipped via quiet-move SEE
+// pruning (Params.SEEQuiet; test/diagnostic only).
+func (s *Searcher) DbgSEEQuiet() uint64 { return s.dbgSEEQuiet }
 
 // New returns a full-strength Searcher with a transposition table of ttSizeMB
 // megabytes.
@@ -422,7 +445,10 @@ func (s *Searcher) reset(limits Limits, gameHistory []uint64) {
 	s.dbgNullMoves = 0
 	s.dbgQNodes = 0
 	s.dbgSingular = 0
+	s.dbgDoubleExt = 0
 	s.dbgMultiCut = 0
+	s.dbgHistPrune = 0
+	s.dbgSEEQuiet = 0
 	s.stop = false
 	s.killers = [maxPly][2]chess.Move{}
 	s.history = [12][64]int{}
@@ -1082,7 +1108,16 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 			return 0
 		}
 		if singScore < singularBeta {
-			extension = 1
+			// Double extension: the alternatives fail low by a wide margin, so the TT
+			// move is very clearly the only good move — extend it 2 plies instead of 1.
+			// Non-PV only (the !isPV gate + singularMinDepth are the search-explosion
+			// guards). When DoubleExt is off this is byte-identical: extension = 1.
+			if s.params.DoubleExt && !isPV && singScore < singularBeta-s.params.DoubleExtMargin {
+				extension = 2
+				s.dbgDoubleExt++
+			} else {
+				extension = 1
+			}
 			s.dbgSingular++
 		} else if s.params.MultiCut && singularBeta >= beta {
 			s.dbgMultiCut++
@@ -1118,6 +1153,37 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 			depth <= futilityMaxDepth && bestScore > -mateThreshold &&
 			staticEval+futilityMargin*depth <= alpha {
 			continue
+		}
+
+		// History pruning: at a shallow non-PV node, skip a late quiet whose history
+		// score is strongly negative — move ordering already ranked it last, and a very
+		// negative history means it almost never raises alpha. Mirrors the LMR history
+		// computation (butterfly + continuation history). The threshold grows more
+		// negative with depth, so deeper nodes prune only the very worst quiets.
+		if s.params.HistPrune && quiet && !isPV && !inCheck && searched > 0 &&
+			depth <= histPruneMaxDepth && bestScore > -mateThreshold {
+			hist := s.history[mover][m.To()]
+			if s.params.ContHist && s.cont != nil {
+				hist += s.contScore(ply, mover, m.To())
+			}
+			if hist < histPruneMargin*depth {
+				s.dbgHistPrune++
+				continue
+			}
+		}
+
+		// Quiet-move SEE pruning: at a shallow non-PV node, skip a quiet move whose
+		// Static Exchange Evaluation is strongly negative — the move puts a piece on a
+		// square where it loses material to the opponent's recapture (it "hangs").
+		// Move ordering already ranks such quiets low and at low depth they almost
+		// never raise alpha. Orthogonal to LMP (move count), Futility (static eval) and
+		// HistPrune (history magnitude) — this keys off whether the move hangs material.
+		if s.params.SEEQuiet && quiet && !isPV && !inCheck && searched > 0 &&
+			depth <= s.params.SEEQuietMaxDepth && bestScore > -mateThreshold {
+			if !pos.SEEGE(m, -s.params.SEEQuietMargin*depth) {
+				s.dbgSEEQuiet++
+				continue
+			}
 		}
 
 		var u chess.Undo

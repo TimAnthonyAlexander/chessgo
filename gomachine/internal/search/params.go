@@ -47,9 +47,15 @@ type Params struct {
 	SingularMargin   int  // singular: verification window = ttScore - SingularMargin*depth (default 2; lower = fire singular more often)
 	SingularMinDepth int  // singular: minimum remaining depth to attempt verification (default 8)
 	MultiCut         bool // singular: allow the verification's multi-cut early-return (return singularBeta when a second move also beats beta). DEFAULT TRUE; flip off to isolate fragile multi-cut from the rest of singular
+	DoubleExt        bool // double extensions: when the TT move is singular by a wide margin (singScore < singularBeta - DoubleExtMargin) at a non-PV node, extend it 2 plies instead of 1
+	DoubleExtMargin  int  // double extensions: how far below singularBeta the verification must fail for a double extension (default 16; higher = fire double-ext less often)
 	CleanVerify      bool // singular: run the verification subtree with conservative LMR (not LMR2), even when LMR2 is on globally — so over-reduced alternatives don't pollute the singular decision. Inert unless LMR2 is on
 	IIR              bool // internal iterative reduction: at a deep node with no TT move, search a ply shallower (cheaper, and seeds the TT with a move)
 	Futility         bool // frontier futility pruning: skip a late quiet whose static eval + depth margin can't reach alpha (the fail-low side; distinct from RFP)
+	HistPrune        bool // history pruning: at a shallow non-PV node, skip a late quiet whose history score is strongly negative (move ordering already ranked it low; new signal vs LMP move-count / Futility static-eval)
+	SEEQuiet         bool // quiet-move SEE pruning: at a shallow non-PV node, skip a quiet move whose SEE is strongly negative (it hangs material to the recapture) — orthogonal to LMP move-count / Futility static-eval / HistPrune history-magnitude
+	SEEQuietMaxDepth int  // SEEQuiet: max remaining depth the prune applies at (default 6)
+	SEEQuietMargin   int  // SEEQuiet: per-depth cp margin; prune when SEE < -SEEQuietMargin·depth (default 50)
 	ProbCut          bool // probcut: if a capture's reduced-depth search beats a raised beta, the node is almost surely a fail-high — prune it
 	Razor            bool // razoring: at very shallow depth, if static eval + margin < alpha, drop to qsearch and prune if it confirms we're below alpha
 	CaptHist         bool // capture history: per (piece,to,victim) stats refine capture ordering WITHIN the SEE good/bad tier (orthogonal to quiet butterfly history)
@@ -195,6 +201,12 @@ func DefaultParams() Params {
 		// current behavior. Diagnostic: flip off (multicut=off) to test whether the
 		// fragile multi-cut is what makes lmr2+singular toxic (research lead).
 		MultiCut: true,
+		// Double extensions on top of singular. DEFAULT FALSE = current behavior
+		// (singular extends exactly 1 ply). When on, a TT move that is singular by a
+		// wide margin at a non-PV node is extended 2 plies. DoubleExtMargin 16 = how
+		// far below singularBeta the verification must fail to qualify.
+		DoubleExt:       false,
+		DoubleExtMargin: 16,
 		// Run the singular verification subtree with conservative LMR instead of
 		// LMR2. DEFAULT FALSE = current behavior (LMR2 everywhere). Diagnostic: flip
 		// on (cleanverify=on) with lmr2+singular to test the over-reduced-verify lead.
@@ -211,6 +223,20 @@ func DefaultParams() Params {
 		// Frontier futility SPRT-accepted vs futility=off: +21.3 ± 12.0 Elo @ 40k
 		// nodes [0,6] (495 pairs, 2026-06-28, zero LL). Default ON.
 		Futility: true,
+		// History pruning of late quiets (skip a quiet whose history score is strongly
+		// negative near the leaves). DEFAULT ON — SPRT-accepted +86.8 ± 26.8 @ 40k nodes
+		// (94 pairs, pentanomial [0 6 41 41 6]); seed maxDepth=6 / margin=-1000.
+		HistPrune: true,
+		// Quiet-move SEE pruning (skip a quiet that hangs material to the recapture
+		// near the leaves). DEFAULT ON. SPRT vs off (margin=50) was +21.3 ± 12.8 @ 40k
+		// nodes (inconclusive at the 700-pair cap, stable positive), then a margin
+		// retune: margin=150 beat margin=50 by +75.9 ± 24.8 (H1, 205 pairs,
+		// pentanomial [0 39 76 52 38]) — the seed 50 over-pruned safe quiets (45%
+		// fixed-depth tree growth); 150 prunes only clearly-hanging pieces. 150 is the
+		// peak: 100≈50 (+10, flat), 200<150 (−10 ± 14.7, [31 155 126 188 0]). maxDepth=6.
+		SEEQuiet:         true,
+		SEEQuietMaxDepth: 6,
+		SEEQuietMargin:   150,
 		ProbCut:  false,
 		Razor:    false,
 		// Capture history: refines capture ordering within the SEE tier. DEFAULT OFF
