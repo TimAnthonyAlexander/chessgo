@@ -42,6 +42,19 @@ func ForceScratch() bool { return forceScratch }
 // SetForceScratch toggles the from-scratch eval path at runtime (perf A/B tests).
 func SetForceScratch(b bool) { forceScratch = b }
 
+// lazyMode selects the LAZY/deferred accumulator: Push only RECORDS the move's
+// feature deltas (no copy/apply); the materialisation happens on demand in Eval,
+// walking back to the nearest computed ancestor. A node that Pushes but never
+// Evals (TT-cut / pruned / in-check) then pays nothing. It is bit-identical to
+// the eager path (the NNUE_ASSERT gate proves it). NNUE_LAZY=1. Default off (eager).
+var lazyMode = os.Getenv("NNUE_LAZY") != ""
+
+// Lazy reports whether the deferred-accumulator path is active.
+func Lazy() bool { return lazyMode }
+
+// SetLazy toggles the deferred-accumulator path (read by NewStack).
+func SetLazy(b bool) { lazyMode = b }
+
 // Accumulator holds the two absolute-color first-layer sums (int16, QA-scaled).
 // Each is B0i plus the W0i columns of that color's active piece features.
 //
@@ -188,6 +201,14 @@ type Stack struct {
 	backing   []int16 // one contiguous buffer; each slot's w/b sub-slice it
 	sp        int
 	floatMode bool // route Eval through the float from-scratch path (int-vs-float A/B)
+
+	// Lazy/deferred path (lazy==true): instead of materialising every slot on
+	// Push, record each slot's move deltas and a "computed" flag, then resolve on
+	// demand in Eval by walking back to the nearest computed ancestor.
+	lazy     bool
+	computed []bool          // per slot: is data[i] materialised and current?
+	deltas   [][4]featChange // per slot: the feature changes of the move into it
+	ndelta   []int           // per slot: number of valid entries in deltas[i]
 }
 
 // NewStack allocates a stack deep enough for maxDepth plies. The per-ply
@@ -204,7 +225,13 @@ func (n *Net) NewStack(maxDepth int) *Stack {
 		data[i].w = backing[off : off+hl : off+hl]
 		data[i].b = backing[off+hl : off+2*hl : off+2*hl]
 	}
-	return &Stack{net: n, data: data, backing: backing}
+	st := &Stack{net: n, data: data, backing: backing, lazy: lazyMode}
+	if st.lazy {
+		st.computed = make([]bool, slots)
+		st.deltas = make([][4]featChange, slots)
+		st.ndelta = make([]int, slots)
+	}
+	return st
 }
 
 // Net returns the net this stack was built for (so the searcher can detect a
@@ -219,11 +246,45 @@ func (st *Stack) SetFloatMode(b bool) { st.floatMode = b }
 func (st *Stack) Reset(pos *chess.Position) {
 	st.sp = 0
 	st.net.build(&st.data[0], pos)
+	if st.lazy {
+		st.computed[0] = true // slot 0 is the always-computed floor for walk-backs
+	}
+}
+
+// ensureComputed materialises slot `target` (lazy path): find the nearest
+// computed ancestor, then apply each ply's recorded deltas forward, caching the
+// intermediate slots so siblings reuse them. Slot 0 (Reset) is the floor.
+func (st *Stack) ensureComputed(target int) {
+	j := target
+	for j > 0 && !st.computed[j] {
+		j--
+	}
+	for k := j + 1; k <= target; k++ {
+		dst := &st.data[k]
+		src := &st.data[k-1]
+		copy(dst.w, src.w)
+		copy(dst.b, src.b)
+		for i := 0; i < st.ndelta[k]; i++ {
+			st.net.apply(dst, st.deltas[k][i])
+		}
+		st.computed[k] = true
+	}
 }
 
 // Push applies m (read from the PRE-move pos) onto a new top slot. Call it
 // immediately BEFORE pos.DoMove.
 func (st *Stack) Push(pos *chess.Position, m chess.Move) {
+	if st.lazy {
+		// Defer: record the move's deltas, mark the child uncomputed, do NOT
+		// touch the accumulator. A child that never Evals pays nothing.
+		var ch [4]featChange
+		n := moveChanges(pos, m, &ch)
+		st.deltas[st.sp+1] = ch
+		st.ndelta[st.sp+1] = n
+		st.computed[st.sp+1] = false
+		st.sp++
+		return
+	}
 	src := &st.data[st.sp]
 	dst := &st.data[st.sp+1]
 	// Copy CONTENTS, not the slice headers (which would alias src's backing).
@@ -240,6 +301,12 @@ func (st *Stack) Push(pos *chess.Position, m chess.Move) {
 // PushNull duplicates the top slot (a null move changes no placement). Call it
 // immediately BEFORE pos.DoNullMove.
 func (st *Stack) PushNull() {
+	if st.lazy {
+		st.ndelta[st.sp+1] = 0 // null move changes no placement
+		st.computed[st.sp+1] = false
+		st.sp++
+		return
+	}
 	src := &st.data[st.sp]
 	dst := &st.data[st.sp+1]
 	copy(dst.w, src.w)
@@ -254,6 +321,9 @@ func (st *Stack) Pop() { st.sp-- }
 // side to move. When NNUE_ASSERT is set it first verifies the incremental
 // accumulator against a from-scratch rebuild (the G1 gate).
 func (st *Stack) Eval(pos *chess.Position) int {
+	if st.lazy {
+		st.ensureComputed(st.sp) // materialise the current slot on demand
+	}
 	if assertAccumulator {
 		st.assertConsistent(pos)
 	}
