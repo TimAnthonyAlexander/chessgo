@@ -250,6 +250,7 @@ type Searcher struct {
 	dbgMultiCut  uint64 // singular verification multi-cuts (early fail-high)
 	dbgHistPrune uint64 // late quiets skipped by history pruning (Params.HistPrune)
 	dbgSEEQuiet  uint64 // quiets skipped by quiet-move SEE pruning (Params.SEEQuiet)
+	dbgCaptSEE   uint64 // captures skipped by capture-move SEE pruning (Params.CaptSEE)
 
 	// Correction history tables (Params.CorrHist). Persist across moves within a
 	// game; cleared in ClearTT() between games, NOT in reset(). See corrhist.go.
@@ -296,6 +297,10 @@ func (s *Searcher) DbgHistPrune() uint64 { return s.dbgHistPrune }
 // DbgSEEQuiet reports how many quiets the last search skipped via quiet-move SEE
 // pruning (Params.SEEQuiet; test/diagnostic only).
 func (s *Searcher) DbgSEEQuiet() uint64 { return s.dbgSEEQuiet }
+
+// DbgCaptSEE reports how many captures the last search skipped via capture-move
+// SEE pruning (Params.CaptSEE; test/diagnostic only).
+func (s *Searcher) DbgCaptSEE() uint64 { return s.dbgCaptSEE }
 
 // New returns a full-strength Searcher with a transposition table of ttSizeMB
 // megabytes.
@@ -449,6 +454,7 @@ func (s *Searcher) reset(limits Limits, gameHistory []uint64) {
 	s.dbgMultiCut = 0
 	s.dbgHistPrune = 0
 	s.dbgSEEQuiet = 0
+	s.dbgCaptSEE = 0
 	s.stop = false
 	s.killers = [maxPly][2]chess.Move{}
 	s.history = [12][64]int{}
@@ -1182,6 +1188,22 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 			depth <= s.params.SEEQuietMaxDepth && bestScore > -mateThreshold {
 			if !pos.SEEGE(m, -s.params.SEEQuietMargin*depth) {
 				s.dbgSEEQuiet++
+				continue
+			}
+		}
+
+		// Capture-move SEE pruning: at a shallow non-PV node, skip a CAPTURE whose
+		// Static Exchange Evaluation is strongly negative — a clearly-losing capture
+		// that hangs material through the recapture sequence. Captures are already
+		// SEE-ordered (losing ones last) and SEE-pruned in qsearch, but in the main
+		// move loop a losing capture is still fully searched; this prunes the clearly-
+		// losing tail at low depth. The capture analog of SEEQuiet (which fires only on
+		// quiets) — restricted to genuine captures, never promotions (incl. capture-
+		// promotions), so a promotion is never pruned here.
+		if s.params.CaptSEE && capture && m.Type() != chess.Promotion && !isPV && !inCheck && searched > 0 &&
+			depth <= s.params.CaptSEEMaxDepth && bestScore > -mateThreshold {
+			if !pos.SEEGE(m, -s.params.CaptSEEMargin*depth) {
+				s.dbgCaptSEE++
 				continue
 			}
 		}

@@ -56,6 +56,9 @@ type Params struct {
 	SEEQuiet         bool // quiet-move SEE pruning: at a shallow non-PV node, skip a quiet move whose SEE is strongly negative (it hangs material to the recapture) — orthogonal to LMP move-count / Futility static-eval / HistPrune history-magnitude
 	SEEQuietMaxDepth int  // SEEQuiet: max remaining depth the prune applies at (default 6)
 	SEEQuietMargin   int  // SEEQuiet: per-depth cp margin; prune when SEE < -SEEQuietMargin·depth (default 50)
+	CaptSEE          bool // capture-move SEE pruning: at a shallow non-PV node, skip a CAPTURE whose SEE is strongly negative (a clearly-losing capture that hangs material through the recapture sequence) — the capture analog of SEEQuiet, orthogonal to it (fires only on captures, never quiets/promotions). DEFAULT OFF — under SPRT
+	CaptSEEMaxDepth  int  // CaptSEE: max remaining depth the prune applies at (default 6)
+	CaptSEEMargin    int  // CaptSEE: per-depth cp margin; prune when SEE < -CaptSEEMargin·depth (default 100)
 	ProbCut          bool // probcut: if a capture's reduced-depth search beats a raised beta, the node is almost surely a fail-high — prune it
 	Razor            bool // razoring: at very shallow depth, if static eval + margin < alpha, drop to qsearch and prune if it confirms we're below alpha
 	CaptHist         bool // capture history: per (piece,to,victim) stats refine capture ordering WITHIN the SEE good/bad tier (orthogonal to quiet butterfly history)
@@ -241,6 +244,14 @@ func DefaultParams() Params {
 		SEEQuiet:         true,
 		SEEQuietMaxDepth: 6,
 		SEEQuietMargin:   150,
+		// Capture-move SEE pruning (skip a clearly-losing capture that hangs material
+		// through the recapture sequence near the leaves). The capture analog of
+		// SEEQuiet. DEFAULT ON — SPRT-accepted +77.7 ± 25.2 @ 40k nodes (148 pairs,
+		// pentanomial [0 27 37 75 9]); shrinks the tree (deeper search at fixed nodes).
+		// maxDepth=6 / margin=100 (margin retune in progress to confirm the peak).
+		CaptSEE:         true,
+		CaptSEEMaxDepth: 6,
+		CaptSEEMargin:   100,
 		ProbCut:  false,
 		Razor:    false,
 		// Capture history: refines capture ordering within the SEE tier. DEFAULT OFF

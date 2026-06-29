@@ -364,6 +364,25 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("seequietmaxdepth: %q is not an int", val)
 			}
 			base.SEEQuietMaxDepth = n
+		case "captsee":
+			// capture-move SEE pruning: skip a clearly-losing capture that hangs material.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.CaptSEE = b
+		case "captseemargin", "csm":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("captseemargin: %q is not an int", val)
+			}
+			base.CaptSEEMargin = n
+		case "captseemaxdepth", "csd":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("captseemaxdepth: %q is not an int", val)
+			}
+			base.CaptSEEMaxDepth = n
 		case "probcut", "pc":
 			// probcut: capture-driven reduced-depth fail-high prune.
 			b, err := parseBool(val)
@@ -521,6 +540,15 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.SEEQuietMaxDepth != patch.SEEQuietMaxDepth {
 		diffs = append(diffs, fmt.Sprintf("seequietmaxdepth: %d→%d", base.SEEQuietMaxDepth, patch.SEEQuietMaxDepth))
+	}
+	if base.CaptSEE != patch.CaptSEE {
+		diffs = append(diffs, fmt.Sprintf("captsee: %s→%s", onoff(base.CaptSEE), onoff(patch.CaptSEE)))
+	}
+	if base.CaptSEEMargin != patch.CaptSEEMargin {
+		diffs = append(diffs, fmt.Sprintf("captseemargin: %d→%d", base.CaptSEEMargin, patch.CaptSEEMargin))
+	}
+	if base.CaptSEEMaxDepth != patch.CaptSEEMaxDepth {
+		diffs = append(diffs, fmt.Sprintf("captseemaxdepth: %d→%d", base.CaptSEEMaxDepth, patch.CaptSEEMaxDepth))
 	}
 	if base.ProbCut != patch.ProbCut {
 		diffs = append(diffs, fmt.Sprintf("probcut: %s→%s", onoff(base.ProbCut), onoff(patch.ProbCut)))
