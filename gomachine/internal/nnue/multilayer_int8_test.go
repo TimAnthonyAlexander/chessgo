@@ -84,7 +84,7 @@ func TestDotU8I8Consistency(t *testing.T) {
 		a := make([]uint8, nn)
 		w := make([]int8, nn)
 		for i := range a {
-			a[i] = uint8(rng.Intn(40))    // small ⇒ no pair saturates
+			a[i] = uint8(rng.Intn(40))     // small ⇒ no pair saturates
 			w[i] = int8(rng.Intn(61) - 30) // [-30,30]
 		}
 		var ref int32

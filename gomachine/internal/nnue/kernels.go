@@ -43,6 +43,25 @@ func subColScalar(dst, src []int16) {
 	}
 }
 
+// addColI8Scalar adds an INT8 weight column into the int16 accumulator, widening
+// each int8 to int16 first. This is the enriched net's threat-column update: the
+// (huge) threat weight table is stored int8 to halve the per-move addCol memory
+// traffic (the dominant cost of the threat accumulator), while the accumulator
+// stays int16. Result is identical to an int16 addCol of the widened column, so it
+// composes with subCol etc. on the same accumulator.
+func addColI8Scalar(dst []int16, src []int8) {
+	for j := range dst {
+		dst[j] += int16(src[j])
+	}
+}
+
+// subColI8Scalar subtracts a widened int8 weight column from the int16 accumulator.
+func subColI8Scalar(dst []int16, src []int8) {
+	for j := range dst {
+		dst[j] -= int16(src[j])
+	}
+}
+
 // screluDotScalar computes Σ_i clamp(acc[i],0,qa)² · w[i] as int64, over the
 // whole acc/w slice (len == net HL). This is exactly the per-half body of the
 // old evalFrom; summing the two halves (stm then opp) reproduces the int forward
@@ -78,6 +97,30 @@ func dotF32Scalar(a, w []float32) float32 {
 		s += a[i] * w[i]
 	}
 	return s
+}
+
+// gemvF32Scalar is an OUTPUT-STATIONARY matrix-vector product for the multilayer
+// tail: out[o] = Σ_i in[i] · w[i*stride + off + o], for o in [0,len(out)). The
+// weight matrix is INPUT-MAJOR (each input i owns a contiguous row; an output
+// bucket is the [off:off+len(out)] sub-slice of that row, hence stride/off). This
+// replaces the old "one dotF32 per output row" tail, which paid a horizontal
+// reduction + indirect call PER OUTPUT (~49× for 512→16→32→1) — ~2.5 µs of pure
+// overhead. Output-stationary keeps the output vector resident and loops over
+// inputs (broadcast in[i], FMA the contiguous weight row), so there is ONE pass
+// and NO per-row reduction. Bias + activation are applied by the caller. Like
+// dotF32 this is bit-CLOSE (float add order differs from the old per-row dot), not
+// bit-exact — the cp rounding absorbs it.
+func gemvF32Scalar(out, in, w []float32, stride, off int) {
+	for o := range out {
+		out[o] = 0
+	}
+	for i := 0; i < len(in); i++ {
+		x := in[i]
+		row := w[i*stride+off : i*stride+off+len(out)]
+		for o := range out {
+			out[o] += x * row[o]
+		}
+	}
 }
 
 // screluActivateFScalar applies SCReLU (clamp to [0,1], then square) elementwise,
@@ -161,7 +204,7 @@ func screluActivateI16Scalar(dst []float32, src []int16) {
 // the same value (±1) the float screluActivateF→quantU8 chain produced, but with a
 // shift the SIMD backend reproduces bit-for-bit. The matching descale (L1Inv =
 // 1/(int8QA·Sw)) is unchanged.
-const ftShift = 9            // log2(ftQA²/int8QA) = log2(65025/127) ≈ 9; 255²>>9 = 127
+const ftShift = 9                  // log2(ftQA²/int8QA) = log2(65025/127) ≈ 9; 255²>>9 = 127
 const ftRound = 1 << (ftShift - 1) // 256: round-to-nearest before the shift (floor biased eval ~25cp)
 
 func quantU8I16Scalar(dst []uint8, src []int16) {
@@ -217,10 +260,17 @@ var (
 	addCol = addColScalar
 	// subCol(dst, src): dst -= src, elementwise int16.
 	subCol = subColScalar
+	// addColI8(dst, src): dst += widen(src), int16 acc += int8 col (threat columns).
+	addColI8 = addColI8Scalar
+	// subColI8(dst, src): dst -= widen(src), int16 acc -= int8 col.
+	subColI8 = subColI8Scalar
 	// screluDot(acc, w, qa): Σ clamp(acc,0,qa)²·w as int64.
 	screluDot = screluDotScalar
 	// dotF32(a, w): Σ a·w as float32 (MultiNet tail matmul; bit-CLOSE, not exact).
 	dotF32 = dotF32Scalar
+	// gemvF32(out, in, w, stride, off): output-stationary GEMV, input-major weights
+	// (enriched tail; bit-CLOSE). out[o] = Σ_i in[i]·w[i*stride+off+o].
+	gemvF32 = gemvF32Scalar
 	// screluActivateF(dst, src): dst = clamp(src,0,1)² elementwise (bit-exact).
 	screluActivateF = screluActivateFScalar
 	// quantU8(dst, src): dst = u8 round(clamp(src,0,1)²·255) — SCReLU→int8 domain.

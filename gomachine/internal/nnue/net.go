@@ -141,8 +141,8 @@ func RandomNetSize(seed int64, hl int) *Net {
 func (n *Net) Eval(pos *chess.Position) int {
 	hl := n.HL
 	acc := make([]float32, 2*hl)
-	copy(acc[:hl], n.B0)  // stm half
-	copy(acc[hl:], n.B0)  // opp half
+	copy(acc[:hl], n.B0) // stm half
+	copy(acc[hl:], n.B0) // opp half
 
 	stm := pos.SideToMove()
 	var buf [maxActive]uint16
@@ -315,7 +315,7 @@ func readGNN1(r io.Reader, hl int) (*Net, error) {
 		return nil, err
 	}
 	n.quantizeFromFloat() // populate the int view (lossy for arbitrary floats)
-	n.quantized = false    // floats are authoritative here, not bullet-exact ints
+	n.quantized = false   // floats are authoritative here, not bullet-exact ints
 	return n, nil
 }
 

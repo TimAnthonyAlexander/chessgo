@@ -137,7 +137,10 @@ func DefaultParams() Params {
 		PawnRace: true,
 		// EG drawishness scale factor (Stockfish-classical): scales the eg term by
 		// sf/64 in drawish material (no-pawn ≤minor → 0/4/14, opposite bishops,
-		// lone-queen, pawn-count cap). UNDER SPRT — default off until accepted.
+		// lone-queen, pawn-count cap). SPRT-REJECTED at movetime: -0.0 ± 4.0 @ 100ms,
+		// pentanomial [0 0 129 0 0] — ALL DRAWS, i.e. byte-identical play: the drawish-
+		// material condition never fires within the search horizon on the test book, so
+		// it's INERT at movetime (not harmful). Default off (2026-06-30).
 		ScaleFactor: false,
 		TunedEval:   true,
 		// Syzygy endgame tablebase probing at the search root. SPRT-accepted vs
@@ -178,11 +181,17 @@ func DefaultParams() Params {
 		// vs corrhist=off: +66.9 ± 22.9 Elo @ 40k nodes [0,6] (174 pairs,
 		// 2026-06-28, pentanomial [0 21 87 44 22], zero LL). Default ON.
 		CorrHist: true,
-		// Extra corrhist keys (minor-piece + continuation), behind their own flags.
-		// DEFAULT OFF — under SPRT. Additive eval adjustment (cannot over-prune);
-		// require CorrHist on.
-		CorrHistMinor: false,
-		CorrHistCont:  false,
+		// Extra corrhist keys (minor-piece + continuation), additive eval adjustment
+		// (cannot over-prune); require CorrHist on.
+		// CorrHistMinor: SPRT-ACCEPTED at MOVETIME vs off — the honest eval gate (NOT
+		// fixed-nodes, which inflates eval changes): +43.4 ± 16.6 Elo @ 100ms (408
+		// pairs, 2026-06-30, H1, pentanomial [0 102 153 102 51], zero LL); separately
+		// +67.5 @ 40k nodes. Measured ON TOP of IIR. Default ON.
+		CorrHistMinor: true,
+		// CorrHistCont: continuation corrhist key. SPRT-REJECTED at movetime ON TOP OF
+		// IIR+CorrHistMinor: -10.6 ± 11.7 Elo @ 100ms (2026-06-30, ~H0) — redundant with
+		// the minor-piece key (stacking both double-counts the correction). Default OFF.
+		CorrHistCont: false,
 		// Continuation history (1-ply countermove + 2-ply), blended into quiet move
 		// ordering and the LMR reduction term alongside butterfly history. DEFAULT
 		// OFF — under SPRT (best tested bundled with aggressive LMR, where better
@@ -191,26 +200,33 @@ func DefaultParams() Params {
 		// Aggressive LMR (supersedes LMR when on): reduces captures/promotions too,
 		// earlier onset (non-PV from the 2nd move), with PV / improving /
 		// ordering-trust / SEE reduction adjustments; over-reductions are caught by
-		// the existing zero-window re-search. DEFAULT OFF — under SPRT, coupled with
-		// Singular (aggressive reductions need singular extensions to re-extend the
-		// forced moves they over-cut).
+		// the existing zero-window re-search. +33.0 @ 40k NODES WITH multicut=off (384
+		// pairs, 2026-06-30). The durable finding here is the ANTI-SYNERGY CAUSE: the
+		// lmr2+singular -67 was the MULTI-CUT early-return, NOT the verification LMR
+		// (cleanverify failed twice). BUT in the day's 5-patch stack the MOVETIME
+		// re-anchor was -77.7, so REVERTED to OFF. LMR2 is the PRIME reclaim candidate
+		// (its value is depth-per-second, a movetime gain) — re-gate lmr2=on,multicut=off
+		// at MOVETIME on the CorrHistMinor-only baseline before shipping.
 		LMR2: false,
 		// Singular extensions: a TT move that is much better than every alternative
 		// at a reduced-depth verification search is extended a ply (and a second move
 		// beating beta triggers a multi-cut). Conservative: depth≥8, single ply, no
 		// double extensions. SPRT-accepted vs singular=off: +22.2 ± 12.2 Elo @ 40k
 		// nodes [0,6] (186 pairs, 2026-06-28, [0 11 140 35 0], zero LL). Default ON.
-		// NOTE: toxic in combination with LMR2 (lmr2+singular SPRT'd −67 although each
-		// is positive alone: lmr2 +9.7, singular +22.2) — an anti-synergy under
-		// investigation; do NOT enable LMR2 on top of this without fixing it.
+		// NOTE: lmr2+singular WAS toxic (−67) but the cause was the MULTI-CUT early
+		// return, not singular itself (fix = multicut=off, NOT cleanverify). lmr2+
+		// multicut-off was +33 @ fixed nodes but reverted (the 5-patch movetime stack
+		// was -77.7); pending an individual movetime gate. Singular stays on regardless.
 		Singular: true,
 		// Singular verification knobs, promoted from consts so they're SPRT-tunable.
 		// Defaults (margin 2·depth, min-depth 8) preserve the banked +22.2 exactly.
 		SingularMargin:   singularMargin,
 		SingularMinDepth: singularMinDepth,
-		// Multi-cut early-return inside the singular verification. DEFAULT TRUE =
-		// current behavior. Diagnostic: flip off (multicut=off) to test whether the
-		// fragile multi-cut is what makes lmr2+singular toxic (research lead).
+		// Multi-cut early-return inside the singular verification. DEFAULT TRUE (part of
+		// singular's accepted +22.2). FINDING (2026-06-30): the fragile multi-cut is what
+		// made lmr2+singular toxic (-67) — lmr2=on,multicut=off was +33 @ fixed nodes.
+		// That pair was reverted (5-patch movetime stack -77.7). If LMR2 is reclaimed at
+		// movetime, flip this OFF together with LMR2 ON; otherwise leave ON.
 		MultiCut: true,
 		// Double extensions on top of singular. DEFAULT FALSE — SPRT-REJECTED: a dry
 		// hole on this baseline (singular already ships; the tree is already heavily
@@ -225,15 +241,21 @@ func DefaultParams() Params {
 		// Run the singular verification subtree with conservative LMR instead of
 		// LMR2. DEFAULT FALSE = current behavior (LMR2 everywhere). Diagnostic: flip
 		// on (cleanverify=on) with lmr2+singular to test the over-reduced-verify lead.
+		// RE-CONFIRMED 2026-06-30: lmr2=on,cleanverify=on SPRT'd -74.9 @ 40k nodes (~H0)
+		// on the IIR+CHM+ProbCut+Razor baseline — CleanVerify does NOT untangle the
+		// lmr2+singular anti-synergy (the verification-LMR is not the cause). Matches the
+		// earlier negative result. The remaining hypothesis is the multi-cut early-return.
 		CleanVerify: false,
 		// Wave 4 cheap top-ups (each behind its own flag, DEFAULT OFF — under SPRT):
 		// IIR (reduce a ply at a deep node with no TT move), frontier futility
 		// (skip late quiets that can't reach alpha), ProbCut (capture-driven
 		// fail-high prune), razoring (shallow drop-to-qsearch). All gated so the
 		// off-path is byte-identical to the current default engine.
-		// IIR REJECTED: -33.7 Elo as implemented (fires on ALL node types — standard
-		// IIR is PV + expected-cut only; ours over-prunes). Kept off; rework to
-		// selective placement before retrying.
+		// IIR: REJECTED at -33.7 (all-nodes), REWORKED to PV-only → +11.0 @ 40k NODES
+		// (2216 pairs, 2026-06-30). BUT the full-stack MOVETIME re-anchor of the day's 5
+		// patches was -77.7 @ 100ms — the fixed-nodes win did not survive real TC on this
+		// already-heavily-pruned engine. REVERTED to OFF pending an INDIVIDUAL movetime
+		// gate on the CorrHistMinor-only baseline. (Lesson: gate pruners at movetime.)
 		IIR: false,
 		// Frontier futility SPRT-accepted vs futility=off: +21.3 ± 12.0 Elo @ 40k
 		// nodes [0,6] (495 pairs, 2026-06-28, zero LL). Default ON.
@@ -264,8 +286,15 @@ func DefaultParams() Params {
 		CaptSEE:         true,
 		CaptSEEMaxDepth: 6,
 		CaptSEEMargin:   25,
-		ProbCut:  false,
-		Razor:    false,
+		// ProbCut: +22.1 @ 40k NODES on the corrhist baseline (1235 pairs, 2026-06-30,
+		// H1) — but part of the day's 5-patch stack that the MOVETIME re-anchor REJECTED
+		// at -77.7. Fixed-nodes inflation / collective over-prune. REVERTED to OFF; the
+		// prior note that probcut is "flat/negative on our heavily-pruned baseline" stands
+		// at real TC. Re-gate individually at MOVETIME before ever shipping.
+		ProbCut: false,
+		// Razor: +32.8 @ 40k NODES (455 pairs, 2026-06-30, H1) — same fate as ProbCut:
+		// in the 5-patch stack the movetime re-anchor was -77.7. REVERTED to OFF.
+		Razor: false,
 		// Capture history: refines capture ordering within the SEE tier. DEFAULT OFF
 		// — under SPRT.
 		CaptHist: false,

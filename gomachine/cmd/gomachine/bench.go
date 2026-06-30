@@ -109,9 +109,38 @@ func loadMultiOrExit(spec string, int8L1 bool) *nnue.MultiNet {
 	return m
 }
 
+// loadLeanOrExit parses a 'path,H,NB' lean-threats-net spec (single-layer tail +
+// threats) and imports it (a bullet float export). Empty → nil; a bad spec is fatal.
+func loadLeanOrExit(spec string) *nnue.EnrichedNet {
+	if spec == "" {
+		return nil
+	}
+	parts := strings.Split(spec, ",")
+	if len(parts) != 3 {
+		fmt.Fprintf(os.Stderr, "lean-net spec %q: want 'path,H,NB'\n", spec)
+		os.Exit(1)
+	}
+	atoi := func(s string) int {
+		n, err := strconv.Atoi(strings.TrimSpace(s))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "lean-net spec %q: bad int %q\n", spec, s)
+			os.Exit(1)
+		}
+		return n
+	}
+	path := strings.TrimSpace(parts[0])
+	n, err := nnue.ImportBulletLeanNet(path, atoi(parts[1]), atoi(parts[2]))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "lean net %q: %v\n", path, err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "lean net: loaded %s (H=%s NB=%s) single-layer+threats\n", path, parts[1], parts[2])
+	return n
+}
+
 // loadEnrichedOrExit parses a 'path,H,D2,D3,NB' enriched-net spec (threats) and
 // imports it (a bullet float export). Empty → nil; a bad spec/path is fatal.
-func loadEnrichedOrExit(spec string) *nnue.EnrichedNet {
+func loadEnrichedOrExit(spec string, int8L1, int8FT bool) *nnue.EnrichedNet {
 	if spec == "" {
 		return nil
 	}
@@ -134,7 +163,15 @@ func loadEnrichedOrExit(spec string) *nnue.EnrichedNet {
 		fmt.Fprintf(os.Stderr, "enriched net %q: %v\n", path, err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "enriched net: loaded %s (H=%s D2=%s D3=%s NB=%s)\n", path, parts[1], parts[2], parts[3], parts[4])
+	if int8L1 {
+		n.QuantizeForInt8() // int8 tail L1 (QAT'd)
+	}
+	if int8FT {
+		if c := n.QuantizeFTInt8(); c > 0 { // int8 FT threat columns (needs threat-weight QAT to be lossless)
+			fmt.Fprintf(os.Stderr, "  enriched int8FT: %d threat weights clamped\n", c)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "enriched net: loaded %s (H=%s D2=%s D3=%s NB=%s) int8L1=%v int8FT=%v\n", path, parts[1], parts[2], parts[3], parts[4], int8L1, int8FT)
 	return n
 }
 
@@ -245,8 +282,13 @@ func cmdBenchSPRT(args []string) {
 	newMulti := fs.String("new-multi", "", "multilayer (GNN4) net for --new: 'path,H,D2,D3' (bullet float export, e.g. ~/nnue-training/.../raw.bin,512,16,32); forces --concurrency 1")
 	oldMulti := fs.String("old-multi", "", "multilayer (GNN4) net for --old: 'path,H,D2,D3'")
 	multiInt8 := fs.Bool("multi-int8", false, "quantize loaded multilayer net(s) L1 to int8 (PTQ; the movetime-viable path)")
-	newEnriched := fs.String("new-enriched", "", "enriched (threats) net for --new: 'path,H,D2,D3,NB' (bullet float export, e.g. ~/nnue-training/.../raw.bin,1024,16,32,8); forces --concurrency 1")
+	newEnriched := fs.String("new-enriched", "", "enriched (threats) net for --new: 'path,H,D2,D3,NB' (bullet float export, e.g. ~/nnue-training/.../raw.bin,512,16,32,8); forces --concurrency 1")
 	oldEnriched := fs.String("old-enriched", "", "enriched (threats) net for --old: 'path,H,D2,D3,NB'")
+	enrichedInt8 := fs.Bool("enriched-int8", false, "int8 the enriched tail L1 (maddubs; QAT-trained)")
+	enrichedInt8FT := fs.Bool("enriched-int8-ft", false, "ALSO int8 the FT threat columns (faster accumulator; needs threat-weight QAT or it clips)")
+	newLean := fs.String("new-lean", "", "lean single-layer+threats net for --new: 'path,H,NB' (chessgo_lean_threats); forces --concurrency 1")
+	oldLean := fs.String("old-lean", "", "lean single-layer+threats net for --old: 'path,H,NB'")
+	leanInt8FT := fs.Bool("lean-int8ft", false, "int8 the lean --new net's FT threat columns (halves per-move threat accumulator memory traffic; the movetime NPS lever)")
 	_ = fs.Parse(args)
 
 	base := search.DefaultParams()
@@ -275,8 +317,22 @@ func cmdBenchSPRT(args []string) {
 	oldNetP := loadNetOrExit(*oldNet)
 	newMultiP := loadMultiOrExit(*newMulti, *multiInt8)
 	oldMultiP := loadMultiOrExit(*oldMulti, *multiInt8)
-	newEnrichedP := loadEnrichedOrExit(*newEnriched)
-	oldEnrichedP := loadEnrichedOrExit(*oldEnriched)
+	newEnrichedP := loadEnrichedOrExit(*newEnriched, *enrichedInt8, *enrichedInt8FT)
+	oldEnrichedP := loadEnrichedOrExit(*oldEnriched, *enrichedInt8, *enrichedInt8FT)
+	// Lean single-layer+threats nets ride the same EnrichedNet config slots (lean=true);
+	// --new-lean/--old-lean override --new-enriched/--old-enriched if both are given.
+	if p := loadLeanOrExit(*newLean); p != nil {
+		if *leanInt8FT {
+			tot := nnue.ThreatBlock * p.H
+			c := p.QuantizeFTInt8()
+			fmt.Fprintf(os.Stderr, "lean int8FT: ON — %d/%d threat weights clamped (%.4f%%)\n",
+				c, tot, 100*float64(c)/float64(tot))
+		}
+		newEnrichedP = p
+	}
+	if p := loadLeanOrExit(*oldLean); p != nil {
+		oldEnrichedP = p
+	}
 	if (newNetP != nil || oldNetP != nil || newMultiP != nil || oldMultiP != nil || newEnrichedP != nil || oldEnrichedP != nil) && *conc != 1 {
 		fmt.Fprintln(os.Stderr, "note: --new-*/--old-* net flags force --concurrency 1 (the NNUE net is a process global)")
 		*conc = 1

@@ -55,6 +55,15 @@ func Lazy() bool { return lazyMode }
 // SetLazy toggles the deferred-accumulator path (read by NewStack).
 func SetLazy(b bool) { lazyMode = b }
 
+// LazyPush / LazyWasted are diagnostic counters (lazy path only): total deferred
+// pushes, and pushes whose slot was never materialised before Pop (no Eval at it
+// or any descendant) — i.e. the work lazy SKIPPED. LazyWasted/LazyPush is the
+// upper bound on what a lazy accumulator can save. Reset via ResetLazyStats.
+var LazyPush, LazyWasted int64
+
+// ResetLazyStats zeroes the diagnostic counters.
+func ResetLazyStats() { LazyPush, LazyWasted = 0, 0 }
+
 // Accumulator holds the two absolute-color first-layer sums (int16, QA-scaled).
 // Each is B0i plus the W0i columns of that color's active piece features.
 //
@@ -283,6 +292,7 @@ func (st *Stack) Push(pos *chess.Position, m chess.Move) {
 		st.ndelta[st.sp+1] = n
 		st.computed[st.sp+1] = false
 		st.sp++
+		LazyPush++
 		return
 	}
 	src := &st.data[st.sp]
@@ -305,6 +315,7 @@ func (st *Stack) PushNull() {
 		st.ndelta[st.sp+1] = 0 // null move changes no placement
 		st.computed[st.sp+1] = false
 		st.sp++
+		LazyPush++
 		return
 	}
 	src := &st.data[st.sp]
@@ -315,7 +326,12 @@ func (st *Stack) PushNull() {
 }
 
 // Pop discards the top slot (call after UndoMove/UndoNullMove).
-func (st *Stack) Pop() { st.sp-- }
+func (st *Stack) Pop() {
+	if st.lazy && !st.computed[st.sp] {
+		LazyWasted++ // slot was never materialised → its update was skipped
+	}
+	st.sp--
+}
 
 // Eval returns the static eval of the current (top) accumulator oriented to the
 // side to move. When NNUE_ASSERT is set it first verifies the incremental

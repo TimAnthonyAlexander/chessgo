@@ -100,6 +100,42 @@ func TestScreluActivateFMatchScalar(t *testing.T) {
 	t.Logf("screluActivateF backend = %q (bit-exact vs scalar)", kernelBackend)
 }
 
+// TestAddColI8MatchScalar gates the int8-widen-on-add FT kernels (the enriched
+// net's int8 threat-column accumulator update). The active backend must be
+// byte-identical to the scalar reference for all widths incl. non-multiples of the
+// SIMD width, with int8 columns spanning the ±127 extremes — integer widen+add is
+// associative, so this is EXACT (no tolerance).
+func TestAddColI8MatchScalar(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x1817))
+	for _, n := range []int{1, 2, 7, 8, 15, 16, 17, 31, 32, 33, 64, 512, 513} {
+		src := make([]int8, n)
+		for i := range src {
+			src[i] = int8(rng.Intn(255) - 127) // [-127,127]
+		}
+		if n > 1 {
+			src[0], src[n-1] = 127, -127 // force the extremes
+		}
+		base := randI16(rng, n)
+		for _, op := range []string{"add", "sub"} {
+			got := append([]int16(nil), base...)
+			ref := append([]int16(nil), base...)
+			if op == "add" {
+				addColI8(got, src)
+				addColI8Scalar(ref, src)
+			} else {
+				subColI8(got, src)
+				subColI8Scalar(ref, src)
+			}
+			for i := range got {
+				if got[i] != ref[i] {
+					t.Fatalf("%sColI8[n=%d,i=%d] backend=%q: got %d want %d", op, n, i, kernelBackend, got[i], ref[i])
+				}
+			}
+		}
+	}
+	t.Logf("addColI8/subColI8 backend = %q (bit-exact vs scalar, ±127 domain)", kernelBackend)
+}
+
 // TestDotU8I8MatchScalar is the bit-exact gate for the int8 L1 matmul kernel.
 // Inputs are the PRODUCTION domain: activations a ∈ [0,127] (quantU8 output) and
 // weights w ∈ [-127,127]. There the maddubs int16 saturation never fires, so the
@@ -112,7 +148,7 @@ func TestDotU8I8MatchScalar(t *testing.T) {
 		a := make([]uint8, n)
 		w := make([]int8, n)
 		for i := range a {
-			a[i] = uint8(rng.Intn(128))    // [0,127] — the quantU8 domain
+			a[i] = uint8(rng.Intn(128))      // [0,127] — the quantU8 domain
 			w[i] = int8(rng.Intn(255) - 127) // [-127,127]
 		}
 		got := dotU8I8(a, w)
@@ -242,4 +278,32 @@ func assertEqI16(t *testing.T, name string, n int, got, want []int16) {
 			t.Fatalf("%s[n=%d] backend=%q: index %d got %d, want %d", name, n, kernelBackend, i, got[i], want[i])
 		}
 	}
+}
+
+// TestGemvF32MatchScalar gates the output-stationary GEMV SIMD backends bit-close
+// to gemvF32Scalar, across input/output lengths and offsets — including outLen not
+// a multiple of the SIMD width (1,7,16,17,32,33) so the scalar out-tail is hit.
+func TestGemvF32MatchScalar(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x6E47))
+	type cfg struct{ inLen, outLen, off, pad int }
+	for _, c := range []cfg{
+		{16, 1, 0, 0}, {16, 7, 2, 3}, {512, 16, 0, 0}, {512, 16, 5, 7},
+		{16, 17, 1, 2}, {512, 32, 8, 0}, {32, 4, 0, 1}, {1, 16, 0, 0}, {513, 33, 3, 4},
+	} {
+		stride := c.off + c.outLen + c.pad
+		in := randF32(rng, c.inLen)
+		w := randF32(rng, c.inLen*stride)
+		got := make([]float32, c.outLen)
+		ref := make([]float32, c.outLen)
+		gemvF32(got, in, w, stride, c.off)
+		gemvF32Scalar(ref, in, w, stride, c.off)
+		for o := 0; o < c.outLen; o++ {
+			tol := 1e-3 + 1e-4*absF32(ref[o])
+			if d := absF32(got[o] - ref[o]); d > tol {
+				t.Fatalf("gemvF32[in=%d out=%d off=%d stride=%d] o=%d backend=%q: got %g want %g (|Δ|=%g > tol %g)",
+					c.inLen, c.outLen, c.off, stride, o, kernelBackend, got[o], ref[o], d, tol)
+			}
+		}
+	}
+	t.Logf("gemvF32 backend = %q (bit-close vs scalar)", kernelBackend)
 }

@@ -125,8 +125,9 @@ func BenchmarkEnrichedIncrementalNode(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	moves := pos.LegalMoves()
-	if len(moves) == 0 {
+	var ml chess.MoveList
+	pos.GenerateLegal(&ml)
+	if ml.Len() == 0 {
 		b.Fatal("no legal moves")
 	}
 	st := n.NewStack(8)
@@ -134,7 +135,7 @@ func BenchmarkEnrichedIncrementalNode(b *testing.B) {
 	b.ResetTimer()
 	var sink int
 	for i := 0; i < b.N; i++ {
-		m := moves[i%len(moves)]
+		m := ml.Get(i % ml.Len())
 		st.Push(pos, m)
 		child := *pos
 		var u chess.Undo
@@ -143,6 +144,136 @@ func BenchmarkEnrichedIncrementalNode(b *testing.B) {
 		st.Pop()
 	}
 	_ = sink
+}
+
+// midgameForBench is a dense midgame (many threats = worst case) used by the
+// per-node benchmarks below.
+const midgameForBench = "r2q1rk1/1b1nbppp/p2ppn2/1p6/3NPP2/1BN1B3/PPP3PP/R2Q1RK1 w - - 0 1"
+
+// benchIncrementalNode runs Push→Eval→Pop on a stack-with-Push/Eval/Pop, the real
+// per-node search cost. pushEvalPop abstracts over the v6 and enriched stacks.
+func benchIncrementalNode(b *testing.B, pos *chess.Position, reset func(*chess.Position), pushEvalPop func(*chess.Position, chess.Move) int) {
+	var ml chess.MoveList
+	pos.GenerateLegal(&ml)
+	if ml.Len() == 0 {
+		b.Fatal("no moves")
+	}
+	reset(pos)
+	b.ResetTimer()
+	var sink int
+	for i := 0; i < b.N; i++ {
+		sink += pushEvalPop(pos, ml.Get(i%ml.Len()))
+	}
+	_ = sink
+}
+
+// BenchmarkEnrichedIncrementalNodeInt8 is the shipping path's per-node cost: full
+// int8 (tail L1 + FT threat columns), incremental accumulator. THIS is the number
+// to compare against BenchmarkV6IncrementalNode for the movetime NPS ratio.
+func BenchmarkEnrichedIncrementalNodeInt8(b *testing.B) {
+	path := os.Getenv("ENRICHED_NET")
+	if path == "" {
+		b.Skip("set ENRICHED_NET")
+	}
+	n, err := ImportBulletEnrichedNet(path, 512, 16, 32, 8)
+	if err != nil {
+		b.Fatal(err)
+	}
+	n.QuantizeForInt8()
+	n.QuantizeFTInt8()
+	pos, _ := chess.ParseFEN(midgameForBench)
+	st := n.NewStack(8)
+	benchIncrementalNode(b, pos, st.Reset, func(p *chess.Position, m chess.Move) int {
+		st.Push(p, m)
+		child := *p
+		var u chess.Undo
+		child.DoMove(m, &u)
+		v := st.Eval(&child)
+		st.Pop()
+		return v
+	})
+}
+
+// BenchmarkV6IncrementalNode is the shipped v6 net's per-node cost (incremental
+// Stack), the baseline our enriched net must approach to be movetime-viable.
+func BenchmarkV6IncrementalNode(b *testing.B) {
+	net, err := LoadNet("../../data/nnue/net.nnue")
+	if err != nil {
+		b.Skip("v6 net: " + err.Error())
+	}
+	pos, _ := chess.ParseFEN(midgameForBench)
+	st := net.NewStack(8)
+	benchIncrementalNode(b, pos, st.Reset, func(p *chess.Position, m chess.Move) int {
+		st.Push(p, m)
+		child := *p
+		var u chess.Undo
+		child.DoMove(m, &u)
+		v := st.Eval(&child)
+		st.Pop()
+		return v
+	})
+}
+
+// BenchmarkEnrichedTailOnlyInt8 isolates the int8 tail cost (pairwise u8 + maddubs
+// L1), to compare against the float tail (BenchmarkEnrichedTailOnly) on AVX-512.
+func BenchmarkEnrichedTailOnlyInt8(b *testing.B) {
+	path := os.Getenv("ENRICHED_NET")
+	if path == "" {
+		b.Skip("set ENRICHED_NET")
+	}
+	n, _ := ImportBulletEnrichedNet(path, 512, 16, 32, 8)
+	n.QuantizeForInt8()
+	ps := benchPositions(b)
+	accW := make([]int16, n.H)
+	accB := make([]int16, n.H)
+	n.buildAcc(accW, accB, ps[0])
+	sc := n.newScratch()
+	b.ResetTimer()
+	var sink int
+	for i := 0; i < b.N; i++ {
+		sink += n.evalFromHalves(accW, accB, 4, &sc)
+	}
+	_ = sink
+}
+
+// BenchmarkPairwiseHalfTail isolates the pairwise FT activation (the 2× scalar
+// CReLU-clamp+multiply over H, into the H-wide hidden buffer) — to see if the
+// ~5µs tail is the activation (scalar, SIMD-able) or the matmuls.
+func BenchmarkPairwiseHalfTail(b *testing.B) {
+	path := os.Getenv("ENRICHED_NET")
+	if path == "" {
+		b.Skip("set ENRICHED_NET")
+	}
+	n, _ := ImportBulletEnrichedNet(path, 512, 16, 32, 8)
+	accW := make([]int16, n.H)
+	accB := make([]int16, n.H)
+	n.buildAcc(accW, accB, benchPositions(b)[0])
+	hidden := make([]float32, n.H)
+	half := n.H / 2
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		pairwiseHalf(hidden[:half], accW)
+		pairwiseHalf(hidden[half:], accB)
+	}
+}
+
+// BenchmarkGemvL1Tail isolates just the L1 GEMV (hidden[H]→l1[D2]), the biggest
+// matmul, to compare against the pairwise cost.
+func BenchmarkGemvL1Tail(b *testing.B) {
+	path := os.Getenv("ENRICHED_NET")
+	if path == "" {
+		b.Skip("set ENRICHED_NET")
+	}
+	n, _ := ImportBulletEnrichedNet(path, 512, 16, 32, 8)
+	hidden := make([]float32, n.H)
+	for i := range hidden {
+		hidden[i] = 0.1
+	}
+	l1 := make([]float32, n.D2)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		gemvF32(l1, hidden, n.L1W, n.NB*n.D2, 4*n.D2)
+	}
 }
 
 // BenchmarkV6Eval is the shipped single-layer net's from-scratch eval, as the

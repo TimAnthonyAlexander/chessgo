@@ -50,8 +50,83 @@ func init() {
 	subCol = subColSIMD
 	screluDot = screluDotSIMD
 	dotF32 = dotF32SIMD
+	gemvF32 = gemvF32SIMD
 	screluActivateF = screluActivateFSIMD
-	kernelBackend = "simd/archsimd-neon-arm64(addCol,subCol,screluDot,dotF32,screluActivateF)"
+	addColI8 = addColI8SIMD
+	subColI8 = subColI8SIMD
+	kernelBackend = "simd/archsimd-neon-arm64(addCol,subCol,screluDot,dotF32,gemvF32,screluActivateF,addColI8,subColI8)"
+}
+
+// gemvF32SIMD is the output-stationary tail GEMV: out[o] = Σ_i in[i]·w[i*stride+off+o].
+// Weights INPUT-MAJOR; per output 4-chunk one Float32x4 accumulator is held across
+// the input loop (broadcast in[i], FMA the contiguous weight sub-row) — no
+// per-output reduction (the old per-row dotF32 tail's 49× cost). Out-tail columns
+// fall to a scalar dot. Bit-CLOSE (float add order), like dotF32.
+func gemvF32SIMD(out, in, w []float32, stride, off int) {
+	nIn, nOut := len(in), len(out)
+	c := 0
+	for ; c+4 <= nOut; c += 4 {
+		// FOUR independent accumulators over the INPUT dim break the FMA
+		// dependency chain (single acc is latency-bound, ~4× slower); summed once
+		// per output chunk, not per output — still no per-output reduction.
+		base := off + c
+		a0 := archsimd.BroadcastFloat32x4(0)
+		a1 := archsimd.BroadcastFloat32x4(0)
+		a2 := archsimd.BroadcastFloat32x4(0)
+		a3 := archsimd.BroadcastFloat32x4(0)
+		i := 0
+		for ; i+4 <= nIn; i += 4 {
+			a0 = archsimd.LoadFloat32x4(w[(i+0)*stride+base:(i+0)*stride+base+4]).MulAdd(archsimd.BroadcastFloat32x4(in[i+0]), a0)
+			a1 = archsimd.LoadFloat32x4(w[(i+1)*stride+base:(i+1)*stride+base+4]).MulAdd(archsimd.BroadcastFloat32x4(in[i+1]), a1)
+			a2 = archsimd.LoadFloat32x4(w[(i+2)*stride+base:(i+2)*stride+base+4]).MulAdd(archsimd.BroadcastFloat32x4(in[i+2]), a2)
+			a3 = archsimd.LoadFloat32x4(w[(i+3)*stride+base:(i+3)*stride+base+4]).MulAdd(archsimd.BroadcastFloat32x4(in[i+3]), a3)
+		}
+		acc := a0.Add(a1).Add(a2.Add(a3))
+		for ; i < nIn; i++ {
+			acc = archsimd.LoadFloat32x4(w[i*stride+base:i*stride+base+4]).MulAdd(archsimd.BroadcastFloat32x4(in[i]), acc)
+		}
+		acc.Store(out[c : c+4])
+	}
+	for ; c < nOut; c++ { // scalar tail columns
+		col := off + c
+		var s float32
+		for i := 0; i < nIn; i++ {
+			s += in[i] * w[i*stride+col]
+		}
+		out[c] = s
+	}
+}
+
+// addColI8SIMD: dst[j] += int16(src[j]), widening the int8 column to int16.
+// NEON has only ExtendLo8ToInt16 (low 8 lanes of an Int8x16 → Int16x8) and no
+// Int16x16 loader, so this does 8 lanes/iter, loading the full 16-byte Int8x16
+// (guarded by i+16<=n) and using its low 8; the ≤15-element remainder is scalar.
+// Bit-exact to addColI8Scalar (integer widen+add is associative).
+func addColI8SIMD(dst []int16, src []int8) {
+	n := len(dst)
+	i := 0
+	for ; i+16 <= n; i += 8 {
+		d := archsimd.LoadInt16x8(dst[i : i+8])
+		s := archsimd.LoadInt8x16(src[i : i+16]).ExtendLo8ToInt16()
+		d.Add(s).Store(dst[i : i+8])
+	}
+	for ; i < n; i++ {
+		dst[i] += int16(src[i])
+	}
+}
+
+// subColI8SIMD: dst[j] -= int16(src[j]), 8 lanes/iter + scalar tail.
+func subColI8SIMD(dst []int16, src []int8) {
+	n := len(dst)
+	i := 0
+	for ; i+16 <= n; i += 8 {
+		d := archsimd.LoadInt16x8(dst[i : i+8])
+		s := archsimd.LoadInt8x16(src[i : i+16]).ExtendLo8ToInt16()
+		d.Sub(s).Store(dst[i : i+8])
+	}
+	for ; i < n; i++ {
+		dst[i] -= int16(src[i])
+	}
 }
 
 // addColSIMD: dst[j] += src[j], 8 int16 lanes/iter + scalar tail.
@@ -101,9 +176,9 @@ func screluDotSIMD(acc, w []int16, qa int32) int64 {
 		c := a.Max(zero16).Min(qa16)
 
 		// square: c*c as int32, low 4 then high 4 lanes (c≤255 ⇒ no overflow).
-		ccLo := c.MulWidenLo(c)                 // Int32x4: c0² c1² c2² c3²
-		cHi := c.HiToLo()                       //
-		ccHi := cHi.MulWidenLo(cHi)             // Int32x4: c4² c5² c6² c7²
+		ccLo := c.MulWidenLo(c)     // Int32x4: c0² c1² c2² c3²
+		cHi := c.HiToLo()           //
+		ccHi := cHi.MulWidenLo(cHi) // Int32x4: c4² c5² c6² c7²
 
 		// widen w int16→int32 (sign-extend), low 4 then high 4.
 		wLo := wv.ExtendLo4ToInt32()
@@ -111,9 +186,9 @@ func screluDotSIMD(acc, w []int16, qa int32) int64 {
 
 		// int64(c*c) * int64(w): int32×int32 → int64 widening multiply, low 2
 		// then high 2 of each Int32x4. This is the int64 width the scalar uses.
-		p0 := ccLo.MulWidenLo(wLo)              // lanes 0,1
+		p0 := ccLo.MulWidenLo(wLo)                   // lanes 0,1
 		p1 := ccLo.HiToLo().MulWidenLo(wLo.HiToLo()) // lanes 2,3
-		p2 := ccHi.MulWidenLo(wHi)             // lanes 4,5
+		p2 := ccHi.MulWidenLo(wHi)                   // lanes 4,5
 		p3 := ccHi.HiToLo().MulWidenLo(wHi.HiToLo()) // lanes 6,7
 
 		accum = accum.Add(p0).Add(p1).Add(p2).Add(p3)
@@ -153,14 +228,14 @@ func dotF32SIMD(a, w []float32) float32 {
 	acc3 := archsimd.BroadcastFloat32x4(0)
 	i := 0
 	for ; i+16 <= n; i += 16 {
-		acc0 = archsimd.LoadFloat32x4(a[i : i+4]).MulAdd(archsimd.LoadFloat32x4(w[i:i+4]), acc0)
-		acc1 = archsimd.LoadFloat32x4(a[i+4 : i+8]).MulAdd(archsimd.LoadFloat32x4(w[i+4:i+8]), acc1)
-		acc2 = archsimd.LoadFloat32x4(a[i+8 : i+12]).MulAdd(archsimd.LoadFloat32x4(w[i+8:i+12]), acc2)
-		acc3 = archsimd.LoadFloat32x4(a[i+12 : i+16]).MulAdd(archsimd.LoadFloat32x4(w[i+12:i+16]), acc3)
+		acc0 = archsimd.LoadFloat32x4(a[i:i+4]).MulAdd(archsimd.LoadFloat32x4(w[i:i+4]), acc0)
+		acc1 = archsimd.LoadFloat32x4(a[i+4:i+8]).MulAdd(archsimd.LoadFloat32x4(w[i+4:i+8]), acc1)
+		acc2 = archsimd.LoadFloat32x4(a[i+8:i+12]).MulAdd(archsimd.LoadFloat32x4(w[i+8:i+12]), acc2)
+		acc3 = archsimd.LoadFloat32x4(a[i+12:i+16]).MulAdd(archsimd.LoadFloat32x4(w[i+12:i+16]), acc3)
 	}
 	acc := acc0.Add(acc1).Add(acc2.Add(acc3))
 	for ; i+4 <= n; i += 4 {
-		acc = archsimd.LoadFloat32x4(a[i : i+4]).MulAdd(archsimd.LoadFloat32x4(w[i:i+4]), acc)
+		acc = archsimd.LoadFloat32x4(a[i:i+4]).MulAdd(archsimd.LoadFloat32x4(w[i:i+4]), acc)
 	}
 	out := acc.GetElem(0) + acc.GetElem(1) + acc.GetElem(2) + acc.GetElem(3)
 	for ; i < n; i++ {

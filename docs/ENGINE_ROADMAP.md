@@ -1,4 +1,162 @@
-> ## STATUS (updated after the endgame push) — read this first
+# ★ CURRENT PHASE — closing the gap to Stormphrax (2026-06-30, 17:00) — READ THIS FIRST
+
+> This block supersedes everything below it. The older blocks are kept as history.
+> A fresh instance should be able to continue the engine from this section alone.
+> Companion docs: `docs/NNUE/ENRICHED_MULTILAYER.md` (the phase plan),
+> `docs/ENGINE_STRENGTH.md §16` (the measured numbers), `docs/NNUE/NEXT_ARCH.md`.
+
+## Where we are
+- **Shipped/prod: NNUE v6** — single-layer `(768→512)×2→1` SCReLU, int16, SIMD
+  (`archsimd`), default-on. **≈3260 "dirty" CCRL Blitz** (`ENGINE_STRENGTH.md §15`).
+- **The goal / the line to pass: Stormphrax (~3700 CCRL).** Stormphrax beats v6
+  *clearly* (+~440). That is the target. **Stockfish is NOT the anchor** — it's not a
+  representative CCRL peer; beating CCRL-level engines (Stormphrax, Viridithas) is what
+  moves us up the leaderboard. We have Stormphrax cloned at `~/stormphrax` (GPLv3 — learn
+  techniques, copy no code) and built/benched on lairner (`~/stormphrax-bench/`).
+
+## The plan — ONE LADDER (not two paths). v6 = rung 0; threats = the climb.
+The "stay fast & threat-free" option is a **dead end** (ceiling ≈ where v6 is). Every
+~3700 engine runs **threat inputs**; they are the path up. Climb one rung, gate at
+**movetime** (or fixed-depth; **never fixed-nodes** — it inflates eval changes,
+`§14.4`), then the next:
+
+1. **threats + single-layer tail + 8 output buckets, 320-sb, int8** → must **beat v6
+   at movetime**.  ← *rung 1, training NOW (see "What's training").*
+2. **width → 1024** (cheap once int8 inference is real).
+3. **king buckets** (needs an accumulator **refresh** path — the one piece the
+   absolute-color accumulator doesn't have yet; bulletformat is stm-oriented, our acc is
+   absolute-color, so reconcile carefully).
+4. **multilayer tail** (the `…→16→32→1` enriched tail) — a **+30–50 Elo** refinement,
+   added **last** and **only behind an int8-SIMD tail** (a float multilayer tail is a
+   movetime wash — proven, twice).
+5. **self-generated data** — the ceiling-breaker. We currently **distill Stockfish
+   binpacks**, which asymptotes toward the teacher. Stormphrax forbids 3rd-party data
+   for exactly this reason. This is how you pass the frontier; long pole, last.
+
+**"Optimal" destination spec:** inputs `768 + threats (+ king buckets)`, width `1024`,
+`8` output buckets, **int8 everywhere + QAT**, multilayer tail (last), self-gen data.
+
+## The hard-won learnings (don't re-derive these)
+- **Eval quality is NOT our problem; NPS is.** The enriched threats net is **+149 Elo
+  vs v6 at fixed depth 8** (eval genuinely much better) but **−160 at movetime** — it is a
+  better *eval* bolted onto a ~13×-slower engine. Transitivity holds: losing to v6 at
+  100 ms = genuinely weaker (~3100, not 3700). Only a **movetime win over v6** counts.
+- **Per-node cost (AVX-512/lairner): enriched ≈ 9 µs ≈ 13× v6 (~700 ns).** Split ≈ half
+  **tail** (the multilayer/pairwise math) + ≈ half **threat-push** (the accumulator
+  update, memory-bound on the ~10 MB threat-weight table — already incremental).
+- **★ Stormphrax NPS anchor (lairner, same box): ~410k NPS / ~2,440 ns/node for a 56 MB
+  net.** So a real 3700 threat-net is only **~3.7× slower than a lean net** (not 13×) and
+  **~3.7× FASTER than our enriched** despite a bigger net. **⇒ our inference is ~3.7×
+  inefficient — fixable, not fundamental.** Target = **~2,440 ns/node**; there the NPS
+  penalty (~−130 Elo) is overcome by the eval edge → enriched beats v6.
+- **Why we're 3.7× off = the two things Stormphrax does and we don't (yet):**
+  1. **int8-SIMD tail.** Ours is **scalar float** (~5 µs). Profiled: the biggest single
+     tail cost is the **pairwise activation (~2.4 µs, scalar, SIMD-able)**, NOT the
+     matmuls. The output-stationary GEMV rewrite (`gemvF32`) gave only a small win — the
+     tail was *not* reduction-bound as first hypothesized; it's the scalar pairwise +
+     memory. **int8 tail was a WASH so far** because (a) on NEON our `dotU8I8` is SCALAR
+     and (b) the old per-row layout was dispatch-bound. int8 only helps in the *right
+     layout on a real int8-dot instruction* (see int8/asm note below).
+  2. **move-aware threat push.** Ours re-enumerates all features + multiset-diffs each
+     node (the diff is correct & already minimal on the apply side, ~50 scattered int8
+     column adds; the re-enumeration ~0.5 µs is the avoidable part). Stormphrax computes
+     only the changed threat edges directly (`threatsAdded`/`threatsRemoved`).
+- **int8 status: PARTS BUILT, not yet paying off.** Built + bit-exact-gated: int8 FT
+  threat columns (`addColI8`/`subColI8`, 3 SIMD backends), int8 L1 (`dotU8I8`),
+  `gemvF32` (3 backends), `EnrichedStack` incremental accumulator (count-array multiset
+  diff, no per-node sort). **Weight-QAT works**: PTQ leaked ~150 Elo (float +170 → int8
+  +21 at fixed depth); adding `faux_quantise` on the L1 weights (scale QB=64) in training
+  recovered it to **+149**. **What remains:** make int8 actually *fast* on the prod arch
+  (int8-dot instruction) + move-aware push → hit ~2,440 ns/node.
+- **Go is NOT the problem.** Go-vs-C++ ≈ 40–70 Elo; the gap is arch+data. The one real
+  Go bite is the int8-dot kernel (see below). Do **not** rewrite in C++.
+- **Multilayer is right** (Stormphrax IS multilayer + threats — our exact shape, at
+  2,440 ns/node). Our slowness is the *implementation* (scalar tail + re-enumerated
+  push), not the architecture. But single-layer FIRST (rung 1), multilayer LAST (rung 4).
+- **Hardware nuance:** the "beats v6 at movetime" verdict is **hardware-dependent** —
+  the threat-push is memory-bound and lairner is a weak 4-core box (push ~4.5 µs there
+  vs ~1.9 µs on the M3). A stronger box narrows the deficit. Measure on the deploy box.
+
+## Hardware / where to run
+- **Mac (M3 Pro):** training (bullet on Metal GPU, ~1 M pos/s with threats), and local
+  dev. NEON. **Currently our int8 is scalar on NEON** → int8 looks slow here; fixable
+  (see int8/asm). The Mac *can* be a first-class int8 box (it has the `UDOT` dotprod
+  instruction).
+- **lairner:** prod (AVX-512 Zen4 EPYC, but only **4 cores**, weak memory → punishes the
+  memory-bound threat push). All movetime numbers above are from here. Scratch repo
+  `~/chessgo-simd/`; build `GOEXPERIMENT=simd GOAMD64=v4 ~/sdk/go1.26.4`.
+- **coalla (optional, via SSH; 12 cores, ~3× RAM):** a stronger/better-memory box. Clone
+  the public repo there for heavier single-thread movetime measurement (note: net-vs-net
+  SPRT is forced **concurrency 1** — the net is a process global — so extra cores don't
+  parallelize *that*; the value is faster single-thread + more cache/bandwidth).
+
+## int8 via Go assembly — the path to "real" int8 (UDOT / VPDPBUSD)
+Go's `archsimd` does **not** expose the int8 dot-product instruction (amd64-only, and
+only the int16 `DotProductPairs`/`VPMADDWD`; no `VPDPBUSD`/`DotProdBytes` — that's why
+`dotU8I8` is scalar on NEON and `maddubs`-bound on AVX-512). **CONFIRMED feasible via
+hand-written Go (Plan9) assembly** (research, 2026-06-30):
+- **x86-64 `VPDPBUSD` (AVX-512 VNNI, lairner): a NAMED Go-assembler instruction** since
+  Go 1.11 (`avx512_vnni`) — write it directly with Z-registers. Trivial.
+- **ARM64 `SDOT`/`UDOT` (NEON dotprod, M3 has it): NOT named, but `WORD`-encodable**
+  (e.g. `WORD $0x4E829420` = `SDOT V0.4S, V1.16B, V2.16B`).
+- **Prior art = `github.com/camdencheek/simd_blog`** ships BOTH `dot_amd64.s` (VPDPBUSD)
+  and `dot_arm64.s` (WORD-encoded SDOT) for an int8 dot — a solved, shipped pattern.
+- **Effort ~2–3 focused days** (two small `.s` leaf fns + scalar fallback + bit-exact
+  test, like our existing kernels). avo can generate the amd64 side; hand-write arm64.
+- **One caveat:** `VPDPBUSD` is **unsigned×signed** (need the +128-bias-and-compensate
+  trick) while ARM `SDOT` is **signed×signed** — slightly different quant/bias per arch;
+  unify in the test harness. Don't use cgo (per-call overhead kills a per-node kernel).
+
+This makes int8 fast on BOTH boxes (the **Mac becomes a first-class int8 dev box** — no
+more lairner round-trips just for int8). It's the keystone of getting to ~2,440 ns/node.
+
+## What's training RIGHT NOW (2026-06-30 17:00)
+- **`chessgo_lean_threats` — rung 1.** Lean single-layer + threats:
+  `(768 + 9216 threats) → 512 ×2 → SCReLU → concat(1024) → 1, ×8 buckets`, 64 superbatches,
+  QAT on the FT (scale 255). bullet on the M3 Metal GPU; config
+  `~/nnue-training/bullet/examples/chessgo_lean_threats.rs`. At ~17:00 it's ~sb 23/64
+  (~1 h to the annealed `-64`; log `…/scratchpad/lean_threats.log`).
+- **Gate armed** (`…/scratchpad/lean_gate.sh`, auto-fires when `-64` lands → log
+  `lean_gate.log`): fixed-depth + **movetime** lean-vs-v6 via `--new-lean
+  "…/chessgo_lean_threats-64/raw.bin,512,8"`. **This decides rung 1:** beats v6 → bank
+  single-layer+threats, climb width/buckets/data; loses → the threat *push* is the wall →
+  the int8-dot-asm + move-aware-push speed work is mandatory first.
+- The earlier **multilayer** enriched net (`chessgo_enriched-64`, `(…→512→pairwise→16→32→1)×8`,
+  weight-QAT) is the +149-fixed-depth / −160-movetime net — kept for reference; it's
+  rung 4 (multilayer) prematurely stacked, deferred until int8 tail is real.
+
+## Code state (what exists, for a fresh instance)
+- `internal/nnue/enriched.go` — `EnrichedNet`: multilayer **and** lean (`lean bool`)
+  tails; threat feature map (`appendEnrichedFeatures`, byte-matches the Rust);
+  `ftAdd`/`ftSub` base(int16)/threat(int8) dispatch; importers `ImportBulletEnrichedNet`
+  (multilayer) and `ImportBulletLeanNet` (lean).
+- `internal/nnue/enriched_acc.go` — `EnrichedStack` incremental accumulator (count-array
+  multiset diff; `NNUE_ASSERT` bit-exact gate vs from-scratch).
+- `internal/nnue/enriched_int8.go` — `QuantizeForInt8` (L1, fixed scale QB=64),
+  `QuantizeFTInt8` (threat columns int8).
+- `internal/nnue/kernels*.go` — `addColI8`/`subColI8`, `gemvF32`, `dotU8I8`, etc.;
+  scalar + NEON + AVX2 + AVX-512, all bit-exact-gated (`kernels_test.go`).
+- `chess.PseudoAttacks` (exported for the threat feature map).
+- `cmd/gomachine/bench.go` — `--new-enriched/--old-enriched "path,H,D2,D3,NB"`,
+  `--new-lean/--old-lean "path,H,NB"`, `--enriched-int8` (L1), `--enriched-int8-ft` (FT).
+- bullet configs: `examples/chessgo_enriched.rs` (multilayer+QAT),
+  `examples/chessgo_lean_threats.rs` (lean+QAT). bullet's QAT `faux_quantise` STE bug is
+  patched in the local clone (don't `git reset` it).
+
+## Immediate next steps (in order)
+1. **Read the rung-1 gate result** (`lean_gate.log`) — fixed-depth confirms the eval,
+   movetime is the verdict.
+2. If movetime still loses (likely on lairner's weak box): **write the int8-dot asm
+   kernel** (UDOT + VPDPBUSD) and **move-aware threat push**, re-measure toward
+   ~2,440 ns/node. Optionally re-measure on **coalla**.
+3. **320-sb full train** of the winning arch (the 64-sb runs are undertrained — v6 shipped
+   at 320).
+4. Then climb: width 1024 → king buckets → multilayer (behind int8) → self-gen data.
+5. Anchor progress vs **Stormphrax** at movetime, not vs v6 alone.
+
+---
+
+> ## STATUS (updated after the endgame push) — older history below
 >
 > The diagnosis below was acted on. Full write-up with SPRT numbers in
 > `docs/ENGINE_STRENGTH.md §10`. Summary:

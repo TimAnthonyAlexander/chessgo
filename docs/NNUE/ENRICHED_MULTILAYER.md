@@ -8,6 +8,47 @@
 
 ---
 
+> ## ★ OUTCOME UPDATE (2026-06-30 19:30) — RUNG 2 DONE: threats net is now MOVETIME-VIABLE (−330 → v6 parity). All numbers on **prod AVX512 `GOAMD64=v4` (coalla)**.
+>
+> Took the lean single-layer + threats net (64-sb) from **movetime −330 vs v6 → −8 ± 11 (statistical parity, CI straddles 0)**, eval **+115 fixed depth** (preserved). Two wins, then a wall:
+> - **Tail fusion (the big one, ~1.87× NPS + free +40 eval):** the lean tail ran the scalar `screluActivateI16` + a *degenerate* `gemvF32` (nOut=1 → scalar strided gather) = **44% of the node**. Replaced with v6's fused integer `screluDot` over a bucket-contiguous int16 tail (`TWi`, `quantizeLeanTail`, QB=1024). Fixed depth went **+75 → +115** (the integer rounding beats the old float tail — a free eval gain).
+> - **int8-FT (`QuantizeFTInt8`, bit-exact, 0 clamps):** halves threat-column memory traffic; the QAT trained the threat weights fully inside int8 range so it's lossless. Wired via `--lean-int8ft`.
+> - **REJECTED, measured (do NOT re-try on this baseline):** register-tiling the accumulator apply *regressed −15% NPS* (the 1 KB accumulator is L1-resident, so the "redundant" reloads were free and the per-chunk overhead dominated); enumeration-dedup (compute attacks once, both perspectives) was *NPS-neutral* (the profiler was right: attack-gen is not the bottleneck); in-place make/unmake is *worse* (re-diffing on Pop costs more than the 2 KB copy); **lazy/deferred accumulator** — **measured the wasted-push rate (pushes whose whole subtree never evals) = ~5% midgame / ~14% endgame**, so the ceiling is ~3.5% NPS even on the heavy threats net, eaten by bookkeeping. That's why v6 lazy was −70/−30: **not a bug — the search evals ~95% of nodes it makes.** (`NNUE_LAZY=1 bestmove` prints the rate; counters `nnue.LazyPush/LazyWasted`.)
+> - **The floor:** the per-move threat delta is ~22 accumulator columns (vs v6's ~4) and is *intrinsic to the threat encoding* — so pure speed is maxed for 64-sb/512-width. **The lever for a clear win is EVAL, not speed.**
+> - **NEXT (running):** a **320-sb retrain** of the *same 512-width* lean+threats net (same NPS, stronger eval; 64-vs-320 → 320-vs-320). Expectation: clearly beats v6 at movetime. Width-1024 is deferred (doubles per-node eval cost; no point while a same-width run is training).
+> - **BUILD GOTCHA (cost us time — pinned in CLAUDE.md):** the **arm64** local SIMD build needs **`go1.27rc1`** (`GOEXPERIMENT=simd ~/go/bin/go1.27rc1`). go1.26.4's arm64 `archsimd` is incomplete (missing `BroadcastFloat32x4`/`LoadFloat32x4` etc.); **amd64/prod stays on go1.26.4 `GOAMD64=v4`**. No Go assembly needed — `archsimd` covers the NEON/AVX kernels.
+
+---
+
+> ## ★ OUTCOME UPDATE (2026-06-30 17:00) — read `ENGINE_ROADMAP.md` top block + `ENGINE_STRENGTH.md §16` for the FULL plan/state; this is the short version.
+>
+> **We built the enriched threats net (multilayer) and learned the decisive thing:
+> the EVAL is great, the INFERENCE is the wall.**
+> - Threats net: **+149 Elo vs v6 at fixed depth 8** (weight-QAT int8) but **−160 at
+>   movetime** — a better eval on a ~13× slower engine. So it's genuinely ~3100 now.
+> - **Anchor (lairner): Stormphrax ~410k NPS / 2,440 ns/node (56 MB net) vs our enriched
+>   ~110k / 9 µs.** A real 3700 threat-net is only ~3.7× slower than lean (not 13×) and
+>   ~3.7× faster than ours ⇒ **our inference is ~3.7× inefficient, fixable.**
+> - **The two fixes** (what Stormphrax does, we don't): **(1) real int8 dot via Go
+>   assembly** — VPDPBUSD (named, x86) + SDOT (`WORD`-encoded, ARM64); CONFIRMED feasible
+>   ~2–3 days, prior art `camdencheek/simd_blog`; `archsimd` lacks int8-dot. **(2)
+>   move-aware threat push** (only changed edges, not re-enumerate).
+> - **The line to pass is Stormphrax (~3700), not Stockfish** (not a CCRL peer).
+> - **One ladder** (v6 = rung 0): threats+single-layer (rung 1, **training now**) →
+>   int8-asm + move-aware push (beat v6 at movetime) → width 1024 → king buckets →
+>   multilayer tail (+30–50, last, behind int8) → **self-gen data** (ceiling breaker;
+>   we currently distill Stockfish = a ceiling). Multilayer was added prematurely; it's
+>   the LAST rung, not the first. Single-layer + threats is a legitimate frontier base.
+> - **What's training:** `chessgo_lean_threats` (lean single-layer + threats, 64-sb, QAT);
+>   gate auto-runs lean-vs-v6 fixed-depth + movetime when `-64` lands.
+> - **Process scars:** gate int8 STRENGTH not cp-closeness (5.8cp hid a 150-Elo cliff);
+>   weight-QAT (faux_quantise L1 weights, QB=64) recovered +21→+149; the GEMV-tail
+>   "reduction overhead" theory was WRONG (real tail cost = the SCALAR pairwise ~2.4µs);
+>   the threat push is memory-bound (already incremental). §5 below is now superseded by
+>   the ROADMAP ladder.
+
+---
+
 ## 1. Why we're doing this
 
 gomachine plays at **≈3260 "dirty" CCRL Blitz**. The open-source NNUE frontier

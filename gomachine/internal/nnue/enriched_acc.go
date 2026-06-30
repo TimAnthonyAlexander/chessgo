@@ -2,7 +2,6 @@ package nnue
 
 import (
 	"fmt"
-	"slices"
 
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 )
@@ -13,27 +12,29 @@ import (
 // whose rays open/close, captures), so rather than reason about the move-aware
 // delta (the classic accumulator-bug source) we exploit two measured facts:
 //
-//   - feature enumeration is cheap (~269 ns: attack-gen is NOT the bottleneck);
+//   - feature enumeration is cheap (~233 ns: attack-gen is NOT the bottleneck);
 //   - chess.Position is a pure value type, so copy + DoMove is cheap.
 //
 // So Push copies the position, makes the move on the copy, re-enumerates the
-// child's full feature set, and applies only the MULTISET DIFF vs the parent
-// (sorted-merge: removed -> subCol, added -> addCol). This is correct by
-// construction — it literally computes the symmetric difference of the exact
-// feature sets — so the from-scratch assert is a formality, not a slider-delta
-// minefield. The win over from-scratch is applying ~tens of delta columns instead
-// of ~224 (both perspectives) every node.
+// child's full feature set, and applies only the MULTISET DIFF vs the parent.
+// The diff is computed with an O(n) COUNT ARRAY (not a sort — sorting ~112
+// features/perspective measured ~540 ns, a quarter of the node): decrement counts
+// for parent features, increment for child, then apply the net per-feature delta,
+// touching only active indices and zeroing them back out. Correct by construction
+// (it is the exact symmetric difference, multiplicity preserved), so the
+// from-scratch assert is a formality, not a slider-delta minefield.
 type EnrichedStack struct {
 	net     *EnrichedNet
 	data    []enrichedSlot
 	backing []int16
+	counts  []int16 // reusable per-feature count scratch (len net.InputDim), kept all-zero between Pushes
 	sc      enrichedScratch
 	sp      int
 }
 
 type enrichedSlot struct {
 	w, b   []int16  // perspective accumulator halves (len H), into the shared backing
-	fw, fb []uint16 // SORTED active features (White-persp, Black-persp); own backing
+	fw, fb []uint16 // active features (White-persp, Black-persp); own backing, UNSORTED
 }
 
 // NewStack allocates an EnrichedStack deep enough for maxDepth plies.
@@ -49,59 +50,54 @@ func (n *EnrichedNet) NewStack(maxDepth int) *EnrichedStack {
 		data[i].fw = make([]uint16, 0, maxEnrichedActive)
 		data[i].fb = make([]uint16, 0, maxEnrichedActive)
 	}
-	return &EnrichedStack{net: n, data: data, backing: backing, sc: n.newScratch()}
+	return &EnrichedStack{net: n, data: data, backing: backing, counts: make([]int16, n.InputDim), sc: n.newScratch()}
 }
 
 // Net returns the net this stack was built for (so the searcher can detect a swap).
 func (st *EnrichedStack) Net() *EnrichedNet { return st.net }
-
-// sortedFeatures fills dst (reset to len 0) with pos's sorted active features for
-// the given perspective.
-func sortedFeatures(dst []uint16, pos *chess.Position, persp chess.Color) []uint16 {
-	dst = appendEnrichedFeatures(dst[:0], pos, persp)
-	slices.Sort(dst)
-	return dst
-}
 
 // Reset rebuilds slot 0 from scratch for pos and points the stack at it.
 func (st *EnrichedStack) Reset(pos *chess.Position) {
 	st.sp = 0
 	s := &st.data[0]
 	st.net.buildAcc(s.w, s.b, pos)
-	s.fw = sortedFeatures(s.fw, pos, chess.White)
-	s.fb = sortedFeatures(s.fb, pos, chess.Black)
+	s.fw, s.fb = appendEnrichedFeaturesBoth(s.fw[:0], s.fb[:0], pos)
 }
 
-// applyDiff walks two SORTED feature multisets (parent, child) and applies the
-// symmetric difference to acc: indices only in parent are subtracted, indices
-// only in child are added. Multiplicity is preserved (a duplicate index that
-// drops from 2->1 yields exactly one subCol).
-func (n *EnrichedNet) applyDiff(acc []int16, parent, child []uint16) {
-	h := n.H
-	i, j := 0, 0
-	for i < len(parent) && j < len(child) {
-		switch {
-		case parent[i] == child[j]:
-			i++
-			j++
-		case parent[i] < child[j]:
-			f := int(parent[i])
-			subCol(acc, n.W0i[f*h:f*h+h])
-			i++
-		default:
-			f := int(child[j])
-			addCol(acc, n.W0i[f*h:f*h+h])
-			j++
+// applyDiff applies the multiset symmetric difference (child − parent) to acc via
+// the count-array scratch: features dropped from parent are subtracted, features
+// gained in child are added, with multiplicity. O(len(parent)+len(child)); the
+// counts slice is left all-zero for the next call.
+func (st *EnrichedStack) applyDiff(acc []int16, parent, child []uint16) {
+	c := st.counts
+	for _, f := range parent {
+		c[f]--
+	}
+	for _, f := range child {
+		c[f]++
+	}
+	net := st.net
+	apply := func(list []uint16) {
+		for _, f := range list {
+			d := c[f]
+			if d == 0 {
+				continue
+			}
+			fi := int(f)
+			if d > 0 {
+				for ; d > 0; d-- {
+					net.ftAdd(acc, fi)
+				}
+			} else {
+				for ; d < 0; d++ {
+					net.ftSub(acc, fi)
+				}
+			}
+			c[f] = 0 // mark handled (dups + leave counts zeroed for next call)
 		}
 	}
-	for ; i < len(parent); i++ {
-		f := int(parent[i])
-		subCol(acc, n.W0i[f*h:f*h+h])
-	}
-	for ; j < len(child); j++ {
-		f := int(child[j])
-		addCol(acc, n.W0i[f*h:f*h+h])
-	}
+	apply(parent)
+	apply(child)
 }
 
 // Push computes the child slot from its parent plus the move delta. Call it
@@ -117,10 +113,9 @@ func (st *EnrichedStack) Push(pos *chess.Position, m chess.Move) {
 	var u chess.Undo
 	child.DoMove(m, &u)
 
-	dst.fw = sortedFeatures(dst.fw, &child, chess.White)
-	dst.fb = sortedFeatures(dst.fb, &child, chess.Black)
-	st.net.applyDiff(dst.w, src.fw, dst.fw)
-	st.net.applyDiff(dst.b, src.fb, dst.fb)
+	dst.fw, dst.fb = appendEnrichedFeaturesBoth(dst.fw[:0], dst.fb[:0], &child)
+	st.applyDiff(dst.w, src.fw, dst.fw)
+	st.applyDiff(dst.b, src.fb, dst.fb)
 	st.sp++
 }
 

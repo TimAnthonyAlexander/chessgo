@@ -13,6 +13,7 @@ import (
 	"github.com/timanthonyalexander/gomachine/internal/book"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 	"github.com/timanthonyalexander/gomachine/internal/engine"
+	"github.com/timanthonyalexander/gomachine/internal/nnue"
 	"github.com/timanthonyalexander/gomachine/internal/server"
 	"github.com/timanthonyalexander/gomachine/internal/uci"
 )
@@ -110,6 +111,10 @@ func cmdBestMove(args []string) {
 	fmt.Printf("bestmove %s (%s)  score %s  depth %d  nodes %d  %v  pv %s\n",
 		res.Move.String(), pos.SAN(res.Move), scoreStr, res.Depth, res.Nodes,
 		el.Round(time.Millisecond), strings.Join(pv, " "))
+	if nnue.Lazy() && nnue.LazyPush > 0 {
+		fmt.Fprintf(os.Stderr, "lazy: pushes=%d wasted=%d wasted-rate=%.1f%% (upper bound on lazy savings)\n",
+			nnue.LazyPush, nnue.LazyWasted, 100*float64(nnue.LazyWasted)/float64(nnue.LazyPush))
+	}
 }
 
 func cmdPerft(args []string) {

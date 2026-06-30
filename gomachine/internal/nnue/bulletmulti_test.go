@@ -27,7 +27,7 @@ func TestImportSmokeMultiNet(t *testing.T) {
 		"rnbqkbnr/ppp2ppp/8/3pp3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 3", // open center
 		"r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3",
 		"rnbqkb1r/pppp1ppp/5n2/4p3/4P3/8/PPPPQPPP/RNB1KBNR w KQkq - 2 3", // white up nothing, dev
-		"8/8/8/4k3/8/4K3/4P3/8 w - - 0 1",                              // K+P endgame
+		"8/8/8/4k3/8/4K3/4P3/8 w - - 0 1",                                // K+P endgame
 	}
 	for _, fen := range fens {
 		pos, err := chess.ParseFEN(fen)

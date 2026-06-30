@@ -37,10 +37,82 @@ func init() {
 	subCol = subColSIMD
 	screluDot = screluDotSIMD
 	dotF32 = dotF32SIMD
+	gemvF32 = gemvF32SIMD
 	screluActivateF = screluActivateFSIMD
 	dotU8I8 = dotU8I8SIMD
 	quantU8I16 = quantU8I16SIMD
-	kernelBackend = "simd/archsimd-avx512-amd64(addCol,subCol,screluDot,dotF32,screluActivateF,dotU8I8,quantU8I16)"
+	addColI8 = addColI8SIMD
+	subColI8 = subColI8SIMD
+	kernelBackend = "simd/archsimd-avx512-amd64(addCol,subCol,screluDot,dotF32,gemvF32,screluActivateF,dotU8I8,quantU8I16,addColI8,subColI8)"
+}
+
+// gemvF32SIMD is the output-stationary tail GEMV: out[o] = Σ_i in[i]·w[i*stride+off+o].
+// Weights INPUT-MAJOR; per output 16-chunk one Float32x16 accumulator is held
+// across the input loop (broadcast in[i], FMA the contiguous weight sub-row) — no
+// per-output reduction (the old per-row dotF32 tail's 49× cost). Out-tail columns
+// fall to a scalar dot. Bit-CLOSE (float add order), like dotF32.
+func gemvF32SIMD(out, in, w []float32, stride, off int) {
+	nIn, nOut := len(in), len(out)
+	c := 0
+	for ; c+16 <= nOut; c += 16 {
+		// FOUR independent accumulators over the INPUT dim break the FMA
+		// dependency chain (single acc is latency-bound, ~4× slower); summed once
+		// per output chunk, not per output — still no per-output reduction.
+		base := off + c
+		a0 := archsimd.BroadcastFloat32x16(0)
+		a1 := archsimd.BroadcastFloat32x16(0)
+		a2 := archsimd.BroadcastFloat32x16(0)
+		a3 := archsimd.BroadcastFloat32x16(0)
+		i := 0
+		for ; i+4 <= nIn; i += 4 {
+			a0 = archsimd.LoadFloat32x16Slice(w[(i+0)*stride+base:(i+0)*stride+base+16]).MulAdd(archsimd.BroadcastFloat32x16(in[i+0]), a0)
+			a1 = archsimd.LoadFloat32x16Slice(w[(i+1)*stride+base:(i+1)*stride+base+16]).MulAdd(archsimd.BroadcastFloat32x16(in[i+1]), a1)
+			a2 = archsimd.LoadFloat32x16Slice(w[(i+2)*stride+base:(i+2)*stride+base+16]).MulAdd(archsimd.BroadcastFloat32x16(in[i+2]), a2)
+			a3 = archsimd.LoadFloat32x16Slice(w[(i+3)*stride+base:(i+3)*stride+base+16]).MulAdd(archsimd.BroadcastFloat32x16(in[i+3]), a3)
+		}
+		acc := a0.Add(a1).Add(a2.Add(a3))
+		for ; i < nIn; i++ {
+			acc = archsimd.LoadFloat32x16Slice(w[i*stride+base:i*stride+base+16]).MulAdd(archsimd.BroadcastFloat32x16(in[i]), acc)
+		}
+		acc.StoreSlice(out[c : c+16])
+	}
+	for ; c < nOut; c++ { // scalar tail columns
+		col := off + c
+		var s float32
+		for i := 0; i < nIn; i++ {
+			s += in[i] * w[i*stride+col]
+		}
+		out[c] = s
+	}
+}
+
+// addColI8SIMD: dst[j] += int16(src[j]), widening int8→int16 (VPMOVSXBW via
+// Int8x32.ExtendToInt16 → Int16x32), 32 lanes/iter + scalar tail. Bit-exact.
+func addColI8SIMD(dst []int16, src []int8) {
+	n := len(dst)
+	i := 0
+	for ; i+32 <= n; i += 32 {
+		d := archsimd.LoadInt16x32Slice(dst[i : i+32])
+		s := archsimd.LoadInt8x32Slice(src[i : i+32]).ExtendToInt16()
+		d.Add(s).StoreSlice(dst[i : i+32])
+	}
+	for ; i < n; i++ {
+		dst[i] += int16(src[i])
+	}
+}
+
+// subColI8SIMD: dst[j] -= int16(src[j]), 32 lanes/iter + scalar tail.
+func subColI8SIMD(dst []int16, src []int8) {
+	n := len(dst)
+	i := 0
+	for ; i+32 <= n; i += 32 {
+		d := archsimd.LoadInt16x32Slice(dst[i : i+32])
+		s := archsimd.LoadInt8x32Slice(src[i : i+32]).ExtendToInt16()
+		d.Sub(s).StoreSlice(dst[i : i+32])
+	}
+	for ; i < n; i++ {
+		dst[i] -= int16(src[i])
+	}
 }
 
 // quantU8I16SIMD is the int8-path FT activation on AVX-512, 16 int16/iter: clamp
@@ -148,14 +220,14 @@ func dotF32SIMD(a, w []float32) float32 {
 	acc3 := archsimd.BroadcastFloat32x16(0)
 	i := 0
 	for ; i+64 <= n; i += 64 {
-		acc0 = archsimd.LoadFloat32x16Slice(a[i : i+16]).MulAdd(archsimd.LoadFloat32x16Slice(w[i:i+16]), acc0)
-		acc1 = archsimd.LoadFloat32x16Slice(a[i+16 : i+32]).MulAdd(archsimd.LoadFloat32x16Slice(w[i+16:i+32]), acc1)
-		acc2 = archsimd.LoadFloat32x16Slice(a[i+32 : i+48]).MulAdd(archsimd.LoadFloat32x16Slice(w[i+32:i+48]), acc2)
-		acc3 = archsimd.LoadFloat32x16Slice(a[i+48 : i+64]).MulAdd(archsimd.LoadFloat32x16Slice(w[i+48:i+64]), acc3)
+		acc0 = archsimd.LoadFloat32x16Slice(a[i:i+16]).MulAdd(archsimd.LoadFloat32x16Slice(w[i:i+16]), acc0)
+		acc1 = archsimd.LoadFloat32x16Slice(a[i+16:i+32]).MulAdd(archsimd.LoadFloat32x16Slice(w[i+16:i+32]), acc1)
+		acc2 = archsimd.LoadFloat32x16Slice(a[i+32:i+48]).MulAdd(archsimd.LoadFloat32x16Slice(w[i+32:i+48]), acc2)
+		acc3 = archsimd.LoadFloat32x16Slice(a[i+48:i+64]).MulAdd(archsimd.LoadFloat32x16Slice(w[i+48:i+64]), acc3)
 	}
 	acc := acc0.Add(acc1).Add(acc2.Add(acc3)) // Float32x16
 	for ; i+16 <= n; i += 16 {
-		acc = archsimd.LoadFloat32x16Slice(a[i : i+16]).MulAdd(archsimd.LoadFloat32x16Slice(w[i:i+16]), acc)
+		acc = archsimd.LoadFloat32x16Slice(a[i:i+16]).MulAdd(archsimd.LoadFloat32x16Slice(w[i:i+16]), acc)
 	}
 	h8 := acc.GetLo().Add(acc.GetHi()) // Float32x8
 	q := h8.GetLo().Add(h8.GetHi())    // Float32x4

@@ -63,6 +63,10 @@ cd frontend && bun run typecheck && bun run build                            # f
 php mason migrate:generate && php mason migrate:apply -y                     # DB schema
 ```
 
+**SIMD builds (`GOEXPERIMENT=simd`) — toolchain split by arch:**
+- **amd64 / prod (lairner, coalla):** `GOEXPERIMENT=simd GOAMD64=v4 ~/go/bin/go1.26.4 build …` (AVX-512 kernels).
+- **arm64 / local M3:** must use **`go1.27rc1`** — `GOEXPERIMENT=simd ~/go/bin/go1.27rc1 build -o bin/gomachine ./cmd/gomachine` (and `… test ./internal/nnue/`). go1.26.4's arm64 `archsimd` is **incomplete** (missing `BroadcastFloat32x4`/`LoadFloat32x4` etc. → "undefined: archsimd.*" build errors). The plain `go build` (system go, no `GOEXPERIMENT`) compiles a scalar binary that's fine for logic but **not** for movetime/NPS work. No hand-written Go assembly is needed — `archsimd` provides the NEON/AVX intrinsics; you just need the toolchain that has the arm64 ops.
+
 ## Conventions & gotchas (project-specific)
 
 - **Schema = models.** Change a BaseAPI model, then `migrate:generate` →

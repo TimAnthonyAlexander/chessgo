@@ -87,10 +87,10 @@ func ImportBulletNet(path string, nb int) (*Net, error) {
 		vals[i] = int16(binary.LittleEndian.Uint16(raw[i*2 : i*2+2]))
 	}
 
-	l0w := vals[0:l0wCount]                                              // [HL x 768] column-major
-	l0b := vals[l0wCount : l0wCount+l0bCount]                            // [HL]
-	l1w := vals[l0wCount+l0bCount : l0wCount+l0bCount+l1wCount]          // [nb x 2·HL] bucket-contiguous
-	l1b := vals[l0wCount+l0bCount+l1wCount : wantI16]                    // [nb]
+	l0w := vals[0:l0wCount]                                     // [HL x 768] column-major
+	l0b := vals[l0wCount : l0wCount+l0bCount]                   // [HL]
+	l1w := vals[l0wCount+l0bCount : l0wCount+l0bCount+l1wCount] // [nb x 2·HL] bucket-contiguous
+	l1b := vals[l0wCount+l0bCount+l1wCount : wantI16]           // [nb]
 
 	n := NewNetSizeBuckets(hl, nb)
 	n.QA, n.QB, n.Scale = bulletQA, bulletQB, bulletSCALE
