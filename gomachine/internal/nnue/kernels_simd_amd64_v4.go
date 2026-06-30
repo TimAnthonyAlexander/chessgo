@@ -36,7 +36,134 @@ func init() {
 	addCol = addColSIMD
 	subCol = subColSIMD
 	screluDot = screluDotSIMD
-	kernelBackend = "simd/archsimd-avx512-amd64(addCol,subCol,screluDot)"
+	dotF32 = dotF32SIMD
+	screluActivateF = screluActivateFSIMD
+	dotU8I8 = dotU8I8SIMD
+	quantU8I16 = quantU8I16SIMD
+	kernelBackend = "simd/archsimd-avx512-amd64(addCol,subCol,screluDot,dotF32,screluActivateF,dotU8I8,quantU8I16)"
+}
+
+// quantU8I16SIMD is the int8-path FT activation on AVX-512, 16 int16/iter: clamp
+// the accumulator to [0,ftQA], widen to int32, square, (·+ftRound)>>ftShift, and
+// narrow int32→u8 via VPMOVUSDB (Uint32x16.SaturateToUint8 — no lane crossing, the
+// reason this is clean on AVX-512). Bit-identical to quantU8I16Scalar: all values
+// stay in [0,127] so the unsigned-saturate narrow is exact, and arithmetic shift
+// == logical for the non-negative square. This was the dominant scalar cost
+// (~2.5 µs/eval); SIMD makes the multilayer int8 eval movetime-competitive.
+func quantU8I16SIMD(dst []uint8, src []int16) {
+	n := len(src)
+	zero := archsimd.BroadcastInt16x16(0)
+	cap255 := archsimd.BroadcastInt16x16(int16(ftQA))
+	round := archsimd.BroadcastInt32x16(ftRound)
+	i := 0
+	for ; i+16 <= n; i += 16 {
+		a := archsimd.LoadInt16x16Slice(src[i : i+16])
+		c := a.Max(zero).Min(cap255)              // Int16x16 ∈ [0,ftQA]
+		c32 := c.ExtendToInt32()                  // Int32x16
+		cc := c32.Mul(c32)                        // Int32x16 ∈ [0,ftQA²]
+		r := cc.Add(round).ShiftAllRight(ftShift) // (c²+ftRound)>>ftShift ∈ [0,int8QA]
+		r.AsUint32x16().SaturateToUint8().StoreSlice(dst[i : i+16])
+	}
+	for ; i < n; i++ { // scalar tail — identical to quantU8I16Scalar
+		c := int32(src[i])
+		if c < 0 {
+			c = 0
+		} else if c > ftQA {
+			c = ftQA
+		}
+		dst[i] = uint8((c*c + ftRound) >> ftShift)
+	}
+}
+
+// dotU8I8SIMD computes Σ a[i]·w[i] (int32) for MultiNet's int8 L1 matmul via the
+// AVX-512 VPMADDUBSW (DotProductPairsSaturated on zmm, u8×i8 → saturated int16)
+// then VPMADDWD against 1s (DotProductPairs → int32), 64 elements/iter — the
+// widest int8 path, so the L1 dot (2*H=1024) runs in 16 iters. Bit-identical to
+// dotU8I8Scalar: activations ≤ int8QA=127 ⇒ pair sums ≤32258 < 32767 ⇒ saturation
+// never fires; the int32 reduction is exact.
+func dotU8I8SIMD(a []uint8, w []int8) int32 {
+	n := len(a)
+	ones := archsimd.BroadcastInt16x32(1)
+	acc := archsimd.BroadcastInt32x16(0)
+	i := 0
+	for ; i+64 <= n; i += 64 {
+		av := archsimd.LoadUint8x64Slice(a[i : i+64])
+		wv := archsimd.LoadInt8x64Slice(w[i : i+64])
+		pairs := av.DotProductPairsSaturated(wv) // Int16x32 (sat never fires for ≤127)
+		acc = acc.Add(pairs.DotProductPairs(ones))
+	}
+	s8 := acc.GetLo().Add(acc.GetHi()) // Int32x8
+	s := s8.GetLo().Add(s8.GetHi())    // Int32x4
+	out := s.GetElem(0) + s.GetElem(1) + s.GetElem(2) + s.GetElem(3)
+	for ; i+2 <= n; i += 2 {
+		p := int32(a[i])*int32(w[i]) + int32(a[i+1])*int32(w[i+1])
+		if p > 32767 {
+			p = 32767
+		} else if p < -32768 {
+			p = -32768
+		}
+		out += p
+	}
+	if i < n {
+		out += int32(a[i]) * int32(w[i])
+	}
+	return out
+}
+
+// screluActivateFSIMD applies SCReLU (clamp [0,1] then square) elementwise via
+// AVX-512 Max/Min/Mul, 16 lanes/iter + scalar tail. Bit-exact to the scalar ref.
+func screluActivateFSIMD(dst, src []float32) {
+	n := len(src)
+	zero := archsimd.BroadcastFloat32x16(0)
+	one := archsimd.BroadcastFloat32x16(1)
+	i := 0
+	for ; i+16 <= n; i += 16 {
+		x := archsimd.LoadFloat32x16Slice(src[i : i+16]).Max(zero).Min(one)
+		x.Mul(x).StoreSlice(dst[i : i+16])
+	}
+	for ; i < n; i++ {
+		x := src[i]
+		if x < 0 {
+			x = 0
+		} else if x > 1 {
+			x = 1
+		}
+		dst[i] = x * x
+	}
+}
+
+// dotF32SIMD computes Σ a[i]·w[i] over float32 slices via AVX-512 fused
+// multiply-add (VFMADD on zmm), 16 lanes/iter. FOUR independent Float32x16
+// accumulators (64 elem/iter) break the FMA dependency chain (single-acc is
+// latency-bound). A 16-wide tail loop then a scalar tail handle the remainder.
+// Bit-CLOSE (not exact) to dotF32Scalar — float add is non-associative, so the
+// vector reduction differs by float32 rounding only (TestDotF32MatchScalar gate).
+// MultiNet's tail-matmul kernel (multilayer.go); this is the widest backend, so
+// the L1 dot (2*H=1024) runs in 16 FMA iters across 4 chains.
+func dotF32SIMD(a, w []float32) float32 {
+	n := len(a)
+	acc0 := archsimd.BroadcastFloat32x16(0)
+	acc1 := archsimd.BroadcastFloat32x16(0)
+	acc2 := archsimd.BroadcastFloat32x16(0)
+	acc3 := archsimd.BroadcastFloat32x16(0)
+	i := 0
+	for ; i+64 <= n; i += 64 {
+		acc0 = archsimd.LoadFloat32x16Slice(a[i : i+16]).MulAdd(archsimd.LoadFloat32x16Slice(w[i:i+16]), acc0)
+		acc1 = archsimd.LoadFloat32x16Slice(a[i+16 : i+32]).MulAdd(archsimd.LoadFloat32x16Slice(w[i+16:i+32]), acc1)
+		acc2 = archsimd.LoadFloat32x16Slice(a[i+32 : i+48]).MulAdd(archsimd.LoadFloat32x16Slice(w[i+32:i+48]), acc2)
+		acc3 = archsimd.LoadFloat32x16Slice(a[i+48 : i+64]).MulAdd(archsimd.LoadFloat32x16Slice(w[i+48:i+64]), acc3)
+	}
+	acc := acc0.Add(acc1).Add(acc2.Add(acc3)) // Float32x16
+	for ; i+16 <= n; i += 16 {
+		acc = archsimd.LoadFloat32x16Slice(a[i : i+16]).MulAdd(archsimd.LoadFloat32x16Slice(w[i:i+16]), acc)
+	}
+	h8 := acc.GetLo().Add(acc.GetHi()) // Float32x8
+	q := h8.GetLo().Add(h8.GetHi())    // Float32x4
+	out := q.GetElem(0) + q.GetElem(1) + q.GetElem(2) + q.GetElem(3)
+	for ; i < n; i++ {
+		out += a[i] * w[i]
+	}
+	return out
 }
 
 // addColSIMD: dst[j] += src[j], 32 int16 lanes/iter + scalar tail.

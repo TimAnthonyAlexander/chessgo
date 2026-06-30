@@ -239,6 +239,19 @@ type Searcher struct {
 	// AND the eval is routed through NNUE, so HCE searches pay zero overhead.
 	accStack *nnue.Stack
 	useNNUE  bool
+	// multiStack, when non-nil, is the active INCREMENTAL accumulator for a
+	// multilayer (GNN4) net: it shadows accStack at the same push/pop sites (via
+	// the acc* helpers) and routes rawEvaluate to the multilayer tail. nil ⇒ the
+	// single-layer accStack path (v6). multiStackCache holds the allocation across
+	// searches so it is rebuilt only on a net swap. useNNUE is true for either net.
+	multiStack      *nnue.MultiStack
+	multiStackCache *nnue.MultiStack
+	// enrichedStack, when non-nil, is the active INCREMENTAL accumulator for an
+	// ENRICHED (threats) net: it shadows accStack/multiStack at the push/pop sites
+	// and routes rawEvaluate to the enriched tail. It takes precedence over both.
+	// enrichedStackCache holds the allocation across searches (rebuilt on net swap).
+	enrichedStack      *nnue.EnrichedStack
+	enrichedStackCache *nnue.EnrichedStack
 
 	// Diagnostic counters (cheap, like nodes) — used by tests to confirm the
 	// accumulator gate actually covered null-move and quiescence nodes, and that the
@@ -370,9 +383,71 @@ func (s *Searcher) evaluate(pos *chess.Position) int {
 // stop being behavior-preserving. Callers apply the fresh correction on top.
 func (s *Searcher) rawEvaluate(pos *chess.Position) int {
 	if s.useNNUE {
-		return s.accStack.Eval(pos)
+		return s.accEval(pos)
 	}
 	return eval.Evaluate(pos, s.ec)
+}
+
+// acc* route the per-ply accumulator operations to the active stack — the
+// multilayer multiStack when a GNN4 net is installed, else the single-layer
+// accStack. The nil-check is a cheap, predictable branch, so v6 keeps its
+// concrete fast path (no interface dispatch).
+func (s *Searcher) accReset(pos *chess.Position) {
+	if s.enrichedStack != nil {
+		s.enrichedStack.Reset(pos)
+		return
+	}
+	if s.multiStack != nil {
+		s.multiStack.Reset(pos)
+		return
+	}
+	s.accStack.Reset(pos)
+}
+
+func (s *Searcher) accPush(pos *chess.Position, m chess.Move) {
+	if s.enrichedStack != nil {
+		s.enrichedStack.Push(pos, m)
+		return
+	}
+	if s.multiStack != nil {
+		s.multiStack.Push(pos, m)
+		return
+	}
+	s.accStack.Push(pos, m)
+}
+
+func (s *Searcher) accPushNull() {
+	if s.enrichedStack != nil {
+		s.enrichedStack.PushNull()
+		return
+	}
+	if s.multiStack != nil {
+		s.multiStack.PushNull()
+		return
+	}
+	s.accStack.PushNull()
+}
+
+func (s *Searcher) accPop() {
+	if s.enrichedStack != nil {
+		s.enrichedStack.Pop()
+		return
+	}
+	if s.multiStack != nil {
+		s.multiStack.Pop()
+		return
+	}
+	s.accStack.Pop()
+}
+
+func (s *Searcher) accEval(pos *chess.Position) int {
+	if s.enrichedStack != nil {
+		return s.enrichedStack.Eval(pos)
+	}
+	if s.multiStack != nil {
+		return s.multiStack.Eval(pos)
+	}
+	return s.accStack.Eval(pos)
 }
 
 // nnueBegin prepares the incremental accumulator for a search rooted at pos. It
@@ -381,7 +456,34 @@ func (s *Searcher) rawEvaluate(pos *chess.Position) int {
 // idempotent — safe to call at every top-level search entry.
 func (s *Searcher) nnueBegin(pos *chess.Position) {
 	s.useNNUE = false
+	s.multiStack = nil
+	s.enrichedStack = nil
 	if !s.ec.NNUE {
+		return
+	}
+	// An enriched (threats) net, if installed, takes precedence and drives its own
+	// incremental accumulator (enrichedStack), shadowing accStack at the push/pop
+	// sites. enrichedStackCache keeps the allocation across searches.
+	if en := nnue.DefaultEnriched(); en != nil {
+		if s.enrichedStackCache == nil || s.enrichedStackCache.Net() != en {
+			s.enrichedStackCache = en.NewStack(maxPly + 8)
+		}
+		s.enrichedStack = s.enrichedStackCache
+		s.enrichedStack.Reset(pos)
+		s.useNNUE = true
+		return
+	}
+	// A multilayer (GNN4) net, if installed, takes precedence: drive its own
+	// incremental accumulator (multiStack), shadowing accStack at the same push/pop
+	// sites. multiStackCache keeps the allocation across searches (rebuilt only on
+	// a net swap); multiStack==nil for the v6 path leaves accStack in charge.
+	if m := nnue.DefaultMulti(); m != nil {
+		if s.multiStackCache == nil || s.multiStackCache.Net() != m {
+			s.multiStackCache = m.NewStack(maxPly + 8)
+		}
+		s.multiStack = s.multiStackCache
+		s.multiStack.Reset(pos)
+		s.useNNUE = true
 		return
 	}
 	net := nnue.Default()
@@ -614,7 +716,7 @@ func (s *Searcher) searchRoot(pos *chess.Position, depth, prevScore int) {
 	// rebuilt from scratch): self-correcting against any push/pop imbalance and
 	// cheap relative to a full-depth search.
 	if s.useNNUE {
-		s.accStack.Reset(pos)
+		s.accReset(pos)
 	}
 	if !s.params.Aspiration || depth < aspMinDepth || absInt(prevScore) >= mateThreshold {
 		s.negamax(pos, depth, 0, -infinity, infinity)
@@ -701,7 +803,7 @@ func (s *Searcher) RootScores(pos *chess.Position, limits Limits, gameHistory []
 		m := ml.Get(i)
 		var u chess.Undo
 		if s.useNNUE {
-			s.accStack.Push(pos, m)
+			s.accPush(pos, m)
 		}
 		pos.DoMove(m, &u)
 		s.pushKey(pos.Key())
@@ -709,7 +811,7 @@ func (s *Searcher) RootScores(pos *chess.Position, limits Limits, gameHistory []
 		s.popKey()
 		pos.UndoMove(m, &u)
 		if s.useNNUE {
-			s.accStack.Pop()
+			s.accPop()
 		}
 		out = append(out, RootMove{Move: m, Score: score})
 	}
@@ -771,7 +873,7 @@ func (s *Searcher) MultiPV(pos *chess.Position, limits Limits, gameHistory []uin
 			}
 			var u chess.Undo
 			if s.useNNUE {
-				s.accStack.Push(pos, m)
+				s.accPush(pos, m)
 			}
 			pos.DoMove(m, &u)
 			s.pushKey(pos.Key())
@@ -780,7 +882,7 @@ func (s *Searcher) MultiPV(pos *chess.Position, limits Limits, gameHistory []uin
 			s.popKey()
 			pos.UndoMove(m, &u)
 			if s.useNNUE {
-				s.accStack.Pop()
+				s.accPop()
 			}
 			if !force && s.stop {
 				return iter, false // this move's score is unreliable — discard the iteration
@@ -986,7 +1088,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 		s.dbgNullMoves++
 		var u chess.Undo
 		if s.useNNUE {
-			s.accStack.PushNull()
+			s.accPushNull()
 		}
 		pos.DoNullMove(&u)
 		s.pushKey(pos.Key())
@@ -996,7 +1098,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 		s.popKey()
 		pos.UndoNullMove(&u)
 		if s.useNNUE {
-			s.accStack.Pop()
+			s.accPop()
 		}
 		if s.stop {
 			return 0
@@ -1041,7 +1143,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 			mover := pos.PieceOn(m.From())
 			var u chess.Undo
 			if s.useNNUE {
-				s.accStack.Push(pos, m)
+				s.accPush(pos, m)
 			}
 			pos.DoMove(m, &u)
 			s.pushKey(pos.Key())
@@ -1054,7 +1156,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 			s.popKey()
 			pos.UndoMove(m, &u)
 			if s.useNNUE {
-				s.accStack.Pop()
+				s.accPop()
 			}
 			if s.stop {
 				return 0
@@ -1210,7 +1312,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 
 		var u chess.Undo
 		if s.useNNUE {
-			s.accStack.Push(pos, m)
+			s.accPush(pos, m)
 		}
 		pos.DoMove(m, &u)
 		s.pushKey(pos.Key())
@@ -1314,7 +1416,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 		s.popKey()
 		pos.UndoMove(m, &u)
 		if s.useNNUE {
-			s.accStack.Pop()
+			s.accPop()
 		}
 		if s.stop {
 			return 0
@@ -1449,13 +1551,13 @@ func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 		}
 		var u chess.Undo
 		if s.useNNUE {
-			s.accStack.Push(pos, m)
+			s.accPush(pos, m)
 		}
 		pos.DoMove(m, &u)
 		sc := -s.quiescence(pos, ply+1, -beta, -alpha)
 		pos.UndoMove(m, &u)
 		if s.useNNUE {
-			s.accStack.Pop()
+			s.accPop()
 		}
 		if s.stop {
 			return 0

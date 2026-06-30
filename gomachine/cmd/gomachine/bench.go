@@ -1,13 +1,14 @@
 package main
 
 import (
-	"math/rand"
 	"context"
 	"flag"
 	"fmt"
+	"math/rand"
 	"os"
 	"os/signal"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -73,6 +74,68 @@ func loadNetOrExit(path string) *nnue.Net {
 	}
 	fmt.Fprintf(os.Stderr, "net: loaded %s\n", path)
 	return net
+}
+
+// loadMultiOrExit parses a 'path,H,D2,D3' multilayer-net spec and imports it (a
+// bullet float export, raw.bin/quantised.bin). Empty → nil. A bad spec/path is
+// fatal — a silent fallback would secretly compare a net against itself.
+func loadMultiOrExit(spec string, int8L1 bool) *nnue.MultiNet {
+	if spec == "" {
+		return nil
+	}
+	parts := strings.Split(spec, ",")
+	if len(parts) != 4 {
+		fmt.Fprintf(os.Stderr, "multi-net spec %q: want 'path,H,D2,D3'\n", spec)
+		os.Exit(1)
+	}
+	atoi := func(s string) int {
+		n, err := strconv.Atoi(strings.TrimSpace(s))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "multi-net spec %q: bad int %q\n", spec, s)
+			os.Exit(1)
+		}
+		return n
+	}
+	path := strings.TrimSpace(parts[0])
+	m, err := nnue.ImportBulletMultiNet(path, atoi(parts[1]), atoi(parts[2]), atoi(parts[3]))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "multi net %q: %v\n", path, err)
+		os.Exit(1)
+	}
+	if int8L1 {
+		m.QuantizeForInt8()
+	}
+	fmt.Fprintf(os.Stderr, "multi net: loaded %s (H=%s D2=%s D3=%s) int8L1=%v\n", path, parts[1], parts[2], parts[3], int8L1)
+	return m
+}
+
+// loadEnrichedOrExit parses a 'path,H,D2,D3,NB' enriched-net spec (threats) and
+// imports it (a bullet float export). Empty → nil; a bad spec/path is fatal.
+func loadEnrichedOrExit(spec string) *nnue.EnrichedNet {
+	if spec == "" {
+		return nil
+	}
+	parts := strings.Split(spec, ",")
+	if len(parts) != 5 {
+		fmt.Fprintf(os.Stderr, "enriched-net spec %q: want 'path,H,D2,D3,NB'\n", spec)
+		os.Exit(1)
+	}
+	atoi := func(s string) int {
+		n, err := strconv.Atoi(strings.TrimSpace(s))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "enriched-net spec %q: bad int %q\n", spec, s)
+			os.Exit(1)
+		}
+		return n
+	}
+	path := strings.TrimSpace(parts[0])
+	n, err := nnue.ImportBulletEnrichedNet(path, atoi(parts[1]), atoi(parts[2]), atoi(parts[3]), atoi(parts[4]))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "enriched net %q: %v\n", path, err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "enriched net: loaded %s (H=%s D2=%s D3=%s NB=%s)\n", path, parts[1], parts[2], parts[3], parts[4])
+	return n
 }
 
 // loadTablebaseDefault auto-discovers a Syzygy tablebase for the prod serve/hub
@@ -179,6 +242,11 @@ func cmdBenchSPRT(args []string) {
 	oldDepth := fs.Int("old-depth", 0, "max search depth for --old (0 → unbounded)")
 	newNet := fs.String("new-net", "", "NNUE net file for --new only (net-vs-net A/B, e.g. a new net vs the shipped one); forces --concurrency 1")
 	oldNet := fs.String("old-net", "", "NNUE net file for --old only (e.g. data/nnue/net.nnue.bak-pre-v5)")
+	newMulti := fs.String("new-multi", "", "multilayer (GNN4) net for --new: 'path,H,D2,D3' (bullet float export, e.g. ~/nnue-training/.../raw.bin,512,16,32); forces --concurrency 1")
+	oldMulti := fs.String("old-multi", "", "multilayer (GNN4) net for --old: 'path,H,D2,D3'")
+	multiInt8 := fs.Bool("multi-int8", false, "quantize loaded multilayer net(s) L1 to int8 (PTQ; the movetime-viable path)")
+	newEnriched := fs.String("new-enriched", "", "enriched (threats) net for --new: 'path,H,D2,D3,NB' (bullet float export, e.g. ~/nnue-training/.../raw.bin,1024,16,32,8); forces --concurrency 1")
+	oldEnriched := fs.String("old-enriched", "", "enriched (threats) net for --old: 'path,H,D2,D3,NB'")
 	_ = fs.Parse(args)
 
 	base := search.DefaultParams()
@@ -205,37 +273,46 @@ func cmdBenchSPRT(args []string) {
 
 	newNetP := loadNetOrExit(*newNet)
 	oldNetP := loadNetOrExit(*oldNet)
-	if (newNetP != nil || oldNetP != nil) && *conc != 1 {
-		fmt.Fprintln(os.Stderr, "note: --new-net/--old-net force --concurrency 1 (the NNUE net is a process global)")
+	newMultiP := loadMultiOrExit(*newMulti, *multiInt8)
+	oldMultiP := loadMultiOrExit(*oldMulti, *multiInt8)
+	newEnrichedP := loadEnrichedOrExit(*newEnriched)
+	oldEnrichedP := loadEnrichedOrExit(*oldEnriched)
+	if (newNetP != nil || oldNetP != nil || newMultiP != nil || oldMultiP != nil || newEnrichedP != nil || oldEnrichedP != nil) && *conc != 1 {
+		fmt.Fprintln(os.Stderr, "note: --new-*/--old-* net flags force --concurrency 1 (the NNUE net is a process global)")
+		*conc = 1
 	}
 
 	cfg := bench.Config{
-		NewParams:   newParams,
-		OldParams:   oldParams,
-		NewName:     nameFor(*newSpec, "new"),
-		OldName:     nameFor(*oldSpec, "old"),
-		Nodes:       *nodes,
-		MoveTime:    time.Duration(*movetime) * time.Millisecond,
-		NewMoveTime: time.Duration(*newMovetime) * time.Millisecond,
-		OldMoveTime: time.Duration(*oldMovetime) * time.Millisecond,
-		NewDepth:    *newDepth,
-		OldDepth:    *oldDepth,
-		TTMB:        *tt,
-		Elo0:        *elo0,
-		Elo1:        *elo1,
-		Alpha:       *alpha,
-		Beta:        *beta,
-		Concurrency: *conc,
-		MaxPairs:    *maxPairs,
-		Book:        book,
-		EngineBook:  loadEngineBook(*engBookPath),
-		Tablebase:   loadTablebase(*tbPath),
-		NewNet:      newNetP,
-		OldNet:      oldNetP,
-		NewThreads:  *newThreads,
-		OldThreads:  *oldThreads,
-		NewLevel:    -1, // full strength (SPRT tests search.Params, not levels)
-		OldLevel:    -1,
+		NewParams:      newParams,
+		OldParams:      oldParams,
+		NewName:        nameFor(*newSpec, "new"),
+		OldName:        nameFor(*oldSpec, "old"),
+		Nodes:          *nodes,
+		MoveTime:       time.Duration(*movetime) * time.Millisecond,
+		NewMoveTime:    time.Duration(*newMovetime) * time.Millisecond,
+		OldMoveTime:    time.Duration(*oldMovetime) * time.Millisecond,
+		NewDepth:       *newDepth,
+		OldDepth:       *oldDepth,
+		TTMB:           *tt,
+		Elo0:           *elo0,
+		Elo1:           *elo1,
+		Alpha:          *alpha,
+		Beta:           *beta,
+		Concurrency:    *conc,
+		MaxPairs:       *maxPairs,
+		Book:           book,
+		EngineBook:     loadEngineBook(*engBookPath),
+		Tablebase:      loadTablebase(*tbPath),
+		NewNet:         newNetP,
+		OldNet:         oldNetP,
+		NewMultiNet:    newMultiP,
+		OldMultiNet:    oldMultiP,
+		NewEnrichedNet: newEnrichedP,
+		OldEnrichedNet: oldEnrichedP,
+		NewThreads:     *newThreads,
+		OldThreads:     *oldThreads,
+		NewLevel:       -1, // full strength (SPRT tests search.Params, not levels)
+		OldLevel:       -1,
 	}
 
 	reporter := bench.NewReporter(cfg)

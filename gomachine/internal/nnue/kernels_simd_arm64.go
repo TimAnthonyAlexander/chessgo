@@ -49,7 +49,9 @@ func init() {
 	addCol = addColSIMD
 	subCol = subColSIMD
 	screluDot = screluDotSIMD
-	kernelBackend = "simd/archsimd-neon-arm64(addCol,subCol,screluDot)"
+	dotF32 = dotF32SIMD
+	screluActivateF = screluActivateFSIMD
+	kernelBackend = "simd/archsimd-neon-arm64(addCol,subCol,screluDot,dotF32,screluActivateF)"
 }
 
 // addColSIMD: dst[j] += src[j], 8 int16 lanes/iter + scalar tail.
@@ -131,4 +133,61 @@ func screluDotSIMD(acc, w []int16, qa int32) int64 {
 		out += int64(c*c) * int64(w[i])
 	}
 	return out
+}
+
+// dotF32SIMD computes Σ a[i]·w[i] over float32 slices via fused multiply-add
+// (VFMLA). It uses FOUR independent Float32x4 accumulators (16 elem/iter) so the
+// FMA dependency chain is broken — a single accumulator is latency-bound (each
+// MulAdd waits on the previous, ~1.2× over scalar); four in-flight chains hide
+// the ~4-cycle FMA latency and approach throughput-bound. A 4-wide tail loop then
+// a scalar tail handle the remainder.
+//
+// Bit-CLOSE (not exact) to dotF32Scalar: the vector reduction sums in a different
+// order than the scalar left-to-right loop (and FMA fuses the rounding), so the
+// result differs by float32 rounding only — gated by TestDotF32MatchScalar.
+func dotF32SIMD(a, w []float32) float32 {
+	n := len(a)
+	acc0 := archsimd.BroadcastFloat32x4(0)
+	acc1 := archsimd.BroadcastFloat32x4(0)
+	acc2 := archsimd.BroadcastFloat32x4(0)
+	acc3 := archsimd.BroadcastFloat32x4(0)
+	i := 0
+	for ; i+16 <= n; i += 16 {
+		acc0 = archsimd.LoadFloat32x4(a[i : i+4]).MulAdd(archsimd.LoadFloat32x4(w[i:i+4]), acc0)
+		acc1 = archsimd.LoadFloat32x4(a[i+4 : i+8]).MulAdd(archsimd.LoadFloat32x4(w[i+4:i+8]), acc1)
+		acc2 = archsimd.LoadFloat32x4(a[i+8 : i+12]).MulAdd(archsimd.LoadFloat32x4(w[i+8:i+12]), acc2)
+		acc3 = archsimd.LoadFloat32x4(a[i+12 : i+16]).MulAdd(archsimd.LoadFloat32x4(w[i+12:i+16]), acc3)
+	}
+	acc := acc0.Add(acc1).Add(acc2.Add(acc3))
+	for ; i+4 <= n; i += 4 {
+		acc = archsimd.LoadFloat32x4(a[i : i+4]).MulAdd(archsimd.LoadFloat32x4(w[i:i+4]), acc)
+	}
+	out := acc.GetElem(0) + acc.GetElem(1) + acc.GetElem(2) + acc.GetElem(3)
+	for ; i < n; i++ {
+		out += a[i] * w[i]
+	}
+	return out
+}
+
+// screluActivateFSIMD applies SCReLU (clamp [0,1] then square) elementwise via
+// NEON Max/Min/Mul, 4 lanes/iter + scalar tail. Bit-exact to the scalar reference
+// (pure elementwise IEEE ops, no reduction reordering).
+func screluActivateFSIMD(dst, src []float32) {
+	n := len(src)
+	zero := archsimd.BroadcastFloat32x4(0)
+	one := archsimd.BroadcastFloat32x4(1)
+	i := 0
+	for ; i+4 <= n; i += 4 {
+		x := archsimd.LoadFloat32x4(src[i : i+4]).Max(zero).Min(one)
+		x.Mul(x).Store(dst[i : i+4])
+	}
+	for ; i < n; i++ {
+		x := src[i]
+		if x < 0 {
+			x = 0
+		} else if x > 1 {
+			x = 1
+		}
+		dst[i] = x * x
+	}
 }

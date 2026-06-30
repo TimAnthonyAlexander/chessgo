@@ -61,6 +61,150 @@ func screluDotScalar(acc, w []int16, qa int32) int64 {
 	return out
 }
 
+// dotF32Scalar computes Σ_i a[i]·w[i] over equal-length float32 slices. This is
+// MultiNet's hot tail-matmul kernel (multilayer.go): the multilayer net's
+// per-node cost is dominated by L1 = D2 dot-products over the 2*H feature vector
+// (16×1024 ≈ 16K mults), so SIMD-ing this dot is the first speed lever for the
+// movetime-viability of the multilayer eval (docs/NNUE/INT8_HANDOFF.md step 1).
+//
+// Unlike the integer kernels above, the bit-exact contract does NOT hold here:
+// float add is non-associative, so a vectorized reduction differs from this
+// left-to-right scalar sum by a tiny rounding (~1e-5 relative). MultiNet rounds
+// its final output to integer centipawns, which absorbs that drift; the gate is
+// TestDotF32MatchScalar with a tolerance, not byte-identity.
+func dotF32Scalar(a, w []float32) float32 {
+	var s float32
+	for i := range a {
+		s += a[i] * w[i]
+	}
+	return s
+}
+
+// screluActivateFScalar applies SCReLU (clamp to [0,1], then square) elementwise,
+// writing dst[i] = clamp(src[i],0,1)². This is MultiNet's feature-transformer
+// activation (evalFromAcc): it turns the 2*H accumulator halves into the float
+// tail's input vector. Unlike dotF32 this is a pure elementwise map (no
+// reduction), so a SIMD backend is BIT-EXACT to this scalar reference — IEEE
+// Max/Min/Mul are deterministic per element. dst and src may be the same length;
+// len(dst) == len(src).
+func screluActivateFScalar(dst, src []float32) {
+	for i := range src {
+		x := src[i]
+		if x < 0 {
+			x = 0
+		} else if x > 1 {
+			x = 1
+		}
+		dst[i] = x * x
+	}
+}
+
+// int8QA is the activation quantization scale: SCReLU outputs ∈ [0,1] map to u8
+// in [0, int8QA]. It is 127 (NOT 255) ON PURPOSE: with activations ≤127 and int8
+// weights ≤127, a VPMADDUBSW pair sum is ≤ 2·127·127 = 32258 < 32767, so the
+// int16 saturation in maddubs CAN NEVER FIRE — the int8 L1 dot is then exact
+// (no saturation loss), and scalar == SIMD trivially. At 255 the pair could reach
+// 64770 and saturate hard (measured: 14 cp mean / 83 cp max PTQ error); 127
+// trades one bit of activation resolution to remove that error entirely.
+//
+// NOTE: 127 is the conservative *no-VNNI* variant. The mainstream NNUE choice is
+// u8∈[0,255] fed to AVX-512-VNNI VPDPBUSD (`dpbusd`), which accumulates straight
+// to int32 with NO pairwise saturation (Stormphrax `kFtQBits=8`). We use the
+// portable maddubs+madd fallback (runs on AVX2 and the M3/NEON laptop too), for
+// which 255 WOULD saturate — so 127 is required for our path, not 255. Raising to
+// 255 is only correct if dotU8I8 switches to a non-saturating VNNI dpbusd (and the
+// QAT config's activation faux_quantise must move to 255 in lockstep). The matching
+// descale lives in QuantizeForInt8 (L1Inv = 1/(int8QA·Sw)).
+const int8QA = 127
+
+// quantU8Scalar fuses MultiNet's FT activation and int8 quantization: it writes
+// dst[i] = round(clamp(src[i],0,1)² · int8QA) as a u8 in [0,int8QA]. This is the
+// SCReLU feature activation (same value screluActivateFScalar produces) scaled to
+// the int8 domain and rounded — the u8 input to the int8 L1 matmul (dotU8I8). The
+// round is "round half up" via +0.5 (operands are ≥0). len(dst) == len(src).
+func quantU8Scalar(dst []uint8, src []float32) {
+	for i := range src {
+		x := src[i]
+		if x < 0 {
+			x = 0
+		} else if x > 1 {
+			x = 1
+		}
+		q := x * x * int8QA
+		dst[i] = uint8(q + 0.5) // q ∈ [0,int8QA]
+	}
+}
+
+// screluActivateI16Scalar applies SCReLU to the int16 accumulator: it reads
+// src[i] (= round(float_act · ftQA)), maps it back to [0,1] (clamp then /ftQA),
+// squares it, and writes the float result to dst — the float tail's input. Same
+// value the float-source screluActivateF produced, but reading the int16
+// accumulator (which the fast int16 Push maintains). len(dst) == len(src).
+func screluActivateI16Scalar(dst []float32, src []int16) {
+	const inv = float32(1) / ftQA
+	for i, v := range src {
+		x := float32(v) * inv
+		if x < 0 {
+			x = 0
+		} else if x > 1 {
+			x = 1
+		}
+		dst[i] = x * x
+	}
+}
+
+// quantU8I16Scalar is the int8-path FT activation, computed in PURE INTEGER (no
+// float, no divide — both slow per-element over 2*H): clamp the int16 accumulator
+// to [0,ftQA], square (int32), and shift right by ftShift. Because ftQA=255 and
+// int8QA=127, ftQA² = 65025 and 65025 >> 9 = 127, i.e. the shift IS the divide by
+// ftQA²/int8QA: dst = clamp(acc,0,255)² >> 9 ≈ SCReLU(acc/255)·int8QA ∈ [0,127] —
+// the same value (±1) the float screluActivateF→quantU8 chain produced, but with a
+// shift the SIMD backend reproduces bit-for-bit. The matching descale (L1Inv =
+// 1/(int8QA·Sw)) is unchanged.
+const ftShift = 9            // log2(ftQA²/int8QA) = log2(65025/127) ≈ 9; 255²>>9 = 127
+const ftRound = 1 << (ftShift - 1) // 256: round-to-nearest before the shift (floor biased eval ~25cp)
+
+func quantU8I16Scalar(dst []uint8, src []int16) {
+	for i, v := range src {
+		c := int32(v)
+		if c < 0 {
+			c = 0
+		} else if c > ftQA {
+			c = ftQA
+		}
+		dst[i] = uint8((c*c + ftRound) >> ftShift)
+	}
+}
+
+// dotU8I8Scalar computes Σ a[i]·w[i] as int32, modeling the AVX2/AVX-512
+// VPMADDUBSW+VPMADDWD path EXACTLY so the scalar reference and the SIMD backends
+// are bit-identical: VPMADDUBSW forms, per adjacent byte pair, an int16 word
+// saturate_int16(a[2k]·w[2k] + a[2k+1]·w[2k+1]) (a unsigned, w signed); VPMADDWD
+// then sums those words into int32 (no further saturation). The int16 saturation
+// is therefore PART OF THE DEFINED int8 forward (not a hardware artifact to be
+// worked around): the int8 net IS this saturating computation, and the float net
+// is the thing it approximates (validated by SPRT, not bit-equality). An odd
+// trailing element (no pair) contributes a single product (|255·127| < 2^15, so
+// no saturation possible).
+func dotU8I8Scalar(a []uint8, w []int8) int32 {
+	var acc int32
+	n := len(a)
+	i := 0
+	for ; i+2 <= n; i += 2 {
+		p := int32(a[i])*int32(w[i]) + int32(a[i+1])*int32(w[i+1])
+		if p > 32767 {
+			p = 32767
+		} else if p < -32768 {
+			p = -32768
+		}
+		acc += p
+	}
+	if i < n { // odd tail: single product, cannot saturate
+		acc += int32(a[i]) * int32(w[i])
+	}
+	return acc
+}
+
 // Kernel seam. These default to the scalar reference; a SIMD backend (e.g.
 // kernels_arm64.go behind `//go:build arm64 && nnue_neon`) repoints them in its
 // own init() — no duplicate symbols, and the choice is made once at startup, not
@@ -75,4 +219,16 @@ var (
 	subCol = subColScalar
 	// screluDot(acc, w, qa): Σ clamp(acc,0,qa)²·w as int64.
 	screluDot = screluDotScalar
+	// dotF32(a, w): Σ a·w as float32 (MultiNet tail matmul; bit-CLOSE, not exact).
+	dotF32 = dotF32Scalar
+	// screluActivateF(dst, src): dst = clamp(src,0,1)² elementwise (bit-exact).
+	screluActivateF = screluActivateFScalar
+	// quantU8(dst, src): dst = u8 round(clamp(src,0,1)²·255) — SCReLU→int8 domain.
+	quantU8 = quantU8Scalar
+	// dotU8I8(a, w): Σ a·w int32 via maddubs+madd semantics (sat16 pairs).
+	dotU8I8 = dotU8I8Scalar
+	// screluActivateI16(dst, src): dst = SCReLU(src/ftQA)² float, from int16 acc.
+	screluActivateI16 = screluActivateI16Scalar
+	// quantU8I16(dst, src): dst = u8 round(SCReLU(src/ftQA)²·int8QA), from int16 acc.
+	quantU8I16 = quantU8I16Scalar
 )

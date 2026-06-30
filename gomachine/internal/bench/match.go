@@ -63,6 +63,17 @@ type Config struct {
 	// that side uses the process default net (data/nnue/net.nnue).
 	NewNet, OldNet *nnue.Net
 
+	// NewMultiNet/OldMultiNet give a side a multilayer (GNN4) net instead of a
+	// single-layer one — the same per-side-swap A/B (forces Concurrency=1), used to
+	// measure the multilayer architecture vs the shipped v6 (fixed depth, NEXT_ARCH
+	// Phase 1). A side may set at most one of NewNet/NewMultiNet.
+	NewMultiNet, OldMultiNet *nnue.MultiNet
+
+	// NewEnrichedNet/OldEnrichedNet give a side the ENRICHED (threats) net — its
+	// from-scratch forward (nnueBegin checks DefaultEnriched first, before
+	// DefaultMulti). Same per-side-swap A/B (forces Concurrency=1).
+	NewEnrichedNet, OldEnrichedNet *nnue.EnrichedNet
+
 	NewThreads int // Lazy SMP threads for the patch engine (default 1)
 	OldThreads int // Lazy SMP threads for the baseline engine (default 1)
 
@@ -83,9 +94,20 @@ type player struct {
 	lim     search.Limits
 	level   int
 	net     *nnue.Net // per-side NNUE net; when non-nil, made active before each search (requires Concurrency==1, since the net is a process global)
+	// multiNet, when non-nil, gives this side a multilayer (GNN4) net — it takes
+	// precedence over net in the searcher (nnueBegin checks DefaultMulti first).
+	// Same per-side-swap A/B; requires Concurrency==1.
+	multiNet *nnue.MultiNet
+	// enrichedNet, when non-nil, takes precedence over both (DefaultEnriched first).
+	enrichedNet *nnue.EnrichedNet
 }
 
 func (p player) play(pos *chess.Position, history []uint64) engine.BestResult {
+	// Per-side eval swap (process globals; requires Concurrency==1). SetMultiNet is
+	// called unconditionally (nil clears it) so the side that uses a single-layer
+	// net isn't left running the other side's multilayer net.
+	nnue.SetMultiNet(p.multiNet)
+	nnue.SetEnriched(p.enrichedNet)
 	if p.net != nil {
 		nnue.SetNet(p.net) // searcher's nnueBegin rebuilds its accumulator when the net changes
 	}
@@ -228,8 +250,8 @@ func RunSPRT(ctx context.Context, cfg Config, onProgress func(Progress)) Summary
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			newP := player{eng: engine.NewWithParams(cfg.TTMB, cfg.NewParams), threads: maxThreads(cfg.NewThreads), lim: newLim, level: cfg.NewLevel, net: cfg.NewNet}
-			oldP := player{eng: engine.NewWithParams(cfg.TTMB, cfg.OldParams), threads: maxThreads(cfg.OldThreads), lim: oldLim, level: cfg.OldLevel, net: cfg.OldNet}
+			newP := player{eng: engine.NewWithParams(cfg.TTMB, cfg.NewParams), threads: maxThreads(cfg.NewThreads), lim: newLim, level: cfg.NewLevel, net: cfg.NewNet, multiNet: cfg.NewMultiNet, enrichedNet: cfg.NewEnrichedNet}
+			oldP := player{eng: engine.NewWithParams(cfg.TTMB, cfg.OldParams), threads: maxThreads(cfg.OldThreads), lim: oldLim, level: cfg.OldLevel, net: cfg.OldNet, multiNet: cfg.OldMultiNet, enrichedNet: cfg.OldEnrichedNet}
 			newP.eng.SetBook(cfg.EngineBook)
 			oldP.eng.SetBook(cfg.EngineBook)
 			newP.eng.SetTablebase(cfg.Tablebase)

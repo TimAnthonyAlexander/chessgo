@@ -109,6 +109,15 @@ func queenAttacksBB(sq Square, occ Bitboard) Bitboard {
 	return bishopAttacksBB(sq, occ) | rookAttacksBB(sq, occ)
 }
 
+// PseudoAttacks returns the squares attacked by piece pc on sq given board
+// occupancy occ (sliders are blocked by occ; leapers/pawns ignore it). It is the
+// exported pseudo-attack accessor used by the NNUE threat-feature extractor
+// (internal/nnue), which needs "who attacks whom" per position. Castling and
+// en-passant are not attacks and are excluded by construction.
+func PseudoAttacks(pc Piece, sq Square, occ Bitboard) Bitboard {
+	return attacksFrom(pc.Type(), pc.Color(), sq, occ)
+}
+
 // attacksFrom returns the attack set of a piece type from sq given occupancy.
 func attacksFrom(pt PieceType, c Color, sq Square, occ Bitboard) Bitboard {
 	switch pt {
