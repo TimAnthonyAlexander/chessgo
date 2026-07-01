@@ -7,7 +7,8 @@
 
 ## Where we are
 - **Shipped/prod: NNUE v6** — single-layer `(768→512)×2→1` SCReLU, int16, SIMD
-  (`archsimd`), default-on. **≈3260 "dirty" CCRL Blitz** (`ENGINE_STRENGTH.md §15`).
+  (`archsimd`), default-on. **Bracketed 3400–3700 CCRL Blitz, floor >3400** (2026-07-01,
+  100–0 vs a ~3400 engine; `ENGINE_STRENGTH.md §20` — supersedes the older ≈3260 read of §15).
 - **The goal / the line to pass: Stormphrax (~3700 CCRL).** Stormphrax beats v6
   *clearly* (+~440). That is the target. **Stockfish is NOT the anchor** — it's not a
   representative CCRL peer; beating CCRL-level engines (Stormphrax, Viridithas) is what
@@ -211,10 +212,12 @@ more lairner round-trips just for int8). It's the keystone of getting to ~2,440 
 > shipped default-on** → **Phase B** int16 quantization (GNN2 net, bullet ints
 > verbatim, bit-exact gate; deficit →1.59×, reaches depth 15 vs HCE's 14) →
 > **+212.2 ± 49.2 @ movetime, H1, shipped.** Net committed at `data/nnue/net.nnue`,
-> auto-loads. **CCRL anchor (2026-06-29): ≈3260 "dirty" CCRL Blitz** (two NNUE anchors —
-> Starzix 5.0 3276±83 / Viridithas 17 3245±94 @ 100ms; ENGINE_STRENGTH.md §15),
-> superseding the SF-UCI_Elo **≈2882** reading (band 2847–2935 vs SF-2700/2800/2900,
-> 2026-06-22) — the two consistent via the ~390 CCRL-over-FIDE offset.
+> auto-loads. **CCRL bracket (2026-07-01, ENGINE_STRENGTH.md §20): 3400–3700, floor >3400**
+> — 100–0 vs a ~3400 engine (hard floor), lost hard to a ~3700. Supersedes the ≈3260 "dirty"
+> read of 2026-06-29 (Starzix/Viridithas, §15) and the one-sided ≈3200 a loss-heavy match
+> produced (an all-losses formula artifact, not a measurement). The older reads reconcile with
+> the SF-UCI_Elo **≈2882** via the ~390 CCRL-over-FIDE offset. Still untriangulated (no ~50%
+> opponent) — quote the band, not a point.
 >
 > **NNUE v6 (512-wide) + SIMD — SHIPPED to prod.** The post-NNUE ladder
 > (v5-maturity → SIMD → wider net) is now resolved, and **width was the lever**:
@@ -247,8 +250,8 @@ more lairner round-trips just for int8). It's the keystone of getting to ~2,440 
 > **correction history** (`corrhist`, **+66.9 @ 40k nodes** — per-pattern
 > eval-error correction), **singular extensions** (`singular`, **+22.2**), and
 > **frontier futility** (`futility`, **+21.3**). Fixed-nodes self-play; the bundle
-> owes a movetime SPRT before the headline figure (now **≈3260 "dirty" CCRL Blitz**,
-> §15) moves (self-play
+> owes a movetime SPRT before the headline figure (now the **3400–3700 CCRL bracket**,
+> §20) moves (self-play
 > inflation + corrhist's per-node cost). **Tried and REJECTED** (default-off): the
 > cheap long tail mostly washed on our already-heavily-pruned baseline — conthist
 > (flat, wiring-verified), IIR (−33.7, fired on all node types), capthist (≈−33,

@@ -241,10 +241,13 @@ scalar build is a movetime wash). Then a **search-feature wave** (`docs/ENGINE_S
 §13`) shipped **corrhist + singular + futility** (+66.9/+22.2/+21.3 @ 40k nodes; owes a
 movetime re-anchor) and rejected the cheap long tail (conthist/IIR/capthist/probcut/razor
 flat-or-negative; lmr2-on-singular −67 anti-synergy) — the cheap-search-patch well is now
-mostly dry on this baseline. Current strength **≈3260 "dirty" CCRL Blitz**
-(2026-06-29, two-NNUE-anchor agreement: Starzix 5.0 3276±83 / Viridithas 17 3245±94 @
-100ms — ENGINE_STRENGTH.md §15), which **supersedes** the old SF-UCI_Elo **≈2882**
-reading (that scale sits ~390 below CCRL; 2882+390≈3270, so the two agree). Next:
+mostly dry on this baseline. Current strength **bracketed 3400–3700 CCRL Blitz, floor
+comfortably >3400** (2026-07-01, ENGINE_STRENGTH.md §20: **100W–0L vs a ~3400 engine** =
+hard floor; lost hard to a ~3700). Untriangulated — no ~50% opponent yet, so quote the
+**band**, not a point. This **supersedes** the earlier ≈3260 "dirty" read (§15, two-blowout)
+and the one-sided **≈3200** a loss-heavy match produced (a mathematical artifact of scoring
+≈0%, not a measurement — never quote it). Both older reads reconcile with the old SF-UCI_Elo
+**≈2882** (that scale sits ~390 below CCRL). Next:
 NNUE width → **1024** (cheap behind SIMD), hub-restart-durable resume, puzzle generation
 pipeline, reworked-selective versions of the rejected search patches (PV-only IIR,
 scaled capthist, conthist that doesn't double-count history), **SPSA**,

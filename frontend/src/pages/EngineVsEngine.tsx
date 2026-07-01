@@ -38,6 +38,43 @@ const BOOK_ARROW_COLOR = '#4c8bf5'
 
 const sideToMoveOf = (fen: string): Color => (fen.split(' ')[1] === 'b' ? 'b' : 'w')
 
+// ---- Strength display scales ---------------------------------------------------
+// Both engines are shown on a truthful CCRL-ish scale, which is NOT the raw number
+// either engine speaks internally (see docs/ENGINE_STRENGTH.md §20).
+//
+// gomachine: the internal rating ladder tops out at 2900 = full strength (the engine
+// clamps rating>2900 → 2900). Full-strength gomachine is ≈3400–3700 CCRL, so the slider
+// DISPLAYS a CCRL-ish number and maps it back onto the internal 700..2900 ladder the
+// backend understands. display 700→700 (a weak bot is a weak bot), display 3500→2900
+// (full strength); the stretch is larger toward the top, matching how the old ladder ran
+// below CCRL.
+const GOMA_DISPLAY_MIN = 700
+const GOMA_DISPLAY_MAX = 3500
+const GOMA_INTERNAL_MIN = 700
+const GOMA_INTERNAL_MAX = 2900
+function gomaDisplayToInternal(display: number): number {
+    const t = (display - GOMA_DISPLAY_MIN) / (GOMA_DISPLAY_MAX - GOMA_DISPLAY_MIN)
+    return Math.round(GOMA_INTERNAL_MIN + t * (GOMA_INTERNAL_MAX - GOMA_INTERNAL_MIN))
+}
+
+// Stockfish: UCI_Elo runs FAR below CCRL and SATURATES at ~3100 on our prod build
+// (UCI_Elo 3100 == 3190 == full strength). We display a truthful CCRL-ish number instead
+// of SF's own (misleading) figure, anchored at the one hard data point we have: UCI 3000
+// ≈ 3400 CCRL. At the top notch we UNCAP Stockfish entirely (send elo=0 → no
+// UCI_LimitStrength) and label it "Unleashed" — ~3700–4000, clearly above gomachine.
+const SF_UCI_MIN = 1320
+const SF_UNLEASHED_UCI = 3100 // slider top notch; at/above here SF plays at full force
+// affine on the UCI scale: UCI 1320→~1500, UCI 3000→3400 (slope ≈1.13, gap widens up top).
+function sfDisplayElo(uci: number): number {
+    return Math.round(1500 + (uci - SF_UCI_MIN) * ((3400 - 1500) / (3000 - SF_UCI_MIN)))
+}
+function sfIsUnleashed(uci: number): boolean {
+    return uci >= SF_UNLEASHED_UCI
+}
+function sfLabel(uci: number): string {
+    return sfIsUnleashed(uci) ? 'Unleashed' : `~${sfDisplayElo(uci)} Elo`
+}
+
 // The left-card settings persist to localStorage, so whatever you last set becomes
 // your new defaults on the next visit.
 const SETTINGS_KEY = 'eve.settings'
@@ -47,7 +84,8 @@ interface EveSettings {
     gomaSide: Color
     budget: number
 }
-const DEFAULT_SETTINGS: EveSettings = { gomaRating: 2200, sfElo: 1500, gomaSide: 'w', budget: 300 }
+// gomaRating is a DISPLAY value (700..3500); sfElo is Stockfish UCI_Elo (1320..3100).
+const DEFAULT_SETTINGS: EveSettings = { gomaRating: 3500, sfElo: 3000, gomaSide: 'w', budget: 300 }
 
 function loadSettings(): EveSettings {
     try {
@@ -141,7 +179,9 @@ export default function EngineVsEngine() {
                     fen,
                     side: moverSide,
                     movetime: budget,
-                    ...(moverSide === 'gomachine' ? { rating: gomaRating } : { elo: sfElo }),
+                    ...(moverSide === 'gomachine'
+                        ? { rating: gomaDisplayToInternal(gomaRating) }
+                        : { elo: sfIsUnleashed(sfElo) ? 0 : sfElo }),
                 })
                 if (cancelled) return
                 if (!res.bestmove || !res.fen) {
@@ -364,7 +404,7 @@ export default function EngineVsEngine() {
                         <MatchupRow
                             icon={<Bot size={16} />}
                             name="Stockfish"
-                            detail={`${sfElo} Elo`}
+                            detail={sfLabel(sfElo)}
                             side={gomaSide === 'w' ? 'b' : 'w'}
                         />
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
@@ -521,8 +561,8 @@ function Controls({
                 <Slider
                     value={gomaRating}
                     onChange={(_, v) => onRating(v as number)}
-                    min={700}
-                    max={2900}
+                    min={GOMA_DISPLAY_MIN}
+                    max={GOMA_DISPLAY_MAX}
                     step={50}
                     disabled={disabledSettings}
                     sx={sliderSx}
@@ -530,17 +570,21 @@ function Controls({
             </Box>
 
             <Box>
-                <Label>Stockfish rating</Label>
-                <SettingValue>{sfElo} Elo</SettingValue>
+                <Label>Stockfish strength</Label>
+                <SettingValue>{sfLabel(sfElo)}</SettingValue>
                 <Slider
                     value={sfElo}
                     onChange={(_, v) => onElo(v as number)}
-                    min={1320}
-                    max={3190}
+                    min={SF_UCI_MIN}
+                    max={SF_UNLEASHED_UCI}
                     step={10}
                     disabled={disabledSettings}
                     sx={sliderSx}
                 />
+                <Typography sx={{ fontSize: 11.5, color: 'var(--muted)', mt: 0.25 }}>
+                    Shown on a truthful CCRL scale, not Stockfish's own (which reads far low).
+                    Top notch = Unleashed (uncapped, ~3700–4000).
+                </Typography>
             </Box>
 
             <Box>
@@ -571,7 +615,7 @@ function Controls({
                     sx={sliderSx}
                 />
                 <Typography sx={{ fontSize: 11.5, color: 'var(--muted)', mt: 0.25 }}>
-                    Both engines think this long. Above ~2400, more time = stronger than the rating.
+                    Both engines think this long. Above ~2600, more time = stronger than the rating.
                 </Typography>
             </Box>
 

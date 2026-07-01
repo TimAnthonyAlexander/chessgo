@@ -81,8 +81,13 @@ gomachine bench vs-stockfish --sf /opt/homebrew/bin/stockfish --sf-elo 2500 \
   --movetime 100 --games 60 --threads 4
 ```
 
-**Latest reading (2026-06-29, CCRL Blitz anchor — this is now the headline strength
-figure, superseding the SF-UCI_Elo number):** **≈3260 "dirty" CCRL Blitz.** Measured by
+**Current reading (2026-07-01, §20): bracketed 3400–3700 CCRL Blitz, floor comfortably
+>3400** (100–0 vs a ~3400 engine; lost to a ~3700). Untriangulated — no ~50% opponent yet.
+The ≈3260/≈3200 numbers below are **superseded**; the ≈3200 in particular was a one-sided
+all-losses artifact — see §20. The reads below are kept for the record.
+
+**Prior reading (2026-06-29, CCRL Blitz anchor — the then-headline figure, now raised to the
+3400–3700 bracket by §20):** **≈3260 "dirty" CCRL Blitz.** Measured by
 playing the prod v6+SIMD build at 100 ms/move vs **full-strength, officially-rated NNUE
 engines**, anchoring to each opponent's CCRL Blitz rating (not the handicapped-SF
 UCI_Elo scale). Two NNUE anchors agree: **3276 ± 83** vs Starzix 5.0 (~3622, scored 12%)
@@ -970,6 +975,11 @@ The cause is **partial-iteration cutoff**:
 
 ## 15. CCRL Blitz anchor (2026-06-29) — ≈3260 "dirty", replacing the SF-UCI_Elo number
 
+> **SUPERSEDED by §20 (2026-07-01):** the bracket is now **3400–3700, floor >3400** (100–0 vs
+> a ~3400 engine). The ≈3260 here was a two-blowout "dirty" read; keep it as method/record,
+> not as the current strength. Never quote the ≈3200 that a later one-sided loss produced.
+
+
 For weeks the headline strength figure was **≈2882 on Stockfish's UCI_Elo scale**
 (§2.2) — a scale that is *not* logistic-linear, plays erratically when handicapped,
 and (we now understand) sits **~390 Elo below** the CCRL scale everyone else quotes.
@@ -1228,3 +1238,36 @@ dot (`screluDot`, ~10%) and the int16 base columns (~7%). int8-ing either needs 
 (PTQ int8 has a ~150-Elo cliff, §16.2) plus a hand-written VNNI kernel (`archsimd` has no
 VPDPBUSD/SDOT). So the next eval-speed gains fold into the next training run, not more push
 surgery. See `ENGINE_ROADMAP.md`.
+
+## 20. CCRL bracket update (2026-07-01) — >3400 hard floor, the "≈3200" was a one-sided artifact
+
+The ≈3260 read of §15/§18 is **stale and, at the low end, wrong**. Two newer full-strength
+matches vs officially-CCRL-rated opponents move the picture up and bracket it:
+
+| Opponent (CCRL Blitz) | gomachine score | What it tells us |
+|---|---|---|
+| **~3400 engine** | **100W – 0L** (clean sweep) | **hard floor: we are objectively >3400.** A 100–0 sweep is not a 3400-vs-3400 coin-flip; the true gap is large, so the floor is *well* above 3400, not at it. |
+| **~3700 engine** | lost hard (losses + draws, **0 wins**) | ceiling: clearly below ~3700. The formula estimate off this match spat out **≈3200**. |
+
+**The ≈3200 is a garbage number — do not quote it.** It is the anchor formula
+(`opponent_Elo + logit(score)`) applied to a **one-sided, near-zero-score** result with **no
+wins**. When you score ≈0% the logit term saturates and the formula *must* return something
+far below the opponent regardless of true strength — it is mathematically incapable of
+returning a triangulated value from an all-losses sample. It is a **lower-bound projection of
+a blowout**, not a measurement. The 100–0 sweep at 3400 flatly contradicts it: you cannot be
+both "≈3200" and "crushes 3400 100–0." When two anchors disagree, the *sweep* is the harder
+evidence — a 3200 engine does not go 100–0 vs a 3400 engine, ever.
+
+**Honest current statement: gomachine is bracketed 3400–3700 CCRL Blitz, untriangulated,
+and the floor is comfortably above 3400** (the sweep margin implies real headroom over it).
+We still lack a **~50% opponent inside the band** — the pending step §15.2 already flagged.
+Both reference matches remain blowouts in opposite directions (100–0 one way, ~0% the other);
+a proper single number needs an opponent we score ~40–60% against (target a ranked **NNUE**
+CCRL entry in the ~3450–3600 range). Until then, quote the **band**, not a point, and never
+the ≈3200.
+
+**Frontend note:** the Engine-vs-Engine admin page previously topped the gomachine rating
+slider at 2900 — badly stale. Bumped to **3500** (mid-bracket, defensible) alongside this
+finding. The Stockfish ruler on that page was also re-scaled to a truthful CCRL-ish display
+(SF's raw UCI_Elo runs far below CCRL) — see the frontend/backend mapping change shipped with
+this update.
