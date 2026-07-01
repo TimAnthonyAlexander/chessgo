@@ -13,9 +13,32 @@ use App\Models\BotGame;
  */
 class BotGameService
 {
-    /** Bot strength bounds (mirror gomachine engine rating.go RatingMin/Max). */
+    /**
+     * Human-facing bot strength bounds — the FIDE/human scale the picker + Glicko use.
+     * These are deliberately NOT the engine's CCRL ladder top (3500): the /bot picker
+     * stays human-scale, and playBot() lifts the chosen rating onto the engine's CCRL
+     * ladder via engineRatingForHuman() so play is identical to before the CCRL rescale.
+     * See gomachine internal/engine/rating.go (EngineRatingForHuman, humanFullStrength).
+     */
     public const RATING_MIN = 700;
     public const RATING_MAX = 2900;
+
+    /** Old human-scale full-strength label; = engine.humanFullStrength. */
+    private const HUMAN_FULL_STRENGTH = 2900;
+    /** Engine CCRL ladder top; = engine.RatingMax. */
+    private const ENGINE_CCRL_MAX = 3500;
+
+    /**
+     * Map a human/FIDE-scale rating onto the engine's native CCRL ladder, preserving
+     * playing strength (mirrors engine.EngineRatingForHuman). Keeps /bot games playing
+     * exactly as they did before the engine ladder was rescaled to CCRL.
+     */
+    private function engineRatingForHuman(int $human): int
+    {
+        return (int) (self::RATING_MIN
+            + ($human - self::RATING_MIN) * (self::ENGINE_CCRL_MAX - self::RATING_MIN)
+                / (self::HUMAN_FULL_STRENGTH - self::RATING_MIN));
+    }
 
     public function __construct(private readonly GomachineClient $engine)
     {
@@ -171,7 +194,11 @@ class BotGameService
         if ($game->status !== 'ongoing') {
             return;
         }
-        $best = $this->engine->bestMove($game->fen, $game->rating, $game->getHistory());
+        $best = $this->engine->bestMove(
+            $game->fen,
+            $this->engineRatingForHuman($game->rating),
+            $game->getHistory(),
+        );
         $uci = $best['bestmove'] ?? null;
         if (!is_string($uci) || $uci === '') {
             return;

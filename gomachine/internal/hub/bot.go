@@ -169,7 +169,9 @@ func (h *Hub) scheduleBotMove(g *game) {
 		ply:         len(g.moves),
 		fen:         g.pos.FEN(),
 		history:     append([]uint64(nil), g.history...),
-		rating:      humanizedEngineRating(bot.rating), // weaken to actual human strength
+		// Weaken to actual human strength (human scale), then lift onto the engine's
+		// native CCRL ladder so the search produces the same play as before the rescale.
+		rating:      engine.EngineRatingForHuman(humanizedEngineRating(bot.rating)),
 		moveTimeCap: moveTimeCap,
 		tc:          g.tc,
 		remainingMs: g.remainingMs(botColor),
@@ -356,7 +358,10 @@ func botDisplayRating(userRating int) int {
 const (
 	botMaxHandicap   = 500            // max Elo shaved off the weakest fill-in bots
 	botHandicapFloor = ratingCleanTop // at/above this displayed rating, no handicap
-	ratingCleanTop   = 2200           // mirrors engine.ratingCleanFloor (clean play above it)
+	// Human-scale floor above which the ladder is at-strength for a human of that
+	// rating. This is a FIDE/human-scale number (backfill matches human Glicko); it is
+	// deliberately NOT engine.ratingCleanFloor (which is on the CCRL scale, now 2600).
+	ratingCleanTop = 2200
 )
 
 // humanizedEngineRating maps a fill-in bot's displayed rating to the (weaker)

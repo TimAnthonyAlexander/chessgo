@@ -138,6 +138,36 @@ func loadLeanOrExit(spec string) *nnue.EnrichedNet {
 	return n
 }
 
+// loadLeanPairwiseOrExit parses a 'path,H,NB' lean-PAIRWISE-net spec (pairwise FT
+// head + single-layer tail + threats, chessgo_lean_pairwise) and imports it. Same
+// spec shape as --new-lean; only the tail arch differs. Empty → nil; bad spec fatal.
+func loadLeanPairwiseOrExit(spec string) *nnue.EnrichedNet {
+	if spec == "" {
+		return nil
+	}
+	parts := strings.Split(spec, ",")
+	if len(parts) != 3 {
+		fmt.Fprintf(os.Stderr, "lean-pairwise-net spec %q: want 'path,H,NB'\n", spec)
+		os.Exit(1)
+	}
+	atoi := func(s string) int {
+		n, err := strconv.Atoi(strings.TrimSpace(s))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "lean-pairwise-net spec %q: bad int %q\n", spec, s)
+			os.Exit(1)
+		}
+		return n
+	}
+	path := strings.TrimSpace(parts[0])
+	n, err := nnue.ImportBulletLeanPairwiseNet(path, atoi(parts[1]), atoi(parts[2]))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "lean-pairwise net %q: %v\n", path, err)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "lean-pairwise net: loaded %s (H=%s NB=%s) pairwise+threats\n", path, parts[1], parts[2])
+	return n
+}
+
 // loadEnrichedOrExit parses a 'path,H,D2,D3,NB' enriched-net spec (threats) and
 // imports it (a bullet float export). Empty → nil; a bad spec/path is fatal.
 func loadEnrichedOrExit(spec string, int8L1, int8FT bool) *nnue.EnrichedNet {
@@ -327,6 +357,8 @@ func cmdBenchSPRT(args []string) {
 	leanInt8FT := fs.Bool("lean-int8ft", false, "int8 the lean --new net's FT threat columns (halves per-move threat accumulator memory traffic; the movetime NPS lever)")
 	leanMoveAware := fs.Bool("lean-moveaware", false, "O(delta) move-aware push for the lean --new net (skip full re-enumeration + full-list diff; bit-exact, the movetime NPS lever)")
 	oldLeanMoveAware := fs.Bool("old-lean-moveaware", false, "also enable move-aware push on the --old-lean net (for a clean lean-vs-lean move-aware profile)")
+	newLeanPairwise := fs.String("new-lean-pairwise", "", "lean PAIRWISE+threats net for --new: 'path,H,NB' (chessgo_lean_pairwise); forces --concurrency 1")
+	oldLeanPairwise := fs.String("old-lean-pairwise", "", "lean PAIRWISE+threats net for --old: 'path,H,NB'")
 	_ = fs.Parse(args)
 
 	startPprof(*pprofAddr)
@@ -380,6 +412,30 @@ func cmdBenchSPRT(args []string) {
 		}
 		if *oldLeanMoveAware {
 			p.SetMoveAware(true) // for a clean lean-vs-lean move-aware PROFILE (both sides O(delta))
+		}
+		oldEnrichedP = p
+	}
+	// Lean-PAIRWISE nets ride the same EnrichedNet slots; they honor the same
+	// int8FT / move-aware toggles (the FT is byte-identical to lean). Override lean.
+	if p := loadLeanPairwiseOrExit(*newLeanPairwise); p != nil {
+		if *leanInt8FT {
+			tot := nnue.ThreatBlock * p.H
+			c := p.QuantizeFTInt8()
+			fmt.Fprintf(os.Stderr, "lean-pairwise int8FT: ON — %d/%d threat weights clamped (%.4f%%)\n",
+				c, tot, 100*float64(c)/float64(tot))
+		}
+		if *leanMoveAware {
+			p.SetMoveAware(true)
+			fmt.Fprintln(os.Stderr, "lean-pairwise move-aware push: ON (O(delta) incremental)")
+		}
+		newEnrichedP = p
+	}
+	if p := loadLeanPairwiseOrExit(*oldLeanPairwise); p != nil {
+		if *leanInt8FT {
+			p.QuantizeFTInt8()
+		}
+		if *oldLeanMoveAware {
+			p.SetMoveAware(true)
 		}
 		oldEnrichedP = p
 	}

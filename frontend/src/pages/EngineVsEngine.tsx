@@ -38,24 +38,16 @@ const BOOK_ARROW_COLOR = '#4c8bf5'
 
 const sideToMoveOf = (fen: string): Color => (fen.split(' ')[1] === 'b' ? 'b' : 'w')
 
-// ---- Strength display scales ---------------------------------------------------
-// Both engines are shown on a truthful CCRL-ish scale, which is NOT the raw number
-// either engine speaks internally (see docs/ENGINE_STRENGTH.md §20).
+// ---- Strength scales -----------------------------------------------------------
+// Both engines are shown on the truthful CCRL ruler (see docs/ENGINE_STRENGTH.md §20).
 //
-// gomachine: the internal rating ladder tops out at 2900 = full strength (the engine
-// clamps rating>2900 → 2900). Full-strength gomachine is ≈3400–3700 CCRL, so the slider
-// DISPLAYS a CCRL-ish number and maps it back onto the internal 700..2900 ladder the
-// backend understands. display 700→700 (a weak bot is a weak bot), display 3500→2900
-// (full strength); the stretch is larger toward the top, matching how the old ladder ran
-// below CCRL.
-const GOMA_DISPLAY_MIN = 700
-const GOMA_DISPLAY_MAX = 3500
-const GOMA_INTERNAL_MIN = 700
-const GOMA_INTERNAL_MAX = 2900
-function gomaDisplayToInternal(display: number): number {
-    const t = (display - GOMA_DISPLAY_MIN) / (GOMA_DISPLAY_MAX - GOMA_DISPLAY_MIN)
-    return Math.round(GOMA_INTERNAL_MIN + t * (GOMA_INTERNAL_MAX - GOMA_INTERNAL_MIN))
-}
+// gomachine: the engine's rating ladder is now NATIVELY CCRL — RatingMin..RatingMax =
+// 700..3500, full strength at 3500 (gomachine internal/engine/rating.go). This admin
+// page speaks raw CCRL: the slider value is sent straight through as the engine rating,
+// no conversion (the human-scale /bot picker + hub backfill convert separately, engine-
+// side). Bounds mirror the engine constants.
+const GOMA_RATING_MIN = 700
+const GOMA_RATING_MAX = 3500
 
 // Stockfish: UCI_Elo runs FAR below CCRL and SATURATES at ~3100 on our prod build
 // (UCI_Elo 3100 == 3190 == full strength). We display a truthful CCRL-ish number instead
@@ -180,7 +172,7 @@ export default function EngineVsEngine() {
                     side: moverSide,
                     movetime: budget,
                     ...(moverSide === 'gomachine'
-                        ? { rating: gomaDisplayToInternal(gomaRating) }
+                        ? { rating: gomaRating }
                         : { elo: sfIsUnleashed(sfElo) ? 0 : sfElo }),
                 })
                 if (cancelled) return
@@ -561,8 +553,8 @@ function Controls({
                 <Slider
                     value={gomaRating}
                     onChange={(_, v) => onRating(v as number)}
-                    min={GOMA_DISPLAY_MIN}
-                    max={GOMA_DISPLAY_MAX}
+                    min={GOMA_RATING_MIN}
+                    max={GOMA_RATING_MAX}
                     step={50}
                     disabled={disabledSettings}
                     sx={sliderSx}

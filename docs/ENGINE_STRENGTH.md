@@ -1266,8 +1266,19 @@ a proper single number needs an opponent we score ~40–60% against (target a ra
 CCRL entry in the ~3450–3600 range). Until then, quote the **band**, not a point, and never
 the ≈3200.
 
-**Frontend note:** the Engine-vs-Engine admin page previously topped the gomachine rating
-slider at 2900 — badly stale. Bumped to **3500** (mid-bracket, defensible) alongside this
-finding. The Stockfish ruler on that page was also re-scaled to a truthful CCRL-ish display
-(SF's raw UCI_Elo runs far below CCRL) — see the frontend/backend mapping change shipped with
-this update.
+**Engine-ladder rescale (the real fix, not a frontend trick).** `configForRating`'s ladder
+(`internal/engine/rating.go`) is now **natively CCRL**: `RatingMax` 2900 → **3500** (full
+strength is a single ceiling config — max depth/time/no-noise — so 2900 was only ever a
+*label* on the FIDE/human ruler; 3500 is that same ceiling on CCRL), `ratingCleanFloor`
+2200 → 2600 (holds the same normalized noise-onset). Full strength now *reads* 3500.
+
+**Human matchmaking is untouched** (Glicko stays FIDE-centered). Human-facing callers — hub
+backfill (`bot.go`) and the `/bot` picker (`BotGameService.php`) — route their human-scale
+rating through a new `engine.EngineRatingForHuman()` (linear `[700,2900]→[700,3500]`,
+strength-preserving) before it hits the ladder, so those bots play **identically** to before
+the rescale. Only the admin Engine-vs page speaks raw CCRL (slider 700–3500, straight
+through). The public vs-AI difficulty slider stays 700–2900 (human scale) on purpose.
+
+**Stockfish ruler** on the Engine-vs page was also re-scaled to a truthful CCRL-ish display
+(SF's raw UCI_Elo runs far below CCRL; UCI 3000 → shows ~3400, top notch → "Unleashed" =
+uncapped SF via `elo=0`).

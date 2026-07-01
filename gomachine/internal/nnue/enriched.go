@@ -94,7 +94,16 @@ type EnrichedNet struct {
 	// leanTailQB. It lets evalFromHalvesLean run v6's single FUSED SIMD screluDot
 	// per half (one clamp²·w integer pass) instead of the scalar screluActivateI16
 	// + nOut=1 strided gemvF32 — the 44%-of-node tail hotspot the profiler found.
-	TWi []int16 // NB * 2H  (bucket-contiguous int16 tail weights)
+	// For leanPairwise, TWi is [NB × H] (the pairwise output is H-wide, not 2H).
+	TWi []int16 // NB * (2H | H)  (bucket-contiguous int16 tail weights)
+
+	// leanPairwise is the LEAN tail with a PAIRWISE FT head (chessgo_lean_pairwise.rs):
+	// CReLU each FT half-pair and multiply → H/2 per perspective, concat → H, one output
+	// dot per bucket. The FT/accumulator/threat-push/int8FT/move-aware path is
+	// BYTE-IDENTICAL to lean (same InputDim→H, same threat scheme) — only the tail
+	// forward differs (evalFromHalvesLeanPairwise). TW is input-major [H × NB]; TWi is
+	// bucket-contiguous [NB × H]. Mutually exclusive with lean.
+	leanPairwise bool
 }
 
 // ThreatBlock is the threat feature-block size: (attacker 0..11, victim 0..11,
@@ -374,6 +383,9 @@ func pairwiseHalf(out []float32, half []int16) {
 // hidden layers, linear output) for the given output bucket, into the caller's
 // reused scratch (no allocation).
 func (n *EnrichedNet) evalFromHalves(stm, opp []int16, bk int, sc *enrichedScratch) int {
+	if n.leanPairwise {
+		return n.evalFromHalvesLeanPairwise(stm, opp, bk, sc)
+	}
 	if n.lean {
 		return n.evalFromHalvesLean(stm, opp, bk, sc)
 	}
