@@ -1396,3 +1396,60 @@ the 4.7 MB int8 threat table). Neither geometry nor deferral touches it — it's
 axis (narrower threat-FT half, pruned low-value (attacker,victim) classes, or an int8 accumulator to
 halve write traffic), i.e. a retrain, gated at movetime. That's the road from 2.89× toward the
 ≤1.5×-v6 gate.
+
+---
+
+## 23. Stormphrax search-patch mining run (2026-07-01) — nmpgate + qsfut ship (~+5 combined)
+
+A pure **search** pass (no net, no eval change): mine Stormphrax (`~/stormphrax`) for
+heuristics/constants we don't have, port the promising ones behind default-off `Params`
+flags (byte-identical off), and movetime-SPRT them on coalla. Three research subagents
+split the source — one on Go/NPS mechanics, one on search heuristics, one on tuned
+constants — vs our `params.go`; **6 candidates** came out and were A/B'd.
+
+**Method / decision policy (a deliberate speed/rigor trade for a queue of small patches):**
+all SPRTs on **coalla** (AVX-512 SIMD box, go1.26.4, **100 ms/move**, α=β=0.05,
+concurrency 12). Batch policy = **CAP 800 pairs + trend-accept** — accept if `LLR>0`
+**AND** the Elo-CI lower bound `>0`; drop otherwise; kill early if clearly negative. This
+clears a 6-patch queue in a few hours instead of running each to a formal bound, at the
+cost of noisier per-patch point estimates — so the **individual +12s below are cap-800
+trend-accepts, and the honest headline is the direct combined-vs-shipped SPRT (~+5), not
+the sum.** Winners were carried as explicit flags on *both* SPRT sides so no rebuild was
+needed between accepts (rebuild only to introduce a brand-new flag into the binary).
+
+### 23.1 Accepted (shipped default-on, `7ca44e0`, deployed to prod lairner)
+
+| Patch | Flags | Movetime Elo (100 ms) | Pairs | What it does |
+|---|---|---|---:|---|
+| **nmpgate** | `NmpGate`, `NmpEvalDivisor=200` | **+12.1 ± 10.0** (LLR +1.83, CI lo +2.1) | 890 | null-move pruning now requires `staticEval ≥ beta` **and** scales the reduction: `R += min((staticEval−beta)/200, 3)` — deeper null reductions when we're well above beta |
+| **qsfut** | `QSFutility`, `QSFutilityMargin=100` | **+12.4 ± 10.0** (LLR +1.89, CI lo +2.4) | 897 | qsearch **node-level** futility (Stormphrax `qsearchFp`): out of check, skip a non-SEE-winning capture (`!SEEGE(m,1)`) once `standPat+100 ≤ alpha`. **Additive** to our existing per-move delta pruning (delta subtracts the victim value; this is a node floor gated on SEE) |
+
+- The qsfut sample (897 pairs, measured **on top of** nmpgate) is the more robust of the two.
+- **Combined winner-stack vs shipped baseline: +5.2 ± 15.3 @ ~400 pairs, stable positive**
+  (the running read walked +6.3 → +6.0 → +5.2). This is **SUB-ADDITIVE** vs the summed
+  individual reads — expected, since nmpgate and qsfut are two overlapping pruning
+  heuristics, and the +12s are noisy cap-800 trend-accepts. **The honest banked gain of
+  this run is ~+5 Elo @ movetime, not +24.**
+
+### 23.2 Rejected (kept DEFAULT-OFF behind their flags as scaffolding)
+
+| Patch | Flag(s) | Result | Verdict / root cause |
+|---|---|---|---|
+| **futbase** | `FutBase` | **WASH** (+0.6 ± 12.2, LLR −0.25) | futility margin `100·depth` → base+slope (`150 + 70·depth`). No movetime win at these constants. **Knob kept for SPSA** (the base/slope split is exactly an SPSA target). |
+| **aspdelta** | `AspDelta` | **WASH/slightly neg** (−8.2 ± 28.1, LLR −0.26) | aspiration initial window 25 → 12 cp. A tighter window is not a win at 100 ms on our engine. |
+| **negext** | `NegExt` (cutnode plumbing) | **NEGATIVE** (−10.4 ± ~20, LLR −0.64) | thread a `cutnode` flag through negamax + negative extensions (`−2` cutnode / `−3` tt-fail-high) + **SOFT** multicut via `ilerp` toward beta (`T=503/1024`), replacing our hard `return singularBeta`. Implementation is correct and **race-clean** (targeted `-race` passed); it conflicts with our already-SPRT-tuned singular/multicut margins — the delicate area of the historical `lmr2+singular −67` anti-synergy (§13.2). **NOT a dead idea — REVISIT via joint SPSA of the singular margins + negative-extension params together, not a standalone A/B.** The `cutnode` plumbing is byte-identical when `NegExt` off and is now available for future work. |
+| **conthist2** | `ContHist2` | **NEGATIVE** (−24 ± 33) | Stormphrax-style continuation history — offsets `1/2/4/6` plies (we had only `1+2`), coupled `updateWithBase` gravity, per-`Searcher` tables, fed into ordering + LMR + histprune. Does **not** rescue continuation history on our heavily-pruned baseline (consistent with the original ContHist rejection, §13.2). |
+
+### 23.3 Process notes
+- **The cap-800 trend-accept policy did its job** — it let us clear a 6-patch queue in a
+  few hours by killing the washes/negatives fast instead of grinding each to a formal
+  bound; the two winners were then confirmed *together* by the combined-vs-shipped SPRT.
+  Use it for **queues of small patches**, not for a single high-stakes accept.
+- **Flags on both SPRT sides = no rebuild between accepts.** Only a brand-new flag forces
+  a rebuild; toggling an already-compiled flag does not.
+- **Sub-additivity reminder (again).** Summing individual trend-accepts overstates the
+  bundle; the direct **combined-vs-shipped** SPRT is the figure to quote (~+5 here, not the
+  +24.5 the two +12s add to). Same discipline as §13's "they compound, don't sum."
+- **Follow-ups → SPSA.** `futbase` (base/slope), and `negext` **jointly with** the singular
+  margins, are the two SPSA-revisit items this run parks; both stay wired default-off. The
+  `cutnode` plumbing landing (inert) is the prerequisite for the negext revisit.

@@ -28,6 +28,18 @@
   push and very reducible. Deferral was measured and **disproven** (~5% eval-less pushes). The
   remaining push lever is the memory-bound **column-apply** (449 ns), a net-arch/retrain axis
   (narrower threat-FT, pruned edge classes, int8 accumulator) — the road toward the ≤1.5× gate.
+- **Stormphrax search-patch mining — SHIPPED ~+5 Elo (2026-07-01, `ENGINE_STRENGTH.md §23`).**
+  Mined `~/stormphrax` for search heuristics/constants vs our `params.go`; 6 candidates A/B'd
+  on coalla (100 ms, cap-800 trend-accept). **Shipped default-on (`7ca44e0`, prod):**
+  `nmpgate` (null-move needs `staticEval≥beta` + scaled reduction `R += min((sEval−beta)/200,3)`)
+  and `qsfut` (qsearch node-level futility: skip a non-SEE-winning capture once `standPat+100≤alpha`).
+  Trend-accepts read +12 each, but the honest **combined-vs-shipped is +5.2 ± 15.3** (sub-additive —
+  two overlapping pruning heuristics; don't quote the sum). **Rejected (kept default-off as
+  scaffolding):** `futbase` (margin base+slope, wash), `aspdelta` (25→12 cp window, wash),
+  `negext` (cutnode-plumbed negative extensions + soft multicut, −10 — conflicts with our tuned
+  singular/multicut margins), `conthist2` (Stormphrax conthist, −24 — conthist still dry on our
+  pruned baseline). **SPSA-revisit follow-ups:** `futbase` base/slope, and `negext` **jointly with**
+  the singular margins (not a standalone A/B); the inert `cutnode` plumbing is now landed for it.
 
 ## The plan — ONE LADDER (not two paths). v6 = rung 0; threats = the climb.
 The "stay fast & threat-free" option is a **dead end** (ceiling ≈ where v6 is). Every
