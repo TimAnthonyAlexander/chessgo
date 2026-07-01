@@ -183,17 +183,17 @@ func DefaultParams() Params {
 		CorrHist: true,
 		// Extra corrhist keys (minor-piece + continuation), additive eval adjustment
 		// (cannot over-prune); require CorrHist on.
-		// CorrHistMinor: MOVETIME-NEUTRAL (re-validated 2026-07-01, coalla/AVX-512):
-		// −4.2 ± 13.6 Elo @ 100ms (411 pairs, LLR −0.70, pentanomial [8 104 200 88 11]) —
-		// a wash, CI spans 0. Fixed-40k control is a clear LOSS: −56.6 ± 20.1 (292 pairs,
-		// H0 REJECT). The old "+43.4 @ 100ms H1" reading was CONTAMINATED: `--movetime`
-		// is silently ignored unless `--nodes 0` is ALSO passed (nodes defaults to 25000),
-		// so that run was fixed-25000-nodes, not movetime — and even a proper fixed-nodes
-		// run on today's (reverted) baseline is negative. Kept ON only because it's a
-		// standard technique and movetime says wash (no movetime justification to remove
-		// it either — per §14.4, don't act on the fixed-nodes number). Owes a longer-TC
-		// re-test before we trust it as a positive. Default ON (unproven, movetime-neutral).
-		CorrHistMinor: true,
+		// CorrHistMinor: DEFAULT OFF — never legitimately SPRT-accepted. Re-validated
+		// 2026-07-01 (coalla/AVX-512): MOVETIME-NEUTRAL −4.2 ± 13.6 @ 100ms (411 pairs,
+		// LLR −0.70, a wash) and fixed-40k NEGATIVE −56.6 ± 20.1 (292 pairs, H0 REJECT).
+		// The old "+43.4 @ 100ms H1" that flipped it on was CONTAMINATED: `--movetime` is
+		// silently ignored unless `--nodes 0` is ALSO passed (nodes defaults to 25000), so
+		// that run was fixed-25000-nodes, not movetime. Per the project rule (default-on
+		// only if it accepts H1) an unproven, fixed-nodes-negative key doesn't ship on.
+		// It IS wired and works (it just isn't a win here — a standard technique that owes
+		// a clean longer-TC re-test before re-enabling). Off restores the byte-identical
+		// gating the corrhist_keys tests assert.
+		CorrHistMinor: false,
 		// CorrHistCont: continuation corrhist key. SPRT-REJECTED at movetime ON TOP OF
 		// IIR+CorrHistMinor: -10.6 ± 11.7 Elo @ 100ms (2026-06-30, ~H0) — redundant with
 		// the minor-piece key (stacking both double-counts the correction). Default OFF.

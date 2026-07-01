@@ -30,6 +30,7 @@ func TestCorrHistExtraKeysOffPathIdentical(t *testing.T) {
 // searched tree (proving it's actually applied, not a no-op).
 func TestCorrHistExtraKeysWired(t *testing.T) {
 	base := DefaultParams()
+	base.CorrHistMinor, base.CorrHistCont = false, false // pin off so each variant is a real on-vs-off delta, independent of the shipped default
 	variants := []struct {
 		name string
 		mut  func(p *Params)
