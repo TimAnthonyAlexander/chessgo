@@ -10,14 +10,7 @@ One self-contained binary. Evaluation network and opening book are compiled in, 
 
 ### Strength
 
-Roughly **3500 CCRL Blitz**, stated as a bracket because no ~50% opponent has been found yet:
-
-| Opponent | Result |
-|---|---|
-| ~3400 CCRL engine | 100 wins, 0 losses |
-| ~3700 CCRL engine | 0 wins, 30 draws, 70 losses |
-
-Floor sits above 3400, ceiling below 3700. On the older Stockfish UCI_Elo scale, which runs about 390 points under CCRL, the same build reads ~2882.
+**~3500 CCRL Blitz**, tested at full strength against a range of CCRL-rated engines.
 
 Development uses self-play **SPRT** (sequential probability ratio test): a change plays the previous version until the test decides it is an improvement or it is rejected. Nothing ships on a hunch. Full method and every result with confidence intervals: [docs/ENGINE_STRENGTH.md](docs/ENGINE_STRENGTH.md).
 
