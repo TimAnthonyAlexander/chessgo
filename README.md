@@ -59,15 +59,16 @@ Tablebases are optional. Point at a Syzygy set with `SYZYGY_PATH=/path/to/syzygy
 
 ## Website
 
-You do not need an account to play. Bot games, puzzles, and casual live games work as a guest. An account gives you a rating; rated games require both players to be logged in.
+No account needed to play. Bot games, puzzles, and casual live games all work as a guest. An account adds ratings, which are required for rated games (both players logged in).
 
-- **Live games**: rating-proximity matchmaking (the acceptable rating gap widens the longer you wait, capped at 400), server-side clocks that start Lichess-style (neither clock runs until both players have moved; a stalled first move aborts), reconnect and resume after closing the tab.
-- **Ratings**: Glicko-2 tracked separately for bullet, blitz, rapid, classical. Provisional until the deviation tightens; regrows when you sit out.
-- **Bot**: eleven levels (0–10). Logged in and waiting for a human, a rating-matched bot fills in after a short wait and plays at a human-like pace. Fill-in games are rated; explicit `/bot` practice games are not.
-- **Puzzles**: Lichess-seeded, matched to a separate puzzle rating, theme-filtered. Solutions are validated server-side and never sent to the browser. Includes a deterministic daily puzzle.
-- **Watch**: spectate the strongest games in progress live, without disturbing your own game.
-- **Analysis board**: runs the engine move by move over any finished game and marks the mistakes; free exploration with the engine on any position.
-- **Also**: challenge a friend by private link, board editor, player profiles, per-category leaderboards, premoves, move sounds.
+- **Live games**: rating-proximity matchmaking (the acceptable gap widens the longer you wait, capped at 400). Server-side clocks that start Lichess-style: neither clock runs until both players have moved, and a stalled first move aborts. Chat, draw and takeback offers, resign, premoves, opponent-disconnected status, reconnect and resume after closing the tab. If no human turns up, a rating-matched bot fills in and that game is rated one-sided.
+- **Ratings**: Glicko-2 tracked separately for bullet, blitz, rapid, and classical. Provisional until the deviation tightens; regrows when you sit out. A separate puzzle rating.
+- **Play the computer**: pick an opponent strength on a 700–2900 Elo slider (labelled Beginner through Master), choose White, Black, or random, and play untimed. Undo, resign, live eval bar, premoves. Unrated.
+- **Puzzles**: Puzzle-Rush-style sessions. Pick a theme (mate-in-1/2/3, fork, pin, skewer, discovered attack, sacrifice, endgame, and more) and a timed format (1:00 Sprint, 3:00 Blitz, 5:00 Marathon, or untimed), then solve as many as you can while a streak strip tracks hits and misses. Positions are Lichess-seeded and matched to your puzzle rating; solutions are validated server-side and never sent to the browser. Includes a deterministic daily puzzle.
+- **Analysis board**: load a finished game or start from any position. Streams engine eval to depth ~22, draws the best-move arrow, shows the principal variation and a move tree of the lines you explore, and reviews a whole game with per-player accuracy and inaccuracy/mistake/blunder counts. Opening explorer with book moves; auto-play and auto-best replay.
+- **Editor**: set up any position (place pieces, side to move, castling rights), watch a live eval bar update as you edit, copy the FEN, then jump straight into analysis or a bot game from that position.
+- **Watch and spectate**: a grid of the strongest live games with names, ratings, clocks, and a mini board; click to watch one move by move without disturbing your own game.
+- **Also**: challenge a friend by 6-character code or link (any time control, rated or casual), player profiles with record and rating history, per-category leaderboards, move sounds.
 
 ### Run locally
 
