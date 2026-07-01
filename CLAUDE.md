@@ -1,7 +1,10 @@
 # CLAUDE.md — chessgo
 
-A website to play chess **vs other humans** (live matchmaking with clocks) and
-**vs an AI**, with all chess rules + the AI implemented in a dedicated Go engine.
+A **production-ready chess website** + a **strong ~3500 CCRL Go chess engine**:
+play chess **vs other humans** (live matchmaking with clocks) and **vs the AI**,
+with all chess rules + the AI implemented in a dedicated Go engine (`gomachine`).
+The engine — bracketed ~3500 CCRL Blitz (floor >3400, ceiling <3700; §Status) —
+is the centerpiece; the website is the front door to it.
 
 > Read `docs/SPEC.md` for the full design and `docs/COMMANDS.md` to run/deploy.
 > This file is the fast orientation.
