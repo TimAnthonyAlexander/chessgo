@@ -1112,3 +1112,119 @@ the annealed `-64` lands (~18:00). The multilayer `chessgo_enriched-64` (+149 fd
 mt) is kept for reference (rung 4, deferred until the int8 tail is real). **Both 64-sb
 nets are undertrained** — v6 shipped at 320; a full 320-sb anneal is the production step
 once an arch wins the movetime gate.
+
+---
+
+## 17. The `--nodes 0` flag bug + what it invalidated (2026-07-01)
+
+**The methodology footgun (write it on the wall):** `bench sprt --movetime N` is
+**silently ignored unless `--nodes 0` is ALSO passed** — `nodes` defaults to 25000, and
+whenever nodes > 0 the harness runs fixed-nodes and drops `--movetime` on the floor. The
+run header tells the truth: it must say **`budget: 100ms/move`**, NOT `budget: 25000
+nodes/move`. Every "movetime" SPRT that omitted `--nodes 0` was actually a **fixed-25000-
+nodes** run — and fixed-nodes *inflates* eval-heavy features (§14.4). Two of our banked
+numbers were contaminated by exactly this:
+
+### 17.1 CorrHistMinor — re-validated, it's a WASH (not +43)
+Corrected run (coalla/AVX-512, `--new "" --old "corrhistminor=off" --nodes 0 --movetime
+100`, header confirmed `100ms/move`):
+
+| budget | Elo | pairs | LLR | pentanomial | verdict |
+|---|---|---|---|---|---|
+| **TRUE movetime (100 ms)** | **−4.2 ± 13.6** | 411 | −0.70 | [8 104 200 88 11] | **parity** (CI spans 0) |
+| fixed-40k (control) | **−56.6 ± 20.1** | 292 | −2.95 | [19 147 36 90 0] | **H0 REJECT** |
+
+The old "+43.4 ± 16.6 @ 100ms, H1" that justified shipping it was the `--nodes 0` bug —
+it ran fixed-25000-nodes. At **true** movetime CorrHistMinor has **no measurable effect**,
+and at fixed nodes on today's (reverted) baseline it's a clear loss. **Kept default-ON**
+anyway: movetime says wash, so there's no movetime justification to *remove* it either —
+acting on the −57 fixed-nodes number would be the §14.4 mistake. It's a standard technique;
+it owes a **longer-TC** re-test before we trust it as a positive. (`params.go` comment
+updated to match.)
+
+### 17.2 The 5-patch "−77.7 movetime revert" was also contaminated
+The day's search-wave re-anchor that read **−77.7 "movetime"** and drove the mass revert
+(IIR / ProbCut / Razor / LMR2 back to OFF) **also** omitted `--nodes 0` → it was fixed-
+25000-nodes, not movetime. The reverts still stand as *the conservative call* (those
+patches never showed a clean movetime win, and the multicut/lmr2 anti-synergy is real),
+but the specific "−77.7 at movetime" figure should be read as **fixed-25000-nodes**, not a
+movetime verdict. A clean movetime re-anchor of that stack is still owed.
+
+### 17.3 The rule
+**A movetime SPRT that doesn't print `100ms/move` in its header is a fixed-nodes SPRT.**
+Grep the header before trusting any "movetime" number in this doc. The v6 / lean-threats
+(v9) net gates below used scripts that *did* pass `--nodes 0` and were header-verified —
+those numbers are movetime-clean.
+
+## 18. Enriched threats net (v9 lean) — movetime PARITY with v6, a speed wall (2026-07-01)
+
+The 320-sb annealed **lean single-layer + threats** net (rung 1, QAT int8, made movetime-
+viable by **tail fusion** + **int8-FT** — see `docs/NNUE/ENRICHED_MULTILAYER.md`):
+
+| gate (vs shipped v6, header-verified) | result |
+|---|---|
+| **fixed depth 8** | **+139 Elo** — the threats eval is genuinely much stronger |
+| **vs v9-160** (same arch, half-annealed) | **+156 Elo** — the anneal matters, as expected |
+| **movetime (100 ms)** | **−13 … +9 Elo** — dead **parity** (within ±22 noise) |
+
+**Verdict: eval wall cleared, speed wall not.** The threats net is a **much** better
+evaluator (+139 fixed-depth) but the per-move threat accumulator (~22 columns/move vs v6's
+~4) makes eval ~2.25× costlier, so at equal *time* the extra eval quality is exactly
+cancelled by the lost NPS → v9 ≈ v6 at movetime. This is the same shape as v8 buckets
+(§14.3): a fixed-depth/fixed-nodes win that evaporates at movetime because the regimes
+aren't equal effort. We went **−330 → parity** via tail fusion (fused integer `screluDot`,
++1.87× NPS + a free +40 eval) and int8-FT (halves the threat-accumulator memory traffic);
+parity is the floor, not the ceiling. The lever to push *past* v6 is the two Stormphrax
+fixes in §16.4 (real int8 dot via Go asm; move-aware threat push), which cut ns/node
+without touching eval quality — i.e. buy back the NPS the threats cost.
+
+**Anchor:** since v9 is movetime-parity with v6, it anchors at the **same ≈3260 "dirty"
+CCRL Blitz** as v6 (§15) — the +139 fixed-depth does *not* move the movetime anchor. v6
+sits ≈363 Elo below Stormphrax undertown on the two-NNUE-anchor agreement; v9 shipping
+would need a real movetime win, which waits on the NPS work, not more training.
+
+## 19. Move-aware push — v9 crosses from parity to **+25 vs v6 at movetime** (2026-07-01)
+
+The push (§18) was the wall. A movetime **pprof of the lean net** (new `bench --pprof`
+flag, lean-vs-lean both move-aware) settled the internal split that the old §16.3 profile —
+taken on the *multilayer* net — had left ambiguous:
+
+- **The accumulator push is ~47% of engine CPU.** Half the node.
+- Of that, the per-move **full re-enumeration** of the threat feature set (~11%) and the
+  **O(active-features) count-array diff** over the full ~100-200-feature lists (~13%) are
+  overhead — only a handful of features actually change per move. The rest (~14%) is the
+  irreducible column add/subs (the accumulator genuinely changing). Search (TT.probe,
+  selectMove, negamax…) is ~30% but is **shared with v6**, so it never moves the v9-vs-v6 gap.
+
+**The fix (`internal/nnue/enriched_delta.go`):** compute the base+threat delta directly.
+Diff the old vs child board (O(64)) for the changed squares `D`; the affected attackers are
+the pieces on `D` plus every piece attacking a `D`-square under the old **or** new occupancy
+(a discovering slider was the square's blocker in exactly one of the two). Re-enumerate just
+those attackers' edges old-vs-new and reuse the existing `applyDiff` count-array to cancel
+the unchanged ones. **Bit-exact** vs from-scratch across ~2M nodes covering captures,
+castling, en passant, promotions — under scalar *and* AVX-512, int8-FT off and on
+(`TestEnrichedMoveAwareBitExact`, gated by the `NNUE_ASSERT` int16-equality check).
+
+| metric (coalla / AVX-512) | value |
+|---|---|
+| push cost | **1304 → 822 ns** (1.58× faster) |
+| whole-engine NPS | **≈1.2×** |
+| **movetime (100 ms) vs v6** | **+27.6 ± 24.9 @ 164 pairs** (CI excludes 0) — call it **≈+25** |
+
+**v9 went from movetime parity (§18) to a real positive.** The +139 fixed-depth eval edge
+is finally coming through the clock. Default-on for lean nets (`ImportBulletLeanNet` sets
+`moveAware`), it's strictly better and bit-exact.
+
+**The push is now tapped (measured, not assumed).** Three attempts to beat the flat
+re-enumerate-and-cancel form were all **slower** on AVX-512: (1) single-edge shortcut for
+knight/king attackers **935 ns**, (2) exact changed-edges via the XOR of each attacker's
+old/new PseudoAttacks **888 ns**. Both add per-attacker probing (extra `AttackersTo` / a
+second `PseudoAttacks`) to shrink the sub/add lists — but `applyDiff` is already cheap (SIMD
+column ops over an L1-resident count array), so the probing dominates. **The enumeration is
+the irreducible cost.** Do not re-derive these.
+
+**Where the remaining lean-specific eval cost lives (all behind a retrain):** the int16 tail
+dot (`screluDot`, ~10%) and the int16 base columns (~7%). int8-ing either needs **QAT**
+(PTQ int8 has a ~150-Elo cliff, §16.2) plus a hand-written VNNI kernel (`archsimd` has no
+VPDPBUSD/SDOT). So the next eval-speed gains fold into the next training run, not more push
+surgery. See `ENGINE_ROADMAP.md`.

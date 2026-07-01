@@ -183,10 +183,16 @@ func DefaultParams() Params {
 		CorrHist: true,
 		// Extra corrhist keys (minor-piece + continuation), additive eval adjustment
 		// (cannot over-prune); require CorrHist on.
-		// CorrHistMinor: SPRT-ACCEPTED at MOVETIME vs off — the honest eval gate (NOT
-		// fixed-nodes, which inflates eval changes): +43.4 ± 16.6 Elo @ 100ms (408
-		// pairs, 2026-06-30, H1, pentanomial [0 102 153 102 51], zero LL); separately
-		// +67.5 @ 40k nodes. Measured ON TOP of IIR. Default ON.
+		// CorrHistMinor: MOVETIME-NEUTRAL (re-validated 2026-07-01, coalla/AVX-512):
+		// −4.2 ± 13.6 Elo @ 100ms (411 pairs, LLR −0.70, pentanomial [8 104 200 88 11]) —
+		// a wash, CI spans 0. Fixed-40k control is a clear LOSS: −56.6 ± 20.1 (292 pairs,
+		// H0 REJECT). The old "+43.4 @ 100ms H1" reading was CONTAMINATED: `--movetime`
+		// is silently ignored unless `--nodes 0` is ALSO passed (nodes defaults to 25000),
+		// so that run was fixed-25000-nodes, not movetime — and even a proper fixed-nodes
+		// run on today's (reverted) baseline is negative. Kept ON only because it's a
+		// standard technique and movetime says wash (no movetime justification to remove
+		// it either — per §14.4, don't act on the fixed-nodes number). Owes a longer-TC
+		// re-test before we trust it as a positive. Default ON (unproven, movetime-neutral).
 		CorrHistMinor: true,
 		// CorrHistCont: continuation corrhist key. SPRT-REJECTED at movetime ON TOP OF
 		// IIR+CorrHistMinor: -10.6 ± 11.7 Elo @ 100ms (2026-06-30, ~H0) — redundant with
@@ -204,9 +210,10 @@ func DefaultParams() Params {
 		// pairs, 2026-06-30). The durable finding here is the ANTI-SYNERGY CAUSE: the
 		// lmr2+singular -67 was the MULTI-CUT early-return, NOT the verification LMR
 		// (cleanverify failed twice). BUT in the day's 5-patch stack the MOVETIME
-		// re-anchor was -77.7, so REVERTED to OFF. LMR2 is the PRIME reclaim candidate
-		// (its value is depth-per-second, a movetime gain) — re-gate lmr2=on,multicut=off
-		// at MOVETIME on the CorrHistMinor-only baseline before shipping.
+		// re-anchor was -77.7, so REVERTED to OFF. MOVETIME gate (lmr2=on,multicut=off,
+		// ALONE on the CorrHistMinor-only baseline) = -64.9 ± 21.6 — STRONGLY NEGATIVE:
+		// over-reduction + re-search churn outweighs the depth-per-second gain at real TC
+		// on this heavily-pruned engine. Stays OFF (the +33 fixed-nodes was inflation).
 		LMR2: false,
 		// Singular extensions: a TT move that is much better than every alternative
 		// at a reduced-depth verification search is extended a ply (and a second move
@@ -254,8 +261,9 @@ func DefaultParams() Params {
 		// IIR: REJECTED at -33.7 (all-nodes), REWORKED to PV-only → +11.0 @ 40k NODES
 		// (2216 pairs, 2026-06-30). BUT the full-stack MOVETIME re-anchor of the day's 5
 		// patches was -77.7 @ 100ms — the fixed-nodes win did not survive real TC on this
-		// already-heavily-pruned engine. REVERTED to OFF pending an INDIVIDUAL movetime
-		// gate on the CorrHistMinor-only baseline. (Lesson: gate pruners at movetime.)
+		// already-heavily-pruned engine. INDIVIDUAL movetime gate on the CorrHistMinor-
+		// only baseline = +0.3 ± 11.5 — DEAD FLAT (the +11 fixed-nodes was pure inflation).
+		// Stays OFF. (Lesson: gate pruners at movetime, not fixed-nodes.)
 		IIR: false,
 		// Frontier futility SPRT-accepted vs futility=off: +21.3 ± 12.0 Elo @ 40k
 		// nodes [0,6] (495 pairs, 2026-06-28, zero LL). Default ON.

@@ -72,6 +72,16 @@ type EnrichedNet struct {
 	int8FT bool
 	W0t8   []int8 // ThreatBlock * H, int8 threat columns at scale ftQA (clamped ±127)
 
+	// moveAware makes the incremental Push compute the base+threat feature DELTA
+	// directly from the move (affected-attacker diff, enriched_delta.go) instead of
+	// re-enumerating the child's FULL feature set and multiset-diffing it. Profiling
+	// the lean threats net at movetime showed the push is ~47% of engine CPU, of
+	// which the full enumeration (~11%) + the O(active-features) count-array diff
+	// (~13%) are pure overhead the move-aware path removes; only the actual column
+	// add/subs (the true delta) remain. Bit-identical result — validated by the
+	// NNUE_ASSERT from-scratch rebuild.
+	moveAware bool
+
 	// LEAN single-layer tail (enriched_lean path). When lean is true, the tail is
 	// v6's FAST shape: SCReLU each FT half, concat (2H), one output dot per bucket —
 	// NO pairwise, NO multilayer (L1W/L2W/OW unused). This banks the threat eval
@@ -116,6 +126,12 @@ func NewEnrichedNet(h, d2, d3, nb int) *EnrichedNet {
 		CpScale: 1,
 	}
 }
+
+// SetMoveAware toggles the O(delta) move-aware incremental push (enriched_delta.go).
+func (n *EnrichedNet) SetMoveAware(on bool) { n.moveAware = on }
+
+// MoveAware reports whether the move-aware push is enabled.
+func (n *EnrichedNet) MoveAware() bool { return n.moveAware }
 
 // quantizeFT derives the int16 accumulator weights from the float FT at ftQA.
 func (n *EnrichedNet) quantizeFT() {
@@ -458,6 +474,7 @@ func ImportBulletLeanNet(path string, h, nb int) (*EnrichedNet, error) {
 	n.CpScale = bulletSCALE // 400
 	n.quantizeFT()
 	n.quantizeLeanTail() // build the fused int16 tail (TWi)
+	n.moveAware = true   // strictly better + bit-exact (see enriched_delta.go); default on
 	return n, nil
 }
 

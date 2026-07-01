@@ -30,6 +30,10 @@ type EnrichedStack struct {
 	counts  []int16 // reusable per-feature count scratch (len net.InputDim), kept all-zero between Pushes
 	sc      enrichedScratch
 	sp      int
+
+	// move-aware push (enriched_delta.go) scratch: the small per-move sub/add
+	// feature lists for each perspective, reused across Pushes to avoid alloc.
+	dsubW, daddW, dsubB, daddB []uint16
 }
 
 type enrichedSlot struct {
@@ -50,7 +54,12 @@ func (n *EnrichedNet) NewStack(maxDepth int) *EnrichedStack {
 		data[i].fw = make([]uint16, 0, maxEnrichedActive)
 		data[i].fb = make([]uint16, 0, maxEnrichedActive)
 	}
-	return &EnrichedStack{net: n, data: data, backing: backing, counts: make([]int16, n.InputDim), sc: n.newScratch()}
+	const dcap = 4 * maxEnrichedActive // generous: base deltas + affected-attacker edges
+	return &EnrichedStack{
+		net: n, data: data, backing: backing, counts: make([]int16, n.InputDim), sc: n.newScratch(),
+		dsubW: make([]uint16, 0, dcap), daddW: make([]uint16, 0, dcap),
+		dsubB: make([]uint16, 0, dcap), daddB: make([]uint16, 0, dcap),
+	}
 }
 
 // Net returns the net this stack was built for (so the searcher can detect a swap).
@@ -104,6 +113,10 @@ func (st *EnrichedStack) applyDiff(acc []int16, parent, child []uint16) {
 // immediately BEFORE pos.DoMove (m is read from the PRE-move pos); the move is
 // replayed on a cheap value-type copy to get the child's features.
 func (st *EnrichedStack) Push(pos *chess.Position, m chess.Move) {
+	if st.net.moveAware {
+		st.pushMoveAware(pos, m)
+		return
+	}
 	src := &st.data[st.sp]
 	dst := &st.data[st.sp+1]
 	copy(dst.w, src.w)

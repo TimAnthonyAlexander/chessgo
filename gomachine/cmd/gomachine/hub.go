@@ -58,6 +58,9 @@ func cmdHub(args []string) {
 	}
 
 	h := hub.New(secret)
+	// Route eval through the v9 lean threats net if present (else v6) — BEFORE the
+	// engine pools are built, so every bot/filler engine uses it.
+	loadEnrichedDefault()
 	// Auto-discover a Syzygy tablebase and attach it BEFORE the engine pools are
 	// built, so every bot/filler engine probes endgames at the root.
 	h.SetTablebase(loadTablebaseDefault(*tbPath))

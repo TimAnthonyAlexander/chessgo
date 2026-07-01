@@ -21,7 +21,15 @@ The "stay fast & threat-free" option is a **dead end** (ceiling ≈ where v6 is)
 `§14.4`), then the next:
 
 1. **threats + single-layer tail + 8 output buckets, 320-sb, int8** → must **beat v6
-   at movetime**.  ← *rung 1, training NOW (see "What's training").*
+   at movetime**.  ← *rung 1 **DONE (2026-07-01): +25 Elo vs v6 at movetime.** Path: +139
+   fixed-depth but first movetime PARITY (speed wall — the ~22-column threat push is ~2.25×
+   v6's eval cost). The **move-aware push** (`internal/nnue/enriched_delta.go`, bit-exact,
+   1.58× faster push / ~1.2× NPS) bought back enough NPS to convert the eval edge:
+   **+27.6 ± 24.9 @ 164 pairs**, CI excludes 0. Default-on for lean nets. The push is now
+   TAPPED (3 further micro-opts measured slower — enumeration is irreducible). See
+   `ENGINE_STRENGTH.md §17–19`. **Next lever = a retrain** that bakes in int8 tail+base
+   (QAT+VNNI) and/or width/data — the remaining eval-speed lives behind training, not more
+   push surgery (analysis in progress).*
 2. **width → 1024** (cheap once int8 inference is real).
 3. **king buckets** (needs an accumulator **refresh** path — the one piece the
    absolute-color accumulator doesn't have yet; bulletformat is stm-oriented, our acc is

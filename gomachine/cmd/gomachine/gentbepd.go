@@ -37,20 +37,20 @@ func tbMaterials() []tbMaterial {
 		// DRAWN material — the "where endgames draw" half, which fights the eval's
 		// over-optimism (a lone minor scores ~+3 to the eval but is a dead draw).
 		// Deliberately heavy so the slice isn't decisive-skewed like the first pass.
-		{[]chess.PieceType{N}, nil, 4},                          // KNvK — insufficient, always draw
-		{[]chess.PieceType{B}, nil, 4},                          // KBvK — insufficient, always draw
-		{nil, []chess.PieceType{N}, 3},                          //
-		{nil, []chess.PieceType{B}, 3},                          //
-		{[]chess.PieceType{R}, []chess.PieceType{R}, 4},         // KRvKR — usually drawn
-		{[]chess.PieceType{N}, []chess.PieceType{N}, 2},         //
-		{[]chess.PieceType{B}, []chess.PieceType{B}, 2},         // (mixed colors → draws)
+		{[]chess.PieceType{N}, nil, 4},                  // KNvK — insufficient, always draw
+		{[]chess.PieceType{B}, nil, 4},                  // KBvK — insufficient, always draw
+		{nil, []chess.PieceType{N}, 3},                  //
+		{nil, []chess.PieceType{B}, 3},                  //
+		{[]chess.PieceType{R}, []chess.PieceType{R}, 4}, // KRvKR — usually drawn
+		{[]chess.PieceType{N}, []chess.PieceType{N}, 2}, //
+		{[]chess.PieceType{B}, []chess.PieceType{B}, 2}, // (mixed colors → draws)
 		// Pure king-and-pawn races — king distance is the whole game; KPvKP draws a lot.
 		{[]chess.PieceType{P}, []chess.PieceType{P}, 9},
 		{[]chess.PieceType{P}, nil, 4},
 		{nil, []chess.PieceType{P}, 4},
 		{[]chess.PieceType{P, P}, []chess.PieceType{P}, 5},
 		{[]chess.PieceType{P}, []chess.PieceType{P, P}, 5},
-		{[]chess.PieceType{P, P}, []chess.PieceType{P, P}, 4},   // 5-man pawn race, drawish
+		{[]chess.PieceType{P, P}, []chess.PieceType{P, P}, 4}, // 5-man pawn race, drawish
 		{[]chess.PieceType{P, P}, nil, 2},
 		{nil, []chess.PieceType{P, P}, 2},
 		// Minor + pawn(s) — escort/blockade with a piece on the board.

@@ -36,6 +36,7 @@ func cmdServe(args []string) {
 
 	startPprof(*pprofAddr)
 	srv := server.New(*workers, *tt, *searchThreads)
+	loadEnrichedDefault() // route eval through the v9 lean threats net if data/nnue/lean.bin is present (else v6)
 	if tb := loadTablebaseDefault(*tbPath); tb != nil {
 		srv.SetTablebase(tb)
 	}

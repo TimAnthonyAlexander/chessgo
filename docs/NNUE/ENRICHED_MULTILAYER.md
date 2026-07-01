@@ -4,7 +4,21 @@
 > well at movetime.** Reads top-to-bottom; deeper detail lives in `INT8_HANDOFF.md §8`
 > (the int8/QAT speed work), `NEXT_ARCH.md` (the architecture plan), `INT8_PORT_SPEC.md`
 > (the clean-room int8 forward), and `ENGINE_STRENGTH.md §14–15` (gating + the CCRL anchor).
-> Last updated 2026-06-30.
+> Last updated 2026-07-01.
+
+---
+
+> ## ★ OUTCOME UPDATE (2026-07-01) — RUNG 1 320-sb RESULT: movetime PARITY with v6, NOT the hoped-for clear win. The eval wall is cleared; the SPEED wall is not.
+>
+> The 320-sb anneal (the "NEXT (running)" from the 06-30 19:30 banner) finished and gated on coalla/AVX-512 (`--nodes 0`, header-verified `100ms/move`):
+> - **Fixed depth 8: +139 Elo vs v6** — the threats eval is genuinely much stronger (and +156 vs the half-annealed v9-160, so the anneal paid off as expected).
+> - **Movetime 100 ms: −13 … +9 Elo vs v6 — dead parity** (within ±22 noise). The +139 fixed-depth does **not** convert to a movetime win.
+> - **Why:** the per-move threat accumulator (~22 columns vs v6's ~4) makes eval ~2.25× costlier, so at equal *time* the eval edge is exactly cancelled by lost NPS. Same shape as v8 buckets (`ENGINE_STRENGTH.md §14.3`): a fixed-depth/nodes win that evaporates at movetime because the regimes aren't equal effort. **Retraining longer does not fix this — it's a speed wall, not an undertraining wall.**
+> - **Anchor:** v9 is movetime-parity with v6 ⇒ it anchors at the **same ≈3260 "dirty" CCRL Blitz** (§15). No shipping without a real movetime win.
+> - **The only lever now is NPS** (buy back what threats cost, without touching eval): the two §16.4 Stormphrax fixes — **real int8 dot via Go asm** (VPDPBUSD / SDOT) and **move-aware threat push** (only changed edges). Width-1024 stays deferred (doubles eval cost — wrong direction until the tail/push are fast). Full write-up: `ENGINE_STRENGTH.md §17–18`.
+>
+> **★ UPDATE (2026-07-01, later): move-aware push DONE → v9 now +25 vs v6 at movetime.** `internal/nnue/enriched_delta.go` (bit-exact, 1.58× faster push / ~1.2× NPS) converted the parity into **+27.6 ± 24.9 @ 164 pairs** (CI excludes 0). The push is now TAPPED — three further micro-opts (knight/king single-edge; exact XOR-changed-edges) all measured SLOWER, because `applyDiff` is already cheap (SIMD + L1 count array) so extra per-attacker probing dominates. The remaining eval-speed (int16 tail dot ~10%, int16 base cols ~7%) is behind a **retrain** (int8 tail/base needs QAT — PTQ has a ~150-Elo cliff — plus a VNNI kernel). Full write-up: `ENGINE_STRENGTH.md §19`.
+> - **Methodology scar (also §17):** the CorrHistMinor "+43 movetime" and the search-wave "−77.7 movetime revert" were both `--nodes 0`-contaminated (fixed-25000-nodes mislabelled movetime). A movetime SPRT whose header doesn't say `100ms/move` is a fixed-nodes SPRT. CorrHistMinor re-validated true-movetime = wash (−4.2 ± 13.6, 411 pairs).
 
 ---
 

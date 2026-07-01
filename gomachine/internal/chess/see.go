@@ -25,6 +25,12 @@ func (pos *Position) attackersTo(sq Square, occ Bitboard) Bitboard {
 	return bb & occ
 }
 
+// AttackersTo is the exported view of attackersTo: every piece of either color
+// attacking sq given occupancy occ (sliders re-probed against occ). Used by the
+// NNUE move-aware threat delta to find the pieces whose attack edges a move
+// perturbs. sq need not be occupied.
+func (pos *Position) AttackersTo(sq Square, occ Bitboard) Bitboard { return pos.attackersTo(sq, occ) }
+
 func (pos *Position) bishopsQueens() Bitboard {
 	return pos.pieces[WhiteBishop] | pos.pieces[BlackBishop] |
 		pos.pieces[WhiteQueen] | pos.pieces[BlackQueen]

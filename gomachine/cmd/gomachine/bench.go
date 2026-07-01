@@ -202,6 +202,38 @@ func loadTablebaseDefault(flagPath string) *syzygy.Tablebase {
 	return nil
 }
 
+// leanEnrichedH / leanEnrichedNB are the shipped lean-threats net's FT width and
+// output-bucket count (chessgo_lean_threats, 320-sb). Update these if the prod net's
+// architecture changes.
+const (
+	leanEnrichedH  = 512
+	leanEnrichedNB = 8
+)
+
+// loadEnrichedDefault auto-discovers the lean single-layer+threats net (v9) for the
+// prod serve/hub paths and, if found, installs it as the process-wide enriched eval
+// (nnue.SetEnriched) — the searcher then routes eval through it (search.go) instead
+// of the v6 piece-square net. Mirror of loadTablebaseDefault: the LEAN_NET_PATH env
+// override wins, else the cwd-relative data/nnue/lean.bin gitignored sidecar (working
+// dir is gomachine/ in both the dev screen and the systemd unit). The net ships in
+// the exact config the +25-Elo movetime gate used: int8-FT (QuantizeFTInt8) + the
+// move-aware push (default-on in ImportBulletLeanNet). Absent/unreadable file → silent
+// no-op, so the engine stays on v6 (safe rollback = remove the file + restart).
+func loadEnrichedDefault() {
+	path := os.Getenv("LEAN_NET_PATH")
+	if path == "" {
+		path = "data/nnue/lean.bin"
+	}
+	n, err := nnue.ImportBulletLeanNet(path, leanEnrichedH, leanEnrichedNB)
+	if err != nil {
+		return // no lean net on disk → stay on the v6 net
+	}
+	clamped := n.QuantizeFTInt8() // int8-FT: the movetime config the +25 was measured with
+	nnue.SetEnriched(n)
+	fmt.Printf("enriched eval: lean threats net loaded from %s (H=%d NB=%d, int8-FT %d clamped, move-aware=%v) — routing eval through v9\n",
+		path, leanEnrichedH, leanEnrichedNB, clamped, n.MoveAware())
+}
+
 // cmdBench dispatches `gomachine bench <subcommand>`.
 func cmdBench(args []string) {
 	if len(args) == 0 {
@@ -211,6 +243,8 @@ func cmdBench(args []string) {
 	switch args[0] {
 	case "sprt":
 		cmdBenchSPRT(args[1:])
+	case "spsa", "tune-spsa":
+		cmdBenchSPSA(args[1:])
 	case "vs-stockfish", "stockfish", "sf":
 		cmdBenchStockfish(args[1:])
 	case "game":
@@ -233,6 +267,7 @@ func benchUsage() {
 
 Usage:
   gomachine bench sprt          [flags]   self-play: does --new beat --old?
+  gomachine bench spsa          [flags]   SPSA-tune integer search margins by self-play
   gomachine bench vs-stockfish  [flags]   absolute Elo anchor vs Stockfish
   gomachine bench blunders      [flags]   mine gomachine's eval blind spots vs SF → EPD
 
@@ -271,6 +306,7 @@ func cmdBenchSPRT(args []string) {
 	seed := fs.Int("seed", 0, "shuffle opening-book order with this seed (0=none); give parallel SPRT processes distinct seeds to decorrelate their games")
 	engBookPath := fs.String("engine-book", "data/book.bin", "precomputed engine opening book consulted when a side has book=on (\"\" disables)")
 	tbPath := fs.String("tb-path", "", "Syzygy tablebase directory, probed when a side has tb=on (\"\" disables)")
+	pprofAddr := fs.String("pprof", "", "if set (e.g. 127.0.0.1:6480), serve net/http/pprof for CPU profiling this run (scrape with: go tool pprof http://addr/debug/pprof/profile?seconds=30)")
 	newThreads := fs.Int("new-threads", 1, "Lazy SMP threads for --new (use with --movetime)")
 	oldThreads := fs.Int("old-threads", 1, "Lazy SMP threads for --old")
 	newMovetime := fs.Int("new-movetime", 0, "ms/move for --new only (asymmetric TC; 0 → shared --movetime). Needs --nodes 0")
@@ -289,7 +325,11 @@ func cmdBenchSPRT(args []string) {
 	newLean := fs.String("new-lean", "", "lean single-layer+threats net for --new: 'path,H,NB' (chessgo_lean_threats); forces --concurrency 1")
 	oldLean := fs.String("old-lean", "", "lean single-layer+threats net for --old: 'path,H,NB'")
 	leanInt8FT := fs.Bool("lean-int8ft", false, "int8 the lean --new net's FT threat columns (halves per-move threat accumulator memory traffic; the movetime NPS lever)")
+	leanMoveAware := fs.Bool("lean-moveaware", false, "O(delta) move-aware push for the lean --new net (skip full re-enumeration + full-list diff; bit-exact, the movetime NPS lever)")
+	oldLeanMoveAware := fs.Bool("old-lean-moveaware", false, "also enable move-aware push on the --old-lean net (for a clean lean-vs-lean move-aware profile)")
 	_ = fs.Parse(args)
+
+	startPprof(*pprofAddr)
 
 	base := search.DefaultParams()
 	newParams, err := bench.ParseParams(base, *newSpec)
@@ -328,9 +368,19 @@ func cmdBenchSPRT(args []string) {
 			fmt.Fprintf(os.Stderr, "lean int8FT: ON — %d/%d threat weights clamped (%.4f%%)\n",
 				c, tot, 100*float64(c)/float64(tot))
 		}
+		if *leanMoveAware {
+			p.SetMoveAware(true)
+			fmt.Fprintln(os.Stderr, "lean move-aware push: ON (O(delta) incremental)")
+		}
 		newEnrichedP = p
 	}
 	if p := loadLeanOrExit(*oldLean); p != nil {
+		if *leanInt8FT {
+			p.QuantizeFTInt8() // match --new's FT precision so an A/B isolates the push change
+		}
+		if *oldLeanMoveAware {
+			p.SetMoveAware(true) // for a clean lean-vs-lean move-aware PROFILE (both sides O(delta))
+		}
 		oldEnrichedP = p
 	}
 	if (newNetP != nil || oldNetP != nil || newMultiP != nil || oldMultiP != nil || newEnrichedP != nil || oldEnrichedP != nil) && *conc != 1 {
