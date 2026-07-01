@@ -357,6 +357,8 @@ func cmdBenchSPRT(args []string) {
 	leanInt8FT := fs.Bool("lean-int8ft", false, "int8 the lean --new net's FT threat columns (halves per-move threat accumulator memory traffic; the movetime NPS lever)")
 	leanMoveAware := fs.Bool("lean-moveaware", false, "O(delta) move-aware push for the lean --new net (skip full re-enumeration + full-list diff; bit-exact, the movetime NPS lever)")
 	oldLeanMoveAware := fs.Bool("old-lean-moveaware", false, "also enable move-aware push on the --old-lean net (for a clean lean-vs-lean move-aware profile)")
+	leanNoGeometry := fs.Bool("lean-no-geometry", false, "disable the fast changed-edges threat delta on the --new enriched/lean/pairwise net (fall back to full re-enumeration; bit-identical, for the geometry A/B)")
+	oldLeanNoGeometry := fs.Bool("old-lean-no-geometry", false, "disable the fast changed-edges threat delta on the --old enriched/lean/pairwise net")
 	newLeanPairwise := fs.String("new-lean-pairwise", "", "lean PAIRWISE+threats net for --new: 'path,H,NB' (chessgo_lean_pairwise); forces --concurrency 1")
 	oldLeanPairwise := fs.String("old-lean-pairwise", "", "lean PAIRWISE+threats net for --old: 'path,H,NB'")
 	_ = fs.Parse(args)
@@ -438,6 +440,16 @@ func cmdBenchSPRT(args []string) {
 			p.SetMoveAware(true)
 		}
 		oldEnrichedP = p
+	}
+	// Geometry (changed-edges threat delta) is default-on; --lean-no-geometry /
+	// --old-lean-no-geometry fall a side back to full re-enumeration for the A/B.
+	if newEnrichedP != nil && *leanNoGeometry {
+		newEnrichedP.SetChangedEdges(false)
+		fmt.Fprintln(os.Stderr, "new enriched net: changed-edges geometry OFF (full re-enumeration)")
+	}
+	if oldEnrichedP != nil && *oldLeanNoGeometry {
+		oldEnrichedP.SetChangedEdges(false)
+		fmt.Fprintln(os.Stderr, "old enriched net: changed-edges geometry OFF (full re-enumeration)")
 	}
 	if (newNetP != nil || oldNetP != nil || newMultiP != nil || oldMultiP != nil || newEnrichedP != nil || oldEnrichedP != nil) && *conc != 1 {
 		fmt.Fprintln(os.Stderr, "note: --new-*/--old-* net flags force --concurrency 1 (the NNUE net is a process global)")

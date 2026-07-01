@@ -1282,3 +1282,117 @@ through). The public vs-AI difficulty slider stays 700–2900 (human scale) on p
 **Stockfish ruler** on the Engine-vs page was also re-scaled to a truthful CCRL-ish display
 (SF's raw UCI_Elo runs far below CCRL; UCI 3000 → shows ~3400, top notch → "Unleashed" =
 uncapped SF via `elo=0`).
+
+## 21. v10 (pairwise head) — hard NO-GO, and it proves the wall is SPEED not eval (2026-07-01)
+
+**What v10 was.** v9 (lean threats, `(768+9216)→512` single-layer) with the tail head
+swapped for **pairwise multiplication**: CReLU each FT half-pair and multiply —
+`crelu(l0[0:256])·crelu(l0[256:512])` per perspective, concat → H=512 → single output dot
+per bucket (`chessgo_lean_pairwise.rs`; Go inference `internal/nnue/enriched_lean_pairwise.go`,
+full-integer `ca·cb` dot). Motivation: a multiplicative nonlinearity (Stormphrax "dual
+activation") **and** it halves the tail input (1024→512). FT is byte-identical to v9, so the
+accumulator / threat-push / int8-FT / move-aware path is reused untouched — only the tail
+differs. Trained standalone **64-sb, fully annealed**. Go path validated bit-close before any
+game: arithmetic vs float ref ≤4.6cp, incremental==from-scratch over 346k nodes, symmetric
+queen-up evals.
+
+**Baseline caveat (important for reading the numbers).** The A/B baseline `lean_threats_64` is
+the **sb64 checkpoint of the single 320-sb v9 run** — i.e. *under-annealed* (LR barely decayed
+at 64/320). pairwise-64 is *fully* annealed. So **pairwise had an anneal *advantage*** over the
+baseline: a loss here is damning; a modest win would have to be discounted.
+
+**Results (coalla, v4 AVX-512 SIMD build):**
+
+| Gate | Config | Result | Read |
+|---|---|---|---|
+| pairwise-**32** vs lean_threats_64 | fixed 40k nodes | **−277** (101 pairs) | both under-annealed → understated early read, not a verdict |
+| pairwise-**64** vs lean_threats_64 | fixed 40k nodes (eval quality) | **−64.5 ±18** (229 pairs) | lost eval quality **with** the anneal edge → damning |
+| pairwise-**64** vs lean_threats_64 | movetime 100ms, int8FT+move-aware both | **−145 ±53** | *worse* than fixed-nodes → also slower |
+
+**Per-node cost (the smoking gun), dense midgame, v4 AVX-512:**
+
+| Net | ns/node | NPS | vs v6 | vs v9 |
+|---|---|---|---|---|
+| v6 (no threats) | 312 | 3.20M | — | — |
+| **v9** (lean threats) | 1041 | 0.96M | **3.3× slower** | — |
+| **pairwise (v10)** | 1943 | 0.51M | 6.2× slower | **1.87× slower** |
+
+pairwise is 1.87× slower per node than v9 → ~47% fewer NPS → in a movetime game it searches
+~half the nodes, which is exactly why **movetime (−145) came out worse than fixed-nodes
+(−65)**: shallower search *on top of* worse eval. Cause: the pairwise tail is a **scalar** int64
+loop (branchy clamps), where v9's tail is the fused **SIMD** `screluDot` — the half-width didn't
+help, scalar-vs-SIMD *added* ~900 ns/node. Fixable (SIMD-ize it), but **moot**: eval quality is
+−65 regardless of speed.
+
+**Verdict: hard NO-GO on both axes** — worse eval AND slower. The pairwise multiplication head
+is a regression at 64-sb on our Stockfish data. Not scaled to 320. (Nets kept: `lean_pairwise_32/64.bin`.)
+
+### 21.1 The real lesson — eval quality is NOT the wall, the threat-PUSH is
+
+Two independent signals point at the same thing:
+- v9 already has the **eval** (+170 @ fixed depth vs v6) but only **~+25 at movetime** — because
+  it is **3.3× slower per node** than v6 (the threat accumulator's memory traffic).
+- v10's whole failure was a *speed* failure amplifying a small eval regression.
+
+So the leverage is **not another eval head** — it's making the threat features **cheaper to
+carry**. Concretely, the Go-side work that must land **before any v11 retrain** (there are always
+improvements to be made):
+
+- **Cut the threat-push cost** — the `EnrichedStack` per-move accumulator update is the 3.3× tax.
+  Options: narrower/int8 threat FT (less memory moved per edge), a cheaper affected-attacker
+  delta, SoA/prefetch on the threat columns, or dropping low-value threat edge classes entirely.
+- **SIMD any scalar eval path** (the v10 tail was a reminder scalar tails silently cost ~900ns).
+- Re-anchor v9's **movetime** number after any push speedup — the fixed-depth eval is banked; the
+  only question that matters is NPS.
+
+**Gate rule going forward: a threats arch is only worth training if the per-node cost stays
+within ~1.5× of v6.** v9 is at 3.3×, v10 was at 6.2× — both are why the big fixed-depth eval
+wins don't cash out at movetime. Fix the push first; then a v11 head has room to pay for itself.
+
+## 22. Fixing the push (not the net): geometry enumeration ships **+18 Elo** on v9 (2026-07-01)
+
+Acting on §21's "fix the push first," a 4-agent investigation (our-code self-audit + two Stormphrax
+studies + a measurement adjudication) settled three things by numbers, not opinion:
+
+**Push-cost split (v9, AVX-512, dense midgame, 1040 ns/node):** enumeration **382 ns (37%)**,
+column-apply **449 ns (43%, memory-bound)**, eval tail **211 ns (20%)**. Both prior audits were
+half-right: enumeration is *not* "irreducible" (it re-enumerates full edge sets), and deferral is
+*not* a big lever here.
+
+- **Deferral — evidently DISPROVEN, skipped.** Stormphrax defers the column math to `evaluate()`
+  and skips it on pruned nodes; but instrumented searches show **only 4.9% of our pushes are
+  eval-less** (we compute a static eval nearly everywhere — RFP/futility/null-move + qsearch
+  stand-pat). Ceiling ~2-3% NPS for a whole new accumulator-bug surface. Not worth it. Their
+  "many nodes pruned before eval" premise is false for gomachine.
+- **Geometry / changed-edges enumeration — SHIPPED, +18 Elo.** `appendAttackerEdges` re-enumerated
+  every affected attacker's full edge set under old+new occupancy and cancelled; replaced with
+  **changed-edges-only** (`pushMoveAwareChanged`): non-sliders skip entirely when unaffected;
+  sliders diff only along rays through a changed square via a masked-line full diff (`LineBB`),
+  which uniformly handles discovered-slider extend/retract. **Bit-exact** (perft int16 gate,
+  int8FT on+off, all move types — no piece-class fell back). Kept the full re-enumeration behind a
+  runtime toggle (`SetChangedEdges`, default on) for A/B. Results: **push 817→682 ns (−16.5%),
+  node 1051→902 ns (−14% NPS)** on AVX-512; movetime SPRT (geometry on vs off, v9, 100 ms):
+  **+18.1 Elo, CI [+2.6, +33.6]** (279 pairs). v9's per-node cost drops **3.37× → 2.89× v6**.
+  Pure speed — identical eval, no retrain. `internal/nnue/enriched_delta.go` +
+  `internal/chess/rays.go`. *(The scalar arm64 A/B showed only ~3% — pure SIMD-dilution: the
+  same ~135 ns saving is 3% of a 4000 ns scalar push but 14% of the 900 ns AVX-512 push. Measure
+  speed on the SIMD toolchain.)*
+
+**Corrects the record:** the old "enumeration is the irreducible cost / the push is tapped"
+conclusion (from the three reverted move-aware micro-opts) was wrong — those variants *added*
+`PseudoAttacks` calls to shrink the already-cheap `applyDiff`; geometry *reduces* them. Enumeration
+was 38% of the push and very much reducible.
+
+**Also this pass — B1, a real search bug (fixed).** The LMR2 noisy-move reduction computed
+`isCapture`/`SEEGE` on the *post-`DoMove`* (child) position → `isCapture` always true, SEE on the
+wrong board. Fixed to use the pre-move `capture` bool + a pre-move SEE (`search.go`, guarded by
+`LMR2 && SEE && capture` so it's free on other nodes). **Inert in prod** (LMR2 default-off), but it
+had tainted LMR2's rejection: re-SPRT moved LMR2 **−64.9 → −11.9** (movetime, v9) — a ~53 Elo swing,
+proving the bug was material. LMR2 itself is now neutral-to-slightly-negative, so it **stays off**;
+the fix un-taints future LMR2 work.
+
+**Next on the push:** the untouched lever is the **449 ns column-apply** (memory-bound scatter over
+the 4.7 MB int8 threat table). Neither geometry nor deferral touches it — it's a **net-architecture**
+axis (narrower threat-FT half, pruned low-value (attacker,victim) classes, or an int8 accumulator to
+halve write traffic), i.e. a retrain, gated at movetime. That's the road from 2.89× toward the
+≤1.5×-v6 gate.

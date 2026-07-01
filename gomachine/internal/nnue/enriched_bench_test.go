@@ -291,3 +291,51 @@ func BenchmarkV6Eval(b *testing.B) {
 	}
 	_ = sink
 }
+
+// benchEnrichedIncrementalNode runs the real movetime per-node cost (Push→Eval→Pop,
+// int8FT + move-aware) for an already-built lean/pairwise EnrichedNet. This is the
+// number that determines NPS; 1/it is the search rate. Compare across v6
+// (BenchmarkV6IncrementalNode), v9-lean, and pairwise.
+func benchEnrichedIncrementalNode(b *testing.B, n *EnrichedNet) {
+	n.QuantizeFTInt8() // int8 threat columns — the movetime config
+	n.SetMoveAware(true)
+	pos, _ := chess.ParseFEN(midgameForBench)
+	st := n.NewStack(8)
+	benchIncrementalNode(b, pos, st.Reset, func(p *chess.Position, m chess.Move) int {
+		st.Push(p, m)
+		child := *p
+		var u chess.Undo
+		child.DoMove(m, &u)
+		v := st.Eval(&child)
+		st.Pop()
+		return v
+	})
+}
+
+// BenchmarkLeanIncrementalNode — v9 (single-layer threats) per-node cost at the
+// movetime config. Set LEAN_NET to a lean_threats raw.bin.
+func BenchmarkLeanV9Node(b *testing.B) {
+	path := os.Getenv("LEAN_NET")
+	if path == "" {
+		b.Skip("set LEAN_NET")
+	}
+	n, err := ImportBulletLeanNet(path, 512, 8)
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchEnrichedIncrementalNode(b, n)
+}
+
+// BenchmarkPairwiseIncrementalNode — the pairwise-head net per-node cost at the
+// movetime config (the scalar pairwise tail). Set LEAN_PAIRWISE_NET.
+func BenchmarkPairwiseIncrementalNode(b *testing.B) {
+	path := os.Getenv("LEAN_PAIRWISE_NET")
+	if path == "" {
+		b.Skip("set LEAN_PAIRWISE_NET")
+	}
+	n, err := ImportBulletLeanPairwiseNet(path, 512, 8)
+	if err != nil {
+		b.Fatal(err)
+	}
+	benchEnrichedIncrementalNode(b, n)
+}

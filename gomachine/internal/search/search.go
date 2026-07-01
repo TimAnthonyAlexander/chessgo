@@ -1310,6 +1310,15 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 			}
 		}
 
+		// Pre-move SEE for the LMR2 noisy-move reduction below: it must be read
+		// before DoMove empties m.From() and flips the side to move. Only computed
+		// when the LMR2 capture path will actually consult it, so non-LMR2 / non-
+		// capture nodes pay nothing.
+		seeWinning := false
+		if s.params.LMR2 && s.params.SEE && capture {
+			seeWinning = pos.SEEGE(m, 0)
+		}
+
 		var u chess.Undo
 		if s.useNNUE {
 			s.accPush(pos, m)
@@ -1354,8 +1363,8 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 						r -= hist / lmrHistoryDiv
 					} else {
 						r-- // noisy move: reduce less than a quiet
-						if s.params.SEE && isCapture(pos, m) && pos.SEEGE(m, 0) {
-							r-- // winning/equal capture: reduce even less
+						if capture && seeWinning {
+							r-- // winning/equal capture (pre-move SEE): reduce even less
 						}
 					}
 					if isPV {

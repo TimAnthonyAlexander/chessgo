@@ -15,6 +15,13 @@ var (
 
 func init() { initRays() }
 
+// LineBB returns the full line (rank, file, or diagonal) through squares a and b —
+// every square on that line, including a and b — or 0 if a and b are not aligned.
+// Exported for the NNUE move-aware threat delta (internal/nnue/enriched_delta.go),
+// which masks a slider's changed edges to the lines passing through a changed
+// square (a slider edge can only shift along a ray that crosses a changed square).
+func LineBB(a, b Square) Bitboard { return lineBB[a][b] }
+
 func initRays() {
 	// betweenBB: walk each of the 8 ray directions from a, recording the squares
 	// seen SO FAR as the "between" set for the square currently reached.

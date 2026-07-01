@@ -82,6 +82,13 @@ type EnrichedNet struct {
 	// NNUE_ASSERT from-scratch rebuild.
 	moveAware bool
 
+	// changedEdges selects the O(changed-edges) fast threat delta (pushMoveAwareChanged)
+	// over the full re-enumeration path (pushMoveAwareEnumerate). Both are bit-exact;
+	// this is a runtime toggle (default on) so the two paths can be A/B'd at movetime —
+	// the fast path is a ~14% NPS win on AVX-512, gated by the perft bit-exact test.
+	// Only consulted when moveAware is on.
+	changedEdges bool
+
 	// LEAN single-layer tail (enriched_lean path). When lean is true, the tail is
 	// v6's FAST shape: SCReLU each FT half, concat (2H), one output dot per bucket —
 	// NO pairwise, NO multilayer (L1W/L2W/OW unused). This banks the threat eval
@@ -133,6 +140,8 @@ func NewEnrichedNet(h, d2, d3, nb int) *EnrichedNet {
 		OW:      make([]float32, nb*d3),
 		OB:      make([]float32, nb),
 		CpScale: 1,
+
+		changedEdges: true, // fast threat delta on by default (bit-exact; ~14% NPS)
 	}
 }
 
@@ -141,6 +150,13 @@ func (n *EnrichedNet) SetMoveAware(on bool) { n.moveAware = on }
 
 // MoveAware reports whether the move-aware push is enabled.
 func (n *EnrichedNet) MoveAware() bool { return n.moveAware }
+
+// SetChangedEdges toggles the O(changed-edges) fast threat delta (default on). Off
+// falls back to the bit-identical full re-enumeration path (for A/B measurement).
+func (n *EnrichedNet) SetChangedEdges(on bool) { n.changedEdges = on }
+
+// ChangedEdges reports whether the fast changed-edges threat delta is enabled.
+func (n *EnrichedNet) ChangedEdges() bool { return n.changedEdges }
 
 // quantizeFT derives the int16 accumulator weights from the float FT at ftQA.
 func (n *EnrichedNet) quantizeFT() {

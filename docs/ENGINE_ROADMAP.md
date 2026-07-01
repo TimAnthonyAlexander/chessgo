@@ -14,6 +14,20 @@
   representative CCRL peer; beating CCRL-level engines (Stormphrax, Viridithas) is what
   moves us up the leaderboard. We have Stormphrax cloned at `~/stormphrax` (GPLv3 — learn
   techniques, copy no code) and built/benched on lairner (`~/stormphrax-bench/`).
+- **v10 (pairwise head) — hard NO-GO (2026-07-01, `ENGINE_STRENGTH.md §21`).** v9 tail
+  swapped for pairwise-multiply (`crelu(lo)·crelu(hi)`). Fully-annealed 64-sb, gated vs the
+  (under-annealed) `lean_threats_64` — pairwise even had the anneal edge and still lost:
+  **−65 fixed-nodes (eval), −145 movetime.** Per-node it's **1.87× slower than v9 / 6.2× v6**
+  (scalar tail vs v9's SIMD `screluDot`). Regression on both axes; not scaled. **The lesson
+  reinforced: eval quality isn't the wall — the threat-PUSH speed is (v9 is already 3.3× v6).**
+- **Geometry changed-edges enumeration — SHIPPED +18 Elo (2026-07-01, `ENGINE_STRENGTH.md §22`).**
+  Acting on "fix the push first": replaced the full threat-edge re-enumeration with a changed-edges-
+  only delta (ray/`LineBB` masked diff + discovered-slider handling). **Bit-exact**, pure speed:
+  **−14% node / −16.5% push** on AVX-512, **+18.1 Elo movetime** on v9 (SPRT). v9 per-node cost
+  **3.37× → 2.89× v6.** Corrects the old "enumeration is irreducible" claim — it was 38% of the
+  push and very reducible. Deferral was measured and **disproven** (~5% eval-less pushes). The
+  remaining push lever is the memory-bound **column-apply** (449 ns), a net-arch/retrain axis
+  (narrower threat-FT, pruned edge classes, int8 accumulator) — the road toward the ≤1.5× gate.
 
 ## The plan — ONE LADDER (not two paths). v6 = rung 0; threats = the climb.
 The "stay fast & threat-free" option is a **dead end** (ceiling ≈ where v6 is). Every
@@ -44,6 +58,16 @@ The "stay fast & threat-free" option is a **dead end** (ceiling ≈ where v6 is)
 
 **"Optimal" destination spec:** inputs `768 + threats (+ king buckets)`, width `1024`,
 `8` output buckets, **int8 everywhere + QAT**, multilayer tail (last), self-gen data.
+
+**GATE before any new head/width (v11+): fix the threat-PUSH speed first.** v10 confirmed
+(again) that a big fixed-depth eval doesn't cash out at movetime while the per-node cost is
+high: v9 is **3.3× v6/node**, v10 was **6.2×**, and both movetime numbers suffered for it.
+**Rule: a threats arch is only worth training if per-node cost stays within ~1.5× of v6.**
+So the next real work is **Go-side, not a retrain** — cut the `EnrichedStack` threat-push tax
+(narrower/int8 threat FT, cheaper affected-attacker delta, SoA/prefetch on the threat columns,
+or pruning low-value edge classes) and SIMD any scalar eval path, then re-anchor v9's movetime
+number. Only once the push is cheap does a v11 head have room to pay for itself. Benchmarks:
+`BenchmarkV6IncrementalNode` / `BenchmarkLeanV9Node` / `BenchmarkPairwiseIncrementalNode`.
 
 ## The hard-won learnings (don't re-derive these)
 - **Eval quality is NOT our problem; NPS is.** The enriched threats net is **+149 Elo
