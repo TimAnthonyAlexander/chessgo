@@ -5,3 +5,4 @@ data/nnue/*
 !data/nnue/net.nnue
 !data/nnue/net.nnue.v6-320
 data/blunders/
+*.test
