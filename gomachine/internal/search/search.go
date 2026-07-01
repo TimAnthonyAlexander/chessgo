@@ -74,11 +74,12 @@ const (
 	// Internal iterative reduction (Params.IIR): at a node this deep with no TT
 	// move to guide ordering, search a ply shallower (seeds the TT, cheaper redo).
 	iirMinDepth = 4
-	// Frontier futility pruning (Params.Futility): max depth it applies at and the
-	// per-depth centipawn margin. A late quiet is skipped when staticEval +
-	// futilityMargin·depth ≤ alpha (it almost surely can't raise alpha).
+	// Frontier futility pruning (Params.Futility): max depth it applies at. A late
+	// quiet is skipped when staticEval + FutilityBase + FutilitySlope·depth ≤ alpha
+	// (it almost surely can't raise alpha). The margin is now the tunable
+	// base+slope pair Params.FutilityBase/FutilitySlope (defaults 0/100, so it
+	// reproduces the historical futilityMargin·depth = 100·depth exactly).
 	futilityMaxDepth = 6
-	futilityMargin   = 100
 	// History pruning (Params.HistPrune): max depth it applies at and the per-depth
 	// history threshold. A late quiet is skipped when its history score (butterfly,
 	// plus continuation history when ContHist is on) is below histPruneMargin·depth.
@@ -275,6 +276,12 @@ type Searcher struct {
 	// Cleared per-search in reset() (mirrors butterfly history). See conthist.go.
 	cont     *contHist
 	contMove [maxPly]contEntry
+
+	// Stormphrax-style continuation history (Params.ContHist2). cont2 holds the four
+	// keyed tables (offsets 1/2/4/6; allocated only when ContHist2 is on) and reuses
+	// the shared contMove path stack above. Per-Searcher (per SMP worker), cleared
+	// per-search in reset() — same ownership/lifecycle as cont. See conthist2.go.
+	cont2 *contHist2
 
 	// excluded[ply] is the move barred from the search at that ply during a
 	// singular-extension verification search (Params.Singular); NullMove outside a
@@ -563,7 +570,8 @@ func (s *Searcher) reset(limits Limits, gameHistory []uint64) {
 	s.captureHist = [12][64][6]int{}
 	s.excluded = [maxPly]chess.Move{} // always NullMove outside a verification; reset for safety
 	s.inSingularVerify = false
-	s.contBegin() // continuation history: clear tables + path, per-search like butterfly
+	s.contBegin()  // continuation history: clear tables + path, per-search like butterfly
+	s.cont2Begin() // Stormphrax-style continuation history: clear its tables (after contBegin resets the shared path)
 	s.useTime = limits.MoveTime > 0
 	if s.useTime {
 		s.deadline = time.Now().Add(limits.MoveTime)
@@ -719,14 +727,14 @@ func (s *Searcher) searchRoot(pos *chess.Position, depth, prevScore int) {
 		s.accReset(pos)
 	}
 	if !s.params.Aspiration || depth < aspMinDepth || absInt(prevScore) >= mateThreshold {
-		s.negamax(pos, depth, 0, -infinity, infinity)
+		s.negamax(pos, depth, 0, -infinity, infinity, false) // root is a PV node → non-cut
 		return
 	}
-	delta := aspInitDelta
+	delta := s.params.AspInitDelta
 	alpha := maxInt(prevScore-delta, -infinity)
 	beta := minInt(prevScore+delta, infinity)
 	for {
-		score := s.negamax(pos, depth, 0, alpha, beta)
+		score := s.negamax(pos, depth, 0, alpha, beta, false) // root is a PV node → non-cut
 		if s.stop {
 			return
 		}
@@ -807,7 +815,7 @@ func (s *Searcher) RootScores(pos *chess.Position, limits Limits, gameHistory []
 		}
 		pos.DoMove(m, &u)
 		s.pushKey(pos.Key())
-		score := -s.negamax(pos, depth-1, 1, -infinity, infinity)
+		score := -s.negamax(pos, depth-1, 1, -infinity, infinity, false) // full-window root child → non-cut
 		s.popKey()
 		pos.UndoMove(m, &u)
 		if s.useNNUE {
@@ -877,7 +885,7 @@ func (s *Searcher) MultiPV(pos *chess.Position, limits Limits, gameHistory []uin
 			}
 			pos.DoMove(m, &u)
 			s.pushKey(pos.Key())
-			score := -s.negamax(pos, depth-1, 1, -infinity, infinity)
+			score := -s.negamax(pos, depth-1, 1, -infinity, infinity, false) // full-window root child → non-cut
 			pv := append([]chess.Move{m}, s.extractPV(pos, depth)...)
 			s.popKey()
 			pos.UndoMove(m, &u)
@@ -920,7 +928,26 @@ func mateDistance(score int) int {
 	return 0
 }
 
-func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int {
+// multicutFailFirmT mirrors Stormphrax's multicutFailFirmT tunable (503 of 1024):
+// the blend weight used by the SOFTENED singular multicut return (Params.NegExt).
+const multicutFailFirmT = 503
+
+// ilerpToBeta blends a (non-decisive) singular-verification score toward beta with
+// weight multicutFailFirmT/1024, mirroring Stormphrax's
+// util::ilerp<1024>(score, beta, multicutFailFirmT()) softened-multicut return
+// ((a*(kOne-t) + b*t)/kOne with a=score, b=beta, t=503, kOne=1024). Used only by
+// the NegExt-gated soft multicut, so it is inert when NegExt is off.
+func ilerpToBeta(score, beta int) int {
+	return (score*(1024-multicutFailFirmT) + beta*multicutFailFirmT) / 1024
+}
+
+// negamax is the core alpha-beta search. cutnode is the expected-node-type flag
+// (Stormphrax-style): true at a node we expect to fail high (a zero-window scout
+// child of a PV/all node), false at the root, PV nodes, and full-window
+// re-searches. It is COMPUTED and threaded at every recursive call site but only
+// CONSUMED by the Params.NegExt-gated negative-extension / soft-multicut logic, so
+// with NegExt off the whole cutnode plumbing is behavior-neutral (byte-identical).
+func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cutnode bool) int {
 	s.nodes++
 	s.checkStop()
 	if s.stop {
@@ -1084,6 +1111,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 
 	// Null-move pruning.
 	if s.params.NullMove && !inCheck && depth >= 3 && ply > 0 && beta < mateThreshold &&
+		(!s.params.NmpGate || staticEval >= beta) &&
 		pos.NonPawnMaterial(pos.SideToMove()) {
 		s.dbgNullMoves++
 		var u chess.Undo
@@ -1094,7 +1122,17 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 		s.pushKey(pos.Key())
 		s.contMove[ply] = contEntry{} // null move: child has no continuation parent
 		r := s.params.NullMoveR + depth/4
-		sc := -s.negamax(pos, depth-1-r, ply+1, -beta, -beta+1)
+		if s.params.NmpGate {
+			add := (staticEval - beta) / s.params.NmpEvalDivisor
+			if add > 3 {
+				add = 3
+			}
+			if add < 0 {
+				add = 0
+			}
+			r += add
+		}
+		sc := -s.negamax(pos, depth-1-r, ply+1, -beta, -beta+1, !cutnode) // null-move child: opposite node type (Stormphrax search.cpp:890)
 		s.popKey()
 		pos.UndoNullMove(&u)
 		if s.useNNUE {
@@ -1151,7 +1189,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 			// Cheap qsearch filter first, then confirm with a reduced-depth search.
 			score := -s.quiescence(pos, ply+1, -probcutBeta, -probcutBeta+1)
 			if score >= probcutBeta {
-				score = -s.negamax(pos, probcutDepth, ply+1, -probcutBeta, -probcutBeta+1)
+				score = -s.negamax(pos, probcutDepth, ply+1, -probcutBeta, -probcutBeta+1, !cutnode) // probcut child: opposite node type (Stormphrax search.cpp:954)
 			}
 			s.popKey()
 			pos.UndoMove(m, &u)
@@ -1209,7 +1247,9 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 		s.excluded[ply] = ttMove
 		prevVerify := s.inSingularVerify
 		s.inSingularVerify = true // CleanVerify: verify subtree uses conservative LMR
-		singScore := s.negamax(pos, rDepth, ply, singularBeta-1, singularBeta)
+		// Singular verification preserves the parent's cutnode (Stormphrax
+		// search.cpp:1093 passes `cutnode` unchanged into the verification search).
+		singScore := s.negamax(pos, rDepth, ply, singularBeta-1, singularBeta, cutnode)
 		s.inSingularVerify = prevVerify
 		s.excluded[ply] = chess.NullMove
 		if s.stop {
@@ -1227,6 +1267,31 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 				extension = 1
 			}
 			s.dbgSingular++
+		} else if s.params.NegExt {
+			// NegExt (Params.NegExt, DEFAULT OFF): the TT move is NOT singular. Mirror
+			// Stormphrax's softened multicut + negative extensions (search.cpp:1113-1119),
+			// which is exactly the machinery our own notes blame for the lmr2+singular
+			// −67 (the HARD `return singularBeta` early-return).
+			//   - !isPV && singScore >= beta  → SOFT multicut: don't hard-return
+			//     singularBeta; blend the verification score toward beta (ilerp, T=503/1024)
+			//     unless it is a mate/TB score, in which case return it raw.
+			//   - else if ttScore >= beta      → extension = -3 (TT entry itself fails high:
+			//     search the TT move SHALLOWER).
+			//   - else if cutnode              → extension = -2 (expected cut node: shallower).
+			// A negative extension feeds newDepth = depth + extension - 1 (can drop the
+			// move toward qsearch) and flips the child cutnode (see childCutnode below,
+			// Stormphrax's `cutnode |= extension < 0`).
+			if !isPV && singScore >= beta {
+				s.dbgMultiCut++
+				if absInt(singScore) < tbThreshold {
+					return ilerpToBeta(singScore, beta)
+				}
+				return singScore
+			} else if ttScore >= beta {
+				extension = -3
+			} else if cutnode {
+				extension = -2
+			}
 		} else if s.params.MultiCut && singularBeta >= beta {
 			s.dbgMultiCut++
 			return singularBeta // multi-cut: another move also beats beta
@@ -1259,7 +1324,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 		// /promotions excluded), never the first move, never when getting mated.
 		if s.params.Futility && quiet && !isPV && !inCheck && searched > 0 &&
 			depth <= futilityMaxDepth && bestScore > -mateThreshold &&
-			staticEval+futilityMargin*depth <= alpha {
+			staticEval+s.params.FutilityBase+s.params.FutilitySlope*depth <= alpha {
 			continue
 		}
 
@@ -1273,6 +1338,9 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 			hist := s.history[mover][m.To()]
 			if s.params.ContHist && s.cont != nil {
 				hist += s.contScore(ply, mover, m.To())
+			}
+			if s.params.ContHist2 && s.cont2 != nil {
+				hist += s.contScore2(ply, mover, m.To())
 			}
 			if hist < histPruneMargin*depth {
 				s.dbgHistPrune++
@@ -1331,15 +1399,36 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 		givesCheck := pos.InCheck()
 
 		// Singular extension applies to the TT move only (extension is 0 otherwise,
-		// so newDepth == depth-1 and the off-path is byte-identical).
+		// so newDepth == depth-1 and the off-path is byte-identical). A NEGATIVE
+		// extension (NegExt) drops the TT move's depth (can fall toward qsearch).
 		newDepth := depth - 1
 		if extension != 0 && m == ttMove {
 			newDepth += extension
 		}
 
+		// Stormphrax's `cutnode |= extension < 0` (search.cpp:1131): a negatively-
+		// extended move — only ever the TT move here — is searched as an expected cut
+		// node. Kept as a PER-MOVE local (childCutnode), not a mutation of the shared
+		// `cutnode` parameter, so the flip never leaks to sibling moves or the next
+		// loop iteration. extension < 0 only occurs when NegExt is on, so childCutnode
+		// == cutnode on the off-path (and cutnode is behavior-neutral there anyway).
+		childCutnode := cutnode
+		if extension < 0 && m == ttMove {
+			childCutnode = true
+		}
+
 		var sc int
 		if searched == 0 {
-			sc = -s.negamax(pos, newDepth, ply+1, -beta, -alpha)
+			// First searched move. At a PV node this is the PV child (full window,
+			// never a cut node → false, Stormphrax search.cpp:1250). At a non-PV
+			// (zero-window) node the same call is the first scout child, which is the
+			// opposite node type from the parent (!childCutnode, Stormphrax's non-LMR
+			// first-move zero-window search.cpp:1240).
+			firstCut := !childCutnode
+			if isPV {
+				firstCut = false
+			}
+			sc = -s.negamax(pos, newDepth, ply+1, -beta, -alpha, firstCut)
 		} else {
 			reduction := 0
 			// CleanVerify: while inside a singular verification subtree, fall back to
@@ -1359,6 +1448,9 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 						hist := s.history[mover][m.To()]
 						if s.params.ContHist && s.cont != nil {
 							hist += s.contScore(ply, mover, m.To())
+						}
+						if s.params.ContHist2 && s.cont2 != nil {
+							hist += s.contScore2(ply, mover, m.To())
 						}
 						r -= hist / lmrHistoryDiv
 					} else {
@@ -1398,6 +1490,9 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 					if s.params.ContHist && s.cont != nil {
 						hist += s.contScore(ply, mover, m.To())
 					}
+					if s.params.ContHist2 && s.cont2 != nil {
+						hist += s.contScore2(ply, mover, m.To())
+					}
 					r -= hist / lmrHistoryDiv
 					if r < 1 {
 						r = 1
@@ -1413,12 +1508,24 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 					}
 				}
 			}
-			sc = -s.negamax(pos, newDepth-reduction, ply+1, -alpha-1, -alpha)
+			// Zero-window scout. A REDUCED (LMR) child is searched as an expected cut
+			// node (true, matching Stormphrax's hardcoded `true` on the reduced search
+			// search.cpp:1186); an UNREDUCED scout is the opposite node type from the
+			// parent (!childCutnode, Stormphrax non-LMR zero-window search.cpp:1240).
+			scoutCut := true
+			if reduction == 0 {
+				scoutCut = !childCutnode
+			}
+			sc = -s.negamax(pos, newDepth-reduction, ply+1, -alpha-1, -alpha, scoutCut)
 			if sc > alpha && reduction > 0 {
-				sc = -s.negamax(pos, newDepth, ply+1, -alpha-1, -alpha)
+				// LMR re-search at full depth (zero window): opposite node type
+				// (!childCutnode, Stormphrax search.cpp:1205).
+				sc = -s.negamax(pos, newDepth, ply+1, -alpha-1, -alpha, !childCutnode)
 			}
 			if sc > alpha && sc < beta {
-				sc = -s.negamax(pos, newDepth, ply+1, -beta, -alpha)
+				// PV full-window re-search: a PV child, never a cut node (false,
+				// Stormphrax search.cpp:1250).
+				sc = -s.negamax(pos, newDepth, ply+1, -beta, -alpha, false)
 			}
 		}
 
@@ -1453,6 +1560,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int) int
 						s.recordKiller(ply, m)
 						s.updateQuietStats(pos, m, triedQuiets[:nQuiets], depth)
 						s.updateContHist(pos, m, triedQuiets[:nQuiets], depth, ply)
+						s.updateContHist2(pos, m, triedQuiets[:nQuiets], depth, ply)
 					} else if s.params.CaptHist && capture {
 						s.updateCaptureStats(pos, m, triedCaptures[:nCaptures], depth)
 					}
@@ -1555,6 +1663,20 @@ func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 		// (winning the victim plus a margin) cannot raise alpha.
 		if !inCheck && s.params.DeltaPrune && isCapture(pos, m) && m.Type() != chess.Promotion {
 			if standPat+captureGain(pos, m)+deltaMargin <= alpha {
+				continue
+			}
+		}
+		// Qsearch node-level futility (QSFutility; Stormphrax qsearchFp, DEFAULT OFF):
+		// out of check, if the node floor (standPat + a small margin) can't reach
+		// alpha AND this capture wins no material (SEE < 1), it's futile — skip it.
+		// ADDITIVE to the per-move delta prune above, not a duplicate: delta subtracts
+		// THIS move's optimistic victim value (standPat + captureGain + deltaMargin),
+		// whereas this is a node-level floor with NO victim term, gated instead on the
+		// capture not being a SEE-winning exchange. `continue` (not `break`) because our
+		// captures aren't strictly SEE-ordered — a later SEE-winning capture must still
+		// be searched even once the floor fails.
+		if s.params.QSFutility && !inCheck && isCapture(pos, m) && m.Type() != chess.Promotion {
+			if standPat+s.params.QSFutilityMargin <= alpha && !pos.SEEGE(m, 1) {
 				continue
 			}
 		}

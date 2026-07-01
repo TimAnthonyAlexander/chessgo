@@ -54,6 +54,24 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("nullr: %q is not an int", val)
 			}
 			base.NullMoveR = n
+		case "nmpgate", "nmpg":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.NmpGate = b
+		case "nmpdiv", "nmpevaldiv":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("nmpdiv: %q is not an int", val)
+			}
+			base.NmpEvalDivisor = n
+		case "aspdelta", "aspinitdelta":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("aspdelta: %q is not an int", val)
+			}
+			base.AspInitDelta = n
 		case "singularmargin", "smargin":
 			n, err := strconv.Atoi(val)
 			if err != nil {
@@ -284,6 +302,15 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.ContHist = b
+		case "conthist2", "ch2":
+			// Stormphrax-style continuation history (independent of conthist): keys off
+			// 1/2/4/6-ply ancestors with a coupled updateWithBase gravity; feeds quiet
+			// ordering + the LMR reduction term + the history-pruning margin.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.ContHist2 = b
 		case "lmr2":
 			// aggressive LMR: reduce captures/promotions too, earlier onset, with
 			// PV/improving/ordering-trust/SEE adjustments (supersedes LMR when on).
@@ -324,6 +351,15 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.CleanVerify = b
+		case "negext", "ne":
+			// negative extensions + soft multicut (Stormphrax): when the TT move is
+			// not singular, search it shallower (extension −2/−3) and soften the
+			// multi-cut early-return into an ilerp blend toward beta. Consumes cutnode.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.NegExt = b
 		case "iir":
 			// internal iterative reduction: reduce a ply at a deep node with no TT move.
 			b, err := parseBool(val)
@@ -377,6 +413,18 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("captseemargin: %q is not an int", val)
 			}
 			base.CaptSEEMargin = n
+		case "futbase", "futilitybase":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("futbase: %q is not an int", val)
+			}
+			base.FutilityBase = n
+		case "futslope", "futilityslope":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("futslope: %q is not an int", val)
+			}
+			base.FutilitySlope = n
 		case "captseemaxdepth", "csd":
 			n, err := strconv.Atoi(val)
 			if err != nil {
@@ -397,6 +445,20 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.Razor = b
+		case "qsfut", "qsfutility":
+			// qsearch node-level futility: out of check, skip a non-SEE-winning
+			// capture once standPat + margin can't reach alpha.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.QSFutility = b
+		case "qsfutmargin", "qsfm":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("qsfutmargin: %q is not an int", val)
+			}
+			base.QSFutilityMargin = n
 		default:
 			return base, fmt.Errorf("unknown param %q", key)
 		}
@@ -508,6 +570,9 @@ func DiffParams(base, patch search.Params) string {
 	if base.ContHist != patch.ContHist {
 		diffs = append(diffs, fmt.Sprintf("conthist: %s→%s", onoff(base.ContHist), onoff(patch.ContHist)))
 	}
+	if base.ContHist2 != patch.ContHist2 {
+		diffs = append(diffs, fmt.Sprintf("conthist2: %s→%s", onoff(base.ContHist2), onoff(patch.ContHist2)))
+	}
 	if base.LMR2 != patch.LMR2 {
 		diffs = append(diffs, fmt.Sprintf("lmr2: %s→%s", onoff(base.LMR2), onoff(patch.LMR2)))
 	}
@@ -522,6 +587,9 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.CleanVerify != patch.CleanVerify {
 		diffs = append(diffs, fmt.Sprintf("cleanverify: %s→%s", onoff(base.CleanVerify), onoff(patch.CleanVerify)))
+	}
+	if base.NegExt != patch.NegExt {
+		diffs = append(diffs, fmt.Sprintf("negext: %s→%s", onoff(base.NegExt), onoff(patch.NegExt)))
 	}
 	if base.IIR != patch.IIR {
 		diffs = append(diffs, fmt.Sprintf("iir: %s→%s", onoff(base.IIR), onoff(patch.IIR)))
@@ -547,6 +615,12 @@ func DiffParams(base, patch search.Params) string {
 	if base.CaptSEEMargin != patch.CaptSEEMargin {
 		diffs = append(diffs, fmt.Sprintf("captseemargin: %d→%d", base.CaptSEEMargin, patch.CaptSEEMargin))
 	}
+	if base.FutilityBase != patch.FutilityBase {
+		diffs = append(diffs, fmt.Sprintf("futbase: %d→%d", base.FutilityBase, patch.FutilityBase))
+	}
+	if base.FutilitySlope != patch.FutilitySlope {
+		diffs = append(diffs, fmt.Sprintf("futslope: %d→%d", base.FutilitySlope, patch.FutilitySlope))
+	}
 	if base.CaptSEEMaxDepth != patch.CaptSEEMaxDepth {
 		diffs = append(diffs, fmt.Sprintf("captseemaxdepth: %d→%d", base.CaptSEEMaxDepth, patch.CaptSEEMaxDepth))
 	}
@@ -555,6 +629,9 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.Razor != patch.Razor {
 		diffs = append(diffs, fmt.Sprintf("razor: %s→%s", onoff(base.Razor), onoff(patch.Razor)))
+	}
+	if base.AspInitDelta != patch.AspInitDelta {
+		diffs = append(diffs, fmt.Sprintf("aspdelta: %d→%d", base.AspInitDelta, patch.AspInitDelta))
 	}
 	if base.SingularMargin != patch.SingularMargin {
 		diffs = append(diffs, fmt.Sprintf("singularmargin: %d→%d", base.SingularMargin, patch.SingularMargin))
@@ -567,6 +644,18 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.CaptHist != patch.CaptHist {
 		diffs = append(diffs, fmt.Sprintf("capthist: %s→%s", onoff(base.CaptHist), onoff(patch.CaptHist)))
+	}
+	if base.QSFutility != patch.QSFutility {
+		diffs = append(diffs, fmt.Sprintf("qsfut: %s→%s", onoff(base.QSFutility), onoff(patch.QSFutility)))
+	}
+	if base.QSFutilityMargin != patch.QSFutilityMargin {
+		diffs = append(diffs, fmt.Sprintf("qsfutmargin: %d→%d", base.QSFutilityMargin, patch.QSFutilityMargin))
+	}
+	if base.NmpGate != patch.NmpGate {
+		diffs = append(diffs, fmt.Sprintf("nmpgate: %s→%s", onoff(base.NmpGate), onoff(patch.NmpGate)))
+	}
+	if base.NmpEvalDivisor != patch.NmpEvalDivisor {
+		diffs = append(diffs, fmt.Sprintf("nmpdiv: %d→%d", base.NmpEvalDivisor, patch.NmpEvalDivisor))
 	}
 	if len(diffs) == 0 {
 		return "(identical — sanity/noise run)"

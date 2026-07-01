@@ -68,6 +68,11 @@ func (s *Searcher) moveScore(pos *chess.Position, m, ttMove chess.Move, ply int)
 	if s.params.ContHist && s.cont != nil {
 		h += s.contScore(ply, mover, m.To())
 	}
+	// Stormphrax-style continuation history (independent path; both stay well below
+	// the killer tier). ContHist and ContHist2 are never on together in practice.
+	if s.params.ContHist2 && s.cont2 != nil {
+		h += s.contScore2(ply, mover, m.To())
+	}
 	return h
 }
 

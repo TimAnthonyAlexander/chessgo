@@ -19,6 +19,7 @@ type Params struct {
 	SEE              bool // order captures by SEE; prune losing captures in quiescence
 	DeltaPrune       bool // delta pruning in quiescence (skip captures that can't raise alpha)
 	Aspiration       bool // aspiration windows around the previous iteration's score
+	AspInitDelta     int  // aspiration: initial half-window (centipawns) around prevScore; widening logic unchanged. Default 25 (the old aspInitDelta const) → byte-identical. Lower = tighter opening window (Stormphrax-style)
 	RFP              bool // reverse futility pruning (static null move) near leaves
 	LMP              bool // late move pruning (move-count pruning) of late quiets near leaves
 	HistMalus        bool // history gravity update + bonus cap + malus to non-cutoff quiets
@@ -42,6 +43,7 @@ type Params struct {
 	CorrHistMinor    bool // extra corrhist key on the minor-piece (N+B) skeleton; additive eval adjustment (requires CorrHist)
 	CorrHistCont     bool // extra corrhist key: continuation correction from the stm's own prior moves at ply-2/-4 (requires CorrHist)
 	ContHist         bool // continuation history: 1-ply (countermove) + 2-ply history keyed by the preceding move(s); feeds quiet ordering + the LMR reduction term (sharpens every reduction/late-move prune)
+	ContHist2        bool // Stormphrax-style continuation history (independent of ContHist): keys off 1/2/4/6-ply ancestors with a coupled updateWithBase gravity; feeds quiet ordering + LMR reduction + history-pruning margin
 	LMR2             bool // aggressive LMR: reduce captures/promotions too, earlier onset, PV/improving/ordering-trust/SEE reduction adjustments (supersedes LMR when on)
 	Singular         bool // singular extensions: verify the TT move against all alternatives at reduced depth; extend it a ply if singular, multi-cut if a second move also beats beta
 	SingularMargin   int  // singular: verification window = ttScore - SingularMargin*depth (default 2; lower = fire singular more often)
@@ -50,8 +52,11 @@ type Params struct {
 	DoubleExt        bool // double extensions: when the TT move is singular by a wide margin (singScore < singularBeta - DoubleExtMargin) at a non-PV node, extend it 2 plies instead of 1
 	DoubleExtMargin  int  // double extensions: how far below singularBeta the verification must fail for a double extension (default 16; higher = fire double-ext less often)
 	CleanVerify      bool // singular: run the verification subtree with conservative LMR (not LMR2), even when LMR2 is on globally — so over-reduced alternatives don't pollute the singular decision. Inert unless LMR2 is on
+	NegExt           bool // negative extensions + SOFT multicut (Stormphrax): when the TT move is NOT singular, search it shallower (extension −2 at a cutnode, −3 when the TT entry itself fails high), and replace the hard multi-cut early-return with a soft blend of the verification score toward beta (ilerp). Consumes the cutnode flag. DEFAULT OFF — under SPRT; off-path is byte-identical (needs Singular on to fire)
 	IIR              bool // internal iterative reduction: at a deep node with no TT move, search a ply shallower (cheaper, and seeds the TT with a move)
 	Futility         bool // frontier futility pruning: skip a late quiet whose static eval + depth margin can't reach alpha (the fail-low side; distinct from RFP)
+	FutilityBase     int  // Futility: constant cp base of the margin (Stormphrax base+slope form). Margin = FutilityBase + FutilitySlope·depth. Default 0 → reproduces the old pure margin·depth exactly.
+	FutilitySlope    int  // Futility: per-depth cp slope of the margin. Default 100 (the old futilityMargin), so FutilityBase(0)+FutilitySlope(100)·depth == 100·depth byte-for-byte.
 	HistPrune        bool // history pruning: at a shallow non-PV node, skip a late quiet whose history score is strongly negative (move ordering already ranked it low; new signal vs LMP move-count / Futility static-eval)
 	SEEQuiet         bool // quiet-move SEE pruning: at a shallow non-PV node, skip a quiet move whose SEE is strongly negative (it hangs material to the recapture) — orthogonal to LMP move-count / Futility static-eval / HistPrune history-magnitude
 	SEEQuietMaxDepth int  // SEEQuiet: max remaining depth the prune applies at (default 6)
@@ -62,6 +67,10 @@ type Params struct {
 	ProbCut          bool // probcut: if a capture's reduced-depth search beats a raised beta, the node is almost surely a fail-high — prune it
 	Razor            bool // razoring: at very shallow depth, if static eval + margin < alpha, drop to qsearch and prune if it confirms we're below alpha
 	CaptHist         bool // capture history: per (piece,to,victim) stats refine capture ordering WITHIN the SEE good/bad tier (orthogonal to quiet butterfly history)
+	NmpGate          bool // only attempt null-move pruning when staticEval >= beta, and add an eval-margin term to the reduction R. DEFAULT OFF — under SPRT.
+	NmpEvalDivisor   int  // NMP eval-scaled reduction: R += min((staticEval-beta)/NmpEvalDivisor, NmpEvalMax). Default 200.
+	QSFutility       bool // qsearch node-level futility (Stormphrax qsearchFp): out of check, once standPat + QSFutilityMargin <= alpha, skip any remaining capture that isn't a SEE-winning exchange (all such captures are futile — the node floor can't reach alpha and the move wins no material). ADDITIVE to per-move delta pruning (which subtracts the specific victim value); this is a node-level floor gated by SEE instead. DEFAULT OFF — under SPRT.
+	QSFutilityMargin int  // QSFutility: cp margin above stand-pat for the futility base (default 100).
 }
 
 // DefaultParams returns the engine's current full-strength configuration.
@@ -106,6 +115,7 @@ func DefaultParams() Params {
 		SEE:            true,
 		DeltaPrune:     true,
 		Aspiration:     true,
+		AspInitDelta:   aspInitDelta, // 25; keeps the aspiration setup byte-identical
 		RFP:            true,
 		LMP:            true,
 		HistMalus:      true,
@@ -203,6 +213,13 @@ func DefaultParams() Params {
 		// OFF — under SPRT (best tested bundled with aggressive LMR, where better
 		// quiet ordering pays off through reductions).
 		ContHist: false,
+		// Stormphrax-style continuation history (Params.ContHist2), a stronger VARIANT
+		// of ContHist kept fully independent of it: keys off FOUR ancestor plies
+		// (1/2/4/6 back, vs 1+2) and updates with a COUPLED "updateWithBase" gravity
+		// whose decay pull is a weighted blend of the main history + all four cont
+		// entries (so the tables age together). Feeds quiet ordering, the LMR reduction
+		// term and the history-pruning margin. DEFAULT OFF — SPRT-gate separately.
+		ContHist2: false,
 		// Aggressive LMR (supersedes LMR when on): reduces captures/promotions too,
 		// earlier onset (non-PV from the 2nd move), with PV / improving /
 		// ordering-trust / SEE reduction adjustments; over-reductions are caught by
@@ -253,6 +270,17 @@ func DefaultParams() Params {
 		// lmr2+singular anti-synergy (the verification-LMR is not the cause). Matches the
 		// earlier negative result. The remaining hypothesis is the multi-cut early-return.
 		CleanVerify: false,
+		// Negative extensions + SOFT multicut (Stormphrax search.cpp:1113-1131), the
+		// modern replacement for the fragile hard multi-cut early-return our own notes
+		// blame for the lmr2+singular −67 anti-synergy. When the TT move is NOT
+		// singular: (a) if it also fails high at a non-PV node, blend the verification
+		// score toward beta (ilerp T=503/1024) instead of hard-returning singularBeta;
+		// (b) else search the TT move SHALLOWER — extension −3 when the TT entry itself
+		// fails high, −2 at an expected cut node. Requires the cutnode plumbing (now
+		// threaded through negamax) and Singular on to fire. DEFAULT OFF — under SPRT;
+		// the off-path is byte-identical (cutnode is computed/passed but only consumed
+		// here). Intended to make aggressive LMR2 safe on re-test.
+		NegExt: false,
 		// Wave 4 cheap top-ups (each behind its own flag, DEFAULT OFF — under SPRT):
 		// IIR (reduce a ply at a deep node with no TT move), frontier futility
 		// (skip late quiets that can't reach alpha), ProbCut (capture-driven
@@ -268,6 +296,10 @@ func DefaultParams() Params {
 		// Frontier futility SPRT-accepted vs futility=off: +21.3 ± 12.0 Elo @ 40k
 		// nodes [0,6] (495 pairs, 2026-06-28, zero LL). Default ON.
 		Futility: true,
+		// Futility margin in Stormphrax base+slope form. Base=0, Slope=100 reproduces
+		// the old constant futilityMargin·depth (futilityMargin was 100) byte-identically.
+		FutilityBase:  0,
+		FutilitySlope: 100,
 		// History pruning of late quiets (skip a quiet whose history score is strongly
 		// negative near the leaves). DEFAULT ON — SPRT-accepted +86.8 ± 26.8 @ 40k nodes
 		// (94 pairs, pentanomial [0 6 41 41 6]); seed maxDepth=6 / margin=-1000.
@@ -306,5 +338,19 @@ func DefaultParams() Params {
 		// Capture history: refines capture ordering within the SEE tier. DEFAULT OFF
 		// — under SPRT.
 		CaptHist: false,
+		// NMP static-eval gate + eval-scaled reduction. When on, null-move pruning
+		// only fires when staticEval >= beta, and R gets an extra
+		// min((staticEval-beta)/NmpEvalDivisor, 3) plies. DEFAULT ON — trend-accepted
+		// (Stormphrax research, 2026-07-01): +12.1 ± 10.0 Elo @ 100ms/move, 890 pairs,
+		// LLR +1.83, Elo-CI lower bound +2.1 > 0. Provisional (cap-800 trend policy);
+		// owes a strict α=β=0.05 confirmation with the other winners.
+		NmpGate:        true,
+		NmpEvalDivisor: 200,
+		// Qsearch node-level futility (Stormphrax qsearchFp). DEFAULT ON — trend-accepted
+		// (Stormphrax research, 2026-07-01): +12.4 ± 10.0 Elo @ 100ms/move, 897 pairs,
+		// LLR +1.89, Elo-CI lower bound +2.4 > 0. Provisional (cap-800 trend policy);
+		// confirmed with nmpgate in the strict end-of-queue stack SPRT.
+		QSFutility:       true,
+		QSFutilityMargin: 100,
 	}
 }
