@@ -39,8 +39,7 @@ const COLUMNS: FooterColumn[] = [
     },
     {
         title: 'About',
-        // Placeholder GitHub URL — fixed during wiring.
-        links: [{ label: 'GitHub', to: 'https://github.com', external: true }],
+        links: [{ label: 'GitHub', to: 'https://github.com/timanthonyalexander/chessgo', external: true }],
     },
 ]
 

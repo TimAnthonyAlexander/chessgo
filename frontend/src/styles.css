@@ -54,6 +54,16 @@ body,
     margin: 0;
 }
 
+/* Global guard: never let page content produce a horizontal scrollbar / zoom-out
+   on mobile. `clip` kills sideways overflow without creating a scroll container or
+   affecting vertical scrolling; portaled overlays (MUI menus/dialogs/tooltips) live
+   outside #root so they are never clipped. Layouts should still size correctly on
+   their own — this is a backstop, not a substitute for min-width:0 + wrapping. */
+html,
+body {
+    overflow-x: clip;
+}
+
 body {
     background: var(--bg);
     /* Faint atmospheric depth — a single soft radial, no gradients-on-white cliché */

@@ -84,6 +84,7 @@ export default function BoardPage({ children, left, right, evalBar }: BoardPageP
                     justifyContent: 'center',
                     width: { xs: '100%', md: 'fit-content' },
                     maxWidth: '100%',
+                    minWidth: 0,
                     mx: 'auto',
                 }}
             >
@@ -101,6 +102,7 @@ export default function BoardPage({ children, left, right, evalBar }: BoardPageP
                         alignItems: 'stretch',
                         alignSelf: 'start',
                         width: { xs: '100%', md: BOARD_SIZE },
+                        minWidth: 0,
                         // Extra left gap ONLY when the eval bar is shown, so the floated bar
                         // claims that space (instead of the right card being left far out).
                         // The board nudges a few px right; with no bar both gaps are equal.
@@ -155,6 +157,7 @@ function SideColumn({ children, order }: { children?: ReactNode; order: { xs: nu
                 order,
                 width: { xs: '100%', md: `${SIDE_W}px` },
                 height: { md: BOARD_SIZE },
+                minWidth: 0,
                 minHeight: 0,
                 display: 'flex',
                 flexDirection: 'column',
