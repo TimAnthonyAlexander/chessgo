@@ -332,6 +332,10 @@ export interface AnalysisSide {
 
 export interface GameAnalysis {
     version: number
+    /** True when the game's variant (Chess960, Duck Chess) isn't analyzable by the
+     *  standard engine — `plies` is empty and the client shows a notice instead. */
+    unsupported?: boolean
+    variant?: Variant
     hubGameId: string
     result: string
     reason: string

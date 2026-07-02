@@ -31,6 +31,7 @@ import MoveTree from '../components/MoveTree'
 import OpeningPanel from '../components/OpeningPanel'
 import { analyze, getGameAnalysis, sfAnalyze, type GameAnalysis } from '../api/client'
 import type { Color } from '../api/client'
+import { VARIANT_LABEL } from '../lib/variants'
 import {
     type Tree,
     type TreeNode,
@@ -186,6 +187,14 @@ export default function Analysis() {
             try {
                 const a = await getGameAnalysis(id)
                 if (cancelled) return
+                if (a.unsupported) {
+                    // Chess960 / Duck Chess games can't be replayed by the standard
+                    // full-game analyzer — show a clear notice instead of an error.
+                    const label = a.variant ? VARIANT_LABEL[a.variant] : 'this variant'
+                    setLoadError(`Engine analysis isn't available for ${label} games yet.`)
+                    setLoading(false)
+                    return
+                }
                 const built = buildFromAnalysis(a.startFen, a.plies)
                 setTree(built.tree)
                 setCurrentId(built.tree.rootId)

@@ -44,6 +44,16 @@ class GameAnalysisService
      */
     public function analyze(Game $game): array
     {
+        // The full-game analyzer is standard-chess only: it replays the moves
+        // through the standard engine and streams standard evals. Chess960 moves
+        // would replay from the wrong start (silently wrong or illegal) and Duck
+        // Chess uses composite "<piece>:<duck>" moves the standard engine rejects
+        // outright. Rather than 502 on those, return an explicit "unsupported"
+        // payload the client renders as a friendly notice.
+        if ($game->variant !== '' && $game->variant !== 'standard') {
+            return $this->unsupported($game);
+        }
+
         $cached = $game->getAnalysis();
         if ($cached !== null && ($cached['version'] ?? null) === self::VERSION) {
             return $cached;
@@ -64,6 +74,34 @@ class GameAnalysisService
         $game->save();
 
         return $payload;
+    }
+
+    /**
+     * A minimal payload for a game the standard analyzer can't handle (Chess960,
+     * Duck Chess). Not cached — it's cheap and the flag lets the client show a
+     * clear "not available for this variant" state instead of an error.
+     *
+     * @return array<string, mixed>
+     */
+    private function unsupported(Game $game): array
+    {
+        return [
+            'version' => self::VERSION,
+            'unsupported' => true,
+            'variant' => $game->variant,
+            'hubGameId' => $game->hub_game_id,
+            'result' => $game->result,
+            'reason' => $game->reason,
+            'pool' => $game->pool,
+            'rated' => $game->rated,
+            'whiteName' => $game->white_name,
+            'blackName' => $game->black_name,
+            'whiteIsBot' => $game->white_is_bot,
+            'blackIsBot' => $game->black_is_bot,
+            'startFen' => self::START_FEN,
+            'plies' => [],
+            'summary' => $this->summary([]),
+        ];
     }
 
     /**
