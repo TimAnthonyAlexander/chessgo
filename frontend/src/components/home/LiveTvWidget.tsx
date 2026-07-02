@@ -7,6 +7,12 @@ import { getLiveGames, type LiveGameSummary, type LiveSide } from '../../api/cli
 import { categoryFor, CATEGORY_META } from '../../lib/timeControl'
 
 const POLL_MS = 6000
+// The very first /watch poll is also what wakes the hub's JIT filler pool
+// (it stamps lastWatchActivity), so an empty first response is expected while
+// those engine-vs-engine games spin up. Retry a few times on a short backoff
+// before falling back to "no live games", so the card warms up instead of
+// blanking out on load. The steady POLL_MS loop is the longer-term backstop.
+const WARMUP_BACKOFF_MS = [0, 1200, 2600]
 const STATUS_GREEN = 'var(--live)'
 
 /** mm:ss from a millisecond clock value (clamped at zero). */
@@ -96,22 +102,61 @@ export default function LiveTvWidget() {
 
     useEffect(() => {
         let alive = true
-        const poll = async () => {
+        let intervalId: number | undefined
+        let timeoutId: number | undefined
+
+        // One fetch. Returns the top game, or null on empty/transient error so
+        // the caller decides whether to retry or fall back.
+        const fetchTop = async (): Promise<LiveGameSummary | null> => {
             try {
                 const res = await getLiveGames()
-                if (!alive) return
-                setGame(res.games[0] ?? null)
+                return res.games[0] ?? null
             } catch {
-                // keep the last value on transient errors
-            } finally {
-                if (alive) setLoading(false)
+                return null
             }
         }
-        void poll()
-        const id = window.setInterval(() => void poll(), POLL_MS)
+
+        // Initial warm-up: retry an empty result a couple of times (the first
+        // poll is what triggers filler creation) before showing the empty
+        // state. As soon as any attempt returns a game we render it.
+        const warmUp = async () => {
+            for (const delay of WARMUP_BACKOFF_MS) {
+                if (!alive) return
+                if (delay > 0) {
+                    await new Promise<void>((resolve) => {
+                        timeoutId = window.setTimeout(resolve, delay)
+                    })
+                    if (!alive) return
+                }
+                const top = await fetchTop()
+                if (!alive) return
+                if (top) {
+                    setGame(top)
+                    setLoading(false)
+                    return
+                }
+            }
+            // Exhausted the warm-up attempts with nothing to show yet — reveal
+            // the empty state; the steady poll below still keeps trying.
+            if (alive) setLoading(false)
+        }
+
+        // Steady-state poll keeps the featured game fresh and keeps the hub's
+        // watch window alive (so fillers keep flowing while we're on screen).
+        const startPolling = () => {
+            intervalId = window.setInterval(async () => {
+                const top = await fetchTop()
+                if (alive) setGame(top)
+            }, POLL_MS)
+        }
+
+        void warmUp()
+        startPolling()
+
         return () => {
             alive = false
-            window.clearInterval(id)
+            if (intervalId) window.clearInterval(intervalId)
+            if (timeoutId) window.clearTimeout(timeoutId)
         }
     }, [])
 
