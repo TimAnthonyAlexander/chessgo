@@ -22,7 +22,6 @@ import RecentGamesWidget from '../components/home/RecentGamesWidget'
 import SignUpWidget from '../components/home/SignUpWidget'
 import LeaderboardWidget from '../components/home/LeaderboardWidget'
 import ChallengeDialog from '../components/ChallengeDialog'
-import CustomTimeDialog from '../components/CustomTimeDialog'
 import type { Variant } from '../lib/variants'
 import { DuckGlyph } from '../components/DuckGlyph'
 
@@ -56,7 +55,6 @@ export default function Home() {
     const live = s.game
     const [search, setSearch] = useState<string | null>(null)
     const [challengeOpen, setChallengeOpen] = useState(false)
-    const [customOpen, setCustomOpen] = useState(false)
 
     // When the hub matches us, jump into the live game.
     useEffect(() => {
@@ -238,7 +236,6 @@ export default function Home() {
                                         queue(`Duck Chess · ${DUCK_POOL}`, DUCK_POOL, 'duck')
                                     }
                                 />
-                                <CustomCell onClick={() => setCustomOpen(true)} />
                             </Box>
                         </Panel>
                     </Box>
@@ -318,11 +315,6 @@ export default function Home() {
                 </DialogActions>
             </Dialog>
 
-            <CustomTimeDialog
-                open={customOpen}
-                onClose={() => setCustomOpen(false)}
-                onStart={(pool) => queue(`Custom · ${pool}`, pool)}
-            />
             <ChallengeDialog open={challengeOpen} onClose={() => setChallengeOpen(false)} />
         </Box>
     )
@@ -540,36 +532,6 @@ function DuckCell({ onClick }: { onClick: () => void }) {
                     {DUCK_POOL} · Blitz
                 </Typography>
             </Box>
-        </Box>
-    )
-}
-
-function CustomCell({ onClick }: { onClick: () => void }) {
-    return (
-        <Box
-            onClick={onClick}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    onClick()
-                }
-            }}
-            sx={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                py: { xs: 2.5, md: 3 },
-                border: '1px dashed var(--line)',
-                borderRadius: '12px',
-                cursor: 'pointer',
-                color: 'var(--muted)',
-                transition: 'color 0.12s ease, border-color 0.12s ease',
-                '&:hover': { color: 'var(--accent)', borderColor: 'var(--accent-line)' },
-            }}
-        >
-            <Typography sx={{ fontSize: { xs: 16, md: 17 }, fontWeight: 500 }}>Custom</Typography>
         </Box>
     )
 }
