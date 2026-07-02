@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Box, Typography, Button } from '@mui/material'
-import { Target } from 'lucide-react'
+import { Box, Typography } from '@mui/material'
 import { useNavigate } from 'react-router-dom'
 import { Panel, PanelHead } from './Panel'
 import MiniBoard from '../MiniBoard'
@@ -49,44 +48,54 @@ export default function DailyPuzzleWidget() {
             sx={
                 interactive
                     ? {
-                          transition: 'transform 0.12s ease, border-color 0.12s ease',
-                          '&:hover': {
-                              transform: 'translateY(-2px)',
-                              borderColor: 'var(--accent-line)',
-                          },
+                          cursor: 'pointer',
+                          transition: 'border-color 0.12s ease',
+                          '&:hover': { borderColor: 'var(--accent-line)' },
                       }
                     : undefined
             }
         >
-            <PanelHead title="Daily puzzle" />
-
             {error ? (
-                <Typography
-                    sx={{ fontSize: 13, color: 'var(--muted)', py: 4, textAlign: 'center' }}
-                >
-                    Couldn't load today's puzzle
-                </Typography>
-            ) : !puzzle ? (
-                <Box
-                    sx={{
-                        aspectRatio: '1',
-                        width: '100%',
-                        borderRadius: '10px',
-                        bgcolor: 'var(--surface-2)',
-                        border: '1px solid var(--line-soft)',
-                    }}
-                />
-            ) : (
                 <>
+                    <PanelHead title="Daily puzzle" />
+                    <Typography
+                        sx={{ fontSize: 13, color: 'var(--muted)', py: 4, textAlign: 'center' }}
+                    >
+                        Couldn't load today's puzzle
+                    </Typography>
+                </>
+            ) : !puzzle ? (
+                <>
+                    <PanelHead title="Daily puzzle" />
                     <Box
-                        role="button"
-                        onClick={goSolve}
                         sx={{
-                            cursor: 'pointer',
+                            aspectRatio: '1',
+                            width: '100%',
+                            borderRadius: '10px',
+                            bgcolor: 'var(--surface-2)',
+                            border: '1px solid var(--line-soft)',
+                        }}
+                    />
+                </>
+            ) : (
+                <Box
+                    role="button"
+                    tabIndex={0}
+                    onClick={goSolve}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            goSolve()
+                        }
+                    }}
+                    sx={{ outline: 'none' }}
+                >
+                    <PanelHead title="Daily puzzle" />
+                    <Box
+                        sx={{
                             borderRadius: '10px',
                             border: '1px solid var(--line-soft)',
                             overflow: 'hidden',
-                            display: 'block',
                         }}
                     >
                         <MiniBoard
@@ -105,7 +114,14 @@ export default function DailyPuzzleWidget() {
                             mt: 1.75,
                         }}
                     >
-                        <Typography sx={{ fontFamily: 'var(--font-display)', fontSize: 14, color: 'var(--text)', fontWeight: 600 }}>
+                        <Typography
+                            sx={{
+                                fontFamily: 'var(--font-display)',
+                                fontSize: 14,
+                                color: 'var(--text)',
+                                fontWeight: 600,
+                            }}
+                        >
                             {puzzle.color === 'w' ? 'White to move' : 'Black to move'}
                         </Typography>
                         <Typography
@@ -140,17 +156,7 @@ export default function DailyPuzzleWidget() {
                             ))}
                         </Box>
                     )}
-
-                    <Button
-                        variant="contained"
-                        fullWidth
-                        startIcon={<Target size={16} />}
-                        onClick={goSolve}
-                        sx={{ mt: 2, textTransform: 'none', fontWeight: 600 }}
-                    >
-                        Solve
-                    </Button>
-                </>
+                </Box>
             )}
         </Panel>
     )

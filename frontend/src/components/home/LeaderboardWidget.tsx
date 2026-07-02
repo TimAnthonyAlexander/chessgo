@@ -16,7 +16,7 @@ function apiKey(cat: Category): 'bullet' | 'blitz' | 'rapid' | 'classical' {
 type LoadState =
     { kind: 'loading' } | { kind: 'error' } | { kind: 'ready'; entries: LeaderboardEntry[] }
 
-/** Homepage sidebar widget: per-category top-10 leaderboard with a category toggle.
+/** Homepage sidebar widget: per-category top-5 leaderboard with a category toggle.
  * Self-contained — fetches its own data and re-fetches when the category changes. */
 export default function LeaderboardWidget() {
     const navigate = useNavigate()
@@ -29,7 +29,7 @@ export default function LeaderboardWidget() {
         getLeaderboard(apiKey(category))
             .then((res) => {
                 if (cancelled) return
-                setState({ kind: 'ready', entries: res.entries.slice(0, 10) })
+                setState({ kind: 'ready', entries: res.entries.slice(0, 5) })
             })
             .catch(() => {
                 if (cancelled) return
@@ -168,7 +168,7 @@ export default function LeaderboardWidget() {
 function SkeletonRows() {
     return (
         <Box>
-            {Array.from({ length: 8 }).map((_, i) => (
+            {Array.from({ length: 5 }).map((_, i) => (
                 <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 0.9 }}>
                     <Box
                         sx={{

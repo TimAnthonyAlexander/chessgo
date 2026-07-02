@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Box, Typography, Button } from '@mui/material'
-import { Eye } from 'lucide-react'
+import { Box, Typography } from '@mui/material'
 import { useNavigate } from 'react-router-dom'
 import { Panel, PanelHead } from './Panel'
 import MiniBoard from '../MiniBoard'
@@ -187,33 +186,11 @@ export default function LiveTvWidget() {
     return (
         <Panel
             sx={{
-                transition: 'transform 0.12s ease, border-color 0.12s ease',
-                '&:hover': { transform: 'translateY(-2px)', borderColor: 'var(--accent-line)' },
+                cursor: 'pointer',
+                transition: 'border-color 0.12s ease',
+                '&:hover': { borderColor: 'var(--accent-line)' },
             }}
         >
-            {head}
-            <Box
-                sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 0.75,
-                    mb: 1,
-                    color: 'var(--text-dim)',
-                }}
-            >
-                <Icon size={14} />
-                <Typography
-                    sx={{
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: 11,
-                        letterSpacing: '0.14em',
-                        fontWeight: 600,
-                        textTransform: 'uppercase',
-                    }}
-                >
-                    {cat} · {game.pool}
-                </Typography>
-            </Box>
             <Box
                 role="button"
                 tabIndex={0}
@@ -224,37 +201,56 @@ export default function LiveTvWidget() {
                         goWatch()
                     }
                 }}
-                sx={{
-                    border: '1px solid var(--line-soft)',
-                    borderRadius: '10px',
-                    overflow: 'hidden',
-                    bgcolor: 'var(--surface-2)',
-                    cursor: 'pointer',
-                    outline: 'none',
-                }}
+                sx={{ outline: 'none' }}
             >
-                <PlayerStrip
-                    side={game.black}
-                    clockMs={game.clockB}
-                    toMove={game.sideToMove === 'b'}
-                />
-                <MiniBoard fen={game.fen} lastMove={game.lastMove || undefined} orientation="w" />
-                <PlayerStrip
-                    side={game.white}
-                    clockMs={game.clockW}
-                    toMove={game.sideToMove === 'w'}
-                />
+                {head}
+                <Box
+                    sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 0.75,
+                        mb: 1,
+                        color: 'var(--text-dim)',
+                    }}
+                >
+                    <Icon size={14} />
+                    <Typography
+                        sx={{
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: 11,
+                            letterSpacing: '0.14em',
+                            fontWeight: 600,
+                            textTransform: 'uppercase',
+                        }}
+                    >
+                        {cat} · {game.pool}
+                    </Typography>
+                </Box>
+                <Box
+                    sx={{
+                        border: '1px solid var(--line-soft)',
+                        borderRadius: '10px',
+                        overflow: 'hidden',
+                        bgcolor: 'var(--surface-2)',
+                    }}
+                >
+                    <PlayerStrip
+                        side={game.black}
+                        clockMs={game.clockB}
+                        toMove={game.sideToMove === 'b'}
+                    />
+                    <MiniBoard
+                        fen={game.fen}
+                        lastMove={game.lastMove || undefined}
+                        orientation="w"
+                    />
+                    <PlayerStrip
+                        side={game.white}
+                        clockMs={game.clockW}
+                        toMove={game.sideToMove === 'w'}
+                    />
+                </Box>
             </Box>
-
-            <Button
-                variant="contained"
-                fullWidth
-                startIcon={<Eye size={16} />}
-                onClick={goWatch}
-                sx={{ mt: 2, textTransform: 'none', fontWeight: 600 }}
-            >
-                Watch live
-            </Button>
         </Panel>
     )
 }
