@@ -50,23 +50,40 @@ class BotGameService
      * start, or picks the side that is not to move in a custom `$startFen`.
      *
      * @param string|null $startFen Optional custom starting position (e.g. carried
-     *   over from the analysis board). Null = standard start.
+     *   over from the analysis board). Null = standard start. Ignored for Duck Chess,
+     *   which always starts from the standard position with no duck placed.
+     * @param string $variant 'standard' | 'chess960' | 'duck'. Chess960 uses the
+     *   standard engine flow (the engine parses 960 FENs); Duck Chess uses the
+     *   dedicated /duck/* endpoints.
      * @throws \InvalidArgumentException if the custom FEN is invalid or already finished.
      */
-    public function create(int $rating, string $humanColor, ?string $startFen = null): BotGame
+    public function create(int $rating, string $humanColor, ?string $startFen = null, string $variant = 'standard'): BotGame
     {
         $game = new BotGame();
+        $game->variant = in_array($variant, ['standard', 'chess960', 'duck'], true) ? $variant : 'standard';
         $game->rating = max(self::RATING_MIN, min(self::RATING_MAX, $rating));
         $game->human_color = $humanColor === 'b' ? 'b' : 'w';
         $game->setMoves([]);
         $game->setHistory([]);
 
-        if ($startFen !== null && $startFen !== '') {
-            $this->applyStartFen($game, $startFen);
-        }
+        if ($game->variant === 'duck') {
+            // Duck Chess always starts from the standard position (the model
+            // defaults: standard start FEN, duck=null, White to move); a custom
+            // start FEN is not supported. Open with a duck bot move if the human
+            // is Black.
+            if ($game->status === 'ongoing' && $game->side_to_move !== $game->human_color) {
+                $this->playDuckBot($game);
+            }
+        } else {
+            // Standard and Chess960 share the same flow: applyStartFen validates
+            // any provided FEN via the engine (which now understands 960 castling).
+            if ($startFen !== null && $startFen !== '') {
+                $this->applyStartFen($game, $startFen);
+            }
 
-        if ($game->status === 'ongoing' && $game->side_to_move !== $game->human_color) {
-            $this->playBot($game);
+            if ($game->status === 'ongoing' && $game->side_to_move !== $game->human_color) {
+                $this->playBot($game);
+            }
         }
 
         $game->save();
@@ -111,6 +128,23 @@ class BotGameService
             return ['ok' => false, 'error' => 'not your turn'];
         }
 
+        if ($game->variant === 'duck') {
+            $result = $this->engine->duckMove($game->fen, $game->duck ?? '', $move);
+            if (empty($result['legal'])) {
+                return ['ok' => false, 'error' => is_string($result['error'] ?? null) ? $result['error'] : 'illegal move'];
+            }
+
+            $this->applyDuck($game, $move, $result, 'human');
+
+            if ($game->status === 'ongoing') {
+                $this->playDuckBot($game);
+            }
+
+            $game->save();
+
+            return ['ok' => true];
+        }
+
         $result = $this->engine->move($game->fen, $move, $game->getHistory());
         if (empty($result['legal'])) {
             return ['ok' => false, 'error' => 'illegal move'];
@@ -139,6 +173,11 @@ class BotGameService
      */
     public function undo(BotGame $game): array
     {
+        // Duck Chess undo is out of scope (the duck endpoints carry no history).
+        if ($game->variant === 'duck') {
+            return ['ok' => false, 'error' => 'undo is not available in Duck Chess'];
+        }
+
         $moves = $game->getMoves();
         $history = $game->getHistory();
         if ($moves === []) {
@@ -246,6 +285,61 @@ class BotGameService
     }
 
     /**
+     * Compute and apply one Duck Chess bot move on the given (ongoing) game.
+     * The duck engine does its own weakening, so the RAW human rating is passed
+     * (no engineRatingForHuman remap). The bestmove is already applied engine-side,
+     * so its response carries the resulting newFen/duck/status/result.
+     */
+    private function playDuckBot(BotGame $game): void
+    {
+        if ($game->status !== 'ongoing') {
+            return;
+        }
+        $best = $this->engine->duckBestMove($game->fen, $game->duck ?? '', $game->rating);
+        $uci = $best['bestmove'] ?? null;
+        if (!is_string($uci) || $uci === '') {
+            return;
+        }
+        $this->applyDuck($game, $uci, $best, 'bot', $best);
+    }
+
+    /**
+     * Mutate the game with one applied Duck Chess move's result. Unlike the
+     * standard apply(), this stores the resulting `duck` square on both the game
+     * and the move entry (so the frontend can show the duck per historical ply),
+     * and does NOT push a repetition-history FEN (the duck endpoints are stateless
+     * and take no history).
+     *
+     * @param array<string, mixed> $result Engine /duck/move or /duck/bestmove response.
+     * @param array<string, mixed> $best   Engine /duck/bestmove response (bot only, for eval).
+     */
+    private function applyDuck(BotGame $game, string $uci, array $result, string $by, array $best = []): void
+    {
+        $moves = $game->getMoves();
+        $entry = [
+            'ply' => count($moves) + 1,
+            'uci' => $uci,
+            'san' => is_string($result['san'] ?? null) ? $result['san'] : $uci,
+            'by' => $by,
+            'fen' => is_string($result['newFen'] ?? null) ? $result['newFen'] : $game->fen,
+            'duck' => is_string($result['duck'] ?? null) ? $result['duck'] : null,
+        ];
+        if ($by === 'bot' && isset($best['eval'])) {
+            $entry['eval'] = $best['eval'];
+        }
+        $moves[] = $entry;
+        $game->setMoves($moves);
+
+        $game->fen = is_string($result['newFen'] ?? null) ? $result['newFen'] : $game->fen;
+        $game->duck = is_string($result['duck'] ?? null) ? $result['duck'] : $game->duck;
+        $game->side_to_move = is_string($result['sideToMove'] ?? null) ? $result['sideToMove'] : $game->side_to_move;
+        $game->status = is_string($result['status'] ?? null) ? $result['status'] : 'ongoing';
+        if (!empty($result['result'])) {
+            $game->result = $result['result'];
+        }
+    }
+
+    /**
      * Build the API representation: the game plus the legal moves available to
      * the side to move and a your_turn flag.
      *
@@ -256,7 +350,9 @@ class BotGameService
         $data = $game->jsonSerialize();
         $data['legal_moves'] = [];
         if ($game->status === 'ongoing') {
-            $legal = $this->engine->legalMoves($game->fen);
+            $legal = $game->variant === 'duck'
+                ? $this->engine->duckLegalMoves($game->fen, $game->duck ?? '')
+                : $this->engine->legalMoves($game->fen);
             $data['legal_moves'] = $legal['moves'] ?? [];
         }
         $data['your_turn'] = $game->status === 'ongoing' && $game->side_to_move === $game->human_color;

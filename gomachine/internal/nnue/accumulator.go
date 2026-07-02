@@ -177,25 +177,17 @@ func moveChanges(pos *chess.Position, m chess.Move, ch *[4]featChange) int {
 		ch[n] = featChange{moving, to, true}
 		n++
 	case chess.Castling:
-		ch[n] = featChange{moving, from, false} // king
-		n++
-		ch[n] = featChange{moving, to, true}
-		n++
-		var rFrom, rTo chess.Square
-		switch to {
-		case chess.G1:
-			rFrom, rTo = chess.H1, chess.F1
-		case chess.C1:
-			rFrom, rTo = chess.A1, chess.D1
-		case chess.G8:
-			rFrom, rTo = chess.H8, chess.F8
-		case chess.C8:
-			rFrom, rTo = chess.A8, chess.D8
-		}
+		// King-captures-rook encoding: from = king origin, to = rook origin.
+		rFrom := to
+		kingTo, rTo := chess.CastleTargets(from, rFrom)
 		rook := pos.PieceOn(rFrom)
-		ch[n] = featChange{rook, rFrom, false}
+		ch[n] = featChange{moving, from, false} // king leaves origin
 		n++
-		ch[n] = featChange{rook, rTo, true}
+		ch[n] = featChange{moving, kingTo, true} // king arrives
+		n++
+		ch[n] = featChange{rook, rFrom, false} // rook leaves origin
+		n++
+		ch[n] = featChange{rook, rTo, true} // rook arrives
 		n++
 	}
 	return n

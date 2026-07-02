@@ -1,13 +1,25 @@
 package chess
 
-// ParseUCIMove resolves a UCI move string (e.g. "e2e4", "e7e8q", "e1g1") against
-// the legal moves of the position, returning the matching Move. This is robust:
-// it handles castling, en passant, and promotion without special-casing because
-// it matches the move's canonical UCI string. Returns false if no legal move
-// matches.
+// ParseUCIMove resolves a UCI move string against the legal moves of the position,
+// returning the matching Move. It handles castling, en passant, and promotion by
+// matching the move's UCI string. Both castling UCI conventions are accepted:
+//   - king-captures-rook, e.g. "e1h1" (canonical Chess960, Lichess convention);
+//   - king-two-squares, e.g. "e1g1" (standard chess).
+//
+// The king-captures-rook form is matched first (it is unambiguous in Chess960,
+// where a normal king step can share a king-two-square string with a castle).
+// Returns false if no legal move matches.
 func (pos *Position) ParseUCIMove(s string) (Move, bool) {
 	var ml MoveList
 	pos.GenerateLegal(&ml)
+	// Pass 1: king-captures-rook form for castling (unambiguous in FRC).
+	for i := 0; i < ml.Len(); i++ {
+		m := ml.Get(i)
+		if m.Type() == Castling && m.CastleUCI() == s {
+			return m, true
+		}
+	}
+	// Pass 2: canonical String form (king-two-square castles + all other moves).
 	for i := 0; i < ml.Len(); i++ {
 		if ml.Get(i).String() == s {
 			return ml.Get(i), true

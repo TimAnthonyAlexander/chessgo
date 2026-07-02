@@ -1,7 +1,11 @@
 // Typed client for the chessgo BaseAPI backend (SPEC §7 / VS-Bot endpoints).
+import type { Variant } from '../lib/variants'
+
 const BASE = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:6464'
 
 export type Color = 'w' | 'b'
+
+export type { Variant }
 
 export type GameStatus =
     | 'ongoing'
@@ -13,6 +17,10 @@ export type GameStatus =
     | 'draw-fivefold'
     | 'draw-insufficient-material'
     | 'draw-dead-position'
+    // Duck Chess terminals (win by capturing the king; no check/checkmate).
+    | 'white_win'
+    | 'black_win'
+    | 'draw'
 
 export interface MoveEntry {
     ply: number
@@ -21,12 +29,14 @@ export interface MoveEntry {
     by: 'human' | 'bot'
     fen: string // position after this move (for history navigation)
     eval?: { type: 'cp' | 'mate'; value: number }
+    duck?: string // Duck Chess: the duck's square after this move
 }
 
 export interface BotGame {
     id: string
     rating: number
     human_color: Color
+    variant: Variant
     fen: string
     side_to_move: Color
     status: GameStatus
@@ -34,6 +44,7 @@ export interface BotGame {
     moves: MoveEntry[]
     legal_moves: string[]
     your_turn: boolean
+    duck: string | null // Duck Chess: the duck's square, or null before the first placement
 }
 
 class ApiError extends Error {
@@ -64,12 +75,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     return body as T
 }
 
-/** Create a bot game. An optional `fen` starts from a custom position (e.g. one
- * carried over from the analysis board); omitted = the standard start. */
-export function createBotGame(rating: number, humanColor: Color, fen?: string): Promise<BotGame> {
+/** Create a bot game. `opts.fen` starts from a custom position (e.g. one carried
+ * over from the analysis board); `opts.variant` selects a chess variant (default
+ * standard). Omitting both = a standard game from the normal start. */
+export function createBotGame(
+    rating: number,
+    humanColor: Color,
+    opts?: { fen?: string; variant?: Variant },
+): Promise<BotGame> {
     return request<BotGame>('/bot-games', {
         method: 'POST',
-        body: JSON.stringify({ rating, human_color: humanColor, ...(fen ? { fen } : {}) }),
+        body: JSON.stringify({
+            rating,
+            human_color: humanColor,
+            ...(opts?.variant ? { variant: opts.variant } : {}),
+            ...(opts?.fen ? { fen: opts.fen } : {}),
+        }),
     })
 }
 

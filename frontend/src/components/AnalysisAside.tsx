@@ -3,6 +3,7 @@ import { Box, Tooltip, Typography } from '@mui/material'
 import { Bot, Check, Copy, Dices, FileInput, Pencil, RotateCcw } from 'lucide-react'
 import { Chess } from 'chess.js'
 import { START_FEN } from '../lib/analysisTree'
+import { random960 } from '../lib/variants'
 
 // Standard piece values + starting counts, used to derive captured material from a
 // bare FEN (an approximation when pawns have promoted, like most board UIs).
@@ -37,28 +38,6 @@ function computeMaterial(fen: string): Material {
         for (let i = 0; i < START_COUNT[t] - (w[t] ?? 0); i++) capturedByBlack.push(t)
     }
     return { capturedByWhite, capturedByBlack, diff: whiteVal - blackVal }
-}
-
-// A random Chess960 (Fischer Random) start position. Castling is left disabled
-// ("-") so the position always loads cleanly in chess.js and movegen stays exact.
-function random960(): string {
-    const rank: (string | null)[] = Array(8).fill(null)
-    const pickFrom = (cells: number[]) => cells[Math.floor(Math.random() * cells.length)]
-    // Bishops on opposite-colored squares.
-    rank[pickFrom([1, 3, 5, 7])] = 'B'
-    rank[pickFrom([0, 2, 4, 6])] = 'B'
-    const empties = () => rank.map((p, i) => (p === null ? i : -1)).filter((i) => i >= 0)
-    rank[pickFrom(empties())] = 'Q'
-    rank[pickFrom(empties())] = 'N'
-    rank[pickFrom(empties())] = 'N'
-    // Remaining three squares get rook, king, rook (king always between the rooks).
-    const [r1, k, r2] = empties()
-    rank[r1] = 'R'
-    rank[k] = 'K'
-    rank[r2] = 'R'
-    const white = rank.join('')
-    const black = white.toLowerCase()
-    return `${black}/pppppppp/8/8/8/8/PPPPPPPP/${white} w - - 0 1`
 }
 
 // Returns the FEN if chess.js accepts it, else null.

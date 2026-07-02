@@ -1,9 +1,17 @@
 import { Box, Typography } from '@mui/material'
 import { Infinity as InfinityIcon } from 'lucide-react'
+import { type Variant, VARIANT_LABEL } from '../lib/variants'
 
-/** Left-side game-mode card. We currently only offer casual, untimed games vs
- * the engine — shown plainly, no placeholders for modes we don't have. */
-export default function GameModeCard({ rating }: { rating: number }) {
+/** Left-side game-mode card. Untimed, casual play vs the engine; the headline
+ * reflects the chosen variant (Standard → "Casual", otherwise the variant name). */
+export default function GameModeCard({
+    rating,
+    variant = 'standard',
+}: {
+    rating: number
+    variant?: Variant
+}) {
+    const title = variant === 'standard' ? 'Casual' : VARIANT_LABEL[variant]
     return (
         <Box
             sx={{
@@ -38,7 +46,7 @@ export default function GameModeCard({ rating }: { rating: number }) {
                     lineHeight: 1,
                 }}
             >
-                Casual
+                {title}
             </Typography>
 
             <Box sx={{ borderTop: '1px solid var(--line-soft)', mt: 2.25, pt: 2.25 }}>

@@ -74,21 +74,21 @@ func (pos *Position) DoMove(m Move, u *Undo) {
 		pos.removePiece(capSq)
 		pos.movePiece(from, to)
 	case Castling:
-		pos.movePiece(from, to) // king
-		switch to {
-		case G1:
-			pos.movePiece(H1, F1)
-		case C1:
-			pos.movePiece(A1, D1)
-		case G8:
-			pos.movePiece(H8, F8)
-		case C8:
-			pos.movePiece(A8, D8)
-		}
+		// from = king origin, to = rook origin (king-captures-rook encoding).
+		// Remove both movers before placing them so overlapping origin/destination
+		// squares (the FRC king-over-rook / rook-onto-king-origin cases, and the
+		// king-doesn't-move case) can never collide.
+		kingTo, rookTo := castleTargets(from, to)
+		king := pos.board[from]
+		rook := pos.board[to]
+		pos.removePiece(from)
+		pos.removePiece(to)
+		pos.addPiece(king, kingTo)
+		pos.addPiece(rook, rookTo)
 	}
 
 	// Update castling rights.
-	newCastling := pos.castling & castleMask[from] & castleMask[to]
+	newCastling := pos.castling & pos.castleMask[from] & pos.castleMask[to]
 	if newCastling != pos.castling {
 		pos.key ^= zobristCastling[pos.castling] ^ zobristCastling[newCastling]
 		pos.castling = newCastling
@@ -161,17 +161,16 @@ func (pos *Position) UndoMove(m Move, u *Undo) {
 		capSq := Square(int(to) - dirForward(us))
 		pos.addPiece(u.captured, capSq)
 	case Castling:
-		pos.movePiece(to, from) // king back
-		switch to {
-		case G1:
-			pos.movePiece(F1, H1)
-		case C1:
-			pos.movePiece(D1, A1)
-		case G8:
-			pos.movePiece(F8, H8)
-		case C8:
-			pos.movePiece(D8, A8)
-		}
+		// from = king origin, to = rook origin. Pull both pieces off their
+		// destinations and restore them to their origins (remove-then-add handles
+		// every FRC origin/destination overlap; the key is restored from u below).
+		kingTo, rookTo := castleTargets(from, to)
+		king := pos.board[kingTo]
+		rook := pos.board[rookTo]
+		pos.removePiece(kingTo)
+		pos.removePiece(rookTo)
+		pos.addPiece(king, from)
+		pos.addPiece(rook, to)
 	}
 
 	// Restore irreversible state (also restores the key exactly).

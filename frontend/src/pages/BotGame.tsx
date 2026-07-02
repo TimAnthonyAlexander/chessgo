@@ -38,9 +38,12 @@ import {
 } from '../api/client'
 import { statusLabel } from '../lib/chess'
 import { useBoardInteraction } from '../lib/useBoardInteraction'
+import { useDuckInteraction } from '../lib/useDuckInteraction'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { useAuth } from '../lib/auth'
 import AdminBestMove from '../components/AdminBestMove'
+import VariantPicker from '../components/VariantPicker'
+import { type Variant, random960 } from '../lib/variants'
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 const other = (c: Color): Color => (c === 'w' ? 'b' : 'w')
@@ -62,6 +65,7 @@ export default function BotGame() {
     const [rating, setRating] = useState(1500)
     // Default to playing whichever side is to move in the carried-over position.
     const [colorChoice, setColorChoice] = useState<ColorChoice>(navFen ? sideToMoveOf(navFen) : 'w')
+    const [variant, setVariant] = useState<Variant>('standard')
     const [creating, setCreating] = useState(false)
     const [thinking, setThinking] = useState(false)
     const [error, setError] = useState<string | null>(null)
@@ -79,35 +83,56 @@ export default function BotGame() {
     const over = resigned || (game != null && game.status !== 'ongoing')
     const ongoing = !!game && !over
 
+    const isDuck = game?.variant === 'duck'
+
     const liveLen = game?.moves.length ?? 0
     const shownPly = viewIndex === null ? liveLen : Math.min(viewIndex, liveLen)
     const atLive = shownPly === liveLen
     const interactive = ongoing && atLive && game.your_turn && !thinking
 
-    // Board interaction (optimistic overlay + move sound + submit) lives in the
-    // shared controller. The bot reply, "thinking" gate, and error are this page's
-    // concern, so they ride along in `submit`.
+    // Submit a move to the server and fold in the bot's reply. Shared by the
+    // standard and Duck controllers — the move string is a plain UCI in normal
+    // play and a composite "<pieceUci>:<duckSquare>" in Duck Chess; the API and
+    // engine treat it opaquely, so this path is identical for both.
+    const submitMove = async (uci: string) => {
+        if (!game) return
+        setError(null)
+        setViewIndex(null)
+        setThinking(true)
+        try {
+            const g = await playMove(game.id, uci)
+            setGame(g)
+            voiceServerReply(game.moves.length, g)
+        } catch (e) {
+            setError(e instanceof Error ? e.message : 'Move failed.')
+        } finally {
+            setThinking(false)
+        }
+    }
+
+    // Two board controllers, both hooks called unconditionally (only one is ever
+    // "live" — the other is inert with myTurn:false). Standard/Chess960 use the
+    // shared optimistic+premove controller; Duck Chess uses the two-phase
+    // piece-then-duck controller. The variant picks which one drives <Board>.
     const interaction = useBoardInteraction({
         fen: game?.fen ?? startFen ?? START_FEN,
-        myTurn: interactive,
-        legalMoves: interactive && game ? game.legal_moves : [],
+        myTurn: interactive && !isDuck,
+        legalMoves: interactive && !isDuck && game ? game.legal_moves : [],
         canPremove: true,
-        submit: async (uci) => {
-            if (!game) return
-            setError(null)
-            setViewIndex(null)
-            setThinking(true)
-            try {
-                const g = await playMove(game.id, uci)
-                setGame(g)
-                voiceServerReply(game.moves.length, g)
-            } catch (e) {
-                setError(e instanceof Error ? e.message : 'Move failed.')
-            } finally {
-                setThinking(false)
-            }
-        },
+        submit: submitMove,
     })
+    const duck = useDuckInteraction({
+        fen: game?.fen ?? START_FEN,
+        duck: game?.duck ?? null,
+        myTurn: interactive && isDuck,
+        legalMoves: interactive && isDuck && game ? game.legal_moves : [],
+        submit: submitMove,
+    })
+
+    // The optimistic overlay + last-move highlight come from whichever controller
+    // is live for this variant.
+    const activeOverride = isDuck ? duck.override : interaction.override
+    const activeOptimisticLast = isDuck ? duck.optimisticLast : interaction.optimisticLast
 
     const boardFen = !game
         ? (startFen ?? START_FEN)
@@ -118,8 +143,8 @@ export default function BotGame() {
             : game.moves[shownPly - 1].fen
 
     const lastMove =
-        interaction.override && atLive && interaction.optimisticLast
-            ? interaction.optimisticLast
+        activeOverride && atLive && activeOptimisticLast
+            ? activeOptimisticLast
             : game && shownPly > 0
               ? {
                     from: game.moves[shownPly - 1].uci.slice(0, 2),
@@ -127,13 +152,27 @@ export default function BotGame() {
                 }
               : null
 
+    // The duck's square to render: at the live position it's the game's duck,
+    // hidden while the local player's move is mid-flight (the duck is "in hand"
+    // during placement and until the server reply lands). When reviewing history
+    // it's the duck recorded on that ply.
+    const shownDuck: string | null = isDuck
+        ? atLive
+            ? activeOverride
+                ? null
+                : (game?.duck ?? null)
+            : (game?.moves[shownPly - 1]?.duck ?? null)
+        : null
+
     // Eval bar — full-strength analysis of the live position, level-independent.
     // Streams in layers (shallow depth first, then deeper) so a number lands almost
     // immediately and refines, instead of holding the previous position's eval for a
     // full ~1.5s search and only then snapping to the new one. The value is always
     // White-relative (+ = White better, − = Black better), matching every other bar.
     useEffect(() => {
-        if (!game) {
+        if (!game || game.variant === 'duck') {
+            // Duck Chess has no check/checkmate and the /analyze engine doesn't
+            // understand the duck — there's no meaningful eval bar to show.
             setAnalyzedEval(null)
             return
         }
@@ -193,8 +232,17 @@ export default function BotGame() {
         setViewIndex(null)
         const color: Color =
             colorChoice === 'random' ? (Math.random() < 0.5 ? 'w' : 'b') : colorChoice
+        // Chess960 gets a fresh random back-rank; Duck Chess always starts from the
+        // standard position (its rules, not the layout, are what differ); Standard
+        // honors a position carried over from the analysis board.
+        const fen =
+            variant === 'chess960'
+                ? random960()
+                : variant === 'standard'
+                  ? (startFen ?? undefined)
+                  : undefined
         try {
-            const g = await createBotGame(rating, color, startFen ?? undefined)
+            const g = await createBotGame(rating, color, { variant, fen })
             setGame(g)
             const opener = g.moves[g.moves.length - 1]
             if (opener) playForSan(opener.san, g.status !== 'ongoing')
@@ -214,7 +262,8 @@ export default function BotGame() {
 
     // Take back the human's last move (plus any bot reply since). Available once
     // the human has actually moved, while the game is live and nothing's in flight.
-    const canUndo = ongoing && !thinking && !!game?.moves.some((m) => m.by === 'human')
+    // Duck Chess undo isn't supported (the duck-move engine is stateless).
+    const canUndo = ongoing && !thinking && !isDuck && !!game?.moves.some((m) => m.by === 'human')
     async function undo() {
         if (!game || thinking) return
         setError(null)
@@ -316,7 +365,7 @@ export default function BotGame() {
                         width: '100%',
                     }}
                 >
-                    <GameModeCard rating={game?.rating ?? rating} />
+                    <GameModeCard rating={game?.rating ?? rating} variant={game?.variant ?? variant} />
                 </Box>
 
                 {/* Center — board, top-aligned so its top lines up with the side cards */}
@@ -339,12 +388,15 @@ export default function BotGame() {
                             lastMove={lastMove}
                             inCheck={false}
                             interactive={interactive}
-                            onMove={interaction.onMove}
-                            premoveColor={ongoing && atLive ? humanColor : null}
-                            premove={atLive ? interaction.premove : null}
+                            onMove={isDuck ? duck.onMove : interaction.onMove}
+                            premoveColor={ongoing && atLive && !isDuck ? humanColor : null}
+                            premove={atLive && !isDuck ? interaction.premove : null}
                             onCancelPremove={interaction.cancelPremove}
-                            {...(interaction.override && atLive
-                                ? { overrideBoard: interaction.override }
+                            duck={shownDuck}
+                            duckTargets={isDuck && atLive ? duck.duckTargets : null}
+                            onPlaceDuck={duck.onPlaceDuck}
+                            {...(activeOverride && atLive
+                                ? { overrideBoard: activeOverride }
                                 : {})}
                         />
                     </Box>
@@ -395,10 +447,12 @@ export default function BotGame() {
                             <Setup
                                 rating={rating}
                                 colorChoice={colorChoice}
+                                variant={variant}
                                 creating={creating}
                                 customStart={!!startFen}
                                 onRating={setRating}
                                 onColor={setColorChoice}
+                                onVariant={setVariant}
                                 onStart={newGame}
                             />
                             {error && <ErrorBanner sx={{ mt: 1.5 }}>{error}</ErrorBanner>}
@@ -595,20 +649,34 @@ function MovePanel({
 function Setup({
     rating,
     colorChoice,
+    variant,
     creating,
     customStart,
     onRating,
     onColor,
+    onVariant,
     onStart,
 }: {
     rating: number
     colorChoice: ColorChoice
+    variant: Variant
     creating: boolean
     customStart: boolean
     onRating: (n: number) => void
     onColor: (c: ColorChoice) => void
+    onVariant: (v: Variant) => void
     onStart: () => void
 }) {
+    // The carried-over "play from this position" note only applies to a standard
+    // game — Chess960 uses a random back-rank and Duck Chess always starts fresh.
+    const subtitle =
+        variant === 'chess960'
+            ? 'Play a random Chess960 (Fischer Random) position.'
+            : variant === 'duck'
+              ? 'Play Duck Chess — capture the king; the duck blocks every square.'
+              : customStart
+                ? 'Play the gomachine engine from this position.'
+                : 'Play the gomachine engine.'
     return (
         <Box
             sx={{
@@ -634,10 +702,15 @@ function Setup({
                     New game
                 </Typography>
                 <Typography sx={{ fontSize: 13.5, color: 'var(--text-dim)', mt: 0.5 }}>
-                    {customStart
-                        ? 'Play the gomachine engine from this position.'
-                        : 'Play the gomachine engine.'}
+                    {subtitle}
                 </Typography>
+            </Box>
+
+            <Box>
+                <Label>Mode</Label>
+                <Box sx={{ mt: 1 }}>
+                    <VariantPicker value={variant} onChange={onVariant} disabled={creating} />
+                </Box>
             </Box>
 
             <Box>

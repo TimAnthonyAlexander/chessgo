@@ -27,6 +27,15 @@ class BotGame extends BaseModel
     /** The human's color: 'w' or 'b'. */
     public string $human_color = 'w';
 
+    /** Game variant: 'standard' | 'chess960' | 'duck'. Standard and Chess960
+     *  share the same engine flow (the engine parses 960 FENs); Duck Chess uses
+     *  the dedicated /duck/* endpoints and carries a duck square below. */
+    public string $variant = 'standard';
+
+    /** Duck Chess only: the square the duck occupies (e.g. "e5"), or null when
+     *  the game is standard/960 or the duck has not yet been placed. */
+    public ?string $duck = null;
+
     /** Current position (FEN). Defaults to the standard start position. */
     public string $fen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 

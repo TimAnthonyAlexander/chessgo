@@ -213,6 +213,62 @@ class GomachineClient
         return $this->post('/legal-moves', $body);
     }
 
+    /**
+     * Duck Chess: list the legal PIECE moves in the given position (UCI long
+     * algebraic). King-captures are included and no check filter is applied —
+     * Duck Chess has no check. The duck placement that follows each piece move
+     * is chosen client-side / by the engine when the move is submitted.
+     *
+     * @param string $duck Current duck square ("" if not yet placed).
+     * @return array<string, mixed> {moves}
+     */
+    public function duckLegalMoves(string $fen, string $duck): array
+    {
+        return $this->post('/duck/legal-moves', [
+            'fen' => $fen,
+            'duck' => $duck,
+        ]);
+    }
+
+    /**
+     * Duck Chess: validate and apply a composite move `"<pieceUCI>:<duckSquare>"`
+     * (e.g. "e2e4:e5", "e7e8q:h6") — the duck square is where the duck ends up
+     * after the piece move.
+     *
+     * @param string $duck Current duck square ("" if not yet placed).
+     * @return array<string, mixed> {legal, error?, newFen, duck, san, sideToMove, status, result}
+     */
+    public function duckMove(string $fen, string $duck, string $move): array
+    {
+        return $this->post('/duck/move', [
+            'fen' => $fen,
+            'duck' => $duck,
+            'move' => $move,
+        ]);
+    }
+
+    /**
+     * Duck Chess: compute the AI's composite move at a target Elo rating. The
+     * duck engine does its own weakening, so pass the raw human rating. The
+     * returned move is ALREADY APPLIED — newFen/duck reflect the position after it.
+     *
+     * @param string $duck Current duck square ("" if not yet placed).
+     * @return array<string, mixed> {bestmove, san, eval, newFen, duck, sideToMove, status, result}
+     */
+    public function duckBestMove(string $fen, string $duck, int $rating, int $movetimeMs = 0): array
+    {
+        $limits = ['rating' => $rating];
+        if ($movetimeMs > 0) {
+            $limits['movetime'] = $movetimeMs;
+        }
+
+        return $this->post('/duck/bestmove', [
+            'fen' => $fen,
+            'duck' => $duck,
+            'limits' => $limits,
+        ]);
+    }
+
     /** Liveness check against the engine. */
     public function healthy(): bool
     {

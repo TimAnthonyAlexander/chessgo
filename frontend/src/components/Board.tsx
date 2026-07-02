@@ -55,6 +55,13 @@ interface BoardProps {
     premove?: { from: Square; to: Square } | null
     /** Discard the queued premove (user clicked an empty / invalid square). */
     onCancelPremove?: () => void
+    /** Duck Chess: render a duck glyph on this square (normal play, placement, and history). */
+    duck?: Square | null
+    /** Duck Chess: non-null puts the board in DUCK-PLACEMENT mode — normal piece input is
+     * disabled and these empty squares are the valid duck drops. */
+    duckTargets?: Set<Square> | null
+    /** Duck Chess: called with the chosen empty square while in duck-placement mode. */
+    onPlaceDuck?: (sq: Square) => void
 }
 
 const PROMO_ORDER = ['q', 'r', 'b', 'n']
@@ -143,6 +150,9 @@ export default function Board({
     premoveColor,
     premove,
     onCancelPremove,
+    duck,
+    duckTargets,
+    onPlaceDuck,
 }: BoardProps) {
     const boardRef = useRef<HTMLDivElement>(null)
     const pieceSet = usePieceSet() // re-render (with new piece SVGs) when the set changes
@@ -166,7 +176,10 @@ export default function Board({
     // which pieces are "ours" (our color, not the side to move) and which targets
     // are valid (piece geometry, since the real legal-move list isn't ours yet).
     const premoveActive = !interactive && premoveColor != null
-    const inputEnabled = interactive || premoveActive
+    // Duck-placement mode disables ALL normal piece input; the only left-click action
+    // is dropping the duck on an empty target square (handled separately below).
+    const duckPlacing = duckTargets != null
+    const inputEnabled = !duckPlacing && (interactive || premoveActive)
     const movingColor: Color = interactive ? sideToMove : (premoveColor ?? sideToMove)
     const destsFor = (from: Square): Set<Square> =>
         interactive ? targetsFrom(legalMoves, from) : premoveTargets(board, from)
@@ -254,6 +267,14 @@ export default function Board({
 
         // Any left-click clears existing annotations (Lichess behaviour).
         if (shapes.length) setShapes([])
+
+        // Duck-placement mode: the only left action is dropping the duck on a valid
+        // empty target square; normal piece selection/drag/premove is disabled.
+        if (duckPlacing) {
+            const sq = squareFromPoint(e.clientX, e.clientY)
+            if (sq && duckTargets?.has(sq)) onPlaceDuck?.(sq)
+            return
+        }
 
         if (!inputEnabled) return
         const sq = squareFromPoint(e.clientX, e.clientY)
@@ -370,6 +391,7 @@ export default function Board({
                         const piece = board[sq]
                         const light = (file + rank) % 2 === 1
                         const isTarget = targets.has(sq)
+                        const isDuckTarget = duckTargets?.has(sq) ?? false
                         const isLast = lastMove && (lastMove.from === sq || lastMove.to === sq)
                         const isPremove = premove && (premove.from === sq || premove.to === sq)
                         const isDragOrigin = drag?.moved && drag.from === sq
@@ -395,8 +417,14 @@ export default function Board({
                             <div key={sq} className={classes}>
                                 {isTarget && !piece && <span className="dot" />}
                                 {isTarget && piece && <span className="ring" />}
+                                {isDuckTarget && !piece && <span className="dot" />}
                                 {piece && (
                                     <PieceGlyph piece={piece} set={pieceSet} hidden={isDragOrigin} />
+                                )}
+                                {duck === sq && (
+                                    <span className="duck" aria-hidden>
+                                        🦆
+                                    </span>
                                 )}
                                 {showRank && <span className="coord rank">{rank + 1}</span>}
                                 {showFile && <span className="coord file">{'abcdefgh'[file]}</span>}

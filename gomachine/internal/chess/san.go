@@ -10,7 +10,9 @@ func (pos *Position) SAN(m Move) string {
 	var sb strings.Builder
 
 	if m.Type() == Castling {
-		if m.To().File() == FileG {
+		// to = rook origin (king-captures-rook): kingside iff the rook is right of
+		// the king. Holds for standard (h-rook) and Chess960 alike.
+		if m.To().File() > m.From().File() {
 			sb.WriteString("O-O")
 		} else {
 			sb.WriteString("O-O-O")

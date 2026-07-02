@@ -12,6 +12,9 @@ use App\Services\BotGameService;
  * and applied in the same request (SPEC §7.2).
  *
  *   POST /bot-games/{id}/move   { move: "e2e4" }   // UCI long algebraic
+ *
+ * Duck Chess submits a composite `"<pieceUCI>:<duckSquare>"` move (up to 8 chars,
+ * e.g. "e7e8q:h6"), hence the max:8 length; the engine validates legality either way.
  */
 class BotMoveController extends Controller
 {
@@ -26,7 +29,7 @@ class BotMoveController extends Controller
     public function post(): JsonResponse
     {
         $this->validate([
-            'move' => 'required|string|max:5',
+            'move' => 'required|string|max:8',
         ]);
 
         $game = BotGame::find($this->id);

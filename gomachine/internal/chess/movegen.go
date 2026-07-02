@@ -100,40 +100,51 @@ func (pos *Position) genPawns(ml *MoveList, us Color, occ, theirs Bitboard) {
 	}
 }
 
+// genCastling emits legal castling moves for the side to move, generalized for
+// Chess960: it works from the stored king/rook origin squares rather than fixed
+// E1/H1-style squares. A castle is emitted as (king origin, rook origin).
+//
+// Legality (FRC rules, which reduce to the standard rules for a classic layout):
+//   - every square the king passes through (king origin → king destination,
+//     inclusive) must be unattacked — no castling out of, through, or into check;
+//   - every square in the king's and the rook's travel spans must be empty,
+//     EXCEPT the moving king's and moving rook's own origin squares (in FRC the
+//     king may pass over the rook's origin and vice-versa).
 func (pos *Position) genCastling(ml *MoveList, us Color) {
-	occ := pos.occupied
-	them := us.Opposite()
-	clear := func(squares ...Square) bool {
-		for _, s := range squares {
-			if occ.Has(s) {
-				return false
-			}
-		}
-		return true
-	}
-	safe := func(squares ...Square) bool {
-		for _, s := range squares {
-			if pos.attackedBy(s, them, occ) {
-				return false
-			}
-		}
-		return true
-	}
+	kingFrom := pos.kingSq(us)
 	if us == White {
-		if pos.castling&castleWK != 0 && clear(F1, G1) && safe(E1, F1, G1) {
-			ml.add(NewMove(E1, G1, Castling, Pawn))
-		}
-		if pos.castling&castleWQ != 0 && clear(D1, C1, B1) && safe(E1, D1, C1) {
-			ml.add(NewMove(E1, C1, Castling, Pawn))
-		}
+		pos.genCastleSide(ml, us, kingFrom, castleWK, ciWK)
+		pos.genCastleSide(ml, us, kingFrom, castleWQ, ciWQ)
 	} else {
-		if pos.castling&castleBK != 0 && clear(F8, G8) && safe(E8, F8, G8) {
-			ml.add(NewMove(E8, G8, Castling, Pawn))
-		}
-		if pos.castling&castleBQ != 0 && clear(D8, C8, B8) && safe(E8, D8, C8) {
-			ml.add(NewMove(E8, C8, Castling, Pawn))
+		pos.genCastleSide(ml, us, kingFrom, castleBK, ciBK)
+		pos.genCastleSide(ml, us, kingFrom, castleBQ, ciBQ)
+	}
+}
+
+func (pos *Position) genCastleSide(ml *MoveList, us Color, kingFrom Square, right uint8, rookIdx int) {
+	if pos.castling&right == 0 {
+		return
+	}
+	rookFrom := pos.castleRook[rookIdx]
+	kingTo, rookTo := castleTargets(kingFrom, rookFrom)
+	occ := pos.occupied
+
+	// Squares that must be empty: king span ∪ rook span, minus the two movers.
+	mustEmpty := (rankSpanBB(kingFrom, kingTo) | rankSpanBB(rookFrom, rookTo)) &^
+		(kingFrom.BB() | rookFrom.BB())
+	if occ&mustEmpty != 0 {
+		return
+	}
+
+	// King path (inclusive of origin and destination) must be free of attack.
+	them := us.Opposite()
+	for path := rankSpanBB(kingFrom, kingTo); path != 0; {
+		if pos.attackedBy(path.PopLSB(), them, occ) {
+			return
 		}
 	}
+
+	ml.add(NewMove(kingFrom, rookFrom, Castling, Pawn))
 }
 
 // GenerateLegal fills ml with the fully-legal moves for the side to move, using

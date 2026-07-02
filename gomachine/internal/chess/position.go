@@ -17,20 +17,26 @@ const (
 	castleBQ
 )
 
-// castleMask[sq] holds the castling-right bits to KEEP when a piece moves from or
-// to sq. Touching a king or rook home square clears the relevant rights.
-var castleMask [64]uint8
+// Castling-right indices (into Position.castleRook), one per right bit.
+const (
+	ciWK = 0
+	ciWQ = 1
+	ciBK = 2
+	ciBQ = 3
+)
 
-func init() {
-	for i := range castleMask {
-		castleMask[i] = 0xF
+// rightIndex maps a single castling-right bit to its castleRook index.
+func rightIndex(right uint8) int {
+	switch right {
+	case castleWK:
+		return ciWK
+	case castleWQ:
+		return ciWQ
+	case castleBK:
+		return ciBK
+	default: // castleBQ
+		return ciBQ
 	}
-	castleMask[E1] &^= castleWK | castleWQ
-	castleMask[A1] &^= castleWQ
-	castleMask[H1] &^= castleWK
-	castleMask[E8] &^= castleBK | castleBQ
-	castleMask[A8] &^= castleBQ
-	castleMask[H8] &^= castleBK
 }
 
 // Position is a full chess position: bitboards + redundant mailbox + state.
@@ -45,6 +51,24 @@ type Position struct {
 	halfmove uint16       // plies since last capture/pawn move (50-move rule)
 	fullmove uint16       // starts at 1, +1 after Black moves
 	key      uint64       // Zobrist hash
+
+	// Chess960 castling state. castleRook holds the origin square of the rook for
+	// each castling right (indexed by ciWK..ciBQ; SqNone when the right is absent).
+	// For standard chess these are the a/h-file rooks and nothing changes.
+	//
+	// castleMask[sq] holds the castling-right bits to KEEP when a piece moves from
+	// or to sq — touching a king or castling-rook origin square clears the relevant
+	// rights. It is per-position (not a global) because in Chess960 the king/rook
+	// origin files vary; ParseFEN populates it. For a standard setup it reproduces
+	// the classic E1/A1/H1/E8/A8/H8 mask exactly.
+	//
+	// Zobrist note: the rook FILES are deliberately NOT folded into the key. Only
+	// the castling-right bits are hashed (zobristCastling). Within a single game the
+	// castling setup is fixed, so two positions that share the same right bits are
+	// genuinely equivalent for the TT — expanding the key would only invalidate the
+	// standard-chess TT for no benefit.
+	castleRook [4]Square
+	castleMask [64]uint8
 }
 
 // --- piece manipulation (maintain bitboards, mailbox, and key together) ---
@@ -230,6 +254,9 @@ func ParseFEN(fen string) (*Position, error) {
 	for i := range pos.board {
 		pos.board[i] = NoPiece
 	}
+	for i := range pos.castleRook {
+		pos.castleRook[i] = SqNone
+	}
 
 	// 1. Piece placement (ranks 8 -> 1).
 	rank := 7
@@ -265,22 +292,9 @@ func ParseFEN(fen string) (*Position, error) {
 		return nil, errors.New("invalid side to move: " + fields[1])
 	}
 
-	// 3. Castling rights.
-	if fields[2] != "-" {
-		for i := 0; i < len(fields[2]); i++ {
-			switch fields[2][i] {
-			case 'K':
-				pos.castling |= castleWK
-			case 'Q':
-				pos.castling |= castleWQ
-			case 'k':
-				pos.castling |= castleBK
-			case 'q':
-				pos.castling |= castleBQ
-			default:
-				return nil, errors.New("invalid castling char: " + string(fields[2][i]))
-			}
-		}
+	// 3. Castling rights (standard KQkq, X-FEN, and Shredder-FEN all accepted).
+	if err := pos.parseCastling(fields[2]); err != nil {
+		return nil, err
 	}
 
 	// 4. En-passant target.
@@ -344,18 +358,7 @@ func (pos *Position) FEN() string {
 	if pos.castling == 0 {
 		sb.WriteByte('-')
 	} else {
-		if pos.castling&castleWK != 0 {
-			sb.WriteByte('K')
-		}
-		if pos.castling&castleWQ != 0 {
-			sb.WriteByte('Q')
-		}
-		if pos.castling&castleBK != 0 {
-			sb.WriteByte('k')
-		}
-		if pos.castling&castleBQ != 0 {
-			sb.WriteByte('q')
-		}
+		sb.WriteString(pos.castlingField())
 	}
 	sb.WriteByte(' ')
 	if pos.epSquare == SqNone {

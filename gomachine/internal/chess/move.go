@@ -49,15 +49,36 @@ func (m Move) Type() MoveType { return MoveType((m >> 12) & 0x3) }
 func (m Move) Promo() PieceType { return PieceType((m>>14)&0x3) + Knight }
 
 // String renders the move in UCI long algebraic notation (e2e4, e7e8q, e1g1).
+//
+// Castling is stored internally as king-captures-rook (from = king, to = rook
+// origin), but String emits the king-two-square form (e1g1 / e1c1) derived from
+// the king and rook files, so standard castling UCI is unchanged. The
+// king-captures-rook form is the canonical Chess960 input/output — see
+// Position.CastleUCI and ParseUCIMove.
 func (m Move) String() string {
 	if m == NullMove {
 		return "0000"
+	}
+	if m.Type() == Castling {
+		from := m.From()
+		kingTo, _ := castleTargets(from, m.To())
+		return from.String() + kingTo.String()
 	}
 	s := m.From().String() + m.To().String()
 	if m.Type() == Promotion {
 		s += string([]byte{"nbrq"[(m>>14)&0x3]})
 	}
 	return s
+}
+
+// CastleUCI returns the canonical Chess960 "king-captures-rook" UCI for a castling
+// move (king origin → castling-rook origin, e.g. e1h1). For non-castling moves it
+// is identical to String. This is the unambiguous form GUIs use for FRC.
+func (m Move) CastleUCI() string {
+	if m.Type() != Castling {
+		return m.String()
+	}
+	return m.From().String() + m.To().String()
 }
 
 // MoveList is a fixed-capacity move buffer (max 218 legal moves; 256 rounds up).

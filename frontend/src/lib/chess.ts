@@ -72,16 +72,49 @@ export function applyUciVisually(board: BoardMap, uci: string): BoardMap {
     // Promotion.
     next[to] = promo ? (white ? promo.toUpperCase() : promo.toLowerCase()) : piece
 
-    // Castling: the king travels two files; bring the rook along.
-    if (lower === 'k' && Math.abs(fileOf(to) - fileOf(from)) === 2) {
-        const rank = from[1]
-        const rook = white ? 'R' : 'r'
-        if (fileOf(to) > fileOf(from)) {
-            delete next[`h${rank}`]
-            next[`f${rank}`] = rook
-        } else {
-            delete next[`a${rank}`]
-            next[`d${rank}`] = rook
+    // Castling (display-only, best-effort — the engine's authoritative FEN is the
+    // real source of truth). Two cases:
+    //   - Standard: the king travels exactly two files (e1g1 / e1c1).
+    //   - Chess960: a king landing on its back-rank g/c-file via a king-two-square
+    //     castling UCI (e.g. b1g1), distinguished from a normal one-step king move.
+    // The correct back-rank rook is relocated to f-file (kingside) or d-file
+    // (queenside); if none is found we simply leave the king moved (fallback).
+    if (lower === 'k') {
+        const fileDiff = Math.abs(fileOf(to) - fileOf(from))
+        const backRank = white ? '1' : '8'
+        const toFile = to[0]
+        const onBackRank = from[1] === backRank && to[1] === backRank
+        let side: 'k' | 'q' | null = null
+        if (fileDiff === 2) {
+            side = fileOf(to) > fileOf(from) ? 'k' : 'q'
+        } else if (onBackRank && fileDiff !== 1 && (toFile === 'g' || toFile === 'c')) {
+            side = toFile === 'g' ? 'k' : 'q'
+        }
+        if (side) {
+            const rook = white ? 'R' : 'r'
+            const kf = fileOf(from)
+            const kr = rankOf(from)
+            if (side === 'k') {
+                // Kingside: the rook on the highest file to the RIGHT of the king → f-file.
+                for (let f = 7; f > kf; f--) {
+                    const sq = squareAt(f, kr)
+                    if (board[sq] === rook) {
+                        delete next[sq]
+                        next[`f${backRank}`] = rook
+                        break
+                    }
+                }
+            } else {
+                // Queenside: the rook on the lowest file to the LEFT of the king → d-file.
+                for (let f = 0; f < kf; f++) {
+                    const sq = squareAt(f, kr)
+                    if (board[sq] === rook) {
+                        delete next[sq]
+                        next[`d${backRank}`] = rook
+                        break
+                    }
+                }
+            }
         }
     }
 
@@ -241,6 +274,9 @@ const STATUS_LABEL: Record<string, string> = {
     'draw-fivefold': 'Draw — fivefold repetition',
     'draw-insufficient-material': 'Draw — insufficient material',
     'draw-dead-position': 'Draw — dead position',
+    white_win: 'White wins — king captured',
+    black_win: 'Black wins — king captured',
+    draw: 'Draw',
 }
 export function statusLabel(status: string): string {
     return STATUS_LABEL[status] ?? status

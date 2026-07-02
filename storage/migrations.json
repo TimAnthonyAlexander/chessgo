@@ -585,6 +585,24 @@
             "table": "user",
             "operation": "add_column",
             "warning": null
+        },
+        {
+            "id": "mig_81d2b24f4ce2",
+            "sql": "ALTER TABLE `bot_game` ADD COLUMN `variant` VARCHAR(255) NOT NULL DEFAULT 'standard'",
+            "destructive": false,
+            "generated_at": "2026-07-02T16:30:40+00:00",
+            "table": "bot_game",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_9ed9279ff455",
+            "sql": "ALTER TABLE `bot_game` ADD COLUMN `duck` VARCHAR(255)",
+            "destructive": false,
+            "generated_at": "2026-07-02T16:30:40+00:00",
+            "table": "bot_game",
+            "operation": "add_column",
+            "warning": null
         }
     ]
 }

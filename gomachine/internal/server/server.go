@@ -91,6 +91,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /analyze-game", s.handleAnalyzeGame)
 	mux.HandleFunc("POST /status", s.handleStatus)
 	mux.HandleFunc("POST /perft", s.handlePerft)
+	// Duck Chess variant (self-contained; internal/duckchess). No engine pool.
+	mux.HandleFunc("POST /duck/legal-moves", s.handleDuckLegalMoves)
+	mux.HandleFunc("POST /duck/move", s.handleDuckMove)
+	mux.HandleFunc("POST /duck/bestmove", s.handleDuckBestMove)
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	return recoverPanics(mux)
 }
