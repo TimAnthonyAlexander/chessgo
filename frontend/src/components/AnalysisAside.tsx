@@ -56,11 +56,15 @@ export default function AnalysisAside({
     onLoadFen,
     playBotDisabled = false,
     showSetup = true,
+    hideActions = false,
 }: {
     fen: string
     onLoadFen: (fen: string) => void
     playBotDisabled?: boolean
     showSetup?: boolean
+    // Duck review: hide the cross-navigation actions (edit/play-bot/engine-vs) — they
+    // seed a STANDARD board from a duck position, which would be misleading.
+    hideActions?: boolean
 }) {
     const mat = useMemo(() => computeMaterial(fen), [fen])
 
@@ -79,7 +83,9 @@ export default function AnalysisAside({
             {/* Cross-links: edit the board, play a bot, or (admins) run an engine
                 match — all seeded from the position on the board. "Analyse this
                 position" is omitted (you're already in analysis). */}
-            <BoardActions fen={fen} omit={['analyze-position']} playDisabled={playBotDisabled} />
+            {!hideActions && (
+                <BoardActions fen={fen} omit={['analyze-position']} playDisabled={playBotDisabled} />
+            )}
         </Box>
     )
 }

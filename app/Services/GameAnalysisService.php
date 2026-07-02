@@ -18,7 +18,7 @@ use RuntimeException;
 class GameAnalysisService
 {
     /** Bump when the payload shape or judgment thresholds change (invalidates cache). */
-    private const VERSION = 3;
+    private const VERSION = 4;
 
     // Centipawn-loss thresholds for judging a move (from the mover's perspective).
     private const BLUNDER = 300;
@@ -44,12 +44,17 @@ class GameAnalysisService
      */
     public function analyze(Game $game): array
     {
-        // The full-game analyzer is standard-chess only: it replays the moves
-        // through the standard engine and streams standard evals. Chess960 moves
-        // would replay from the wrong start (silently wrong or illegal) and Duck
-        // Chess uses composite "<piece>:<duck>" moves the standard engine rejects
-        // outright. Rather than 502 on those, return an explicit "unsupported"
-        // payload the client renders as a friendly notice.
+        // Duck Chess has its own full-game analyzer (composite "<piece>:<duck>"
+        // moves + a dedicated duck engine endpoint); route it there.
+        if ($game->variant === 'duck') {
+            return $this->analyzeDuck($game);
+        }
+
+        // The standard full-game analyzer replays the moves through the standard
+        // engine and streams standard evals. Chess960 moves would replay from the
+        // wrong start (silently wrong or illegal), so those stay unsupported —
+        // rather than 502, return an explicit "unsupported" payload the client
+        // renders as a friendly notice.
         if ($game->variant !== '' && $game->variant !== 'standard') {
             return $this->unsupported($game);
         }
@@ -77,9 +82,42 @@ class GameAnalysisService
     }
 
     /**
-     * A minimal payload for a game the standard analyzer can't handle (Chess960,
-     * Duck Chess). Not cached — it's cheap and the flag lets the client show a
-     * clear "not available for this variant" state instead of an error.
+     * Return the Duck Chess analysis payload, computing + caching it on first
+     * call. Mirrors {@see analyze()} but replays the game's composite moves
+     * through the duck engine's full-game endpoint; {@see build()} then turns the
+     * positions into the same per-ply payload (composite moves + the per-position
+     * duck square flow through opaquely).
+     *
+     * @return array<string, mixed>
+     */
+    private function analyzeDuck(Game $game): array
+    {
+        $cached = $game->getAnalysis();
+        if ($cached !== null && ($cached['version'] ?? null) === self::VERSION) {
+            return $cached;
+        }
+
+        $moves = array_map('strval', $game->getMoves());
+        $sans = array_map('strval', $game->getSans());
+
+        $res = $this->engine->duckAnalyzeGame($moves);
+        $positions = is_array($res['positions'] ?? null) ? $res['positions'] : [];
+        if ($positions === []) {
+            throw new RuntimeException('engine returned no positions');
+        }
+
+        $payload = $this->build($game, $moves, $sans, $positions);
+
+        $game->setAnalysis($payload);
+        $game->save();
+
+        return $payload;
+    }
+
+    /**
+     * A minimal payload for a game the standard analyzer can't handle (Chess960).
+     * Not cached — it's cheap and the flag lets the client show a clear "not
+     * available for this variant" state instead of an error.
      *
      * @return array<string, mixed>
      */
@@ -121,6 +159,9 @@ class GameAnalysisService
             $node = [
                 'ply' => $k,
                 'fen' => (string) ($p['fen'] ?? ''),
+                // Per-position duck square (Duck Chess only; '' for standard —
+                // harmless, the client ignores it when the game isn't a duck game).
+                'duck' => (string) ($p['duck'] ?? ''),
                 'sideToMove' => $stm,
                 'evalWhite' => $this->whiteEval($p, $stm, $game->result),
                 'bestUci' => $this->stringOrNull($p['bestmove'] ?? null),
@@ -153,6 +194,9 @@ class GameAnalysisService
 
         return [
             'version' => self::VERSION,
+            // Lets the client tell a duck review apart from a standard one (drives
+            // the per-ply duck overlay); '' / 'standard' for ordinary games.
+            'variant' => $game->variant,
             'hubGameId' => $game->hub_game_id,
             'result' => $game->result,
             'reason' => $game->reason,

@@ -318,6 +318,7 @@ export interface AnalysisPly {
     bestPv: string[] // engine's best line from this position (UCI, bestUci first); [] if none
     bestDepth: number | null
     move?: AnalysisMove
+    duck?: string // Duck Chess: the duck's square at this position ("" if unplaced)
 }
 
 export interface AnalysisSide {

@@ -199,6 +199,30 @@ class GomachineClient
     }
 
     /**
+     * Duck Chess full-game analysis: replay composite `moves`
+     * (`"<pieceUCI>:<duckSquare>"`) from the standard start and evaluate every
+     * resulting position with the duck engine at full strength. Mirrors
+     * {@see analyzeGame()} — one HTTP call fanned across the pool, so it can take
+     * many seconds for a long game (hence the generous timeout). Each position
+     * carries a `duck` square and composite `bestmove` in addition to the
+     * standard analyze-game shape.
+     *
+     * @param string[] $moves Composite duck moves in order
+     * @return array<string, mixed> {positions: list<position>, count} where each
+     *   position is {ply, fen, duck, sideToMove, eval|null, bestmove|null,
+     *   bestSan|null, terminal, checkmate, stalemate}
+     */
+    public function duckAnalyzeGame(array $moves, int $movetimeMs = 250): array
+    {
+        // A full game can be 80+ positions; even fanned out across the pool this
+        // dwarfs the per-move budget, so allow a generous ceiling.
+        return $this->post('/duck/analyze-game', [
+            'moves' => array_values($moves),
+            'movetime' => $movetimeMs,
+        ], 120_000);
+    }
+
+    /**
      * List legal moves (optionally from a single square).
      *
      * @return array<string, mixed> {moves, count}

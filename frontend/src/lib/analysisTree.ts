@@ -28,6 +28,7 @@ export interface TreeNode {
     bestDepth: number | null // search depth the eval/PV were computed at
     judgment: Judgment | null // judgment of `move` (set for a loaded game's mainline)
     cpLoss: number | null
+    duck?: string // Duck Chess: the duck's square at this position ("" if unplaced; undefined for non-duck)
 }
 
 export interface Tree {
@@ -241,6 +242,7 @@ export interface AnalysisPlyDTO {
         isBest: boolean
         judgment: Judgment
     }
+    duck?: string // Duck Chess: the duck's square at this position ("" if unplaced)
 }
 
 /**
@@ -252,6 +254,15 @@ export function buildFromAnalysis(
     startFen: string,
     plies: AnalysisPlyDTO[],
 ): { tree: Tree; lastId: number } {
+    // Duck Chess review: the mainline can't be replayed through chess.js — Duck
+    // moves are composite ("e2e4:e5") and often illegal in standard chess (king
+    // captures, self-checks). Build the line straight from the payload's per-ply
+    // FENs instead, carrying the duck square onto each node. Detected by the
+    // presence of a `duck` field on any ply (standard/960 payloads have none).
+    if (plies.some((p) => p.duck !== undefined)) {
+        return buildDuckMainline(startFen, plies)
+    }
+
     let tree = createTree(startFen || START_FEN)
     let curId = tree.rootId
 
@@ -293,6 +304,79 @@ export function buildFromAnalysis(
                 },
             }
         }
+    }
+
+    return { tree, lastId: curId }
+}
+
+/**
+ * Build a Duck Chess mainline for review directly from the payload's per-ply FENs
+ * (the backend is the rules authority — the client has no duck rules). Each node's
+ * position is taken from the NEXT ply entry's `fen`; the composite move UCI
+ * ("piece:duckSquare") is split so `from`/`to` (the piece move) drive the board's
+ * last-move highlight and the best-move arrow. Every node also carries the duck
+ * square at that position. Playback-only — the user cannot branch (no client rules).
+ */
+function buildDuckMainline(
+    startFen: string,
+    plies: AnalysisPlyDTO[],
+): { tree: Tree; lastId: number } {
+    let tree = createTree(startFen || START_FEN)
+    let curId = tree.rootId
+
+    // Root (start position): eval + best line + the duck square at the start.
+    if (plies[0]) {
+        const p0 = plies[0]
+        tree = annotateEval(
+            tree,
+            curId,
+            p0.evalWhite,
+            p0.bestUci,
+            p0.bestPv ?? null,
+            p0.bestDepth ?? null,
+        )
+        const rootNode = tree.nodes[curId]
+        if (rootNode) {
+            tree = { ...tree, nodes: { ...tree.nodes, [curId]: { ...rootNode, duck: p0.duck } } }
+        }
+    }
+
+    for (let k = 0; k < plies.length; k++) {
+        const p = plies[k]
+        if (!p.move) continue
+        const parent = tree.nodes[curId]
+        if (!parent) break
+        // The resulting position + its eval/best/duck come from the NEXT ply entry
+        // (the payload is authoritative for Duck positions). Fall back to this ply's
+        // own FEN if the next entry is somehow absent.
+        const after = plies[k + 1]
+        const fen = after?.fen ?? p.fen
+        const pieceUci = p.move.uci.split(':')[0] // strip the ":duckSquare" suffix
+        const id = tree.nextId
+        const child = emptyNode(id, fen, parent.ply + 1, curId)
+        child.move = {
+            uci: p.move.uci,
+            san: p.move.san,
+            from: pieceUci.slice(0, 2),
+            to: pieceUci.slice(2, 4),
+        }
+        child.evalWhite = after ? after.evalWhite : null
+        child.bestUci = after ? after.bestUci : null
+        child.bestPv = after ? (after.bestPv ?? null) : null
+        child.bestDepth = after ? (after.bestDepth ?? null) : null
+        child.judgment = p.move.judgment
+        child.cpLoss = p.move.cpLoss
+        child.duck = after ? after.duck : undefined
+        tree = {
+            ...tree,
+            nodes: {
+                ...tree.nodes,
+                [id]: child,
+                [curId]: { ...parent, children: [...parent.children, id] },
+            },
+            nextId: id + 1,
+        }
+        curId = id
     }
 
     return { tree, lastId: curId }

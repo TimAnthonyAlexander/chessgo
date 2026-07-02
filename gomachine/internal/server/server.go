@@ -95,6 +95,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /duck/legal-moves", s.handleDuckLegalMoves)
 	mux.HandleFunc("POST /duck/move", s.handleDuckMove)
 	mux.HandleFunc("POST /duck/bestmove", s.handleDuckBestMove)
+	mux.HandleFunc("POST /duck/analyze-game", s.handleDuckAnalyzeGame)
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	return recoverPanics(mux)
 }

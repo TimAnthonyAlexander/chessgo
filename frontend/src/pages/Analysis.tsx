@@ -33,6 +33,7 @@ import { analyze, getGameAnalysis, sfAnalyze, type GameAnalysis } from '../api/c
 import type { Color } from '../api/client'
 import { VARIANT_LABEL } from '../lib/variants'
 import {
+    type GameOver,
     type Tree,
     type TreeNode,
     annotateEval,
@@ -89,6 +90,17 @@ const ANALYSIS_LADDER: { depth: number; ceilingMs: number }[] = [
 ]
 
 type AutoMode = 'off' | 'play' | 'best'
+
+// Duck Chess is REVIEW-ONLY on the analysis board — the client has no duck rules,
+// so there's no "game over" to compute locally; the board is non-interactive and we
+// short-circuit chess.js entirely for a loaded duck game.
+const NO_GAME_OVER: GameOver = {
+    over: false,
+    checkmate: false,
+    stalemate: false,
+    draw: false,
+    check: false,
+}
 
 // A useState<boolean> that persists to localStorage, so view preferences (engine
 // on/off, which arrows are shown) survive a refresh. Behaves like useState — the
@@ -222,9 +234,17 @@ export default function Analysis() {
     useEffect(() => setHoverUci(null), [currentId])
 
     const current = tree.nodes[currentId] ?? tree.nodes[tree.rootId]
+    // Reviewing a loaded Duck Chess game: playback only (no client-side duck rules,
+    // so no move input / variations / live standard-engine analysis).
+    const isDuck = game?.variant === 'duck'
     const sideToMove = turnAt(current)
-    const over = useMemo(() => gameOverAt(current), [current.fen])
-    const legalMoves = useMemo(() => (over.over ? [] : legalUci(current)), [current.fen, over.over])
+    // Duck has no locally-computable game-over / legality — the engine owns duck
+    // rules. Feed the board an empty legal-move set and a no-op terminal state.
+    const over = useMemo(() => (isDuck ? NO_GAME_OVER : gameOverAt(current)), [current.fen, isDuck])
+    const legalMoves = useMemo(
+        () => (isDuck || over.over ? [] : legalUci(current)),
+        [current.fen, over.over, isDuck],
+    )
 
     // --- Live engine eval + best line: progressive ("streaming") deepening ---
     // We can't stream over the wire (no SSE behind Cloudflare), so we emulate it by
@@ -238,6 +258,10 @@ export default function Analysis() {
     // re-keys only when the VIEWED position changes (current.id/fen).
     useEffect(() => {
         if (!engineOn) return // engine analysis disabled — no fetching
+        // Duck review: the cached per-ply evals from the payload are already on every
+        // node — don't stream the STANDARD engine against a duck position (it has no
+        // duck rules and would mis-evaluate it).
+        if (isDuck) return
         // While a game is loading, the tree is still the transient empty root; don't
         // fire /analyze against it — that races buildFromAnalysis (whichever lands
         // last wins) and would overwrite the persisted, book-backed game analysis.
@@ -330,7 +354,7 @@ export default function Analysis() {
         // Keyed on the VIEWED position only — current.bestPv/bestDepth are read at
         // effect start (above) but deliberately NOT deps: our own setTree updates them
         // each step, and re-running would abort the in-flight call and re-fetch it.
-    }, [engineOn, loading, current.id, current.fen, over.over, over.checkmate, sideToMove])
+    }, [engineOn, isDuck, loading, current.id, current.fen, over.over, over.checkmate, sideToMove])
 
     // --- Stockfish second-opinion best move (optional arrow) ---
     // One full-strength Stockfish call per viewed position, only while the toggle
@@ -338,7 +362,8 @@ export default function Analysis() {
     // installed the request errors and we just don't draw the arrow. Keyed on the
     // VIEWED position — setting sfBest is deliberately NOT a dep (it would refetch).
     useEffect(() => {
-        if (!engineOn || !showSfArrow || loading || over.over) return
+        // Gated off for duck review — Stockfish has no duck rules (standard-only arrow).
+        if (!engineOn || !showSfArrow || loading || over.over || isDuck) return
         const fen = current.fen
         let cancelled = false
         const ac = new AbortController()
@@ -360,7 +385,7 @@ export default function Analysis() {
             cancelled = true
             ac.abort()
         }
-    }, [engineOn, showSfArrow, loading, over.over, current.fen])
+    }, [engineOn, showSfArrow, loading, over.over, isDuck, current.fen])
 
     // --- Navigation (manual navigation always cancels any auto playback) ---
     const goPrev = useCallback(() => {
@@ -443,7 +468,9 @@ export default function Analysis() {
     // lean on the eval effect to populate `bestUci`; when it's not yet known we
     // simply wait (this effect re-runs once it arrives). ---
     useEffect(() => {
-        if (autoMode !== 'best') return
+        // Auto Best plays the engine's best move into the tree via chess.js — disabled
+        // for duck review (composite moves + no client rules). Auto Play still works.
+        if (autoMode !== 'best' || isDuck) return
         if (over.over) {
             setAutoMode('off') // game over — nothing left to play
             return
@@ -461,7 +488,7 @@ export default function Analysis() {
             setCurrentId(res.nodeId)
         }, AUTO_DELAY)
         return () => clearTimeout(t)
-    }, [autoMode, currentId, current.bestUci, over.over, tree])
+    }, [autoMode, isDuck, currentId, current.bestUci, over.over, tree])
 
     const toggleAuto = useCallback((mode: Exclude<AutoMode, 'off'>) => {
         if (mode === 'best') setEngineOn(true) // Auto Best Move needs the engine running
@@ -479,14 +506,15 @@ export default function Analysis() {
 
     // Stockfish's best move for the CURRENT position (ignore a stale one held for a
     // previous FEN). Only surfaced while the engine + the SF-arrow toggle are on.
-    const sfCurrent = engineOn && showSfArrow && sfBest?.fen === current.fen ? sfBest : null
+    const sfCurrent =
+        !isDuck && engineOn && showSfArrow && sfBest?.fen === current.fen ? sfBest : null
     const sfUci = sfCurrent?.uci ?? null
     // The eval-bar line, unlike the arrow, persists the LAST known Stockfish eval
     // while the next one loads (mirrors the main eval's lastRef) — so making a move
     // smoothly animates the line to its new height instead of blinking out. The
     // arrow stays strictly current-position-gated (a stale arrow could point to a
     // move that's now illegal).
-    const sfEvForBar = engineOn && showSfArrow ? (sfBest?.evalWhite ?? null) : null
+    const sfEvForBar = !isDuck && engineOn && showSfArrow ? (sfBest?.evalWhite ?? null) : null
 
     // Board arrows. A hovered candidate (book) move wins outright — a single blue
     // arrow, no engine overlays. Otherwise we draw gomachine's gold best-move arrow
@@ -526,6 +554,7 @@ export default function Analysis() {
                     onLoadFen={loadPosition}
                     playBotDisabled={over.over}
                     showSetup={!id}
+                    hideActions={isDuck}
                 />
             }
             evalBar={
@@ -559,7 +588,10 @@ export default function Analysis() {
                         evalWhite={current.evalWhite}
                         depth={current.bestDepth}
                         fen={current.fen}
-                        pvUci={current.bestPv}
+                        // Duck: the cached eval/depth are meaningful, but the PV is a
+                        // composite duck line chess.js can't render as SAN — suppress it.
+                        pvUci={isDuck ? null : current.bestPv}
+                        pvUnavailable={isDuck}
                     />
 
                     <MoveTree tree={tree} currentId={currentId} onSelect={selectNode} />
@@ -595,14 +627,21 @@ export default function Analysis() {
                                             : 'Play through the moves in the list'
                                 }
                             />
-                            <AutoBtn
-                                active={autoMode === 'best'}
-                                onClick={() => toggleAuto('best')}
-                                icon={
-                                    autoMode === 'best' ? <Square size={15} /> : <Zap size={15} />
-                                }
-                                label={autoMode === 'best' ? 'Stop' : 'Auto Best'}
-                            />
+                            {/* Auto Best plays engine moves via chess.js — standard-only. */}
+                            {!isDuck && (
+                                <AutoBtn
+                                    active={autoMode === 'best'}
+                                    onClick={() => toggleAuto('best')}
+                                    icon={
+                                        autoMode === 'best' ? (
+                                            <Square size={15} />
+                                        ) : (
+                                            <Zap size={15} />
+                                        )
+                                    }
+                                    label={autoMode === 'best' ? 'Stop' : 'Auto Best'}
+                                />
+                            )}
                         </Box>
 
                         {/* Navigation + view toggles */}
@@ -630,14 +669,17 @@ export default function Analysis() {
                             >
                                 <Target size={19} />
                             </NavBtn>
-                            <NavBtn
-                                onClick={() => setShowSfArrow((v) => !v)}
-                                label="Stockfish best move arrow"
-                                active={engineOn && showSfArrow}
-                                accent={SF_ARROW_COLOR}
-                            >
-                                <Fish size={19} />
-                            </NavBtn>
+                            {/* Stockfish second-opinion arrow is standard-only. */}
+                            {!isDuck && (
+                                <NavBtn
+                                    onClick={() => setShowSfArrow((v) => !v)}
+                                    label="Stockfish best move arrow"
+                                    active={engineOn && showSfArrow}
+                                    accent={SF_ARROW_COLOR}
+                                >
+                                    <Fish size={19} />
+                                </NavBtn>
+                            )}
                             <NavBtn
                                 onClick={() => setOrientation((o) => (o === 'w' ? 'b' : 'w'))}
                                 label="Flip board"
@@ -658,13 +700,17 @@ export default function Analysis() {
                         </Box>
                     </Box>
 
-                    <OpeningPanel
-                        tree={tree}
-                        currentId={currentId}
-                        engineOn={engineOn}
-                        onMove={onMove}
-                        onHoverMove={setHoverUci}
-                    />
+                    {/* Opening explorer / candidates are standard-only (chess.js +
+                        standard engine) — hidden for duck review. */}
+                    {!isDuck && (
+                        <OpeningPanel
+                            tree={tree}
+                            currentId={currentId}
+                            engineOn={engineOn}
+                            onMove={onMove}
+                            onHoverMove={setHoverUci}
+                        />
+                    )}
                 </Box>
             }
         >
@@ -675,10 +721,13 @@ export default function Analysis() {
                 legalMoves={legalMoves}
                 lastMove={lastMove}
                 inCheck={over.check}
-                interactive
+                // Duck review is playback-only — no move input / variations (the client
+                // has no duck rules). Navigation is via the move list + nav buttons.
+                interactive={!isDuck}
                 onMove={onMove}
                 arrow={arrow}
                 arrow2={sfArrow}
+                duck={isDuck ? current.duck || null : null}
             />
         </BoardPage>
     )
@@ -808,6 +857,7 @@ function EngineLine({
     depth,
     fen,
     pvUci,
+    pvUnavailable,
 }: {
     engineOn: boolean
     onToggleEngine: () => void
@@ -815,6 +865,9 @@ function EngineLine({
     depth: number | null
     fen: string
     pvUci: string[] | null
+    // When true (Duck review), the best line can't be rendered as SAN — show just
+    // the eval pill, with no "analysing…" placeholder.
+    pvUnavailable?: boolean
 }) {
     // Render the PV as numbered SAN tokens ("12. Nf3 Nc6 13. Bb5 …") relative to
     // the current position's move number and side to move.
@@ -922,7 +975,14 @@ function EngineLine({
             {/* Eval pill + best line — only while the engine is on */}
             {engineOn && (
                 <Box
-                    sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.25, px: 1.5, pb: 1.5 }}
+                    sx={{
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: 1.25,
+                        px: 1.5,
+                        pb: 1.5,
+                        minWidth: 0,
+                    }}
                 >
                     <Box
                         sx={{
@@ -959,7 +1019,7 @@ function EngineLine({
                                 component="span"
                                 sx={{ color: 'var(--muted)', fontStyle: 'italic' }}
                             >
-                                analysing…
+                                {pvUnavailable ? '' : 'analysing…'}
                             </Box>
                         ) : (
                             tokens.map((t, i) => (
@@ -1125,9 +1185,32 @@ function Header({
                     mb: 1,
                 }}
             >
-                <Typography sx={{ fontWeight: 600, fontSize: 13.5, letterSpacing: 0.2 }}>
-                    Game review
-                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
+                    <Typography sx={{ fontWeight: 600, fontSize: 13.5, letterSpacing: 0.2 }}>
+                        Game review
+                    </Typography>
+                    {game.variant === 'duck' && (
+                        <Box
+                            component="span"
+                            sx={{
+                                fontFamily: 'var(--font-mono)',
+                                fontSize: 10.5,
+                                fontWeight: 700,
+                                letterSpacing: 0.4,
+                                textTransform: 'uppercase',
+                                color: 'var(--accent)',
+                                bgcolor: 'var(--accent-soft)',
+                                border: '1px solid var(--accent-line)',
+                                borderRadius: '5px',
+                                px: 0.6,
+                                py: '1px',
+                                flexShrink: 0,
+                            }}
+                        >
+                            Duck Chess
+                        </Box>
+                    )}
+                </Box>
                 <Typography sx={{ fontSize: 13, fontWeight: 600, color: resultColor }}>
                     {resultText}
                 </Typography>
