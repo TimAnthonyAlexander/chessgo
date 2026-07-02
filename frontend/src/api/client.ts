@@ -260,10 +260,20 @@ export interface DuckEval {
 export function duckEval(
     fen: string,
     duck: string,
-    opts?: { movetime?: number; signal?: AbortSignal },
+    opts?: { movetime?: number; rating?: number; depth?: number; nodes?: number; signal?: AbortSignal },
 ): Promise<DuckEval> {
-    const body: { fen: string; duck: string; movetime?: number } = { fen, duck }
+    const body: {
+        fen: string
+        duck: string
+        movetime?: number
+        rating?: number
+        depth?: number
+        nodes?: number
+    } = { fen, duck }
     if (opts?.movetime) body.movetime = opts.movetime
+    if (opts?.rating) body.rating = opts.rating
+    if (opts?.depth) body.depth = opts.depth
+    if (opts?.nodes) body.nodes = opts.nodes
     return request<DuckEval>('/duck/analyze', {
         method: 'POST',
         body: JSON.stringify(body),

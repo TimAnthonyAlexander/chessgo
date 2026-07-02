@@ -30,6 +30,8 @@ import { ErrorBanner, NavBtn } from '../components/PanelUI'
 import {
     analyze,
     type Color,
+    duckEval,
+    duckPlay,
     engineVsMove,
     type EngineSide,
     type GameStatus,
@@ -123,8 +125,9 @@ const SETTINGS_KEY = 'eve.settings.v2'
 interface EveSettings {
     white: SideConfig
     black: SideConfig
+    duck?: boolean // Duck Chess mode (both sides forced to gomachine)
 }
-const DEFAULT_SETTINGS: EveSettings = { white: DEFAULT_WHITE, black: DEFAULT_BLACK }
+const DEFAULT_SETTINGS: EveSettings = { white: DEFAULT_WHITE, black: DEFAULT_BLACK, duck: false }
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))
 
@@ -160,6 +163,7 @@ function loadSettings(): EveSettings {
         return {
             white: coerceSide(p.white, DEFAULT_WHITE),
             black: coerceSide(p.black, DEFAULT_BLACK),
+            duck: typeof p.duck === 'boolean' ? p.duck : false,
         }
     } catch {
         return DEFAULT_SETTINGS // unparseable / storage unavailable → fall back to defaults
@@ -205,17 +209,21 @@ export default function EngineVsEngine() {
     // White is the bottom player; Black is the top player (board is White-at-bottom).
     const [white, setWhite] = useState<SideConfig>(() => loadSettings().white)
     const [black, setBlack] = useState<SideConfig>(() => loadSettings().black)
+    // Duck Chess mode: both sides forced to gomachine (Stockfish can't play Duck
+    // Chess), driven through the duck engine. Persisted alongside the side configs.
+    const [duckMode, setDuckMode] = useState<boolean>(() => loadSettings().duck ?? false)
 
     useEffect(() => {
         try {
-            localStorage.setItem(SETTINGS_KEY, JSON.stringify({ white, black }))
+            localStorage.setItem(SETTINGS_KEY, JSON.stringify({ white, black, duck: duckMode }))
         } catch {
             // storage unavailable / quota — settings just won't persist this session
         }
-    }, [white, black])
+    }, [white, black, duckMode])
 
     // Game
     const [fen, setFen] = useState(startFen)
+    const [duck, setDuck] = useState('') // Duck Chess: the duck's square ("" = unplaced)
     const [moves, setMoves] = useState<MoveEntry[]>([])
     const [status, setStatus] = useState<GameStatus>('ongoing')
     const [result, setResult] = useState<string | null>(null)
@@ -230,7 +238,8 @@ export default function EngineVsEngine() {
     const over = status !== 'ongoing'
     const sideToMove = sideToMoveOf(fen)
     const moverCfg = sideToMove === 'w' ? white : black
-    const moverSide: EngineSide = moverCfg.engine
+    // In Duck mode BOTH sides are gomachine regardless of the stored engine pick.
+    const moverSide: EngineSide = duckMode ? 'gomachine' : moverCfg.engine
 
     // Book panel: a tree of the game line so far, so the engine-owned OpeningPanel
     // can name the opening + show candidate-move eval bars for the live position.
@@ -258,6 +267,56 @@ export default function EngineVsEngine() {
         const id = setTimeout(async () => {
             thinkingRef.current = true
             try {
+                if (duckMode) {
+                    // Duck Chess: drive the game through the duck engine. Both sides
+                    // are gomachine; the mover's rating + search budget come from its
+                    // stored SideConfig. duckEval returns a composite move; duckPlay
+                    // validates + applies it and reports the resulting status.
+                    const r = await duckEval(fen, duck, {
+                        rating: moverCfg.rating,
+                        ...(moverCfg.limitKind === 'depth'
+                            ? { depth: moverCfg.depth }
+                            : moverCfg.limitKind === 'nodes'
+                              ? { nodes: moverCfg.nodes }
+                              : { movetime: moverCfg.movetime }),
+                    })
+                    if (cancelled) return
+                    if (!r.bestmove) {
+                        setRunning(false)
+                        setError('engine returned no move')
+                        return
+                    }
+                    const mv = await duckPlay(fen, duck, r.bestmove)
+                    if (cancelled) return
+                    if (!mv.legal) {
+                        setRunning(false)
+                        setError(mv.error ?? 'engine returned an illegal move')
+                        return
+                    }
+                    setLastMove({ from: r.bestmove.slice(0, 2), to: r.bestmove.slice(2, 4) })
+                    setMoves((m) => [
+                        ...m,
+                        {
+                            ply: m.length + 1,
+                            uci: r.bestmove!,
+                            san: mv.san,
+                            by: 'bot',
+                            fen: mv.newFen,
+                            duck: mv.duck,
+                        },
+                    ])
+                    setFen(mv.newFen)
+                    setDuck(mv.duck)
+                    const gameOver = mv.status !== 'ongoing'
+                    playForSan(mv.san, gameOver) // move/capture/end cue
+                    if (mv.status !== 'ongoing') {
+                        setStatus(mv.status)
+                        setResult(mv.result ?? null)
+                        setRunning(false)
+                    }
+                    return
+                }
+
                 const res = await engineVsMove(paramsForSide(moverCfg, fen))
                 if (cancelled) return
                 if (!res.bestmove || !res.fen) {
@@ -301,7 +360,7 @@ export default function EngineVsEngine() {
             cancelled = true
             clearTimeout(id)
         }
-    }, [running, ply, over, fen, sideToMove, moverCfg])
+    }, [running, ply, over, fen, sideToMove, moverCfg, duck, duckMode])
 
     // Eval bar = ONE consistent evaluator: gomachine at full strength, re-reading the
     // current position after every ply regardless of who moved. We deliberately do NOT
@@ -310,6 +369,17 @@ export default function EngineVsEngine() {
     // while still surfacing forced mates as M1/M2.
     useEffect(() => {
         if (over) {
+            if (duckMode) {
+                // Duck Chess terminals: win by capturing a king (no check/checkmate).
+                setWhiteEval(
+                    status === 'white_win'
+                        ? { type: 'mate', white: 1 }
+                        : status === 'black_win'
+                          ? { type: 'mate', white: -1 }
+                          : { type: 'cp', white: 0 },
+                )
+                return
+            }
             // Checkmate: the side to move has been mated, so it's lost. Other terminals
             // (stalemate / draws) are dead even.
             setWhiteEval(
@@ -324,6 +394,20 @@ export default function EngineVsEngine() {
             return
         }
         let cancelled = false
+        if (duckMode) {
+            // Duck eval bar = the duck engine at FULL strength (no rating cap),
+            // side-to-move eval converted to White-relative.
+            duckEval(fen, duck)
+                .then((r) => {
+                    if (cancelled || !r.eval) return
+                    const white = r.sideToMove === 'w' ? r.eval.value : -r.eval.value
+                    setWhiteEval({ type: r.eval.type, white })
+                })
+                .catch(() => {})
+            return () => {
+                cancelled = true
+            }
+        }
         analyze(fen, { movetime: 300 })
             .then((r) => {
                 if (cancelled || !r.eval) return
@@ -334,11 +418,12 @@ export default function EngineVsEngine() {
         return () => {
             cancelled = true
         }
-    }, [fen, status, over, sideToMove, ply])
+    }, [fen, status, over, sideToMove, ply, duckMode, duck])
 
     function reset() {
         setRunning(false)
         setFen(startFen)
+        setDuck('')
         setMoves([])
         setStatus('ongoing')
         setResult(null)
@@ -353,6 +438,7 @@ export default function EngineVsEngine() {
         if (!navFen) return
         setRunning(false)
         setFen(navFen)
+        setDuck('')
         setMoves([])
         setStatus('ongoing')
         setResult(null)
@@ -392,16 +478,42 @@ export default function EngineVsEngine() {
         <BoardPage
             left={
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                    <Box
+                        sx={{
+                            bgcolor: 'var(--surface)',
+                            border: '1px solid var(--line-soft)',
+                            borderRadius: '14px',
+                            p: 1.75,
+                            boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+                        }}
+                    >
+                        <Label>Mode</Label>
+                        <ToggleButtonGroup
+                            exclusive
+                            fullWidth
+                            size="small"
+                            value={duckMode ? 'duck' : 'standard'}
+                            onChange={(_, v) => v && setDuckMode(v === 'duck')}
+                            disabled={running}
+                            sx={toggleSx}
+                        >
+                            <ToggleButton value="standard">Standard</ToggleButton>
+                            <ToggleButton value="duck">Duck Chess</ToggleButton>
+                        </ToggleButtonGroup>
+                    </Box>
+
                     <SideControls
                         cfg={black}
                         onChange={(patch) => setBlack((c) => ({ ...c, ...patch }))}
                         disabled={running}
+                        duckMode={duckMode}
                     />
 
                     <SideControls
                         cfg={white}
                         onChange={(patch) => setWhite((c) => ({ ...c, ...patch }))}
                         disabled={running}
+                        duckMode={duckMode}
                     />
                 </Box>
             }
@@ -420,15 +532,27 @@ export default function EngineVsEngine() {
                         }}
                     >
                         <MatchupRow
-                            icon={black.engine === 'gomachine' ? <Cpu size={16} /> : <Bot size={16} />}
-                            name={engineName(black.engine)}
-                            detail={sideDetail(black)}
+                            icon={
+                                duckMode || black.engine === 'gomachine' ? (
+                                    <Cpu size={16} />
+                                ) : (
+                                    <Bot size={16} />
+                                )
+                            }
+                            name={duckMode ? 'gomachine' : engineName(black.engine)}
+                            detail={duckMode ? `~${black.rating} Elo` : sideDetail(black)}
                             side="b"
                         />
                         <MatchupRow
-                            icon={white.engine === 'gomachine' ? <Cpu size={16} /> : <Bot size={16} />}
-                            name={engineName(white.engine)}
-                            detail={sideDetail(white)}
+                            icon={
+                                duckMode || white.engine === 'gomachine' ? (
+                                    <Cpu size={16} />
+                                ) : (
+                                    <Bot size={16} />
+                                )
+                            }
+                            name={duckMode ? 'gomachine' : engineName(white.engine)}
+                            detail={duckMode ? `~${white.rating} Elo` : sideDetail(white)}
                             side="w"
                         />
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
@@ -452,14 +576,14 @@ export default function EngineVsEngine() {
                                         state: { moves: moves.map((m) => m.uci), startFen },
                                     })
                                 }
-                                disabled={moves.length === 0}
+                                disabled={duckMode || moves.length === 0}
                             >
                                 <Telescope size={18} />
                             </NavBtn>
                             <NavBtn
                                 label="Play a bot from here"
                                 onClick={() => navigate('/bot', { state: { fen } })}
-                                disabled={running}
+                                disabled={running || duckMode}
                             >
                                 <Bot size={18} />
                             </NavBtn>
@@ -491,27 +615,33 @@ export default function EngineVsEngine() {
 
                     {/* Book info: opening name + candidate-move eval bars for the live
                         position (engine-owned). Hover a move for its arrow + opening;
-                        click to open that line in the analysis board. */}
-                    <Box
-                        sx={{
-                            bgcolor: 'var(--surface)',
-                            border: '1px solid var(--line-soft)',
-                            borderRadius: '14px',
-                            overflow: 'hidden',
-                        }}
-                    >
-                        <OpeningPanel
-                            tree={bookTree}
-                            currentId={bookNodeId}
-                            engineOn
-                            onMove={(uci) =>
-                                navigate('/analysis', {
-                                    state: { moves: [...moves.map((m) => m.uci), uci], startFen },
-                                })
-                            }
-                            onHoverMove={setHoverUci}
-                        />
-                    </Box>
+                        click to open that line in the analysis board. Standard-only —
+                        the book + standard engine don't understand the duck. */}
+                    {!duckMode && (
+                        <Box
+                            sx={{
+                                bgcolor: 'var(--surface)',
+                                border: '1px solid var(--line-soft)',
+                                borderRadius: '14px',
+                                overflow: 'hidden',
+                            }}
+                        >
+                            <OpeningPanel
+                                tree={bookTree}
+                                currentId={bookNodeId}
+                                engineOn
+                                onMove={(uci) =>
+                                    navigate('/analysis', {
+                                        state: {
+                                            moves: [...moves.map((m) => m.uci), uci],
+                                            startFen,
+                                        },
+                                    })
+                                }
+                                onHoverMove={setHoverUci}
+                            />
+                        </Box>
+                    )}
                 </Box>
             }
         >
@@ -525,6 +655,7 @@ export default function EngineVsEngine() {
                 interactive={false}
                 onMove={() => {}}
                 arrow={arrow}
+                duck={duckMode ? duck || null : null}
             />
         </BoardPage>
     )
@@ -563,12 +694,18 @@ function SideControls({
     cfg,
     onChange,
     disabled,
+    duckMode = false,
 }: {
     cfg: SideConfig
     onChange: (patch: Partial<SideConfig>) => void
     disabled: boolean
+    // Duck Chess mode: this side is forced to gomachine; hide the engine picker,
+    // Stockfish strength, Aggression, and Opening book — leaving only the rating
+    // slider + the search-limit controls.
+    duckMode?: boolean
 }) {
-    const isGoma = cfg.engine === 'gomachine'
+    // Duck mode pins the side to gomachine regardless of the stored engine pick.
+    const isGoma = duckMode || cfg.engine === 'gomachine'
     // Stockfish offers only movetime | depth; if the stored kind is 'nodes' (carried
     // over from gomachine), treat it as movetime for the toggle + sending.
     const effKind: LimitKind = !isGoma && cfg.limitKind === 'nodes' ? 'movetime' : cfg.limitKind
@@ -586,27 +723,29 @@ function SideControls({
                 boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
             }}
         >
-            <ToggleButtonGroup
-                exclusive
-                fullWidth
-                size="small"
-                value={cfg.engine}
-                onChange={(_, v) => {
-                    if (!v) return
-                    // Switching to Stockfish: coerce a nodes budget (SF has no nodes mode)
-                    // to movetime so the sent budget stays valid.
-                    if (v === 'stockfish' && cfg.limitKind === 'nodes') {
-                        onChange({ engine: 'stockfish', limitKind: 'movetime' })
-                    } else {
-                        onChange({ engine: v as EngineKind })
-                    }
-                }}
-                disabled={disabled}
-                sx={{ ...toggleSx, mt: 0 }}
-            >
-                <ToggleButton value="gomachine">gomachine</ToggleButton>
-                <ToggleButton value="stockfish">Stockfish</ToggleButton>
-            </ToggleButtonGroup>
+            {!duckMode && (
+                <ToggleButtonGroup
+                    exclusive
+                    fullWidth
+                    size="small"
+                    value={cfg.engine}
+                    onChange={(_, v) => {
+                        if (!v) return
+                        // Switching to Stockfish: coerce a nodes budget (SF has no nodes
+                        // mode) to movetime so the sent budget stays valid.
+                        if (v === 'stockfish' && cfg.limitKind === 'nodes') {
+                            onChange({ engine: 'stockfish', limitKind: 'movetime' })
+                        } else {
+                            onChange({ engine: v as EngineKind })
+                        }
+                    }}
+                    disabled={disabled}
+                    sx={{ ...toggleSx, mt: 0 }}
+                >
+                    <ToggleButton value="gomachine">gomachine</ToggleButton>
+                    <ToggleButton value="stockfish">Stockfish</ToggleButton>
+                </ToggleButtonGroup>
+            )}
 
             {isGoma ? (
                 <>
@@ -620,31 +759,37 @@ function SideControls({
                         disabled={disabled}
                         onChange={(n) => onChange({ rating: n })}
                     />
-                    <SliderRow
-                        label="Aggression"
-                        value={`${cfg.aggr}`}
-                        sliderValue={cfg.aggr}
-                        min={0}
-                        max={100}
-                        step={5}
-                        disabled={disabled}
-                        onChange={(n) => onChange({ aggr: n })}
-                    />
-                    <Box>
-                        <Label>Opening book</Label>
-                        <ToggleButtonGroup
-                            exclusive
-                            fullWidth
-                            size="small"
-                            value={cfg.book ? 'on' : 'off'}
-                            onChange={(_, v) => v && onChange({ book: v === 'on' })}
-                            disabled={disabled}
-                            sx={toggleSx}
-                        >
-                            <ToggleButton value="on">On</ToggleButton>
-                            <ToggleButton value="off">Off</ToggleButton>
-                        </ToggleButtonGroup>
-                    </Box>
+                    {/* Aggression + opening book are gomachine-only knobs, hidden in
+                        Duck mode (the duck engine ignores them). */}
+                    {!duckMode && (
+                        <>
+                            <SliderRow
+                                label="Aggression"
+                                value={`${cfg.aggr}`}
+                                sliderValue={cfg.aggr}
+                                min={0}
+                                max={100}
+                                step={5}
+                                disabled={disabled}
+                                onChange={(n) => onChange({ aggr: n })}
+                            />
+                            <Box>
+                                <Label>Opening book</Label>
+                                <ToggleButtonGroup
+                                    exclusive
+                                    fullWidth
+                                    size="small"
+                                    value={cfg.book ? 'on' : 'off'}
+                                    onChange={(_, v) => v && onChange({ book: v === 'on' })}
+                                    disabled={disabled}
+                                    sx={toggleSx}
+                                >
+                                    <ToggleButton value="on">On</ToggleButton>
+                                    <ToggleButton value="off">Off</ToggleButton>
+                                </ToggleButtonGroup>
+                            </Box>
+                        </>
+                    )}
                 </>
             ) : (
                 <SliderRow

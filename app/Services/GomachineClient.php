@@ -276,14 +276,34 @@ class GomachineClient
      * duck engine does its own weakening, so pass the raw human rating. The
      * returned move is ALREADY APPLIED — newFen/duck reflect the position after it.
      *
+     * Like {@see bestMove()}, the admin engine-vs-engine (Duck mode) view can pin
+     * the search budget to EXACTLY ONE of depth / nodes / movetime (pass the
+     * others as 0; the engine applies depth→nodes→movetime precedence). Everyday
+     * callers (bot games) pass rating + optional movetime and stay identical.
+     *
      * @param string $duck Current duck square ("" if not yet placed).
      * @return array<string, mixed> {bestmove, san, eval, newFen, duck, sideToMove, status, result}
      */
-    public function duckBestMove(string $fen, string $duck, int $rating, int $movetimeMs = 0): array
-    {
-        $limits = ['rating' => $rating];
-        if ($movetimeMs > 0) {
-            $limits['movetime'] = $movetimeMs;
+    public function duckBestMove(
+        string $fen,
+        string $duck,
+        int $rating,
+        int $movetimeMs = 0,
+        int $depth = 0,
+        int $nodes = 0,
+    ): array {
+        $limits = [];
+        if ($rating > 0) {
+            $limits['rating'] = $rating; // >0 caps strength; omit for full power
+        }
+        // Exactly one budget dimension; the engine applies depth→nodes→movetime
+        // precedence if more than one leaks through.
+        if ($depth > 0) {
+            $limits['depth'] = $depth; // fixed-depth search (admin engine-vs-engine)
+        } elseif ($nodes > 0) {
+            $limits['nodes'] = $nodes; // fixed-nodes search (admin engine-vs-engine)
+        } elseif ($movetimeMs > 0) {
+            $limits['movetime'] = $movetimeMs; // budget override
         }
 
         return $this->post('/duck/bestmove', [
