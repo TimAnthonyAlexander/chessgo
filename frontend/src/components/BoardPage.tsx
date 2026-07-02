@@ -7,10 +7,13 @@ import { Box } from '@mui/material'
 // moves or resizes the board.
 //
 // How the guarantees hold:
-//  - A 3-column grid `SIDE · board · SIDE` with EQUAL fixed side widths, centered
-//    (`fit-content` + `mx:auto`), puts the board column dead-center in the viewport.
-//    Both side columns are ALWAYS rendered (empty when a page has no left/right
-//    content) so the centering never shifts between pages.
+//  - A 3-column grid `SIDE · board · SIDE`, centered (`fit-content` + `mx:auto`),
+//    with TIGHT gaps so the cards sit close to the board. Both side columns are
+//    ALWAYS rendered (empty when a page has no left/right content) so the layout is
+//    stable. The board is dead-centered when there's no eval bar; when a bar IS
+//    shown it claims a little extra room on the LEFT (where it floats), nudging the
+//    board a few px right so BOTH cards hug the board+bar block evenly instead of
+//    leaving the right card stranded far out.
 //  - The board column is a FIXED length (`BOARD_SIZE`), never `1fr`/`auto`, so no
 //    amount of side content can steal or add width to it.
 //  - Side columns are a fixed width AND fixed height (= the board's height), so tall
@@ -25,14 +28,21 @@ import { Box } from '@mui/material'
 
 // Fixed side-column width (desktop). The board is flanked by two of these.
 const SIDE_W = 320
-// Gap between each side column and the center board block. Also the corridor the
-// floated eval bar (38px bar + 10px offset = 48px) lives in on the left, so it must
-// clear it with a little breathing room.
-const COL_GAP = 56
+// The ONE uniform gap between the board-block and whatever sits next to it: the
+// eval-bar↔board gap, the right-card↔board gap, and the left-card↔board gap when
+// there's no bar. Keeping them all equal is what makes the spacing read as even.
+const EDGE_GAP = 10
+// Eval-bar width (matches EvalBar's md width). When a bar is shown the left card
+// sits EDGE_GAP from the bar and the bar sits EDGE_GAP from the board, so the left
+// gap grows by (EDGE_GAP + EVAL_W) on top of the base EDGE_GAP.
+const EVAL_W = 38
+const GAP_EVAL_EXTRA = EDGE_GAP + EVAL_W // extra left gap only when the bar is present
 // Horizontal room the layout reserves besides the board: two side columns, the two
-// column gaps, and the outer page padding (px:3 → 24px each side). The board's
-// width term subtracts this so a width-bound viewport never overflows.
-const H_RESERVE = SIDE_W * 2 + COL_GAP * 2 + 48 // = 784
+// base edge gaps, the eval-bar's extra left gap (reserved unconditionally so the
+// board SIZE stays identical whether or not a page shows the bar), and the outer
+// page padding (px:3 → 24px each side). The board's width term subtracts this so a
+// width-bound viewport never overflows.
+const H_RESERVE = SIDE_W * 2 + EDGE_GAP * 2 + GAP_EVAL_EXTRA + 48 // = 756
 
 // The board square — the SINGLE source of truth for board size across the app.
 // Binds to whichever hits first: the viewport height minus the 60px nav + padding
@@ -68,7 +78,7 @@ export default function BoardPage({ children, left, right, evalBar }: BoardPageP
                 sx={{
                     display: 'grid',
                     gridTemplateColumns: { xs: '1fr', md: `${SIDE_W}px auto ${SIDE_W}px` },
-                    columnGap: { md: `${COL_GAP}px` },
+                    columnGap: { md: `${EDGE_GAP}px` },
                     rowGap: { xs: 2, md: 0 },
                     alignItems: 'start',
                     justifyContent: 'center',
@@ -91,7 +101,10 @@ export default function BoardPage({ children, left, right, evalBar }: BoardPageP
                         alignItems: 'stretch',
                         alignSelf: 'start',
                         width: { xs: '100%', md: BOARD_SIZE },
-                        justifySelf: 'center',
+                        // Extra left gap ONLY when the eval bar is shown, so the floated bar
+                        // claims that space (instead of the right card being left far out).
+                        // The board nudges a few px right; with no bar both gaps are equal.
+                        ml: { md: evalBar ? `${GAP_EVAL_EXTRA}px` : 0 },
                     }}
                 >
                     {evalBar && (
@@ -105,7 +118,7 @@ export default function BoardPage({ children, left, right, evalBar }: BoardPageP
                                 // plain margin collapses on an abs-positioned element). xs:
                                 // inline gutter via mr.
                                 position: { xs: 'static', md: 'absolute' },
-                                right: { md: 'calc(100% + 10px)' },
+                                right: { md: `calc(100% + ${EDGE_GAP}px)` },
                                 top: { md: 0 },
                                 bottom: { md: 0 },
                                 mr: { xs: 0.75, md: 0 },
