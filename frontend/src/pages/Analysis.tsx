@@ -1,4 +1,12 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
+import {
+    type Dispatch,
+    Fragment,
+    type SetStateAction,
+    useCallback,
+    useEffect,
+    useMemo,
+    useState,
+} from 'react'
 import { Box, Button, Tooltip, Typography } from '@mui/material'
 import {
     ChevronFirst,
@@ -61,6 +69,29 @@ const ANALYSIS_DEPTHS = [6, 9, 12, 14, 16, 18, 20, 22]
 
 type AutoMode = 'off' | 'play' | 'best'
 
+// A useState<boolean> that persists to localStorage, so view preferences (engine
+// on/off, which arrows are shown) survive a refresh. Behaves like useState — the
+// setter accepts a value or an updater — and degrades to in-memory state if
+// localStorage is unavailable (private mode, etc.).
+function usePersistentBool(key: string, fallback: boolean): [boolean, Dispatch<SetStateAction<boolean>>] {
+    const [value, setValue] = useState<boolean>(() => {
+        try {
+            const v = localStorage.getItem(key)
+            return v === null ? fallback : v === '1'
+        } catch {
+            return fallback
+        }
+    })
+    useEffect(() => {
+        try {
+            localStorage.setItem(key, value ? '1' : '0')
+        } catch {
+            /* ignore — preference just won't persist this session */
+        }
+    }, [key, value])
+    return [value, setValue]
+}
+
 // Play the appropriate sound for the move that leads INTO a node.
 function playMoveSound(node?: TreeNode) {
     if (!node?.move) return
@@ -80,15 +111,17 @@ export default function Analysis() {
     const [tree, setTree] = useState<Tree>(() => createTree(START_FEN))
     const [currentId, setCurrentId] = useState(0)
     const [orientation, setOrientation] = useState<Color>('w')
-    const [showArrow, setShowArrow] = useState(true)
+    // View preferences persist across refreshes (localStorage).
+    const [showArrow, setShowArrow] = usePersistentBool('chessgo.analysis.showArrow', true)
     // Optional second-opinion arrow: full-strength Stockfish's best move, drawn
     // translucent so you can see where it disagrees with gomachine. Off by default.
-    const [showSfArrow, setShowSfArrow] = useState(false)
+    const [showSfArrow, setShowSfArrow] = usePersistentBool('chessgo.analysis.showSfArrow', false)
     // Stockfish's best move for a specific position (kept with its FEN so a stale
     // response from a previous position is ignored).
     const [sfBest, setSfBest] = useState<{ fen: string; uci: string } | null>(null)
     const [sound, setSound] = useState(soundEnabled())
-    const [engineOn, setEngineOn] = useState(true) // master: eval bar + arrow + engine line
+    // master: eval bar + arrow + engine line (persisted across refreshes)
+    const [engineOn, setEngineOn] = usePersistentBool('chessgo.analysis.engineOn', true)
     const [game, setGame] = useState<GameAnalysis | null>(null)
     const [loadError, setLoadError] = useState<string | null>(null)
     const [loading, setLoading] = useState<boolean>(!!id)
@@ -577,6 +610,7 @@ export default function Analysis() {
                                 onClick={() => setShowArrow((v) => !v)}
                                 label="Best move arrow"
                                 active={engineOn && showArrow}
+                                accent="var(--accent)"
                             >
                                 <Target size={19} />
                             </NavBtn>
@@ -584,6 +618,7 @@ export default function Analysis() {
                                 onClick={() => setShowSfArrow((v) => !v)}
                                 label="Stockfish best move arrow"
                                 active={engineOn && showSfArrow}
+                                accent={SF_ARROW_COLOR}
                             >
                                 <Fish size={19} />
                             </NavBtn>
@@ -625,14 +660,24 @@ function NavBtn({
     label,
     active,
     grow,
+    accent,
     children,
 }: {
     onClick: () => void
     label: string
     active?: boolean
     grow?: boolean
+    // Optional per-button accent (e.g. the color of the arrow this toggle controls).
+    // When set, the icon is ALWAYS tinted this color — so the button↔arrow mapping
+    // reads at a glance, on or off — and the active glow/border use it too. Derived
+    // soft/line tints come from color-mix so any hex or CSS var works.
+    accent?: string
     children: React.ReactNode
 }) {
+    const tinted = accent != null
+    const acc = accent ?? 'var(--accent)'
+    const soft = tinted ? `color-mix(in srgb, ${acc} 16%, transparent)` : 'var(--accent-soft)'
+    const line = tinted ? `color-mix(in srgb, ${acc} 42%, transparent)` : 'var(--accent-line)'
     return (
         <Tooltip title={label} arrow>
             <Button
@@ -646,13 +691,14 @@ function NavBtn({
                     height: 42,
                     p: 0,
                     borderRadius: '9px',
-                    color: active ? 'var(--accent)' : 'var(--text-dim)',
-                    bgcolor: active ? 'var(--accent-soft)' : 'transparent',
-                    border: active ? '1px solid var(--accent-line)' : '1px solid transparent',
-                    transition: 'background-color .15s, color .15s, border-color .15s',
+                    color: active || tinted ? acc : 'var(--text-dim)',
+                    bgcolor: active ? soft : 'transparent',
+                    border: active ? `1px solid ${line}` : '1px solid transparent',
+                    boxShadow: active && tinted ? `0 0 14px -5px ${acc}` : 'none',
+                    transition: 'background-color .15s, color .15s, border-color .15s, box-shadow .2s',
                     '&:hover': {
-                        color: 'var(--accent)',
-                        bgcolor: active ? 'var(--accent-soft)' : 'var(--line)',
+                        color: acc,
+                        bgcolor: active ? soft : tinted ? soft : 'var(--line)',
                     },
                     '&:active': { transform: 'translateY(1px)' },
                 }}

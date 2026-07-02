@@ -59,6 +59,38 @@ interface BoardProps {
 const PROMO_ORDER = ['q', 'r', 'b', 'n']
 const DRAG_THRESHOLD = 5 // px before a press becomes a drag
 
+// Build an arrow as a SINGLE filled polygon (shaft + head) from a→b in the 80×80
+// board space. Used for the "both engines agree" arrow, where we want ONE arrow
+// with a clean, uniform border in a second color — a fill + stroke on one shape
+// borders evenly everywhere (including the head), which stacked line+marker
+// shapes can't (their heads scale with stroke width and misalign).
+function arrowPolygon(a: { x: number; y: number }, b: { x: number; y: number }): string {
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const len = Math.hypot(dx, dy) || 1
+    const ux = dx / len
+    const uy = dy / len
+    const nx = -uy // unit normal
+    const ny = ux
+    const shaft = 1.7 // shaft half-width is shaft/2
+    const headLen = 5
+    const headW = 6 // head half-width is headW/2
+    const bx = b.x - ux * headLen // head base (where shaft meets head)
+    const by = b.y - uy * headLen
+    const sh = shaft / 2
+    const hh = headW / 2
+    const p = (px: number, py: number) => `${px.toFixed(2)},${py.toFixed(2)}`
+    return [
+        p(a.x + nx * sh, a.y + ny * sh),
+        p(bx + nx * sh, by + ny * sh),
+        p(bx + nx * hh, by + ny * hh),
+        p(b.x, b.y), // tip
+        p(bx - nx * hh, by - ny * hh),
+        p(bx - nx * sh, by - ny * sh),
+        p(a.x - nx * sh, a.y - ny * sh),
+    ].join(' ')
+}
+
 // Lichess-style right-click annotations. A shape with from === to is a square
 // highlight (ring); otherwise it's an arrow. The modifier held while drawing
 // picks the brush colour.
@@ -383,9 +415,6 @@ export default function Board({
                             zIndex: 5,
                         }}
                     >
-                        {/* markerUnits defaults to strokeWidth, so a wider line
-                            auto-scales its arrowhead — the outline line (drawn wider,
-                            underneath) leaves a colored rim around the primary arrow. */}
                         <defs>
                             {arrow2Geom && (
                                 <marker
@@ -399,19 +428,7 @@ export default function Board({
                                     <path d="M0,0 L4,2 L0,4 z" fill={arrow2Color} />
                                 </marker>
                             )}
-                            {arrowGeom && arrowOutline && (
-                                <marker
-                                    id="bm-out"
-                                    markerWidth="4"
-                                    markerHeight="4"
-                                    refX="2.6"
-                                    refY="2"
-                                    orient="auto"
-                                >
-                                    <path d="M0,0 L4,2 L0,4 z" fill={arrowOutline} />
-                                </marker>
-                            )}
-                            {arrowGeom && (
+                            {arrowGeom && !arrowOutline && (
                                 <marker
                                     id="bm-head"
                                     markerWidth="4"
@@ -436,36 +453,34 @@ export default function Board({
                                 strokeWidth={1.7}
                                 strokeLinecap="round"
                                 markerEnd="url(#bm-head2)"
-                                opacity={0.5}
+                                opacity={0.32}
                             />
                         )}
-                        {/* Agreement ring: a wider outline-colored arrow under the
-                            primary, so the primary reads as bordered in that color. */}
-                        {arrowGeom && arrowOutline && (
-                            <line
-                                x1={arrowGeom.a.x}
-                                y1={arrowGeom.a.y}
-                                x2={arrowGeom.b.x}
-                                y2={arrowGeom.b.y}
+                        {/* Agreement case: ONE arrow drawn as a filled polygon, gold
+                            fill + a clean uniform border in the outline color. */}
+                        {arrowGeom && arrowOutline ? (
+                            <polygon
+                                points={arrowPolygon(arrowGeom.a, arrowGeom.b)}
+                                fill={arrowColor}
                                 stroke={arrowOutline}
-                                strokeWidth={3}
-                                strokeLinecap="round"
-                                markerEnd="url(#bm-out)"
+                                strokeWidth={0.7}
+                                strokeLinejoin="round"
                                 opacity={0.85}
                             />
-                        )}
-                        {arrowGeom && (
-                            <line
-                                x1={arrowGeom.a.x}
-                                y1={arrowGeom.a.y}
-                                x2={arrowGeom.b.x}
-                                y2={arrowGeom.b.y}
-                                stroke={arrowColor}
-                                strokeWidth={1.7}
-                                strokeLinecap="round"
-                                markerEnd="url(#bm-head)"
-                                opacity={0.7}
-                            />
+                        ) : (
+                            arrowGeom && (
+                                <line
+                                    x1={arrowGeom.a.x}
+                                    y1={arrowGeom.a.y}
+                                    x2={arrowGeom.b.x}
+                                    y2={arrowGeom.b.y}
+                                    stroke={arrowColor}
+                                    strokeWidth={1.7}
+                                    strokeLinecap="round"
+                                    markerEnd="url(#bm-head)"
+                                    opacity={0.7}
+                                />
+                            )
                         )}
                     </svg>
                 )}
