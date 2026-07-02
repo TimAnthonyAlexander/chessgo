@@ -18,6 +18,7 @@ import { CATEGORY_META, type Category } from '../lib/timeControl'
 import { Panel, PanelHead } from '../components/home/Panel'
 import LiveTvWidget from '../components/home/LiveTvWidget'
 import DailyPuzzleWidget from '../components/home/DailyPuzzleWidget'
+import RecentGamesWidget from '../components/home/RecentGamesWidget'
 import LeaderboardWidget from '../components/home/LeaderboardWidget'
 import ChallengeDialog from '../components/ChallengeDialog'
 import CustomTimeDialog from '../components/CustomTimeDialog'
@@ -170,12 +171,13 @@ export default function Home() {
                     }}
                 >
                     {/* Column: daily puzzle (left) */}
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, order: { lg: 1 } }}>
                         <DailyPuzzleWidget />
+                        <RecentGamesWidget />
                     </Box>
 
                     {/* Column: play actions + quick pairing (center, biggest) */}
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, order: { xs: 1, lg: 2 } }}>
                         <Panel>
                             <PanelHead title="Play" sub="Train, analyze, or take on a friend" />
                             <Box
@@ -227,7 +229,7 @@ export default function Home() {
                     </Box>
 
                     {/* Column: live game + leaderboard (right) */}
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, order: { lg: 3 } }}>
                         <LiveTvWidget />
                         <LeaderboardWidget />
                     </Box>
