@@ -160,6 +160,7 @@ export function analyze(
 export interface SfAnalysis {
     bestmove: string | null // UCI of Stockfish's full-strength best move
     san: string | null
+    eval: { type: 'cp' | 'mate'; value: number } | null // side-to-move POV
 }
 
 /** Full-strength Stockfish best move for a position — the analysis board's

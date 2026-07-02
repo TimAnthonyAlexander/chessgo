@@ -77,15 +77,34 @@ func (s *Server) handleStockfishMove(w http.ResponseWriter, r *http.Request) {
 	if mt <= 0 {
 		mt = 100 * time.Millisecond
 	}
-	uci, err := sf.BestMove(req.FEN, nil, bench.UCIBudget{MoveTime: mt})
+	res, err := sf.AnalyzeBest(req.FEN, nil, bench.UCIBudget{MoveTime: mt})
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "stockfish move: " + err.Error()})
 		return
 	}
-	mv, okm := pos.ParseUCIMove(uci)
+	mv, okm := pos.ParseUCIMove(res.BestMove)
 	if !okm {
 		writeJSON(w, http.StatusOK, map[string]any{"bestmove": nil, "reason": "no legal move"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"bestmove": uci, "san": pos.SAN(mv)})
+
+	// Eval from the SIDE-TO-MOVE's POV (same convention as /analyze — the UI flips
+	// it to White). AnalyzeBest collapses mate to ±(20000−dist); recover the signed
+	// mate distance for the UI's "M3" style label.
+	var evalObj map[string]any
+	if res.IsMate {
+		mag := res.Cp
+		if mag < 0 {
+			mag = -mag
+		}
+		dist := 20000 - mag
+		if res.Cp < 0 {
+			dist = -dist
+		}
+		evalObj = map[string]any{"type": "mate", "value": dist}
+	} else {
+		evalObj = map[string]any{"type": "cp", "value": res.Cp}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"bestmove": res.BestMove, "san": pos.SAN(mv), "eval": evalObj})
 }

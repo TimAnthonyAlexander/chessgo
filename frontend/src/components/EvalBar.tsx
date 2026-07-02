@@ -11,6 +11,11 @@ export interface WhiteEval {
 interface EvalBarProps {
     ev: WhiteEval | null
     orientation: Color
+    // Optional second-opinion marker (e.g. Stockfish's eval): a thin colored line
+    // drawn at that eval's height, so you can see how close the two engines are.
+    // Most pages don't pass this. `sfColor` defaults to the Stockfish arrow violet.
+    sfEv?: WhiteEval | null
+    sfColor?: string
 }
 
 // Lichess "Winning chances": a sigmoid of centipawns fit from real game data, so
@@ -29,7 +34,7 @@ function evalLabel(ev: WhiteEval | null): string {
     return (Math.abs(ev.white) / 100).toFixed(1)
 }
 
-export default function EvalBar({ ev, orientation }: EvalBarProps) {
+export default function EvalBar({ ev, orientation, sfEv, sfColor = '#b06bff' }: EvalBarProps) {
     // While the engine is still computing the new position's eval, `ev` is null.
     // Keep showing (and animating from) the last known eval instead of snapping the
     // bar to center, so it slides old → new once the result arrives.
@@ -40,6 +45,7 @@ export default function EvalBar({ ev, orientation }: EvalBarProps) {
     const shown = ev ?? lastRef.current
 
     const whitePct = whiteWinPercent(shown)
+    const sfPct = sfEv ? whiteWinPercent(sfEv) : 0
     const whiteAhead = shown ? shown.white >= 0 : true
     const whiteAnchor = orientation === 'w' ? 'bottom' : 'top' // White grows from its own side
 
@@ -87,6 +93,28 @@ export default function EvalBar({ ev, orientation }: EvalBarProps) {
                     }}
                 />
             ))}
+
+            {/* Stockfish's eval level — a thin colored line at its win-% height,
+                measured from the SAME side White grows from, so it reads directly
+                against the fill's top edge (how close the two engines are). */}
+            {sfEv && (
+                <Box
+                    sx={{
+                        position: 'absolute',
+                        left: 0,
+                        right: 0,
+                        [whiteAnchor]: `${sfPct}%`,
+                        height: '2px',
+                        transform: whiteAnchor === 'bottom' ? 'translateY(50%)' : 'translateY(-50%)',
+                        background: sfColor,
+                        boxShadow: `0 0 6px ${sfColor}`,
+                        opacity: 0.9,
+                        transition: `${whiteAnchor} 0.45s cubic-bezier(0.4, 0, 0.2, 1)`,
+                        pointerEvents: 'none',
+                        zIndex: 3,
+                    }}
+                />
+            )}
 
             {/* The single eval value, at the winning side's end */}
             <Box

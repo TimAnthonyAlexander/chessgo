@@ -116,9 +116,14 @@ export default function Analysis() {
     // Optional second-opinion arrow: full-strength Stockfish's best move, drawn
     // translucent so you can see where it disagrees with gomachine. Off by default.
     const [showSfArrow, setShowSfArrow] = usePersistentBool('chessgo.analysis.showSfArrow', false)
-    // Stockfish's best move for a specific position (kept with its FEN so a stale
-    // response from a previous position is ignored).
-    const [sfBest, setSfBest] = useState<{ fen: string; uci: string } | null>(null)
+    // Stockfish's best move + eval for a specific position (kept with its FEN so a
+    // stale response from a previous position is ignored). `evalWhite` is already
+    // flipped to White's POV, ready for the eval bar's second-opinion line.
+    const [sfBest, setSfBest] = useState<{
+        fen: string
+        uci: string
+        evalWhite: WhiteEval | null
+    } | null>(null)
     const [sound, setSound] = useState(soundEnabled())
     // master: eval bar + arrow + engine line (persisted across refreshes)
     const [engineOn, setEngineOn] = usePersistentBool('chessgo.analysis.engineOn', true)
@@ -304,7 +309,13 @@ export default function Analysis() {
         void (async () => {
             try {
                 const r = await sfAnalyze(fen, { movetime: 300, signal: ac.signal })
-                if (!cancelled && r.bestmove) setSfBest({ fen, uci: r.bestmove })
+                if (cancelled || !r.bestmove) return
+                // Flip Stockfish's side-to-move eval to White's POV (from the FEN).
+                const stm = fen.split(' ')[1] === 'b' ? 'b' : 'w'
+                const evalWhite: WhiteEval | null = r.eval
+                    ? { type: r.eval.type, white: stm === 'w' ? r.eval.value : -r.eval.value }
+                    : null
+                setSfBest({ fen, uci: r.bestmove, evalWhite })
             } catch {
                 // Stockfish unavailable or request aborted — leave the arrow off.
             }
@@ -432,7 +443,8 @@ export default function Analysis() {
 
     // Stockfish's best move for the CURRENT position (ignore a stale one held for a
     // previous FEN). Only surfaced while the engine + the SF-arrow toggle are on.
-    const sfUci = engineOn && showSfArrow && sfBest?.fen === current.fen ? sfBest.uci : null
+    const sfCurrent = engineOn && showSfArrow && sfBest?.fen === current.fen ? sfBest : null
+    const sfUci = sfCurrent?.uci ?? null
 
     // Board arrows. A hovered candidate (book) move wins outright — a single blue
     // arrow, no engine overlays. Otherwise we draw gomachine's gold best-move arrow
@@ -504,7 +516,12 @@ export default function Analysis() {
 
                 {/* Eval bar + board */}
                 <Box sx={{ minWidth: 0, display: 'flex', gap: 1, alignItems: 'stretch' }}>
-                    <EvalBar ev={engineOn ? current.evalWhite : null} orientation={orientation} />
+                    <EvalBar
+                        ev={engineOn ? current.evalWhite : null}
+                        orientation={orientation}
+                        sfEv={sfCurrent?.evalWhite ?? null}
+                        sfColor={SF_ARROW_COLOR}
+                    />
                     <Box sx={{ flex: 1, minWidth: 0 }}>
                         <Board
                             fen={current.fen}

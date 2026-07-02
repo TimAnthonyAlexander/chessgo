@@ -14,7 +14,10 @@ use App\Services\GomachineClient;
  * (UCI_LimitStrength off). Returns just the move — the arrow needs nothing else.
  *
  *   POST /sf-analyze   { fen: "<FEN>", movetime?: <ms> }
- *   → { bestmove: "<uci>"|null, san: "<san>"|null }
+ *   → { bestmove: "<uci>"|null, san: "<san>"|null, eval: {type,value}|null }
+ *
+ * `eval` is from the side-to-move's POV (like /analyze), so the UI can plot
+ * Stockfish's own read of the position next to gomachine's.
  *
  * `movetime` (optional, clamped 50..2000ms; default 300) trades depth for
  * latency. If Stockfish isn't installed the engine replies non-2xx and the
@@ -43,6 +46,7 @@ class SfAnalyzeController extends Controller
         return JsonResponse::ok([
             'bestmove' => $res['bestmove'] ?? null,
             'san' => $res['san'] ?? null,
+            'eval' => $res['eval'] ?? null,
         ]);
     }
 }
