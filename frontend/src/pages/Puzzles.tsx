@@ -11,11 +11,13 @@ import {
     Square as StopIcon,
     Target,
     Trophy,
+    Volume2,
+    VolumeX,
     X,
     XCircle,
 } from 'lucide-react'
 import Board from '../components/Board'
-import { ActionBtn, ErrorBanner } from '../components/PanelUI'
+import { ActionBtn, ErrorBanner, NavBtn } from '../components/PanelUI'
 import {
     type Color,
     nextPuzzle,
@@ -24,7 +26,7 @@ import {
     submitPuzzleMove,
 } from '../api/client'
 import { applyUciVisually, type BoardMap, parseFen } from '../lib/chess'
-import { playForMove, sounds } from '../lib/sounds'
+import { playForMove, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { authStore, useAuth } from '../lib/auth'
 
 type Phase = 'loading' | 'intro' | 'solving' | 'checking' | 'solved' | 'failed' | 'empty'
@@ -887,6 +889,14 @@ function StatusCard({
     const delta = result?.rating?.delta ?? null
     const toMove = orientation === 'w' ? 'White' : 'Black'
     const lowTime = limitSec != null && remainingMs <= 10_000
+    const [sound, setSound] = useState(soundEnabled())
+
+    function toggleSound() {
+        const next = !sound
+        setSound(next)
+        setSoundEnabled(next)
+        if (next) sounds.move()
+    }
 
     return (
         <Card sx={{ overflow: 'hidden' }}>
@@ -927,7 +937,12 @@ function StatusCard({
                         {limitSec == null ? 'Untimed' : fmtClock(remainingMs)}
                     </Typography>
                 </Box>
-                <Chip>{themeLabel(theme)}</Chip>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <NavBtn small label={sound ? 'Mute' : 'Unmute'} onClick={toggleSound}>
+                        {sound ? <Volume2 size={18} /> : <VolumeX size={18} />}
+                    </NavBtn>
+                    <Chip>{themeLabel(theme)}</Chip>
+                </Box>
             </Box>
 
             {/* Headline */}

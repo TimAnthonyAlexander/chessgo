@@ -1,18 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import { Box, Button, Typography } from '@mui/material'
-import { Check, Flag, Handshake, Telescope, Undo2, User, X } from 'lucide-react'
+import { Check, Flag, Handshake, Telescope, Undo2, User, Volume2, VolumeX, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import Board from '../components/Board'
 import ChatPanel from '../components/ChatPanel'
 import Clock from '../components/Clock'
 import LiveModeCard from '../components/LiveModeCard'
 import MoveList from '../components/MoveList'
-import { ActionBtn, Avatar, PANEL_SHADOW } from '../components/PanelUI'
+import { ActionBtn, Avatar, NavBtn, PANEL_SHADOW } from '../components/PanelUI'
 import type { MoveEntry } from '../api/client'
 import { type Color, gameSocket, type LiveGameState, liveRemaining } from '../lib/socket'
 import { useGameSocket } from '../lib/useGameSocket'
 import { useBoardInteraction } from '../lib/useBoardInteraction'
-import { playForSan, sounds } from '../lib/sounds'
+import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { authStore, useAuth } from '../lib/auth'
 import AdminBestMove from '../components/AdminBestMove'
 
@@ -60,6 +60,14 @@ export default function LiveGame() {
     const isAdmin = user?.role === 'admin'
 
     const [, force] = useState(0)
+    const [sound, setSound] = useState(soundEnabled())
+
+    function toggleSound() {
+        const next = !sound
+        setSound(next)
+        setSoundEnabled(next)
+        if (next) sounds.move()
+    }
 
     // Tick for live clock countdown while a game is running.
     useEffect(() => {
@@ -275,6 +283,9 @@ export default function LiveGame() {
                         >
                             {g.rated ? 'Rated' : 'Casual'}
                         </Box>
+                        <NavBtn small label={sound ? 'Mute' : 'Unmute'} onClick={toggleSound}>
+                            {sound ? <Volume2 size={18} /> : <VolumeX size={18} />}
+                        </NavBtn>
                     </Box>
 
                     {/* Opponent */}

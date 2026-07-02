@@ -30,12 +30,14 @@ export function Avatar({ small, children }: { small?: boolean; children: ReactNo
     )
 }
 
-/** Icon button for toolbars (navigation, flip, mute …). */
+/** Icon button for toolbars (navigation, flip, mute …). `small` (34px) suits
+ *  compact header rows; the default 42px suits dedicated toolbars. */
 export function NavBtn({
     label,
     onClick,
     active,
     grow,
+    small,
     disabled,
     children,
 }: {
@@ -43,9 +45,11 @@ export function NavBtn({
     onClick: () => void
     active?: boolean
     grow?: boolean
+    small?: boolean
     disabled?: boolean
     children: ReactNode
 }) {
+    const d = small ? 34 : 42
     return (
         <Tooltip title={label} arrow>
             <Box
@@ -55,8 +59,8 @@ export function NavBtn({
                 disabled={disabled}
                 sx={{
                     flex: grow ? 1 : 'none',
-                    width: grow ? 'auto' : 42,
-                    height: 42,
+                    width: grow ? 'auto' : d,
+                    height: d,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',

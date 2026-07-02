@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { Box, Button, Tooltip, Typography } from '@mui/material'
-import { ArrowLeft, Gauge, Target, User } from 'lucide-react'
+import { ArrowLeft, Gauge, Target, User, Volume2, VolumeX } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router-dom'
 import Board from '../components/Board'
 import Clock from '../components/Clock'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveList from '../components/MoveList'
-import { Avatar, PANEL_SHADOW } from '../components/PanelUI'
+import { Avatar, NavBtn, PANEL_SHADOW } from '../components/PanelUI'
 import { analyze, type MoveEntry } from '../api/client'
 import { pvToSan } from '../lib/analysisTree'
 import {
@@ -17,7 +17,7 @@ import {
 } from '../lib/spectate'
 import { useSpectate } from '../lib/useSpectate'
 import { useAuth } from '../lib/auth'
-import { playForSan, sounds } from '../lib/sounds'
+import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 
 // Admins get a full-strength eval bar + best-move arrow over the spectated board,
 // each independently toggleable (persisted in localStorage). Ordinary spectators
@@ -58,6 +58,14 @@ export default function Spectate() {
     const s = useSpectate()
     const g = s.game
     const [, force] = useState(0)
+    const [sound, setSound] = useState(soundEnabled())
+
+    function toggleSound() {
+        const next = !sound
+        setSound(next)
+        setSoundEnabled(next)
+        if (next) sounds.move()
+    }
 
     // Admin-only engine overlay: an eval bar and a best-move arrow, each toggled
     // independently (like the Analysis board). We re-read the position at full
@@ -333,6 +341,9 @@ export default function Spectate() {
                         >
                             {g.rated ? 'Rated' : 'Casual'}
                         </Box>
+                        <NavBtn small label={sound ? 'Mute' : 'Unmute'} onClick={toggleSound}>
+                            {sound ? <Volume2 size={18} /> : <VolumeX size={18} />}
+                        </NavBtn>
                     </Box>
 
                     {/* Admin engine overlay controls */}

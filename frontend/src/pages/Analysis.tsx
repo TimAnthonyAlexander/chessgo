@@ -9,6 +9,8 @@ import {
     Play,
     Square,
     Target,
+    Volume2,
+    VolumeX,
     Zap,
 } from 'lucide-react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
@@ -33,7 +35,7 @@ import {
     START_FEN,
     turnAt,
 } from '../lib/analysisTree'
-import { playForSan } from '../lib/sounds'
+import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { useAuth } from '../lib/auth'
 
 // How long (ms) each auto-played move lingers before the next one.
@@ -72,6 +74,7 @@ export default function Analysis() {
     const [currentId, setCurrentId] = useState(0)
     const [orientation, setOrientation] = useState<Color>('w')
     const [showArrow, setShowArrow] = useState(true)
+    const [sound, setSound] = useState(soundEnabled())
     const [engineOn, setEngineOn] = useState(true) // master: eval bar + arrow + engine line
     const [game, setGame] = useState<GameAnalysis | null>(null)
     const [loadError, setLoadError] = useState<string | null>(null)
@@ -529,6 +532,17 @@ export default function Analysis() {
                                 label="Flip board"
                             >
                                 <FlipVertical2 size={19} />
+                            </NavBtn>
+                            <NavBtn
+                                onClick={() => {
+                                    const next = !sound
+                                    setSound(next)
+                                    setSoundEnabled(next)
+                                    if (next) sounds.move()
+                                }}
+                                label={sound ? 'Mute' : 'Unmute'}
+                            >
+                                {sound ? <Volume2 size={19} /> : <VolumeX size={19} />}
                             </NavBtn>
                         </Box>
                     </Box>
