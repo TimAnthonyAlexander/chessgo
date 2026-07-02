@@ -193,7 +193,7 @@ export default function Home() {
                             md: 'repeat(2, minmax(0, 1fr))',
                             lg: 'minmax(0, 1.45fr) minmax(0, 1fr) minmax(0, 1fr)',
                         },
-                        gap: { xs: 2.5, lg: 2.5 },
+                        gap: 2.5,
                         alignItems: 'start',
                     }}
                 >
@@ -223,10 +223,10 @@ export default function Home() {
 
                     {/* Column B: play + leaderboard */}
                     <Box
-                        sx={{ display: 'flex', flexDirection: 'column', gap: { xs: 2.5, lg: 2.5 } }}
+                        sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}
                     >
                         <Panel>
-                            <PanelHead title="Play" sub="Train, analyse, or take on a friend" />
+                            <PanelHead title="Play" sub="Train, analyze, or take on a friend" />
                             <Box sx={{ mx: { xs: -2, md: -2.5 } }}>
                                 {actions.map((a, i) => (
                                     <ActionRow
@@ -245,7 +245,7 @@ export default function Home() {
 
                     {/* Column C: live game + daily puzzle */}
                     <Box
-                        sx={{ display: 'flex', flexDirection: 'column', gap: { xs: 2.5, lg: 2.5 } }}
+                        sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}
                     >
                         <LiveTvWidget />
                         <DailyPuzzleWidget />
@@ -282,14 +282,14 @@ export default function Home() {
                     </Typography>
                     <CircularProgress sx={{ color: 'var(--accent)', my: 3 }} />
                     <Typography
-                        sx={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 19 }}
+                        sx={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 20 }}
                     >
                         Finding an opponent…
                     </Typography>
                     <Typography
                         sx={{
                             color: 'var(--text-dim)',
-                            fontSize: 13.5,
+                            fontSize: 13,
                             mt: 1,
                             maxWidth: 280,
                             mx: 'auto',
@@ -306,11 +306,15 @@ export default function Home() {
                             gameSocket.cancelQueue()
                             setSearch(null)
                         }}
-                        sx={{ color: 'var(--text-dim)' }}
+                        sx={{ color: 'var(--text-dim)', textTransform: 'none' }}
                     >
                         Cancel
                     </Button>
-                    <Button variant="contained" onClick={() => navigate('/bot')}>
+                    <Button
+                        variant="contained"
+                        onClick={() => navigate('/bot')}
+                        sx={{ textTransform: 'none', fontWeight: 600 }}
+                    >
                         Play the computer instead
                     </Button>
                 </DialogActions>
@@ -342,8 +346,8 @@ function ResumeBanner({ game }: { game: LiveGameState }) {
                 cursor: 'pointer',
                 bgcolor: 'var(--accent-soft)',
                 border: '1px solid var(--accent-line)',
-                transition: 'background 0.15s ease',
-                '&:hover': { bgcolor: 'rgba(216,166,87,0.18)' },
+                transition: 'background 0.12s ease',
+                '&:hover': { bgcolor: 'var(--accent-soft-strong)' },
             }}
         >
             <Box
@@ -355,7 +359,7 @@ function ResumeBanner({ game }: { game: LiveGameState }) {
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    bgcolor: 'rgba(216,166,87,0.18)',
+                    bgcolor: 'var(--accent-soft-strong)',
                     color: 'var(--accent)',
                 }}
             >
@@ -363,7 +367,7 @@ function ResumeBanner({ game }: { game: LiveGameState }) {
             </Box>
             <Box sx={{ minWidth: 0 }}>
                 <Typography
-                    sx={{ fontWeight: 700, fontSize: 14.5, fontFamily: 'var(--font-display)' }}
+                    sx={{ fontWeight: 600, fontSize: 15, fontFamily: 'var(--font-display)' }}
                 >
                     You have a game in progress
                 </Typography>
@@ -387,11 +391,11 @@ function ResumeBanner({ game }: { game: LiveGameState }) {
                     fontFamily: 'var(--font-display)',
                     fontSize: 14,
                     fontWeight: 600,
-                    color: '#15171c',
-                    background: 'linear-gradient(180deg, #e3b56a, #d8a657)',
+                    color: 'var(--on-accent)',
+                    background: 'var(--accent-grad)',
                     border: '1px solid var(--accent)',
                     borderRadius: '10px',
-                    '&:hover': { background: 'linear-gradient(180deg, #e7bd76, #dcab5d)' },
+                    '&:hover': { background: 'var(--accent-grad-hover)' },
                     '&:active': { transform: 'translateY(1px)' },
                 }}
             >
@@ -406,6 +410,14 @@ function TimeCell({ preset, onClick }: { preset: Preset; onClick: () => void }) 
     return (
         <Box
             onClick={onClick}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onClick()
+                }
+            }}
             sx={{
                 position: 'relative',
                 display: 'flex',
@@ -415,11 +427,11 @@ function TimeCell({ preset, onClick }: { preset: Preset; onClick: () => void }) 
                 gap: 1,
                 py: { xs: 2.5, md: 3 },
                 bgcolor: 'var(--surface-2)',
-                border: '1px solid var(--line)',
+                border: '1px solid var(--line-soft)',
                 borderRadius: '12px',
                 cursor: 'pointer',
                 overflow: 'hidden',
-                transition: 'border-color .12s ease, background .12s ease',
+                transition: 'border-color 0.12s ease, background 0.12s ease',
                 '&:hover': {
                     borderColor: 'var(--accent-line)',
                     bgcolor: 'var(--surface)',
@@ -437,9 +449,9 @@ function TimeCell({ preset, onClick }: { preset: Preset; onClick: () => void }) 
             >
                 {preset.time}
             </Typography>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
                 <Box component="span" sx={{ display: 'flex', color }}>
-                    <Icon size={13} />
+                    <Icon size={14} />
                 </Box>
                 <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)', fontWeight: 500 }}>
                     {preset.cat}
@@ -453,6 +465,14 @@ function CustomCell({ onClick }: { onClick: () => void }) {
     return (
         <Box
             onClick={onClick}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onClick()
+                }
+            }}
             sx={{
                 display: 'flex',
                 alignItems: 'center',
@@ -462,7 +482,7 @@ function CustomCell({ onClick }: { onClick: () => void }) {
                 borderRadius: '12px',
                 cursor: 'pointer',
                 color: 'var(--muted)',
-                transition: 'color .12s ease, border-color .12s ease',
+                transition: 'color 0.12s ease, border-color 0.12s ease',
                 '&:hover': { color: 'var(--accent)', borderColor: 'var(--accent-line)' },
             }}
         >
@@ -487,6 +507,14 @@ function ActionRow({
     return (
         <Box
             onClick={onClick}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onClick()
+                }
+            }}
             sx={{
                 display: 'flex',
                 alignItems: 'center',
@@ -495,7 +523,7 @@ function ActionRow({
                 py: 1.4,
                 cursor: 'pointer',
                 borderTop: first ? 'none' : '1px solid var(--line-soft)',
-                transition: 'background-color .12s ease',
+                transition: 'background-color 0.12s ease',
                 '&:hover': {
                     bgcolor: 'var(--surface-2)',
                     '& .action-chevron': { color: 'var(--accent)', transform: 'translateX(2px)' },
@@ -524,7 +552,7 @@ function ActionRow({
                 >
                     {title}
                 </Typography>
-                <Typography sx={{ fontSize: 12.5, color: 'var(--muted)', mt: 0.1 }}>
+                <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)', mt: 0.1 }}>
                     {sub}
                 </Typography>
             </Box>
@@ -534,7 +562,7 @@ function ActionRow({
                     display: 'flex',
                     color: 'var(--text-dim)',
                     flexShrink: 0,
-                    transition: 'color .12s, transform .12s',
+                    transition: 'color 0.12s ease, transform 0.12s ease',
                 }}
             >
                 <ChevronRight size={18} />
@@ -564,7 +592,7 @@ function StatPill({ icon, value, label }: { icon: ReactNode; value?: number; lab
                     sx={{
                         fontFamily: 'var(--font-mono)',
                         fontSize: 16,
-                        fontWeight: 700,
+                        fontWeight: 600,
                         color: 'var(--text)',
                     }}
                 >

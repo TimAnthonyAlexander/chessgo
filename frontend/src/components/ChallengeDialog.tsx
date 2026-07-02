@@ -115,8 +115,8 @@ export default function ChallengeDialog({ open, onClose }: { open: boolean; onCl
                     sx: {
                         bgcolor: 'var(--surface)',
                         border: '1px solid var(--line)',
-                        borderRadius: 3,
-                        minWidth: 380,
+                        borderRadius: '16px',
+                        minWidth: 360,
                         maxWidth: 420,
                     },
                 },
@@ -141,13 +141,13 @@ export default function ChallengeDialog({ open, onClose }: { open: boolean; onCl
                             sx={{
                                 fontFamily: 'var(--font-display)',
                                 fontWeight: 600,
-                                fontSize: 22,
+                                fontSize: 20,
                                 mb: 0.5,
                             }}
                         >
                             Challenge a friend
                         </Typography>
-                        <Typography sx={{ color: 'var(--text-dim)', fontSize: 13.5, mb: 2.5 }}>
+                        <Typography sx={{ color: 'var(--text-dim)', fontSize: 13, mb: 2.5 }}>
                             Create a private game and send your friend the link.
                         </Typography>
 
@@ -246,7 +246,7 @@ export default function ChallengeDialog({ open, onClose }: { open: boolean; onCl
                                 </Typography>
                                 <Typography sx={{ fontSize: 12, color: 'var(--text-dim)' }}>
                                     {loggedIn
-                                        ? 'Affects both players’ ratings'
+                                        ? "Affects both players' ratings"
                                         : 'Log in to play rated'}
                                 </Typography>
                             </Box>
@@ -272,7 +272,7 @@ export default function ChallengeDialog({ open, onClose }: { open: boolean; onCl
                             fullWidth
                             disabled={!poolValid || s.conn === 'connecting'}
                             onClick={create}
-                            sx={{ mt: 2.5 }}
+                            sx={{ mt: 2.5, textTransform: 'none', fontWeight: 600 }}
                         >
                             Create invite
                         </Button>
@@ -288,7 +288,8 @@ export default function ChallengeDialog({ open, onClose }: { open: boolean; onCl
                                 sx={{
                                     fontSize: 11.5,
                                     color: 'var(--muted)',
-                                    letterSpacing: '0.1em',
+                                    fontFamily: 'var(--font-mono)',
+                                    letterSpacing: '0.14em',
                                 }}
                             >
                                 OR JOIN
@@ -330,6 +331,7 @@ export default function ChallengeDialog({ open, onClose }: { open: boolean; onCl
                                         <CircularProgress size={14} color="inherit" />
                                     ) : undefined
                                 }
+                                sx={{ textTransform: 'none', fontWeight: 600 }}
                             >
                                 Join
                             </Button>
@@ -406,8 +408,8 @@ function InviteView({
                         fontFamily: 'var(--font-mono)',
                         fontSize: 30,
                         fontWeight: 700,
-                        letterSpacing: '0.22em',
-                        pl: '0.22em',
+                        letterSpacing: '0.14em',
+                        pl: '0.14em',
                     }}
                 >
                     {code}
@@ -424,7 +426,7 @@ function InviteView({
                     px: 1.5,
                     py: 1,
                     mb: 2,
-                    borderRadius: '10px',
+                    borderRadius: '12px',
                     bgcolor: 'var(--surface-2)',
                     border: '1px solid var(--line)',
                 }}
@@ -489,7 +491,8 @@ function Label({ text, sx }: { text: string; sx?: object }) {
                 fontWeight: 600,
                 color: 'var(--muted)',
                 textTransform: 'uppercase',
-                letterSpacing: '0.08em',
+                fontFamily: 'var(--font-mono)',
+                letterSpacing: '0.14em',
                 mb: 1,
                 ...sx,
             }}
@@ -526,24 +529,24 @@ function Chip({
                 fontSize: small ? 13 : 13.5,
                 fontWeight: 600,
                 fontFamily: 'var(--font-display)',
-                borderRadius: '9px',
+                borderRadius: '12px',
                 cursor: disabled ? 'not-allowed' : 'pointer',
                 opacity: disabled ? 0.4 : 1,
-                color: active ? '#15171c' : 'var(--text-dim)',
+                color: active ? 'var(--on-accent)' : 'var(--text-dim)',
                 background: active
-                    ? 'linear-gradient(180deg, #e3b56a, #d8a657)'
+                    ? 'var(--accent-grad)'
                     : 'var(--surface-2)',
                 border: active
                     ? '1px solid var(--accent)'
                     : dashed
                       ? '1px dashed var(--line)'
                       : '1px solid var(--line)',
-                transition: 'border-color .12s, background .12s, color .12s',
+                transition: 'border-color 0.12s ease, background 0.12s ease, color 0.12s ease',
                 '&:hover': disabled
                     ? {}
                     : {
                           borderColor: 'var(--accent-line)',
-                          color: active ? '#15171c' : 'var(--text)',
+                          color: active ? 'var(--on-accent)' : 'var(--text)',
                       },
             }}
         >

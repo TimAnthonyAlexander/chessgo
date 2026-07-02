@@ -62,7 +62,7 @@ export default function CustomTimeDialog(props: CustomTimeDialogProps): JSX.Elem
                 },
             }}
         >
-            <DialogTitle sx={{ fontFamily: 'var(--font-display)', color: 'var(--text)', pb: 1 }}>
+            <DialogTitle sx={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 20, color: 'var(--text)', pb: 1 }}>
                 Custom time control
             </DialogTitle>
 
@@ -127,7 +127,7 @@ export default function CustomTimeDialog(props: CustomTimeDialogProps): JSX.Elem
             </DialogContent>
 
             <DialogActions sx={{ px: 3, pb: 2.5 }}>
-                <Button onClick={handleClose} sx={{ color: 'var(--muted)', textTransform: 'none' }}>
+                <Button onClick={handleClose} sx={{ color: 'var(--text-dim)', textTransform: 'none' }}>
                     Cancel
                 </Button>
                 <Button

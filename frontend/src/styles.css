@@ -15,7 +15,14 @@
     /* Single accent — brass / amber */
     --accent: #d8a657;
     --accent-soft: rgba(216, 166, 87, 0.14);
+    --accent-soft-strong: rgba(216, 166, 87, 0.18);
     --accent-line: rgba(216, 166, 87, 0.4);
+    --accent-grad: linear-gradient(180deg, #e3b56a, #d8a657);
+    --accent-grad-hover: linear-gradient(180deg, #e7bd76, #dcab5d);
+    --on-accent: #15171c; /* near-black ink for text on the brass gradient */
+
+    /* Status */
+    --live: #7bb661; /* live/online green */
 
     /* Board — Lichess-style cool grey-blue two-tone */
     --board-light: #dde2e6;

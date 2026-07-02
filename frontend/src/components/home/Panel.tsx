@@ -11,7 +11,7 @@ export function Panel({ children, sx }: { children: ReactNode; sx?: SxProps<Them
                 {
                     bgcolor: 'var(--surface)',
                     border: '1px solid var(--line-soft)',
-                    borderRadius: '14px',
+                    borderRadius: '12px',
                     p: { xs: 2, md: 2.5 },
                 },
                 ...(Array.isArray(sx) ? sx : [sx]),
@@ -55,7 +55,7 @@ export function PanelHead({
                     {title}
                 </Typography>
                 {sub && (
-                    <Typography sx={{ fontSize: 13, color: 'var(--muted)', mt: 0.25 }}>
+                    <Typography sx={{ fontSize: 13, color: 'var(--text-dim)', mt: 0.25 }}>
                         {sub}
                     </Typography>
                 )}

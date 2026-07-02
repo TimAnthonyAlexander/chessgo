@@ -61,7 +61,7 @@ export default function LeaderboardWidget() {
                             fontWeight: active ? 700 : 500,
                             lineHeight: 1,
                             color: active ? 'var(--accent)' : 'var(--muted)',
-                            transition: 'color 120ms ease',
+                            transition: 'color 0.12s ease',
                             '&:hover': { color: active ? 'var(--accent)' : 'var(--text)' },
                         }}
                     >
@@ -78,14 +78,14 @@ export default function LeaderboardWidget() {
             {state.kind === 'loading' && <SkeletonRows />}
             {state.kind === 'error' && (
                 <Typography
-                    sx={{ fontSize: 13, color: 'var(--muted)', py: 1.5, textAlign: 'center' }}
+                    sx={{ fontSize: 13, color: 'var(--muted)', py: 4, textAlign: 'center' }}
                 >
-                    Couldn't load the leaderboard.
+                    Couldn't load the leaderboard
                 </Typography>
             )}
             {state.kind === 'ready' && state.entries.length === 0 && (
                 <Typography
-                    sx={{ fontSize: 13, color: 'var(--muted)', py: 1.5, textAlign: 'center' }}
+                    sx={{ fontSize: 13, color: 'var(--muted)', py: 4, textAlign: 'center' }}
                 >
                     No ranked players yet
                 </Typography>
@@ -112,7 +112,7 @@ export default function LeaderboardWidget() {
                                 borderTop: i === 0 ? 'none' : '1px solid var(--line-soft)',
                                 bgcolor: 'transparent',
                                 textAlign: 'left',
-                                transition: 'background-color 120ms ease',
+                                transition: 'background-color 0.12s ease',
                                 '&:hover': { bgcolor: 'var(--surface-2)' },
                             }}
                         >

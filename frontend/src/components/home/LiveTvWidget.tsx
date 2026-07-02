@@ -7,7 +7,7 @@ import { getLiveGames, type LiveGameSummary, type LiveSide } from '../../api/cli
 import { categoryFor, CATEGORY_META } from '../../lib/timeControl'
 
 const POLL_MS = 6000
-const STATUS_GREEN = '#7bb661'
+const STATUS_GREEN = 'var(--live)'
 
 /** mm:ss from a millisecond clock value (clamped at zero). */
 function formatClock(ms: number): string {
@@ -65,7 +65,7 @@ function PlayerStrip({
                     sx={{
                         fontFamily: 'var(--font-mono)',
                         fontSize: 12,
-                        color: 'var(--muted)',
+                        color: 'var(--text-dim)',
                         flexShrink: 0,
                     }}
                 >
@@ -140,7 +140,7 @@ export default function LiveTvWidget() {
                         sx={{
                             fontFamily: 'var(--font-mono)',
                             fontSize: 11,
-                            letterSpacing: 1,
+                            letterSpacing: '0.14em',
                             color: STATUS_GREEN,
                             fontWeight: 700,
                         }}
@@ -185,7 +185,7 @@ export default function LiveTvWidget() {
         <Panel
             sx={{
                 cursor: 'pointer',
-                transition: 'transform 0.15s ease, border-color 0.15s ease',
+                transition: 'transform 0.12s ease, border-color 0.12s ease',
                 '&:hover': { transform: 'translateY(-2px)', borderColor: 'var(--accent-line)' },
             }}
         >
@@ -213,11 +213,12 @@ export default function LiveTvWidget() {
                         sx={{
                             fontFamily: 'var(--font-mono)',
                             fontSize: 11,
-                            letterSpacing: 0.5,
+                            letterSpacing: '0.14em',
                             fontWeight: 600,
+                            textTransform: 'uppercase',
                         }}
                     >
-                        {cat.toUpperCase()} · {game.pool}
+                        {cat} · {game.pool}
                     </Typography>
                 </Box>
                 <Box

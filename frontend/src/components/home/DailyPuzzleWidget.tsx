@@ -48,7 +48,7 @@ export default function DailyPuzzleWidget() {
 
             {error ? (
                 <Typography
-                    sx={{ fontSize: 13.5, color: 'var(--muted)', py: 2, textAlign: 'center' }}
+                    sx={{ fontSize: 13, color: 'var(--muted)', py: 4, textAlign: 'center' }}
                 >
                     Couldn't load today's puzzle
                 </Typography>
@@ -57,7 +57,7 @@ export default function DailyPuzzleWidget() {
                     sx={{
                         aspectRatio: '1',
                         width: '100%',
-                        borderRadius: '8px',
+                        borderRadius: '10px',
                         bgcolor: 'var(--surface-2)',
                         border: '1px solid var(--line-soft)',
                     }}
@@ -69,7 +69,8 @@ export default function DailyPuzzleWidget() {
                         onClick={goSolve}
                         sx={{
                             cursor: 'pointer',
-                            borderRadius: '8px',
+                            borderRadius: '10px',
+                            border: '1px solid var(--line-soft)',
                             overflow: 'hidden',
                             display: 'block',
                         }}
@@ -90,7 +91,7 @@ export default function DailyPuzzleWidget() {
                             mt: 1.75,
                         }}
                     >
-                        <Typography sx={{ fontSize: 14, color: 'var(--text)', fontWeight: 600 }}>
+                        <Typography sx={{ fontFamily: 'var(--font-display)', fontSize: 14, color: 'var(--text)', fontWeight: 600 }}>
                             {puzzle.color === 'w' ? 'White to move' : 'Black to move'}
                         </Typography>
                         <Typography

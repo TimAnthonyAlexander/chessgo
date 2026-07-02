@@ -57,17 +57,17 @@ export default function RatingCards() {
                             border: '1px solid var(--line-soft)',
                             borderRadius: '12px',
                             p: 1.5,
-                            transition: 'border-color 120ms ease',
-                            '&:hover': { borderColor: 'var(--line)' },
+                            transition: 'border-color 0.12s ease',
+                            '&:hover': { borderColor: 'var(--accent-line)' },
                         }}
                     >
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, color }}>
-                            <Icon size={15} />
+                            <Icon size={14} />
                             <Typography
                                 sx={{
                                     fontFamily: 'var(--font-mono)',
                                     fontSize: 10,
-                                    letterSpacing: '0.18em',
+                                    letterSpacing: '0.14em',
                                     textTransform: 'uppercase',
                                     color: 'var(--text-dim)',
                                 }}
@@ -87,7 +87,9 @@ export default function RatingCards() {
                             }}
                         >
                             {rating}
-                            {provisional ? '?' : ''}
+                            {provisional && (
+                                <Box component="span" sx={{ color: 'var(--muted)' }}>?</Box>
+                            )}
                         </Typography>
 
                         <Typography sx={{ fontSize: 12, color: 'var(--muted)', mt: 0.5 }}>

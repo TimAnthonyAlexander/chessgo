@@ -35,6 +35,8 @@ func main() {
 		cmdPerft(os.Args[2:])
 	case "play":
 		cmdPlay(os.Args[2:])
+	case "play-move":
+		cmdPlayMove(os.Args[2:])
 	case "selfplay":
 		cmdSelfPlay(os.Args[2:])
 	case "bench":

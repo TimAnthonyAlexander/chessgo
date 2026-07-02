@@ -276,3 +276,120 @@ func pieceGlyph(p chess.Piece) string {
 	glyphs := []string{"P", "N", "B", "R", "Q", "K", "p", "n", "b", "r", "q", "k"}
 	return glyphs[p]
 }
+
+func cmdPlayMove(args []string) {
+	fs := flag.NewFlagSet("play-move", flag.ExitOnError)
+	level := fs.Int("level", 2, "engine difficulty level 0..10")
+	color := fs.String("color", "white", "your color: white|black")
+	fen := fs.String("fen", chess.StartFEN, "current FEN")
+	userMove := fs.String("move", "", "your move in UCI notation (e.g. e2e4)")
+	_ = fs.Parse(args)
+
+	pos, err := chess.ParseFEN(*fen)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "invalid fen:", err)
+		os.Exit(1)
+	}
+	if !pos.Legal() {
+		fmt.Fprintln(os.Stderr, "illegal position")
+		os.Exit(1)
+	}
+
+	human := chess.White
+	if strings.HasPrefix(strings.ToLower(*color), "b") {
+		human = chess.Black
+	}
+
+	// Check game state first
+	var history []uint64
+	st := engine.Adjudicate(pos, history)
+	if st.State != "ongoing" {
+		fmt.Printf("Game over: %s (%s)\n", st.State, st.Result)
+		return
+	}
+
+	// Print board
+	fmt.Println("\n=== CURRENT BOARD ===")
+	printBoard(pos)
+	fmt.Printf("Side to move: %s\n\n", sideToMoveStr(pos.SideToMove()))
+
+	// If it's the human's turn, apply their move
+	if pos.SideToMove() == human {
+		if *userMove == "" {
+			fmt.Println("Error: it's your move but no move provided (-move flag)")
+			os.Exit(1)
+		}
+		m, ok := pos.ParseUCIMove(*userMove)
+		if !ok {
+			fmt.Printf("Error: illegal move '%s'\n", *userMove)
+			os.Exit(1)
+		}
+		fmt.Printf("You play: %s (%s)\n\n", pos.SAN(m), m.String())
+		history = append(history, pos.Key())
+		var u chess.Undo
+		pos.DoMove(m, &u)
+
+		// Check state after human move
+		st = engine.Adjudicate(pos, history)
+		if st.State != "ongoing" {
+			fmt.Printf("Game over: %s (%s)\n", st.State, st.Result)
+			fmt.Println("\n=== FINAL BOARD ===")
+			printBoard(pos)
+			fmt.Printf("FEN: %s\n", pos.FEN())
+			return
+		}
+
+		// Now it's engine's turn
+		fmt.Println("=== ENGINE THINKING ===")
+		eng := engine.New(64)
+		res := eng.BestMove(pos, *level, history)
+		if res.Move == chess.NullMove {
+			fmt.Println("Engine has no legal moves")
+			return
+		}
+		fmt.Printf("Gomachine plays: %s (%s)\n\n", pos.SAN(res.Move), res.Move.String())
+		history = append(history, pos.Key())
+		var u2 chess.Undo
+		pos.DoMove(res.Move, &u2)
+
+		// Check state after engine move
+		st = engine.Adjudicate(pos, history)
+		if st.State != "ongoing" {
+			fmt.Printf("Game over: %s (%s)\n", st.State, st.Result)
+		}
+
+		fmt.Println("\n=== BOARD AFTER ENGINE MOVE ===")
+		printBoard(pos)
+		fmt.Printf("\nFEN: %s\n", pos.FEN())
+	} else {
+		// It's engine's turn, no user move expected
+		fmt.Println("=== ENGINE THINKING ===")
+		eng := engine.New(64)
+		res := eng.BestMove(pos, *level, history)
+		if res.Move == chess.NullMove {
+			fmt.Println("Engine has no legal moves")
+			return
+		}
+		fmt.Printf("Gomachine plays: %s (%s)\n\n", pos.SAN(res.Move), res.Move.String())
+		history = append(history, pos.Key())
+		var u chess.Undo
+		pos.DoMove(res.Move, &u)
+
+		// Check state after engine move
+		st = engine.Adjudicate(pos, history)
+		if st.State != "ongoing" {
+			fmt.Printf("Game over: %s (%s)\n", st.State, st.Result)
+		}
+
+		fmt.Println("=== BOARD AFTER ENGINE MOVE ===")
+		printBoard(pos)
+		fmt.Printf("\nFEN: %s\n", pos.FEN())
+	}
+}
+
+func sideToMoveStr(color chess.Color) string {
+	if color == chess.White {
+		return "White"
+	}
+	return "Black"
+}
