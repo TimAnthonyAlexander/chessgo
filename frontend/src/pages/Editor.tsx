@@ -13,6 +13,7 @@ import {
     RotateCcw,
 } from 'lucide-react'
 import BoardEditor, { type Brush, EditorPalette } from '../components/BoardEditor'
+import BoardPage from '../components/BoardPage'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import { ActionBtn } from '../components/PanelUI'
 import { analyze, type Color, nextPuzzle } from '../api/client'
@@ -115,74 +116,13 @@ export default function Editor() {
     const engineVsEngine = () => navigate('/admin/engine-vs', { state: { fen } })
 
     return (
-        <Box
-            sx={{
-                flex: 1,
-                display: 'flex',
-                justifyContent: 'center',
-                alignItems: { xs: 'flex-start', md: 'center' },
-                px: { xs: 1.5, md: 3 },
-                py: { xs: 2, md: 2 },
-            }}
-        >
-            <Box
-                sx={{
-                    display: 'grid',
-                    gridTemplateColumns: {
-                        xs: '1fr',
-                        md: '320px min(calc(100vh - 120px), calc(100vw - 752px), 880px) 320px',
-                    },
-                    columnGap: { md: 4 },
-                    rowGap: 2,
-                    alignItems: { xs: 'start', md: 'center' },
-                    justifyContent: 'center',
-                    width: { xs: '100%', md: 'fit-content' },
-                    maxWidth: '100%',
-                    mx: 'auto',
-                }}
-            >
-                {/* Left — spare-piece palette + how-to (mirrors the right panel so the
-            board stays centered). */}
+        <BoardPage
+            left={<PaletteCard brush={brush} onPick={setBrush} />}
+            evalBar={<EvalBar ev={whiteEval} orientation={orientation} />}
+            right={
                 <Box
                     sx={{
-                        alignSelf: 'start',
                         width: '100%',
-                        maxWidth: { xs: 'min(94vw, 64vh)', md: 'none' },
-                        mx: { xs: 'auto', md: 0 },
-                    }}
-                >
-                    <PaletteCard brush={brush} onPick={setBrush} />
-                </Box>
-
-                {/* Center — the editor board, with a live balance read-out alongside. */}
-                <Box
-                    sx={{
-                        minWidth: 0,
-                        width: { xs: 'min(94vw, 64vh)', md: '100%' },
-                        mx: 'auto',
-                        display: 'flex',
-                        gap: 1.25,
-                    }}
-                >
-                    <EvalBar ev={whiteEval} orientation={orientation} />
-                    <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <BoardEditor
-                            fen={fen}
-                            orientation={orientation}
-                            brush={brush}
-                            onChange={setFen}
-                        />
-                    </Box>
-                </Box>
-
-                {/* Right — controls + actions. */}
-                <Box
-                    sx={{
-                        justifySelf: { md: 'start' },
-                        alignSelf: 'start',
-                        width: '100%',
-                        maxWidth: { xs: 'min(94vw, 64vh)', md: 'none' },
-                        mx: { xs: 'auto', md: 0 },
                         border: '1px solid var(--line-soft)',
                         borderRadius: '14px',
                         bgcolor: 'var(--surface)',
@@ -342,8 +282,10 @@ export default function Editor() {
                         </Box>
                     </Box>
                 </Box>
-            </Box>
-        </Box>
+            }
+        >
+            <BoardEditor fen={fen} orientation={orientation} brush={brush} onChange={setFen} />
+        </BoardPage>
     )
 }
 

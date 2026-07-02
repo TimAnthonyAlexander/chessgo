@@ -27,6 +27,7 @@ import Board from '../components/Board'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveList from '../components/MoveList'
 import GameModeCard from '../components/GameModeCard'
+import BoardPage from '../components/BoardPage'
 import { ActionBtn, Avatar, ErrorBanner, NavBtn } from '../components/PanelUI'
 import {
     analyze,
@@ -367,141 +368,79 @@ export default function BotGame() {
             : 'dim'
 
     return (
-        <Box
-            sx={{
-                flex: 1,
-                display: 'flex',
-                justifyContent: 'center',
-                alignItems: { xs: 'flex-start', md: 'center' },
-                px: { xs: 2, md: 3 },
-                py: { xs: 3, md: 2 },
-            }}
-        >
-            <Box
-                sx={{
-                    display: 'grid',
-                    // Same board sizing as LiveGame: 320px side columns, a board that fills
-                    // almost the full height. The fit-content grid + mx:auto keeps the BOARD
-                    // centered in the viewport (equal 320px gutters mirror each other).
-                    gridTemplateColumns: {
-                        xs: '1fr',
-                        md: '320px min(calc(100vh - 120px), calc(100vw - 752px), 880px) 320px',
-                    },
-                    columnGap: { md: 4 },
-                    rowGap: 3,
-                    alignItems: { xs: 'center', md: 'stretch' },
-                    justifyContent: 'center',
-                    width: { xs: '100%', md: 'fit-content' },
-                    maxWidth: '100%',
-                    mx: 'auto',
-                }}
-            >
-                {/* Left — game mode, top-aligned (mirrors the right column to center the board) */}
-                <Box
-                    sx={{
-                        display: { xs: 'none', md: 'block' },
-                        justifySelf: 'end',
-                        alignSelf: 'start',
-                        width: '100%',
-                    }}
-                >
+        <BoardPage
+            left={
+                <Box sx={{ display: { xs: 'none', md: 'block' } }}>
                     <GameModeCard rating={game?.rating ?? rating} variant={game?.variant ?? variant} />
                 </Box>
-
-                {/* Center — board, top-aligned so its top lines up with the side cards */}
-                <Box
-                    sx={{
-                        alignSelf: 'start',
-                        width: { xs: 'min(94vw, 64vh)', md: '100%' },
-                        display: 'flex',
-                        gap: { xs: 0.75, md: 1.25 },
-                        alignItems: 'stretch',
-                    }}
-                >
-                    <EvalBar ev={analyzedEval} orientation={orientation} />
-                    <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Board
-                            fen={boardFen}
-                            orientation={orientation}
-                            sideToMove={game?.side_to_move ?? 'w'}
-                            legalMoves={interactive ? game.legal_moves : []}
-                            lastMove={lastMove}
-                            inCheck={false}
-                            interactive={interactive}
-                            onMove={isDuck ? duck.onMove : interaction.onMove}
-                            premoveColor={ongoing && atLive && !isDuck ? humanColor : null}
-                            premove={atLive && !isDuck ? interaction.premove : null}
-                            onCancelPremove={interaction.cancelPremove}
-                            duck={shownDuck}
-                            duckTargets={isDuck && atLive ? duck.duckTargets : null}
-                            onPlaceDuck={duck.onPlaceDuck}
-                            {...(activeOverride && atLive
-                                ? { overrideBoard: activeOverride }
-                                : {})}
-                        />
-                    </Box>
-                </Box>
-
-                {/* Right — full-height move panel, or the setup card (top-aligned) */}
-                <Box
-                    sx={{
-                        justifySelf: { md: 'start' },
-                        alignSelf: { xs: 'auto', md: game ? 'stretch' : 'start' },
-                        width: '100%',
-                        maxWidth: { xs: 'min(94vw, 64vh)', md: 'none' },
-                        minHeight: 0,
-                        display: 'flex',
-                        flexDirection: 'column',
-                    }}
-                >
-                    {game ? (
-                        <MovePanel
-                            game={game}
+            }
+            evalBar={<EvalBar ev={analyzedEval} orientation={orientation} />}
+            right={
+                game ? (
+                    <MovePanel
+                        game={game}
+                        rating={rating}
+                        ongoing={ongoing}
+                        canUndo={canUndo}
+                        shownPly={shownPly}
+                        sound={sound}
+                        caption={caption}
+                        statusTone={statusTone}
+                        error={error}
+                        onSelectPly={selectPly}
+                        onFirst={goFirst}
+                        onPrev={goPrev}
+                        onNext={goNext}
+                        onLast={goLast}
+                        onFlip={() => setFlipped((f) => !f)}
+                        onToggleSound={toggleSound}
+                        onUndo={undo}
+                        onResign={resign}
+                        onNewGame={() => {
+                            setGame(null)
+                            setStartFen(null)
+                        }}
+                        isAdmin={isAdmin}
+                        bestFen={boardFen}
+                        bestMyTurn={interactive}
+                        gameStartFen={startFen ?? START_FEN}
+                    />
+                ) : (
+                    <>
+                        <Setup
                             rating={rating}
-                            ongoing={ongoing}
-                            canUndo={canUndo}
-                            shownPly={shownPly}
-                            sound={sound}
-                            caption={caption}
-                            statusTone={statusTone}
-                            error={error}
-                            onSelectPly={selectPly}
-                            onFirst={goFirst}
-                            onPrev={goPrev}
-                            onNext={goNext}
-                            onLast={goLast}
-                            onFlip={() => setFlipped((f) => !f)}
-                            onToggleSound={toggleSound}
-                            onUndo={undo}
-                            onResign={resign}
-                            onNewGame={() => {
-                                setGame(null)
-                                setStartFen(null)
-                            }}
-                            isAdmin={isAdmin}
-                            bestFen={boardFen}
-                            bestMyTurn={interactive}
-                            gameStartFen={startFen ?? START_FEN}
+                            colorChoice={colorChoice}
+                            variant={variant}
+                            creating={creating}
+                            customStart={!!startFen}
+                            onRating={setRating}
+                            onColor={setColorChoice}
+                            onVariant={setVariant}
+                            onStart={newGame}
                         />
-                    ) : (
-                        <>
-                            <Setup
-                                rating={rating}
-                                colorChoice={colorChoice}
-                                variant={variant}
-                                creating={creating}
-                                customStart={!!startFen}
-                                onRating={setRating}
-                                onColor={setColorChoice}
-                                onVariant={setVariant}
-                                onStart={newGame}
-                            />
-                            {error && <ErrorBanner sx={{ mt: 1.5 }}>{error}</ErrorBanner>}
-                        </>
-                    )}
-                </Box>
-            </Box>
-        </Box>
+                        {error && <ErrorBanner sx={{ mt: 1.5 }}>{error}</ErrorBanner>}
+                    </>
+                )
+            }
+        >
+            <Board
+                fen={boardFen}
+                orientation={orientation}
+                sideToMove={game?.side_to_move ?? 'w'}
+                legalMoves={interactive ? game.legal_moves : []}
+                lastMove={lastMove}
+                inCheck={false}
+                interactive={interactive}
+                onMove={isDuck ? duck.onMove : interaction.onMove}
+                premoveColor={ongoing && atLive && !isDuck ? humanColor : null}
+                premove={atLive && !isDuck ? interaction.premove : null}
+                onCancelPremove={interaction.cancelPremove}
+                duck={shownDuck}
+                duckTargets={isDuck && atLive ? duck.duckTargets : null}
+                onPlaceDuck={duck.onPlaceDuck}
+                {...(activeOverride && atLive ? { overrideBoard: activeOverride } : {})}
+            />
+        </BoardPage>
     )
 }
 

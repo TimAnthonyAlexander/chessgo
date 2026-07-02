@@ -25,6 +25,7 @@ import {
 import { useLocation, useParams } from 'react-router-dom'
 import AnalysisAside from '../components/AnalysisAside'
 import Board from '../components/Board'
+import BoardPage from '../components/BoardPage'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveTree from '../components/MoveTree'
 import OpeningPanel from '../components/OpeningPanel'
@@ -506,69 +507,28 @@ export default function Analysis() {
     const lastMove = current.move ? { from: current.move.from, to: current.move.to } : null
 
     return (
-        <Box
-            sx={{
-                flex: 1,
-                display: 'flex',
-                justifyContent: 'center',
-                alignItems: { xs: 'flex-start', md: 'center' },
-                px: { xs: 1.5, md: 3 },
-                py: { xs: 2, md: 2 },
-            }}
-        >
-            <Box
-                sx={{
-                    display: 'grid',
-                    // A left spacer column mirrors the 360px sidebar so the BOARD (not the
-                    // board+sidebar block) is centered in the viewport — same trick as LiveGame.
-                    gridTemplateColumns: {
-                        xs: '1fr',
-                        md: '320px min(calc(100vh - 120px), calc(100vw - 752px), 880px) 320px',
-                    },
-                    columnGap: { md: 4 },
-                    rowGap: 2,
-                    alignItems: { xs: 'start', md: 'stretch' },
-                    justifyContent: 'center',
-                    width: { xs: '100%', md: 'fit-content' },
-                    maxWidth: '100%',
-                    mx: 'auto',
-                }}
-            >
-                {/* Left column: material + position cards (mirrors the sidebar width, so
+        <BoardPage
+            left={
+                /* Left column: material + position cards (mirrors the sidebar width, so
             the board stays centered). Setup tools only in free mode — reviewing a
-            loaded game shows material alone. */}
+            loaded game shows material alone. */
                 <AnalysisAside
                     fen={current.fen}
                     onLoadFen={loadPosition}
                     playBotDisabled={over.over}
                     showSetup={!id}
                 />
-
-                {/* Eval bar + board */}
-                <Box sx={{ minWidth: 0, display: 'flex', gap: 1, alignItems: 'stretch' }}>
-                    <EvalBar
-                        ev={engineOn ? current.evalWhite : null}
-                        orientation={orientation}
-                        sfEv={sfEvForBar}
-                        sfColor={SF_ARROW_COLOR}
-                    />
-                    <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Board
-                            fen={current.fen}
-                            orientation={orientation}
-                            sideToMove={sideToMove}
-                            legalMoves={legalMoves}
-                            lastMove={lastMove}
-                            inCheck={over.check}
-                            interactive
-                            onMove={onMove}
-                            arrow={arrow}
-                            arrow2={sfArrow}
-                        />
-                    </Box>
-                </Box>
-
-                {/* Sidebar */}
+            }
+            evalBar={
+                <EvalBar
+                    ev={engineOn ? current.evalWhite : null}
+                    orientation={orientation}
+                    sfEv={sfEvForBar}
+                    sfColor={SF_ARROW_COLOR}
+                />
+            }
+            right={
+                /* Sidebar */
                 <Box
                     sx={{
                         width: { xs: '100%', md: '100%' },
@@ -697,8 +657,21 @@ export default function Analysis() {
                         onHoverMove={setHoverUci}
                     />
                 </Box>
-            </Box>
-        </Box>
+            }
+        >
+            <Board
+                fen={current.fen}
+                orientation={orientation}
+                sideToMove={sideToMove}
+                legalMoves={legalMoves}
+                lastMove={lastMove}
+                inCheck={over.check}
+                interactive
+                onMove={onMove}
+                arrow={arrow}
+                arrow2={sfArrow}
+            />
+        </BoardPage>
     )
 }
 

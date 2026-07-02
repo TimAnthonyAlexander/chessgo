@@ -3,6 +3,7 @@ import { Box, Button, Typography } from '@mui/material'
 import { Check, Flag, Handshake, Undo2, User, Volume2, VolumeX, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import Board from '../components/Board'
+import BoardPage from '../components/BoardPage'
 import ChatPanel from '../components/ChatPanel'
 import Clock from '../components/Clock'
 import LiveModeCard from '../components/LiveModeCard'
@@ -187,43 +188,15 @@ export default function LiveGame() {
     }))
 
     return (
-        <Box
-            sx={{
-                flex: 1,
-                display: 'flex',
-                justifyContent: 'center',
-                alignItems: { xs: 'flex-start', md: 'center' },
-                px: { xs: 2, md: 3 },
-                py: { xs: 3, md: 2 },
-            }}
-        >
-            <Box
-                sx={{
-                    display: 'grid',
-                    // A left spacer column mirrors the 320px sidebar so the BOARD itself
-                    // (not the board+sidebar block) is centered in the viewport.
-                    gridTemplateColumns: {
-                        xs: '1fr',
-                        md: '320px min(calc(100vh - 120px), calc(100vw - 752px), 880px) 320px',
-                    },
-                    columnGap: { md: 4 },
-                    rowGap: 2,
-                    alignItems: { xs: 'flex-start', md: 'stretch' },
-                    justifyContent: 'center',
-                    width: { xs: '100%', md: 'fit-content' },
-                    maxWidth: '100%',
-                    mx: 'auto',
-                }}
-            >
+        <BoardPage
+            left={
                 <Box
                     sx={{
                         display: { xs: 'none', md: 'flex' },
                         flexDirection: 'column',
                         gap: 2,
                         minHeight: 0,
-                        width: '100%',
-                        justifySelf: 'end',
-                        alignSelf: 'stretch',
+                        flex: 1,
                     }}
                 >
                     <LiveModeCard
@@ -239,26 +212,8 @@ export default function LiveGame() {
                         disabled={g.ended}
                     />
                 </Box>
-                <Box sx={{ minWidth: 0, alignSelf: 'start', width: '100%' }}>
-                    <Board
-                        fen={g.fen}
-                        orientation={g.color}
-                        sideToMove={g.sideToMove}
-                        legalMoves={myTurn ? g.legalMoves : []}
-                        lastMove={activeOptimisticLast ?? g.lastMove}
-                        inCheck={isDuck ? false : g.check}
-                        interactive={myTurn}
-                        onMove={isDuck ? duck.onMove : interaction.onMove}
-                        premoveColor={g.ended || isDuck ? null : g.color}
-                        premove={isDuck ? null : interaction.premove}
-                        onCancelPremove={interaction.cancelPremove}
-                        duck={shownDuck}
-                        duckTargets={isDuck ? duck.duckTargets : null}
-                        onPlaceDuck={duck.onPlaceDuck}
-                        {...(activeOverride ? { overrideBoard: activeOverride } : {})}
-                    />
-                </Box>
-
+            }
+            right={
                 <Box
                     sx={{
                         flex: 1,
@@ -528,8 +483,26 @@ export default function LiveGame() {
                         divider="top"
                     />
                 </Box>
-            </Box>
-        </Box>
+            }
+        >
+            <Board
+                fen={g.fen}
+                orientation={g.color}
+                sideToMove={g.sideToMove}
+                legalMoves={myTurn ? g.legalMoves : []}
+                lastMove={activeOptimisticLast ?? g.lastMove}
+                inCheck={isDuck ? false : g.check}
+                interactive={myTurn}
+                onMove={isDuck ? duck.onMove : interaction.onMove}
+                premoveColor={g.ended || isDuck ? null : g.color}
+                premove={isDuck ? null : interaction.premove}
+                onCancelPremove={interaction.cancelPremove}
+                duck={shownDuck}
+                duckTargets={isDuck ? duck.duckTargets : null}
+                onPlaceDuck={duck.onPlaceDuck}
+                {...(activeOverride ? { overrideBoard: activeOverride } : {})}
+            />
+        </BoardPage>
     )
 }
 

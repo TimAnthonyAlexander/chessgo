@@ -8,6 +8,7 @@ import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveList from '../components/MoveList'
 import { Avatar, NavBtn, PANEL_SHADOW } from '../components/PanelUI'
 import BoardActions from '../components/BoardActions'
+import BoardPage from '../components/BoardPage'
 import { analyze, type MoveEntry } from '../api/client'
 import { pvToSan, START_FEN } from '../lib/analysisTree'
 import {
@@ -25,15 +26,6 @@ import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds
 // see the board as-is — no analyze traffic for them.
 const LS_EVAL = 'spectate-eval-bar'
 const LS_ARROW = 'spectate-best-arrow'
-
-// Board sizing. The board is a fixed square and its grid column sizes to content
-// (`auto`), so toggling the eval bar ADDS width to the left and re-centers the
-// row rather than stealing width from the board. The width term reserves the
-// eval-bar's footprint only while it's shown, so a width-bound viewport never
-// overflows; on the common height-bound desktop the height term binds and the
-// board size is identical whether or not the bar is on.
-const BOARD_SIZE = 'min(calc(100vh - 120px), calc(100vw - 392px), 880px)'
-const BOARD_SIZE_WITH_EVAL = 'min(calc(100vh - 120px), calc(100vw - 438px), 880px)'
 
 function loadFlag(key: string): boolean {
     try {
@@ -183,85 +175,9 @@ export default function Spectate() {
     }))
 
     return (
-        <Box
-            sx={{
-                flex: 1,
-                display: 'flex',
-                justifyContent: 'center',
-                alignItems: { xs: 'flex-start', md: 'center' },
-                px: { xs: 2, md: 3 },
-                py: { xs: 3, md: 2 },
-            }}
-        >
-            <Box
-                sx={{
-                    display: 'grid',
-                    gridTemplateColumns: {
-                        xs: '1fr',
-                        // Board area sizes to its content (board + optional eval bar), so
-                        // the bar adds width to the left instead of shrinking the board.
-                        md: 'auto 320px',
-                    },
-                    columnGap: { md: 4 },
-                    rowGap: 2,
-                    alignItems: { xs: 'flex-start', md: 'stretch' },
-                    justifyContent: 'center',
-                    width: { xs: '100%', md: 'fit-content' },
-                    maxWidth: '100%',
-                    mx: 'auto',
-                }}
-            >
-                <Box
-                    sx={{
-                        minWidth: 0,
-                        alignSelf: 'start',
-                        width: { xs: '100%', md: 'auto' },
-                        display: 'flex',
-                        gap: 1,
-                        alignItems: 'stretch',
-                    }}
-                >
-                    {/* Reserve the eval bar's slot for the whole admin session (md): the
-                        element is always in the layout, and toggling only flips its
-                        visibility — so showing it never shifts the board or sidebar. On xs
-                        (single column) we only mount it when shown, to avoid wasting width. */}
-                    {isAdmin && (
-                        <Box
-                            sx={{
-                                display: { xs: showEval ? 'flex' : 'none', md: 'flex' },
-                                visibility: { md: showEval ? 'visible' : 'hidden' },
-                                flexShrink: 0,
-                            }}
-                            aria-hidden={!showEval}
-                        >
-                            <EvalBar ev={whiteEval} orientation="w" />
-                        </Box>
-                    )}
-                    <Box
-                        sx={{
-                            // xs: fill the column and share it with the bar (single-column,
-                            // full-width). md: a fixed square. For admins the size always
-                            // reserves the eval bar, so toggling the bar never resizes it.
-                            flex: { xs: 1, md: '0 0 auto' },
-                            width: { md: isAdmin ? BOARD_SIZE_WITH_EVAL : BOARD_SIZE },
-                            minWidth: 0,
-                        }}
-                    >
-                        <Board
-                            fen={g.fen}
-                            orientation="w"
-                            sideToMove={g.sideToMove}
-                            legalMoves={[]}
-                            lastMove={g.lastMove}
-                            inCheck={g.variant === 'duck' ? false : g.check}
-                            interactive={false}
-                            onMove={() => {}}
-                            duck={g.variant === 'duck' ? g.duck : null}
-                            arrow={arrow}
-                        />
-                    </Box>
-                </Box>
-
+        <BoardPage
+            evalBar={isAdmin && showEval ? <EvalBar ev={whiteEval} orientation="w" /> : undefined}
+            right={
                 <Box
                     sx={{
                         flex: 1,
@@ -462,8 +378,21 @@ export default function Spectate() {
                         divider="top"
                     />
                 </Box>
-            </Box>
-        </Box>
+            }
+        >
+            <Board
+                fen={g.fen}
+                orientation="w"
+                sideToMove={g.sideToMove}
+                legalMoves={[]}
+                lastMove={g.lastMove}
+                inCheck={g.variant === 'duck' ? false : g.check}
+                interactive={false}
+                onMove={() => {}}
+                duck={g.variant === 'duck' ? g.duck : null}
+                arrow={arrow}
+            />
+        </BoardPage>
     )
 }
 

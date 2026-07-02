@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import Board from '../components/Board'
 import BoardActions from '../components/BoardActions'
+import BoardPage from '../components/BoardPage'
 import { ActionBtn, ErrorBanner, NavBtn } from '../components/PanelUI'
 import {
     type Color,
@@ -380,76 +381,14 @@ export default function Puzzles() {
     const interactive = phase === 'solving'
 
     return (
-        <Box
-            sx={{
-                flex: 1,
-                display: 'flex',
-                justifyContent: 'center',
-                alignItems: { xs: 'flex-start', md: 'center' },
-                px: { xs: 2, md: 3 },
-                py: { xs: 3, md: 2 },
-            }}
-        >
-            <Box
-                sx={{
-                    display: 'grid',
-                    // Same board sizing as the other pages, but Bot/Analysis put a ~46px
-                    // EvalBar (38px) + gap (8px) beside the board, shrinking it that much.
-                    // Puzzles has no eval bar, so trim the board column by 46px to match.
-                    gridTemplateColumns: {
-                        xs: '1fr',
-                        md: '320px min(calc(100vh - 166px), calc(100vw - 798px), 834px) 320px',
-                    },
-                    columnGap: { md: 4 },
-                    rowGap: 2.5,
-                    alignItems: { xs: 'center', md: 'stretch' },
-                    justifyContent: 'center',
-                    width: { xs: '100%', md: 'fit-content' },
-                    maxWidth: '100%',
-                    mx: 'auto',
-                }}
-            >
-                {/* Left — session info (desktop) */}
-                <Box
-                    sx={{
-                        display: { xs: 'none', md: 'block' },
-                        justifySelf: 'end',
-                        alignSelf: 'start',
-                        width: '100%',
-                    }}
-                >
+        <BoardPage
+            left={
+                <Box sx={{ display: { xs: 'none', md: 'block' } }}>
                     <RunningAside user={userStats} theme={theme} limitSec={limitSec} />
                 </Box>
-
-                {/* Center — board, top-aligned to line up with the side cards. */}
-                <Box
-                    sx={{
-                        alignSelf: 'start',
-                        width: { xs: 'calc(min(94vw, 64vh) - 34px)', md: '100%' },
-                    }}
-                >
-                    <Board
-                        fen={displayFen}
-                        orientation={orientation}
-                        sideToMove={orientation}
-                        legalMoves={interactive ? legal : []}
-                        lastMove={lastMove}
-                        inCheck={false}
-                        interactive={interactive}
-                        onMove={onMove}
-                        {...(override ? { overrideBoard: override } : {})}
-                    />
-                </Box>
-
-                {/* Right — clock / status / controls */}
-                <Box
-                    sx={{
-                        justifySelf: { md: 'start' },
-                        alignSelf: 'start',
-                        width: '100%',
-                        maxWidth: { xs: 'min(94vw, 64vh)', md: 'none' },
-                    }}
-                >
+            }
+            right={
+                <>
                     <StatusCard
                         phase={phase}
                         orientation={orientation}
@@ -472,9 +411,21 @@ export default function Puzzles() {
                     )}
                     <HistoryStrip history={history} />
                     {error && <ErrorBanner sx={{ mx: 0, mt: 1.5 }}>{error}</ErrorBanner>}
-                </Box>
-            </Box>
-        </Box>
+                </>
+            }
+        >
+            <Board
+                fen={displayFen}
+                orientation={orientation}
+                sideToMove={orientation}
+                legalMoves={interactive ? legal : []}
+                lastMove={lastMove}
+                inCheck={false}
+                interactive={interactive}
+                onMove={onMove}
+                {...(override ? { overrideBoard: override } : {})}
+            />
+        </BoardPage>
     )
 }
 

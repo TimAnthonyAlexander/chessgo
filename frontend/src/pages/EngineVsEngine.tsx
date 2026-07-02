@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import Board from '../components/Board'
+import BoardPage from '../components/BoardPage'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveList from '../components/MoveList'
 import OpeningPanel from '../components/OpeningPanel'
@@ -43,14 +44,6 @@ const MAX_PLIES = 400 // hard stop so two shuffling engines can't loop forever
 const MOVE_DELAY = 550 // ms between plies, so it's watchable
 // Blue board arrow drawn when hovering a candidate (book) move (matches Analysis).
 const BOOK_ARROW_COLOR = '#4c8bf5'
-
-// The square board sizes to whichever bound hits first, so it never overflows:
-//  - viewport height minus the top nav + page padding (short monitors),
-//  - viewport width minus the two side columns + gaps + padding (narrow monitors),
-//  - a generous absolute cap (huge monitors).
-// The left control column shares this expression as its minHeight so the board and
-// the two side cards stay vertically aligned.
-const BOARD_SIZE = 'min(calc(100vh - 112px), calc(100vw - 772px), 1160px)'
 
 const sideToMoveOf = (fen: string): Color => (fen.split(' ')[1] === 'b' ? 'b' : 'w')
 
@@ -396,45 +389,9 @@ export default function EngineVsEngine() {
             : 'Configure both sides and press Start'
 
     return (
-        <Box
-            sx={{
-                flex: 1,
-                display: 'flex',
-                justifyContent: 'center',
-                alignItems: 'flex-start',
-                px: { xs: 2, md: 3 },
-                py: 3,
-            }}
-        >
-            <Box
-                sx={{
-                    display: 'grid',
-                    gridTemplateColumns: {
-                        xs: '1fr',
-                        md: `340px ${BOARD_SIZE} 320px`,
-                    },
-                    columnGap: { md: 4 },
-                    rowGap: 3,
-                    width: { xs: '100%', md: 'fit-content' },
-                    maxWidth: '100%',
-                    mx: 'auto',
-                    alignItems: 'stretch',
-                }}
-            >
-                {/* Left — two half-height control cards (top = Black player, bottom =
-                    White player), vertically centred in each half, with the global
-                    run/reset controls on the divider between them. */}
-                <Box
-                    sx={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        justifyContent: 'flex-start',
-                        gap: 1.5,
-                        width: '100%',
-                        minWidth: 0,
-                        minHeight: { md: BOARD_SIZE },
-                    }}
-                >
+        <BoardPage
+            left={
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
                     <SideControls
                         cfg={black}
                         onChange={(patch) => setBlack((c) => ({ ...c, ...patch }))}
@@ -447,34 +404,10 @@ export default function EngineVsEngine() {
                         disabled={running}
                     />
                 </Box>
-
-                {/* Center — board */}
-                <Box
-                    sx={{
-                        alignSelf: 'start',
-                        width: { xs: 'min(94vw, 64vh)', md: '100%' },
-                        display: 'flex',
-                        gap: 1.25,
-                    }}
-                >
-                    <EvalBar ev={whiteEval} orientation="w" />
-                    <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Board
-                            fen={fen}
-                            orientation="w"
-                            sideToMove={sideToMove}
-                            legalMoves={[]}
-                            lastMove={lastMove}
-                            inCheck={false}
-                            interactive={false}
-                            onMove={() => {}}
-                            arrow={arrow}
-                        />
-                    </Box>
-                </Box>
-
-                {/* Right — status + move list */}
-                <Box sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+            }
+            evalBar={<EvalBar ev={whiteEval} orientation="w" />}
+            right={
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
                     <Box
                         sx={{
                             bgcolor: 'var(--surface)',
@@ -580,8 +513,20 @@ export default function EngineVsEngine() {
                         />
                     </Box>
                 </Box>
-            </Box>
-        </Box>
+            }
+        >
+            <Board
+                fen={fen}
+                orientation="w"
+                sideToMove={sideToMove}
+                legalMoves={[]}
+                lastMove={lastMove}
+                inCheck={false}
+                interactive={false}
+                onMove={() => {}}
+                arrow={arrow}
+            />
+        </BoardPage>
     )
 }
 
