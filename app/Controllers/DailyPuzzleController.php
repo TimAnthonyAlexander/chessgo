@@ -6,6 +6,7 @@ use BaseApi\App;
 use BaseApi\Controllers\Controller;
 use BaseApi\Http\JsonResponse;
 use App\Models\Puzzle;
+use App\Services\CacheHelper;
 use App\Services\GomachineClient;
 
 /**
@@ -33,31 +34,68 @@ class DailyPuzzleController extends Controller
 
     private const MAX_RATING = 1900;
 
+    /** Cache namespace + TTL for the computed daily payload. The cache key is the
+     * UTC date, so it rotates itself at midnight; the TTL just needs to comfortably
+     * cover a day (a hair over 24h so a same-day miss can't expire early). */
+    private const CACHE_NS = 'puzzle_daily';
+
+    private const CACHE_TTL = 90000; // 25h
+
     public function __construct(
         private readonly GomachineClient $engine,
     ) {}
 
     public function get(): JsonResponse
     {
+        // The daily puzzle is identical for everyone all UTC day, so the whole
+        // computed payload (including the two engine round-trips below) is cached
+        // under the date. Only the first caller per day pays the cold cost; every
+        // refresh/visitor after that is a file-cache hit. A null result (no puzzle
+        // / malformed / engine hiccup) is self-healing — Cache::get can't tell it
+        // from a miss, so it simply recomputes next call instead of pinning a bad
+        // day. No jitter: one key per day makes stampede-spreading pointless.
+        $payload = CacheHelper::remember(
+            self::CACHE_NS,
+            gmdate('Y-m-d'),
+            self::CACHE_TTL,
+            fn(): ?array => $this->buildDaily(),
+            false,
+        );
+
+        if ($payload === null) {
+            return JsonResponse::notFound('No daily puzzle available');
+        }
+
+        return JsonResponse::ok($payload);
+    }
+
+    /**
+     * Compute today's daily-puzzle payload (the cache-miss path). Returns null on
+     * any failure so the caller renders a 404 and nothing bad is cached.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function buildDaily(): ?array
+    {
         $puzzle = $this->pickDaily();
         if (!$puzzle instanceof Puzzle) {
-            return JsonResponse::notFound('No daily puzzle available');
+            return null;
         }
 
         $solution = $puzzle->getMoves();
         if (count($solution) < 2) {
-            return JsonResponse::error('Malformed puzzle', 500);
+            return null;
         }
 
         // Auto-play the opponent's setup move; the player solves from the result.
         $applied = $this->engine->move($puzzle->fen, $solution[0]);
         if (empty($applied['legal'])) {
-            return JsonResponse::error('Malformed puzzle', 500);
+            return null;
         }
         $playerFen = $applied['newFen'];
         $legal = $this->engine->legalMoves($playerFen);
 
-        return JsonResponse::ok([
+        return [
             'id' => $puzzle->id,
             'rating' => $puzzle->rating,
             'start_fen' => $puzzle->fen,
@@ -67,34 +105,43 @@ class DailyPuzzleController extends Controller
             'legal_moves' => $legal['moves'] ?? [],
             'ply' => 1,
             'themes' => $puzzle->getThemes(),
-        ]);
+        ];
     }
 
     /**
-     * Pick the deterministic puzzle for today's UTC date: a stable OFFSET, keyed
-     * by crc32(date), into the rating-banded set ordered by id. Same input ⇒ same
-     * row, all day — and a different row tomorrow.
+     * Pick the deterministic puzzle for today's UTC date.
+     *
+     * A keyset seek, NOT a COUNT + `LIMIT 1 OFFSET n`: the old approach filesorted
+     * the whole ~80k-row rating band and skipped n rows on every call. Instead we
+     * derive an 8-hex boundary from crc32(date) and take the first in-band puzzle
+     * whose (UUID) id >= that boundary in primary-key order — an index seek that
+     * stops at the first match. Same date ⇒ same boundary ⇒ same row all day, a
+     * different row tomorrow; UUIDv5 ids are hash-uniform so the pick is well
+     * spread. Wrap-around (boundary past the last in-band id) falls back to the
+     * first in-band row.
      */
     private function pickDaily(): ?Puzzle
     {
-        $count = (int) App::db()->scalar(
-            'SELECT COUNT(*) FROM puzzle WHERE rating BETWEEN ? AND ?',
-            [self::MIN_RATING, self::MAX_RATING],
-        );
-        if ($count <= 0) {
-            return null;
-        }
-
-        $date = gmdate('Y-m-d');
-        $offset = crc32($date) % $count; // non-negative: crc32 ≥ 0, count > 0
+        $boundary = sprintf('%08x-0000-0000-0000-000000000000', crc32(gmdate('Y-m-d')) & 0xffffffff);
 
         $rows = App::db()->raw(
             "SELECT id FROM puzzle
-             WHERE rating BETWEEN ? AND ?
+             WHERE rating BETWEEN ? AND ? AND id >= ?
              ORDER BY id
-             LIMIT 1 OFFSET $offset",
-            [self::MIN_RATING, self::MAX_RATING],
+             LIMIT 1",
+            [self::MIN_RATING, self::MAX_RATING, $boundary],
         );
+
+        if (empty($rows)) {
+            $rows = App::db()->raw(
+                "SELECT id FROM puzzle
+                 WHERE rating BETWEEN ? AND ?
+                 ORDER BY id
+                 LIMIT 1",
+                [self::MIN_RATING, self::MAX_RATING],
+            );
+        }
+
         $id = $rows[0]['id'] ?? null;
         if ($id === null) {
             return null;
