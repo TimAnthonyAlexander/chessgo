@@ -258,7 +258,9 @@ export default function LiveTvWidget() {
         )
     }
 
-    const goWatch = () => navigate('/watch')
+    const goWatch = () => {
+        if (game) navigate(`/watch/${game.id}`)
+    }
 
     // Interpolate the running side's clock forward from the last poll snapshot.
     // Clocks only run once both opening moves are in (ply >= 2, Lichess-style);
