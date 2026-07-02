@@ -1,0 +1,9 @@
+Chess piece set: "fantasy"
+By Maurizio Monge.
+
+Source: https://github.com/lichess-org/lila (public/piece/fantasy)
+Upstream: https://github.com/maurimo/chess-art
+
+Licensed under MIT. These SVG files are used here unmodified.
+
+Fantasy — Maurizio Monge — MIT — https://github.com/maurimo/chess-art — vendored from lichess-org/lila (public/piece/fantasy)

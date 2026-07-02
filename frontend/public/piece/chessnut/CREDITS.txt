@@ -1,0 +1,9 @@
+Chess piece set: "chessnut"
+By Alexis Luengas.
+
+Source: https://github.com/lichess-org/lila (public/piece/chessnut)
+Upstream: https://github.com/LexLuengas/chessnut-pieces
+
+Licensed under Apache 2.0. These SVG files are used here unmodified.
+
+Chessnut — Alexis Luengas — Apache 2.0 — https://github.com/LexLuengas/chessnut-pieces — vendored from lichess-org/lila (public/piece/chessnut)

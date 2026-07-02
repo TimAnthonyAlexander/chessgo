@@ -1,5 +1,6 @@
 import { Box } from '@mui/material'
 import { parseFen, pieceImageUrl, squareAt } from '../lib/chess'
+import { usePieceSet } from '../lib/boardTheme'
 import type { Color } from '../api/client'
 
 /** A small, non-interactive board rendered from a FEN — for Watch previews.
@@ -14,6 +15,7 @@ export default function MiniBoard({
     orientation?: Color
 }) {
     const board = parseFen(fen)
+    const pieceSet = usePieceSet() // repaint when the piece theme changes
     const from = lastMove && lastMove.length >= 4 ? lastMove.slice(0, 2) : null
     const to = lastMove && lastMove.length >= 4 ? lastMove.slice(2, 4) : null
     const ranks = orientation === 'w' ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7]
@@ -45,7 +47,7 @@ export default function MiniBoard({
                                 background: light ? 'var(--board-light)' : 'var(--board-dark)',
                                 ...(piece
                                     ? {
-                                          backgroundImage: `url(${pieceImageUrl(piece)})`,
+                                          backgroundImage: `url(${pieceImageUrl(piece, pieceSet)})`,
                                           backgroundRepeat: 'no-repeat',
                                           backgroundPosition: 'center',
                                           backgroundSize: '86%',

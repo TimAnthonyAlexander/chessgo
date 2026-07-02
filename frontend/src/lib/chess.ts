@@ -2,6 +2,8 @@
 // rules authority; these utilities only parse FEN for rendering and apply a
 // move visually for instant feedback before the server response arrives.
 
+import { themeStore } from './boardTheme'
+
 export type Square = string // 'e4'
 export type BoardMap = Record<Square, string> // square -> piece char (PNBRQK / pnbrqk)
 
@@ -211,10 +213,14 @@ export function kingSquare(board: BoardMap, white: boolean): Square | null {
     return null
 }
 
-// Real cburnett vector pieces (the Lichess set), served from /public.
-export function pieceImageUrl(piece: string): string {
+// Vector piece SVGs served from /public/piece/<set>/. The set defaults to the
+// user's chosen piece theme (appearance store); callers that need a SPECIFIC set
+// regardless of the current preference (e.g. the theme picker previews) pass it
+// explicitly. Board/MiniBoard subscribe to the store (usePieceSet) so a change
+// re-renders them with the new URLs.
+export function pieceImageUrl(piece: string, set: string = themeStore.getPieceSet()): string {
     const color = isWhitePiece(piece) ? 'w' : 'b'
-    return `/piece/cburnett/${color}${piece.toUpperCase()}.svg`
+    return `/piece/${set}/${color}${piece.toUpperCase()}.svg`
 }
 
 // Render SAN with an outline piece glyph instead of the piece letter (Lichess

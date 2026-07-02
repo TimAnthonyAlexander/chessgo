@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Box, Button, Divider, Typography } from '@mui/material'
-import { ChevronDown, LogOut, UserRound } from 'lucide-react'
+import { Box, Button, Divider, IconButton, Tooltip, Typography } from '@mui/material'
+import { ChevronDown, LogOut, Palette, UserRound } from 'lucide-react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { gameSocket } from '../lib/socket'
 import { authStore, useAuth } from '../lib/auth'
 import AuthDialog, { type AuthMode } from './AuthDialog'
+import ThemeDialog from './ThemeDialog'
 import Logo from './Logo'
 import Footer from './Footer'
 import MobileNavDrawer, { type MobileNavSection } from './MobileNavDrawer'
@@ -75,6 +76,7 @@ export default function Layout() {
     const { user } = useAuth()
     const [authOpen, setAuthOpen] = useState(false)
     const [authMode, setAuthMode] = useState<AuthMode>('login')
+    const [themeOpen, setThemeOpen] = useState(false)
     const openAuth = (mode: AuthMode = 'login') => {
         setAuthMode(mode)
         setAuthOpen(true)
@@ -149,6 +151,19 @@ export default function Layout() {
                         onLogin={() => openAuth('login')}
                         onLogout={() => void authStore.logout()}
                     />
+                    <Tooltip title="Appearance">
+                        <IconButton
+                            aria-label="Appearance"
+                            size="small"
+                            onClick={() => setThemeOpen(true)}
+                            sx={{
+                                color: 'var(--text-dim)',
+                                '&:hover': { color: 'var(--accent)' },
+                            }}
+                        >
+                            <Palette size={18} />
+                        </IconButton>
+                    </Tooltip>
                     {user ? (
                         <UserMenu user={user} />
                     ) : (
@@ -181,6 +196,8 @@ export default function Layout() {
                 initialMode={authMode}
                 onClose={() => setAuthOpen(false)}
             />
+
+            <ThemeDialog open={themeOpen} onClose={() => setThemeOpen(false)} />
         </Box>
     )
 }

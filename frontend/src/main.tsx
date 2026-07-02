@@ -14,7 +14,11 @@ import Profile from './pages/Profile'
 import Watch from './pages/Watch'
 import Spectate from './pages/Spectate'
 import EngineVsEngine from './pages/EngineVsEngine'
+import { initTheme } from './lib/boardTheme'
 import './styles.css'
+
+// Apply the persisted board/piece appearance before first paint (no theme flash).
+initTheme()
 
 const router = createBrowserRouter([
     {

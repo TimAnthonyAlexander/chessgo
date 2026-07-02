@@ -15,13 +15,14 @@ import {
     squareAt,
     targetsFrom,
 } from '../lib/chess'
+import { usePieceSet } from '../lib/boardTheme'
 
-function PieceGlyph({ piece, hidden }: { piece: string; hidden?: boolean }) {
+function PieceGlyph({ piece, set, hidden }: { piece: string; set: string; hidden?: boolean }) {
     return (
         <span
             className="piece"
             style={{
-                backgroundImage: `url(${pieceImageUrl(piece)})`,
+                backgroundImage: `url(${pieceImageUrl(piece, set)})`,
                 ...(hidden ? { opacity: 0 } : {}),
             }}
         />
@@ -144,6 +145,7 @@ export default function Board({
     onCancelPremove,
 }: BoardProps) {
     const boardRef = useRef<HTMLDivElement>(null)
+    const pieceSet = usePieceSet() // re-render (with new piece SVGs) when the set changes
     const [selected, setSelected] = useState<Square | null>(null)
     const [promo, setPromo] = useState<{ from: Square; to: Square; options: string[] } | null>(null)
     const [drag, setDrag] = useState<DragState | null>(null)
@@ -393,7 +395,9 @@ export default function Board({
                             <div key={sq} className={classes}>
                                 {isTarget && !piece && <span className="dot" />}
                                 {isTarget && piece && <span className="ring" />}
-                                {piece && <PieceGlyph piece={piece} hidden={isDragOrigin} />}
+                                {piece && (
+                                    <PieceGlyph piece={piece} set={pieceSet} hidden={isDragOrigin} />
+                                )}
                                 {showRank && <span className="coord rank">{rank + 1}</span>}
                                 {showFile && <span className="coord file">{'abcdefgh'[file]}</span>}
                             </div>
@@ -571,7 +575,10 @@ export default function Board({
                                     onClick={() => choosePromotion(p)}
                                     aria-label={`Promote to ${p}`}
                                 >
-                                    <PieceGlyph piece={sideToMove === 'w' ? p.toUpperCase() : p} />
+                                    <PieceGlyph
+                                        piece={sideToMove === 'w' ? p.toUpperCase() : p}
+                                        set={pieceSet}
+                                    />
                                 </button>
                             ))}
                         </div>

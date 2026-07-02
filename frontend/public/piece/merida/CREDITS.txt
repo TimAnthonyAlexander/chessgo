@@ -1,0 +1,8 @@
+Chess piece set: "merida"
+By Armando Hernandez Marroquin.
+
+Source: https://github.com/lichess-org/lila (public/piece/merida)
+
+Licensed under GPLv2+. These SVG files are used here unmodified.
+
+Merida — Armando Hernandez Marroquin — GPLv2+ — vendored from lichess-org/lila (public/piece/merida)
