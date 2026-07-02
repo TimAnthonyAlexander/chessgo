@@ -131,11 +131,15 @@ export function ActionBtn({
             disabled={disabled}
             sx={{
                 flex: 1,
+                minWidth: 0,
                 height: large ? 50 : 44,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: 0.75,
+                overflow: 'hidden',
+                whiteSpace: 'nowrap',
+                textOverflow: 'ellipsis',
                 cursor: disabled ? 'default' : 'pointer',
                 fontFamily: 'var(--font-display)',
                 fontSize: large ? 15.5 : 14,

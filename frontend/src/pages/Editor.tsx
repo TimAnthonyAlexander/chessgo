@@ -438,6 +438,8 @@ function ToolBtn({
             disabled={disabled}
             sx={{
                 flex: 1,
+                minWidth: 0,
+                overflow: 'hidden',
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
