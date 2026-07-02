@@ -50,11 +50,12 @@ type scoredMove struct {
 
 // searchConfig is the resolved per-search plan (after rating/level mapping).
 type searchConfig struct {
-	depth    int
-	movetime time.Duration
-	nodes    uint64
-	noise    int
-	blunder  float64
+	depth      int
+	movetime   time.Duration
+	nodes      uint64
+	noise      int
+	blunder    float64
+	duckRandom float64 // probability of a sloppy (random) duck placement instead of the best block
 }
 
 // resolveConfig maps Limits to a concrete plan. Duck-Chess search is intentionally
@@ -76,15 +77,32 @@ func resolveConfig(lim Limits) searchConfig {
 	return cfg
 }
 
-// applyRating sets depth + weakening (noise/blunder) from a target Elo.
+// applyRating sets depth + weakening (noise/blunder/sloppy-duck) from a target Elo.
+//
+// Duck Chess is sharply tactical and the duck is a huge lever, so a shallow but
+// clean search plays much stronger than its nominal Elo — depth alone at 2..4 made
+// even 1500 feel like a titled player. The fix: a much steeper depth ladder (weak
+// ratings barely look ahead), stronger eval noise / blunder rates, AND — the piece
+// that was missing entirely — deliberately sloppy DUCK placement at lower ratings
+// (the optimal block is what made low-rated bots place "brilliant" ducks). All of
+// it fades to zero near master level.
 func applyRating(cfg *searchConfig, rating int) {
 	r := clampInt(rating, 700, 3500)
-	s := float64(r-700) / float64(3500-700) // 0..1
-	cfg.depth = int(2.0 + 2.0*s + 0.5)       // 2..4
-	if r < 2600 {
-		u := float64(2600-r) / float64(2600-700) // 0..1
-		cfg.noise = int(180.0 * u * u)
-		cfg.blunder = 0.35 * u * u
+	switch {
+	case r < 1600:
+		cfg.depth = 1
+	case r < 2200:
+		cfg.depth = 2
+	case r < 2800:
+		cfg.depth = 3
+	default:
+		cfg.depth = 4
+	}
+	if r < 2800 {
+		u := float64(2800-r) / float64(2800-700) // 0..1, 1 at the 700 floor
+		cfg.noise = int(320.0 * u * u)
+		cfg.blunder = 0.6 * u * u
+		cfg.duckRandom = 0.8 * u * u
 	}
 }
 
@@ -170,14 +188,47 @@ func BestMove(s State, lim Limits) Result {
 		return results[i].move.UCI() < results[j].move.UCI()
 	})
 
-	chosen := results[weakenPick(results, cfg, seedFor(&s))]
+	// One deterministic RNG (seeded from the position) drives both the move-level
+	// weakening and the sloppy duck placement, so replays are identical.
+	rng := rand.New(rand.NewSource(int64(seedFor(&s))))
+	chosen := results[weakenPick(results, cfg, rng)]
+
+	// Sloppy duck placement: at lower ratings, sometimes drop the duck on a random
+	// empty square instead of the optimal block — a big part of why low-rated bots
+	// felt unbeatable was flawless duck defense. Never do this in a forced-win line
+	// (a random duck could throw away the mate).
+	duckSq := chosen.duck
+	if cfg.duckRandom > 0 && mateDistance(chosen.score) == 0 && rng.Float64() < cfg.duckRandom {
+		mid, _ := s.doPieceMove(chosen.move)
+		if alt, ok := randomDuckSquare(&mid, rng); ok {
+			duckSq = alt
+		}
+	}
+
 	return Result{
 		Move:    chosen.move,
-		Duck:    chosen.duck,
+		Duck:    duckSq,
 		Score:   chosen.score,
 		Mate:    mateDistance(chosen.score),
 		HasMove: true,
 	}
+}
+
+// randomDuckSquare returns a uniformly random legal duck square (empty, and not the
+// duck's current square) in the post-piece-move state, or false if none exists.
+func randomDuckSquare(mid *State, rng *rand.Rand) (chess.Square, bool) {
+	occ := mid.occupied()
+	prev := mid.duck
+	cands := make([]chess.Square, 0, 48)
+	for sq := chess.Square(0); sq < 64; sq++ {
+		if !occ.Has(sq) && sq != prev {
+			cands = append(cands, sq)
+		}
+	}
+	if len(cands) == 0 {
+		return chess.SqNone, false
+	}
+	return cands[rng.Intn(len(cands))], true
 }
 
 // negamax is a shallow alpha-beta over PIECE moves. King captures resolve as
@@ -244,11 +295,10 @@ func moveOrderScore(s *State, m PieceMove) int {
 // 0 (the best). Otherwise it adds bounded, deterministic eval noise to re-rank the
 // candidates and, with probability cfg.blunder, deliberately drops to a slightly
 // weaker one. Randomness is seeded from the position so replays are identical.
-func weakenPick(results []scoredMove, cfg searchConfig, seed uint64) int {
+func weakenPick(results []scoredMove, cfg searchConfig, rng *rand.Rand) int {
 	if cfg.noise <= 0 && cfg.blunder <= 0 {
 		return 0
 	}
-	rng := rand.New(rand.NewSource(int64(seed)))
 
 	type jittered struct {
 		idx   int
