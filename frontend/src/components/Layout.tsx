@@ -4,7 +4,7 @@ import { ChevronDown, LogOut, UserRound } from 'lucide-react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { gameSocket } from '../lib/socket'
 import { authStore, useAuth } from '../lib/auth'
-import AuthDialog from './AuthDialog'
+import AuthDialog, { type AuthMode } from './AuthDialog'
 import Logo from './Logo'
 import Footer from './Footer'
 import MobileNavDrawer, { type MobileNavSection } from './MobileNavDrawer'
@@ -46,6 +46,12 @@ function navItems(isAdmin: boolean): NavItem[] {
 const isActive = (to: string, pathname: string): boolean =>
     to === '/' ? pathname === '/' : pathname.startsWith(to)
 
+// Shared through the router Outlet so any routed page (e.g. the homepage
+// sign-up CTA) can open the auth modal — login or straight to signup.
+export interface LayoutOutletContext {
+    openAuth: (mode?: AuthMode) => void
+}
+
 // Pages built around a large board need the full viewport — the footer would
 // either push the board up or add an awkward scroll, so we drop it on them:
 // live play, bot play, puzzles, watch/spectate, and analysis.
@@ -68,6 +74,11 @@ export default function Layout() {
     const { pathname } = useLocation()
     const { user } = useAuth()
     const [authOpen, setAuthOpen] = useState(false)
+    const [authMode, setAuthMode] = useState<AuthMode>('login')
+    const openAuth = (mode: AuthMode = 'login') => {
+        setAuthMode(mode)
+        setAuthOpen(true)
+    }
 
     // The same nav model the desktop bar uses, flattened for the mobile drawer.
     const sections: MobileNavSection[] = navItems(user?.role === 'admin').map((item) =>
@@ -135,7 +146,7 @@ export default function Layout() {
                     <MobileNavDrawer
                         sections={sections}
                         user={user ? { name: user.name } : null}
-                        onLogin={() => setAuthOpen(true)}
+                        onLogin={() => openAuth('login')}
                         onLogout={() => void authStore.logout()}
                     />
                     {user ? (
@@ -145,7 +156,7 @@ export default function Layout() {
                             variant="outlined"
                             color="inherit"
                             size="small"
-                            onClick={() => setAuthOpen(true)}
+                            onClick={() => openAuth('login')}
                             sx={{
                                 borderColor: 'var(--line)',
                                 color: 'var(--text-dim)',
@@ -160,12 +171,16 @@ export default function Layout() {
             </Box>
 
             <Box component="main" sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                <Outlet />
+                <Outlet context={{ openAuth } satisfies LayoutOutletContext} />
             </Box>
 
             {!hideFooter(pathname) && <Footer />}
 
-            <AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} />
+            <AuthDialog
+                open={authOpen}
+                initialMode={authMode}
+                onClose={() => setAuthOpen(false)}
+            />
         </Box>
     )
 }

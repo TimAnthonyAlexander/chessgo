@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
     Alert,
     Box,
@@ -12,12 +12,27 @@ import {
 import { authStore } from '../lib/auth'
 import { ApiError } from '../api/client'
 
-type Mode = 'login' | 'signup'
+export type AuthMode = 'login' | 'signup'
 
 /** Login / signup modal. On success it closes; the auth store + socket identity
- * are updated by the store methods. */
-export default function AuthDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-    const [mode, setMode] = useState<Mode>('login')
+ * are updated by the store methods. `initialMode` picks which tab opens (a
+ * "Create account" CTA opens straight to signup). */
+export default function AuthDialog({
+    open,
+    onClose,
+    initialMode = 'login',
+}: {
+    open: boolean
+    onClose: () => void
+    initialMode?: AuthMode
+}) {
+    const [mode, setMode] = useState<AuthMode>(initialMode)
+
+    // Re-sync the tab each time the dialog is (re)opened, so the caller's
+    // requested mode wins over whatever it was left on last time.
+    useEffect(() => {
+        if (open) setMode(initialMode)
+    }, [open, initialMode])
     const [name, setName] = useState('')
     const [email, setEmail] = useState('')
     const [password, setPassword] = useState('')

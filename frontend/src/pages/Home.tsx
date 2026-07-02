@@ -19,6 +19,7 @@ import { Panel, PanelHead } from '../components/home/Panel'
 import LiveTvWidget from '../components/home/LiveTvWidget'
 import DailyPuzzleWidget from '../components/home/DailyPuzzleWidget'
 import RecentGamesWidget from '../components/home/RecentGamesWidget'
+import SignUpWidget from '../components/home/SignUpWidget'
 import LeaderboardWidget from '../components/home/LeaderboardWidget'
 import ChallengeDialog from '../components/ChallengeDialog'
 import CustomTimeDialog from '../components/CustomTimeDialog'
@@ -170,10 +171,12 @@ export default function Home() {
                         alignItems: 'start',
                     }}
                 >
-                    {/* Column: daily puzzle (left) */}
+                    {/* Column: daily puzzle (left). The second card self-selects on
+                        auth: recent games when signed in, a sign-up CTA for guests. */}
                     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, order: { lg: 1 } }}>
                         <DailyPuzzleWidget />
                         <RecentGamesWidget />
+                        <SignUpWidget />
                     </Box>
 
                     {/* Column: play actions + quick pairing (center, biggest) */}
