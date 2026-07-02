@@ -445,6 +445,12 @@ export default function Analysis() {
     // previous FEN). Only surfaced while the engine + the SF-arrow toggle are on.
     const sfCurrent = engineOn && showSfArrow && sfBest?.fen === current.fen ? sfBest : null
     const sfUci = sfCurrent?.uci ?? null
+    // The eval-bar line, unlike the arrow, persists the LAST known Stockfish eval
+    // while the next one loads (mirrors the main eval's lastRef) — so making a move
+    // smoothly animates the line to its new height instead of blinking out. The
+    // arrow stays strictly current-position-gated (a stale arrow could point to a
+    // move that's now illegal).
+    const sfEvForBar = engineOn && showSfArrow ? (sfBest?.evalWhite ?? null) : null
 
     // Board arrows. A hovered candidate (book) move wins outright — a single blue
     // arrow, no engine overlays. Otherwise we draw gomachine's gold best-move arrow
@@ -519,7 +525,7 @@ export default function Analysis() {
                     <EvalBar
                         ev={engineOn ? current.evalWhite : null}
                         orientation={orientation}
-                        sfEv={sfCurrent?.evalWhite ?? null}
+                        sfEv={sfEvForBar}
                         sfColor={SF_ARROW_COLOR}
                     />
                     <Box sx={{ flex: 1, minWidth: 0 }}>
