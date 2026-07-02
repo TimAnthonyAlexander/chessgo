@@ -15,6 +15,9 @@ use App\Controllers\BotGameController;
 use App\Controllers\BotMoveController;
 use App\Controllers\BotUndoController;
 use App\Controllers\AnalyzeController;
+use App\Controllers\DuckLegalMovesController;
+use App\Controllers\DuckMoveController;
+use App\Controllers\DuckAnalyzeController;
 use App\Controllers\SfAnalyzeController;
 use App\Controllers\CandidatesController;
 use App\Controllers\EngineMatchController;
@@ -79,6 +82,26 @@ $router->post('/bot-games/{id}/undo', [
 $router->post('/analyze', [
     RateLimitMiddleware::class => ['limit' => '120/1m'],
     AnalyzeController::class,
+]);
+
+// Duck Chess free-play on the analysis board — PUBLIC, stateless, no persisted
+// game. Legal piece moves for a position: { fen, duck? } → { moves }
+$router->post('/duck/legal-moves', [
+    RateLimitMiddleware::class => ['limit' => '240/1m'],
+    DuckLegalMovesController::class,
+]);
+
+// Validate + apply a composite duck move: { fen, duck?, move } → resulting
+// position (+ next legal moves while ongoing)
+$router->post('/duck/move', [
+    RateLimitMiddleware::class => ['limit' => '240/1m'],
+    DuckMoveController::class,
+]);
+
+// Full-strength duck engine analysis (eval bar + best move): { fen, duck?, movetime? }
+$router->post('/duck/analyze', [
+    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    DuckAnalyzeController::class,
 ]);
 
 // Full-strength Stockfish best move for the analysis board's optional

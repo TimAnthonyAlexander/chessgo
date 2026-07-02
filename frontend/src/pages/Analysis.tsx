@@ -25,6 +25,7 @@ import {
 import { useLocation, useParams } from 'react-router-dom'
 import AnalysisAside from '../components/AnalysisAside'
 import Board from '../components/Board'
+import DuckFreeBoard from '../components/DuckFreeBoard'
 import BoardPage from '../components/BoardPage'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveTree from '../components/MoveTree'
@@ -166,6 +167,9 @@ export default function Analysis() {
     // UCI of the candidate (book) move currently hovered in the OpeningPanel, drawn
     // as a blue arrow on the board. Cleared whenever the viewed node changes.
     const [hoverUci, setHoverUci] = useState<string | null>(null)
+    // Free mode only: interactive Duck Chess. When true (and no game is loaded) the
+    // standard board/tree layout is replaced by the self-contained duck board.
+    const [duckFree, setDuckFree] = useState(false)
 
     // --- Load a finished game's analysis (review mode) ---
     useEffect(() => {
@@ -232,6 +236,11 @@ export default function Analysis() {
     // A hovered candidate move only makes sense for the position it was listed for;
     // drop it when the viewed node changes (the row also unmounts on navigation).
     useEffect(() => setHoverUci(null), [currentId])
+
+    // Duck Chess is free-mode only — loading a game (review mode) exits it.
+    useEffect(() => {
+        if (id) setDuckFree(false)
+    }, [id])
 
     const current = tree.nodes[currentId] ?? tree.nodes[tree.rootId]
     // Reviewing a loaded Duck Chess game: playback only (no client-side duck rules,
@@ -543,6 +552,12 @@ export default function Analysis() {
 
     const lastMove = current.move ? { from: current.move.from, to: current.move.to } : null
 
+    // Free-mode Duck Chess replaces the entire standard board/tree layout with the
+    // self-contained interactive duck board (review mode is never duck-free).
+    if (!id && duckFree) {
+        return <DuckFreeBoard onExit={() => setDuckFree(false)} />
+    }
+
     return (
         <BoardPage
             left={
@@ -555,6 +570,7 @@ export default function Analysis() {
                     playBotDisabled={over.over}
                     showSetup={!id}
                     hideActions={isDuck}
+                    onEnableDuck={!id ? () => setDuckFree(true) : undefined}
                 />
             }
             evalBar={
@@ -571,6 +587,11 @@ export default function Analysis() {
                     sx={{
                         width: { xs: '100%', md: '100%' },
                         justifySelf: { md: 'start' },
+                        // Fill the SideColumn's fixed (BOARD_SIZE) height on desktop, so
+                        // the flex:1 MoveTree inside gets a DEFINITE height to fill — its
+                        // scroll area is position:absolute/inset:0 and collapses to 0 (the
+                        // move list vanishes) if this box only sizes to its content.
+                        flex: { md: 1 },
                         display: 'flex',
                         flexDirection: 'column',
                         minHeight: 0,
@@ -592,6 +613,7 @@ export default function Analysis() {
                         // composite duck line chess.js can't render as SAN — suppress it.
                         pvUci={isDuck ? null : current.bestPv}
                         pvUnavailable={isDuck}
+                        bestSan={isDuck ? (current.bestSan ?? null) : null}
                     />
 
                     <MoveTree tree={tree} currentId={currentId} onSelect={selectNode} />
@@ -858,6 +880,7 @@ function EngineLine({
     fen,
     pvUci,
     pvUnavailable,
+    bestSan,
 }: {
     engineOn: boolean
     onToggleEngine: () => void
@@ -866,8 +889,11 @@ function EngineLine({
     fen: string
     pvUci: string[] | null
     // When true (Duck review), the best line can't be rendered as SAN — show just
-    // the eval pill, with no "analysing…" placeholder.
+    // the eval pill plus the single best move (`bestSan`), no "analysing…" placeholder.
     pvUnavailable?: boolean
+    // Duck review: the engine's best move as SAN (e.g. "Nf6 🦆e2"), shown in place of
+    // the (unavailable) principal variation.
+    bestSan?: string | null
 }) {
     // Render the PV as numbered SAN tokens ("12. Nf3 Nc6 13. Bb5 …") relative to
     // the current position's move number and side to move.
@@ -1015,12 +1041,30 @@ function EngineLine({
                         }}
                     >
                         {tokens.length === 0 ? (
-                            <Box
-                                component="span"
-                                sx={{ color: 'var(--muted)', fontStyle: 'italic' }}
-                            >
-                                {pvUnavailable ? '' : 'analysing…'}
-                            </Box>
+                            pvUnavailable && bestSan ? (
+                                // Duck review: show the single best move (no full PV).
+                                <Box component="span">
+                                    <Box
+                                        component="span"
+                                        sx={{ color: 'var(--muted)', mr: 0.6, fontSize: 11.5 }}
+                                    >
+                                        best
+                                    </Box>
+                                    <Box
+                                        component="span"
+                                        sx={{ color: 'var(--text)', fontWeight: 600 }}
+                                    >
+                                        {bestSan}
+                                    </Box>
+                                </Box>
+                            ) : (
+                                <Box
+                                    component="span"
+                                    sx={{ color: 'var(--muted)', fontStyle: 'italic' }}
+                                >
+                                    {pvUnavailable ? '' : 'analysing…'}
+                                </Box>
+                            )
                         ) : (
                             tokens.map((t, i) => (
                                 <Box

@@ -24,6 +24,7 @@ export interface TreeNode {
     move: TreeMove | null // the move leading INTO this node (null at root)
     evalWhite: WhiteEval | null // eval at this position, White-relative (null = unknown)
     bestUci: string | null // engine's best move FROM this position (for the arrow)
+    bestSan?: string | null // engine's best move as SAN (Duck review: shown since the PV can't be)
     bestPv: string[] | null // engine's principal variation FROM this position (UCI), bestUci first
     bestDepth: number | null // search depth the eval/PV were computed at
     judgment: Judgment | null // judgment of `move` (set for a loaded game's mainline)
@@ -337,7 +338,10 @@ function buildDuckMainline(
         )
         const rootNode = tree.nodes[curId]
         if (rootNode) {
-            tree = { ...tree, nodes: { ...tree.nodes, [curId]: { ...rootNode, duck: p0.duck } } }
+            tree = {
+                ...tree,
+                nodes: { ...tree.nodes, [curId]: { ...rootNode, duck: p0.duck, bestSan: p0.bestSan } },
+            }
         }
     }
 
@@ -362,6 +366,7 @@ function buildDuckMainline(
         }
         child.evalWhite = after ? after.evalWhite : null
         child.bestUci = after ? after.bestUci : null
+        child.bestSan = after ? after.bestSan : null
         child.bestPv = after ? (after.bestPv ?? null) : null
         child.bestDepth = after ? (after.bestDepth ?? null) : null
         child.judgment = p.move.judgment

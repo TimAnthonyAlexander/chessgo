@@ -210,6 +210,67 @@ export function sfAnalyze(
     })
 }
 
+// --- Duck Chess (free-mode analysis board) ---
+// The client has no duck rules — the engine owns them. These three public
+// endpoints drive an interactive duck board: legal piece moves for a position,
+// applying a composite "<pieceUci>:<duckSquare>" turn, and evaluating a position.
+
+/** Legal PIECE moves (UCI) for a duck position. `duck` is the duck's current
+ *  square, or "" before the first placement. */
+export function duckLegalMoves(fen: string, duck: string): Promise<{ moves: string[] }> {
+    return request<{ moves: string[] }>('/duck/legal-moves', {
+        method: 'POST',
+        body: JSON.stringify({ fen, duck }),
+    })
+}
+
+/** Result of applying one duck turn (a composite "<pieceUci>:<duckSquare>"). On a
+ *  legal move `moves` holds the NEXT position's piece moves when the game is still
+ *  ongoing; on an illegal move `legal` is false and `error` explains why. */
+export interface DuckPlayResult {
+    legal: boolean
+    error?: string
+    newFen: string
+    duck: string // the duck's square after this turn
+    san: string // SAN of the completed turn (includes the duck glyph)
+    sideToMove: Color
+    status: GameStatus
+    result: string | null
+    moves: string[] // the next position's legal piece moves ([] if terminal)
+}
+
+/** Apply a composite duck turn to a position. The move is validated server-side. */
+export function duckPlay(fen: string, duck: string, move: string): Promise<DuckPlayResult> {
+    return request<DuckPlayResult>('/duck/move', {
+        method: 'POST',
+        body: JSON.stringify({ fen, duck, move }),
+    })
+}
+
+/** Engine evaluation of a duck position (drives the free-mode eval bar + best-move
+ *  arrow). `eval` is from the side-to-move's perspective; `bestmove` is a composite
+ *  "<pieceUci>:<duckSquare>". Abortable via `signal` (like `analyze`). */
+export interface DuckEval {
+    eval: { type: 'cp' | 'mate'; value: number } | null
+    bestmove: string | null
+    bestSan: string | null
+    sideToMove: Color
+}
+
+export function duckEval(
+    fen: string,
+    duck: string,
+    opts?: { movetime?: number; signal?: AbortSignal },
+): Promise<DuckEval> {
+    const body: { fen: string; duck: string; movetime?: number } = { fen, duck }
+    if (opts?.movetime) body.movetime = opts.movetime
+    return request<DuckEval>('/duck/analyze', {
+        method: 'POST',
+        body: JSON.stringify(body),
+        signal: opts?.signal,
+    })
+}
+
 /** The opening of a line: ECO code + full name (e.g. "B90", "Sicilian … Najdorf"). */
 export interface Opening {
     eco: string

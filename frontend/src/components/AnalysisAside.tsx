@@ -57,6 +57,7 @@ export default function AnalysisAside({
     playBotDisabled = false,
     showSetup = true,
     hideActions = false,
+    onEnableDuck,
 }: {
     fen: string
     onLoadFen: (fen: string) => void
@@ -65,6 +66,9 @@ export default function AnalysisAside({
     // Duck review: hide the cross-navigation actions (edit/play-bot/engine-vs) — they
     // seed a STANDARD board from a duck position, which would be misleading.
     hideActions?: boolean
+    // Free mode only: switch the analysis board into interactive Duck Chess. When
+    // provided, a "Duck Chess" button sits beside the Chess960 setup button.
+    onEnableDuck?: () => void
 }) {
     const mat = useMemo(() => computeMaterial(fen), [fen])
 
@@ -79,7 +83,9 @@ export default function AnalysisAside({
             }}
         >
             <MaterialCard mat={mat} />
-            {showSetup && <PositionCard fen={fen} onLoadFen={onLoadFen} />}
+            {showSetup && (
+                <PositionCard fen={fen} onLoadFen={onLoadFen} onEnableDuck={onEnableDuck} />
+            )}
             {/* Cross-links: edit the board, play a bot, or (admins) run an engine
                 match — all seeded from the position on the board. "Analyse this
                 position" is omitted (you're already in analysis). */}
@@ -213,7 +219,15 @@ function SideRow({
     )
 }
 
-function PositionCard({ fen, onLoadFen }: { fen: string; onLoadFen: (fen: string) => void }) {
+function PositionCard({
+    fen,
+    onLoadFen,
+    onEnableDuck,
+}: {
+    fen: string
+    onLoadFen: (fen: string) => void
+    onEnableDuck?: () => void
+}) {
     const [pasteOpen, setPasteOpen] = useState(false)
     const [pasteVal, setPasteVal] = useState('')
     const [pasteErr, setPasteErr] = useState(false)
@@ -255,6 +269,17 @@ function PositionCard({ fen, onLoadFen }: { fen: string; onLoadFen: (fen: string
                         label="Chess960"
                         onClick={() => onLoadFen(random960())}
                     />
+                    {onEnableDuck && (
+                        <AsideBtn
+                            icon={
+                                <Box component="span" sx={{ fontSize: 15, lineHeight: 1 }}>
+                                    🦆
+                                </Box>
+                            }
+                            label="Duck Chess"
+                            onClick={onEnableDuck}
+                        />
+                    )}
                 </Box>
                 <AsideBtn
                     icon={<FileInput size={15} />}
