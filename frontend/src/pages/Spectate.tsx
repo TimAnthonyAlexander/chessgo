@@ -7,8 +7,9 @@ import Clock from '../components/Clock'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveList from '../components/MoveList'
 import { Avatar, NavBtn, PANEL_SHADOW } from '../components/PanelUI'
+import BoardActions from '../components/BoardActions'
 import { analyze, type MoveEntry } from '../api/client'
-import { pvToSan } from '../lib/analysisTree'
+import { pvToSan, START_FEN } from '../lib/analysisTree'
 import {
     type SpectateGame,
     type SpectateSide,
@@ -405,6 +406,25 @@ export default function Spectate() {
                             >
                                 {resultText(g)}
                             </Typography>
+                            {/* The game's finished — let spectators carry it into
+                                analysis / the editor / their own bot game / an engine
+                                match. Duck Chess has no analysable standard position;
+                                Chess960 can't replay from the standard start (spectated
+                                games aren't persisted for id-based replay), so it gets
+                                position-level actions only. */}
+                            {g.variant !== 'duck' && (
+                                <BoardActions
+                                    fen={g.fen}
+                                    analyzeGame={
+                                        g.variant === 'standard'
+                                            ? {
+                                                  moves: g.moves.map((m) => m.uci),
+                                                  startFen: START_FEN,
+                                              }
+                                            : null
+                                    }
+                                />
+                            )}
                             <Button
                                 fullWidth
                                 variant="contained"

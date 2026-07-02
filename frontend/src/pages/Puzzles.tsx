@@ -17,6 +17,7 @@ import {
     XCircle,
 } from 'lucide-react'
 import Board from '../components/Board'
+import BoardActions from '../components/BoardActions'
 import { ActionBtn, ErrorBanner, NavBtn } from '../components/PanelUI'
 import {
     type Color,
@@ -461,6 +462,14 @@ export default function Puzzles() {
                         onNext={() => void load(theme)}
                         onStop={endSession}
                     />
+                    {/* Only once the puzzle is resolved — offering analysis mid-solve
+                        would hand the user the answer. A puzzle is a single position,
+                        so no "Analyse game". */}
+                    {(phase === 'solved' || phase === 'failed') && (
+                        <Box sx={{ mt: 1.5 }}>
+                            <BoardActions fen={fen} />
+                        </Box>
+                    )}
                     <HistoryStrip history={history} />
                     {error && <ErrorBanner sx={{ mx: 0, mt: 1.5 }}>{error}</ErrorBanner>}
                 </Box>

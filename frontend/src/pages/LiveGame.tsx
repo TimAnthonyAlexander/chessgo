@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Box, Button, Typography } from '@mui/material'
-import { Check, Flag, Handshake, Telescope, Undo2, User, Volume2, VolumeX, X } from 'lucide-react'
+import { Check, Flag, Handshake, Undo2, User, Volume2, VolumeX, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import Board from '../components/Board'
 import ChatPanel from '../components/ChatPanel'
@@ -17,6 +17,7 @@ import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds
 import { VARIANT_LABEL } from '../lib/variants'
 import { authStore, useAuth } from '../lib/auth'
 import AdminBestMove from '../components/AdminBestMove'
+import BoardActions from '../components/BoardActions'
 
 const other = (c: Color): Color => (c === 'w' ? 'b' : 'w')
 
@@ -500,12 +501,19 @@ export default function LiveGame() {
                                     }}
                                 />
                             </Box>
-                            {g.reason !== 'aborted' && g.status !== 'aborted' && (
-                                <ActionBtn
-                                    tone="neutral"
-                                    icon={<Telescope size={16} />}
-                                    label="Analyse game"
-                                    onClick={() => navigate(`/analysis/${g.id}`)}
+                            {/* Post-game only — carry the finished game/position into
+                                analysis, the editor, a bot game, or an engine match.
+                                Never mid-game (no engine assistance while playing).
+                                Duck Chess has no analysable standard position. The
+                                game replays server-side by id, so Chess960 works too. */}
+                            {g.variant !== 'duck' && (
+                                <BoardActions
+                                    fen={g.fen}
+                                    analyzeGame={
+                                        g.reason !== 'aborted' && g.status !== 'aborted'
+                                            ? { id: g.id }
+                                            : null
+                                    }
                                 />
                             )}
                         </Box>

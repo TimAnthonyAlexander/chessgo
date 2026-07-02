@@ -22,7 +22,7 @@ import {
     VolumeX,
     Zap,
 } from 'lucide-react'
-import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useParams } from 'react-router-dom'
 import AnalysisAside from '../components/AnalysisAside'
 import Board from '../components/Board'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
@@ -119,7 +119,6 @@ function playMoveSound(node?: TreeNode) {
 
 export default function Analysis() {
     const { id } = useParams<{ id?: string }>()
-    const navigate = useNavigate()
     // Free mode can be seeded with an in-memory game (moves replayed from a start
     // position) passed via navigation state — e.g. from Engine vs Engine, which is
     // never persisted so it can't be loaded by id.
@@ -541,8 +540,6 @@ export default function Analysis() {
                 <AnalysisAside
                     fen={current.fen}
                     onLoadFen={loadPosition}
-                    onPlayBot={() => navigate('/bot', { state: { fen: current.fen } })}
-                    onEditBoard={() => navigate('/editor', { state: { fen: current.fen } })}
                     playBotDisabled={over.over}
                     showSetup={!id}
                 />

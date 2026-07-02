@@ -24,6 +24,7 @@ import LeaderboardWidget from '../components/home/LeaderboardWidget'
 import ChallengeDialog from '../components/ChallengeDialog'
 import CustomTimeDialog from '../components/CustomTimeDialog'
 import type { Variant } from '../lib/variants'
+import { DuckGlyph } from '../components/DuckGlyph'
 
 // The time control the Duck Chess quick-pairing queue uses. Duck matches only
 // other Duck queuers (or a Duck bot backfill after a short wait), so it has its
@@ -516,8 +517,12 @@ function DuckCell({ onClick }: { onClick: () => void }) {
                 },
             }}
         >
-            <Box component="span" sx={{ fontSize: { xs: 26, md: 30 }, lineHeight: 1 }} aria-hidden>
-                🦆
+            <Box
+                component="span"
+                sx={{ fontSize: { xs: 26, md: 30 }, lineHeight: 1, display: 'block' }}
+                aria-hidden
+            >
+                <DuckGlyph />
             </Box>
             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
                 <Typography

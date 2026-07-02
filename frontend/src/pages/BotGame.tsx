@@ -42,6 +42,7 @@ import { useDuckInteraction } from '../lib/useDuckInteraction'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { useAuth } from '../lib/auth'
 import AdminBestMove from '../components/AdminBestMove'
+import BoardActions from '../components/BoardActions'
 import VariantPicker from '../components/VariantPicker'
 import { type Variant, random960 } from '../lib/variants'
 
@@ -480,6 +481,7 @@ export default function BotGame() {
                             isAdmin={isAdmin}
                             bestFen={boardFen}
                             bestMyTurn={interactive}
+                            gameStartFen={startFen ?? START_FEN}
                         />
                     ) : (
                         <>
@@ -533,6 +535,7 @@ function MovePanel({
     isAdmin,
     bestFen,
     bestMyTurn,
+    gameStartFen,
 }: {
     game: Game
     rating: number
@@ -556,6 +559,7 @@ function MovePanel({
     isAdmin: boolean
     bestFen: string
     bestMyTurn: boolean
+    gameStartFen: string
 }) {
     return (
         <Box
@@ -680,6 +684,23 @@ function MovePanel({
                         onClick={onNewGame}
                     />
                 </Box>
+
+                {/* Once the game is over, offer to carry the position elsewhere —
+                    never mid-game (no engine crutch while playing). Duck Chess has
+                    no analysable standard position; Chess960 can't replay from the
+                    standard start, so it gets position-level actions only. */}
+                {!ongoing && game.variant !== 'duck' && (
+                    <BoardActions
+                        fen={game.fen}
+                        analyzeGame={
+                            game.variant === 'standard'
+                                ? { moves: game.moves.map((m) => m.uci), startFen: gameStartFen }
+                                : null
+                        }
+                        omit={['play-bot']}
+                        playDisabled={game.legal_moves.length === 0}
+                    />
+                )}
             </Box>
         </Box>
     )

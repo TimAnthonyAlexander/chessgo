@@ -523,6 +523,13 @@ export default function EngineVsEngine() {
                             >
                                 <Telescope size={18} />
                             </NavBtn>
+                            <NavBtn
+                                label="Play a bot from here"
+                                onClick={() => navigate('/bot', { state: { fen } })}
+                                disabled={running}
+                            >
+                                <Bot size={18} />
+                            </NavBtn>
                             <NavBtn label={sound ? 'Mute' : 'Unmute'} onClick={toggleSound}>
                                 {sound ? <Volume2 size={18} /> : <VolumeX size={18} />}
                             </NavBtn>

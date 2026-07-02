@@ -16,6 +16,7 @@ import {
     targetsFrom,
 } from '../lib/chess'
 import { usePieceSet } from '../lib/boardTheme'
+import { DuckGlyph } from './DuckGlyph'
 
 function PieceGlyph({ piece, set, hidden }: { piece: string; set: string; hidden?: boolean }) {
     return (
@@ -423,7 +424,7 @@ export default function Board({
                                 )}
                                 {duck === sq && (
                                     <span className="duck" aria-hidden>
-                                        🦆
+                                        <DuckGlyph />
                                     </span>
                                 )}
                                 {showRank && <span className="coord rank">{rank + 1}</span>}
