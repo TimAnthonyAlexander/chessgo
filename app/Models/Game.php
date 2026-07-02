@@ -171,6 +171,7 @@ class Game extends BaseModel
             'created_at' => $this->created_at,
             'category' => $this->category,
             'pool' => $this->pool,
+            'variant' => $this->variant,
             'rated' => $this->rated,
             'result' => $this->result,
             'reason' => $this->reason,

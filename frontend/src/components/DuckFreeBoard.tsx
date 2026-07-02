@@ -15,6 +15,7 @@ import EvalBar, { type WhiteEval } from './EvalBar'
 import { ActionBtn, ErrorBanner, NavBtn, PANEL_SHADOW } from './PanelUI'
 import { duckEval, duckLegalMoves, duckPlay, type Color } from '../api/client'
 import { statusLabel } from '../lib/chess'
+import { MoveSan } from './MoveSan'
 import { useDuckInteraction } from '../lib/useDuckInteraction'
 import { START_FEN } from '../lib/variants'
 
@@ -453,7 +454,7 @@ function SidePanel({
                                             },
                                         }}
                                     >
-                                        {p.san ?? '—'}
+                                        {p.san ? <MoveSan san={p.san} /> : '—'}
                                     </Box>
                                 </Box>
                             )

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Box, Button, Typography } from '@mui/material'
 import { Bot, Crown, Zap } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { DuckGlyph } from '../components/DuckGlyph'
 import {
     ApiError,
     getProfile,
@@ -387,6 +388,35 @@ function GameRow({
                         vs {opponent || 'Anonymous'}
                     </Typography>
                     {opponentBot && <Bot size={13} color="var(--muted)" />}
+                    {game.variant === 'duck' && (
+                        <Box
+                            component="span"
+                            title="Duck Chess"
+                            sx={{ display: 'inline-flex', fontSize: 16, flexShrink: 0 }}
+                        >
+                            <DuckGlyph />
+                        </Box>
+                    )}
+                    {game.variant === 'chess960' && (
+                        <Box
+                            component="span"
+                            title="Chess960"
+                            sx={{
+                                flexShrink: 0,
+                                fontFamily: 'var(--font-mono)',
+                                fontSize: 9.5,
+                                fontWeight: 700,
+                                color: 'var(--accent)',
+                                border: '1px solid var(--accent-line)',
+                                borderRadius: '4px',
+                                px: 0.4,
+                                py: '1px',
+                                lineHeight: 1.2,
+                            }}
+                        >
+                            960
+                        </Box>
+                    )}
                 </Box>
                 <Typography
                     sx={{ fontSize: 11.5, color: 'var(--muted)', textTransform: 'capitalize' }}

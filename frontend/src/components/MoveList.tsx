@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Box, useMediaQuery, useTheme } from '@mui/material'
 import type { MoveEntry } from '../api/client'
-import { sanToGlyph } from '../lib/chess'
+import { MoveSan } from './MoveSan'
 
 interface MoveListProps {
     moves: MoveEntry[]
@@ -151,7 +151,7 @@ function Cell({
                 '&:hover': { bgcolor: isCurrent ? '#3a4880' : 'rgba(255,255,255,0.09)' },
             }}
         >
-            {sanToGlyph(entry.san)}
+            <MoveSan san={entry.san} />
         </Box>
     )
 }

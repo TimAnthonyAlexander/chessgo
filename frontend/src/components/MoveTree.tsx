@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useRef } from 'react'
 import { Box } from '@mui/material'
 import type { Judgment, Tree, TreeNode } from '../lib/analysisTree'
-import { sanToGlyph } from '../lib/chess'
+import { MoveSan } from './MoveSan'
 
 // Visuals match MoveList (the bot/live move table) so the move list looks the same
 // across every page: a number gutter + White/Black columns, fixed-height rows that
@@ -127,7 +127,7 @@ export default function MoveTree({ tree, currentId, onSelect }: Props) {
                     </Box>
                 )}
                 <span>
-                    {node.move ? sanToGlyph(node.move.san) : ''}
+                    {node.move ? <MoveSan san={node.move.san} /> : ''}
                     {j && JUDGMENT_GLYPH[j]}
                 </span>
             </Box>
@@ -299,7 +299,7 @@ function Cell({
                 },
             }}
         >
-            {node.move ? sanToGlyph(node.move.san) : ''}
+            {node.move ? <MoveSan san={node.move.san} /> : ''}
             {j ? JUDGMENT_GLYPH[j] : ''}
         </Box>
     )
