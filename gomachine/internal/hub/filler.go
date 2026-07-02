@@ -78,8 +78,11 @@ func (h *Hub) checkFillers() {
 var fillerPools = []string{"3+0", "3+2", "5+0", "5+3", "10+0"}
 
 const (
-	fillerRatingMin  = 1100
-	fillerRatingMax  = 2300
+	// The Watch page is the site's "top games right now", so fillers sit in a
+	// strong band. Displayed ratings stay within [fillerRatingMin, fillerRatingMax]
+	// (the per-side jitter is clamped to the same band, not the wider bot band).
+	fillerRatingMin  = 1700
+	fillerRatingMax  = 2600
 	fillerPairJitter = 110 // how far the two opponents' ratings may diverge
 
 	// fillerMoveTimeCap bounds a filler's per-move search. Fillers are cosmetic
@@ -135,8 +138,8 @@ func (h *Hub) startFillerGame() {
 		return
 	}
 	base := fillerRatingMin + mrand.IntN(fillerRatingMax-fillerRatingMin+1)
-	rW := clampBotRating(base + mrand.IntN(2*fillerPairJitter+1) - fillerPairJitter)
-	rB := clampBotRating(base + mrand.IntN(2*fillerPairJitter+1) - fillerPairJitter)
+	rW := clampFillerRating(base + mrand.IntN(2*fillerPairJitter+1) - fillerPairJitter)
+	rB := clampFillerRating(base + mrand.IntN(2*fillerPairJitter+1) - fillerPairJitter)
 
 	startFen := h.pickFillerStart()
 	pos, err := chess.ParseFEN(startFen)
@@ -224,6 +227,19 @@ func clampBotRating(r int) int {
 	}
 	if r > botRatingMax {
 		return botRatingMax
+	}
+	return r
+}
+
+// clampFillerRating keeps a filler's displayed rating inside the Watch-page band,
+// so the top-games lobby stays between fillerRatingMin and fillerRatingMax even
+// after the per-side jitter is applied.
+func clampFillerRating(r int) int {
+	if r < fillerRatingMin {
+		return fillerRatingMin
+	}
+	if r > fillerRatingMax {
+		return fillerRatingMax
 	}
 	return r
 }
