@@ -42,8 +42,22 @@ export default function DailyPuzzleWidget() {
 
     const goSolve = () => navigate('/puzzles')
 
+    const interactive = Boolean(puzzle) && !error
+
     return (
-        <Panel>
+        <Panel
+            sx={
+                interactive
+                    ? {
+                          transition: 'transform 0.12s ease, border-color 0.12s ease',
+                          '&:hover': {
+                              transform: 'translateY(-2px)',
+                              borderColor: 'var(--accent-line)',
+                          },
+                      }
+                    : undefined
+            }
+        >
             <PanelHead title="Daily puzzle" />
 
             {error ? (

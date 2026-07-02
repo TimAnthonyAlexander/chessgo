@@ -8,7 +8,7 @@ import {
     DialogContent,
     Typography,
 } from '@mui/material'
-import { ChevronRight, Cpu, Swords, Target, Telescope, UserPlus, Users } from 'lucide-react'
+import { Cpu, Swords, Target, Telescope, UserPlus, Users } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { gameSocket, type LiveGameState } from '../lib/socket'
 import { useGameSocket } from '../lib/useGameSocket'
@@ -88,30 +88,10 @@ export default function Home() {
     }, [])
 
     const actions = [
-        {
-            icon: <Cpu size={19} />,
-            title: 'Play the computer',
-            sub: 'Eleven levels, gentle to merciless',
-            onClick: () => navigate('/bot'),
-        },
-        {
-            icon: <Target size={19} />,
-            title: 'Puzzles',
-            sub: 'Rated tactics trainer',
-            onClick: () => navigate('/puzzles'),
-        },
-        {
-            icon: <Telescope size={19} />,
-            title: 'Analysis board',
-            sub: 'Explore lines with the engine',
-            onClick: () => navigate('/analysis'),
-        },
-        {
-            icon: <UserPlus size={19} />,
-            title: 'Challenge a friend',
-            sub: 'Private game by link',
-            onClick: () => setChallengeOpen(true),
-        },
+        { icon: <Cpu size={22} />, title: 'Computer', onClick: () => navigate('/bot') },
+        { icon: <Target size={22} />, title: 'Puzzles', onClick: () => navigate('/puzzles') },
+        { icon: <Telescope size={22} />, title: 'Analysis', onClick: () => navigate('/analysis') },
+        { icon: <UserPlus size={22} />, title: 'Challenge', onClick: () => setChallengeOpen(true) },
     ]
 
     return (
@@ -197,58 +177,67 @@ export default function Home() {
                         alignItems: 'start',
                     }}
                 >
-                    {/* Column A: quick pairing */}
-                    <Panel>
-                        <PanelHead
-                            title="Quick pairing"
-                            sub="Get matched with a player of similar strength"
-                        />
-                        <Box
-                            sx={{
-                                display: 'grid',
-                                gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(3, 1fr)' },
-                                gap: 1.25,
-                            }}
-                        >
-                            {PRESETS.map((p) => (
-                                <TimeCell
-                                    key={p.time + p.cat}
-                                    preset={p}
-                                    onClick={() => queue(`${p.cat} · ${p.time}`, p.time)}
-                                />
-                            ))}
-                            <CustomCell onClick={() => setCustomOpen(true)} />
-                        </Box>
-                    </Panel>
-
-                    {/* Column B: play + leaderboard */}
-                    <Box
-                        sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}
-                    >
+                    {/* Column A: play actions + quick pairing */}
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
                         <Panel>
                             <PanelHead title="Play" sub="Train, analyze, or take on a friend" />
-                            <Box sx={{ mx: { xs: -2, md: -2.5 } }}>
-                                {actions.map((a, i) => (
-                                    <ActionRow
+                            <Box
+                                sx={{
+                                    display: 'grid',
+                                    gridTemplateColumns: {
+                                        xs: 'repeat(2, 1fr)',
+                                        sm: 'repeat(4, 1fr)',
+                                    },
+                                    gap: 1.25,
+                                }}
+                            >
+                                {actions.map((a) => (
+                                    <ActionCell
                                         key={a.title}
                                         icon={a.icon}
                                         title={a.title}
-                                        sub={a.sub}
                                         onClick={a.onClick}
-                                        first={i === 0}
                                     />
                                 ))}
                             </Box>
                         </Panel>
-                        <LeaderboardWidget />
+
+                        <Panel>
+                            <PanelHead
+                                title="Quick pairing"
+                                sub="Get matched with a player of similar strength"
+                            />
+                            <Box
+                                sx={{
+                                    display: 'grid',
+                                    gridTemplateColumns: {
+                                        xs: 'repeat(2, 1fr)',
+                                        sm: 'repeat(3, 1fr)',
+                                    },
+                                    gap: 1.25,
+                                }}
+                            >
+                                {PRESETS.map((p) => (
+                                    <TimeCell
+                                        key={p.time + p.cat}
+                                        preset={p}
+                                        onClick={() => queue(`${p.cat} · ${p.time}`, p.time)}
+                                    />
+                                ))}
+                                <CustomCell onClick={() => setCustomOpen(true)} />
+                            </Box>
+                        </Panel>
                     </Box>
 
-                    {/* Column C: live game + daily puzzle */}
-                    <Box
-                        sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}
-                    >
-                        <LiveTvWidget />
+                    {/* Column B: leaderboard + daily puzzle */}
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+                        <LeaderboardWidget />
                         <DailyPuzzleWidget />
+                    </Box>
+
+                    {/* Column C: live game */}
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+                        <LiveTvWidget />
                     </Box>
                 </Box>
             </Box>
@@ -491,18 +480,14 @@ function CustomCell({ onClick }: { onClick: () => void }) {
     )
 }
 
-function ActionRow({
+function ActionCell({
     icon,
     title,
-    sub,
     onClick,
-    first,
 }: {
     icon: ReactNode
     title: string
-    sub: string
     onClick: () => void
-    first?: boolean
 }) {
     return (
         <Box
@@ -517,56 +502,35 @@ function ActionRow({
             }}
             sx={{
                 display: 'flex',
+                flexDirection: 'column',
                 alignItems: 'center',
-                gap: 1.5,
-                px: { xs: 2, md: 2.5 },
-                py: 1.4,
+                justifyContent: 'center',
+                gap: 1,
+                py: { xs: 2, md: 2.25 },
+                bgcolor: 'var(--surface-2)',
+                border: '1px solid var(--line-soft)',
+                borderRadius: '12px',
                 cursor: 'pointer',
-                borderTop: first ? 'none' : '1px solid var(--line-soft)',
-                transition: 'background-color 0.12s ease',
+                color: 'var(--text-dim)',
+                transition: 'color 0.12s ease, border-color 0.12s ease, background 0.12s ease',
                 '&:hover': {
-                    bgcolor: 'var(--surface-2)',
-                    '& .action-chevron': { color: 'var(--accent)', transform: 'translateX(2px)' },
+                    color: 'var(--accent)',
+                    borderColor: 'var(--accent-line)',
+                    bgcolor: 'var(--surface)',
                 },
             }}
         >
-            <Box
+            {icon}
+            <Typography
                 sx={{
-                    width: 38,
-                    height: 38,
-                    flexShrink: 0,
-                    borderRadius: '10px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    bgcolor: 'var(--surface-2)',
-                    border: '1px solid var(--line)',
-                    color: 'var(--text-dim)',
+                    fontSize: 12.5,
+                    fontWeight: 600,
+                    color: 'var(--text)',
+                    fontFamily: 'var(--font-display)',
                 }}
             >
-                {icon}
-            </Box>
-            <Box sx={{ minWidth: 0, flex: 1 }}>
-                <Typography
-                    sx={{ fontWeight: 600, fontSize: 15, fontFamily: 'var(--font-display)' }}
-                >
-                    {title}
-                </Typography>
-                <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)', mt: 0.1 }}>
-                    {sub}
-                </Typography>
-            </Box>
-            <Box
-                className="action-chevron"
-                sx={{
-                    display: 'flex',
-                    color: 'var(--text-dim)',
-                    flexShrink: 0,
-                    transition: 'color 0.12s ease, transform 0.12s ease',
-                }}
-            >
-                <ChevronRight size={18} />
-            </Box>
+                {title}
+            </Typography>
         </Box>
     )
 }
