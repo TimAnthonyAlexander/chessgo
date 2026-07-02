@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Box, Typography } from '@mui/material'
 import { useNavigate } from 'react-router-dom'
 import { Panel, PanelHead } from './Panel'
@@ -9,6 +9,9 @@ import { getLiveGames, type LiveGameSummary, type LiveSide } from '../../api/cli
 import { categoryFor } from '../../lib/timeControl'
 
 const POLL_MS = 6000
+// How often we locally re-tick the running clock between server polls. The
+// display is mm:ss, so sub-second cadence just keeps the countdown smooth.
+const TICK_MS = 250
 // The very first /watch poll is also what wakes the hub's JIT filler pool
 // (it stamps lastWatchActivity), so an empty first response is expected while
 // those engine-vs-engine games spin up. Retry a few times on a short backoff
@@ -135,11 +138,23 @@ export default function LiveTvWidget() {
     const navigate = useNavigate()
     const [game, setGame] = useState<LiveGameSummary | null>(null)
     const [loading, setLoading] = useState(true)
+    // `game.clockW/clockB` are a server snapshot taken at poll time; snapAt is
+    // when we received it, and `now` drives the local countdown between polls.
+    const [now, setNow] = useState(() => Date.now())
+    const snapAtRef = useRef(0)
 
     useEffect(() => {
         let alive = true
         let intervalId: number | undefined
         let timeoutId: number | undefined
+
+        // Record the game plus the moment we received it, so the render can
+        // interpolate the running clock forward from this snapshot.
+        const apply = (top: LiveGameSummary | null) => {
+            snapAtRef.current = Date.now()
+            setNow(Date.now())
+            setGame(top)
+        }
 
         // One fetch. Returns the top game, or null on empty/transient error so
         // the caller decides whether to retry or fall back.
@@ -167,7 +182,7 @@ export default function LiveTvWidget() {
                 const top = await fetchTop()
                 if (!alive) return
                 if (top) {
-                    setGame(top)
+                    apply(top)
                     setLoading(false)
                     return
                 }
@@ -182,7 +197,7 @@ export default function LiveTvWidget() {
         const startPolling = () => {
             intervalId = window.setInterval(async () => {
                 const top = await fetchTop()
-                if (alive) setGame(top)
+                if (alive) apply(top)
             }, POLL_MS)
         }
 
@@ -195,6 +210,14 @@ export default function LiveTvWidget() {
             if (timeoutId) window.clearTimeout(timeoutId)
         }
     }, [])
+
+    // Between server polls, re-tick locally so the running clock visibly counts
+    // down instead of jumping on each poll. Re-synced to the server every poll.
+    useEffect(() => {
+        if (!game) return
+        const id = window.setInterval(() => setNow(Date.now()), TICK_MS)
+        return () => window.clearInterval(id)
+    }, [game])
 
     const sub = game ? `${categoryFor(game.pool)} · ${game.pool}` : 'Top game in play'
 
@@ -237,6 +260,20 @@ export default function LiveTvWidget() {
 
     const goWatch = () => navigate('/watch')
 
+    // Interpolate the running side's clock forward from the last poll snapshot.
+    // Clocks only run once both opening moves are in (ply >= 2, Lichess-style);
+    // the idle side and pre-clock phase hold their snapshot value.
+    const elapsed = Math.max(0, now - snapAtRef.current)
+    const running = game !== null && game.ply >= 2
+    const clockB =
+        game && running && game.sideToMove === 'b'
+            ? Math.max(0, game.clockB - elapsed)
+            : (game?.clockB ?? 0)
+    const clockW =
+        game && running && game.sideToMove === 'w'
+            ? Math.max(0, game.clockW - elapsed)
+            : (game?.clockW ?? 0)
+
     // The board frame — empty board + skeleton strips while loading, real game
     // once it lands. Structurally identical so only the pieces/text swap in.
     const boardFrame = (
@@ -251,7 +288,7 @@ export default function LiveTvWidget() {
             {game ? (
                 <PlayerStrip
                     side={game.black}
-                    clockMs={game.clockB}
+                    clockMs={clockB}
                     toMove={game.sideToMove === 'b'}
                 />
             ) : (
@@ -265,7 +302,7 @@ export default function LiveTvWidget() {
             {game ? (
                 <PlayerStrip
                     side={game.white}
-                    clockMs={game.clockW}
+                    clockMs={clockW}
                     toMove={game.sideToMove === 'w'}
                 />
             ) : (
