@@ -39,6 +39,8 @@ func main() {
 		cmdPlayMove(os.Args[2:])
 	case "selfplay":
 		cmdSelfPlay(os.Args[2:])
+	case "gengames":
+		cmdGenGames(os.Args[2:])
 	case "bench":
 		cmdBench(os.Args[2:])
 	case "loadtest":
@@ -81,6 +83,9 @@ Usage:
   gomachine perft -depth N [-fen FEN] [-divide]
   gomachine play [-level 0..10] [-color white|black] [-fen FEN]
   gomachine selfplay [-level 0..10] [-max 200] [-movetime ms]
+  gomachine gengames [-workers N] [-max-plies 200] [-tt 8]
+                                         batch self-play (JSON batch on stdin →
+                                         JSON-lines results on stdout; dev history seeding)
   gomachine bench sprt [-new SPEC] [-old SPEC] [-nodes N] ...
                                          in-process self-play SPRT (strength test)
   gomachine loadtest [-clients N] [-pool 3+0] [-duration 30s] [-move-delay 0]
