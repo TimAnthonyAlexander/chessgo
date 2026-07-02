@@ -24,15 +24,16 @@ type botMoveResult struct {
 // botSnapshot is an immutable copy of everything a worker needs to pick a move,
 // so it never touches live game state from another goroutine.
 type botSnapshot struct {
-	gameID      string
-	ply         int
-	fen         string
-	history     []uint64
-	rating      int           // target Elo (rating-first ladder)
-	moveTimeCap time.Duration // >0 overrides the ladder budget (fillers: cheap, cosmetic)
-	tc          timeControl   // pacing scales with the time control
-	remainingMs int64
-	legalCount  int
+	gameID        string
+	ply           int
+	fen           string
+	history       []uint64
+	rating        int           // target Elo (rating-first ladder)
+	displayRating int           // shown Elo (human/CCRL scale) — drives pacing, not search
+	moveTimeCap   time.Duration // >0 overrides the ladder budget (fillers: cheap, cosmetic)
+	tc            timeControl   // pacing scales with the time control
+	remainingMs   int64
+	legalCount    int
 }
 
 // EnableBotFill turns on bot backfill: a player waiting longer than `delay` with
@@ -165,17 +166,18 @@ func (h *Hub) scheduleBotMove(g *game) {
 		return // the relevant pool isn't enabled
 	}
 	go h.computeBotMove(botSnapshot{
-		gameID:      g.id,
-		ply:         len(g.moves),
-		fen:         g.pos.FEN(),
-		history:     append([]uint64(nil), g.history...),
+		gameID:  g.id,
+		ply:     len(g.moves),
+		fen:     g.pos.FEN(),
+		history: append([]uint64(nil), g.history...),
 		// Weaken to actual human strength (human scale), then lift onto the engine's
 		// native CCRL ladder so the search produces the same play as before the rescale.
-		rating:      engine.EngineRatingForHuman(humanizedEngineRating(bot.rating)),
-		moveTimeCap: moveTimeCap,
-		tc:          g.tc,
-		remainingMs: g.remainingMs(botColor),
-		legalCount:  len(g.pos.LegalMoveStrings(chess.SqNone)),
+		rating:        engine.EngineRatingForHuman(humanizedEngineRating(bot.rating)),
+		displayRating: bot.rating,
+		moveTimeCap:   moveTimeCap,
+		tc:            g.tc,
+		remainingMs:   g.remainingMs(botColor),
+		legalCount:    len(g.pos.LegalMoveStrings(chess.SqNone)),
 	}, engines)
 }
 
@@ -196,7 +198,7 @@ func (h *Hub) computeBotMove(s botSnapshot, engines chan *engineHandle) {
 		return
 	}
 
-	delay := botThinkDelay(s.tc, s.remainingMs, s.legalCount, s.ply)
+	delay := botThinkDelay(s.tc, s.remainingMs, s.legalCount, s.ply, s.displayRating)
 	if elapsed := time.Since(start); elapsed < delay {
 		time.Sleep(delay - elapsed)
 	}
@@ -235,7 +237,7 @@ func (h *Hub) applyBotMove(r botMoveResult) {
 const (
 	// Snap out roughly the first this-many full moves quickly, ramping up to the
 	// normal midgame pace — like rattling off an opening you know by heart.
-	openingFastMoves = 8
+	openingFastMoves = 10
 	// Below this much clock the bot starts hurrying so it can flag-race instead of
 	// thinking itself into a lost-on-time game...
 	lowTimeMs int64 = 30_000
@@ -252,7 +254,7 @@ const (
 // maxThinkMs absolute (keeps slow controls sane and the untimed first move safely
 // under the 30s first-move abort), and never below a human floor (which itself
 // drops in real time trouble so the bot can blitz).
-func botThinkDelay(tc timeControl, remainingMs int64, legalCount, ply int) time.Duration {
+func botThinkDelay(tc timeControl, remainingMs int64, legalCount, ply, displayRating int) time.Duration {
 	// Rough per-move time budget: assume ~30 moves a side, plus the increment you
 	// get back each move. e.g. 1+0 → 2s, 3+0 → 6s, 5+0 → 10s, 10+0 → 20s, 3+2 → 8s.
 	perMove := float64(tc.Base)/30.0 + float64(tc.Inc)
@@ -268,12 +270,19 @@ func botThinkDelay(tc timeControl, remainingMs int64, legalCount, ply int) time.
 		ms += perMove * 0.15
 	}
 
-	// Opening: move fast for the first several full moves, ramping from ~0.35x at
-	// the very start up to the full midgame pace by openingFastMoves. ply counts
+	// Strength → speed: stronger players recognise positions faster and spend less
+	// time per move; weaker players deliberate more. Scale the whole think from
+	// ~1.25x at the low end down to ~0.70x at the top of the ladder.
+	ms *= ratingSpeedFactor(displayRating)
+
+	inOpening := ply/2 < openingFastMoves
+	// Opening: rattle off known theory. Move MUCH faster for the first several full
+	// moves, ramping on a quadratic curve so the very first moves are near-instant
+	// and the pace only catches up to the midgame by openingFastMoves. ply counts
 	// both sides, so divide to get full moves played.
-	if moves := ply / 2; moves < openingFastMoves {
-		frac := float64(moves) / float64(openingFastMoves) // 0 → ~1
-		ms *= 0.35 + 0.65*frac
+	if inOpening {
+		frac := float64(ply/2) / float64(openingFastMoves) // 0 → ~1
+		ms *= 0.10 + 0.90*frac*frac                        // ~0.10x at move 1, ~full by move 10
 	}
 
 	// Time pressure: as the clock drops below lowTimeMs, shrink the think time
@@ -293,8 +302,12 @@ func botThinkDelay(tc timeControl, remainingMs int64, legalCount, ply int) time.
 	if out > maxThinkMs {
 		out = maxThinkMs
 	}
-	// Human floor — but in genuine time trouble drop it so the bot can blitz.
+	// Human floor — lower in the opening (theory comes out quick), and lower still
+	// in genuine time trouble so the bot can blitz.
 	floor := int64(250)
+	if inOpening {
+		floor = 90
+	}
 	if remainingMs < panicTimeMs {
 		floor = 60
 	}
@@ -302,6 +315,20 @@ func botThinkDelay(tc timeControl, remainingMs int64, legalCount, ply int) time.
 		out = floor
 	}
 	return time.Duration(out) * time.Millisecond
+}
+
+// ratingSpeedFactor maps a displayed rating to a pace multiplier: stronger players
+// move faster. ~1.25x at 800 and below, tapering linearly to ~0.70x at 2400 and up.
+func ratingSpeedFactor(displayRating int) float64 {
+	const lo, hi = 800.0, 2400.0
+	f := (float64(displayRating) - lo) / (hi - lo)
+	if f < 0 {
+		f = 0
+	}
+	if f > 1 {
+		f = 1
+	}
+	return 1.25 - 0.55*f // 1.25 → 0.70
 }
 
 // --- fake identity ---
