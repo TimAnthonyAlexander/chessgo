@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Box, CircularProgress, Typography } from '@mui/material'
 import { Eye, Radio } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
@@ -8,8 +8,15 @@ import { analyze, getLiveGames, type LiveGameSummary, type LiveSide } from '../a
 import { useAuth } from '../lib/auth'
 
 const POLL_MS = 2500 // steady cadence once games are flowing
-const WARM_MS = 800 // fast cadence while the lobby is still warming up
-const WARM_POLLS = 5 // empty responses to see before we declare the lobby truly empty
+const WARM_MS = 700 // fast cadence while the lobby is still warming up
+// The hub spawns its self-play fillers lazily, and the very first /watch poll is
+// what wakes that pool — so the first few responses arrive with 0..max-1 games
+// while the engine-vs-engine games spin up. We keep polling fast and hold the
+// spinner until the lobby is *full* (games.length >= max), so a fresh page load
+// reveals all `max` games at once instead of a partial set the user has to
+// refresh away. This budget caps the warm-up so a lobby that genuinely can't
+// reach `max` still reveals whatever it has.
+const WARM_MAX_POLLS = 10
 
 export default function Watch() {
     const navigate = useNavigate()
@@ -19,37 +26,43 @@ export default function Watch() {
     const isAdmin = user?.role === 'admin'
     const [games, setGames] = useState<LiveGameSummary[] | null>(null)
     const [max, setMax] = useState(5)
-    // Until we've either seen games or confirmed the lobby is genuinely empty
-    // (several empty polls in a row), we keep showing a spinner rather than a
-    // premature "no games" — the hub spawns its self-play fillers lazily on the
-    // first poll, so the very first response is often empty for a beat.
+    // We hold a spinner (rather than a partial or empty grid) until the lobby is
+    // "settled": either full (games.length >= max) or the warm-up budget is spent.
+    // This guarantees a fresh load reveals all `max` games at once instead of the
+    // 0/3 partial the first poll returns while fillers spin up.
     const [settled, setSettled] = useState(false)
-    const emptyPolls = useRef(0)
 
     // Poll the lobby. The request itself signals the hub that someone is watching,
     // which is what spins up the filler games; so we poll fast while warming, then
-    // settle to a steady cadence once something's there.
+    // settle to a steady cadence once the lobby is full.
     useEffect(() => {
         let cancelled = false
         let timer = 0
+        // Closure-local so the cadence decision is synchronous (setSettled is
+        // async, so reading `settled` state here would be stale). Once true we're
+        // in steady state and reveal every response as-is.
+        let done = false
+        let polls = 0
+
         const poll = () => {
             getLiveGames()
                 .then((r) => {
                     if (cancelled) return
                     setGames(r.games)
                     setMax(r.max)
-                    if (r.games.length > 0) {
-                        emptyPolls.current = 0
-                        setSettled(true)
-                    } else {
-                        emptyPolls.current += 1
-                        if (emptyPolls.current >= WARM_POLLS) setSettled(true)
+                    if (!done) {
+                        polls += 1
+                        const full = r.games.length >= r.max
+                        const exhausted = polls >= WARM_MAX_POLLS
+                        if (full || exhausted) {
+                            done = true
+                            setSettled(true)
+                        }
                     }
-                    const warming = r.games.length === 0 && emptyPolls.current < WARM_POLLS
-                    timer = window.setTimeout(poll, warming ? WARM_MS : POLL_MS)
+                    timer = window.setTimeout(poll, done ? POLL_MS : WARM_MS)
                 })
                 .catch(() => {
-                    if (!cancelled) timer = window.setTimeout(poll, POLL_MS)
+                    if (!cancelled) timer = window.setTimeout(poll, done ? POLL_MS : WARM_MS)
                 })
         }
         poll()
@@ -59,10 +72,10 @@ export default function Watch() {
         }
     }, [])
 
-    // Spinner until the first response, and while the lobby is still warming up;
-    // the "no games" text only after the endpoint has genuinely stayed empty.
-    const loading = games == null || (games.length === 0 && !settled)
-    const empty = games != null && games.length === 0 && settled
+    // Spinner until the lobby settles (full, or warm-up exhausted); the "no games"
+    // text only once settled with genuinely nothing to show.
+    const loading = !settled
+    const empty = settled && games != null && games.length === 0
 
     return (
         <Box sx={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
@@ -144,7 +157,7 @@ export default function Watch() {
                             gap: { xs: 2, md: 2.5 },
                         }}
                     >
-                        {games.map((g) => (
+                        {(games ?? []).map((g) => (
                             <GameCard
                                 key={g.id}
                                 game={g}
