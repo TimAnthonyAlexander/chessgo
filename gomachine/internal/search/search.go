@@ -389,10 +389,19 @@ func (s *Searcher) evaluate(pos *chess.Position) int {
 // tables, so caching the corrected eval would make TTEval reuse a stale value and
 // stop being behavior-preserving. Callers apply the fresh correction on top.
 func (s *Searcher) rawEvaluate(pos *chess.Position) int {
+	var e int
 	if s.useNNUE {
-		return s.accEval(pos)
+		e = s.accEval(pos)
+	} else {
+		e = eval.Evaluate(pos, s.ec)
 	}
-	return eval.Evaluate(pos, s.ec)
+	// Aggression style knob (Params.Aggr): add a scaled fraction of the king-attack
+	// pressure term onto the static eval. Aggr==50 (default) skips this entirely, so
+	// the engine stays byte-identical; >50 biases toward attacking play, <50 solid.
+	if s.params.Aggr != 50 {
+		e += eval.AggressionTerm(pos) * (s.params.Aggr - 50) / 50
+	}
+	return e
 }
 
 // acc* route the per-ply accumulator operations to the active stack — the

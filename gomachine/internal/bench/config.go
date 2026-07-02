@@ -459,6 +459,18 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("qsfutmargin: %q is not an int", val)
 			}
 			base.QSFutilityMargin = n
+		case "aggr", "aggression":
+			// aggression style knob 0..100 (50 = neutral/off). Scales a king-attack
+			// term onto the static eval — EVAL change, so SPRT at --movetime or fixed
+			// --new-depth/--old-depth, never fixed-nodes alone.
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("aggr: %q is not an int", val)
+			}
+			if n < 0 || n > 100 {
+				return base, fmt.Errorf("aggr: %d out of range 0..100", n)
+			}
+			base.Aggr = n
 		default:
 			return base, fmt.Errorf("unknown param %q", key)
 		}
@@ -650,6 +662,9 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.QSFutilityMargin != patch.QSFutilityMargin {
 		diffs = append(diffs, fmt.Sprintf("qsfutmargin: %d→%d", base.QSFutilityMargin, patch.QSFutilityMargin))
+	}
+	if base.Aggr != patch.Aggr {
+		diffs = append(diffs, fmt.Sprintf("aggr: %d→%d", base.Aggr, patch.Aggr))
 	}
 	if base.NmpGate != patch.NmpGate {
 		diffs = append(diffs, fmt.Sprintf("nmpgate: %s→%s", onoff(base.NmpGate), onoff(patch.NmpGate)))

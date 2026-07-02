@@ -71,6 +71,7 @@ type Params struct {
 	NmpEvalDivisor   int  // NMP eval-scaled reduction: R += min((staticEval-beta)/NmpEvalDivisor, NmpEvalMax). Default 200.
 	QSFutility       bool // qsearch node-level futility (Stormphrax qsearchFp): out of check, once standPat + QSFutilityMargin <= alpha, skip any remaining capture that isn't a SEE-winning exchange (all such captures are futile — the node floor can't reach alpha and the move wins no material). ADDITIVE to per-move delta pruning (which subtracts the specific victim value); this is a node-level floor gated by SEE instead. DEFAULT OFF — under SPRT.
 	QSFutilityMargin int  // QSFutility: cp margin above stand-pat for the futility base (default 100).
+	Aggr             int  // aggression style knob 0..100 (default 50 = neutral). Scales a small king-attack/tropism term ONTO the static eval: 50→off (byte-identical), 100→fully attacking, 0→solid/defensive. Effect = eval.AggressionTerm(pos)·(Aggr-50)/50. Style lever, NOT a strength patch (a deliberate eval distortion — expected to cost a little Elo; SPRT measures how much per level).
 }
 
 // DefaultParams returns the engine's current full-strength configuration.
@@ -352,5 +353,11 @@ func DefaultParams() Params {
 		// confirmed with nmpgate in the strict end-of-queue stack SPRT.
 		QSFutility:       true,
 		QSFutilityMargin: 100,
+		// Aggression style knob: 50 = neutral. At 50 the term is never evaluated, so
+		// the default engine is byte-identical to before this flag existed. Non-50 is
+		// a deliberate style distortion (attacking >50, solid <50), not a strength
+		// patch — SPRT it at MOVETIME or fixed DEPTH (it's an EVAL change; fixed-nodes
+		// inflates eval, §2.1).
+		Aggr: 50,
 	}
 }

@@ -271,10 +271,12 @@ export default function Analysis() {
                 if (cancelled) return
 
                 const got = r.depth ?? target
-                // No deeper result even though this rung granted MORE time than the
-                // last: the engine has walled out for this position, so stop climbing
-                // rather than burning the ever-larger deep-rung budgets for nothing.
-                if (got <= achieved) return
+                // This rung's budget wasn't enough to get deeper than what we already
+                // have — DON'T stop: skip to the next rung, which grants strictly more
+                // time and can break through. (Stopping here was the bug that pinned
+                // the readout at ~16.) The loop is bounded by the ladder, so a truly
+                // walled position simply exhausts it.
+                if (got <= achieved) continue
 
                 // Coalesce a null PV to [] so the node reads as "resolved, no line".
                 if (!r.eval) {
