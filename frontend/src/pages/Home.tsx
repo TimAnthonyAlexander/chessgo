@@ -163,13 +163,19 @@ export default function Home() {
                         gridTemplateColumns: {
                             xs: '1fr',
                             md: 'repeat(2, minmax(0, 1fr))',
-                            lg: 'minmax(0, 1.45fr) minmax(0, 1fr) minmax(0, 1fr)',
+                            lg: 'minmax(0, 1.5fr) minmax(0, 1.45fr) minmax(0, 1fr)',
                         },
                         gap: 2.5,
                         alignItems: 'start',
                     }}
                 >
-                    {/* Column A: play actions + quick pairing */}
+                    {/* Column B: leaderboard + daily puzzle (now left/biggest) */}
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+                        <LeaderboardWidget />
+                        <DailyPuzzleWidget />
+                    </Box>
+
+                    {/* Column A: play actions + quick pairing (now center) */}
                     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
                         <Panel>
                             <PanelHead title="Play" sub="Train, analyze, or take on a friend" />
@@ -221,13 +227,7 @@ export default function Home() {
                         </Panel>
                     </Box>
 
-                    {/* Column B: leaderboard + daily puzzle */}
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
-                        <LeaderboardWidget />
-                        <DailyPuzzleWidget />
-                    </Box>
-
-                    {/* Column C: live game */}
+                    {/* Column C: live game (now right) */}
                     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
                         <LiveTvWidget />
                     </Box>
