@@ -24,16 +24,17 @@ type botMoveResult struct {
 // botSnapshot is an immutable copy of everything a worker needs to pick a move,
 // so it never touches live game state from another goroutine.
 type botSnapshot struct {
-	gameID        string
-	ply           int
-	fen           string
-	history       []uint64
-	rating        int           // target Elo (rating-first ladder)
-	displayRating int           // shown Elo (human/CCRL scale) — drives pacing, not search
-	moveTimeCap   time.Duration // >0 overrides the ladder budget (fillers: cheap, cosmetic)
-	tc            timeControl   // pacing scales with the time control
-	remainingMs   int64
-	legalCount    int
+	gameID         string
+	ply            int
+	fen            string
+	history        []uint64
+	rating         int           // target Elo (rating-first ladder)
+	displayRating  int           // shown Elo (human/CCRL scale) — drives pacing, not search
+	moveTimeCap    time.Duration // >0 overrides the ladder budget (fillers: cheap, cosmetic)
+	searchDepthCap int           // >0 hard-caps root-rank depth (fillers only; keeps search cheap)
+	tc             timeControl   // pacing scales with the time control
+	remainingMs    int64
+	legalCount     int
 }
 
 // EnableBotFill turns on bot backfill: a player waiting longer than `delay` with
@@ -158,9 +159,11 @@ func (h *Hub) scheduleBotMove(g *game) {
 	}
 	engines := h.engines
 	moveTimeCap := time.Duration(0) // human bot-fill: full rating ladder
+	depthCap := 0                   // human bot-fill: honest strength (SPRT-gated, untouched)
 	if g.filler {
 		engines = h.fillerEngines
 		moveTimeCap = fillerMoveTimeCap // cosmetic self-play: cheap, capped think time
+		depthCap = fillerSearchDepth    // ...and a shallow rank so search never dominates the delay
 	}
 	if engines == nil {
 		return // the relevant pool isn't enabled
@@ -172,12 +175,13 @@ func (h *Hub) scheduleBotMove(g *game) {
 		history: append([]uint64(nil), g.history...),
 		// Weaken to actual human strength (human scale), then lift onto the engine's
 		// native CCRL ladder so the search produces the same play as before the rescale.
-		rating:        engine.EngineRatingForHuman(humanizedEngineRating(bot.rating)),
-		displayRating: bot.rating,
-		moveTimeCap:   moveTimeCap,
-		tc:            g.tc,
-		remainingMs:   g.remainingMs(botColor),
-		legalCount:    len(g.pos.LegalMoveStrings(chess.SqNone)),
+		rating:         engine.EngineRatingForHuman(humanizedEngineRating(bot.rating)),
+		displayRating:  bot.rating,
+		moveTimeCap:    moveTimeCap,
+		searchDepthCap: depthCap,
+		tc:             g.tc,
+		remainingMs:    g.remainingMs(botColor),
+		legalCount:     len(g.pos.LegalMoveStrings(chess.SqNone)),
 	}, engines)
 }
 
@@ -192,7 +196,12 @@ func (h *Hub) computeBotMove(s botSnapshot, engines chan *engineHandle) {
 	}
 	start := time.Now()
 	eng := <-engines
-	res := eng.BestMoveForRatingTimed(pos, s.rating, s.moveTimeCap, s.history)
+	var res engine.BestResult
+	if s.searchDepthCap > 0 {
+		res = eng.BestMoveForRatingCapped(pos, s.rating, s.moveTimeCap, s.searchDepthCap, s.history)
+	} else {
+		res = eng.BestMoveForRatingTimed(pos, s.rating, s.moveTimeCap, s.history)
+	}
 	engines <- eng
 	if res.Move == chess.NullMove {
 		return

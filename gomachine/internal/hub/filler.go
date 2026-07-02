@@ -86,7 +86,21 @@ const (
 	// Watch-page eye-candy on a dedicated pool — they display a believable rating
 	// but must stay cheap, so we cap think time well below the rating ladder's
 	// budget (which reaches ~1.9s at the top). Their moves still look plausible.
+	//
+	// NB: a filler's rating is (almost always) a WEAKENED config, whose move goes
+	// through RootScores — which is DEPTH-bounded and ignores MoveTime. So the cap
+	// above alone does nothing for fillers; fillerSearchDepth is the knob that
+	// actually keeps them cheap.
 	fillerMoveTimeCap = 250 * time.Millisecond
+
+	// fillerSearchDepth hard-caps a filler's root-ranking depth. Without it a
+	// higher-rated filler ranks every root move at its full ladder depth (~11+ at
+	// 2000), taking hundreds of ms to >1s — which then dominates the human-pacing
+	// delay and makes the opening feel sluggish. A shallow rank keeps search well
+	// under the delay so the pacing (fast opening, rating-scaled) is what shows.
+	// Cosmetic only — filler moves are never rated, so playing a touch below the
+	// displayed rating is fine.
+	fillerSearchDepth = 8
 
 	// fillerPuzzleChance is the share of fillers seeded from a realistic midgame
 	// position (a puzzle FEN) rather than the opening — when a FEN pool is loaded.

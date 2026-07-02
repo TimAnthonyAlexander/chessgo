@@ -196,6 +196,24 @@ func (e *Engine) BestMoveConfig(pos *chess.Position, cfg LevelConfig, history []
 	return e.pickWeakened(roots, cfg, rankDepth)
 }
 
+// BestMoveForRatingCapped is BestMoveForRatingTimed with an extra hard depth cap
+// (maxDepth>0) folded into the rating's config. The weakened-bot path ranks every
+// root move at cfg.Depth and IGNORES MoveTime (RootScores is depth-bounded), so a
+// strong-rating bot runs an expensive deep root ranking no matter the movetime cap.
+// Cosmetic filler games use this to bound that cost: the move is never rated, it
+// only has to look plausible and appear quickly, so a shallow rank keeps the search
+// well under the human-pacing delay (which is then what the viewer actually sees).
+func (e *Engine) BestMoveForRatingCapped(pos *chess.Position, rating int, movetime time.Duration, maxDepth int, history []uint64) BestResult {
+	cfg := configForRating(rating)
+	if movetime > 0 {
+		cfg.MoveTime = movetime
+	}
+	if maxDepth > 0 && cfg.Depth > maxDepth {
+		cfg.Depth = maxDepth
+	}
+	return e.BestMoveConfig(pos, cfg, history)
+}
+
 // BestMoveForRating plays at a target Elo (clamped to RatingMin..RatingMax) — the
 // rating-first entry point used by bot games and matchmaking bot-fill (fixed
 // 100ms budget, so it plays the strength it advertises).
