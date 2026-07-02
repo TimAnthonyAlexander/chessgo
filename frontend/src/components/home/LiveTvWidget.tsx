@@ -2,9 +2,11 @@ import { useEffect, useState } from 'react'
 import { Box, Typography } from '@mui/material'
 import { useNavigate } from 'react-router-dom'
 import { Panel, PanelHead } from './Panel'
+import SkeletonBar from './SkeletonBar'
+import { EMPTY_FEN, STRIP_H } from './boardCard'
 import MiniBoard from '../MiniBoard'
 import { getLiveGames, type LiveGameSummary, type LiveSide } from '../../api/client'
-import { categoryFor, CATEGORY_META } from '../../lib/timeControl'
+import { categoryFor } from '../../lib/timeControl'
 
 const POLL_MS = 6000
 // The very first /watch poll is also what wakes the hub's JIT filler pool
@@ -24,7 +26,8 @@ function formatClock(ms: number): string {
 }
 
 /** One player strip (name + rating on the left, clock on the right). The side
- * to move gets a subtle accent dot before the name. */
+ * to move gets a subtle accent dot before the name. Fixed height so it lines up
+ * with the Daily-puzzle card's strips. */
 function PlayerStrip({
     side,
     clockMs,
@@ -37,12 +40,12 @@ function PlayerStrip({
     return (
         <Box
             sx={{
+                height: STRIP_H,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 gap: 1,
                 px: 1,
-                py: 0.75,
             }}
         >
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
@@ -93,8 +96,41 @@ function PlayerStrip({
     )
 }
 
+/** Loading placeholder for a player strip: a name bar + a clock bar, same fixed
+ * height as PlayerStrip so the board doesn't shift when the real data lands. */
+function SkeletonStrip() {
+    return (
+        <Box
+            sx={{
+                height: STRIP_H,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 1,
+                px: 1,
+            }}
+        >
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
+                <Box
+                    sx={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: '50%',
+                        flexShrink: 0,
+                        bgcolor: 'var(--line)',
+                    }}
+                />
+                <SkeletonBar w={96} />
+            </Box>
+            <SkeletonBar w={40} h={13} />
+        </Box>
+    )
+}
+
 /** Homepage "featured live game" TV widget: polls the Watch lobby and shows the
- * single top game with an auto-updating preview board. Click → /watch. */
+ * single top game with an auto-updating preview board. While loading it renders
+ * an empty board plus player-strip skeletons — the board never late-pops, only
+ * the pieces appear on load. Click → /watch. */
 export default function LiveTvWidget() {
     const navigate = useNavigate()
     const [game, setGame] = useState<LiveGameSummary | null>(null)
@@ -160,10 +196,12 @@ export default function LiveTvWidget() {
         }
     }, [])
 
+    const sub = game ? `${categoryFor(game.pool)} · ${game.pool}` : 'Top game in play'
+
     const head = (
         <PanelHead
             title="Live now"
-            sub="Top game in play"
+            sub={sub}
             action={
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
                     <Box
@@ -197,20 +235,9 @@ export default function LiveTvWidget() {
         />
     )
 
-    if (loading && !game) {
-        return (
-            <Panel>
-                {head}
-                <Typography
-                    sx={{ fontSize: 13, color: 'var(--muted)', textAlign: 'center', py: 6 }}
-                >
-                    Loading…
-                </Typography>
-            </Panel>
-        )
-    }
-
-    if (!game) {
+    // Terminal "nothing playing" state (warm-up exhausted, no game). Rare on the
+    // homepage since the /watch poll wakes fillers, but handled explicitly.
+    if (!loading && !game) {
         return (
             <Panel>
                 {head}
@@ -223,10 +250,54 @@ export default function LiveTvWidget() {
         )
     }
 
-    const cat = categoryFor(game.pool)
-    const { Icon } = CATEGORY_META[cat]
-
     const goWatch = () => navigate('/watch')
+
+    // The board frame — empty board + skeleton strips while loading, real game
+    // once it lands. Structurally identical so only the pieces/text swap in.
+    const boardFrame = (
+        <Box
+            sx={{
+                border: '1px solid var(--line-soft)',
+                borderRadius: '10px',
+                overflow: 'hidden',
+                bgcolor: 'var(--surface-2)',
+            }}
+        >
+            {game ? (
+                <PlayerStrip
+                    side={game.black}
+                    clockMs={game.clockB}
+                    toMove={game.sideToMove === 'b'}
+                />
+            ) : (
+                <SkeletonStrip />
+            )}
+            <MiniBoard
+                fen={game ? game.fen : EMPTY_FEN}
+                lastMove={game ? game.lastMove || undefined : undefined}
+                orientation="w"
+            />
+            {game ? (
+                <PlayerStrip
+                    side={game.white}
+                    clockMs={game.clockW}
+                    toMove={game.sideToMove === 'w'}
+                />
+            ) : (
+                <SkeletonStrip />
+            )}
+        </Box>
+    )
+
+    // Loading: not yet clickable (no destination context). Show head + frame.
+    if (!game) {
+        return (
+            <Panel>
+                {head}
+                {boardFrame}
+            </Panel>
+        )
+    }
 
     return (
         <Panel
@@ -249,52 +320,7 @@ export default function LiveTvWidget() {
                 sx={{ outline: 'none' }}
             >
                 {head}
-                <Box
-                    sx={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 0.75,
-                        mb: 1,
-                        color: 'var(--text-dim)',
-                    }}
-                >
-                    <Icon size={14} />
-                    <Typography
-                        sx={{
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: 11,
-                            letterSpacing: '0.14em',
-                            fontWeight: 600,
-                            textTransform: 'uppercase',
-                        }}
-                    >
-                        {cat} · {game.pool}
-                    </Typography>
-                </Box>
-                <Box
-                    sx={{
-                        border: '1px solid var(--line-soft)',
-                        borderRadius: '10px',
-                        overflow: 'hidden',
-                        bgcolor: 'var(--surface-2)',
-                    }}
-                >
-                    <PlayerStrip
-                        side={game.black}
-                        clockMs={game.clockB}
-                        toMove={game.sideToMove === 'b'}
-                    />
-                    <MiniBoard
-                        fen={game.fen}
-                        lastMove={game.lastMove || undefined}
-                        orientation="w"
-                    />
-                    <PlayerStrip
-                        side={game.white}
-                        clockMs={game.clockW}
-                        toMove={game.sideToMove === 'w'}
-                    />
-                </Box>
+                {boardFrame}
             </Box>
         </Panel>
     )

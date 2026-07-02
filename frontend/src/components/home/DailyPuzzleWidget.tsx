@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { Box, Typography } from '@mui/material'
 import { useNavigate } from 'react-router-dom'
 import { Panel, PanelHead } from './Panel'
+import SkeletonBar from './SkeletonBar'
+import { EMPTY_FEN, STRIP_H } from './boardCard'
 import MiniBoard from '../MiniBoard'
 import { getDailyPuzzle, type DailyPuzzle } from '../../api/client'
 
@@ -17,9 +19,30 @@ function titleCaseTheme(theme: string): string {
         .join(' ')
 }
 
+/** The shared strip chrome above/below the board (fixed height so it lines up
+ * with the Live-now card's player strips). */
+function Strip({ children }: { children: React.ReactNode }) {
+    return (
+        <Box
+            sx={{
+                height: STRIP_H,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 1,
+                px: 1.25,
+            }}
+        >
+            {children}
+        </Box>
+    )
+}
+
 /** Homepage "Puzzle of the day" widget. Self-contained: fetches once on mount,
- * shows the position + side-to-move + rating + a few theme pills, and routes to
- * the full trainer at /puzzles. The solution is never fetched here. */
+ * shows the position + side-to-move + rating + a couple of themes, and routes to
+ * the full trainer at /puzzles. While loading it renders an empty board plus
+ * text skeletons — the board never late-pops, only the pieces appear on load.
+ * The solution is never fetched here. */
 export default function DailyPuzzleWidget() {
     const navigate = useNavigate()
     const [puzzle, setPuzzle] = useState<DailyPuzzle | null>(null)
@@ -40,8 +63,115 @@ export default function DailyPuzzleWidget() {
     }, [])
 
     const goSolve = () => navigate('/puzzles')
-
     const interactive = Boolean(puzzle) && !error
+
+    const head = <PanelHead title="Daily puzzle" sub="Find the best move" />
+
+    if (error) {
+        return (
+            <Panel>
+                {head}
+                <Typography
+                    sx={{ fontSize: 13, color: 'var(--muted)', py: 4, textAlign: 'center' }}
+                >
+                    Couldn't load today's puzzle
+                </Typography>
+            </Panel>
+        )
+    }
+
+    const themeLabel =
+        puzzle && puzzle.themes.length > 0
+            ? puzzle.themes.slice(0, 2).map(titleCaseTheme).join(' · ')
+            : puzzle
+              ? 'Tactics'
+              : ''
+
+    const body = (
+        <>
+            {head}
+            <Box
+                sx={{
+                    border: '1px solid var(--line-soft)',
+                    borderRadius: '10px',
+                    overflow: 'hidden',
+                    bgcolor: 'var(--surface-2)',
+                }}
+            >
+                {/* Top strip: side to move + rating (skeletons while loading). */}
+                <Strip>
+                    {puzzle ? (
+                        <>
+                            <Typography
+                                sx={{
+                                    fontFamily: 'var(--font-display)',
+                                    fontSize: 14,
+                                    fontWeight: 600,
+                                    color: 'var(--text)',
+                                }}
+                            >
+                                {puzzle.color === 'w' ? 'White to move' : 'Black to move'}
+                            </Typography>
+                            <Typography
+                                sx={{
+                                    fontFamily: 'var(--font-mono)',
+                                    fontSize: 13,
+                                    color: 'var(--text-dim)',
+                                }}
+                            >
+                                Rating {puzzle.rating}
+                            </Typography>
+                        </>
+                    ) : (
+                        <>
+                            <SkeletonBar w={104} />
+                            <SkeletonBar w={62} />
+                        </>
+                    )}
+                </Strip>
+
+                <MiniBoard
+                    fen={puzzle ? puzzle.fen : EMPTY_FEN}
+                    lastMove={puzzle ? puzzle.opponent_move : undefined}
+                    orientation={puzzle ? puzzle.color : 'w'}
+                />
+
+                {/* Bottom strip: themes + a "solve" affordance. */}
+                <Strip>
+                    {puzzle ? (
+                        <>
+                            <Typography
+                                sx={{
+                                    fontSize: 12.5,
+                                    color: 'var(--text-dim)',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                }}
+                            >
+                                {themeLabel}
+                            </Typography>
+                            <Typography
+                                sx={{
+                                    fontSize: 13,
+                                    fontWeight: 600,
+                                    color: 'var(--accent)',
+                                    flexShrink: 0,
+                                }}
+                            >
+                                Solve →
+                            </Typography>
+                        </>
+                    ) : (
+                        <>
+                            <SkeletonBar w={120} />
+                            <SkeletonBar w={44} />
+                        </>
+                    )}
+                </Strip>
+            </Box>
+        </>
+    )
 
     return (
         <Panel
@@ -55,29 +185,7 @@ export default function DailyPuzzleWidget() {
                     : undefined
             }
         >
-            {error ? (
-                <>
-                    <PanelHead title="Daily puzzle" />
-                    <Typography
-                        sx={{ fontSize: 13, color: 'var(--muted)', py: 4, textAlign: 'center' }}
-                    >
-                        Couldn't load today's puzzle
-                    </Typography>
-                </>
-            ) : !puzzle ? (
-                <>
-                    <PanelHead title="Daily puzzle" />
-                    <Box
-                        sx={{
-                            aspectRatio: '1',
-                            width: '100%',
-                            borderRadius: '10px',
-                            bgcolor: 'var(--surface-2)',
-                            border: '1px solid var(--line-soft)',
-                        }}
-                    />
-                </>
-            ) : (
+            {interactive ? (
                 <Box
                     role="button"
                     tabIndex={0}
@@ -90,73 +198,10 @@ export default function DailyPuzzleWidget() {
                     }}
                     sx={{ outline: 'none' }}
                 >
-                    <PanelHead title="Daily puzzle" />
-                    <Box
-                        sx={{
-                            borderRadius: '10px',
-                            border: '1px solid var(--line-soft)',
-                            overflow: 'hidden',
-                        }}
-                    >
-                        <MiniBoard
-                            fen={puzzle.fen}
-                            lastMove={puzzle.opponent_move}
-                            orientation={puzzle.color}
-                        />
-                    </Box>
-
-                    <Box
-                        sx={{
-                            display: 'flex',
-                            alignItems: 'baseline',
-                            justifyContent: 'space-between',
-                            gap: 2,
-                            mt: 1.75,
-                        }}
-                    >
-                        <Typography
-                            sx={{
-                                fontFamily: 'var(--font-display)',
-                                fontSize: 14,
-                                color: 'var(--text)',
-                                fontWeight: 600,
-                            }}
-                        >
-                            {puzzle.color === 'w' ? 'White to move' : 'Black to move'}
-                        </Typography>
-                        <Typography
-                            sx={{
-                                fontFamily: 'var(--font-mono)',
-                                fontSize: 13,
-                                color: 'var(--text-dim)',
-                            }}
-                        >
-                            Rating {puzzle.rating}
-                        </Typography>
-                    </Box>
-
-                    {puzzle.themes.length > 0 && (
-                        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mt: 1.25 }}>
-                            {puzzle.themes.slice(0, 3).map((theme) => (
-                                <Box
-                                    key={theme}
-                                    sx={{
-                                        px: 1,
-                                        py: 0.25,
-                                        borderRadius: '999px',
-                                        bgcolor: 'var(--surface-2)',
-                                        border: '1px solid var(--line)',
-                                        fontSize: 11.5,
-                                        color: 'var(--text-dim)',
-                                        whiteSpace: 'nowrap',
-                                    }}
-                                >
-                                    {titleCaseTheme(theme)}
-                                </Box>
-                            ))}
-                        </Box>
-                    )}
+                    {body}
                 </Box>
+            ) : (
+                body
             )}
         </Panel>
     )
