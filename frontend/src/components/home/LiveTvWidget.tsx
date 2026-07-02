@@ -8,7 +8,7 @@ import MiniBoard from '../MiniBoard'
 import { getLiveGames, type LiveGameSummary, type LiveSide } from '../../api/client'
 import { categoryFor } from '../../lib/timeControl'
 
-const POLL_MS = 6000
+const POLL_MS = 3000
 // How often we locally re-tick the running clock between server polls. The
 // display is mm:ss, so sub-second cadence just keeps the countdown smooth.
 const TICK_MS = 250
