@@ -97,6 +97,7 @@ export function engineVsMove(params: {
     rating?: number
     elo?: number
     movetime?: number
+    aggr?: number // gomachine aggression style 0..100 (50 = neutral); gomachine side only
 }): Promise<EngineVsMove> {
     return request<EngineVsMove>('/admin/engine-vs/move', {
         method: 'POST',

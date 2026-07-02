@@ -10,6 +10,13 @@ import "github.com/timanthonyalexander/gomachine/internal/chess"
 // sharp king-attacking play. At the default Aggr=50 the scale is 0 and the
 // searcher never calls this, so the engine stays byte-identical.
 //
+// NOTE: this is the REAL (attack-generating) term — it sums pieces whose attacks
+// land in the enemy king zone (a per-piece pos.AttacksFrom call). It carries the
+// knowledge (+43.7 @ fixed depth 8 vs neutral) but is expensive (−44 @ movetime).
+// A distance-only tropism replacement was far cheaper but LOST the knowledge
+// (−65 @ fixed depth 8) — proximity without real attacks is harmful. Kept here as
+// the diagnostic baseline; see docs/ENGINE_STRENGTH.md aggression notes.
+//
 // It is symmetric (us pressure − them pressure) and per-side capped, so it can
 // only nudge selection at the margins; it can never overturn a real material or
 // positional eval. This is a *style* lever, not a strength patch.
@@ -22,9 +29,6 @@ func AggressionTerm(pos *chess.Position) int {
 // (0=N,1=B,2=R,3=Q). Pawns and the king itself are excluded.
 var kzWeight = [4]int{2, 2, 3, 5}
 
-// aggrPerUnit / aggrPerTropism convert raw attack units and tropism into cp;
-// aggrCap bounds each side's raw pressure so a single crowded position can't dwarf
-// the real eval (the searcher then scales the netted, capped value by Aggr).
 const (
 	aggrPerUnit     = 4
 	aggrPerTropism  = 1

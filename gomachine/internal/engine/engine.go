@@ -234,6 +234,26 @@ func (e *Engine) BestMoveForRatingTimed(pos *chess.Position, rating int, movetim
 	return e.BestMoveConfig(pos, cfg, history)
 }
 
+// BestMoveForRatingTimedAggr is BestMoveForRatingTimed with an aggression style
+// override (0..100; 50 = neutral). It applies the knob to the searcher's params for
+// this ONE search and restores 50 afterwards (defer), so a pooled engine never
+// leaks aggression to later /analyze or bot-move calls that share the pool. At
+// aggr==50 it is byte-identical to BestMoveForRatingTimed. Used by the admin
+// engine-vs-engine view for the gomachine side only (Stockfish is unaffected).
+func (e *Engine) BestMoveForRatingTimedAggr(pos *chess.Position, rating int, movetime time.Duration, aggr int, history []uint64) BestResult {
+	if aggr < 0 {
+		aggr = 0
+	}
+	if aggr > 100 {
+		aggr = 100
+	}
+	if aggr != 50 {
+		e.searcher.SetAggr(aggr)
+		defer e.searcher.SetAggr(50) // return the pooled engine to neutral for other callers
+	}
+	return e.BestMoveForRatingTimed(pos, rating, movetime, history)
+}
+
 // pickWeakened applies eval noise + occasional blunders to a root-move ranking.
 func (e *Engine) pickWeakened(roots []search.RootMove, cfg LevelConfig, rankDepth int) BestResult {
 	if len(roots) == 0 {

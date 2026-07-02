@@ -43,14 +43,21 @@ class GomachineClient
      * Compute the AI's move at a target Elo rating (the engine maps it to a
      * weakening config at a fixed think time).
      *
+     * $aggr is the optional aggression style knob (0..100; 50 = neutral). It is
+     * forwarded to the engine's rating path ONLY when non-null — a null (the
+     * default for bot games / matchmaking) leaves the engine byte-identical.
+     *
      * @param string[] $history
      * @return array<string, mixed> {bestmove, san, eval, pv, depth, nodes, nps}
      */
-    public function bestMove(string $fen, int $rating, array $history = [], int $movetimeMs = 0): array
+    public function bestMove(string $fen, int $rating, array $history = [], int $movetimeMs = 0, ?int $aggr = null): array
     {
         $limits = ['rating' => $rating];
         if ($movetimeMs > 0) {
             $limits['movetime'] = $movetimeMs; // budget override (admin engine-vs-engine)
+        }
+        if ($aggr !== null) {
+            $limits['aggr'] = $aggr; // aggression style (admin engine-vs-engine, gomachine side)
         }
 
         return $this->post('/bestmove', [

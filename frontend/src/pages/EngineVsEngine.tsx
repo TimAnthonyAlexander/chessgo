@@ -75,9 +75,17 @@ interface EveSettings {
     sfElo: number
     gomaSide: Color
     budget: number
+    aggr: number
 }
 // gomaRating is a DISPLAY value (700..3500); sfElo is Stockfish UCI_Elo (1320..3100).
-const DEFAULT_SETTINGS: EveSettings = { gomaRating: 3500, sfElo: 3000, gomaSide: 'w', budget: 300 }
+// aggr is gomachine's aggression style (0..100, 50 = neutral); gomachine side only.
+const DEFAULT_SETTINGS: EveSettings = {
+    gomaRating: 3500,
+    sfElo: 3000,
+    gomaSide: 'w',
+    budget: 300,
+    aggr: 50,
+}
 
 function loadSettings(): EveSettings {
     try {
@@ -90,6 +98,7 @@ function loadSettings(): EveSettings {
             sfElo: typeof p.sfElo === 'number' ? p.sfElo : DEFAULT_SETTINGS.sfElo,
             gomaSide: p.gomaSide === 'b' ? 'b' : 'w',
             budget: typeof p.budget === 'number' ? p.budget : DEFAULT_SETTINGS.budget,
+            aggr: typeof p.aggr === 'number' ? p.aggr : DEFAULT_SETTINGS.aggr,
         }
     } catch {
         return DEFAULT_SETTINGS // unparseable / storage unavailable → fall back to defaults
@@ -112,17 +121,18 @@ export default function EngineVsEngine() {
     const [sfElo, setSfElo] = useState(() => loadSettings().sfElo)
     const [gomaSide, setGomaSide] = useState<Color>(() => loadSettings().gomaSide)
     const [budget, setBudget] = useState(() => loadSettings().budget) // ms per move, both engines
+    const [aggr, setAggr] = useState(() => loadSettings().aggr) // gomachine aggression 0..100
 
     useEffect(() => {
         try {
             localStorage.setItem(
                 SETTINGS_KEY,
-                JSON.stringify({ gomaRating, sfElo, gomaSide, budget }),
+                JSON.stringify({ gomaRating, sfElo, gomaSide, budget, aggr }),
             )
         } catch {
             // storage unavailable / quota — settings just won't persist this session
         }
-    }, [gomaRating, sfElo, gomaSide, budget])
+    }, [gomaRating, sfElo, gomaSide, budget, aggr])
 
     // Game
     const [fen, setFen] = useState(startFen)
@@ -172,7 +182,7 @@ export default function EngineVsEngine() {
                     side: moverSide,
                     movetime: budget,
                     ...(moverSide === 'gomachine'
-                        ? { rating: gomaRating }
+                        ? { rating: gomaRating, aggr } // aggression is gomachine-only
                         : { elo: sfIsUnleashed(sfElo) ? 0 : sfElo }),
                 })
                 if (cancelled) return
@@ -217,7 +227,7 @@ export default function EngineVsEngine() {
             cancelled = true
             clearTimeout(id)
         }
-    }, [running, ply, over, fen, sideToMove, moverSide, gomaRating, sfElo, budget])
+    }, [running, ply, over, fen, sideToMove, moverSide, gomaRating, sfElo, budget, aggr])
 
     // Eval bar = ONE consistent evaluator: gomachine at full strength, re-reading the
     // current position after every ply regardless of who moved. We deliberately do NOT
@@ -337,12 +347,14 @@ export default function EngineVsEngine() {
                         sfElo={sfElo}
                         gomaSide={gomaSide}
                         budget={budget}
+                        aggr={aggr}
                         running={running}
                         disabledSettings={running}
                         onRating={setGomaRating}
                         onElo={setSfElo}
                         onSide={setGomaSide}
                         onBudget={setBudget}
+                        onAggr={setAggr}
                         onToggleRun={toggleRun}
                         onReset={reset}
                         over={over}
@@ -494,12 +506,14 @@ function Controls({
     sfElo,
     gomaSide,
     budget,
+    aggr,
     running,
     disabledSettings,
     onRating,
     onElo,
     onSide,
     onBudget,
+    onAggr,
     onToggleRun,
     onReset,
     over,
@@ -508,12 +522,14 @@ function Controls({
     sfElo: number
     gomaSide: Color
     budget: number
+    aggr: number
     running: boolean
     disabledSettings: boolean
     onRating: (n: number) => void
     onElo: (n: number) => void
     onSide: (c: Color) => void
     onBudget: (n: number) => void
+    onAggr: (n: number) => void
     onToggleRun: () => void
     onReset: () => void
     over: boolean
@@ -559,6 +575,23 @@ function Controls({
                     disabled={disabledSettings}
                     sx={sliderSx}
                 />
+            </Box>
+
+            <Box>
+                <Label>gomachine aggression</Label>
+                <SettingValue>{aggr}</SettingValue>
+                <Slider
+                    value={aggr}
+                    onChange={(_, v) => onAggr(v as number)}
+                    min={0}
+                    max={100}
+                    step={5}
+                    disabled={disabledSettings}
+                    sx={sliderSx}
+                />
+                <Typography sx={{ fontSize: 11.5, color: 'var(--muted)', mt: 0.25 }}>
+                    50 = neutral · higher = more attacking (experimental). gomachine side only.
+                </Typography>
             </Box>
 
             <Box>

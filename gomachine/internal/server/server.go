@@ -354,6 +354,7 @@ type bestMoveRequest struct {
 		Level    *int `json:"level"`  // legacy 0..10 difficulty
 		Depth    int  `json:"depth"`
 		MoveTime int  `json:"movetime"` // milliseconds
+		Aggr     *int `json:"aggr"`     // aggression style 0..100 (nil/absent → 50 = neutral); applies to the rating path only
 	} `json:"limits"`
 }
 
@@ -395,8 +396,15 @@ func (s *Server) handleBestMove(w http.ResponseWriter, r *http.Request) {
 	var res engine.BestResult
 	switch {
 	case req.Limits.Rating != nil:
-		res = eng.BestMoveForRatingTimed(pos, *req.Limits.Rating,
-			time.Duration(req.Limits.MoveTime)*time.Millisecond, hist)
+		// Aggression is a rating-path (bot) style knob; absent → 50 (neutral, byte-
+		// identical to the plain rating search, so every non-aggression caller is
+		// unaffected). Only the admin engine-vs-engine gomachine side sends it.
+		aggr := 50
+		if req.Limits.Aggr != nil {
+			aggr = *req.Limits.Aggr
+		}
+		res = eng.BestMoveForRatingTimedAggr(pos, *req.Limits.Rating,
+			time.Duration(req.Limits.MoveTime)*time.Millisecond, aggr, hist)
 	case req.Limits.Level != nil:
 		res = eng.BestMove(pos, *req.Limits.Level, hist)
 	case req.Limits.Depth > 0 || req.Limits.MoveTime > 0:
