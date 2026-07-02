@@ -53,6 +53,12 @@ type ColorChoice = 'w' | 'b' | 'random'
 // tracks the live position instead of lagging a full move behind), then deepens.
 const EVAL_DEPTHS = [4, 8, 12, 16]
 
+// Duck Chess only: the human move and the bot's reply come back in ONE response
+// (the shared duck has already been relocated by the bot). Hold the player's own
+// duck placement on screen for at least this long before revealing the bot's
+// reply, so they actually see where their duck went instead of an instant jump.
+const DUCK_REVEAL_MS = 550
+
 // The side to move encoded in a FEN's active-color field (defaults to White).
 const sideToMoveOf = (fen: string): Color => (fen.split(' ')[1] === 'b' ? 'b' : 'w')
 
@@ -74,6 +80,9 @@ export default function BotGame() {
     const [sound, setSound] = useState(soundEnabled())
     const [analyzedEval, setAnalyzedEval] = useState<WhiteEval | null>(null)
     const [viewIndex, setViewIndex] = useState<number | null>(null) // null = live
+    // Duck Chess: the human's just-placed duck square, shown during the brief
+    // reveal hold before the bot's reply lands (null when not holding).
+    const [duckReveal, setDuckReveal] = useState<string | null>(null)
 
     const { user } = useAuth()
     const isAdmin = user?.role === 'admin'
@@ -110,6 +119,34 @@ export default function BotGame() {
         }
     }
 
+    // Duck Chess submit: the server returns the human move AND the bot's reply in a
+    // single response (both sides relocate the one shared duck). Show the player's
+    // own duck placement for a beat before revealing the reply — the optimistic
+    // piece-move overlay + `duckReveal` render the completed human turn during the
+    // hold, then setGame swaps in the bot's move.
+    const submitDuckMove = async (composite: string) => {
+        if (!game) return
+        const placed = composite.split(':')[1] ?? null
+        const priorCount = game.moves.length
+        setError(null)
+        setViewIndex(null)
+        setThinking(true)
+        setDuckReveal(placed)
+        const started = performance.now()
+        try {
+            const g = await playMove(game.id, composite)
+            const wait = DUCK_REVEAL_MS - (performance.now() - started)
+            if (wait > 0) await new Promise((r) => setTimeout(r, wait))
+            setGame(g)
+            voiceServerReply(priorCount, g)
+        } catch (e) {
+            setError(e instanceof Error ? e.message : 'Move failed.')
+        } finally {
+            setDuckReveal(null)
+            setThinking(false)
+        }
+    }
+
     // Two board controllers, both hooks called unconditionally (only one is ever
     // "live" — the other is inert with myTurn:false). Standard/Chess960 use the
     // shared optimistic+premove controller; Duck Chess uses the two-phase
@@ -126,7 +163,7 @@ export default function BotGame() {
         duck: game?.duck ?? null,
         myTurn: interactive && isDuck,
         legalMoves: interactive && isDuck && game ? game.legal_moves : [],
-        submit: submitMove,
+        submit: submitDuckMove,
     })
 
     // The optimistic overlay + last-move highlight come from whichever controller
@@ -157,11 +194,13 @@ export default function BotGame() {
     // during placement and until the server reply lands). When reviewing history
     // it's the duck recorded on that ply.
     const shownDuck: string | null = isDuck
-        ? atLive
-            ? activeOverride
-                ? null
-                : (game?.duck ?? null)
-            : (game?.moves[shownPly - 1]?.duck ?? null)
+        ? duckReveal != null
+            ? duckReveal // reveal hold: show the player's own just-placed duck
+            : atLive
+              ? activeOverride
+                  ? null // mid-placement: the duck is "in hand"
+                  : (game?.duck ?? null)
+              : (game?.moves[shownPly - 1]?.duck ?? null)
         : null
 
     // Eval bar — full-strength analysis of the live position, level-independent.
