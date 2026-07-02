@@ -108,7 +108,15 @@ export type HomeState = ReturnType<typeof useHome>
 /** The page shell shared by both layouts: max-width container, hero, the
  * resume banner, and the two dialogs. The layout-specific content (the column
  * arrangement) is passed as children. */
-export function HomeChrome({ home, children }: { home: HomeState; children: ReactNode }) {
+export function HomeChrome({
+    home,
+    hero = true,
+    children,
+}: {
+    home: HomeState
+    hero?: boolean
+    children: ReactNode
+}) {
     return (
         <Box sx={{ flex: 1 }}>
             <Box
@@ -119,7 +127,7 @@ export function HomeChrome({ home, children }: { home: HomeState; children: Reac
                     py: { xs: 2.5, md: 3.5 },
                 }}
             >
-                <Hero stats={home.stats} />
+                {hero && <Hero stats={home.stats} />}
 
                 {/* A game in progress is the most urgent thing on the page — for anyone. */}
                 {home.live && !home.live.ended && <ResumeBanner game={home.live} />}

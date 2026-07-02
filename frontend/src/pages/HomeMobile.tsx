@@ -13,7 +13,7 @@ import { HomeChrome, PlayPanel, QuickPairingPanel, useHome } from './home/parts'
 export default function HomeMobile() {
     const home = useHome()
     return (
-        <HomeChrome home={home}>
+        <HomeChrome home={home} hero={false}>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
                 <PlayPanel
                     onNavigate={home.navigate}
