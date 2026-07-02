@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Box, Typography } from '@mui/material'
+import type { SxProps, Theme } from '@mui/material'
 import { useNavigate } from 'react-router-dom'
 import { Panel, PanelHead } from './Panel'
+import SkeletonBar from './SkeletonBar'
 import { getLeaderboard, type LeaderboardEntry } from '../../api/client'
 import type { Category } from '../../lib/timeControl'
 
@@ -164,38 +166,66 @@ export default function LeaderboardWidget() {
     )
 }
 
-/** Placeholder rows while the category fetch is in flight. */
+// The name-column width per placeholder row — varied so the skeleton reads as a
+// list of names rather than identical bars.
+const SKELETON_NAME_W = ['64%', '52%', '58%', '45%', '61%']
+
+// The loaded rows' text sits on a body1 line box (fontSize 14 × lineHeight 1.5 =
+// 21px). The skeleton wraps each bar in a line box of the same height so a
+// placeholder row is exactly as tall as the row that replaces it — no layout
+// shift when the data lands.
+const ROW_LINE_H = 21
+
+/** Placeholder rows while the category fetch is in flight. Structurally mirrors
+ * the loaded rows (same insets, padding, dividers, and line height) so the card
+ * doesn't grow when the real entries arrive. */
 function SkeletonRows() {
     return (
-        <Box>
-            {Array.from({ length: 5 }).map((_, i) => (
-                <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 0.9 }}>
-                    <Box
-                        sx={{
-                            width: 14,
-                            height: 12,
-                            borderRadius: '3px',
-                            bgcolor: 'var(--surface-2)',
-                        }}
-                    />
-                    <Box
-                        sx={{
-                            flex: 1,
-                            height: 12,
-                            borderRadius: '3px',
-                            bgcolor: 'var(--surface-2)',
-                        }}
-                    />
-                    <Box
-                        sx={{
-                            width: 34,
-                            height: 12,
-                            borderRadius: '3px',
-                            bgcolor: 'var(--surface-2)',
-                        }}
-                    />
+        <Box sx={{ mx: { xs: -2, md: -2.5 } }}>
+            {SKELETON_NAME_W.map((nameW, i) => (
+                <Box
+                    key={i}
+                    sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 1.5,
+                        px: { xs: 2, md: 2.5 },
+                        py: 0.9,
+                        borderTop: i === 0 ? 'none' : '1px solid var(--line-soft)',
+                    }}
+                >
+                    <LineBox sx={{ minWidth: 18, justifyContent: 'flex-end' }}>
+                        <SkeletonBar w={12} />
+                    </LineBox>
+                    <LineBox sx={{ flex: 1 }}>
+                        <SkeletonBar w={nameW} />
+                    </LineBox>
+                    <LineBox>
+                        <SkeletonBar w={32} />
+                    </LineBox>
                 </Box>
             ))}
+        </Box>
+    )
+}
+
+/** A fixed-height flex cell that centres a skeleton bar on the same line box the
+ * real text uses, so row heights match the loaded state exactly. */
+function LineBox({
+    children,
+    sx,
+}: {
+    children: React.ReactNode
+    sx?: SxProps<Theme>
+}) {
+    return (
+        <Box
+            sx={[
+                { height: ROW_LINE_H, display: 'flex', alignItems: 'center' },
+                ...(Array.isArray(sx) ? sx : [sx]),
+            ]}
+        >
+            {children}
         </Box>
     )
 }

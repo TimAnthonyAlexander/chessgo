@@ -204,21 +204,6 @@ export default function LiveTvWidget() {
             sub={sub}
             action={
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                    <Box
-                        sx={{
-                            width: 9,
-                            height: 9,
-                            borderRadius: '50%',
-                            bgcolor: STATUS_GREEN,
-                            boxShadow: `0 0 0 0 ${STATUS_GREEN}`,
-                            animation: 'liveTvPulse 1.8s ease-out infinite',
-                            '@keyframes liveTvPulse': {
-                                '0%': { boxShadow: `0 0 0 0 ${STATUS_GREEN}66` },
-                                '70%': { boxShadow: `0 0 0 6px ${STATUS_GREEN}00` },
-                                '100%': { boxShadow: `0 0 0 0 ${STATUS_GREEN}00` },
-                            },
-                        }}
-                    />
                     <Typography
                         sx={{
                             fontFamily: 'var(--font-mono)',
