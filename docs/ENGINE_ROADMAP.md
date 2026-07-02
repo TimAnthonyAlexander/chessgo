@@ -121,6 +121,19 @@ number. Only once the push is cheap does a v11 head have room to pay for itself.
 - **Hardware nuance:** the "beats v6 at movetime" verdict is **hardware-dependent** —
   the threat-push is memory-bound and lairner is a weak 4-core box (push ~4.5 µs there
   vs ~1.9 µs on the M3). A stronger box narrows the deficit. Measure on the deploy box.
+- **A single fixed depth can mislead for depth-dependent eval terms** (extends the
+  fixed-nodes rule, `ENGINE_STRENGTH.md §14.4`). The aggression eval-knob read **+43.7 @
+  depth 8, ≈−30 @ depth 12, ≈−44 @ movetime** — value decays with depth (a shallow-search
+  crutch). **Gate eval across ≥2 depths or at movetime, never one fixed depth.**
+
+## Side-track (deferred, NOT on the strength path): aggression / dynamism
+An eval-bolt-on "aggression" knob (`search.Params.Aggr`, default 50 = inert/byte-identical;
+admin Engine-vs-Engine slider) was built and SPRT'd (2026-07-02). **It's a style lever, not
+a strength patch** — see the depth-decay above. Kept as inert scaffolding. The
+strength-neutral version must be **baked into the NNUE** (WDL/sharpness-weighted retrain,
+then optionally a style bucket). Full plan + numbers: **`docs/AGGRESSION.md`**,
+`ENGINE_STRENGTH.md §24`. Do it between net rungs, if ever; it does not move us toward
+Stormphrax.
 
 ## Hardware / where to run
 - **Mac (M3 Pro):** training (bullet on Metal GPU, ~1 M pos/s with threats), and local

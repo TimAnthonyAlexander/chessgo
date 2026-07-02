@@ -1453,3 +1453,65 @@ needed between accepts (rebuild only to introduce a brand-new flag into the bina
 - **Follow-ups → SPSA.** `futbase` (base/slope), and `negext` **jointly with** the singular
   margins, are the two SPSA-revisit items this run parks; both stay wired default-off. The
   `cutnode` plumbing landing (inert) is the prerequisite for the negext revisit.
+
+## 24. Aggression style knob (2026-07-02) — a shallow-search crutch, NOT a strength patch
+
+**One-line:** an eval bolt-on that biases toward attacking the enemy king wins **big at
+fixed depth 8 (+43.7) but flips to a loss by depth 12 (≈−30) and at movetime (≈−44)** —
+its value **decays monotonically with depth**, so it is a *style* lever only, never a
+strength gain. The clean, strength-neutral version lives in the net, not the eval; see
+`docs/AGGRESSION.md`.
+
+### 24.1 What was built (scaffolding, default-OFF / inert)
+- `search.Params.Aggr` (0..100, **default 50 = neutral**). At 50 the term is *never
+  evaluated*, so the shipped engine is **byte-identical** (guarded `if s.params.Aggr != 50`
+  in `rawEvaluate`, `internal/search/search.go`).
+- `eval.AggressionTerm(pos)` (`internal/eval/aggression.go`) — a side-to-move-relative,
+  per-side-capped king-attack term added on top of the NNUE/HCE static eval, scaled by
+  `(Aggr-50)/50`. Effect range 50→100 = attacking, 50→0 = solid.
+- Bench key `aggr=` (`internal/bench/config.go`, parse + diff label).
+- Frontend: an "aggression" slider on the admin **Engine vs Engine** page (localStorage,
+  default 50), wired end-to-end (React → `engineVsMove` → `EngineMatchController` →
+  `GomachineClient` → `server.go` `Limits.Aggr` → `engine.BestMoveForRatingTimedAggr` →
+  `Searcher.SetAggr`), **gomachine-side only**, absent→50 everywhere.
+
+### 24.2 The measurements (self-play SPRT, [0,5], v6 net)
+Direction = `new` relative to `old`. Fixed **depth** and **movetime** only — this is an
+EVAL change, so fixed-nodes is invalid (§14.4). Fixed-depth runs on the scalar local
+build (depth-bound, hardware-independent); movetime on the arm64 SIMD build (go1.27rc1).
+
+| Test | Ruler | Elo | Verdict |
+|---|---|---:|---|
+| `aggr=0` vs `50` | depth 8 | **−10.8 ± 11.7** (787 pr) | ~H0 — mild caution tax |
+| `aggr=100` vs `50` | depth 8 | **+43.7 ± 16.6** (190 pr) | **ACCEPT** — looks great |
+| `aggr=100` vs `0` | depth 8 | **+97.4 ± 26.4** (95 pr) | **ACCEPT** — monotone `100>50>0` |
+| `aggr=100` vs `50` | **depth 12** | **≈ −30 ± 38** (66 pr) | already negative |
+| `aggr=100` vs `50` | **movetime 100ms** | **≈ −44 ± 51** (~30 pr) | negative from pair 3 |
+
+### 24.3 The two hypotheses and the diagnostic that settled it
+The +44@d8 → −44@movetime flip had two candidate causes:
+- **H_cost:** the knowledge is real & depth-robust; movetime lost only on the NPS the term
+  burns (it loops every piece calling `pos.AttacksFrom` — magic lookups — every eval node).
+- **H_depth:** the *bias itself* helps shallow search (substitutes for tactics it can't yet
+  see) but hurts deep search (which sees them, so the bias just pushes unsound sacs).
+
+**Diagnostic = run the real term at a DEEP fixed depth (12).** Depth removes the NPS
+variable (both sides search equal depth), so a negative there indicts the *bias*, not the
+cost. Result: **≈−30 at depth 12** → **H_depth**. Confirmed independently: a
+distance-only **tropism** rewrite (no attack generation, ~free) was **−65.2 ± 22.4 @ depth
+8** — i.e. cheapening didn't just fail to help, proximity-without-real-attacks is *actively
+harmful*. So (a) the knowledge lives in **real king-zone attacks** (blocker-aware), and
+(b) even free-to-compute it would still lose at movetime because the bias is wrong at depth.
+
+### 24.4 Lessons
+- **Add this to the fixed-nodes rule (§14.4): fixed *depth* is a valid eval ruler, but a
+  *single* fixed depth can still mislead if a term's value is depth-dependent.** Aggression
+  read +44 at d8 and −30 at d12 — same valid ruler, opposite sign. **Gate eval across ≥2
+  depths (or at movetime), not one.** A one-depth "eval win" can be a shallow-search crutch.
+- **A style knob is a legitimate, separate goal from a strength patch** — but this one, as an
+  eval bolt-on, can't be *both*. Kept as inert scaffolding (default 50); the frontend slider
+  gives sharper-but-weaker play at bot-level depths, which is the correct UX for "play
+  aggressively," and is **never** shipped default-on or billed as stronger.
+- **Strength-neutral aggression must be baked into the NNUE** (retrain with a sharpness/
+  WDL-weighted target), the only route that survives depth. Deferred — plan in
+  `docs/AGGRESSION.md`.
