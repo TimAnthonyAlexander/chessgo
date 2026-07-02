@@ -157,6 +157,28 @@ export function analyze(
     })
 }
 
+export interface SfAnalysis {
+    bestmove: string | null // UCI of Stockfish's full-strength best move
+    san: string | null
+}
+
+/** Full-strength Stockfish best move for a position — the analysis board's
+ * optional second-opinion arrow (to see where Stockfish and gomachine disagree).
+ * Returns just the move; if Stockfish isn't available the request errors and the
+ * caller simply omits the arrow. */
+export function sfAnalyze(
+    fen: string,
+    opts?: { movetime?: number; signal?: AbortSignal },
+): Promise<SfAnalysis> {
+    const body: { fen: string; movetime?: number } = { fen }
+    if (opts?.movetime) body.movetime = opts.movetime
+    return request<SfAnalysis>('/sf-analyze', {
+        method: 'POST',
+        body: JSON.stringify(body),
+        signal: opts?.signal,
+    })
+}
+
 /** The opening of a line: ECO code + full name (e.g. "B90", "Sicilian … Najdorf"). */
 export interface Opening {
     eco: string

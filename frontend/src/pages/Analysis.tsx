@@ -5,6 +5,7 @@ import {
     ChevronLast,
     ChevronLeft,
     ChevronRight,
+    Fish,
     FlipVertical2,
     Play,
     Square,
@@ -19,7 +20,7 @@ import Board from '../components/Board'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveTree from '../components/MoveTree'
 import OpeningPanel from '../components/OpeningPanel'
-import { analyze, getGameAnalysis, type GameAnalysis } from '../api/client'
+import { analyze, getGameAnalysis, sfAnalyze, type GameAnalysis } from '../api/client'
 import type { Color } from '../api/client'
 import {
     type Tree,
@@ -44,6 +45,12 @@ const AUTO_DELAY = 700
 // Color of the board arrow drawn when hovering a candidate (book) move — a clear
 // blue, distinct from the gold engine best-move arrow.
 const BOOK_ARROW_COLOR = '#4c8bf5'
+
+// Color of the optional Stockfish best-move arrow — a translucent violet, clearly
+// distinct from the gold gomachine arrow and the blue book arrow. When the two
+// engines agree on the move we don't stack two arrows; the gomachine arrow is
+// ringed in this color instead (see the arrow computation in the component).
+const SF_ARROW_COLOR = '#b06bff'
 
 // Depth schedule for the analysis board's progressive ("streaming") eval. Each
 // entry is a separate /analyze call at that ply depth; we render the result as it
@@ -74,6 +81,12 @@ export default function Analysis() {
     const [currentId, setCurrentId] = useState(0)
     const [orientation, setOrientation] = useState<Color>('w')
     const [showArrow, setShowArrow] = useState(true)
+    // Optional second-opinion arrow: full-strength Stockfish's best move, drawn
+    // translucent so you can see where it disagrees with gomachine. Off by default.
+    const [showSfArrow, setShowSfArrow] = useState(false)
+    // Stockfish's best move for a specific position (kept with its FEN so a stale
+    // response from a previous position is ignored).
+    const [sfBest, setSfBest] = useState<{ fen: string; uci: string } | null>(null)
     const [sound, setSound] = useState(soundEnabled())
     const [engineOn, setEngineOn] = useState(true) // master: eval bar + arrow + engine line
     const [game, setGame] = useState<GameAnalysis | null>(null)
@@ -245,6 +258,30 @@ export default function Analysis() {
         // each step, and re-running would abort the in-flight call and re-fetch it.
     }, [engineOn, loading, current.id, current.fen, over.over, over.checkmate, sideToMove])
 
+    // --- Stockfish second-opinion best move (optional arrow) ---
+    // One full-strength Stockfish call per viewed position, only while the toggle
+    // is on. Independent of gomachine's progressive deepening; if Stockfish isn't
+    // installed the request errors and we just don't draw the arrow. Keyed on the
+    // VIEWED position — setting sfBest is deliberately NOT a dep (it would refetch).
+    useEffect(() => {
+        if (!engineOn || !showSfArrow || loading || over.over) return
+        const fen = current.fen
+        let cancelled = false
+        const ac = new AbortController()
+        void (async () => {
+            try {
+                const r = await sfAnalyze(fen, { movetime: 300, signal: ac.signal })
+                if (!cancelled && r.bestmove) setSfBest({ fen, uci: r.bestmove })
+            } catch {
+                // Stockfish unavailable or request aborted — leave the arrow off.
+            }
+        })()
+        return () => {
+            cancelled = true
+            ac.abort()
+        }
+    }, [engineOn, showSfArrow, loading, over.over, current.fen])
+
     // --- Navigation (manual navigation always cancels any auto playback) ---
     const goPrev = useCallback(() => {
         setAutoMode('off')
@@ -360,19 +397,34 @@ export default function Analysis() {
         })
     }, [])
 
-    // The board arrow needs the engine on and the arrow toggle enabled — even while
-    // Auto Best Move is driving, we honor the user's arrow preference.
-    // A hovered candidate (book) move wins over the gold engine arrow, drawn in
-    // blue. It shows on hover regardless of the best-move arrow toggle.
-    const arrow = hoverUci
-        ? {
-              from: hoverUci.slice(0, 2),
-              to: hoverUci.slice(2, 4),
-              color: BOOK_ARROW_COLOR,
-          }
-        : engineOn && showArrow && current.bestUci
-            ? { from: current.bestUci.slice(0, 2), to: current.bestUci.slice(2, 4) }
-            : null
+    // Stockfish's best move for the CURRENT position (ignore a stale one held for a
+    // previous FEN). Only surfaced while the engine + the SF-arrow toggle are on.
+    const sfUci = engineOn && showSfArrow && sfBest?.fen === current.fen ? sfBest.uci : null
+
+    // Board arrows. A hovered candidate (book) move wins outright — a single blue
+    // arrow, no engine overlays. Otherwise we draw gomachine's gold best-move arrow
+    // (when its toggle is on) plus, optionally, a translucent Stockfish arrow. When
+    // both engines pick the SAME move (comparing from+to, ignoring promo piece) we
+    // draw ONE arrow — gomachine's, ringed in the Stockfish color to signal
+    // agreement — rather than stacking two identical arrows.
+    let arrow: { from: string; to: string; color?: string; outline?: string } | null = null
+    let sfArrow: { from: string; to: string; color?: string } | null = null
+    if (hoverUci) {
+        arrow = { from: hoverUci.slice(0, 2), to: hoverUci.slice(2, 4), color: BOOK_ARROW_COLOR }
+    } else {
+        const goUci = engineOn && showArrow && current.bestUci ? current.bestUci : null
+        const agree = !!goUci && !!sfUci && goUci.slice(0, 4) === sfUci.slice(0, 4)
+        if (goUci) {
+            arrow = {
+                from: goUci.slice(0, 2),
+                to: goUci.slice(2, 4),
+                ...(agree ? { outline: SF_ARROW_COLOR } : {}),
+            }
+        }
+        if (sfUci && !agree) {
+            sfArrow = { from: sfUci.slice(0, 2), to: sfUci.slice(2, 4), color: SF_ARROW_COLOR }
+        }
+    }
 
     const lastMove = current.move ? { from: current.move.from, to: current.move.to } : null
 
@@ -431,6 +483,7 @@ export default function Analysis() {
                             interactive
                             onMove={onMove}
                             arrow={arrow}
+                            arrow2={sfArrow}
                         />
                     </Box>
                 </Box>
@@ -526,6 +579,13 @@ export default function Analysis() {
                                 active={engineOn && showArrow}
                             >
                                 <Target size={19} />
+                            </NavBtn>
+                            <NavBtn
+                                onClick={() => setShowSfArrow((v) => !v)}
+                                label="Stockfish best move arrow"
+                                active={engineOn && showSfArrow}
+                            >
+                                <Fish size={19} />
                             </NavBtn>
                             <NavBtn
                                 onClick={() => setOrientation((o) => (o === 'w' ? 'b' : 'w'))}

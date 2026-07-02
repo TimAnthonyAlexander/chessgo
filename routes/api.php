@@ -15,6 +15,7 @@ use App\Controllers\BotGameController;
 use App\Controllers\BotMoveController;
 use App\Controllers\BotUndoController;
 use App\Controllers\AnalyzeController;
+use App\Controllers\SfAnalyzeController;
 use App\Controllers\CandidatesController;
 use App\Controllers\EngineMatchController;
 use App\Controllers\WsTicketController;
@@ -78,6 +79,14 @@ $router->post('/bot-games/{id}/undo', [
 $router->post('/analyze', [
     RateLimitMiddleware::class => ['limit' => '120/1m'],
     AnalyzeController::class,
+]);
+
+// Full-strength Stockfish best move for the analysis board's optional
+// second-opinion arrow: { fen, movetime? }. Spawns a Stockfish per call, so
+// rate-limit it a little tighter than /analyze.
+$router->post('/sf-analyze', [
+    RateLimitMiddleware::class => ['limit' => '60/1m'],
+    SfAnalyzeController::class,
 ]);
 
 // Opening explorer for the analysis board: opening name + per-move eval

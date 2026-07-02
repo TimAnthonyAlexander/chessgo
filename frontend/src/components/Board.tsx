@@ -40,8 +40,13 @@ interface BoardProps {
     /** Optional display-only board override for optimistic move feedback. */
     overrideBoard?: BoardMap
     /** Optional move arrow (e.g. the engine's best move, or a hovered candidate)
-     * drawn over the board. `color` defaults to the accent (gold) best-move hue. */
-    arrow?: { from: Square; to: Square; color?: string } | null
+     * drawn over the board. `color` defaults to the accent (gold) best-move hue.
+     * `outline` rings the arrow in a second color — used to signal that another
+     * engine agrees on this move (so we draw ONE ringed arrow, not two stacked). */
+    arrow?: { from: Square; to: Square; color?: string; outline?: string } | null
+    /** Optional secondary arrow (e.g. Stockfish's best move alongside the engine's),
+     * drawn translucent and UNDER the primary arrow. */
+    arrow2?: { from: Square; to: Square; color?: string } | null
     /** The local player's own color — enables premove input while it isn't their
      * turn (i.e. while `interactive` is false). Omit/null to disable premoves. */
     premoveColor?: Color | null
@@ -101,6 +106,7 @@ export default function Board({
     onMove,
     overrideBoard,
     arrow,
+    arrow2,
     premoveColor,
     premove,
     onCancelPremove,
@@ -142,6 +148,9 @@ export default function Board({
     }
     const arrowGeom = arrow ? { a: center(arrow.from), b: center(arrow.to) } : null
     const arrowColor = arrow?.color ?? 'var(--accent)'
+    const arrowOutline = arrow?.outline ?? null
+    const arrow2Geom = arrow2 ? { a: center(arrow2.from), b: center(arrow2.to) } : null
+    const arrow2Color = arrow2?.color ?? 'var(--accent)'
 
     const ranks = orientation === 'w' ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7]
     const files = orientation === 'w' ? [0, 1, 2, 3, 4, 5, 6, 7] : [7, 6, 5, 4, 3, 2, 1, 0]
@@ -360,7 +369,7 @@ export default function Board({
                     }),
                 )}
 
-                {arrowGeom && (
+                {(arrowGeom || arrow2Geom) && (
                     <svg
                         className="board-arrow"
                         viewBox="0 0 80 80"
@@ -374,29 +383,90 @@ export default function Board({
                             zIndex: 5,
                         }}
                     >
+                        {/* markerUnits defaults to strokeWidth, so a wider line
+                            auto-scales its arrowhead — the outline line (drawn wider,
+                            underneath) leaves a colored rim around the primary arrow. */}
                         <defs>
-                            <marker
-                                id="bm-head"
-                                markerWidth="4"
-                                markerHeight="4"
-                                refX="2.6"
-                                refY="2"
-                                orient="auto"
-                            >
-                                <path d="M0,0 L4,2 L0,4 z" fill={arrowColor} />
-                            </marker>
+                            {arrow2Geom && (
+                                <marker
+                                    id="bm-head2"
+                                    markerWidth="4"
+                                    markerHeight="4"
+                                    refX="2.6"
+                                    refY="2"
+                                    orient="auto"
+                                >
+                                    <path d="M0,0 L4,2 L0,4 z" fill={arrow2Color} />
+                                </marker>
+                            )}
+                            {arrowGeom && arrowOutline && (
+                                <marker
+                                    id="bm-out"
+                                    markerWidth="4"
+                                    markerHeight="4"
+                                    refX="2.6"
+                                    refY="2"
+                                    orient="auto"
+                                >
+                                    <path d="M0,0 L4,2 L0,4 z" fill={arrowOutline} />
+                                </marker>
+                            )}
+                            {arrowGeom && (
+                                <marker
+                                    id="bm-head"
+                                    markerWidth="4"
+                                    markerHeight="4"
+                                    refX="2.6"
+                                    refY="2"
+                                    orient="auto"
+                                >
+                                    <path d="M0,0 L4,2 L0,4 z" fill={arrowColor} />
+                                </marker>
+                            )}
                         </defs>
-                        <line
-                            x1={arrowGeom.a.x}
-                            y1={arrowGeom.a.y}
-                            x2={arrowGeom.b.x}
-                            y2={arrowGeom.b.y}
-                            stroke={arrowColor}
-                            strokeWidth={1.7}
-                            strokeLinecap="round"
-                            markerEnd="url(#bm-head)"
-                            opacity={0.7}
-                        />
+                        {/* Secondary (e.g. Stockfish) arrow — translucent, drawn first
+                            so the primary sits on top when they don't overlap. */}
+                        {arrow2Geom && (
+                            <line
+                                x1={arrow2Geom.a.x}
+                                y1={arrow2Geom.a.y}
+                                x2={arrow2Geom.b.x}
+                                y2={arrow2Geom.b.y}
+                                stroke={arrow2Color}
+                                strokeWidth={1.7}
+                                strokeLinecap="round"
+                                markerEnd="url(#bm-head2)"
+                                opacity={0.5}
+                            />
+                        )}
+                        {/* Agreement ring: a wider outline-colored arrow under the
+                            primary, so the primary reads as bordered in that color. */}
+                        {arrowGeom && arrowOutline && (
+                            <line
+                                x1={arrowGeom.a.x}
+                                y1={arrowGeom.a.y}
+                                x2={arrowGeom.b.x}
+                                y2={arrowGeom.b.y}
+                                stroke={arrowOutline}
+                                strokeWidth={3}
+                                strokeLinecap="round"
+                                markerEnd="url(#bm-out)"
+                                opacity={0.85}
+                            />
+                        )}
+                        {arrowGeom && (
+                            <line
+                                x1={arrowGeom.a.x}
+                                y1={arrowGeom.a.y}
+                                x2={arrowGeom.b.x}
+                                y2={arrowGeom.b.y}
+                                stroke={arrowColor}
+                                strokeWidth={1.7}
+                                strokeLinecap="round"
+                                markerEnd="url(#bm-head)"
+                                opacity={0.7}
+                            />
+                        )}
                     </svg>
                 )}
 
