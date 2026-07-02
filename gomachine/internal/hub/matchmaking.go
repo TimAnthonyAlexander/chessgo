@@ -1,6 +1,31 @@
 package hub
 
-import "time"
+import (
+	"strings"
+	"time"
+)
+
+// queueKey composes the matchmaking-pool map key from a time-control pool and a
+// board variant. Standard chess keeps the BARE pool key (so standard matchmaking
+// is byte-identical to before variants); a non-standard variant prefixes
+// "<variant>|" so, e.g., Duck players only ever pair with other Duck players in
+// the same time control.
+func queueKey(pool, variant string) string {
+	if variant == "" || variant == variantStandard {
+		return pool
+	}
+	return variant + "|" + pool
+}
+
+// splitQueueKey is the inverse of queueKey: it recovers the time-control pool and
+// the variant from a composite key. A bare key (no "|") is a standard pool, so the
+// time-control pool and rating category are always derived from the tc part.
+func splitQueueKey(key string) (pool, variant string) {
+	if i := strings.IndexByte(key, '|'); i >= 0 {
+		return key[i+1:], key[:i]
+	}
+	return key, variantStandard
+}
 
 // Rating-aware matchmaking. Two players are paired only when their ratings (in
 // the pool's category) are close enough. The acceptable gap starts tight and
@@ -42,19 +67,21 @@ func pairAcceptable(gap int, waitA, waitB time.Duration) bool {
 	return gap <= ratingTolerance(waitA) && gap <= ratingTolerance(waitB)
 }
 
-// bestOpponent returns the waiting client in `pool` that best matches c (smallest
-// acceptable rating gap right now), or nil if none is acceptable. c is assumed
-// not yet in the pool.
-func (h *Hub) bestOpponent(c *Client, pool string, now time.Time) *Client {
-	rc := h.poolRating(c, pool)
+// bestOpponent returns the waiting client under queue `key` that best matches c
+// (smallest acceptable rating gap right now), or nil if none is acceptable. The
+// key may be composite (variant|pool); ratings/category are derived from the tc
+// part. c is assumed not yet in the pool.
+func (h *Hub) bestOpponent(c *Client, key string, now time.Time) *Client {
+	tcPool, _ := splitQueueKey(key)
+	rc := h.poolRating(c, tcPool)
 	waitC := now.Sub(c.queuedAt)
 	var best *Client
 	bestGap := maxRatingGap + 1
-	for _, other := range h.pools[pool] {
+	for _, other := range h.pools[key] {
 		if other == c {
 			continue
 		}
-		gap := absInt(rc - h.poolRating(other, pool))
+		gap := absInt(rc - h.poolRating(other, tcPool))
 		if gap < bestGap && pairAcceptable(gap, waitC, now.Sub(other.queuedAt)) {
 			best, bestGap = other, gap
 		}
@@ -68,35 +95,38 @@ func (h *Hub) bestOpponent(c *Client, pool string, now time.Time) *Client {
 // small, so the O(n²) closest-pair scan is cheap.
 func (h *Hub) matchWaiting() {
 	now := time.Now()
-	for pool := range h.pools {
-		tc, ok := parseTimeControl(pool)
+	for key := range h.pools {
+		tcPool, variant := splitQueueKey(key)
+		tc, ok := parseTimeControl(tcPool)
 		if !ok {
 			continue
 		}
 		for {
-			a, b := h.closestAcceptablePair(pool, now)
+			a, b := h.closestAcceptablePair(key, now)
 			if a == nil {
 				break
 			}
 			h.dequeue(a)
 			h.dequeue(b)
-			h.startGame(a, b, tc, pool)
+			h.startGame(a, b, tc, tcPool, variant)
 		}
-		if len(h.pools[pool]) == 0 {
-			delete(h.pools, pool)
+		if len(h.pools[key]) == 0 {
+			delete(h.pools, key)
 		}
 	}
 }
 
-// closestAcceptablePair finds the two waiting clients in `pool` with the smallest
-// mutually-acceptable rating gap, or (nil, nil) if no pair is acceptable.
-func (h *Hub) closestAcceptablePair(pool string, now time.Time) (*Client, *Client) {
-	list := h.pools[pool]
+// closestAcceptablePair finds the two waiting clients under queue `key` with the
+// smallest mutually-acceptable rating gap, or (nil, nil) if no pair is acceptable.
+// The key may be composite (variant|pool); the rating category comes from the tc part.
+func (h *Hub) closestAcceptablePair(key string, now time.Time) (*Client, *Client) {
+	tcPool, _ := splitQueueKey(key)
+	list := h.pools[key]
 	var ba, bb *Client
 	bestGap := maxRatingGap + 1
 	for i := 0; i < len(list); i++ {
 		for j := i + 1; j < len(list); j++ {
-			gap := absInt(h.poolRating(list[i], pool) - h.poolRating(list[j], pool))
+			gap := absInt(h.poolRating(list[i], tcPool) - h.poolRating(list[j], tcPool))
 			if gap < bestGap && pairAcceptable(gap, now.Sub(list[i].queuedAt), now.Sub(list[j].queuedAt)) {
 				ba, bb, bestGap = list[i], list[j], gap
 			}

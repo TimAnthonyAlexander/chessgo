@@ -8,6 +8,7 @@ import (
 
 	"github.com/timanthonyalexander/gomachine/internal/auth"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
+	"github.com/timanthonyalexander/gomachine/internal/duckchess"
 	"github.com/timanthonyalexander/gomachine/internal/engine"
 )
 
@@ -67,9 +68,9 @@ func (h *Hub) checkBotFill() {
 		return
 	}
 	now := time.Now()
-	for pool := range h.pools {
+	for key := range h.pools {
 		var kept, promote []*Client
-		for _, c := range h.pools[pool] {
+		for _, c := range h.pools[key] {
 			if now.Sub(c.queuedAt) >= h.botDelay {
 				promote = append(promote, c)
 			} else {
@@ -77,27 +78,29 @@ func (h *Hub) checkBotFill() {
 			}
 		}
 		if len(kept) == 0 {
-			delete(h.pools, pool)
+			delete(h.pools, key)
 		} else {
-			h.pools[pool] = kept
+			h.pools[key] = kept
 		}
-		tc, ok := parseTimeControl(pool)
+		tcPool, variant := splitQueueKey(key)
+		tc, ok := parseTimeControl(tcPool)
 		if !ok {
 			continue
 		}
 		for _, c := range promote {
 			c.pool = ""
-			h.startBotGame(c, tc, pool)
+			h.startBotGame(c, tc, tcPool, variant)
 		}
 	}
 }
 
 // startBotGame pairs a human with a fresh random bot opponent. To the client it
 // looks like any other match (name + rating in the matched payload).
-func (h *Hub) startBotGame(human *Client, tc timeControl, pool string) {
+func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variant string) {
 	if human.game != nil {
 		return
 	}
+	variant = normalizeVariant(variant)
 	// Anchor the bot near the human's rating in this category so a one-sided rated
 	// game is fair: the bot's displayed rating (what the human's Elo moves against)
 	// sits within a small jitter of the human's, and the engine plays at roughly
@@ -116,15 +119,24 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool string) {
 		tc:   tc,
 		pool: pool,
 		// A matchmaking bot fill-in is rated for a logged-in human (one-sided Elo
-		// vs the bot). Anonymous players can't be rated. Explicitly chosen /bot
-		// games never reach the hub, so they're unaffected.
-		rated:     !human.id.Anon,
+		// vs the bot) — but only in standard chess, mirroring startGameWith: variant
+		// games never feed the Glicko pools, so a Duck bot game is unrated. Anonymous
+		// players can't be rated. Explicitly chosen /bot games never reach the hub.
+		rated:     !human.id.Anon && variant == variantStandard,
 		clockMs:   [2]int64{tc.Base, tc.Base},
 		turnStart: time.Now(),
 		online:    [2]bool{true, true},
 		startFen:  chess.StartFEN,
-		// Bot backfill is always standard chess — Chess960 is human-vs-human only.
-		variant: variantStandard,
+		// Standard/Chess960 differ only in start position; both drive play off g.pos.
+		// Duck is a separate ruleset carried by g.duck (initialized just below).
+		variant: variant,
+	}
+	if variant == variantDuck {
+		// Duck backfill: the game runs off g.duck (from the standard start, duck not
+		// yet placed); g.pos stays the unused standard start so nil-safe paths hold.
+		if ds, err := duckchess.Parse(chess.StartFEN, ""); err == nil {
+			g.duck = &ds
+		}
 	}
 
 	humanColor := chess.White
@@ -152,8 +164,12 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool string) {
 // for human-vs-bot (one bot) and filler bot-vs-bot (both sides bots); a filler
 // game uses its own dedicated engine pool so it can't starve human bot-fill.
 func (h *Hub) scheduleBotMove(g *game) {
-	if g.over || g.isDuck() {
-		return // Duck Chess is human-vs-human only: no bot backfill, no fillers.
+	if g.over {
+		return
+	}
+	if g.isDuck() {
+		h.scheduleDuckBotMove(g)
+		return
 	}
 	bot, botColor, ok := g.botPlayer()
 	if !ok || g.pos.SideToMove() != botColor {
@@ -185,6 +201,51 @@ func (h *Hub) scheduleBotMove(g *game) {
 		remainingMs:    g.remainingMs(botColor),
 		legalCount:     len(g.pos.LegalMoveStrings(chess.SqNone)),
 	}, engines)
+}
+
+// scheduleDuckBotMove computes a Duck Chess bot reply OFF the Run goroutine and
+// hands it back via botMoves — the same channel the standard path uses, so the
+// move is applied on the Run goroutine (never mutating game state off it). Duck
+// uses the self-contained duckchess search (no engine pool / no shared TT), so it
+// leases nothing; there is no filler/960 duck path (Duck backfill is human-vs-bot
+// only). Snapshots all needed immutable values here, then reads nothing shared in
+// the goroutine.
+func (h *Hub) scheduleDuckBotMove(g *game) {
+	bot, botColor, ok := g.botPlayer()
+	if !ok || g.sideToMove() != botColor {
+		return
+	}
+	gameID := g.id
+	ply := len(g.moves)
+	fen := g.boardFEN()
+	duckSq := g.duckSquare()
+	rating := bot.rating
+	tc := g.tc
+	remainingMs := g.remainingMs(botColor)
+	legalCount := len(g.duck.LegalPieceMoves())
+
+	go func() {
+		start := time.Now()
+		st, err := duckchess.Parse(fen, duckSq)
+		if err != nil {
+			return
+		}
+		res := duckchess.BestMove(st, duckchess.Limits{Rating: rating})
+		if !res.HasMove {
+			return
+		}
+		// Pace with the same variant-agnostic delay as standard bots (real time, so it
+		// comes off the bot's clock).
+		delay := botThinkDelay(tc, remainingMs, legalCount, ply, rating)
+		if elapsed := time.Since(start); elapsed < delay {
+			time.Sleep(delay - elapsed)
+		}
+		select {
+		case h.botMoves <- botMoveResult{gameID: gameID, ply: ply, uci: res.MoveString()}:
+		case <-time.After(2 * time.Second):
+			// Run goroutine wedged/gone; drop rather than leak.
+		}
+	}()
 }
 
 // computeBotMove runs OFF the Run goroutine: search for a move (on a leased
@@ -228,7 +289,9 @@ func (h *Hub) applyBotMove(r botMoveResult) {
 	if g == nil || g.over {
 		return
 	}
-	if _, botColor, ok := g.botPlayer(); !ok || g.pos.SideToMove() != botColor || len(g.moves) != r.ply {
+	// Use sideToMove() (variant-agnostic): for duck, g.pos is the unused standard
+	// start, so g.pos.SideToMove() would be wrong — the real side lives in g.duck.
+	if _, botColor, ok := g.botPlayer(); !ok || g.sideToMove() != botColor || len(g.moves) != r.ply {
 		return
 	}
 	if _, ok := g.applyMove(r.uci); !ok {

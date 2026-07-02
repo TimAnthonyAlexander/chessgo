@@ -157,7 +157,7 @@ class GameSocket {
     private resumeTimer: number | null = null
     private attempts = 0
     private intentional = false
-    private wantQueue: string | null = null
+    private wantQueue: { pool: string; variant: Variant } | null = null
     // Private-challenge intents, replayed on (re)connect like wantQueue: the
     // creator's pending invite and a join-by-code attempt.
     private wantChallenge: {
@@ -205,7 +205,12 @@ class GameSocket {
                 this.set({ conn: 'open' })
                 // Replay whatever lobby intent we hold (only one of queue/create can be
                 // active; a join may ride alongside on a fresh deep-link connection).
-                if (this.wantQueue) this.rawSend({ type: 'queue', pool: this.wantQueue })
+                if (this.wantQueue)
+                    this.rawSend({
+                        type: 'queue',
+                        pool: this.wantQueue.pool,
+                        variant: this.wantQueue.variant,
+                    })
                 else if (this.wantChallenge)
                     this.rawSend({ type: 'createChallenge', ...this.wantChallenge })
                 if (this.wantJoin) this.rawSend({ type: 'joinChallenge', code: this.wantJoin })
@@ -225,11 +230,11 @@ class GameSocket {
         }
     }
 
-    async queue(pool: string): Promise<void> {
-        this.wantQueue = pool
+    async queue(pool: string, variant: Variant = 'standard'): Promise<void> {
+        this.wantQueue = { pool, variant }
         this.set({ status: 'queued', pool, error: null, game: null })
         await this.connect()
-        this.rawSend({ type: 'queue', pool })
+        this.rawSend({ type: 'queue', pool, variant })
     }
 
     cancelQueue() {

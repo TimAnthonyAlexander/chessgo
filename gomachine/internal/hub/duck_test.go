@@ -1,6 +1,8 @@
 package hub
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -115,6 +117,170 @@ func TestDuckRebuildTo(t *testing.T) {
 	}
 	if got := g.duck.SideChar(); got != "b" {
 		t.Errorf("rebuilt side to move = %q, want b", got)
+	}
+}
+
+// queueKey/splitQueueKey must round-trip, and standard must keep the BARE pool key
+// so standard matchmaking is byte-identical to the pre-variant behavior.
+func TestQueueKeyRoundTrip(t *testing.T) {
+	cases := []struct{ pool, variant string }{
+		{"3+0", variantStandard},
+		{"5+0", variantDuck},
+		{"10+5", variantChess960},
+		{"1+0", ""}, // empty variant is treated as standard
+	}
+	for _, tcx := range cases {
+		key := queueKey(tcx.pool, tcx.variant)
+		gotPool, gotVariant := splitQueueKey(key)
+		wantVariant := tcx.variant
+		if wantVariant == "" {
+			wantVariant = variantStandard
+		}
+		if gotPool != tcx.pool || gotVariant != wantVariant {
+			t.Errorf("queueKey/split(%q,%q) -> key %q -> (%q,%q), want (%q,%q)",
+				tcx.pool, tcx.variant, key, gotPool, gotVariant, tcx.pool, wantVariant)
+		}
+	}
+	if k := queueKey("3+0", variantStandard); k != "3+0" {
+		t.Errorf("standard must use the bare pool key, got %q", k)
+	}
+	if k := queueKey("3+0", ""); k != "3+0" {
+		t.Errorf("empty variant must use the bare pool key, got %q", k)
+	}
+	if queueKey("3+0", variantDuck) == "3+0" {
+		t.Error("duck must NOT collide with the bare standard pool key")
+	}
+}
+
+// startBotGame with variant "duck" builds a Duck game: a non-nil g.duck, exactly
+// one bot side, and UNRATED even for a logged-in human (variant games never feed
+// the Glicko pools — same gate as startGameWith).
+func TestStartBotGameDuck(t *testing.T) {
+	h := New(testSecret)
+	human := &Client{id: auth.Identity{UserID: "u1", Name: "human", Rating: 1500}, send: make(chan []byte, sendBuffer)}
+	h.startBotGame(human, timeControl{Base: 300_000, Inc: 0}, "5+0", variantDuck)
+
+	g := human.game
+	if g == nil {
+		t.Fatal("startBotGame did not attach a game")
+	}
+	if g.variant != variantDuck {
+		t.Errorf("variant = %q, want duck", g.variant)
+	}
+	if g.duck == nil {
+		t.Fatal("a duck bot game must have a non-nil duck state")
+	}
+	if g.rated {
+		t.Error("a duck bot game must be unrated (variant games never rated)")
+	}
+	if g.white.isBot == g.black.isBot {
+		t.Errorf("expected exactly one bot side, white=%v black=%v", g.white.isBot, g.black.isBot)
+	}
+}
+
+// Two Duck queuers in the same time control pair into a Duck game (variant duck,
+// unrated, opposite colors) — proving the (pool, variant) queue key pairs Duck
+// with Duck.
+func TestDuckQueuePairs(t *testing.T) {
+	h := New(testSecret)
+	go h.Run()
+	srv := httptest.NewServer(http.HandlerFunc(h.ServeWS))
+	defer srv.Close()
+
+	a := dialRated(t, srv.URL, "d1", "id-d1", 1500)
+	defer a.CloseNow()
+	b := dialRated(t, srv.URL, "d2", "id-d2", 1520)
+	defer b.CloseNow()
+	readType(t, a, "hello")
+	readType(t, b, "hello")
+
+	send(t, a, map[string]any{"type": "queue", "pool": "3+0", "variant": "duck"})
+	send(t, b, map[string]any{"type": "queue", "pool": "3+0", "variant": "duck"})
+
+	ma := readType(t, a, "matched")
+	mb := readType(t, b, "matched")
+	for _, m := range []map[string]any{ma, mb} {
+		if m["variant"] != variantDuck {
+			t.Errorf("matched variant = %v, want duck", m["variant"])
+		}
+		if m["rated"] != false {
+			t.Errorf("duck game must be unrated, rated = %v", m["rated"])
+		}
+	}
+	if ma["color"] == mb["color"] {
+		t.Errorf("both players got color %v", ma["color"])
+	}
+}
+
+// A standard queuer and a Duck queuer at identical rating + time control must NEVER
+// pair — they live under different queue keys.
+func TestDuckAndStandardNeverPair(t *testing.T) {
+	h := New(testSecret)
+	go h.Run()
+	srv := httptest.NewServer(http.HandlerFunc(h.ServeWS))
+	defer srv.Close()
+
+	std := dialRated(t, srv.URL, "std", "id-std", 1500)
+	defer std.CloseNow()
+	duck := dialRated(t, srv.URL, "duck", "id-duck-x", 1500)
+	defer duck.CloseNow()
+	readType(t, std, "hello")
+	readType(t, duck, "hello")
+
+	send(t, std, map[string]any{"type": "queue", "pool": "3+0"}) // standard (bare key)
+	send(t, duck, map[string]any{"type": "queue", "pool": "3+0", "variant": "duck"})
+	readType(t, std, "queued")
+	readType(t, duck, "queued")
+
+	expectNoMatch(t, std, 700*time.Millisecond)
+}
+
+// A lone Duck queuer past the bot-fill delay is promoted to a Duck bot game, and a
+// scheduled duck bot move (computed off the Run goroutine, returned via botMoves)
+// applies a legal composite — placing the duck on the board.
+func TestDuckBotBackfill(t *testing.T) {
+	h := New(testSecret)
+	h.EnableBotFill(6, 50*time.Millisecond, 1, 8, 1) // engine pool unused by the duck path
+	go h.Run()
+	srv := httptest.NewServer(http.HandlerFunc(h.ServeWS))
+	defer srv.Close()
+
+	a := dialRated(t, srv.URL, "ducker", "id-duck-bf", 1400)
+	defer a.CloseNow()
+	readType(t, a, "hello")
+
+	send(t, a, map[string]any{"type": "queue", "pool": "3+0", "variant": "duck"})
+	readType(t, a, "queued")
+
+	m := readType(t, a, "matched")
+	if m["variant"] != variantDuck {
+		t.Fatalf("matched variant = %v, want duck", m["variant"])
+	}
+	if m["rated"] != false {
+		t.Errorf("duck bot game must be unrated, rated = %v", m["rated"])
+	}
+
+	// If the human is White they move first (bot replies); if Black the bot (White)
+	// already moved. Rank 5/6 is always empty after any first White move (pawns reach
+	// rank 4, knights rank 3), so "e5" is a legal duck placement.
+	if m["color"] == "w" {
+		legal, _ := m["legalMoves"].([]any)
+		if len(legal) == 0 {
+			t.Fatal("no legal moves in matched payload")
+		}
+		send(t, a, map[string]any{"type": "move", "move": legal[0].(string) + ":e5"})
+		if st := readType(t, a, "state"); st["duck"] != "e5" {
+			t.Errorf("after our move duck = %v, want e5", st["duck"])
+		}
+	}
+
+	// The bot's reply: a legal composite applied on the Run goroutine places the duck.
+	bs := readType(t, a, "state")
+	if bs["variant"] != variantDuck {
+		t.Errorf("bot state variant = %v, want duck", bs["variant"])
+	}
+	if ds, _ := bs["duck"].(string); ds == "" {
+		t.Error("bot state duck square empty; a legal composite should place the duck")
 	}
 }
 

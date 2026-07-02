@@ -157,7 +157,7 @@ func (h *Hub) handle(cmd command) {
 	c := cmd.client
 	switch cmd.msg.Type {
 	case "queue":
-		h.queue(c, cmd.msg.Pool)
+		h.queue(c, cmd.msg.Pool, cmd.msg.Variant)
 	case "cancel":
 		h.dequeue(c)
 		c.trySend(mustJSON(out("idle", nil)))
@@ -194,7 +194,7 @@ func (h *Hub) handle(cmd command) {
 
 // --- matchmaking ---
 
-func (h *Hub) queue(c *Client, pool string) {
+func (h *Hub) queue(c *Client, pool, variant string) {
 	if c.game != nil {
 		h.sendErr(c, "already in a game")
 		return
@@ -204,20 +204,25 @@ func (h *Hub) queue(c *Client, pool string) {
 		h.sendErr(c, "invalid time control")
 		return
 	}
+	variant = normalizeVariant(variant)
 	h.dequeue(c)
 	now := time.Now()
 	c.queuedAt = now
+	// Key the queue by (pool, variant): standard keeps the bare pool key, so
+	// standard matchmaking is byte-identical; a variant only ever pairs within its
+	// own key. The tc/category are derived from the pool part (splitQueueKey).
+	key := queueKey(pool, variant)
 	// Pair immediately only with a rating-close opponent (within this fresh
 	// arrival's tight tolerance). Otherwise wait — matchWaiting widens the
 	// acceptable gap over time, and bot backfill catches a lone long-waiter.
-	if other := h.bestOpponent(c, pool, now); other != nil {
+	if other := h.bestOpponent(c, key, now); other != nil {
 		h.dequeue(other)
-		h.startGame(other, c, tc, pool)
+		h.startGame(other, c, tc, pool, variant)
 		return
 	}
-	c.pool = pool
-	h.pools[pool] = append(h.pools[pool], c)
-	c.trySend(mustJSON(out("queued", map[string]any{"pool": pool})))
+	c.pool = key
+	h.pools[key] = append(h.pools[key], c)
+	c.trySend(mustJSON(out("queued", map[string]any{"pool": pool, "variant": variant})))
 }
 
 func (h *Hub) dequeue(c *Client) {
@@ -234,14 +239,15 @@ func (h *Hub) dequeue(c *Client) {
 	c.pool = ""
 }
 
-func (h *Hub) startGame(a, b *Client, tc timeControl, pool string) {
+func (h *Hub) startGame(a, b *Client, tc timeControl, pool, variant string) {
 	white, black := a, b
 	if mrand.IntN(2) == 1 {
 		white, black = b, a
 	}
-	// Public pairing is rated only if both sides are accounts. Public matchmaking is
-	// always standard chess; Chess960 comes only through private challenges.
-	h.startGameWith(white, black, tc, pool, !white.id.Anon && !black.id.Anon, variantStandard)
+	// Public pairing is rated only if both sides are accounts; startGameWith further
+	// forces variant games unrated (only standard feeds the Glicko pools). The queue
+	// key carries the variant through (standard/960 threads its existing value).
+	h.startGameWith(white, black, tc, pool, !white.id.Anon && !black.id.Anon, variant)
 }
 
 // startGameWith creates a game between two clients with explicit colors and a

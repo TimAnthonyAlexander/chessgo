@@ -23,6 +23,12 @@ import SignUpWidget from '../components/home/SignUpWidget'
 import LeaderboardWidget from '../components/home/LeaderboardWidget'
 import ChallengeDialog from '../components/ChallengeDialog'
 import CustomTimeDialog from '../components/CustomTimeDialog'
+import type { Variant } from '../lib/variants'
+
+// The time control the Duck Chess quick-pairing queue uses. Duck matches only
+// other Duck queuers (or a Duck bot backfill after a short wait), so it has its
+// own pool separate from the standard time-control queues.
+const DUCK_POOL = '5+0'
 
 // Quick-pairing presets, grouped by time-control category.
 interface Preset {
@@ -59,8 +65,8 @@ export default function Home() {
         }
     }, [s.status, s.game?.id, navigate])
 
-    const queue = (label: string, pool: string) => {
-        void gameSocket.queue(pool)
+    const queue = (label: string, pool: string, variant: Variant = 'standard') => {
+        void gameSocket.queue(pool, variant)
         setSearch(label)
     }
 
@@ -226,6 +232,11 @@ export default function Home() {
                                         onClick={() => queue(`${p.cat} · ${p.time}`, p.time)}
                                     />
                                 ))}
+                                <DuckCell
+                                    onClick={() =>
+                                        queue(`Duck Chess · ${DUCK_POOL}`, DUCK_POOL, 'duck')
+                                    }
+                                />
                                 <CustomCell onClick={() => setCustomOpen(true)} />
                             </Box>
                         </Panel>
@@ -468,6 +479,61 @@ function TimeCell({ preset, onClick }: { preset: Preset; onClick: () => void }) 
                         {eloRange}
                     </Typography>
                 )}
+            </Box>
+        </Box>
+    )
+}
+
+function DuckCell({ onClick }: { onClick: () => void }) {
+    return (
+        <Box
+            onClick={onClick}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onClick()
+                }
+            }}
+            sx={{
+                position: 'relative',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 1,
+                py: { xs: 2.5, md: 3 },
+                bgcolor: 'var(--accent-soft)',
+                border: '1px solid var(--accent-line)',
+                borderRadius: '12px',
+                cursor: 'pointer',
+                overflow: 'hidden',
+                transition: 'border-color 0.12s ease, background 0.12s ease',
+                '&:hover': {
+                    borderColor: 'var(--accent)',
+                    bgcolor: 'var(--accent-soft-strong)',
+                },
+            }}
+        >
+            <Box component="span" sx={{ fontSize: { xs: 26, md: 30 }, lineHeight: 1 }} aria-hidden>
+                🦆
+            </Box>
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
+                <Typography
+                    sx={{
+                        fontFamily: 'var(--font-display)',
+                        fontSize: 14,
+                        fontWeight: 600,
+                        color: 'var(--accent)',
+                        lineHeight: 1,
+                    }}
+                >
+                    Duck Chess
+                </Typography>
+                <Typography sx={{ fontSize: 11.5, color: 'var(--text-dim)', fontWeight: 500 }}>
+                    {DUCK_POOL} · Blitz
+                </Typography>
             </Box>
         </Box>
     )
