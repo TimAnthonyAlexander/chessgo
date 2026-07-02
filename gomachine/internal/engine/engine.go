@@ -183,7 +183,7 @@ func (e *Engine) BestMoveConfig(pos *chess.Position, cfg LevelConfig, history []
 		if r, ok := e.tablebaseMove(pos); ok {
 			return r
 		}
-		limits := search.Limits{Depth: cfg.Depth, MoveTime: cfg.MoveTime}
+		limits := search.Limits{Depth: cfg.Depth, MoveTime: cfg.MoveTime, Nodes: cfg.Nodes}
 		r := e.searcher.SearchParallel(pos, limits, history, e.threads)
 		return BestResult{Move: r.BestMove, Score: r.Score, Depth: r.Depth,
 			Nodes: r.Nodes, PV: r.PV, MateIn: r.MateIn}
@@ -252,6 +252,43 @@ func (e *Engine) BestMoveForRatingTimedAggr(pos *chess.Position, rating int, mov
 		defer e.searcher.SetAggr(50) // return the pooled engine to neutral for other callers
 	}
 	return e.BestMoveForRatingTimed(pos, rating, movetime, history)
+}
+
+// BestMoveForRatingLimitedAggr plays at a target Elo but REPLACES the rating's
+// default think budget with an explicit limit — exactly one of lim.Depth,
+// lim.MoveTime or lim.Nodes is expected to be set (the admin engine-vs-engine UI
+// enforces this; if more than one is set they're applied in Depth→Nodes→MoveTime
+// precedence). aggr (0..100; 50 = neutral) is applied for this one search and
+// restored afterwards, exactly like BestMoveForRatingTimedAggr. The rating's
+// weakening (noise/blunder for low ratings) is preserved; only the budget changes.
+// Book/tablebase consultation is the caller's responsibility, matching the other
+// rating entry points.
+func (e *Engine) BestMoveForRatingLimitedAggr(pos *chess.Position, rating int, lim search.Limits, aggr int, history []uint64) BestResult {
+	if aggr < 0 {
+		aggr = 0
+	}
+	if aggr > 100 {
+		aggr = 100
+	}
+	if aggr != 50 {
+		e.searcher.SetAggr(aggr)
+		defer e.searcher.SetAggr(50) // return the pooled engine to neutral for other callers
+	}
+
+	cfg := configForRating(rating)
+	switch {
+	case lim.Depth > 0:
+		cfg.Depth = lim.Depth
+		cfg.MoveTime = 0
+		cfg.Nodes = 0
+	case lim.Nodes > 0:
+		cfg.Nodes = lim.Nodes
+		cfg.MoveTime = 0 // pure node budget — don't also bind on time
+	case lim.MoveTime > 0:
+		cfg.MoveTime = lim.MoveTime
+		cfg.Nodes = 0
+	}
+	return e.BestMoveConfig(pos, cfg, history)
 }
 
 // pickWeakened applies eval noise + occasional blunders to a root-move ranking.

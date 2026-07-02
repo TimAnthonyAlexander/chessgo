@@ -11,6 +11,7 @@ import "time"
 type LevelConfig struct {
 	Depth    int           // max search depth
 	MoveTime time.Duration // soft time budget
+	Nodes    uint64        // optional hard node cap (0 → none); admin engine-vs-engine only
 	NoiseCp  int           // uniform eval jitter in [-NoiseCp, +NoiseCp] centipawns
 	Blunder  float64       // probability of deliberately picking a weaker move
 }

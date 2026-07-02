@@ -13,11 +13,17 @@ use App\Services\GomachineClient;
  * two engines compete. Stateless (FEN-in), like the rest of the engine API.
  *
  *   POST /admin/engine-vs/move
- *     { fen, side: "gomachine"|"stockfish", rating?, elo?, movetime?, aggr? }
+ *     { fen, side: "gomachine"|"stockfish", rating?, elo?, movetime?, nodes?,
+ *       depth?, aggr?, book? }
  *   → { bestmove, san, fen, status, result?, sideToMove, claimableDraws, by }
  *
  * `aggr` (0..100, default 50 = neutral) is gomachine's aggression style; it applies
- * to the gomachine side ONLY (Stockfish never receives it).
+ * to the gomachine side ONLY (Stockfish never receives it). `book` (gomachine only)
+ * consults the opening book on the rating path.
+ *
+ * The search budget is pinned to EXACTLY ONE dimension per side: gomachine accepts
+ * movetime / nodes / depth (depth→nodes→movetime precedence); Stockfish accepts
+ * movetime / depth (depth wins). The frontend sends only the active one.
  *
  * Repetition history is intentionally omitted (the view is ephemeral); the
  * frontend ends games on checkmate/stalemate/fifty-move + a hard ply cap.
@@ -34,7 +40,13 @@ class EngineMatchController extends Controller
 
     public int $movetime = 100;
 
+    public int $nodes = 0;
+
+    public int $depth = 0;
+
     public int $aggr = 50;
+
+    public bool $book = false;
 
     public function __construct(private readonly GomachineClient $engine)
     {
@@ -51,15 +63,36 @@ class EngineMatchController extends Controller
             'fen' => 'required|string',
             'side' => 'in:gomachine,stockfish',
             'aggr' => 'integer|min:0|max:100',
+            'nodes' => 'integer|min:0',
+            'depth' => 'integer|min:0',
         ]);
 
-        $movetime = max(20, min(5000, $this->movetime)); // clamp the budget
+        $depth = max(0, min(60, $this->depth));  // fixed-depth budget (both engines)
+        $nodes = max(0, $this->nodes);           // fixed-nodes budget (gomachine only)
+        // Movetime only binds when neither depth nor nodes is the active limit; clamp
+        // it to a sane watch range then.
+        $movetime = max(20, min(5000, $this->movetime));
+
         if ($this->side === 'stockfish') {
-            // Stockfish never receives the aggression knob — it's a gomachine-only style.
-            $best = $this->engine->stockfishMove($this->fen, $this->elo, $movetime);
+            // Stockfish never receives the aggression/nodes/book knobs. Depth wins over
+            // movetime when set.
+            $mt = $depth > 0 ? 0 : $movetime;
+            $best = $this->engine->stockfishMove($this->fen, $this->elo, $mt, $depth);
         } else {
             $aggr = max(0, min(100, $this->aggr)); // clamp; 50 = neutral (engine is byte-identical)
-            $best = $this->engine->bestMove($this->fen, $this->rating, [], $movetime, $aggr);
+            // Send only the active budget dimension (the engine applies
+            // depth→nodes→movetime precedence, but keep it unambiguous).
+            $mt = ($depth > 0 || $nodes > 0) ? 0 : $movetime;
+            $best = $this->engine->bestMove(
+                $this->fen,
+                $this->rating,
+                [],
+                $mt,
+                $aggr,
+                $nodes,
+                $depth,
+                $this->book,
+            );
         }
 
         $uci = $best['bestmove'] ?? null;

@@ -13,6 +13,7 @@ import (
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 	"github.com/timanthonyalexander/gomachine/internal/engine"
 	"github.com/timanthonyalexander/gomachine/internal/openings"
+	"github.com/timanthonyalexander/gomachine/internal/search"
 	"github.com/timanthonyalexander/gomachine/internal/syzygy"
 )
 
@@ -350,11 +351,13 @@ type bestMoveRequest struct {
 	FEN     string   `json:"fen"`
 	History []string `json:"history"`
 	Limits  struct {
-		Rating   *int `json:"rating"` // target Elo (rating-first bot strength); takes priority over level
-		Level    *int `json:"level"`  // legacy 0..10 difficulty
-		Depth    int  `json:"depth"`
-		MoveTime int  `json:"movetime"` // milliseconds
-		Aggr     *int `json:"aggr"`     // aggression style 0..100 (nil/absent → 50 = neutral); applies to the rating path only
+		Rating   *int   `json:"rating"` // target Elo (rating-first bot strength); takes priority over level
+		Level    *int   `json:"level"`  // legacy 0..10 difficulty
+		Depth    int    `json:"depth"`
+		MoveTime int    `json:"movetime"` // milliseconds
+		Nodes    uint64 `json:"nodes"`    // hard node cap (0 → none); admin engine-vs-engine rating path only
+		Aggr     *int   `json:"aggr"`     // aggression style 0..100 (nil/absent → 50 = neutral); applies to the rating path only
+		Book     *bool  `json:"book"`     // admin engine-vs-engine: consult the opening book on the rating path (nil/absent → off)
 	} `json:"limits"`
 }
 
@@ -403,8 +406,34 @@ func (s *Server) handleBestMove(w http.ResponseWriter, r *http.Request) {
 		if req.Limits.Aggr != nil {
 			aggr = *req.Limits.Aggr
 		}
-		res = eng.BestMoveForRatingTimedAggr(pos, *req.Limits.Rating,
-			time.Duration(req.Limits.MoveTime)*time.Millisecond, aggr, hist)
+		// Admin engine-vs-engine opening-book toggle: the rating path normally does
+		// NOT consult the book (unlike SearchDirect), so honour it here at the handler
+		// level when the caller asks for it — a hit is the offline-searched move,
+		// strictly stronger than a live opening search. Movegen-validated in bookHit.
+		if req.Limits.Book != nil && *req.Limits.Book {
+			if e, m, hit := s.bookHit(pos); hit {
+				writeJSON(w, http.StatusOK, map[string]any{
+					"bestmove": m.String(),
+					"san":      pos.SAN(m),
+					"eval":     bookEval(e),
+					"pv":       e.PV,
+					"depth":    e.Depth,
+					"nodes":    0,
+					"nps":      0,
+					"level":    -1,
+					"opening":  openingFor(pos, req.History),
+				})
+				return
+			}
+		}
+		// Exactly one of depth/nodes/movetime is set by the admin UI; BestMoveForRating-
+		// LimitedAggr applies Depth→Nodes→MoveTime precedence if more than one leaks in.
+		lim := search.Limits{
+			Depth:    req.Limits.Depth,
+			MoveTime: time.Duration(req.Limits.MoveTime) * time.Millisecond,
+			Nodes:    req.Limits.Nodes,
+		}
+		res = eng.BestMoveForRatingLimitedAggr(pos, *req.Limits.Rating, lim, aggr, hist)
 	case req.Limits.Level != nil:
 		res = eng.BestMove(pos, *req.Limits.Level, hist)
 	case req.Limits.Depth > 0 || req.Limits.MoveTime > 0:

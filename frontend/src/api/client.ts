@@ -90,14 +90,22 @@ export interface EngineVsMove {
     reason?: string
 }
 
-/** Admin-only: play one ply of gomachine(rating) vs Stockfish(elo) and apply it. */
+/** Admin-only: play one ply of gomachine(rating) vs Stockfish(elo) and apply it.
+ *
+ * The search budget is pinned to EXACTLY ONE dimension per side — send only the
+ * active one (leave the others undefined/0): gomachine takes movetime | nodes |
+ * depth, Stockfish takes movetime | depth. `book` (gomachine only) consults the
+ * opening book on the rating path. */
 export function engineVsMove(params: {
     fen: string
     side: EngineSide
     rating?: number
     elo?: number
     movetime?: number
+    nodes?: number // gomachine only: fixed-nodes budget
+    depth?: number // fixed-depth budget (both engines)
     aggr?: number // gomachine aggression style 0..100 (50 = neutral); gomachine side only
+    book?: boolean // gomachine only: consult the opening book
 }): Promise<EngineVsMove> {
     return request<EngineVsMove>('/admin/engine-vs/move', {
         method: 'POST',

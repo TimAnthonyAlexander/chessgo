@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Box, Slider, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material'
+import {
+    Box,
+    Slider,
+    TextField,
+    ToggleButton,
+    ToggleButtonGroup,
+    Typography,
+} from '@mui/material'
 import {
     Bot,
     Cpu,
@@ -36,6 +43,14 @@ const MOVE_DELAY = 550 // ms between plies, so it's watchable
 // Blue board arrow drawn when hovering a candidate (book) move (matches Analysis).
 const BOOK_ARROW_COLOR = '#4c8bf5'
 
+// The square board sizes to whichever bound hits first, so it never overflows:
+//  - viewport height minus the top nav + page padding (short monitors),
+//  - viewport width minus the two side columns + gaps + padding (narrow monitors),
+//  - a generous absolute cap (huge monitors).
+// The left control column shares this expression as its minHeight so the board and
+// the two side cards stay vertically aligned.
+const BOARD_SIZE = 'min(calc(100vh - 112px), calc(100vw - 772px), 1160px)'
+
 const sideToMoveOf = (fen: string): Color => (fen.split(' ')[1] === 'b' ? 'b' : 'w')
 
 // ---- Strength scales -----------------------------------------------------------
@@ -67,24 +82,80 @@ function sfLabel(uci: number): string {
     return sfIsUnleashed(uci) ? 'Unleashed' : `~${sfDisplayElo(uci)} Elo`
 }
 
-// The left-card settings persist to localStorage, so whatever you last set becomes
-// your new defaults on the next visit.
-const SETTINGS_KEY = 'eve.settings'
-interface EveSettings {
-    gomaRating: number
-    sfElo: number
-    gomaSide: Color
-    budget: number
-    aggr: number
+// ---- Search-budget bounds ------------------------------------------------------
+const MOVETIME_MIN = 20
+const MOVETIME_MAX = 5000
+const MOVETIME_STEP = 20
+const DEPTH_MIN = 1
+const DEPTH_MAX = 30
+const NODES_MIN = 1_000
+const NODES_MAX = 50_000_000
+
+type EngineKind = EngineSide // 'gomachine' | 'stockfish'
+type LimitKind = 'movetime' | 'nodes' | 'depth' // stockfish uses movetime | depth only
+
+// One side's full configuration. gomachine fields (rating/aggr/book) and the
+// stockfish field (sfElo) coexist so switching engine keeps each side's last
+// settings; only the fields for the ACTIVE engine are ever sent.
+interface SideConfig {
+    engine: EngineKind
+    rating: number // gomachine target Elo (700..3500, display == engine rating)
+    aggr: number // gomachine aggression 0..100 (50 = neutral)
+    book: boolean // gomachine: consult the opening book on the rating path
+    sfElo: number // Stockfish UCI_Elo (1320..3100; 3100 = Unleashed/uncapped)
+    limitKind: LimitKind // which budget dimension is active
+    movetime: number // ms/move
+    nodes: number // fixed node budget (gomachine only)
+    depth: number // fixed search depth
 }
-// gomaRating is a DISPLAY value (700..3500); sfElo is Stockfish UCI_Elo (1320..3100).
-// aggr is gomachine's aggression style (0..100, 50 = neutral); gomachine side only.
-const DEFAULT_SETTINGS: EveSettings = {
-    gomaRating: 3500,
-    sfElo: 3000,
-    gomaSide: 'w',
-    budget: 300,
+
+const DEFAULT_WHITE: SideConfig = {
+    engine: 'gomachine',
+    rating: GOMA_RATING_MAX,
     aggr: 50,
+    book: false,
+    sfElo: 3000,
+    limitKind: 'movetime',
+    movetime: 300,
+    nodes: 100_000,
+    depth: 12,
+}
+const DEFAULT_BLACK: SideConfig = { ...DEFAULT_WHITE, engine: 'stockfish' }
+
+// The left-card settings persist to localStorage, so whatever you last set becomes
+// your new defaults on the next visit. Key is versioned (v2) — the old single-engine
+// shape is intentionally not migrated.
+const SETTINGS_KEY = 'eve.settings.v2'
+interface EveSettings {
+    white: SideConfig
+    black: SideConfig
+}
+const DEFAULT_SETTINGS: EveSettings = { white: DEFAULT_WHITE, black: DEFAULT_BLACK }
+
+const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))
+
+function coerceSide(p: Partial<SideConfig> | undefined, def: SideConfig): SideConfig {
+    if (!p || typeof p !== 'object') return def
+    return {
+        engine: p.engine === 'stockfish' ? 'stockfish' : 'gomachine',
+        rating:
+            typeof p.rating === 'number'
+                ? clamp(p.rating, GOMA_RATING_MIN, GOMA_RATING_MAX)
+                : def.rating,
+        aggr: typeof p.aggr === 'number' ? clamp(p.aggr, 0, 100) : def.aggr,
+        book: typeof p.book === 'boolean' ? p.book : def.book,
+        sfElo: typeof p.sfElo === 'number' ? clamp(p.sfElo, SF_UCI_MIN, SF_UNLEASHED_UCI) : def.sfElo,
+        limitKind:
+            p.limitKind === 'nodes' || p.limitKind === 'depth' || p.limitKind === 'movetime'
+                ? p.limitKind
+                : def.limitKind,
+        movetime:
+            typeof p.movetime === 'number'
+                ? clamp(p.movetime, MOVETIME_MIN, MOVETIME_MAX)
+                : def.movetime,
+        nodes: typeof p.nodes === 'number' ? clamp(p.nodes, NODES_MIN, NODES_MAX) : def.nodes,
+        depth: typeof p.depth === 'number' ? clamp(p.depth, DEPTH_MIN, DEPTH_MAX) : def.depth,
+    }
 }
 
 function loadSettings(): EveSettings {
@@ -93,21 +164,41 @@ function loadSettings(): EveSettings {
         if (!raw) return DEFAULT_SETTINGS
         const p = JSON.parse(raw) as Partial<EveSettings>
         return {
-            gomaRating:
-                typeof p.gomaRating === 'number' ? p.gomaRating : DEFAULT_SETTINGS.gomaRating,
-            sfElo: typeof p.sfElo === 'number' ? p.sfElo : DEFAULT_SETTINGS.sfElo,
-            gomaSide: p.gomaSide === 'b' ? 'b' : 'w',
-            budget: typeof p.budget === 'number' ? p.budget : DEFAULT_SETTINGS.budget,
-            aggr: typeof p.aggr === 'number' ? p.aggr : DEFAULT_SETTINGS.aggr,
+            white: coerceSide(p.white, DEFAULT_WHITE),
+            black: coerceSide(p.black, DEFAULT_BLACK),
         }
     } catch {
         return DEFAULT_SETTINGS // unparseable / storage unavailable → fall back to defaults
     }
 }
 
-/** Admin-only: watch our engine (gomachine, at a target Elo rating) play Stockfish
- * (at a UCI_Elo). The browser drives the game ply-by-ply through the admin proxy;
- * the engines themselves stay stateless. */
+// Build the engineVsMove params for the side to move, sending ONLY the active
+// budget dimension (the backend pins to exactly one; the others must be omitted).
+type MoveParams = Parameters<typeof engineVsMove>[0]
+function paramsForSide(cfg: SideConfig, fen: string): MoveParams {
+    if (cfg.engine === 'stockfish') {
+        const elo = sfIsUnleashed(cfg.sfElo) ? 0 : cfg.sfElo
+        // Stockfish supports movetime | depth only.
+        return cfg.limitKind === 'depth'
+            ? { fen, side: 'stockfish', elo, depth: cfg.depth }
+            : { fen, side: 'stockfish', elo, movetime: cfg.movetime }
+    }
+    const base = { fen, side: 'gomachine' as const, rating: cfg.rating, aggr: cfg.aggr, book: cfg.book }
+    if (cfg.limitKind === 'depth') return { ...base, depth: cfg.depth }
+    if (cfg.limitKind === 'nodes') return { ...base, nodes: cfg.nodes }
+    return { ...base, movetime: cfg.movetime }
+}
+
+const engineName = (k: EngineKind) => (k === 'gomachine' ? 'gomachine' : 'Stockfish')
+function sideDetail(cfg: SideConfig): string {
+    return cfg.engine === 'gomachine' ? `~${cfg.rating} Elo` : sfLabel(cfg.sfElo)
+}
+
+/** Admin-only: watch any pairing of our engine (gomachine) and Stockfish play each
+ * other. Each side is configured independently — engine, strength, search budget
+ * (movetime / nodes / depth), plus gomachine's aggression + opening book. The
+ * browser drives the game ply-by-ply through the admin proxy; the engines
+ * themselves stay stateless. */
 export default function EngineVsEngine() {
     const { user, status: authStatus } = useAuth()
     const navigate = useNavigate()
@@ -116,23 +207,18 @@ export default function EngineVsEngine() {
     const navFen = (useLocation().state as { fen?: string } | null)?.fen ?? null
     const startFen = navFen ?? START_FEN
 
-    // Settings — initialised from (and persisted back to) localStorage.
-    const [gomaRating, setGomaRating] = useState(() => loadSettings().gomaRating)
-    const [sfElo, setSfElo] = useState(() => loadSettings().sfElo)
-    const [gomaSide, setGomaSide] = useState<Color>(() => loadSettings().gomaSide)
-    const [budget, setBudget] = useState(() => loadSettings().budget) // ms per move, both engines
-    const [aggr, setAggr] = useState(() => loadSettings().aggr) // gomachine aggression 0..100
+    // Per-side settings — initialised from (and persisted back to) localStorage.
+    // White is the bottom player; Black is the top player (board is White-at-bottom).
+    const [white, setWhite] = useState<SideConfig>(() => loadSettings().white)
+    const [black, setBlack] = useState<SideConfig>(() => loadSettings().black)
 
     useEffect(() => {
         try {
-            localStorage.setItem(
-                SETTINGS_KEY,
-                JSON.stringify({ gomaRating, sfElo, gomaSide, budget, aggr }),
-            )
+            localStorage.setItem(SETTINGS_KEY, JSON.stringify({ white, black }))
         } catch {
             // storage unavailable / quota — settings just won't persist this session
         }
-    }, [gomaRating, sfElo, gomaSide, budget, aggr])
+    }, [white, black])
 
     // Game
     const [fen, setFen] = useState(startFen)
@@ -149,7 +235,8 @@ export default function EngineVsEngine() {
     const ply = moves.length
     const over = status !== 'ongoing'
     const sideToMove = sideToMoveOf(fen)
-    const moverSide: EngineSide = sideToMove === gomaSide ? 'gomachine' : 'stockfish'
+    const moverCfg = sideToMove === 'w' ? white : black
+    const moverSide: EngineSide = moverCfg.engine
 
     // Book panel: a tree of the game line so far, so the engine-owned OpeningPanel
     // can name the opening + show candidate-move eval bars for the live position.
@@ -177,14 +264,7 @@ export default function EngineVsEngine() {
         const id = setTimeout(async () => {
             thinkingRef.current = true
             try {
-                const res = await engineVsMove({
-                    fen,
-                    side: moverSide,
-                    movetime: budget,
-                    ...(moverSide === 'gomachine'
-                        ? { rating: gomaRating, aggr } // aggression is gomachine-only
-                        : { elo: sfIsUnleashed(sfElo) ? 0 : sfElo }),
-                })
+                const res = await engineVsMove(paramsForSide(moverCfg, fen))
                 if (cancelled) return
                 if (!res.bestmove || !res.fen) {
                     setRunning(false)
@@ -227,7 +307,7 @@ export default function EngineVsEngine() {
             cancelled = true
             clearTimeout(id)
         }
-    }, [running, ply, over, fen, sideToMove, moverSide, gomaRating, sfElo, budget, aggr])
+    }, [running, ply, over, fen, sideToMove, moverCfg])
 
     // Eval bar = ONE consistent evaluator: gomachine at full strength, re-reading the
     // current position after every ply regardless of who moved. We deliberately do NOT
@@ -309,10 +389,10 @@ export default function EngineVsEngine() {
     const caption = over
         ? `${statusLabel(status)}${result ? ` · ${result}` : ''}`
         : running
-          ? `${moverSide === 'gomachine' ? 'gomachine' : 'Stockfish'} to move…`
+          ? `${engineName(moverSide)} to move…`
           : ply > 0
             ? 'Paused'
-            : 'Set strengths and press Start'
+            : 'Configure both sides and press Start'
 
     return (
         <Box
@@ -330,34 +410,51 @@ export default function EngineVsEngine() {
                     display: 'grid',
                     gridTemplateColumns: {
                         xs: '1fr',
-                        md: '320px min(calc(100vh - 120px), calc(100vw - 752px), 880px) 320px',
+                        md: `340px ${BOARD_SIZE} 320px`,
                     },
                     columnGap: { md: 4 },
                     rowGap: 3,
                     width: { xs: '100%', md: 'fit-content' },
                     maxWidth: '100%',
                     mx: 'auto',
-                    alignItems: 'start',
+                    alignItems: 'stretch',
                 }}
             >
-                {/* Left — controls */}
-                <Box sx={{ display: { xs: 'block', md: 'block' }, width: '100%' }}>
-                    <Controls
-                        gomaRating={gomaRating}
-                        sfElo={sfElo}
-                        gomaSide={gomaSide}
-                        budget={budget}
-                        aggr={aggr}
+                {/* Left — two half-height control cards (top = Black player, bottom =
+                    White player), vertically centred in each half, with the global
+                    run/reset controls on the divider between them. */}
+                <Box
+                    sx={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'flex-start',
+                        gap: 1.5,
+                        width: '100%',
+                        minWidth: 0,
+                        minHeight: { md: BOARD_SIZE },
+                    }}
+                >
+                    <SideControls
+                        heading="Top — Black"
+                        color="b"
+                        cfg={black}
+                        onChange={(patch) => setBlack((c) => ({ ...c, ...patch }))}
+                        disabled={running}
+                    />
+
+                    <GlobalControls
                         running={running}
-                        disabledSettings={running}
-                        onRating={setGomaRating}
-                        onElo={setSfElo}
-                        onSide={setGomaSide}
-                        onBudget={setBudget}
-                        onAggr={setAggr}
+                        over={over}
                         onToggleRun={toggleRun}
                         onReset={reset}
-                        over={over}
+                    />
+
+                    <SideControls
+                        heading="Bottom — White"
+                        color="w"
+                        cfg={white}
+                        onChange={(patch) => setWhite((c) => ({ ...c, ...patch }))}
+                        disabled={running}
                     />
                 </Box>
 
@@ -370,11 +467,11 @@ export default function EngineVsEngine() {
                         gap: 1.25,
                     }}
                 >
-                    <EvalBar ev={whiteEval} orientation={gomaSide} />
+                    <EvalBar ev={whiteEval} orientation="w" />
                     <Box sx={{ flex: 1, minWidth: 0 }}>
                         <Board
                             fen={fen}
-                            orientation={gomaSide}
+                            orientation="w"
                             sideToMove={sideToMove}
                             legalMoves={[]}
                             lastMove={lastMove}
@@ -400,16 +497,16 @@ export default function EngineVsEngine() {
                         }}
                     >
                         <MatchupRow
-                            icon={<Cpu size={16} />}
-                            name="gomachine"
-                            detail={`~${gomaRating} Elo`}
-                            side={gomaSide}
+                            icon={black.engine === 'gomachine' ? <Cpu size={16} /> : <Bot size={16} />}
+                            name={engineName(black.engine)}
+                            detail={sideDetail(black)}
+                            side="b"
                         />
                         <MatchupRow
-                            icon={<Bot size={16} />}
-                            name="Stockfish"
-                            detail={sfLabel(sfElo)}
-                            side={gomaSide === 'w' ? 'b' : 'w'}
+                            icon={white.engine === 'gomachine' ? <Cpu size={16} /> : <Bot size={16} />}
+                            name={engineName(white.engine)}
+                            detail={sideDetail(white)}
+                            side="w"
                         />
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
                             <Typography
@@ -501,163 +598,252 @@ function MatchupRow({
     )
 }
 
-function Controls({
-    gomaRating,
-    sfElo,
-    gomaSide,
-    budget,
-    aggr,
-    running,
-    disabledSettings,
-    onRating,
-    onElo,
-    onSide,
-    onBudget,
-    onAggr,
-    onToggleRun,
-    onReset,
-    over,
+// One side's configuration card. Renders the engine picker plus only the controls
+// that apply to the chosen engine, and pins the search budget to exactly one of
+// movetime / nodes / depth.
+function SideControls({
+    heading,
+    color,
+    cfg,
+    onChange,
+    disabled,
 }: {
-    gomaRating: number
-    sfElo: number
-    gomaSide: Color
-    budget: number
-    aggr: number
-    running: boolean
-    disabledSettings: boolean
-    onRating: (n: number) => void
-    onElo: (n: number) => void
-    onSide: (c: Color) => void
-    onBudget: (n: number) => void
-    onAggr: (n: number) => void
-    onToggleRun: () => void
-    onReset: () => void
-    over: boolean
+    heading: string
+    color: Color
+    cfg: SideConfig
+    onChange: (patch: Partial<SideConfig>) => void
+    disabled: boolean
 }) {
+    const isGoma = cfg.engine === 'gomachine'
+    // Stockfish offers only movetime | depth; if the stored kind is 'nodes' (carried
+    // over from gomachine), treat it as movetime for the toggle + sending.
+    const effKind: LimitKind = !isGoma && cfg.limitKind === 'nodes' ? 'movetime' : cfg.limitKind
+
     return (
         <Box
             sx={{
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
                 borderRadius: '14px',
-                p: 2.5,
+                p: 2,
                 display: 'flex',
                 flexDirection: 'column',
-                gap: 2.5,
+                gap: 1.5,
                 boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
             }}
         >
-            <Box>
+            <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
                 <Typography
                     sx={{
-                        fontFamily: 'var(--font-display)',
-                        fontSize: 22,
-                        fontWeight: 700,
-                        lineHeight: 1.1,
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 10.5,
+                        letterSpacing: '0.16em',
+                        textTransform: 'uppercase',
+                        color: color === 'w' ? 'var(--accent)' : 'var(--text-dim)',
                     }}
                 >
-                    Engine vs Engine
-                </Typography>
-                <Typography sx={{ fontSize: 13, color: 'var(--text-dim)', mt: 0.5 }}>
-                    gomachine vs Stockfish — admin only.
+                    {heading}
                 </Typography>
             </Box>
 
-            <Box>
-                <Label>gomachine rating</Label>
-                <SettingValue>~{gomaRating} Elo</SettingValue>
-                <Slider
-                    value={gomaRating}
-                    onChange={(_, v) => onRating(v as number)}
-                    min={GOMA_RATING_MIN}
-                    max={GOMA_RATING_MAX}
-                    step={50}
-                    disabled={disabledSettings}
-                    sx={sliderSx}
-                />
-            </Box>
+            <ToggleButtonGroup
+                exclusive
+                fullWidth
+                size="small"
+                value={cfg.engine}
+                onChange={(_, v) => {
+                    if (!v) return
+                    // Switching to Stockfish: coerce a nodes budget (SF has no nodes mode)
+                    // to movetime so the sent budget stays valid.
+                    if (v === 'stockfish' && cfg.limitKind === 'nodes') {
+                        onChange({ engine: 'stockfish', limitKind: 'movetime' })
+                    } else {
+                        onChange({ engine: v as EngineKind })
+                    }
+                }}
+                disabled={disabled}
+                sx={toggleSx}
+            >
+                <ToggleButton value="gomachine">gomachine</ToggleButton>
+                <ToggleButton value="stockfish">Stockfish</ToggleButton>
+            </ToggleButtonGroup>
 
-            <Box>
-                <Label>gomachine aggression</Label>
-                <SettingValue>{aggr}</SettingValue>
-                <Slider
-                    value={aggr}
-                    onChange={(_, v) => onAggr(v as number)}
-                    min={0}
-                    max={100}
-                    step={5}
-                    disabled={disabledSettings}
-                    sx={sliderSx}
-                />
-                <Typography sx={{ fontSize: 11.5, color: 'var(--muted)', mt: 0.25 }}>
-                    50 = neutral · higher = more attacking (experimental). gomachine side only.
-                </Typography>
-            </Box>
-
-            <Box>
-                <Label>Stockfish strength</Label>
-                <SettingValue>{sfLabel(sfElo)}</SettingValue>
-                <Slider
-                    value={sfElo}
-                    onChange={(_, v) => onElo(v as number)}
+            {isGoma ? (
+                <>
+                    <SliderRow
+                        label="gomachine rating"
+                        value={`~${cfg.rating} Elo`}
+                        sliderValue={cfg.rating}
+                        min={GOMA_RATING_MIN}
+                        max={GOMA_RATING_MAX}
+                        step={50}
+                        disabled={disabled}
+                        onChange={(n) => onChange({ rating: n })}
+                    />
+                    <SliderRow
+                        label="Aggression"
+                        value={`${cfg.aggr}`}
+                        sliderValue={cfg.aggr}
+                        min={0}
+                        max={100}
+                        step={5}
+                        disabled={disabled}
+                        onChange={(n) => onChange({ aggr: n })}
+                    />
+                    <Box>
+                        <Label>Opening book</Label>
+                        <ToggleButtonGroup
+                            exclusive
+                            fullWidth
+                            size="small"
+                            value={cfg.book ? 'on' : 'off'}
+                            onChange={(_, v) => v && onChange({ book: v === 'on' })}
+                            disabled={disabled}
+                            sx={toggleSx}
+                        >
+                            <ToggleButton value="on">On</ToggleButton>
+                            <ToggleButton value="off">Off</ToggleButton>
+                        </ToggleButtonGroup>
+                    </Box>
+                </>
+            ) : (
+                <SliderRow
+                    label="Stockfish strength"
+                    value={sfLabel(cfg.sfElo)}
+                    sliderValue={cfg.sfElo}
                     min={SF_UCI_MIN}
                     max={SF_UNLEASHED_UCI}
                     step={10}
-                    disabled={disabledSettings}
-                    sx={sliderSx}
+                    disabled={disabled}
+                    onChange={(n) => onChange({ sfElo: n })}
                 />
-                <Typography sx={{ fontSize: 11.5, color: 'var(--muted)', mt: 0.25 }}>
-                    Shown on a truthful CCRL scale, not Stockfish's own (which reads far low).
-                    Top notch = Unleashed (uncapped, ~3700–4000).
-                </Typography>
-            </Box>
+            )}
 
+            {/* Search budget: exactly one of movetime / nodes / depth. */}
             <Box>
-                <Label>gomachine plays</Label>
+                <Label>Search limit</Label>
                 <ToggleButtonGroup
                     exclusive
                     fullWidth
                     size="small"
-                    value={gomaSide}
-                    onChange={(_, v) => v && onSide(v as Color)}
-                    disabled={disabledSettings}
+                    value={effKind}
+                    onChange={(_, v) => v && onChange({ limitKind: v as LimitKind })}
+                    disabled={disabled}
                     sx={toggleSx}
                 >
-                    <ToggleButton value="w">White</ToggleButton>
-                    <ToggleButton value="b">Black</ToggleButton>
+                    <ToggleButton value="movetime">Movetime</ToggleButton>
+                    {isGoma && <ToggleButton value="nodes">Nodes</ToggleButton>}
+                    <ToggleButton value="depth">Depth</ToggleButton>
                 </ToggleButtonGroup>
             </Box>
 
-            <Box>
-                <Label>Move budget</Label>
-                <SettingValue>{budget} ms / move</SettingValue>
-                <Slider
-                    value={budget}
-                    onChange={(_, v) => onBudget(v as number)}
-                    min={50}
-                    max={3000}
-                    step={50}
-                    sx={sliderSx}
+            {effKind === 'movetime' && (
+                <SliderRow
+                    label="Movetime"
+                    value={`${cfg.movetime} ms`}
+                    sliderValue={cfg.movetime}
+                    min={MOVETIME_MIN}
+                    max={MOVETIME_MAX}
+                    step={MOVETIME_STEP}
+                    disabled={disabled}
+                    onChange={(n) => onChange({ movetime: n })}
                 />
-                <Typography sx={{ fontSize: 11.5, color: 'var(--muted)', mt: 0.25 }}>
-                    Both engines think this long. Above ~2600, more time = stronger than the rating.
-                </Typography>
-            </Box>
+            )}
+            {effKind === 'depth' && (
+                <SliderRow
+                    label="Depth"
+                    value={`depth ${cfg.depth}`}
+                    sliderValue={cfg.depth}
+                    min={DEPTH_MIN}
+                    max={DEPTH_MAX}
+                    step={1}
+                    disabled={disabled}
+                    onChange={(n) => onChange({ depth: n })}
+                />
+            )}
+            {effKind === 'nodes' && isGoma && (
+                <Box>
+                    <Label>Nodes</Label>
+                    <TextField
+                        type="number"
+                        size="small"
+                        fullWidth
+                        value={cfg.nodes}
+                        disabled={disabled}
+                        onChange={(e) => {
+                            const n = Number(e.target.value)
+                            if (Number.isFinite(n)) onChange({ nodes: clamp(Math.round(n), NODES_MIN, NODES_MAX) })
+                        }}
+                        inputProps={{ min: NODES_MIN, max: NODES_MAX, step: 1000 }}
+                        sx={numberSx}
+                    />
+                    <Typography sx={{ fontSize: 11, color: 'var(--muted)', mt: 0.25 }}>
+                        Hard node cap ({NODES_MIN.toLocaleString()}–{NODES_MAX.toLocaleString()}).
+                    </Typography>
+                </Box>
+            )}
+        </Box>
+    )
+}
 
-            <Box sx={{ display: 'flex', gap: 1 }}>
-                <ActionBtn
-                    tone="primary"
-                    icon={running ? <Pause size={15} /> : <Play size={15} />}
-                    label={running ? 'Pause' : over ? 'Play again' : 'Start'}
-                    onClick={onToggleRun}
-                />
-                <ActionBtn
-                    tone="danger"
-                    icon={<RotateCcw size={15} />}
-                    label="Reset"
-                    onClick={onReset}
-                />
+function GlobalControls({
+    running,
+    over,
+    onToggleRun,
+    onReset,
+}: {
+    running: boolean
+    over: boolean
+    onToggleRun: () => void
+    onReset: () => void
+}) {
+    return (
+        <Box sx={{ display: 'flex', gap: 1 }}>
+            <ActionBtn
+                tone="primary"
+                icon={running ? <Pause size={15} /> : <Play size={15} />}
+                label={running ? 'Pause' : over ? 'Play again' : 'Start'}
+                onClick={onToggleRun}
+            />
+            <ActionBtn tone="danger" icon={<RotateCcw size={15} />} label="Reset" onClick={onReset} />
+        </Box>
+    )
+}
+
+function SliderRow({
+    label,
+    value,
+    sliderValue,
+    min,
+    max,
+    step,
+    disabled,
+    onChange,
+}: {
+    label: string
+    value: string
+    sliderValue: number
+    min: number
+    max: number
+    step: number
+    disabled: boolean
+    onChange: (n: number) => void
+}) {
+    return (
+        <Box>
+            <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+                <Label>{label}</Label>
+                <SettingValue>{value}</SettingValue>
             </Box>
+            <Slider
+                value={sliderValue}
+                onChange={(_, v) => onChange(v as number)}
+                min={min}
+                max={max}
+                step={step}
+                disabled={disabled}
+                sx={sliderSx}
+            />
         </Box>
     )
 }
@@ -693,10 +879,9 @@ function SettingValue({ children }: { children: React.ReactNode }) {
         <Typography
             sx={{
                 fontFamily: 'var(--font-mono)',
-                fontSize: 14,
+                fontSize: 13,
                 fontWeight: 700,
                 color: 'var(--accent)',
-                mb: 0.25,
             }}
         >
             {children}
@@ -707,9 +892,23 @@ function SettingValue({ children }: { children: React.ReactNode }) {
 const sliderSx = {
     color: 'var(--accent)',
     height: 5,
+    mt: 0.5,
     '& .MuiSlider-rail': { opacity: 0.4, bgcolor: 'var(--line)' },
     '& .MuiSlider-track': { border: 'none' },
     '& .MuiSlider-thumb': { width: 16, height: 16, bgcolor: '#f3eee2' },
+}
+
+const numberSx = {
+    mt: 0.75,
+    '& .MuiOutlinedInput-root': {
+        color: 'var(--text)',
+        fontFamily: 'var(--font-mono)',
+        fontSize: 14,
+        fontWeight: 700,
+        '& fieldset': { borderColor: 'var(--line)' },
+        '&:hover fieldset': { borderColor: 'var(--accent)' },
+        '&.Mui-focused fieldset': { borderColor: 'var(--accent)' },
+    },
 }
 
 const toggleSx = {
@@ -723,7 +922,7 @@ const toggleSx = {
         fontFamily: 'var(--font-display)',
         fontWeight: 600,
         fontSize: 13.5,
-        py: 0.8,
+        py: 0.7,
         '&.Mui-selected': {
             color: '#15171c',
             background: 'linear-gradient(180deg, #e3b56a, #d8a657)',

@@ -47,17 +47,40 @@ class GomachineClient
      * forwarded to the engine's rating path ONLY when non-null — a null (the
      * default for bot games / matchmaking) leaves the engine byte-identical.
      *
+     * The admin engine-vs-engine view can pin the search budget to EXACTLY ONE of
+     * movetime / nodes / depth (pass the others as 0), and optionally consult the
+     * opening book on the rating path via $book=true. Everyday callers (bot games,
+     * matchmaking) pass none of these and stay byte-identical to the plain rating
+     * search.
+     *
      * @param string[] $history
      * @return array<string, mixed> {bestmove, san, eval, pv, depth, nodes, nps}
      */
-    public function bestMove(string $fen, int $rating, array $history = [], int $movetimeMs = 0, ?int $aggr = null): array
-    {
+    public function bestMove(
+        string $fen,
+        int $rating,
+        array $history = [],
+        int $movetimeMs = 0,
+        ?int $aggr = null,
+        int $nodes = 0,
+        int $depth = 0,
+        bool $book = false,
+    ): array {
         $limits = ['rating' => $rating];
-        if ($movetimeMs > 0) {
+        // Exactly one budget dimension should be set; the engine applies
+        // depth→nodes→movetime precedence if more than one leaks through.
+        if ($depth > 0) {
+            $limits['depth'] = $depth; // fixed-depth search (admin engine-vs-engine)
+        } elseif ($nodes > 0) {
+            $limits['nodes'] = $nodes; // fixed-nodes search (admin engine-vs-engine)
+        } elseif ($movetimeMs > 0) {
             $limits['movetime'] = $movetimeMs; // budget override (admin engine-vs-engine)
         }
         if ($aggr !== null) {
             $limits['aggr'] = $aggr; // aggression style (admin engine-vs-engine, gomachine side)
+        }
+        if ($book) {
+            $limits['book'] = true; // consult the opening book on the rating path
         }
 
         return $this->post('/bestmove', [
@@ -70,15 +93,23 @@ class GomachineClient
     /**
      * Stockfish's move at a target UCI_Elo (for the admin engine-vs-engine view).
      *
+     * The admin engine-vs-engine view can pin Stockfish to a fixed search depth
+     * ($depth > 0), which takes precedence over the time budget engine-side.
+     *
      * @return array<string, mixed> {bestmove, san}
      */
-    public function stockfishMove(string $fen, int $elo, int $movetimeMs = 100): array
+    public function stockfishMove(string $fen, int $elo, int $movetimeMs = 100, int $depth = 0): array
     {
-        return $this->post('/sf-bestmove', [
+        $body = [
             'fen' => $fen,
             'elo' => $elo,
             'movetime' => $movetimeMs,
-        ]);
+        ];
+        if ($depth > 0) {
+            $body['depth'] = $depth; // fixed-depth search (takes precedence over movetime)
+        }
+
+        return $this->post('/sf-bestmove', $body);
     }
 
     /**

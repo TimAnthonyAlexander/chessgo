@@ -39,7 +39,8 @@ func stockfishPath() string {
 type sfMoveRequest struct {
 	FEN      string `json:"fen"`
 	Elo      int    `json:"elo"`      // UCI_Elo (1320..3190); <=0 = full strength
-	MoveTime int    `json:"movetime"` // ms; default 100
+	MoveTime int    `json:"movetime"` // ms; default 100 (used when depth <= 0)
+	Depth    int    `json:"depth"`    // fixed search depth; takes precedence over movetime when > 0
 }
 
 // handleStockfishMove returns Stockfish's move at a target UCI_Elo, for the admin
@@ -73,11 +74,19 @@ func (s *Server) handleStockfishMove(w http.ResponseWriter, r *http.Request) {
 	}
 	defer sf.Close()
 
-	mt := time.Duration(req.MoveTime) * time.Millisecond
-	if mt <= 0 {
-		mt = 100 * time.Millisecond
+	// Depth takes precedence over movetime when set (the admin engine-vs-engine UI
+	// picks exactly one). Otherwise fall back to a time budget (default 100ms).
+	var budget bench.UCIBudget
+	if req.Depth > 0 {
+		budget = bench.UCIBudget{Depth: req.Depth}
+	} else {
+		mt := time.Duration(req.MoveTime) * time.Millisecond
+		if mt <= 0 {
+			mt = 100 * time.Millisecond
+		}
+		budget = bench.UCIBudget{MoveTime: mt}
 	}
-	res, err := sf.AnalyzeBest(req.FEN, nil, bench.UCIBudget{MoveTime: mt})
+	res, err := sf.AnalyzeBest(req.FEN, nil, budget)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "stockfish move: " + err.Error()})
 		return
