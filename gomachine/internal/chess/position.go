@@ -91,6 +91,9 @@ func (pos *Position) Key() uint64 { return pos.key }
 // HalfmoveClock returns plies since the last capture or pawn move.
 func (pos *Position) HalfmoveClock() uint16 { return pos.halfmove }
 
+// FullmoveNumber returns the move number (starts at 1, increments after Black moves).
+func (pos *Position) FullmoveNumber() uint16 { return pos.fullmove }
+
 // HasCastlingRights reports whether either side retains any castling right.
 // Syzygy tablebases assume no castling, so the prober skips such positions.
 func (pos *Position) HasCastlingRights() bool { return pos.castling != 0 }

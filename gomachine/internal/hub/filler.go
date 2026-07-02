@@ -143,7 +143,7 @@ func (h *Hub) startFillerGame() {
 		// purely cosmetic: the `filler` flag (not `rated`) is what gates persistence
 		// and Elo in finish(), so a filler game is never recorded regardless.
 		rated:     true,
-		clockMs:   [2]int64{tc.Base, tc.Base},
+		clockMs:   fillerStartClocks(tc, pos),
 		turnStart: time.Now(),
 		online:    [2]bool{true, true},
 		startFen:  startFen,
@@ -154,6 +154,53 @@ func (h *Hub) startFillerGame() {
 	// Schedule the side to move (a bot). From the opening that's White; from a
 	// midgame seed it may be Black — scheduleBotMove keys off pos.SideToMove().
 	h.scheduleBotMove(g)
+}
+
+// fillerStartClocks returns believable starting clocks for a filler. An opening
+// seed (no moves played) keeps the full base time; a midgame seed instead shows
+// clocks that have plausibly been spent to reach that depth, with independent
+// per-side jitter so the two sides differ like a real game — so a game seeded
+// mid-battle no longer displays a pristine 5:00 / 5:00.
+func fillerStartClocks(tc timeControl, pos *chess.Position) [2]int64 {
+	plies := int(pos.FullmoveNumber()-1) * 2
+	if pos.SideToMove() == chess.Black {
+		plies++
+	}
+	if plies <= 0 {
+		return [2]int64{tc.Base, tc.Base} // opening seed: full clocks are correct
+	}
+	// White moves first, so from an odd ply count White has made one more move.
+	whiteMoves := (plies + 1) / 2
+	blackMoves := plies / 2
+
+	return [2]int64{fillerClockFor(tc, whiteMoves), fillerClockFor(tc, blackMoves)}
+}
+
+// fillerClockFor estimates the time a side has left after `moves` moves: a net
+// per-move spend (average think time minus the increment handed back), jittered,
+// then clamped so a midgame filler is never at a full clock nor near-flagging.
+func fillerClockFor(tc timeControl, moves int) int64 {
+	if moves <= 0 {
+		return tc.Base
+	}
+	perMove := float64(tc.Base)/36.0 - float64(tc.Inc) // net ms burned per move
+	if perMove < 0 {
+		perMove = 0
+	}
+	jitter := 0.6 + mrand.Float64()*0.8 // 0.6 .. 1.4
+	spent := int64(perMove * float64(moves) * jitter)
+
+	remaining := tc.Base - spent
+	floor := tc.Base * 12 / 100 // never near-flagging on the lobby preview
+	ceil := tc.Base * 90 / 100  // never a pristine full clock mid-game
+	if remaining > ceil {
+		remaining = ceil
+	}
+	if remaining < floor {
+		remaining = floor
+	}
+
+	return remaining
 }
 
 // clampBotRating keeps a displayed rating inside the bot rating band.
