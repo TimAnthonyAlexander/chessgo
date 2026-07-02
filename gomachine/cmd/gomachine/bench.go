@@ -335,6 +335,8 @@ func cmdBenchSPRT(args []string) {
 	bookPath := fs.String("book", "", "opening book (.epd/.fen or UCI move-lines); default: embedded")
 	seed := fs.Int("seed", 0, "shuffle opening-book order with this seed (0=none); give parallel SPRT processes distinct seeds to decorrelate their games")
 	engBookPath := fs.String("engine-book", "data/book.bin", "precomputed engine opening book consulted when a side has book=on (\"\" disables)")
+	newEngBookPath := fs.String("new-engine-book", "", "engine opening book for --new only (book-vs-book A/B; overrides --engine-book on the new side; needs --new \"book=on\")")
+	oldEngBookPath := fs.String("old-engine-book", "", "engine opening book for --old only (e.g. the shipped data/book.bin vs a recompiled one)")
 	tbPath := fs.String("tb-path", "", "Syzygy tablebase directory, probed when a side has tb=on (\"\" disables)")
 	pprofAddr := fs.String("pprof", "", "if set (e.g. 127.0.0.1:6480), serve net/http/pprof for CPU profiling this run (scrape with: go tool pprof http://addr/debug/pprof/profile?seconds=30)")
 	newThreads := fs.Int("new-threads", 1, "Lazy SMP threads for --new (use with --movetime)")
@@ -476,6 +478,8 @@ func cmdBenchSPRT(args []string) {
 		MaxPairs:       *maxPairs,
 		Book:           book,
 		EngineBook:     loadEngineBook(*engBookPath),
+		NewEngineBook:  loadEngineBook(*newEngBookPath),
+		OldEngineBook:  loadEngineBook(*oldEngBookPath),
 		Tablebase:      loadTablebase(*tbPath),
 		NewNet:         newNetP,
 		OldNet:         oldNetP,

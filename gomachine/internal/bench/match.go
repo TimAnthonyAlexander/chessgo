@@ -50,6 +50,13 @@ type Config struct {
 	// clean controlled A/B (--new "book=on" vs --old "book=off"). nil → no book.
 	EngineBook *book.Book
 
+	// NewEngineBook / OldEngineBook, when non-nil, override EngineBook for that side
+	// only — a book-vs-book A/B (e.g. a freshly recompiled book vs the shipped one)
+	// with both sides book=on. Books are per-engine (not a process global like the
+	// NNUE net), so this needs no concurrency=1. nil → fall back to EngineBook.
+	NewEngineBook *book.Book
+	OldEngineBook *book.Book
+
 	// Tablebase is the Syzygy endgame tablebase attached to BOTH engines; whether a
 	// side probes it is governed solely by its Params.UseTablebase flag, so it's a
 	// clean controlled A/B (--new "tb=on" vs --old "tb=off"). nil → no tablebase.
@@ -252,8 +259,15 @@ func RunSPRT(ctx context.Context, cfg Config, onProgress func(Progress)) Summary
 			defer wg.Done()
 			newP := player{eng: engine.NewWithParams(cfg.TTMB, cfg.NewParams), threads: maxThreads(cfg.NewThreads), lim: newLim, level: cfg.NewLevel, net: cfg.NewNet, multiNet: cfg.NewMultiNet, enrichedNet: cfg.NewEnrichedNet}
 			oldP := player{eng: engine.NewWithParams(cfg.TTMB, cfg.OldParams), threads: maxThreads(cfg.OldThreads), lim: oldLim, level: cfg.OldLevel, net: cfg.OldNet, multiNet: cfg.OldMultiNet, enrichedNet: cfg.OldEnrichedNet}
-			newP.eng.SetBook(cfg.EngineBook)
-			oldP.eng.SetBook(cfg.EngineBook)
+			newBook, oldBook := cfg.EngineBook, cfg.EngineBook
+			if cfg.NewEngineBook != nil {
+				newBook = cfg.NewEngineBook
+			}
+			if cfg.OldEngineBook != nil {
+				oldBook = cfg.OldEngineBook
+			}
+			newP.eng.SetBook(newBook)
+			oldP.eng.SetBook(oldBook)
 			newP.eng.SetTablebase(cfg.Tablebase)
 			oldP.eng.SetTablebase(cfg.Tablebase)
 			for open := range jobs {
