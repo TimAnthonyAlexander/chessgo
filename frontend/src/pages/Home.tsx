@@ -19,7 +19,6 @@ import { Panel, PanelHead } from '../components/home/Panel'
 import LiveTvWidget from '../components/home/LiveTvWidget'
 import DailyPuzzleWidget from '../components/home/DailyPuzzleWidget'
 import LeaderboardWidget from '../components/home/LeaderboardWidget'
-import RatingCards from '../components/home/RatingCards'
 import ChallengeDialog from '../components/ChallengeDialog'
 import CustomTimeDialog from '../components/CustomTimeDialog'
 
@@ -46,7 +45,6 @@ export default function Home() {
     const navigate = useNavigate()
     const s = useGameSocket()
     const live = s.game
-    const { user } = useAuth()
     const [search, setSearch] = useState<string | null>(null)
     const [challengeOpen, setChallengeOpen] = useState(false)
     const [customOpen, setCustomOpen] = useState(false)
@@ -157,12 +155,6 @@ export default function Home() {
                 {/* A game in progress is the most urgent thing on the page — for anyone. */}
                 {live && !live.ended && <ResumeBanner game={live} />}
 
-                {/* Logged-in: your ratings at a glance (renders nothing for anonymous). */}
-                {user && (
-                    <Box sx={{ mb: { xs: 2.5, md: 3 } }}>
-                        <RatingCards />
-                    </Box>
-                )}
 
                 {/* Dashboard: quick pairing + play + live/community widgets */}
                 <Box
@@ -396,6 +388,25 @@ function ResumeBanner({ game }: { game: LiveGameState }) {
 
 function TimeCell({ preset, onClick }: { preset: Preset; onClick: () => void }) {
     const { Icon, color } = CATEGORY_META[preset.cat]
+    const { user } = useAuth()
+
+    const categoryKeyMap: Record<Category, 'bullet' | 'blitz' | 'rapid' | 'classical'> = {
+        Bullet: 'bullet',
+        Blitz: 'blitz',
+        Rapid: 'rapid',
+        Classical: 'classical',
+    }
+
+    let eloRange: string | null = null
+    if (user) {
+        const key = categoryKeyMap[preset.cat]
+        const userRating = user[`rating_${key}` as const]
+        const rounded = Math.round(userRating / 50) * 50
+        const min = rounded - 100
+        const max = rounded + 100
+        eloRange = `~${min.toLocaleString()}–${max.toLocaleString()}`
+    }
+
     return (
         <Box
             onClick={onClick}
@@ -438,13 +449,20 @@ function TimeCell({ preset, onClick }: { preset: Preset; onClick: () => void }) 
             >
                 {preset.time}
             </Typography>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                <Box component="span" sx={{ display: 'flex', color }}>
-                    <Icon size={14} />
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                    <Box component="span" sx={{ display: 'flex', color }}>
+                        <Icon size={14} />
+                    </Box>
+                    <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)', fontWeight: 500 }}>
+                        {preset.cat}
+                    </Typography>
                 </Box>
-                <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)', fontWeight: 500 }}>
-                    {preset.cat}
-                </Typography>
+                {eloRange && (
+                    <Typography sx={{ fontSize: 11, color: 'var(--muted)' }}>
+                        {eloRange}
+                    </Typography>
+                )}
             </Box>
         </Box>
     )
