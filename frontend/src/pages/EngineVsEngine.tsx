@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
     Box,
+    Button,
     Slider,
     TextField,
     ToggleButton,
@@ -24,7 +25,7 @@ import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveList from '../components/MoveList'
 import OpeningPanel from '../components/OpeningPanel'
 import { buildFromMoves } from '../lib/analysisTree'
-import { ActionBtn, ErrorBanner, NavBtn } from '../components/PanelUI'
+import { ErrorBanner, NavBtn } from '../components/PanelUI'
 import {
     analyze,
     type Color,
@@ -435,23 +436,12 @@ export default function EngineVsEngine() {
                     }}
                 >
                     <SideControls
-                        heading="Top — Black"
-                        color="b"
                         cfg={black}
                         onChange={(patch) => setBlack((c) => ({ ...c, ...patch }))}
                         disabled={running}
                     />
 
-                    <GlobalControls
-                        running={running}
-                        over={over}
-                        onToggleRun={toggleRun}
-                        onReset={reset}
-                    />
-
                     <SideControls
-                        heading="Bottom — White"
-                        color="w"
                         cfg={white}
                         onChange={(patch) => setWhite((c) => ({ ...c, ...patch }))}
                         disabled={running}
@@ -538,6 +528,22 @@ export default function EngineVsEngine() {
                             </NavBtn>
                         </Box>
                     </Box>
+
+                    {/* Run controls */}
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                        <RunBtn
+                            primary
+                            icon={running ? <Pause size={16} /> : <Play size={16} />}
+                            label={running ? 'Pause' : over ? 'Play again' : 'Start'}
+                            onClick={toggleRun}
+                        />
+                        <RunBtn
+                            icon={<RotateCcw size={16} />}
+                            label="Reset"
+                            onClick={reset}
+                        />
+                    </Box>
+
                     {error && <ErrorBanner>{error}</ErrorBanner>}
                     <Box sx={{ height: 420, display: 'flex' }}>
                         <MoveList fill moves={moves} currentPly={ply} onSelectPly={() => {}} />
@@ -602,14 +608,10 @@ function MatchupRow({
 // that apply to the chosen engine, and pins the search budget to exactly one of
 // movetime / nodes / depth.
 function SideControls({
-    heading,
-    color,
     cfg,
     onChange,
     disabled,
 }: {
-    heading: string
-    color: Color
     cfg: SideConfig
     onChange: (patch: Partial<SideConfig>) => void
     disabled: boolean
@@ -625,27 +627,13 @@ function SideControls({
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
                 borderRadius: '14px',
-                p: 2,
+                p: 1.75,
                 display: 'flex',
                 flexDirection: 'column',
-                gap: 1.5,
+                gap: 1,
                 boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
             }}
         >
-            <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
-                <Typography
-                    sx={{
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: 10.5,
-                        letterSpacing: '0.16em',
-                        textTransform: 'uppercase',
-                        color: color === 'w' ? 'var(--accent)' : 'var(--text-dim)',
-                    }}
-                >
-                    {heading}
-                </Typography>
-            </Box>
-
             <ToggleButtonGroup
                 exclusive
                 fullWidth
@@ -662,7 +650,7 @@ function SideControls({
                     }
                 }}
                 disabled={disabled}
-                sx={toggleSx}
+                sx={{ ...toggleSx, mt: 0 }}
             >
                 <ToggleButton value="gomachine">gomachine</ToggleButton>
                 <ToggleButton value="stockfish">Stockfish</ToggleButton>
@@ -786,27 +774,56 @@ function SideControls({
     )
 }
 
-function GlobalControls({
-    running,
-    over,
-    onToggleRun,
-    onReset,
+// Run control, styled to match the Analysis board's footer action buttons: a gold
+// gradient for the primary (Start/Pause) button, a quiet surface for the secondary
+// (Reset). `primary` maps to that gold "active" look.
+function RunBtn({
+    icon,
+    label,
+    onClick,
+    primary,
 }: {
-    running: boolean
-    over: boolean
-    onToggleRun: () => void
-    onReset: () => void
+    icon: React.ReactNode
+    label: string
+    onClick: () => void
+    primary?: boolean
 }) {
     return (
-        <Box sx={{ display: 'flex', gap: 1 }}>
-            <ActionBtn
-                tone="primary"
-                icon={running ? <Pause size={15} /> : <Play size={15} />}
-                label={running ? 'Pause' : over ? 'Play again' : 'Start'}
-                onClick={onToggleRun}
-            />
-            <ActionBtn tone="danger" icon={<RotateCcw size={15} />} label="Reset" onClick={onReset} />
-        </Box>
+        <Button
+            onClick={onClick}
+            aria-label={label}
+            startIcon={icon}
+            disableRipple
+            sx={{
+                flex: 1,
+                height: 46,
+                textTransform: 'none',
+                fontFamily: 'var(--font-display)',
+                fontSize: 14,
+                fontWeight: 600,
+                letterSpacing: 0.2,
+                borderRadius: '10px',
+                gap: 0.4,
+                color: primary ? '#15171c' : 'var(--text)',
+                background: primary
+                    ? 'linear-gradient(180deg, #e3b56a, #d8a657)'
+                    : 'var(--surface-2)',
+                border: primary ? '1px solid var(--accent)' : '1px solid var(--line)',
+                boxShadow: primary ? '0 0 16px -4px rgba(216,166,87,0.6)' : 'none',
+                transition: 'background-color .15s, color .15s, border-color .15s, box-shadow .2s',
+                '& .MuiButton-startIcon': { mr: 0.2 },
+                '&:hover': {
+                    background: primary
+                        ? 'linear-gradient(180deg, #e7bd76, #dcab5d)'
+                        : 'var(--line)',
+                    color: primary ? '#15171c' : 'var(--accent)',
+                    borderColor: primary ? 'var(--accent)' : 'var(--accent-line)',
+                },
+                '&:active': { transform: 'translateY(1px)' },
+            }}
+        >
+            {label}
+        </Button>
     )
 }
 
@@ -892,7 +909,8 @@ function SettingValue({ children }: { children: React.ReactNode }) {
 const sliderSx = {
     color: 'var(--accent)',
     height: 5,
-    mt: 0.5,
+    mt: 0.25,
+    mb: 0,
     '& .MuiSlider-rail': { opacity: 0.4, bgcolor: 'var(--line)' },
     '& .MuiSlider-track': { border: 'none' },
     '& .MuiSlider-thumb': { width: 16, height: 16, bgcolor: '#f3eee2' },
@@ -912,7 +930,7 @@ const numberSx = {
 }
 
 const toggleSx = {
-    mt: 1,
+    mt: 0.5,
     gap: 0.75,
     '& .MuiToggleButton-root': {
         color: 'var(--text-dim)',
