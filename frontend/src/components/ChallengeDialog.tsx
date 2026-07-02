@@ -14,6 +14,8 @@ import { Check, Copy, Crown } from 'lucide-react'
 import { gameSocket } from '../lib/socket'
 import { useGameSocket } from '../lib/useGameSocket'
 import { useAuth } from '../lib/auth'
+import { type Variant, VARIANT_LABEL } from '../lib/variants'
+import VariantPicker from './VariantPicker'
 
 // Time-control presets, shared with the lobby. Kept here so the dialog is
 // self-contained (the values are simple strings the hub parses directly).
@@ -36,6 +38,7 @@ export default function ChallengeDialog({ open, onClose }: { open: boolean; onCl
     const [inc, setInc] = useState('3')
     const [color, setColor] = useState<ColorPref>('random')
     const [rated, setRated] = useState(true)
+    const [variant, setVariant] = useState<Variant>('standard')
 
     // Join-by-code state.
     const [joinCode, setJoinCode] = useState('')
@@ -86,7 +89,7 @@ export default function ChallengeDialog({ open, onClose }: { open: boolean; onCl
 
     const create = () => {
         if (!poolValid) return
-        void gameSocket.createChallenge(pool, color, effectiveRated)
+        void gameSocket.createChallenge(pool, color, effectiveRated, variant)
     }
 
     const join = () => {
@@ -130,6 +133,7 @@ export default function ChallengeDialog({ open, onClose }: { open: boolean; onCl
                         pool={challenge.pool}
                         color={challenge.color}
                         rated={challenge.rated}
+                        variant={challenge.variant}
                         copied={copied}
                         onCopyCode={() => copy('code', challenge.code)}
                         onCopyLink={() => copy('link', shareLink)}
@@ -229,6 +233,14 @@ export default function ChallengeDialog({ open, onClose }: { open: boolean; onCl
                                 onClick={() => setColor('b')}
                             />
                         </Box>
+
+                        {/* Variant */}
+                        <Label text="Variant" sx={{ mt: 2 }} />
+                        <VariantPicker
+                            value={variant}
+                            onChange={setVariant}
+                            only={['standard', 'chess960', 'duck']}
+                        />
 
                         {/* Rated */}
                         <Box
@@ -361,6 +373,7 @@ function InviteView({
     pool,
     color,
     rated,
+    variant,
     copied,
     onCopyCode,
     onCopyLink,
@@ -371,6 +384,7 @@ function InviteView({
     pool: string
     color: ColorPref
     rated: boolean
+    variant: Variant
     copied: 'code' | 'link' | null
     onCopyCode: () => void
     onCopyLink: () => void
@@ -465,6 +479,12 @@ function InviteView({
                 <span>{colorLabel}</span>
                 <span>·</span>
                 <span>{rated ? 'Rated' : 'Casual'}</span>
+                {variant !== 'standard' && (
+                    <>
+                        <span>·</span>
+                        <span>{VARIANT_LABEL[variant]}</span>
+                    </>
+                )}
             </Box>
 
             <CircularProgress size={22} sx={{ color: 'var(--accent)', mb: 2 }} />

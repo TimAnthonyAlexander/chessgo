@@ -18,6 +18,9 @@ type inMsg struct {
 	Color  string `json:"color,omitempty"`  // "w"|"b"|"random" creator side (createChallenge)
 	Rated  bool   `json:"rated,omitempty"`  // creator's rated preference (createChallenge)
 	Code   string `json:"code,omitempty"`   // private invite code (joinChallenge)
+	// Variant is "standard" (default), "chess960" or "duck" (createChallenge).
+	// Anything else is normalized to "standard" on the hub.
+	Variant string `json:"variant,omitempty"`
 }
 
 // timeControl is a base time + per-move increment, both in milliseconds.
@@ -62,6 +65,29 @@ func categoryForPool(pool string) string {
 		return "rapid"
 	default:
 		return "classical"
+	}
+}
+
+// Board variants understood by the hub. Standard and Chess960 differ only in the
+// start position (the chess package handles 960 castling, validation, SAN and
+// adjudication). Duck Chess is a wholly different ruleset driven by the
+// internal/duckchess package — the game branches on it throughout game.go/hub.go.
+const (
+	variantStandard = "standard"
+	variantChess960 = "chess960"
+	variantDuck     = "duck"
+)
+
+// normalizeVariant clamps any client-supplied variant to a known value. Anything
+// other than Chess960 or Duck is treated as standard chess.
+func normalizeVariant(v string) string {
+	switch v {
+	case variantChess960:
+		return variantChess960
+	case variantDuck:
+		return variantDuck
+	default:
+		return variantStandard
 	}
 }
 

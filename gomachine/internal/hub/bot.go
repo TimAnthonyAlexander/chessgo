@@ -123,6 +123,8 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool string) {
 		turnStart: time.Now(),
 		online:    [2]bool{true, true},
 		startFen:  chess.StartFEN,
+		// Bot backfill is always standard chess — Chess960 is human-vs-human only.
+		variant: variantStandard,
 	}
 
 	humanColor := chess.White
@@ -150,8 +152,8 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool string) {
 // for human-vs-bot (one bot) and filler bot-vs-bot (both sides bots); a filler
 // game uses its own dedicated engine pool so it can't starve human bot-fill.
 func (h *Hub) scheduleBotMove(g *game) {
-	if g.over {
-		return
+	if g.over || g.isDuck() {
+		return // Duck Chess is human-vs-human only: no bot backfill, no fillers.
 	}
 	bot, botColor, ok := g.botPlayer()
 	if !ok || g.pos.SideToMove() != botColor {

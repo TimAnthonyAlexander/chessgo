@@ -18,6 +18,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/timanthonyalexander/gomachine/internal/auth"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
+	"github.com/timanthonyalexander/gomachine/internal/duckchess"
 	"github.com/timanthonyalexander/gomachine/internal/syzygy"
 )
 
@@ -83,6 +84,7 @@ type FinishedGame struct {
 	ID       string
 	Pool     string
 	Rated    bool
+	Variant  string // "standard" | "chess960" | "duck"
 	White    auth.Identity
 	Black    auth.Identity
 	WhiteBot bool // bot opponents have a non-anon identity (for display) but no account
@@ -182,7 +184,7 @@ func (h *Hub) handle(cmd command) {
 	case "unwatch":
 		h.unwatchGame(c)
 	case "createChallenge":
-		h.createChallenge(c, cmd.msg.Pool, cmd.msg.Color, cmd.msg.Rated)
+		h.createChallenge(c, cmd.msg.Pool, cmd.msg.Color, cmd.msg.Rated, cmd.msg.Variant)
 	case "joinChallenge":
 		h.joinChallenge(c, cmd.msg.Code)
 	case "cancelChallenge":
@@ -237,15 +239,32 @@ func (h *Hub) startGame(a, b *Client, tc timeControl, pool string) {
 	if mrand.IntN(2) == 1 {
 		white, black = b, a
 	}
-	// Public pairing is rated only if both sides are accounts.
-	h.startGameWith(white, black, tc, pool, !white.id.Anon && !black.id.Anon)
+	// Public pairing is rated only if both sides are accounts. Public matchmaking is
+	// always standard chess; Chess960 comes only through private challenges.
+	h.startGameWith(white, black, tc, pool, !white.id.Anon && !black.id.Anon, variantStandard)
 }
 
 // startGameWith creates a game between two clients with explicit colors and a
 // caller-decided rated flag. Shared by public matchmaking (random colors, rated
 // iff both accounts) and private challenges (creator's color/rated preference).
-func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, rated bool) {
-	pos, _ := chess.ParseFEN(chess.StartFEN)
+func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, rated bool, variant string) {
+	variant = normalizeVariant(variant)
+	// Only standard chess feeds the time-control Glicko pools: Chess960 and Duck are
+	// separate rulesets, so a variant game never moves the standard ratings. This is
+	// the single funnel for both public matchmaking (always standard) and private
+	// challenges (any variant), so gating rated here covers every started game.
+	rated = rated && variant == variantStandard
+	// For standard/960 the start position is the ONLY thing the variant changes:
+	// standard uses the classic start FEN, Chess960 a random Fischer-random start.
+	// Everything downstream (applyMove, status, legal moves, takeback, clocks) works
+	// from g.pos / g.startFen — so g.startFen MUST be this FEN, not chess.StartFEN,
+	// or the takeback rebuild would replay from the wrong root. Duck is a wholly
+	// different ruleset carried by g.duck (initialized below) from the standard start.
+	startFen := chess.StartFEN
+	if variant == variantChess960 {
+		startFen = chess.RandomChess960FEN()
+	}
+	pos, _ := chess.ParseFEN(startFen)
 	g := &game{
 		id:        newID(),
 		white:     &player{client: white, id: white.id},
@@ -257,7 +276,15 @@ func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, r
 		clockMs:   [2]int64{tc.Base, tc.Base},
 		turnStart: time.Now(),
 		online:    [2]bool{true, true},
-		startFen:  chess.StartFEN,
+		startFen:  startFen,
+		variant:   variant,
+	}
+	if variant == variantDuck {
+		// Duck starts from the standard board with the duck not yet placed; g.pos is
+		// left as the (unused) standard start so any bot no-op path stays nil-safe.
+		if ds, err := duckchess.Parse(chess.StartFEN, ""); err == nil {
+			g.duck = &ds
+		}
 	}
 	white.game, black.game = g, g
 	h.games[g.id] = g
@@ -279,7 +306,9 @@ func (h *Hub) sendMatched(g *game, c *Client, color chess.Color) {
 		"color":       colStr,
 		"rated":       g.rated,
 		"pool":        g.pool,
-		"fen":         g.pos.FEN(),
+		"variant":     g.variant,
+		"fen":         g.boardFEN(),
+		"duck":        g.duckSquare(),
 		"timeControl": map[string]int64{"base": g.tc.Base, "inc": g.tc.Inc},
 		"clock":       map[string]int64{"w": g.clockMs[chess.White], "b": g.clockMs[chess.Black]},
 		"opponent":    map[string]any{"name": opp.Name, "rating": opp.RatingFor(categoryForPool(g.pool)), "anon": opp.Anon},
@@ -299,7 +328,7 @@ func (h *Hub) move(c *Client, uci string) {
 	if !ok {
 		return
 	}
-	if g.pos.SideToMove() != color {
+	if g.sideToMove() != color {
 		h.sendErr(c, "not your turn")
 		return
 	}
@@ -450,7 +479,7 @@ func (h *Hub) applyTakeback(g *game) {
 	}
 	requester := g.takebackBy
 	g.rebuildTo(target)
-	if g.pos.SideToMove() != requester && target >= 1 {
+	if g.sideToMove() != requester && target >= 1 {
 		target--
 		g.rebuildTo(target)
 	}
@@ -498,7 +527,9 @@ func (h *Hub) checkClocks() {
 		}
 		opp := side.Opposite()
 		result, reason := "1/2-1/2", "timeout-insufficient-material"
-		if g.pos.CanAnyoneMate(opp) {
+		// Duck Chess has no insufficient-material draw: a king can always be captured,
+		// so a flag is always a straight loss for the flagged side.
+		if g.isDuck() || g.pos.CanAnyoneMate(opp) {
 			reason = "timeout"
 			if opp == chess.White {
 				result = "1-0"
@@ -532,7 +563,7 @@ func (h *Hub) finish(g *game, result, reason string) {
 	// Filler (engine-vs-engine) games are never persisted or rated.
 	if h.onFinish != nil && !g.filler {
 		h.onFinish(FinishedGame{
-			ID: g.id, Pool: g.pool, Rated: g.rated,
+			ID: g.id, Pool: g.pool, Rated: g.rated, Variant: g.variant,
 			White: g.white.id, Black: g.black.id,
 			WhiteBot: g.white.isBot, BlackBot: g.black.isBot,
 			Result: result, Reason: reason, Moves: g.moves, SANs: g.sans,
@@ -615,7 +646,9 @@ func (h *Hub) resumeMsg(g *game, color chess.Color) map[string]any {
 		"color":          colStr,
 		"rated":          g.rated,
 		"pool":           g.pool,
-		"fen":            g.pos.FEN(),
+		"variant":        g.variant,
+		"fen":            g.boardFEN(),
+		"duck":           g.duckSquare(),
 		"sideToMove":     st.SideToMove,
 		"status":         st.State,
 		"check":          st.Check,

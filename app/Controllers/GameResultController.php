@@ -63,6 +63,7 @@ class GameResultController extends Controller
         $game->pool = $pool;
         $game->category = $category;
         $game->rated = $rated;
+        $game->variant = $this->normalizeVariant($b['variant'] ?? null);
         $game->result = $result;
         $game->reason = (string)($b['reason'] ?? '');
         $game->white_uid = (string)($white['uid'] ?? '');
@@ -106,6 +107,18 @@ class GameResultController extends Controller
         }
 
         return JsonResponse::created(['id' => $game->id]);
+    }
+
+    /**
+     * Coerce the hub's optional `variant` field into a known value. Older hubs
+     * (and all standard games) omit it, so absent/unknown falls back to
+     * 'standard'. 'duck' is whitelisted for forward-compat (live-duck not wired).
+     */
+    private function normalizeVariant(mixed $variant): string
+    {
+        $v = is_string($variant) ? $variant : '';
+
+        return in_array($v, ['standard', 'chess960', 'duck'], true) ? $v : 'standard';
     }
 
     private function authorized(): bool

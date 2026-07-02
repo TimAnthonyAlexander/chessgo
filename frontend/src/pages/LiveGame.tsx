@@ -12,7 +12,9 @@ import type { MoveEntry } from '../api/client'
 import { type Color, gameSocket, type LiveGameState, liveRemaining } from '../lib/socket'
 import { useGameSocket } from '../lib/useGameSocket'
 import { useBoardInteraction } from '../lib/useBoardInteraction'
+import { useDuckInteraction } from '../lib/useDuckInteraction'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
+import { VARIANT_LABEL } from '../lib/variants'
 import { authStore, useAuth } from '../lib/auth'
 import AdminBestMove from '../components/AdminBestMove'
 
@@ -78,16 +80,34 @@ export default function LiveGame() {
 
     // The local player can move when it's their turn and the socket is live.
     const myTurn = !!g && !g.ended && g.sideToMove === g.color && s.conn === 'open'
+    const isDuck = g?.variant === 'duck'
 
-    // Board interaction (optimistic overlay + move sound + submit) lives in one
-    // shared controller; we just feed it the game state and the socket's move call.
+    // Two board controllers, both hooks called unconditionally (only one is ever
+    // "live" — the other is inert with myTurn:false). Standard/Chess960 use the
+    // shared optimistic+premove controller; Duck Chess uses the two-phase
+    // piece-then-duck controller. Both submit over the SAME socket move call — the
+    // hub accepts a plain UCI or a composite "<pieceUci>:<duckSquare>". Unlike the
+    // bot page there's no reveal delay: the opponent is a human whose reply arrives
+    // asynchronously, so the player sees their own duck placement immediately.
     const interaction = useBoardInteraction({
         fen: g?.fen ?? '',
-        myTurn,
-        legalMoves: g && myTurn ? g.legalMoves : [],
+        myTurn: myTurn && !isDuck,
+        legalMoves: g && myTurn && !isDuck ? g.legalMoves : [],
         submit: (uci) => gameSocket.move(uci),
         canPremove: true,
     })
+    const duck = useDuckInteraction({
+        fen: g?.fen ?? '',
+        duck: g?.duck ?? null,
+        myTurn: myTurn && isDuck,
+        legalMoves: g && myTurn && isDuck ? g.legalMoves : [],
+        submit: (composite) => gameSocket.move(composite),
+    })
+
+    // The optimistic overlay + last-move highlight come from whichever controller
+    // is live for this variant.
+    const activeOverride = isDuck ? duck.override : interaction.override
+    const activeOptimisticLast = isDuck ? duck.optimisticLast : interaction.optimisticLast
 
     // Sound: voice the OPPONENT's newest move as the position advances. Our own
     // move is played synchronously in onMove (inside the click gesture) — both for
@@ -152,6 +172,11 @@ export default function LiveGame() {
         )
     }
 
+    // The duck square to render at the live position: the game's duck, hidden while
+    // the local player's own move is mid-flight (the duck is "in hand" during
+    // placement, until the authoritative position advances).
+    const shownDuck: string | null = isDuck ? (activeOverride ? null : g.duck) : null
+
     const moveEntries: MoveEntry[] = g.moves.map((m, i) => ({
         ply: i + 1,
         san: m.san,
@@ -205,6 +230,7 @@ export default function LiveGame() {
                         rated={g.rated}
                         color={g.color}
                         opponent={g.opponent}
+                        variant={g.variant}
                     />
                     <ChatPanel
                         messages={g.messages}
@@ -218,14 +244,17 @@ export default function LiveGame() {
                         orientation={g.color}
                         sideToMove={g.sideToMove}
                         legalMoves={myTurn ? g.legalMoves : []}
-                        lastMove={interaction.optimisticLast ?? g.lastMove}
-                        inCheck={g.check}
+                        lastMove={activeOptimisticLast ?? g.lastMove}
+                        inCheck={isDuck ? false : g.check}
                         interactive={myTurn}
-                        onMove={interaction.onMove}
-                        premoveColor={g.ended ? null : g.color}
-                        premove={interaction.premove}
+                        onMove={isDuck ? duck.onMove : interaction.onMove}
+                        premoveColor={g.ended || isDuck ? null : g.color}
+                        premove={isDuck ? null : interaction.premove}
                         onCancelPremove={interaction.cancelPremove}
-                        {...(interaction.override ? { overrideBoard: interaction.override } : {})}
+                        duck={shownDuck}
+                        duckTargets={isDuck ? duck.duckTargets : null}
+                        onPlaceDuck={duck.onPlaceDuck}
+                        {...(activeOverride ? { overrideBoard: activeOverride } : {})}
                     />
                 </Box>
 
@@ -265,6 +294,25 @@ export default function LiveGame() {
                         >
                             {g.pool}
                         </Typography>
+                        {g.variant !== 'standard' && (
+                            <Box
+                                sx={{
+                                    px: 1,
+                                    py: 0.3,
+                                    borderRadius: '6px',
+                                    fontFamily: 'var(--font-mono)',
+                                    fontSize: 10.5,
+                                    fontWeight: 700,
+                                    letterSpacing: '0.1em',
+                                    textTransform: 'uppercase',
+                                    color: 'var(--accent)',
+                                    bgcolor: 'var(--accent-soft)',
+                                    border: '1px solid var(--accent-line)',
+                                }}
+                            >
+                                {VARIANT_LABEL[g.variant]}
+                            </Box>
+                        )}
                         <Box
                             sx={{
                                 ml: 'auto',

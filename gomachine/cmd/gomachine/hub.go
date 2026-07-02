@@ -152,10 +152,11 @@ func cmdHub(args []string) {
 // logged, never fatal (the live game is already over and broadcast).
 func persistGame(baseURL, secret string, g hub.FinishedGame) {
 	body, err := json.Marshal(map[string]any{
-		"id":     g.ID,
-		"pool":   g.Pool,
-		"rated":  g.Rated,
-		"result": g.Result,
+		"id":      g.ID,
+		"pool":    g.Pool,
+		"rated":   g.Rated,
+		"variant": g.Variant,
+		"result":  g.Result,
 		"reason": g.Reason,
 		"white":  map[string]any{"uid": g.White.UserID, "name": g.White.Name, "anon": g.White.Anon, "bot": g.WhiteBot, "rating": g.White.Rating},
 		"black":  map[string]any{"uid": g.Black.UserID, "name": g.Black.Name, "anon": g.Black.Anon, "bot": g.BlackBot, "rating": g.Black.Rating},

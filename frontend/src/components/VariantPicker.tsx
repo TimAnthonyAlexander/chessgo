@@ -7,16 +7,22 @@ const ORDER: Variant[] = ['standard', 'chess960', 'duck']
  * Controlled variant selector for the "New game" setup card — Standard / Chess960 /
  * Duck Chess, each with its one-line blurb. Styled to match the Setup card's toggle
  * aesthetic (gold-selected pills on the dark surface).
+ *
+ * `only` restricts the rendered options to a subset (in ORDER's order) — e.g. the
+ * live challenge dialog offers just Standard / Chess960. Omit for all variants.
  */
 export default function VariantPicker({
     value,
     onChange,
     disabled = false,
+    only,
 }: {
     value: Variant
     onChange: (v: Variant) => void
     disabled?: boolean
+    only?: Variant[]
 }) {
+    const options = only ? ORDER.filter((v) => only.includes(v)) : ORDER
     return (
         <ToggleButtonGroup
             exclusive
@@ -27,7 +33,7 @@ export default function VariantPicker({
             onChange={(_, v) => v && onChange(v as Variant)}
             sx={pickerSx}
         >
-            {ORDER.map((v) => (
+            {options.map((v) => (
                 <ToggleButton key={v} value={v}>
                     <Box sx={{ textAlign: 'left', width: '100%' }}>
                         <Typography

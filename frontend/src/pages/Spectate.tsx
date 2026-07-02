@@ -252,9 +252,10 @@ export default function Spectate() {
                             sideToMove={g.sideToMove}
                             legalMoves={[]}
                             lastMove={g.lastMove}
-                            inCheck={g.check}
+                            inCheck={g.variant === 'duck' ? false : g.check}
                             interactive={false}
                             onMove={() => {}}
+                            duck={g.variant === 'duck' ? g.duck : null}
                             arrow={arrow}
                         />
                     </Box>

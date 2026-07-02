@@ -3,6 +3,7 @@
 // via useGameSocket (useSyncExternalStore). The browser auto-replies to the
 // server's ping frames (heartbeat), so we only implement reconnect here.
 import { getWsTicket } from '../api/client'
+import type { Variant } from './variants'
 
 export type Color = 'w' | 'b'
 
@@ -21,6 +22,7 @@ export interface LiveGameState {
     id: string
     color: Color // our color
     rated: boolean
+    variant: Variant // 'standard' unless a variant (e.g. Chess960) was chosen
     pool: string
     timeControl: { base: number; inc: number }
     opponent: { name: string; rating: number; anon: boolean }
@@ -28,6 +30,7 @@ export interface LiveGameState {
     sideToMove: Color
     lastMove: { from: string; to: string } | null
     check: boolean
+    duck: string | null // Duck Chess: the duck's square, or null (non-duck games / before first placement)
     status: string
     legalMoves: string[]
     clock: { w: number; b: number } // ms remaining at clockAt
@@ -52,6 +55,7 @@ export interface ChallengeState {
     pool: string
     color: 'w' | 'b' | 'random'
     rated: boolean
+    variant: Variant
 }
 
 export interface SocketState {
@@ -69,11 +73,18 @@ function parseLast(uci: string | undefined): { from: string; to: string } | null
     return uci ? { from: uci.slice(0, 2), to: uci.slice(2, 4) } : null
 }
 
+// The hub's Duck Chess field: a square string, "" (no duck yet), or absent
+// (standard/960). Normalize the empty/absent cases to null.
+function parseDuck(duck: unknown): string | null {
+    return typeof duck === 'string' && duck !== '' ? duck : null
+}
+
 function buildGame(m: Msg): LiveGameState {
     return {
         id: m.gameId,
         color: m.color,
         rated: !!m.rated,
+        variant: (m.variant as Variant) ?? 'standard',
         pool: m.pool,
         timeControl: m.timeControl,
         opponent: m.opponent,
@@ -81,6 +92,7 @@ function buildGame(m: Msg): LiveGameState {
         sideToMove: (m.fen as string).split(' ')[1] === 'b' ? 'b' : 'w',
         lastMove: null,
         check: false,
+        duck: parseDuck(m.duck),
         status: 'ongoing',
         legalMoves: m.legalMoves ?? [],
         clock: m.clock,
@@ -106,6 +118,7 @@ function buildResume(m: Msg): LiveGameState {
         id: m.gameId,
         color: m.color,
         rated: !!m.rated,
+        variant: (m.variant as Variant) ?? 'standard',
         pool: m.pool,
         timeControl: m.timeControl,
         opponent: m.opponent,
@@ -113,6 +126,7 @@ function buildResume(m: Msg): LiveGameState {
         sideToMove: m.sideToMove,
         lastMove: parseLast(m.lastMove),
         check: !!m.check,
+        duck: parseDuck(m.duck),
         status: m.status,
         legalMoves: m.legalMoves ?? [],
         clock: m.clock,
@@ -146,8 +160,12 @@ class GameSocket {
     private wantQueue: string | null = null
     // Private-challenge intents, replayed on (re)connect like wantQueue: the
     // creator's pending invite and a join-by-code attempt.
-    private wantChallenge: { pool: string; color: 'w' | 'b' | 'random'; rated: boolean } | null =
-        null
+    private wantChallenge: {
+        pool: string
+        color: 'w' | 'b' | 'random'
+        rated: boolean
+        variant: Variant
+    } | null = null
     private wantJoin: string | null = null
 
     getState = (): SocketState => this.state
@@ -228,13 +246,14 @@ class GameSocket {
         pool: string,
         color: 'w' | 'b' | 'random',
         rated: boolean,
+        variant: Variant = 'standard',
     ): Promise<void> {
         this.wantQueue = null
         this.wantJoin = null
-        this.wantChallenge = { pool, color, rated }
+        this.wantChallenge = { pool, color, rated, variant }
         this.set({ status: 'idle', pool: null, game: null, challenge: null, error: null })
         await this.connect()
-        this.rawSend({ type: 'createChallenge', pool, color, rated })
+        this.rawSend({ type: 'createChallenge', pool, color, rated, variant })
     }
 
     /** Join a friend's private invite by its code. On success the hub sends
@@ -385,6 +404,7 @@ class GameSocket {
                         pool: msg.pool,
                         color: msg.color,
                         rated: !!msg.rated,
+                        variant: (msg.variant as Variant) ?? 'standard',
                     },
                     error: null,
                 })
@@ -514,6 +534,7 @@ class GameSocket {
                 sideToMove: msg.sideToMove,
                 lastMove: parseLast(msg.lastMove),
                 check: !!msg.check,
+                duck: parseDuck(msg.duck),
                 status: msg.status,
                 legalMoves: msg.legalMoves ?? [],
                 clock: msg.clock,

@@ -164,6 +164,7 @@ func (h *Hub) startFillerGame() {
 		turnStart: time.Now(),
 		online:    [2]bool{true, true},
 		startFen:  startFen,
+		variant:   variantStandard, // watch fillers are standard chess (960 is human-only)
 		filler:    true,
 	}
 	h.games[g.id] = g

@@ -31,13 +31,14 @@ type challenge struct {
 	tc        timeControl
 	color     string // creator's side preference: "w", "b", or "random"
 	rated     bool   // creator asked for rated (still gated on both being accounts at join)
+	variant   string // board variant: "standard" or "chess960"
 	createdAt time.Time
 }
 
 // createChallenge mints a private invite for the creator and returns its code.
 // A client may hold at most one pending challenge and cannot be queued or in a
 // game at the same time.
-func (h *Hub) createChallenge(c *Client, pool, color string, rated bool) {
+func (h *Hub) createChallenge(c *Client, pool, color string, rated bool, variant string) {
 	if c.spectator {
 		return // spectators don't play
 	}
@@ -55,6 +56,7 @@ func (h *Hub) createChallenge(c *Client, pool, color string, rated bool) {
 	default:
 		color = "random"
 	}
+	variant = normalizeVariant(variant)
 	// One pending action per client: leave any queue and drop a prior challenge.
 	h.dequeue(c)
 	h.dropChallenge(c)
@@ -67,15 +69,17 @@ func (h *Hub) createChallenge(c *Client, pool, color string, rated bool) {
 		tc:        tc,
 		color:     color,
 		rated:     rated && !c.id.Anon, // an anonymous creator can never make it rated
+		variant:   variant,
 		createdAt: time.Now(),
 	}
 	h.challenges[code] = ch
 	c.challengeCode = code
 	c.trySend(mustJSON(out("challengeCreated", map[string]any{
-		"code":  code,
-		"pool":  pool,
-		"color": color,
-		"rated": ch.rated,
+		"code":    code,
+		"pool":    pool,
+		"color":   color,
+		"rated":   ch.rated,
+		"variant": ch.variant,
 	})))
 }
 
@@ -125,7 +129,7 @@ func (h *Hub) joinChallenge(c *Client, code string) {
 	h.removeChallenge(ch)
 	h.dequeue(creator) // make sure neither side lingers in a public pool
 	h.dequeue(c)
-	h.startGameWith(white, black, ch.tc, ch.pool, rated)
+	h.startGameWith(white, black, ch.tc, ch.pool, rated, ch.variant)
 }
 
 // cancelChallenge drops the client's own pending challenge (if any) and returns

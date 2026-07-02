@@ -72,9 +72,11 @@ func (h *Hub) spectateMsg(g *game) map[string]any {
 		"gameId":      g.id,
 		"pool":        g.pool,
 		"rated":       g.rated,
+		"variant":     g.variant,
 		"white":       sideInfo(g.white, cat),
 		"black":       sideInfo(g.black, cat),
-		"fen":         g.pos.FEN(),
+		"fen":         g.boardFEN(),
+		"duck":        g.duckSquare(),
 		"sideToMove":  st.SideToMove,
 		"status":      st.State,
 		"check":       st.Check,
@@ -112,9 +114,11 @@ type gameSummary struct {
 	ID         string      `json:"id"`
 	Pool       string      `json:"pool"`
 	Rated      bool        `json:"rated"`
+	Variant    string      `json:"variant"`
 	White      sideSummary `json:"white"`
 	Black      sideSummary `json:"black"`
 	FEN        string      `json:"fen"`
+	Duck       string      `json:"duck"` // duck square for duck games; "" otherwise
 	SideToMove string      `json:"sideToMove"`
 	LastMove   string      `json:"lastMove"`
 	Ply        int         `json:"ply"`
@@ -139,9 +143,11 @@ func (h *Hub) publishLobby() {
 			ID:         g.id,
 			Pool:       g.pool,
 			Rated:      g.rated,
+			Variant:    g.variant,
 			White:      sideSummary{g.white.id.Name, g.white.id.RatingFor(cat), g.white.id.Anon},
 			Black:      sideSummary{g.black.id.Name, g.black.id.RatingFor(cat), g.black.id.Anon},
-			FEN:        g.pos.FEN(),
+			FEN:        g.boardFEN(),
+			Duck:       g.duckSquare(),
 			SideToMove: st.SideToMove,
 			LastMove:   g.lastUci(),
 			Ply:        len(g.moves),

@@ -4,6 +4,7 @@
 // hub skips the player reattach/resume path, then `watch`es a single game id.
 import { getWsTicket } from '../api/client'
 import type { Color } from '../api/client'
+import type { Variant } from './variants'
 
 export interface SpectateSide {
     name: string
@@ -15,12 +16,14 @@ export interface SpectateGame {
     id: string
     pool: string
     rated: boolean
+    variant: Variant
     white: SpectateSide
     black: SpectateSide
     fen: string
     sideToMove: Color
     lastMove: { from: string; to: string } | null
     check: boolean
+    duck: string | null // Duck Chess: the duck's square, or null (non-duck / before first placement)
     status: string
     timeControl: { base: number; inc: number }
     clock: { w: number; b: number } // ms remaining at clockAt
@@ -43,17 +46,24 @@ function parseLast(uci: string | undefined): { from: string; to: string } | null
     return uci ? { from: uci.slice(0, 2), to: uci.slice(2, 4) } : null
 }
 
+// Duck Chess field from the hub: a square, "" (no duck yet), or absent (non-duck).
+function parseDuck(duck: unknown): string | null {
+    return typeof duck === 'string' && duck !== '' ? duck : null
+}
+
 function buildWatching(m: Msg): SpectateGame {
     return {
         id: m.gameId,
         pool: m.pool,
         rated: !!m.rated,
+        variant: (m.variant as Variant) ?? 'standard',
         white: m.white,
         black: m.black,
         fen: m.fen,
         sideToMove: m.sideToMove,
         lastMove: parseLast(m.lastMove),
         check: !!m.check,
+        duck: parseDuck(m.duck),
         status: m.status,
         timeControl: m.timeControl,
         clock: m.clock,
@@ -202,6 +212,7 @@ class SpectateSocket {
                 sideToMove: msg.sideToMove,
                 lastMove: parseLast(msg.lastMove),
                 check: !!msg.check,
+                duck: parseDuck(msg.duck),
                 status: msg.status,
                 clock: msg.clock,
                 clockAt: Date.now(),

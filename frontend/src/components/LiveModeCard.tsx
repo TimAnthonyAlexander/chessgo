@@ -2,19 +2,22 @@ import { type ReactNode } from 'react'
 import { Box, Typography } from '@mui/material'
 import { Crown, Rabbit, Timer, Zap } from 'lucide-react'
 import type { Color } from '../lib/socket'
+import { type Variant, VARIANT_LABEL } from '../lib/variants'
 
 /** Left-side card for a live human game: time-control category, rated/casual,
- * and opponent details. Mirrors GameModeCard (vs the engine). */
+ * variant (when not standard), and opponent details. Mirrors GameModeCard. */
 export default function LiveModeCard({
     pool,
     rated,
     color,
     opponent,
+    variant = 'standard',
 }: {
     pool: string
     rated: boolean
     color: Color
     opponent: { name: string; rating: number; anon: boolean }
+    variant?: Variant
 }) {
     const cat = categoryFor(pool)
 
@@ -41,6 +44,26 @@ export default function LiveModeCard({
                 >
                     {rated ? 'Rated' : 'Casual'}
                 </Typography>
+                {variant !== 'standard' && (
+                    <Box
+                        sx={{
+                            ml: 'auto',
+                            px: 1,
+                            py: 0.3,
+                            borderRadius: '6px',
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: 10.5,
+                            fontWeight: 700,
+                            letterSpacing: '0.1em',
+                            textTransform: 'uppercase',
+                            color: 'var(--accent)',
+                            bgcolor: 'var(--accent-soft)',
+                            border: '1px solid var(--accent-line)',
+                        }}
+                    >
+                        {VARIANT_LABEL[variant]}
+                    </Box>
+                )}
             </Box>
 
             <Typography

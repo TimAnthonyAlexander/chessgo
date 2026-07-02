@@ -603,6 +603,15 @@
             "table": "bot_game",
             "operation": "add_column",
             "warning": null
+        },
+        {
+            "id": "mig_e30137b094aa",
+            "sql": "ALTER TABLE `game` ADD COLUMN `variant` VARCHAR(255) NOT NULL DEFAULT 'standard'",
+            "destructive": false,
+            "generated_at": "2026-07-02T17:18:30+00:00",
+            "table": "game",
+            "operation": "add_column",
+            "warning": null
         }
     ]
 }
