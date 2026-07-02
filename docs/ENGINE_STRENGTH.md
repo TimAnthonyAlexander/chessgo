@@ -1515,3 +1515,64 @@ harmful*. So (a) the knowledge lives in **real king-zone attacks** (blocker-awar
 - **Strength-neutral aggression must be baked into the NNUE** (retrain with a sharpness/
   WDL-weighted target), the only route that survives depth. Deferred — plan in
   `docs/AGGRESSION.md`.
+
+## 25. Recompile the opening book after every eval upgrade (2026-07-02) — **+33 Elo, free**
+
+**Recurring maintenance, not a one-off.** `data/book.bin` is a *frozen snapshot of whatever
+engine searched it*. It stores, per opening position, that engine's best move + eval — and
+`SearchDirect`/serve return the stored move **verbatim, `nodes 0`, at the stored depth**, never
+re-searching an in-book position. So every eval/search upgrade after a book compile silently
+leaves the entire opening tree (first `maxplies=12` plies) playing the **old, weaker engine's
+choices** — in play *and* on the analysis board.
+
+### 25.1 What we found
+The shipped book was compiled **2026-06-20**, one day *before* NNUE landed (§11) — i.e. by the
+retired **HCE** engine, ~200-300 Elo below current v9. Symptom that surfaced it: the analysis
+board showed `3...e5` in the Rossolimo (`r1bqkbnr/pp1ppppp/2n5/1Bp5/4P3/5N2/PPPP1PPP/RNBQK2R b`)
+frozen at depth 14 and refused to deepen — because it was a **book hit**, not a search. The live
+v9 search flips to `3...g6` by depth ≥12, and Stockfish (d28) agrees (`g6` ≈ +8 cp over `e5`).
+
+Recompiled every position with the current v9 lean-threats net (same recipe: `movetime 3000`,
+`maxplies 12`). **The new book disagrees with the old on 44.6% of positions (2421/5429)** — the
+HCE→v9 upgrade rewrote nearly half the opening tree.
+
+### 25.2 SPRT (new book vs old, both `book=on`, identical v9 search)
+- **Fixed-nodes 40k: +33.0 ± 14.1 Elo, LLR +2.98 → ACCEPT H1** (241 pairs, W76 L30 D376,
+  pentanomial `[0 30 135 76 0]`, zero LL).
+- Movetime 100ms: sign-confirming, trending **+10..+17** at ~130 pairs (draw-heavy → slow, not
+  run to a formal cross; the fixed-nodes H1 is the verdict).
+
+**Fixed-nodes is a valid ruler here** — the rare eval-adjacent change where it doesn't inflate
+(§14.4). A book has **zero per-node cost difference**: it's a pre-search lookup, and once out of
+book both sides run byte-identical search. All the book changes is *which position the search
+starts from*, so a better book ⇒ better start ⇒ better result, monotonically, for any search.
+(This also refutes the "maybe our params are co-tuned to the old book" worry: params are tuned
+from the opening *suite*, not the engine book, and out-of-book play is book-independent.)
+
+### 25.3 The gotcha that almost baked another weak book
+`compile-book` uses `engine.New` (no book — good, it never copies the old book), but it did
+**not** load the prod net, so it would have searched with the embedded **v6** (or HCE fallback),
+not v9. Fixed: `cmdCompileBook` now calls `loadEnrichedDefault()` (routes eval through
+`data/nnue/lean.bin`), same as serve/hub. **Always confirm the compile logs
+`routing eval through v9` before trusting the output.**
+
+### 25.4 The routine (do this whenever the default eval changes — new net, big eval patch)
+```sh
+# 1. recompile with the CURRENT engine (SIMD build so movetime reaches full depth)
+GOEXPERIMENT=simd ~/go/bin/go1.27rc1 build -o bin/gomachine ./cmd/gomachine   # arm64; GOAMD64=v4 + go1.26.4 on prod
+./bin/gomachine compile-book --out data/book_new.bin --movetime 3000 --maxplies 12
+#    → MUST log "enriched eval: lean threats net loaded … routing eval through v9"
+
+# 2. SPRT new vs old (per-side book A/B; fixed-nodes is fine for a book)
+./bin/gomachine bench sprt --new "book=on" --old "book=on" \
+  --new-engine-book data/book_new.bin --old-engine-book data/book.bin \
+  --nodes 40000 --elo0 0 --elo1 5 --concurrency 10
+
+# 3. (optional) see WHERE they differ — diff by move, score each disagreement on one yardstick
+./bin/gomachine book-diff --old data/book.bin --new data/book_new.bin --sf stockfish
+
+# 4. accept → wire in (the embed is data/book.bin) and commit
+cp data/book_new.bin data/book.bin && rm data/book_new.bin
+```
+First landed `23bd81e`. Books are per-engine (not a process global like the net), so
+`--new-engine-book`/`--old-engine-book` need no `--concurrency 1`.
