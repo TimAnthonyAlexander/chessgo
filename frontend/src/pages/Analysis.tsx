@@ -65,7 +65,26 @@ const SF_ARROW_COLOR = '#b06bff'
 // lands, so the panel shows an instant shallow guess that refines as it deepens.
 // Coarsening the steps as they get expensive keeps the round-trip count low (the
 // deepest search dominates the cost anyway) while still feeling like it "ticks up".
-const ANALYSIS_DEPTHS = [6, 9, 12, 14, 16, 18, 20, 22]
+// Progressive-deepening ladder for the analysis board. Each rung is a depth
+// target plus the time ceiling granted to reach it. The early rungs keep tiny
+// ceilings so the "instant shallow guess, then refine" feel is preserved; the
+// deep tail hands out ever-larger budgets so that AS LONG AS the user stays on
+// one position the search keeps climbing (the effect aborts the moment they
+// navigate). The engine returns the instant it REACHES a target depth, so the
+// big ceilings only ever bite on positions too complex to get there quickly.
+const ANALYSIS_LADDER: { depth: number; ceilingMs: number }[] = [
+    { depth: 6, ceilingMs: 1200 },
+    { depth: 9, ceilingMs: 1500 },
+    { depth: 12, ceilingMs: 2000 },
+    { depth: 14, ceilingMs: 2500 },
+    { depth: 16, ceilingMs: 3500 },
+    { depth: 18, ceilingMs: 5000 },
+    { depth: 20, ceilingMs: 7000 },
+    { depth: 22, ceilingMs: 10000 },
+    { depth: 25, ceilingMs: 16000 },
+    { depth: 28, ceilingMs: 24000 },
+    { depth: 30, ceilingMs: 35000 },
+]
 
 type AutoMode = 'off' | 'play' | 'best'
 
@@ -239,20 +258,23 @@ export default function Analysis() {
         // a browser connection / engine worker and delay the new position's first guess.
         const ac = new AbortController()
         const run = async () => {
-            for (const target of ANALYSIS_DEPTHS) {
+            for (const { depth: target, ceilingMs } of ANALYSIS_LADDER) {
                 if (cancelled) return
                 if (target <= achieved) continue
 
                 let r: Awaited<ReturnType<typeof analyze>>
                 try {
-                    r = await analyze(fen, { depth: target, signal: ac.signal })
+                    r = await analyze(fen, { depth: target, movetime: ceilingMs, signal: ac.signal })
                 } catch {
                     return // engine error or aborted — keep whatever we already have
                 }
                 if (cancelled) return
 
                 const got = r.depth ?? target
-                if (got <= achieved) continue // don't apply a result that wouldn't deepen
+                // No deeper result even though this rung granted MORE time than the
+                // last: the engine has walled out for this position, so stop climbing
+                // rather than burning the ever-larger deep-rung budgets for nothing.
+                if (got <= achieved) return
 
                 // Coalesce a null PV to [] so the node reads as "resolved, no line".
                 if (!r.eval) {
@@ -282,7 +304,10 @@ export default function Analysis() {
                 achieved = got
 
                 if (r.eval?.type === 'mate') return // mate found — deeper won't change it
-                if (got < target) return // engine hit its time ceiling — the opinion has settled
+                // NOTE: got < target (ceiling cut this rung short) is NOT terminal —
+                // the next rung hands out a larger budget and may reach deeper. We
+                // only stop once a bigger budget yields no deeper result (handled by
+                // the `got <= achieved` guard at the top of the next iteration).
             }
         }
         void run()

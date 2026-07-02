@@ -95,10 +95,15 @@ class GomachineClient
             $limits['depth'] = $depth;
         }
 
+        // The analysis board's deep-rung calls pass a large movetime ceiling; give
+        // the HTTP request enough headroom to outlast it (never shorter than the
+        // configured default) so the client doesn't sever a legitimate deep search.
+        $timeoutMs = max($this->timeoutMs, $movetimeMs + 5000);
+
         return $this->post('/bestmove', [
             'fen' => $fen,
             'limits' => $limits,
-        ]);
+        ], $timeoutMs);
     }
 
     /**
