@@ -169,8 +169,14 @@ export default function DuckFreeBoard({ onExit }: { onExit: () => void }) {
     // highlight — the committed SAN isn't a plain UCI, so we don't guess one.
     const lastMove = duckI.override ? duckI.optimisticLast : null
 
+    // The engine's best move is a composite "<pieceUci>:<duckSquare>": the arrow shows
+    // the piece move (its from/to are the first four chars) and the ring marks the best
+    // DUCK placement — which an arrow can't express, and which the piece move is often
+    // "blocked" toward until you see where the duck belongs.
     const arrow =
         bestUci && !gameOver ? { from: bestUci.slice(0, 2), to: bestUci.slice(2, 4) } : null
+    const duckSq = bestUci && !gameOver ? bestUci.split(':')[1] : undefined
+    const circle = duckSq ? { square: duckSq } : null
 
     const goFirst = useCallback(() => setIdx(0), [])
     const goPrev = useCallback(() => setIdx((i) => Math.max(0, i - 1)), [])
@@ -231,6 +237,7 @@ export default function DuckFreeBoard({ onExit }: { onExit: () => void }) {
                 interactive={!gameOver}
                 onMove={duckI.onMove}
                 arrow={arrow}
+                circle={circle}
                 duck={shownDuck}
                 duckTargets={duckI.duckTargets}
                 onPlaceDuck={duckI.onPlaceDuck}
