@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Box, Switch, Tooltip, Typography } from '@mui/material'
 import { Sparkles } from 'lucide-react'
-import { analyze, type Analysis, type Color } from '../api/client'
+import { analyze, duckEval, type Analysis, type Color } from '../api/client'
 import { pvToSan } from '../lib/analysisTree'
 
 // Convert the engine's UCI best move (e.g. "e2e4", "b1c3") into SAN piece
@@ -10,6 +10,14 @@ import { pvToSan } from '../lib/analysisTree'
 function bestMoveSan(fen: string, uci: string | null): string {
     if (!uci) return '—'
     return pvToSan(fen, [uci])[0]?.san ?? uci
+}
+
+// Normalized best-move readout, so the standard (analyze) and Duck (duckEval)
+// paths render through the same UI. Duck has no depth to report.
+interface BestDisplay {
+    san: string
+    eval: Analysis['eval']
+    depth: number | null
 }
 
 // The engine reports its eval from the side-to-move's perspective; convert to
@@ -49,9 +57,24 @@ function saveEnabled(on: boolean): void {
 // Admin-only inline toggle: when on, fetches the full-strength engine best move
 // for the given position and shows it compactly (move · eval). Self-contained —
 // pages just render it (gated on the admin role) and feed the current FEN.
-export default function AdminBestMove({ fen, myTurn }: { fen: string; myTurn: boolean }) {
+//
+// Duck Chess: the standard engine has no duck rules, and its "best move" is often
+// exactly the square the duck now blocks — so in duck mode we query the DUCK engine
+// (`/duck/analyze`) instead. Its composite best move's SAN already carries the duck
+// glyph (e.g. "Nf6 🦆e2"), so the readout surfaces the best duck placement too.
+export default function AdminBestMove({
+    fen,
+    myTurn,
+    isDuck = false,
+    duck = null,
+}: {
+    fen: string
+    myTurn: boolean
+    isDuck?: boolean
+    duck?: string | null
+}) {
     const [enabled, setEnabled] = useState(loadEnabled)
-    const [best, setBest] = useState<Analysis | null>(null)
+    const [best, setBest] = useState<BestDisplay | null>(null)
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
 
@@ -66,9 +89,20 @@ export default function AdminBestMove({ fen, myTurn }: { fen: string; myTurn: bo
         let cancelled = false
         setLoading(true)
         setError(null)
-        analyze(fen)
-            .then((a) => {
-                if (!cancelled) setBest(a)
+        const req: Promise<BestDisplay> = isDuck
+            ? duckEval(fen, duck ?? '').then((d) => ({
+                  san: d.bestSan ?? d.bestmove ?? '—',
+                  eval: d.eval,
+                  depth: null,
+              }))
+            : analyze(fen).then((a) => ({
+                  san: bestMoveSan(fen, a.bestmove),
+                  eval: a.eval,
+                  depth: a.depth,
+              }))
+        req
+            .then((b) => {
+                if (!cancelled) setBest(b)
             })
             .catch((e) => {
                 if (!cancelled) setError(e instanceof Error ? e.message : 'Analysis failed')
@@ -79,7 +113,7 @@ export default function AdminBestMove({ fen, myTurn }: { fen: string; myTurn: bo
         return () => {
             cancelled = true
         }
-    }, [enabled, fen, myTurn])
+    }, [enabled, fen, myTurn, isDuck, duck])
 
     return (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
@@ -130,7 +164,7 @@ export default function AdminBestMove({ fen, myTurn }: { fen: string; myTurn: bo
                                 }}
                                 noWrap
                             >
-                                {bestMoveSan(fen, best.bestmove)}
+                                {best.san}
                             </Typography>
                             <Typography
                                 sx={{

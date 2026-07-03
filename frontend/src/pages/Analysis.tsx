@@ -533,6 +533,12 @@ export default function Analysis() {
     // agreement — rather than stacking two identical arrows.
     let arrow: { from: string; to: string; color?: string; outline?: string } | null = null
     let sfArrow: { from: string; to: string; color?: string } | null = null
+    // Duck Chess review: the best move is a composite "<pieceUci>:<duckSquare>". The
+    // arrow shows the piece move (its from/to are the first four chars, so the
+    // ":duckSquare" suffix is harmless), and this ring marks the best DUCK placement
+    // — which an arrow can't express and is often exactly where the piece move looked
+    // "blocked" from the standard-engine POV.
+    let circle: { square: string; color?: string } | null = null
     if (hoverUci) {
         arrow = { from: hoverUci.slice(0, 2), to: hoverUci.slice(2, 4), color: BOOK_ARROW_COLOR }
     } else {
@@ -543,6 +549,10 @@ export default function Analysis() {
                 from: goUci.slice(0, 2),
                 to: goUci.slice(2, 4),
                 ...(agree ? { outline: SF_ARROW_COLOR } : {}),
+            }
+            if (isDuck) {
+                const duckSq = goUci.split(':')[1]
+                if (duckSq) circle = { square: duckSq }
             }
         }
         if (sfUci && !agree) {
@@ -749,6 +759,7 @@ export default function Analysis() {
                 onMove={onMove}
                 arrow={arrow}
                 arrow2={sfArrow}
+                circle={circle}
                 duck={isDuck ? current.duck || null : null}
             />
         </BoardPage>

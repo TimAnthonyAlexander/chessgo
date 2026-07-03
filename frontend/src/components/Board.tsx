@@ -49,6 +49,10 @@ interface BoardProps {
     /** Optional secondary arrow (e.g. Stockfish's best move alongside the engine's),
      * drawn translucent and UNDER the primary arrow. */
     arrow2?: { from: Square; to: Square; color?: string } | null
+    /** Optional highlight ring on a single square — used for Duck Chess to mark the
+     * engine's best DUCK placement (the second half of a composite best move, which
+     * an arrow can't express). `color` defaults to the accent (gold) best-move hue. */
+    circle?: { square: Square; color?: string } | null
     /** The local player's own color — enables premove input while it isn't their
      * turn (i.e. while `interactive` is false). Omit/null to disable premoves. */
     premoveColor?: Color | null
@@ -148,6 +152,7 @@ export default function Board({
     overrideBoard,
     arrow,
     arrow2,
+    circle,
     premoveColor,
     premove,
     onCancelPremove,
@@ -199,6 +204,8 @@ export default function Board({
     const arrowOutline = arrow?.outline ?? null
     const arrow2Geom = arrow2 ? { a: center(arrow2.from), b: center(arrow2.to) } : null
     const arrow2Color = arrow2?.color ?? 'var(--accent)'
+    const circleGeom = circle ? center(circle.square) : null
+    const circleColor = circle?.color ?? 'var(--accent)'
 
     const ranks = orientation === 'w' ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7]
     const files = orientation === 'w' ? [0, 1, 2, 3, 4, 5, 6, 7] : [7, 6, 5, 4, 3, 2, 1, 0]
@@ -434,7 +441,7 @@ export default function Board({
                     }),
                 )}
 
-                {(arrowGeom || arrow2Geom) && (
+                {(arrowGeom || arrow2Geom || circleGeom) && (
                     <svg
                         className="board-arrow"
                         viewBox="0 0 80 80"
@@ -514,6 +521,20 @@ export default function Board({
                                     opacity={0.7}
                                 />
                             )
+                        )}
+                        {/* Best DUCK-placement ring (Duck Chess): a filled, ringed
+                            circle on the square where the engine wants the duck. */}
+                        {circleGeom && (
+                            <circle
+                                cx={circleGeom.x}
+                                cy={circleGeom.y}
+                                r={4}
+                                fill={circleColor}
+                                fillOpacity={0.22}
+                                stroke={circleColor}
+                                strokeWidth={0.9}
+                                opacity={0.85}
+                            />
                         )}
                     </svg>
                 )}

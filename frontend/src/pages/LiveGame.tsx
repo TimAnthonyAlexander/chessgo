@@ -344,6 +344,8 @@ export default function LiveGame() {
                             <AdminBestMove
                                 fen={g.fen}
                                 myTurn={!g.ended && g.sideToMove === g.color}
+                                isDuck={isDuck}
+                                duck={g.duck ?? null}
                             />
                         </Box>
                     )}
