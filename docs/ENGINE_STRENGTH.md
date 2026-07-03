@@ -338,6 +338,8 @@ the sign of the result.
 | **PawnRace eval term (shipped)** | **+17.4 @ movetime** (endgame book) | done | EG knight-aware unstoppable-passer / race term; `pawnrace` flag, default-on; acts above the 5-man TB boundary so it isn't TB-masked (§10.5) |
 | Richer HCE terms (Phase 2, remainder) | +20–60 | medium | NMP verification / verified-null in low-material zugzwang, LMP `non_pawn_material` gate + passed-pawn push extension, 50-move-clock eval damping. (EG scale factors were built but SPRT'd ~0 with the TB — kept default-off, §10.6) |
 | **Ship SMP to prod (shipped, live)** | **part of the +97** (2t on a 4-core box) | done | `serve -search-threads 2` + `hub -bot-search-threads 2` in the systemd units (§4); balanced for the shared box |
+| **Clock-aware time management (shipped)** | not yet SPRT-anchored | done | soft/hard split, best-move-stability + score-drop scaling; UCI-clock aware, legacy `MoveTime` path byte-identical (§26). Only bites when a real clock is passed (`wtime`/`btime`) — inert for fixed-`--movetime` SPRTs |
+| **No-retrain NPS + int8/VNNI asm push** | in progress | open | qsearch captures-only movegen, staged movegen, missing SIMD kernels (NEON `dotU8I8`, AVX2/NEON `quantU8I16`/`screlu`), VPDPBUSD/SDOT int8 dot — pure speed, benefits any wider net too (§26) |
 | **TT static-eval cache (shipped)** | **+14.8 @ movetime** (stopped early) | done | `tteval` flag, default-on; reuse the TT-cached static eval on non-cutoff hits → skips the NNUE SCReLU dot. Behavior-preserving at fixed nodes (byte-identical), so movetime-only. SPRT vs off @ 100ms: Elo +14.8 ± 10.8, LLR +2.32 @ 998 pairs (lower CI +4.0) — stopped just shy of the formal H1 cross, accepted on the stable trend. Also fixed a latent move-encoding bug (`promoCode` underflow leaked garbage into move bits 16-21) so moves are canonically 16-bit |
 | **Correction history (shipped)** | **+66.9 @ 40k nodes** | done | per-pattern static-eval-vs-search bias correction; `corrhist` flag, default-on (§13) |
 | **Singular extensions (shipped)** | **+22.2 @ 40k nodes** | done | extend the lone forcing TT move; `singular`+`multicut`, default-on; toxic with aggressive LMR (§13) |
@@ -1576,3 +1578,146 @@ cp data/book_new.bin data/book.bin && rm data/book_new.bin
 ```
 First landed `23bd81e`. Books are per-engine (not a process global like the net), so
 `--new-engine-book`/`--old-engine-book` need no `--concurrency 1`.
+
+---
+
+## 26. Clock-aware time management (shipped) + the no-retrain NPS/asm push (2026-07-03)
+
+### 26.1 Clock-aware time management — shipped (`c63450a`)
+The old budget was a flat per-move `MoveTime` with a single hard deadline (naive
+`remaining/30 + inc/2`). Replaced by an adaptive manager (`internal/search/timemanager.go`,
+`timemanager_test.go`):
+
+- **Soft/hard split.** A *soft* limit (base allocation from clock + increment) gates
+  **iteration starts** — don't begin a new ID iteration you can't finish; a *hard* limit
+  (3× base, capped at 50% of remaining) is the absolute **mid-search** cutoff.
+- **Best-move stability scaling.** A move stable across iterations shrinks the soft limit
+  (0.5× base — stop early when the move is obvious); an unstable one extends it (1.5×).
+- **Score-drop extension.** A drop in the root score between iterations further extends,
+  to spend more when the position just got worse.
+- **Plumbing.** The UCI handler now passes `wtime`/`btime`/`winc`/`binc`/`movestogo`
+  through `Limits` instead of flattening to one `movetime`. **Every existing caller
+  (bench, serve, hub bots) that passes only `MoveTime`/`Depth`/`Nodes` takes the unchanged
+  legacy path** (`soft == hard == MoveTime`) → byte-identical, so all prior SPRT results
+  stand and fixed-`--movetime` SPRTs are unaffected.
+
+**Not yet SPRT-anchored.** It only bites when a real clock is supplied (UCI `go wtime …`),
+which the in-process self-play harness doesn't do — it passes fixed `MoveTime`. Anchoring
+it needs either a UCI-clock self-play mode in `bench` or a cutechess run with real TCs.
+Until then it's a shipped-but-unmeasured feature; the design follows the standard modern
+recipe (SF-style soft/hard + stability), the Elo is the "+50–100 from TM" the literature
+reports but we haven't independently confirmed on our engine.
+
+### 26.2 External-analysis lever triage (what's real, what's spent, what's blocked)
+An outside research pass (2026-07-03) surfaced a lever list. Reconciled against the current
+engine (v9 lean-threats net, §19; AVX-512 prod on lairner):
+
+| Lever | Status here | Verdict |
+|---|---|---|
+| Clock-aware time management | **Shipped** `c63450a` (§26.1) | spent — the analysis's headline "biggest easy Elo" is already done |
+| Qsearch generates ALL legal moves, filters to captures in-loop | **Confirmed** — `quiescence()` calls `GenerateLegal` (`search.go:1664`) then `continue`s past non-captures out of check | **real NPS, do it** — a captures+promotions (+ check-evasions when in check) generator skips the quiet-move legality cost at the majority of nodes |
+| Staged move generation (TT → captures → killers → quiets) | Not present — `scoreMoves` + lazy `selectMove` selection-sort over the full list | real but smaller than the qsearch fix; avoids *generating* quiets when a capture/killer cuts |
+| VNNI int8 dot (`VPDPBUSD` x86 / `SDOT` arm64) via Plan9 asm | Not present — int8 path is `DotProductPairsSaturated`→`DotProductPairs` two-step (`archsimd` has no VNNI); `int8QA=127` exists *only* because of this (§16.4) | **do it** — one-instruction u8×i8→i32 accumulate, no pairwise saturation; also lets `QA=255` (2× activation resolution). This is the committed asm work |
+| Missing SIMD kernels on some arch | `dotU8I8` scalar on **NEON**; `quantU8I16` scalar on AVX2+NEON; `screluActivateI16` scalar everywhere | real NPS on the int8 path — prod (AVX-512) partly covered, dev M3 (NEON) crippled on int8 |
+| Lazy enriched accumulator | v6 lazy path was flat (§14.2); enriched `EnrichedStack` has no lazy path | speculative — enriched push is ~47% CPU, so even a small skip rate *might* pay; measure, don't assume |
+| int8 base FT columns (currently int16) | threat columns already int8 (`W0t8`); base 768 still int16 (`W0i`) | **blocked on a QAT retrain** — out of scope for the no-retrain phase |
+| Wider v6-style net (1024) / more-data | §7 names 1024 as the next width step | **blocked on training** — deferred; but every §26.3 NPS/asm win *discounts* its 3× eval cost, which is the point |
+| SPSA on the ~20 hand-picked margins | §7 lists it | open, medium; not part of the NPS phase |
+| SCReLU `(v·w)·v` reorder to stay in narrow regs | our `screluDot` widens to int32/int64 | micro; fold into the kernel rewrite if it helps a SIMD path |
+
+Corrections to the external analysis worth recording: (a) it claimed **no** time management —
+false as of `c63450a`; (b) it framed "go wider (1024, no threats)" vs "stay on threats" as the
+fork, but our own §19/§21 already resolved that **the threat net wins at movetime and the wall
+is the threat-PUSH speed, not eval quality** — which is exactly why the §26.3 NPS/asm work is
+the right next move, not a net-architecture change.
+
+### 26.3 The plan — no-retrain, NPS-first (every ns counts; a wider net inherits all of it)
+Ordered cheapest-verifiable → hardest. **Two different tests, don't conflate them:**
+- **Correctness** — a byte-identical (movegen) or bit-exact (kernel) change is *proven* safe by
+  the differential/equality test. That's a proof, stronger than any SPRT sample — so it needs no
+  *gate* SPRT (nothing to decide: it can't change results at equal work).
+- **Elo magnitude** — the speedup is *invisible at fixed nodes* (same tree by construction, so a
+  fixed-nodes SPRT reads exactly 0) but at **movetime** it deliberately diverges: faster → more
+  nodes → deeper → stronger. That Elo is real and the way to measure it is a **movetime SPRT**
+  (same as Lazy SMP, §4). So we DO movetime-SPRT pure-NPS wins — not to gate them (the proof
+  already guarantees they can't hurt) but to **quantify and bank** the Elo. A behavioral change
+  (e.g. QSCastling) is the opposite: the SPRT is the *gate*, because it can come back negative.
+
+Caveat on *what's on the live path*: a movetime SPRT only measures a kernel that the default
+eval actually calls. The VNNI `dotU8I8` isn't (default is `screluDot`), so it can't be
+movetime-SPRT'd until the int8 net is default — that, not "bit-exact", is why it's unmeasured
+now.
+
+1. **Qsearch captures-only generator** — a `GenerateCaptures` (captures + promotions; full
+   evasions when in check) path so qsearch stops paying for quiet-move legality. Gate: perft
+   unaffected (movegen elsewhere unchanged) + identical qsearch node *scores* on a FEN suite +
+   NPS before/after.
+2. **Fill the scalar-fallback SIMD kernels** — NEON `dotU8I8`, AVX2/NEON `quantU8I16`,
+   `screluActivateI16` everywhere. Gate: `TestKernelsMatchScalar` stays green (bit-exact) at
+   all widths; NPS before/after per arch.
+3. **int8 VNNI/SDOT dot in Plan9 asm** — `VPDPBUSD` (x86-64, named Go-asm op) and WORD-encoded
+   `SDOT` (arm64); prior art `camdencheek/simd_blog`. Bit-exact to the current two-step, then
+   (separately) evaluate `QA=127→255`. This is the flagged asm work — **we are doing it**.
+4. **Staged move generation** in the main search — generate quiets only after TT/captures/
+   killers fail to cut. Gate: perft + identical node counts on a suite (ordering must be
+   preserved) + NPS.
+5. **Lazy enriched accumulator** — measure the eval-less push rate for the enriched net first;
+   only wire the skip if it's non-trivial.
+
+Once the NPS/asm wins land, **re-anchor at movetime** (the §14.4 rule: speed shows at movetime,
+not fixed nodes) and *then* revisit the 1024-wide net, whose 3× eval cost is now cheaper.
+
+### 26.4 Landed so far (2026-07-03)
+
+**(1) Qsearch captures-only — SHIPPED, +3–8% NPS, node-identical.** New
+`Position.GenerateCaptures` (`internal/chess/movegen_captures.go`): a target-mask-restricted
+clone of `generateLegalFast` emitting exactly the *noisy* subsequence (captures + push/capture
+promotions + en passant + — by the isCapture-on-rook-square quirk — castling), in the SAME
+emission order, so it's a **byte-identical subsequence of the filtered legal list**
+(`movegen_captures_test.go` differential-tests it against `GenerateLegal` across every perft
+tree + tricky FENs + 400 random games). Qsearch (`search.go`) uses it out of check; in check it
+still calls `GenerateLegal` (every evasion needed). Because the searched move set is identical,
+node counts are unchanged at fixed depth — pure NPS. Measured (fixed-depth-9 `BenchmarkSearch`,
+scalar arm64): **startpos +3.0%, kiwipete +5.0%, endgame +8.4%** (endgame is qsearch-heaviest).
+Scalar *understates* it — eval dominates each node there; on the SIMD build movegen is a bigger
+share. `go vet`, `perft -depth 5`, all chess/search tests green on both arm64 and amd64/v4.
+
+**(1b) Drop castling from qsearch — SPRT running.** Castling is a genuinely quiet move that
+only slips into qsearch via the `isCapture`-on-rook-square quirk; `genCastling` cost ~3.5% of a
+castling-rich search node in the profile. Behind `QSCastling` (`search.Params`, default-on =
+byte-identical). Fixed-nodes self-play SPRT `--new "qscastling=off" --old "qscastling=on"`
+(a search feature — fixed-nodes valid) trending **+10.7 ± 18.7 @ 306 pairs** (not yet
+converged). Decision rule: since off is *strictly faster* at movetime (fewer qsearch nodes),
+any non-negative fixed-nodes verdict flips it off.
+
+**(3) VNNI `VPDPBUSD` int8 dot — SHIPPED (amd64/v4), +18–22% on the int8 L1 matmul,
+bit-exact, CPUID-gated.** Hand Plan9 asm (`dotu8i8_vnni_amd64.s`) replacing the archsimd
+two-step `VPMADDUBSW`+`VPMADDWD` `dotU8I8` with a single `VPDPBUSD`. Installed by the AVX-512
+backend's `init` **only when CPUID leaf-7 ECX bit 11 (AVX512_VNNI) is set** — `GOAMD64=v4`
+mandates AVX-512F but *not* VNNI, so a Skylake-SP v4 box would `#UD` without the guard (both
+coalla and prod lairner are Zen-4 EPYC 9634 with `avx512_vnni`). **Bit-identical to the maddubs
+path on the operating domain**: activations are u8 ∈ [0,int8QA=127], so no maddubs pair can
+saturate → both equal the exact int32 sum VPDPBUSD gives (`TestDotU8I8MatchScalar` is the gate;
+it feeds a∈[0,127]). The one out-of-domain divergence (a=255 → maddubs clamps 64770→32767, VNNI
+doesn't) is made backend-aware in `TestDotU8I8Consistency` and documented as harmless (a=255
+can't occur).
+
+- **The latency trap (the lesson).** A *naive* single-accumulator VPDPBUSD kernel was **~50%
+  SLOWER** than maddubs (15.8 vs 9.2 ns @ n=512). VPDPBUSD *fuses* the accumulate, so `acc +=
+  dp(...)` chains `acc` through the op's full ~4–5c latency; the archsimd maddubs wins with one
+  accumulator because its multiply-reduce sits OFF the acc critical path (only a latency-1
+  `VPADDD` chains). Fix = **4 independent accumulators**, 256 bytes/iter, so the loop runs
+  throughput-bound. After that: n=512 **+22%**, n=1024 **+22%**, n=2048 **+18%** (coalla, Zen 4).
+- **Scope.** `dotU8I8` is the L1 matmul of the **int8/enriched-int8 path** (opt-in, needs a QAT
+  net), NOT the current default eval (which is the fused `screluDot`, already SIMD everywhere).
+  So this is **banked for the int8/wider-net phase** — it's the inference speedup that makes a
+  3×-cost wider net movetime-viable, exactly per §26 intent. `QA=127→255` (the activation-
+  resolution bump VNNI unlocks) still needs a QAT config change + retrain — deferred.
+
+**Not the current-prod hot path (verify-first correction to the external analysis).** The
+analysis led with the missing SIMD kernels (`quantU8I16`/`screluActivateI16`/NEON `dotU8I8`)
+and VNNI as prod NPS wins. Profiling the default eval showed the prod v9-lean hot kernel is
+`screluDot` (already SIMD on all arches), and the flagged kernels are on the int8/float-tail
+path that isn't the default and can't run without QAT. So items (2)/(3) are **future-net levers**
+(correctly banked), while the current-prod NPS wins are the arch-independent search/movegen ones
+— (1) done, (1b)/staged-movegen pending.
