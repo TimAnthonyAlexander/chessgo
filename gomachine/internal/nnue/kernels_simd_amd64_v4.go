@@ -44,6 +44,15 @@ func init() {
 	addColI8 = addColI8SIMD
 	subColI8 = subColI8SIMD
 	kernelBackend = "simd/archsimd-avx512-amd64(addCol,subCol,screluDot,dotF32,gemvF32,screluActivateF,dotU8I8,quantU8I16,addColI8,subColI8)"
+
+	// Replace the two-step maddubs int8 dot with a single-instruction VPDPBUSD
+	// kernel when the CPU has AVX512_VNNI (bit-identical on the [0,127] domain,
+	// TestDotU8I8MatchScalar). GOAMD64=v4 guarantees AVX-512F but not VNNI, so
+	// this is a runtime CPUID gate, not a build-time one.
+	if hasAVX512VNNI() {
+		dotU8I8 = dotU8I8VNNI
+		kernelBackend += "+vnni"
+	}
 }
 
 // gemvF32SIMD is the output-stationary tail GEMV: out[o] = Σ_i in[i]·w[i*stride+off+o].

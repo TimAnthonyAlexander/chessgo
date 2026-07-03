@@ -3,6 +3,7 @@ package nnue
 import (
 	"math/rand"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/timanthonyalexander/gomachine/internal/chess"
@@ -95,11 +96,22 @@ func TestDotU8I8Consistency(t *testing.T) {
 			t.Fatalf("dotU8I8[n=%d] backend=%q non-saturating: got %d want %d", nn, kernelBackend, got, ref)
 		}
 	}
-	// Saturating pair: 255*127 + 255*127 = 64770 → clamps to 32767.
+	// Out-of-domain pair 255*127 + 255*127 = 64770. The two int8 dot semantics
+	// diverge here, and BOTH are correct in the real operating domain:
+	//   - maddubs/scalar clamp each VPMADDUBSW pair sum to int16 → 32767;
+	//   - VPDPBUSD (AVX512-VNNI) accumulates straight to int32, no pairwise
+	//     clamp → 64770.
+	// It never matters: activations are u8 ∈ [0,int8QA=127] (quantU8/quantU8I16),
+	// so a=255 can't occur and no pair can exceed 127·127·2 = 32258 < 32767 —
+	// saturation never fires either way. This case only documents the divergence.
 	a := []uint8{255, 255}
 	w := []int8{127, 127}
-	if got := dotU8I8(a, w); got != 32767 {
-		t.Fatalf("dotU8I8 saturation: got %d want 32767", got)
+	want := int32(32767) // saturating maddubs/scalar
+	if strings.Contains(kernelBackend, "vnni") {
+		want = 64770 // non-saturating VPDPBUSD
+	}
+	if got := dotU8I8(a, w); got != want {
+		t.Fatalf("dotU8I8 out-of-domain pair (backend=%q): got %d want %d", kernelBackend, got, want)
 	}
 }
 
