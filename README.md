@@ -4,6 +4,8 @@ A chess website and a chess engine, both in this repo. The website runs in produ
 
 Every rule, the move generator, the evaluation, and the search are written from scratch in Go. No external chess library. The website calls the engine over HTTP and a WebSocket; the engine has no dependency on the website and runs on its own.
 
+**Under the hood:** 768→512×2→1 SCReLU NNUE, perspective-relative, incremental int16 accumulator, archsimd AVX2/NEON kernels; Lazy SMP negamax alpha-beta, iterative deepening, aspiration windows, principal variation search (PVS), lock-free Hyatt-XOR transposition table with a static-eval cache; late move reductions (LMR), SEE-filtered captures, null-move pruning, reverse futility pruning (RFP), late move pruning (LMP), delta pruning, frontier futility, singular extensions with multicut, correction history; history and killer move ordering; king-proximity and passed-pawn-race eval terms in the hand-crafted fallback; magic bitboard (pin-aware, PGO-built) move generation, Zobrist hashing, repetition detection, opening book; 5-piece Syzygy (Fathom) DTZ root probing plus WDL tablebase probing inside the search; clock-aware time management.
+
 ## gomachine
 
 One self-contained binary. Evaluation network and opening book are compiled in, so it runs from any directory with nothing else to download.
