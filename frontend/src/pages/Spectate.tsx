@@ -9,6 +9,7 @@ import MoveList from '../components/MoveList'
 import { Avatar, NavBtn, PANEL_SHADOW } from '../components/PanelUI'
 import BoardActions from '../components/BoardActions'
 import BoardPage from '../components/BoardPage'
+import SpectateInfoCard from '../components/SpectateInfoCard'
 import { analyze, type MoveEntry } from '../api/client'
 import { pvToSan, START_FEN } from '../lib/analysisTree'
 import {
@@ -177,6 +178,17 @@ export default function Spectate() {
     return (
         <BoardPage
             evalBar={isAdmin && showEval ? <EvalBar ev={whiteEval} orientation="w" /> : undefined}
+            left={
+                <SpectateInfoCard
+                    pool={g.pool}
+                    rated={g.rated}
+                    variant={g.variant}
+                    white={g.white}
+                    black={g.black}
+                    moveCount={g.moves.length}
+                    live={!g.over}
+                />
+            }
             right={
                 <Box
                     sx={{
