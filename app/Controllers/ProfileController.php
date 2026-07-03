@@ -17,8 +17,9 @@ use App\Services\Glicko2Service;
  *   GET /users/{name}
  *
  * Returns the account's per-category ratings (rating/RD/games/provisional), the
- * isolated puzzle rating + solved count, an overall win/loss/draw record across
- * all persisted games, and the most recent games as light rows (no move blobs —
+ * isolated puzzle rating + solved count, the isolated Duck Chess rating, an overall
+ * win/loss/draw record across all persisted games, and the most recent games as
+ * light rows (no move blobs —
  * the board opens them via the analysis endpoint). Game pagination lives on the
  * sibling {@see ProfileGamesController} ("load more").
  */
@@ -73,6 +74,15 @@ class ProfileController extends Controller
                 'games' => $user->games_puzzle,
                 'solved' => $puzzleSolved,
                 'provisional' => ((float) $user->rd_puzzle) > Glicko2Service::PROVISIONAL_RD,
+            ],
+            // Duck Chess is its own isolated pool (like puzzle) — surfaced separately
+            // from the time-control rating tiles.
+            'duck' => [
+                'rating' => $user->rating_duck,
+                'rd' => $user->rd_duck,
+                'games' => $user->games_duck,
+                'provisional' => ((float) $user->rd_duck) > Glicko2Service::PROVISIONAL_RD,
+                'rated_at' => $user->rated_at_duck,
             ],
             'record' => $this->record($id),
             'games' => $rows,

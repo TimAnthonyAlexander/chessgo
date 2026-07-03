@@ -18,8 +18,9 @@ func queueKey(pool, variant string) string {
 }
 
 // splitQueueKey is the inverse of queueKey: it recovers the time-control pool and
-// the variant from a composite key. A bare key (no "|") is a standard pool, so the
-// time-control pool and rating category are always derived from the tc part.
+// the variant from a composite key. A bare key (no "|") is a standard pool. The
+// rating category comes from BOTH parts (categoryFor): duck buckets by the duck
+// pool, standard/960 by the tc part.
 func splitQueueKey(key string) (pool, variant string) {
 	if i := strings.IndexByte(key, '|'); i >= 0 {
 		return key[i+1:], key[:i]
@@ -50,10 +51,12 @@ func ratingTolerance(wait time.Duration) int {
 	return tol
 }
 
-// poolRating is the client's rating in the pool's category, falling back to the
+// poolRating is the client's rating in the queue's category, falling back to the
 // default start rating for anonymous/unrated players so they still match fairly.
-func (h *Hub) poolRating(c *Client, pool string) int {
-	r := c.id.RatingFor(categoryForPool(pool))
+// The category depends on the variant too: Duck queuers are bucketed by their
+// isolated duck rating, not the time-control category of the pool.
+func (h *Hub) poolRating(c *Client, pool, variant string) int {
+	r := c.id.RatingFor(categoryFor(pool, variant))
 	if r <= 0 {
 		r = startRating
 	}
@@ -69,11 +72,11 @@ func pairAcceptable(gap int, waitA, waitB time.Duration) bool {
 
 // bestOpponent returns the waiting client under queue `key` that best matches c
 // (smallest acceptable rating gap right now), or nil if none is acceptable. The
-// key may be composite (variant|pool); ratings/category are derived from the tc
-// part. c is assumed not yet in the pool.
+// key may be composite (variant|pool); the rating category comes from categoryFor
+// (duck buckets by the duck pool). c is assumed not yet in the pool.
 func (h *Hub) bestOpponent(c *Client, key string, now time.Time) *Client {
-	tcPool, _ := splitQueueKey(key)
-	rc := h.poolRating(c, tcPool)
+	tcPool, variant := splitQueueKey(key)
+	rc := h.poolRating(c, tcPool, variant)
 	waitC := now.Sub(c.queuedAt)
 	var best *Client
 	bestGap := maxRatingGap + 1
@@ -81,7 +84,7 @@ func (h *Hub) bestOpponent(c *Client, key string, now time.Time) *Client {
 		if other == c {
 			continue
 		}
-		gap := absInt(rc - h.poolRating(other, tcPool))
+		gap := absInt(rc - h.poolRating(other, tcPool, variant))
 		if gap < bestGap && pairAcceptable(gap, waitC, now.Sub(other.queuedAt)) {
 			best, bestGap = other, gap
 		}
@@ -120,13 +123,13 @@ func (h *Hub) matchWaiting() {
 // smallest mutually-acceptable rating gap, or (nil, nil) if no pair is acceptable.
 // The key may be composite (variant|pool); the rating category comes from the tc part.
 func (h *Hub) closestAcceptablePair(key string, now time.Time) (*Client, *Client) {
-	tcPool, _ := splitQueueKey(key)
+	tcPool, variant := splitQueueKey(key)
 	list := h.pools[key]
 	var ba, bb *Client
 	bestGap := maxRatingGap + 1
 	for i := 0; i < len(list); i++ {
 		for j := i + 1; j < len(list); j++ {
-			gap := absInt(h.poolRating(list[i], tcPool) - h.poolRating(list[j], tcPool))
+			gap := absInt(h.poolRating(list[i], tcPool, variant) - h.poolRating(list[j], tcPool, variant))
 			if gap < bestGap && pairAcceptable(gap, now.Sub(list[i].queuedAt), now.Sub(list[j].queuedAt)) {
 				ba, bb, bestGap = list[i], list[j], gap
 			}

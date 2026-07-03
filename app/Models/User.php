@@ -76,6 +76,20 @@ class User extends BaseModel
 
     public int $games_puzzle = 0;
 
+    // Duck Chess is ALSO a separate, isolated category: it is its own game with no
+    // time-control split (every duck game, whatever its clock, is one "duck"
+    // rating). Updated by Glicko2Service just like the time-control categories, but
+    // fed only by duck games. See GameResultController.
+    public int $rating_duck = 1500;
+
+    public float $rd_duck = 350.0;
+
+    public float $vol_duck = 0.06;
+
+    public ?string $rated_at_duck = null;
+
+    public int $games_duck = 0;
+
     /**
      * Define indexes for this model
      * @var array<string, string>
@@ -96,6 +110,7 @@ class User extends BaseModel
         'rated_at_rapid' => ['type' => 'TEXT', 'nullable' => true],
         'rated_at_classical' => ['type' => 'TEXT', 'nullable' => true],
         'rated_at_puzzle' => ['type' => 'TEXT', 'nullable' => true],
+        'rated_at_duck' => ['type' => 'TEXT', 'nullable' => true],
     ];
 
     public function checkPassword(string $password): bool
@@ -103,8 +118,8 @@ class User extends BaseModel
         return password_verify($password, $this->password);
     }
 
-    /** Categories carrying a Glicko-2 rating, including the isolated puzzle pool. */
-    private const RATING_CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'puzzle'];
+    /** Categories carrying a Glicko-2 rating, including the isolated puzzle + duck pools. */
+    private const RATING_CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'puzzle', 'duck'];
 
     /**
      * Serialize for API output. Overrides BaseModel::jsonSerialize() to strip

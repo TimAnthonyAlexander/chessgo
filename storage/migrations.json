@@ -612,6 +612,51 @@
             "table": "game",
             "operation": "add_column",
             "warning": null
+        },
+        {
+            "id": "mig_49bc46cb8288",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rating_duck` INT NOT NULL DEFAULT 1500",
+            "destructive": false,
+            "generated_at": "2026-07-03T19:24:20+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_8e8f1fecb7b4",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rd_duck` DOUBLE NOT NULL DEFAULT 350",
+            "destructive": false,
+            "generated_at": "2026-07-03T19:24:20+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_de6f11e3243f",
+            "sql": "ALTER TABLE `user` ADD COLUMN `vol_duck` DOUBLE NOT NULL DEFAULT 0.06",
+            "destructive": false,
+            "generated_at": "2026-07-03T19:24:20+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_da4ec0d66de3",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rated_at_duck` TEXT",
+            "destructive": false,
+            "generated_at": "2026-07-03T19:24:20+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_ada9e309b393",
+            "sql": "ALTER TABLE `user` ADD COLUMN `games_duck` INT NOT NULL DEFAULT 0",
+            "destructive": false,
+            "generated_at": "2026-07-03T19:24:20+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
         }
     ]
 }

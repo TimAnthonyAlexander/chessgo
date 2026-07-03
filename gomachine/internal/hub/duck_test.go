@@ -153,8 +153,8 @@ func TestQueueKeyRoundTrip(t *testing.T) {
 }
 
 // startBotGame with variant "duck" builds a Duck game: a non-nil g.duck, exactly
-// one bot side, and UNRATED even for a logged-in human (variant games never feed
-// the Glicko pools — same gate as startGameWith).
+// one bot side, and RATED for a logged-in (non-anon) human — Duck feeds its own
+// isolated "duck" Glicko pool (same gate as startGameWith).
 func TestStartBotGameDuck(t *testing.T) {
 	h := New(testSecret)
 	human := &Client{id: auth.Identity{UserID: "u1", Name: "human", Rating: 1500}, send: make(chan []byte, sendBuffer)}
@@ -170,17 +170,17 @@ func TestStartBotGameDuck(t *testing.T) {
 	if g.duck == nil {
 		t.Fatal("a duck bot game must have a non-nil duck state")
 	}
-	if g.rated {
-		t.Error("a duck bot game must be unrated (variant games never rated)")
+	if !g.rated {
+		t.Error("a duck bot game with a logged-in human must be rated (duck pool)")
 	}
 	if g.white.isBot == g.black.isBot {
 		t.Errorf("expected exactly one bot side, white=%v black=%v", g.white.isBot, g.black.isBot)
 	}
 }
 
-// Two Duck queuers in the same time control pair into a Duck game (variant duck,
-// unrated, opposite colors) — proving the (pool, variant) queue key pairs Duck
-// with Duck.
+// Two Duck queuers (both accounts) in the same time control pair into a Duck game
+// (variant duck, rated on the isolated duck pool, opposite colors) — proving the
+// (pool, variant) queue key pairs Duck with Duck.
 func TestDuckQueuePairs(t *testing.T) {
 	h := New(testSecret)
 	go h.Run()
@@ -203,8 +203,8 @@ func TestDuckQueuePairs(t *testing.T) {
 		if m["variant"] != variantDuck {
 			t.Errorf("matched variant = %v, want duck", m["variant"])
 		}
-		if m["rated"] != false {
-			t.Errorf("duck game must be unrated, rated = %v", m["rated"])
+		if m["rated"] != true {
+			t.Errorf("duck game between two accounts must be rated, rated = %v", m["rated"])
 		}
 	}
 	if ma["color"] == mb["color"] {
@@ -256,8 +256,8 @@ func TestDuckBotBackfill(t *testing.T) {
 	if m["variant"] != variantDuck {
 		t.Fatalf("matched variant = %v, want duck", m["variant"])
 	}
-	if m["rated"] != false {
-		t.Errorf("duck bot game must be unrated, rated = %v", m["rated"])
+	if m["rated"] != true {
+		t.Errorf("duck bot game for a logged-in human must be rated, rated = %v", m["rated"])
 	}
 
 	// If the human is White they move first (bot replies); if Black the bot (White)

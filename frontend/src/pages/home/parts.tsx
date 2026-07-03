@@ -505,6 +505,16 @@ function TimeCell({ preset, onClick }: { preset: Preset; onClick: () => void }) 
 }
 
 function DuckCell({ onClick }: { onClick: () => void }) {
+    const { user } = useAuth()
+
+    // Duck Chess has its own isolated rating — show the same matchmaking Elo range
+    // the time-control cells show, from the user's duck rating.
+    let eloRange: string | null = null
+    if (user) {
+        const rounded = Math.round(user.rating_duck / 50) * 50
+        eloRange = `${(rounded - 100).toLocaleString('de-DE')}–${(rounded + 100).toLocaleString('de-DE')}`
+    }
+
     return (
         <Box
             onClick={onClick}
@@ -547,17 +557,22 @@ function DuckCell({ onClick }: { onClick: () => void }) {
             >
                 {DUCK_POOL}
             </Typography>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                <Box
-                    component="span"
-                    sx={{ fontSize: 14, lineHeight: 1, display: 'flex' }}
-                    aria-hidden
-                >
-                    <DuckGlyph />
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                    <Box
+                        component="span"
+                        sx={{ fontSize: 14, lineHeight: 1, display: 'flex' }}
+                        aria-hidden
+                    >
+                        <DuckGlyph />
+                    </Box>
+                    <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)', fontWeight: 500 }}>
+                        Duck Chess
+                    </Typography>
                 </Box>
-                <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)', fontWeight: 500 }}>
-                    Duck Chess
-                </Typography>
+                {eloRange && (
+                    <Typography sx={{ fontSize: 11, color: 'var(--muted)' }}>{eloRange}</Typography>
+                )}
             </Box>
         </Box>
     )

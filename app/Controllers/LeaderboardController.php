@@ -14,7 +14,7 @@ use App\Services\Glicko2Service;
  *   → { category, entries: [ { rank, id, name, rating, games, provisional }, ... ] }
  *
  * Categories are the Glicko-2 pools on the User model: the four time controls
- * plus the isolated puzzle pool. The category drives interpolated SQL column
+ * plus the isolated puzzle and duck pools. The category drives interpolated SQL column
  * names (rating_<cat> / rd_<cat> / games_<cat>), so it is STRICTLY whitelisted
  * — any other value is rejected, never interpolated.
  *
@@ -25,7 +25,7 @@ use App\Services\Glicko2Service;
 class LeaderboardController extends Controller
 {
     /** Whitelisted rating pools — the ONLY values allowed into the column names. */
-    private const CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'puzzle'];
+    private const CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'puzzle', 'duck'];
 
     /** Bound from ?category= ; one of CATEGORIES. */
     public string $category = 'blitz';

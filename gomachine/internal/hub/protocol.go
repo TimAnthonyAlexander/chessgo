@@ -47,6 +47,18 @@ func parseTimeControl(pool string) (timeControl, bool) {
 	return timeControl{Base: int64(base) * 60_000, Inc: int64(inc) * 1000}, true
 }
 
+// categoryFor picks the rating category for a game from BOTH its pool and its
+// variant. Duck Chess is its own isolated pool (no time-control split — every
+// duck game, whatever its clock, is one "duck" rating), mirroring how BaseAPI
+// routes it in GameResultController. Standard/Chess960 fall back to the
+// duration-derived time-control category.
+func categoryFor(pool, variant string) string {
+	if variant == variantDuck {
+		return "duck"
+	}
+	return categoryForPool(pool)
+}
+
 // categoryForPool maps a pool to a rating category by estimated game duration
 // (base seconds + 40·increment), mirroring BaseAPI's EloService so the displayed
 // rating matches the one ratings are tracked under.

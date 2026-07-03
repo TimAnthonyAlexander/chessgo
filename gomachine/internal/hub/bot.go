@@ -106,7 +106,7 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variant string) 
 	// sits within a small jitter of the human's, and the engine plays at roughly
 	// that strength. Anonymous players have no rating, so fall back to the
 	// configured default level's nominal rating.
-	userRating := human.id.RatingFor(categoryForPool(pool))
+	userRating := human.id.RatingFor(categoryFor(pool, variant))
 	if userRating <= 0 {
 		userRating = ratingForLevel(h.botLevel)
 	}
@@ -119,10 +119,10 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variant string) 
 		tc:   tc,
 		pool: pool,
 		// A matchmaking bot fill-in is rated for a logged-in human (one-sided Elo
-		// vs the bot) — but only in standard chess, mirroring startGameWith: variant
-		// games never feed the Glicko pools, so a Duck bot game is unrated. Anonymous
-		// players can't be rated. Explicitly chosen /bot games never reach the hub.
-		rated:     !human.id.Anon && variant == variantStandard,
+		// vs the bot), mirroring startGameWith: standard feeds the time-control pools
+		// and Duck feeds its own isolated "duck" pool, but Chess960 stays unrated.
+		// Anonymous players can't be rated. Explicit /bot games never reach the hub.
+		rated:     !human.id.Anon && (variant == variantStandard || variant == variantDuck),
 		clockMs:   [2]int64{tc.Base, tc.Base},
 		turnStart: time.Now(),
 		online:    [2]bool{true, true},

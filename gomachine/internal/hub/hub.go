@@ -245,8 +245,8 @@ func (h *Hub) startGame(a, b *Client, tc timeControl, pool, variant string) {
 		white, black = b, a
 	}
 	// Public pairing is rated only if both sides are accounts; startGameWith further
-	// forces variant games unrated (only standard feeds the Glicko pools). The queue
-	// key carries the variant through (standard/960 threads its existing value).
+	// gates by variant (standard → time-control pools, duck → the duck pool, 960
+	// unrated). The queue key carries the variant through (standard threads bare).
 	h.startGameWith(white, black, tc, pool, !white.id.Anon && !black.id.Anon, variant)
 }
 
@@ -255,11 +255,12 @@ func (h *Hub) startGame(a, b *Client, tc timeControl, pool, variant string) {
 // iff both accounts) and private challenges (creator's color/rated preference).
 func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, rated bool, variant string) {
 	variant = normalizeVariant(variant)
-	// Only standard chess feeds the time-control Glicko pools: Chess960 and Duck are
-	// separate rulesets, so a variant game never moves the standard ratings. This is
-	// the single funnel for both public matchmaking (always standard) and private
-	// challenges (any variant), so gating rated here covers every started game.
-	rated = rated && variant == variantStandard
+	// Rating eligibility by variant. Standard chess feeds the time-control Glicko
+	// pools; Duck Chess feeds its own isolated "duck" pool (categoryFor routes it).
+	// Chess960 alone stays unrated (no dedicated pool). This is the single funnel
+	// for both public matchmaking and private challenges, so gating rated here
+	// covers every started game.
+	rated = rated && (variant == variantStandard || variant == variantDuck)
 	// For standard/960 the start position is the ONLY thing the variant changes:
 	// standard uses the classic start FEN, Chess960 a random Fischer-random start.
 	// Everything downstream (applyMove, status, legal moves, takeback, clocks) works
@@ -317,7 +318,7 @@ func (h *Hub) sendMatched(g *game, c *Client, color chess.Color) {
 		"duck":        g.duckSquare(),
 		"timeControl": map[string]int64{"base": g.tc.Base, "inc": g.tc.Inc},
 		"clock":       map[string]int64{"w": g.clockMs[chess.White], "b": g.clockMs[chess.Black]},
-		"opponent":    map[string]any{"name": opp.Name, "rating": opp.RatingFor(categoryForPool(g.pool)), "anon": opp.Anon},
+		"opponent":    map[string]any{"name": opp.Name, "rating": opp.RatingFor(categoryFor(g.pool, g.variant)), "anon": opp.Anon},
 		"legalMoves":  g.legalMoves(),
 	})))
 }
@@ -660,7 +661,7 @@ func (h *Hub) resumeMsg(g *game, color chess.Color) map[string]any {
 		"check":          st.Check,
 		"timeControl":    map[string]int64{"base": g.tc.Base, "inc": g.tc.Inc},
 		"clock":          map[string]int64{"w": g.remainingMs(chess.White), "b": g.remainingMs(chess.Black)},
-		"opponent":       map[string]any{"name": opp.Name, "rating": opp.RatingFor(categoryForPool(g.pool)), "anon": opp.Anon},
+		"opponent":       map[string]any{"name": opp.Name, "rating": opp.RatingFor(categoryFor(g.pool, g.variant)), "anon": opp.Anon},
 		"legalMoves":     g.legalMoves(),
 		"moves":          g.moveLog(),
 		"lastMove":       g.lastUci(),

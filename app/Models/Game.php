@@ -24,7 +24,7 @@ class Game extends BaseModel
     /** Time-control pool, e.g. "3+0". */
     public string $pool = '';
 
-    /** Rating category derived from the pool: bullet | blitz | rapid | classical. */
+    /** Rating category: a time control (bullet|blitz|rapid|classical) or 'duck'. */
     public string $category = '';
 
     /** True only when both sides are registered accounts (affects Elo). */

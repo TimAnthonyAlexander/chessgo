@@ -67,7 +67,7 @@ func (h *Hub) unwatchGame(c *Client) {
 // players, the position, clocks, and the full move history.
 func (h *Hub) spectateMsg(g *game) map[string]any {
 	st := g.status()
-	cat := categoryForPool(g.pool)
+	cat := categoryFor(g.pool, g.variant)
 	return out("watching", map[string]any{
 		"gameId":      g.id,
 		"pool":        g.pool,
@@ -137,7 +137,7 @@ func (h *Hub) publishLobby() {
 		if g.over {
 			continue
 		}
-		cat := categoryForPool(g.pool)
+		cat := categoryFor(g.pool, g.variant)
 		st := g.status()
 		summaries = append(summaries, gameSummary{
 			ID:         g.id,

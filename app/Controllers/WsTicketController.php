@@ -44,6 +44,9 @@ class WsTicketController extends Controller
                 'blitz' => (int)($user['rating_blitz'] ?? 1500),
                 'rapid' => (int)($user['rating_rapid'] ?? 1500),
                 'classical' => (int)($user['rating_classical'] ?? 1500),
+                // Duck Chess has its own isolated pool — the hub matches/displays
+                // duck games by this rating (categoryFor → "duck").
+                'duck' => (int)($user['rating_duck'] ?? 1500),
             ];
             $identity = [
                 'sub' => (string)$user['id'],

@@ -7,12 +7,14 @@ import SkeletonBar from './SkeletonBar'
 import { getLeaderboard, type LeaderboardEntry } from '../../api/client'
 import type { Category } from '../../lib/timeControl'
 
-const CATEGORIES: Category[] = ['Bullet', 'Blitz', 'Rapid', 'Classical']
-const DEFAULT_CATEGORY: Category = 'Blitz'
+// Duck Chess is an isolated rating pool, not a time control — its own tab here.
+type Tab = Category | 'Duck'
+const CATEGORIES: Tab[] = ['Bullet', 'Blitz', 'Rapid', 'Classical', 'Duck']
+const DEFAULT_CATEGORY: Tab = 'Blitz'
 
-/** The lowercase wire value the API expects ('blitz'), derived from the display Category. */
-function apiKey(cat: Category): 'bullet' | 'blitz' | 'rapid' | 'classical' {
-    return cat.toLowerCase() as 'bullet' | 'blitz' | 'rapid' | 'classical'
+/** The lowercase wire value the API expects ('blitz'), derived from the display tab. */
+function apiKey(cat: Tab): 'bullet' | 'blitz' | 'rapid' | 'classical' | 'duck' {
+    return cat.toLowerCase() as 'bullet' | 'blitz' | 'rapid' | 'classical' | 'duck'
 }
 
 type LoadState =
@@ -22,7 +24,7 @@ type LoadState =
  * Self-contained — fetches its own data and re-fetches when the category changes. */
 export default function LeaderboardWidget() {
     const navigate = useNavigate()
-    const [category, setCategory] = useState<Category>(DEFAULT_CATEGORY)
+    const [category, setCategory] = useState<Tab>(DEFAULT_CATEGORY)
     const [state, setState] = useState<LoadState>({ kind: 'loading' })
 
     useEffect(() => {
@@ -43,7 +45,7 @@ export default function LeaderboardWidget() {
     }, [category])
 
     const toggle = (
-        <Box sx={{ display: 'flex', gap: 2 }}>
+        <Box sx={{ display: 'flex', gap: 1.25, flexWrap: 'wrap' }}>
             {CATEGORIES.map((cat) => {
                 const active = cat === category
                 return (

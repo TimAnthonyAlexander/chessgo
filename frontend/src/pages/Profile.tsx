@@ -203,7 +203,7 @@ export default function Profile() {
                             gridTemplateColumns: {
                                 xs: 'repeat(2, 1fr)',
                                 sm: 'repeat(3, 1fr)',
-                                md: 'repeat(5, 1fr)',
+                                md: 'repeat(6, 1fr)',
                             },
                             gap: 1.25,
                         }}
@@ -226,6 +226,18 @@ export default function Profile() {
                             rating={data.puzzle.rating}
                             provisional={data.puzzle.provisional}
                             sub={`${data.puzzle.solved}W ${data.puzzle.games - data.puzzle.solved}L`}
+                            accent
+                        />
+                        <RatingCard
+                            label="Duck"
+                            icon={
+                                <Box component="span" sx={{ fontSize: 14, display: 'flex' }}>
+                                    <DuckGlyph />
+                                </Box>
+                            }
+                            rating={data.duck.rating}
+                            provisional={data.duck.provisional}
+                            sub={`${data.duck.games} ${data.duck.games === 1 ? 'game' : 'games'}`}
                             accent
                         />
                     </Box>
