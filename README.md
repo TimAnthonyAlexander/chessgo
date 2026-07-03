@@ -96,6 +96,10 @@ Tablebases are optional. Point at a Syzygy set with `SYZYGY_PATH=/path/to/syzygy
 
 ## Website
 
+![chessgo homepage](homepage.png)
+
+*The homepage: daily puzzle and recent games on the left, quick pairing across bullet/blitz/rapid/classical (with a Duck Chess tile) and shortcuts to the computer, puzzles, analysis and challenge-a-friend in the middle, a live game preview and the per-category leaderboard on the right, with players-online and games-in-play counts up top.*
+
 No account needed to play. Bot games, puzzles, and casual live games all work as a guest. An account adds ratings, which are required for rated games (both players logged in).
 
 - **Live games**: rating-proximity matchmaking (the acceptable gap widens the longer you wait, capped at 400). Server-side clocks that start Lichess-style: neither clock runs until both players have moved, and a stalled first move aborts. Chat, draw and takeback offers, resign, premoves, opponent-disconnected status, reconnect and resume after closing the tab. If no human turns up, a rating-matched bot fills in and that game is rated one-sided.
