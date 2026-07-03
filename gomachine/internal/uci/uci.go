@@ -15,6 +15,7 @@ import (
 
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 	"github.com/timanthonyalexander/gomachine/internal/engine"
+	"github.com/timanthonyalexander/gomachine/internal/search"
 )
 
 const ttSizeMB = 64
@@ -104,7 +105,7 @@ func parsePosition(fields []string) (*chess.Position, []uint64, bool) {
 func handleGo(out io.Writer, eng *engine.Engine, pos *chess.Position, history []uint64, fields []string) {
 	depth := 0
 	movetime := time.Duration(0)
-	var wtime, btime, winc, binc int
+	var wtime, btime, winc, binc, movestogo int
 
 	for i := 1; i < len(fields); i++ {
 		readInt := func() int {
@@ -128,26 +129,31 @@ func handleGo(out io.Writer, eng *engine.Engine, pos *chess.Position, history []
 			winc = readInt()
 		case "binc":
 			binc = readInt()
+		case "movestogo":
+			movestogo = readInt()
 		case "infinite":
 			depth = 0
 			movetime = 0
 		}
 	}
 
-	// Derive a move time from the clock if none was given explicitly.
+	// Build search limits: prefer clock-aware time management over flat movetime.
+	limits := search.Limits{Depth: depth, MoveTime: movetime}
 	if movetime == 0 && depth == 0 {
 		remaining, inc := wtime, winc
 		if pos.SideToMove() == chess.Black {
 			remaining, inc = btime, binc
 		}
 		if remaining > 0 {
-			movetime = time.Duration(remaining/30+inc/2) * time.Millisecond
+			limits.TimeLeft = time.Duration(remaining) * time.Millisecond
+			limits.Increment = time.Duration(inc) * time.Millisecond
+			limits.MovesToGo = movestogo
 		} else {
-			movetime = time.Second // default think time
+			limits.MoveTime = time.Second
 		}
 	}
 
-	res := eng.SearchDirect(pos, depth, movetime, history)
+	res := eng.SearchDirectLimits(pos, limits, history)
 
 	scoreStr := fmt.Sprintf("cp %d", res.Score)
 	if res.MateIn != 0 {
