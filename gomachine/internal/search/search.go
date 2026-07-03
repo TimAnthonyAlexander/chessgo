@@ -1685,6 +1685,12 @@ func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 	for i := 0; i < ml.Len(); i++ {
 		selectMove(&ml, &scores, i)
 		m := ml.Get(i)
+		// Castling slips through the noisy filter (its rook-origin destination is
+		// occupied → isCapture true) but is a genuinely quiet move. QSCastling=off
+		// drops it from quiescence; default-on preserves the historical behavior.
+		if !inCheck && !s.params.QSCastling && m.Type() == chess.Castling {
+			continue
+		}
 		// Out of check, search only captures/promotions; in check, all evasions.
 		if !inCheck && !isCapture(pos, m) && m.Type() != chess.Promotion {
 			continue

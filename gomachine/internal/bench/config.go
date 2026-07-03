@@ -459,6 +459,13 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("qsfutmargin: %q is not an int", val)
 			}
 			base.QSFutilityMargin = n
+		case "qscastling", "qscastle":
+			// search castling in quiescence (historical quirk). OFF drops it.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.QSCastling = b
 		case "aggr", "aggression":
 			// aggression style knob 0..100 (50 = neutral/off). Scales a king-attack
 			// term onto the static eval — EVAL change, so SPRT at --movetime or fixed
@@ -662,6 +669,9 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.QSFutilityMargin != patch.QSFutilityMargin {
 		diffs = append(diffs, fmt.Sprintf("qsfutmargin: %d→%d", base.QSFutilityMargin, patch.QSFutilityMargin))
+	}
+	if base.QSCastling != patch.QSCastling {
+		diffs = append(diffs, fmt.Sprintf("qscastling: %s→%s", onoff(base.QSCastling), onoff(patch.QSCastling)))
 	}
 	if base.Aggr != patch.Aggr {
 		diffs = append(diffs, fmt.Sprintf("aggr: %d→%d", base.Aggr, patch.Aggr))
