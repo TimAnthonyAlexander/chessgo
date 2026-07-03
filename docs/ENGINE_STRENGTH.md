@@ -339,7 +339,9 @@ the sign of the result.
 | Richer HCE terms (Phase 2, remainder) | +20–60 | medium | NMP verification / verified-null in low-material zugzwang, LMP `non_pawn_material` gate + passed-pawn push extension, 50-move-clock eval damping. (EG scale factors were built but SPRT'd ~0 with the TB — kept default-off, §10.6) |
 | **Ship SMP to prod (shipped, live)** | **part of the +97** (2t on a 4-core box) | done | `serve -search-threads 2` + `hub -bot-search-threads 2` in the systemd units (§4); balanced for the shared box |
 | **Clock-aware time management (shipped)** | not yet SPRT-anchored | done | soft/hard split, best-move-stability + score-drop scaling; UCI-clock aware, legacy `MoveTime` path byte-identical (§26). Only bites when a real clock is passed (`wtime`/`btime`) — inert for fixed-`--movetime` SPRTs |
-| **No-retrain NPS + int8/VNNI asm push** | in progress | open | qsearch captures-only movegen, staged movegen, missing SIMD kernels (NEON `dotU8I8`, AVX2/NEON `quantU8I16`/`screlu`), VPDPBUSD/SDOT int8 dot — pure speed, benefits any wider net too (§26) |
+| **Qsearch captures-only (shipped)** | **+20 @ movetime** | done | noisy-only qsearch movegen; byte-identical at fixed nodes (reads 0), +20 at movetime; `QCaps` default-on (§26.4) |
+| **VNNI VPDPBUSD int8 dot (shipped, banked)** | **+18–22% kernel** | done | single-instruction int8 L1 matmul, CPUID-gated; off the default eval path until an int8 net ships (§26.4) |
+| Remaining no-retrain NPS | +? | open | staged movegen, lazy enriched accumulator; NEON int8 kernels. Castling-drop was **rejected** (−8 movetime, §26.4) |
 | **TT static-eval cache (shipped)** | **+14.8 @ movetime** (stopped early) | done | `tteval` flag, default-on; reuse the TT-cached static eval on non-cutoff hits → skips the NNUE SCReLU dot. Behavior-preserving at fixed nodes (byte-identical), so movetime-only. SPRT vs off @ 100ms: Elo +14.8 ± 10.8, LLR +2.32 @ 998 pairs (lower CI +4.0) — stopped just shy of the formal H1 cross, accepted on the stable trend. Also fixed a latent move-encoding bug (`promoCode` underflow leaked garbage into move bits 16-21) so moves are canonically 16-bit |
 | **Correction history (shipped)** | **+66.9 @ 40k nodes** | done | per-pattern static-eval-vs-search bias correction; `corrhist` flag, default-on (§13) |
 | **Singular extensions (shipped)** | **+22.2 @ 40k nodes** | done | extend the lone forcing TT move; `singular`+`multicut`, default-on; toxic with aggressive LMR (§13) |
@@ -1681,14 +1683,28 @@ node counts are unchanged at fixed depth — pure NPS. Measured (fixed-depth-9 `
 scalar arm64): **startpos +3.0%, kiwipete +5.0%, endgame +8.4%** (endgame is qsearch-heaviest).
 Scalar *understates* it — eval dominates each node there; on the SIMD build movegen is a bigger
 share. `go vet`, `perft -depth 5`, all chess/search tests green on both arm64 and amd64/v4.
+**Movetime SPRT (coalla, v4 SIMD, v6 net auto-loaded, 100 ms/move): +20 Elo** (`qcaps=on` vs
+`qcaps=off`, ~+19–21 across the run, decisive). This is the load-bearing measurement: a
+byte-identical-at-fixed-nodes change reads **exactly 0 at fixed nodes** (same tree), so its Elo
+is only visible at movetime, where the extra nodes buy depth (same principle as Lazy SMP, §4).
+The `QCaps` flag (`search.Params`, default-on) exists *only* to A/B it — the win itself is the
+default. **This +20 IS the aggregate of everything the session ships** (VNNI is off the live
+path; castling-drop was rejected), so there's no separate bigger aggregate number.
 
-**(1b) Drop castling from qsearch — SPRT running.** Castling is a genuinely quiet move that
-only slips into qsearch via the `isCapture`-on-rook-square quirk; `genCastling` cost ~3.5% of a
-castling-rich search node in the profile. Behind `QSCastling` (`search.Params`, default-on =
-byte-identical). Fixed-nodes self-play SPRT `--new "qscastling=off" --old "qscastling=on"`
-(a search feature — fixed-nodes valid) trending **+10.7 ± 18.7 @ 306 pairs** (not yet
-converged). Decision rule: since off is *strictly faster* at movetime (fewer qsearch nodes),
-any non-negative fixed-nodes verdict flips it off.
+**(1b) Drop castling from qsearch — REJECTED.** Castling is a genuinely quiet move that only
+slips into qsearch via the `isCapture`-on-rook-square quirk; `genCastling` cost ~3.5% of a
+castling-rich search node in the profile. Tested behind `QSCastling` (`search.Params`,
+default-on = castling searched = original behavior; off = dropped). Two SPRTs:
+- **Fixed-nodes** `--new "qscastling=off" --old "qscastling=on"` trended **+10.7 ± 12** but
+  **never crossed H1** — inconclusive (LLR ~+1.2), not a real accept, just a noisy positive lean.
+- **Movetime** (the ruler for a speed-touching change, §26.3): **−8.1 ± 17.8** — non-positive.
+
+So the two reads reconcile as **≈ neutral, faintly negative** — *not* the clean win the
+fixed-nodes lean suggested — and dropping castling is **not shipped**. `QSCastling` stays
+**default-on** (searching castling, the winning side); the flag is kept as harmless scaffolding.
+Lesson: a fixed-nodes lean that never crosses H1 is not evidence; the movetime SPRT decides a
+change that touches speed. (This is *also* why searching castling in qsearch turned out to be
+~free/slightly-good, contra the "quiet move pollutes quiescence" prior.)
 
 **(3) VNNI `VPDPBUSD` int8 dot — SHIPPED (amd64/v4), +18–22% on the int8 L1 matmul,
 bit-exact, CPUID-gated.** Hand Plan9 asm (`dotu8i8_vnni_amd64.s`) replacing the archsimd
@@ -1720,4 +1736,9 @@ and VNNI as prod NPS wins. Profiling the default eval showed the prod v9-lean ho
 `screluDot` (already SIMD on all arches), and the flagged kernels are on the int8/float-tail
 path that isn't the default and can't run without QAT. So items (2)/(3) are **future-net levers**
 (correctly banked), while the current-prod NPS wins are the arch-independent search/movegen ones
-— (1) done, (1b)/staged-movegen pending.
+— **(1) captures-only shipped (+20 movetime); (1b) castling-drop rejected; VNNI shipped but
+banked; staged-movegen still pending.**
+
+**Optimal config (shipped defaults, `search.DefaultParams`):** `QCaps=true` (captures-only),
+`QSCastling=true` (search castling — the winning side), VNNI auto-on via CPUID. All three are
+already the defaults; the SPRTs *confirmed* the shipped config rather than changing it.
