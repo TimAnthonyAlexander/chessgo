@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react'
 import { Box, Typography } from '@mui/material'
 import type { SxProps, Theme } from '@mui/material'
 import { useNavigate } from 'react-router-dom'
+import { Rocket, Zap, Rabbit, Turtle } from 'lucide-react'
 import { Panel, PanelHead } from './Panel'
 import SkeletonBar from './SkeletonBar'
+import { DuckGlyph } from '../DuckGlyph'
 import { getLeaderboard, type LeaderboardEntry } from '../../api/client'
 import type { Category } from '../../lib/timeControl'
 
@@ -11,6 +13,26 @@ import type { Category } from '../../lib/timeControl'
 type Tab = Category | 'Duck'
 const CATEGORIES: Tab[] = ['Bullet', 'Blitz', 'Rapid', 'Classical', 'Duck']
 const DEFAULT_CATEGORY: Tab = 'Blitz'
+
+// Five text labels no longer fit beside the title, so the toggle collapses each
+// category to an icon. The four time controls use Lucide icons in a descending-
+// speed register (rocket → lightning → rabbit → turtle) — one stroke weight and
+// grid, so they read as a single set rather than emoji. Duck reuses the same
+// hand-drawn duck SVG that sits on the board (in `mono` — a currentColor
+// silhouette — so it tints with its neighbours instead of being the lone colour).
+// Only the active tab expands to a labelled pill; full names live on `title`/`aria-label`.
+const ICON_PX = 15
+const GLYPH: Record<Tab, React.ReactNode> = {
+    Bullet: <Rocket size={ICON_PX} strokeWidth={2} />,
+    Blitz: <Zap size={ICON_PX} strokeWidth={2} />,
+    Rapid: <Rabbit size={ICON_PX} strokeWidth={2} />,
+    Classical: <Turtle size={ICON_PX} strokeWidth={2} />,
+    Duck: (
+        <Box component="span" sx={{ fontSize: ICON_PX + 2, display: 'inline-flex' }}>
+            <DuckGlyph mono />
+        </Box>
+    ),
+}
 
 /** The lowercase wire value the API expects ('blitz'), derived from the display tab. */
 function apiKey(cat: Tab): 'bullet' | 'blitz' | 'rapid' | 'classical' | 'duck' {
@@ -45,7 +67,7 @@ export default function LeaderboardWidget() {
     }, [category])
 
     const toggle = (
-        <Box sx={{ display: 'flex', gap: 1.25, flexWrap: 'wrap' }}>
+        <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
             {CATEGORIES.map((cat) => {
                 const active = cat === category
                 return (
@@ -54,22 +76,45 @@ export default function LeaderboardWidget() {
                         component="button"
                         type="button"
                         onClick={() => setCategory(cat)}
+                        title={cat}
+                        aria-label={cat}
+                        aria-pressed={active}
                         sx={{
                             appearance: 'none',
                             cursor: 'pointer',
                             font: 'inherit',
-                            background: 'none',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 0.5,
+                            background: active ? 'var(--surface-2)' : 'none',
                             border: 'none',
-                            p: 0,
-                            fontSize: 12.5,
-                            fontWeight: active ? 700 : 500,
+                            borderRadius: '999px',
+                            px: active ? 0.85 : 0.35,
+                            py: 0.35,
                             lineHeight: 1,
+                            // Lucide icons stroke in currentColor and the mono duck fills in
+                            // it too, so every tab tints the same: accent when active, muted when not.
                             color: active ? 'var(--accent)' : 'var(--muted)',
-                            transition: 'color 0.12s ease',
+                            transition: 'color 0.12s ease, background-color 0.12s ease',
                             '&:hover': { color: active ? 'var(--accent)' : 'var(--text)' },
                         }}
                     >
-                        {cat}
+                        <Box component="span" sx={{ display: 'inline-flex', lineHeight: 1 }}>
+                            {GLYPH[cat]}
+                        </Box>
+                        {active && (
+                            <Box
+                                component="span"
+                                sx={{
+                                    fontSize: 12.5,
+                                    fontWeight: 700,
+                                    lineHeight: 1,
+                                    color: 'var(--accent)',
+                                }}
+                            >
+                                {cat}
+                            </Box>
+                        )}
                     </Box>
                 )
             })}
