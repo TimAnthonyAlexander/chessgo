@@ -523,15 +523,15 @@ function DuckCell({ onClick }: { onClick: () => void }) {
                 justifyContent: 'center',
                 gap: 1,
                 py: { xs: 2.5, md: 3 },
-                bgcolor: 'var(--accent-soft)',
-                border: '1px solid var(--accent-line)',
+                bgcolor: 'var(--surface-2)',
+                border: '1px solid var(--line-soft)',
                 borderRadius: '12px',
                 cursor: 'pointer',
                 overflow: 'hidden',
                 transition: 'border-color 0.12s ease, background 0.12s ease',
                 '&:hover': {
-                    borderColor: 'var(--accent)',
-                    bgcolor: 'var(--accent-soft-strong)',
+                    borderColor: 'var(--accent-line)',
+                    bgcolor: 'var(--surface)',
                 },
             }}
         >
@@ -548,7 +548,7 @@ function DuckCell({ onClick }: { onClick: () => void }) {
                         fontFamily: 'var(--font-display)',
                         fontSize: 14,
                         fontWeight: 600,
-                        color: 'var(--accent)',
+                        color: 'var(--text)',
                         lineHeight: 1,
                     }}
                 >
