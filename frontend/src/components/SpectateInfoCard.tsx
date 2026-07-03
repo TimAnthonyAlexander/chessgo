@@ -1,31 +1,26 @@
-import { type ReactNode } from 'react'
+import { type ReactNode, useMemo } from 'react'
 import { Box, Typography } from '@mui/material'
-import { Crown, Eye, Rabbit, Timer, Zap } from 'lucide-react'
-import type { SpectateSide } from '../lib/spectate'
+import { Crown, Rabbit, Timer, Zap } from 'lucide-react'
 import { type Variant, VARIANT_LABEL } from '../lib/variants'
+import { computeMaterial } from '../lib/material'
 import { PANEL_SHADOW } from './PanelUI'
 
-/** Left-side card for the spectator view: what kind of game you're watching
- * (time-control category, rated/casual, variant) and who's playing. Mirrors
- * LiveModeCard so the watch page reads like the rest of the app. */
+// The left column complements the right panel rather than echoing it. The right
+// panel already carries the pool, rated badge, player names + clocks and the move
+// list — so this card deliberately adds only what's NOT there: the human-readable
+// time-control category (the right side shows the raw "3+2" pool only) and a live
+// captured-material readout, the one thing a spectator most wants at a glance.
 export default function SpectateInfoCard({
     pool,
-    rated,
     variant,
-    white,
-    black,
-    moveCount,
-    live,
+    fen,
 }: {
     pool: string
-    rated: boolean
     variant: Variant
-    white: SpectateSide
-    black: SpectateSide
-    moveCount: number
-    live: boolean
+    fen: string
 }) {
     const cat = categoryFor(pool)
+    const mat = useMemo(() => computeMaterial(fen), [fen])
 
     return (
         <Box
@@ -38,18 +33,17 @@ export default function SpectateInfoCard({
                 boxShadow: PANEL_SHADOW,
             }}
         >
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'var(--accent)' }}>
-                <Eye size={17} />
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Box sx={{ color: 'var(--accent)', display: 'flex' }}>{cat.icon}</Box>
                 <Typography
                     sx={{
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: 11,
-                        letterSpacing: '0.2em',
-                        textTransform: 'uppercase',
-                        color: 'var(--text-dim)',
+                        fontFamily: 'var(--font-display)',
+                        fontSize: 24,
+                        fontWeight: 600,
+                        lineHeight: 1,
                     }}
                 >
-                    {rated ? 'Rated' : 'Casual'}
+                    {cat.label}
                 </Typography>
                 {variant !== 'standard' && (
                     <Box
@@ -73,77 +67,92 @@ export default function SpectateInfoCard({
                 )}
             </Box>
 
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
-                <Box sx={{ color: 'var(--accent)', display: 'flex' }}>{cat.icon}</Box>
-                <Typography
-                    sx={{
-                        fontFamily: 'var(--font-display)',
-                        fontSize: 32,
-                        fontWeight: 600,
-                        lineHeight: 1,
-                    }}
-                >
-                    {cat.label}
-                </Typography>
-            </Box>
-            <Typography
-                sx={{
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: 14,
-                    color: 'var(--text-dim)',
-                    mt: 0.75,
-                }}
-            >
-                {pool}
-            </Typography>
-
-            <Box sx={{ borderTop: '1px solid var(--line-soft)', mt: 2.25, pt: 2.25 }}>
-                <Label>Players</Label>
-                <PlayerRow color="w" side={white} />
-                <PlayerRow color="b" side={black} sx={{ mt: 1.25 }} />
-            </Box>
-
-            <Box sx={{ borderTop: '1px solid var(--line-soft)', mt: 2.25, pt: 2.25 }}>
-                <Label>Status</Label>
-                <Typography sx={{ fontWeight: 600, fontSize: 15 }}>
-                    {live ? 'In progress' : 'Finished'}
-                    <Box component="span" sx={{ color: 'var(--text-dim)', fontWeight: 400 }}>
-                        {' · '}
-                        {moveCount === 1 ? '1 move' : `${moveCount} moves`}
-                    </Box>
-                </Typography>
+            <Box sx={{ borderTop: '1px solid var(--line-soft)', mt: 2, pt: 2 }}>
+                <Label>Material</Label>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, mt: 1 }}>
+                    <MaterialRow
+                        label="White"
+                        pieces={mat.capturedByWhite}
+                        color="b"
+                        adv={mat.diff > 0 ? mat.diff : 0}
+                    />
+                    <Box sx={{ height: '1px', bgcolor: 'var(--line-soft)' }} />
+                    <MaterialRow
+                        label="Black"
+                        pieces={mat.capturedByBlack}
+                        color="w"
+                        adv={mat.diff < 0 ? -mat.diff : 0}
+                    />
+                </Box>
             </Box>
         </Box>
     )
 }
 
-/** A single player line: a color swatch (white/black to move), name, rating. */
-function PlayerRow({ color, side, sx }: { color: 'w' | 'b'; side: SpectateSide; sx?: object }) {
+/** One side's captured pieces (opponent's color) + a material advantage badge. */
+function MaterialRow({
+    label,
+    pieces,
+    color,
+    adv,
+}: {
+    label: string
+    pieces: string[]
+    color: 'w' | 'b'
+    adv: number
+}) {
     return (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, ...sx }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minHeight: 24 }}>
+            <Typography
+                sx={{
+                    width: 44,
+                    flexShrink: 0,
+                    fontSize: 12.5,
+                    fontWeight: 600,
+                    letterSpacing: 0.3,
+                    color: 'var(--text-dim)',
+                }}
+            >
+                {label}
+            </Typography>
             <Box
                 sx={{
-                    width: 16,
-                    height: 16,
-                    flexShrink: 0,
-                    borderRadius: '4px',
-                    bgcolor: color === 'w' ? '#f0f0f0' : '#2a2a2a',
-                    border: '1px solid var(--line)',
+                    flex: 1,
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                    gap: '1px',
+                    minWidth: 0,
                 }}
-            />
-            <Typography sx={{ fontWeight: 600, fontSize: 15, minWidth: 0 }} noWrap>
-                {side.name}
-            </Typography>
-            {!side.anon && (
+            >
+                {pieces.length === 0 ? (
+                    <Typography sx={{ fontSize: 13, color: 'var(--muted)' }}>—</Typography>
+                ) : (
+                    pieces.map((t, i) => (
+                        <Box
+                            key={i}
+                            component="img"
+                            src={`/piece/cburnett/${color}${t}.svg`}
+                            alt={t}
+                            sx={{
+                                width: 20,
+                                height: 20,
+                                ml: i > 0 && pieces[i - 1] === t ? '-7px' : 0,
+                            }}
+                        />
+                    ))
+                )}
+            </Box>
+            {adv > 0 && (
                 <Typography
                     sx={{
-                        ml: 'auto',
                         fontFamily: 'var(--font-mono)',
-                        fontSize: 13,
-                        color: 'var(--text-dim)',
+                        fontSize: 13.5,
+                        fontWeight: 700,
+                        color: 'var(--accent)',
                     }}
                 >
-                    {side.rating}
+                    +{adv}
                 </Typography>
             )}
         </Box>
@@ -159,7 +168,6 @@ function Label({ children }: { children: ReactNode }) {
                 letterSpacing: '0.16em',
                 textTransform: 'uppercase',
                 color: 'var(--muted)',
-                mb: 0.75,
             }}
         >
             {children}

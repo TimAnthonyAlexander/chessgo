@@ -4,42 +4,8 @@ import { Check, Copy, Dices, FileInput, RotateCcw } from 'lucide-react'
 import { Chess } from 'chess.js'
 import { START_FEN } from '../lib/analysisTree'
 import { random960 } from '../lib/variants'
+import { computeMaterial, type Material } from '../lib/material'
 import BoardActions from './BoardActions'
-
-// Standard piece values + starting counts, used to derive captured material from a
-// bare FEN (an approximation when pawns have promoted, like most board UIs).
-const VALUE: Record<string, number> = { P: 1, N: 3, B: 3, R: 5, Q: 9 }
-const START_COUNT: Record<string, number> = { P: 8, N: 2, B: 2, R: 2, Q: 1 }
-const ORDER = ['Q', 'R', 'B', 'N', 'P'] as const
-
-interface Material {
-    capturedByWhite: string[] // black pieces removed from the board
-    capturedByBlack: string[] // white pieces removed from the board
-    diff: number // White material minus Black material
-}
-
-function computeMaterial(fen: string): Material {
-    const board = fen.split(' ')[0]
-    const w: Record<string, number> = {}
-    const b: Record<string, number> = {}
-    for (const ch of board) {
-        if (!/[pnbrq]/i.test(ch)) continue
-        const t = ch.toUpperCase()
-        if (ch === t) w[t] = (w[t] ?? 0) + 1
-        else b[t] = (b[t] ?? 0) + 1
-    }
-    const capturedByWhite: string[] = []
-    const capturedByBlack: string[] = []
-    let whiteVal = 0
-    let blackVal = 0
-    for (const t of ORDER) {
-        whiteVal += (w[t] ?? 0) * VALUE[t]
-        blackVal += (b[t] ?? 0) * VALUE[t]
-        for (let i = 0; i < START_COUNT[t] - (b[t] ?? 0); i++) capturedByWhite.push(t)
-        for (let i = 0; i < START_COUNT[t] - (w[t] ?? 0); i++) capturedByBlack.push(t)
-    }
-    return { capturedByWhite, capturedByBlack, diff: whiteVal - blackVal }
-}
 
 // Returns the FEN if chess.js accepts it, else null.
 function validFen(fen: string): string | null {

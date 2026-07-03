@@ -46,7 +46,7 @@ $router = App::router();
 
 // Health check
 $router->get('/health', [
-    RateLimitMiddleware::class => ['limit' => '60/1m'],
+    RateLimitMiddleware::class => ['limit' => '600/1m'],
     HealthController::class,
 ]);
 
@@ -59,7 +59,7 @@ $router->get('/benchmark', [BenchmarkController::class]);
 
 // Create a new game vs the AI: { level?: 0..10, human_color?: "w"|"b" }
 $router->post('/bot-games', [
-    RateLimitMiddleware::class => ['limit' => '30/1m'],
+    RateLimitMiddleware::class => ['limit' => '300/1m'],
     BotGameController::class,
 ]);
 
@@ -68,39 +68,39 @@ $router->get('/bot-games/{id}', [BotGameController::class]);
 
 // Submit the human's move (UCI), get the bot's reply: { move: "e2e4" }
 $router->post('/bot-games/{id}/move', [
-    RateLimitMiddleware::class => ['limit' => '180/1m'],
+    RateLimitMiddleware::class => ['limit' => '1200/1m'],
     BotMoveController::class,
 ]);
 
 // Take back the human's last move (and any bot reply since)
 $router->post('/bot-games/{id}/undo', [
-    RateLimitMiddleware::class => ['limit' => '180/1m'],
+    RateLimitMiddleware::class => ['limit' => '1200/1m'],
     BotUndoController::class,
 ]);
 
 // Full-strength eval of a position (drives the eval bar): { fen }
 $router->post('/analyze', [
-    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    RateLimitMiddleware::class => ['limit' => '1200/1m'],
     AnalyzeController::class,
 ]);
 
 // Duck Chess free-play on the analysis board — PUBLIC, stateless, no persisted
 // game. Legal piece moves for a position: { fen, duck? } → { moves }
 $router->post('/duck/legal-moves', [
-    RateLimitMiddleware::class => ['limit' => '240/1m'],
+    RateLimitMiddleware::class => ['limit' => '1200/1m'],
     DuckLegalMovesController::class,
 ]);
 
 // Validate + apply a composite duck move: { fen, duck?, move } → resulting
 // position (+ next legal moves while ongoing)
 $router->post('/duck/move', [
-    RateLimitMiddleware::class => ['limit' => '240/1m'],
+    RateLimitMiddleware::class => ['limit' => '1200/1m'],
     DuckMoveController::class,
 ]);
 
 // Full-strength duck engine analysis (eval bar + best move): { fen, duck?, movetime? }
 $router->post('/duck/analyze', [
-    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    RateLimitMiddleware::class => ['limit' => '1200/1m'],
     DuckAnalyzeController::class,
 ]);
 
@@ -108,14 +108,14 @@ $router->post('/duck/analyze', [
 // second-opinion arrow: { fen, movetime? }. Spawns a Stockfish per call, so
 // rate-limit it a little tighter than /analyze.
 $router->post('/sf-analyze', [
-    RateLimitMiddleware::class => ['limit' => '60/1m'],
+    RateLimitMiddleware::class => ['limit' => '300/1m'],
     SfAnalyzeController::class,
 ]);
 
 // Opening explorer for the analysis board: opening name + per-move eval
 // (MultiPV): { fen, history?, multipv?, movetime?, depth? }
 $router->post('/candidates', [
-    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    RateLimitMiddleware::class => ['limit' => '1200/1m'],
     CandidatesController::class,
 ]);
 
@@ -130,25 +130,25 @@ $router->post('/admin/engine-vs/move', [
 // gets an account identity (rated play); anonymous callers get a casual ticket.
 $router->get('/ws-ticket', [
     SessionStartMiddleware::class,
-    RateLimitMiddleware::class => ['limit' => '60/1m'],
+    RateLimitMiddleware::class => ['limit' => '300/1m'],
     WsTicketController::class,
 ]);
 
 // Live lobby counts (players online + active games) — proxies the realtime hub
 $router->get('/stats', [
-    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    RateLimitMiddleware::class => ['limit' => '1200/1m'],
     StatsController::class,
 ]);
 
 // Top live games for the Watch page — proxies the realtime hub
 $router->get('/watch', [
-    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    RateLimitMiddleware::class => ['limit' => '1200/1m'],
     WatchController::class,
 ]);
 
 // Public leaderboard — top players for one rating category (?category=blitz)
 $router->get('/leaderboard', [
-    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    RateLimitMiddleware::class => ['limit' => '600/1m'],
     LeaderboardController::class,
 ]);
 
@@ -161,13 +161,13 @@ $router->get('/internal/filler-fens', [FillerFensController::class]);
 
 // Fetch a finished live game by hub id (for the post-game analysis board)
 $router->get('/games/{id}', [
-    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    RateLimitMiddleware::class => ['limit' => '600/1m'],
     GameController::class,
 ]);
 
 // Full-game engine analysis (per-ply eval, best move, blunders) — cached on first call
 $router->get('/games/{id}/analysis', [
-    RateLimitMiddleware::class => ['limit' => '30/1m'],
+    RateLimitMiddleware::class => ['limit' => '300/1m'],
     GameAnalysisController::class,
 ]);
 
@@ -175,13 +175,13 @@ $router->get('/games/{id}/analysis', [
 // Player profiles (public — ratings + record + game history, keyed by name)
 // ================================
 $router->get('/users/{name}', [
-    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    RateLimitMiddleware::class => ['limit' => '600/1m'],
     ProfileController::class,
 ]);
 
 // Paginated game history for a profile ("load more")
 $router->get('/users/{name}/games', [
-    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    RateLimitMiddleware::class => ['limit' => '600/1m'],
     ProfileGamesController::class,
 ]);
 
@@ -193,14 +193,14 @@ $router->get('/users/{name}/games', [
 
 // Puzzle of the day — one deterministic puzzle, same for everyone all UTC day
 $router->get('/puzzles/daily', [
-    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    RateLimitMiddleware::class => ['limit' => '600/1m'],
     DailyPuzzleController::class,
 ]);
 
 // Serve the next puzzle near the solver's rating (solution withheld): ?theme=
 $router->get('/puzzles/next', [
     SessionStartMiddleware::class,
-    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    RateLimitMiddleware::class => ['limit' => '600/1m'],
     PuzzleController::class,
 ]);
 
@@ -208,7 +208,7 @@ $router->get('/puzzles/next', [
 //   { move: "e2e4", fen: "<current FEN>", ply: 1 }
 $router->post('/puzzles/{id}/move', [
     SessionStartMiddleware::class,
-    RateLimitMiddleware::class => ['limit' => '240/1m'],
+    RateLimitMiddleware::class => ['limit' => '1200/1m'],
     PuzzleController::class,
 ]);
 

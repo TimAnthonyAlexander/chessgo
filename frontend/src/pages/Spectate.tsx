@@ -178,17 +178,7 @@ export default function Spectate() {
     return (
         <BoardPage
             evalBar={isAdmin && showEval ? <EvalBar ev={whiteEval} orientation="w" /> : undefined}
-            left={
-                <SpectateInfoCard
-                    pool={g.pool}
-                    rated={g.rated}
-                    variant={g.variant}
-                    white={g.white}
-                    black={g.black}
-                    moveCount={g.moves.length}
-                    live={!g.over}
-                />
-            }
+            left={<SpectateInfoCard pool={g.pool} variant={g.variant} fen={g.fen} />}
             right={
                 <Box
                     sx={{
