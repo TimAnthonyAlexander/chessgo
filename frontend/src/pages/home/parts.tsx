@@ -259,6 +259,7 @@ export function QuickPairingPanel({
                         xs: 'repeat(2, 1fr)',
                         sm: 'repeat(3, 1fr)',
                     },
+                    gridAutoRows: '1fr',
                     gap: 1.25,
                 }}
             >
@@ -441,7 +442,7 @@ function TimeCell({ preset, onClick }: { preset: Preset; onClick: () => void }) 
         const rounded = Math.round(userRating / 50) * 50
         const min = rounded - 100
         const max = rounded + 100
-        eloRange = `~${min.toLocaleString()}–${max.toLocaleString()}`
+        eloRange = `${min.toLocaleString('de-DE')}–${max.toLocaleString('de-DE')}`
     }
 
     return (
@@ -535,27 +536,27 @@ function DuckCell({ onClick }: { onClick: () => void }) {
                 },
             }}
         >
-            <Box
-                component="span"
-                sx={{ fontSize: { xs: 26, md: 30 }, lineHeight: 1, display: 'block' }}
-                aria-hidden
+            <Typography
+                sx={{
+                    fontFamily: 'var(--font-display)',
+                    fontSize: { xs: 25, md: 30 },
+                    fontWeight: 500,
+                    lineHeight: 1,
+                    letterSpacing: '-0.01em',
+                }}
             >
-                <DuckGlyph />
-            </Box>
-            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
-                <Typography
-                    sx={{
-                        fontFamily: 'var(--font-display)',
-                        fontSize: 14,
-                        fontWeight: 600,
-                        color: 'var(--text)',
-                        lineHeight: 1,
-                    }}
+                {DUCK_POOL}
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                <Box
+                    component="span"
+                    sx={{ fontSize: 14, lineHeight: 1, display: 'flex' }}
+                    aria-hidden
                 >
+                    <DuckGlyph />
+                </Box>
+                <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)', fontWeight: 500 }}>
                     Duck Chess
-                </Typography>
-                <Typography sx={{ fontSize: 11.5, color: 'var(--text-dim)', fontWeight: 500 }}>
-                    {DUCK_POOL} · Blitz
                 </Typography>
             </Box>
         </Box>
