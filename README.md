@@ -1,6 +1,6 @@
 # chessgo
 
-A chess website and a chess engine, both in this repo. The website runs in production at [chessgo.timanthonyalexander.de](https://chessgo.timanthonyalexander.de). The engine, `gomachine`, is a standalone Go program that plays in the ~3500 CCRL Blitz range and speaks UCI.
+A chess website and a chess engine, both in this repo. The website runs in production at [chessgo.timanthonyalexander.de](https://chessgo.timanthonyalexander.de). The engine, `gomachine`, is a standalone Go program that plays around ~3750 CCRL Blitz and speaks UCI.
 
 Every rule, the move generator, the evaluation, and the search are written from scratch in Go. No external chess library. The website calls the engine over HTTP and a WebSocket; the engine has no dependency on the website and runs on its own.
 
@@ -10,7 +10,7 @@ One self-contained binary. Evaluation network and opening book are compiled in, 
 
 ### Strength
 
-**~3500 CCRL Blitz**, tested at full strength against a range of CCRL-rated engines.
+**~3750 CCRL Blitz**, tested at full strength against a range of CCRL-rated engines.
 
 Development uses self-play **SPRT** (sequential probability ratio test): a change plays the previous version until the test decides it is an improvement or it is rejected. Nothing ships on a hunch. Full method and every result with confidence intervals: [docs/ENGINE_STRENGTH.md](docs/ENGINE_STRENGTH.md).
 
@@ -24,7 +24,7 @@ Development uses self-play **SPRT** (sequential probability ratio test): a chang
 
 Strength was built in SPRT-gated layers: search patches (~+250 Elo), Lazy SMP (~+97), Texel-tuned eval replacing the piece-square baseline (+101), Syzygy (+18 to +33 on endgame books), NNUE replacing the hand-crafted eval (+212), a wider net with SIMD (+101), then correction history / singular / futility (~+110 at fixed nodes).
 
-Top engines (~3700+ CCRL) are still ahead. Remaining levers, a wider network, more training data, SPSA tuning, are in the strength doc.
+The very top engines (~4000+ CCRL) are still ahead. Remaining levers, a wider network, more training data, SPSA tuning, are in the strength doc.
 
 ### Build
 
