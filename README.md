@@ -28,6 +28,41 @@ Strength was built in SPRT-gated layers: search patches (~+250 Elo), Lazy SMP (~
 
 The very top engines (~4000+ CCRL) are still ahead. Remaining levers, a wider network, more training data, SPSA tuning, are in the strength doc.
 
+### Strength progression (0 → ~3750)
+
+How it got here, chronologically. **Δ Elo** is the self-play SPRT gain of each step over the version before it, on the ruler noted — *fixed-nodes inflates eval changes, movetime is the honest one, and the endgame terms were measured on an endgame book so their whole-game effect is a fraction of the quoted number*. Self-play gains don't linearly sum, so **Cum.** is a guesstimate, not arithmetic. **≈ CCRL** is filled only where there's a real external measurement (†) and interpolated elsewhere; the baseline sits ~2800 because the early "~2400 vs Stockfish" read was on Stockfish's UCI_Elo scale, which runs ~390 below CCRL. The endpoint ~3750 is itself an estimate still owing a formal re-anchor.
+
+| # | Step | Δ Elo (ruler) | Cum. | ≈ CCRL |
+|---|------|---------------|:----:|:------:|
+| 0 | **Foundations** — magic-bitboard movegen, make/unmake, Zobrist, perft; PeSTO tapered HCE; alpha-beta → negamax, iterative deepening, PVS, Hyatt-XOR TT, qsearch, MVV-LVA + killer/history ordering | baseline | 0 | ~2800 |
+| 1 | SEE-filtered captures (qsearch + main search) | ~+70 self-play | +70 | |
+| 2 | Delta pruning + aspiration windows | ~+50 self-play | +120 | |
+| 3 | Reverse futility (RFP) + late move pruning (LMP) + late move reductions (LMR) | ~+90 self-play | +210 | |
+| 4 | Null-move pruning | ~+40 self-play | +250 | ~3000 |
+| 5 | **Lazy SMP** — lock-free TT, multi-thread search | +97 movetime | +347 | ~3050 |
+| 6 | **Texel-tuned HCE** — joint Adam on WDL, PSQT tuned in (the HCE ceiling, done right) | +101 movetime | +448 | ~3110† |
+| 7 | Syzygy 5-piece Fathom root-DTZ probing | +18.8 (EG book) | +456 | |
+| 8 | WDL tablebase probing inside the search | +32.7 (EG book) | +466 | |
+| 9 | KingProx — endgame king-proximity-to-passers eval term | +30.5 (EG book) | +474 | |
+| 10 | PawnRace — knight-aware unstoppable-passer / race eval term | +17.4 (EG book) | +479 | ~3140 |
+| 11 | **NNUE v4 (256-wide)**, non-incremental float — eval leaps but the accumulator is too slow (+172 fixed nodes, **−156 movetime**: the NPS wall) | ~0 net (movetime) | +479 | |
+| 12 | + incremental **int16 accumulator** → NNUE ships and replaces HCE | +212 movetime | +691 | ~3270† |
+| 13 | **NNUE v6 (512-wide)** — width is the lever, but a wash on a scalar build (+124 fixed nodes only) | ~0 (scalar movetime) | +691 | |
+| 14 | + **archsimd** AVX2/NEON SIMD kernels (6.5×/4.16× eval) unlock v6 at movetime | +101 movetime | +792 | ~3300 |
+| 15 | Correction history | +66.9 @ 40k nodes | +827 | |
+| 16 | Singular extensions + multicut | +22.2 @ 40k nodes | +842 | |
+| 17 | Frontier futility | +21.3 @ 40k nodes | +854 | |
+| 18 | SEE / history late-leaf pruning retune (CaptSEE margin → 25) | +97 chain @ 40k | +884 | ~3450 |
+| 19 | PGO build | +3% NPS | +889 | |
+| 20 | Pin-aware legal movegen | +20% NPS | +904 | |
+| 21 | TT static-eval cache | +14.8 movetime | +919 | ~3500 |
+| — | **Anchor (2026-07-01): floor measured >3400** — 100W–0L vs a ~3400 engine | *measurement* | — | **>3400†** |
+| 22 | Opening book recompiled with the current net | +33 fixed nodes | +937 | |
+| 23 | Qsearch captures-only (byte-identical at fixed nodes; the Elo is pure NPS → depth) | +20 movetime | +957 | |
+| 24 | NMP static-eval gate + qsearch futility | ~+5 movetime | +962 | ~3750 |
+
+Two through-lines run under the table. The **eval ladder**: PeSTO HCE → Texel-tuned HCE (the HCE ceiling) → NNUE 256 (the single biggest leap, +212) → NNUE v6 512 + SIMD (+101). And the **NPS thread**, which is why several eval wins only cash out at movetime: the incremental int16 accumulator is what made NNUE viable at all (a 6.9× eval-cost deficit cut to 1.6×), SIMD gave another 6.5×/4.16×, and PGO × pin-aware movegen added ~23% raw NPS — each one buying search depth rather than a smarter static score.
+
 ### Build
 
 Go 1.25+:
