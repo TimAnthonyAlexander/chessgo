@@ -459,6 +459,14 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("qsfutmargin: %q is not an int", val)
 			}
 			base.QSFutilityMargin = n
+		case "qcaps", "qcapsonly":
+			// quiescence generates only noisy moves out of check. OFF = pre-opt
+			// all-legal-then-filter (A/B baseline for the captures-only NPS win).
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.QCaps = b
 		case "qscastling", "qscastle":
 			// search castling in quiescence (historical quirk). OFF drops it.
 			b, err := parseBool(val)
@@ -669,6 +677,9 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.QSFutilityMargin != patch.QSFutilityMargin {
 		diffs = append(diffs, fmt.Sprintf("qsfutmargin: %d→%d", base.QSFutilityMargin, patch.QSFutilityMargin))
+	}
+	if base.QCaps != patch.QCaps {
+		diffs = append(diffs, fmt.Sprintf("qcaps: %s→%s", onoff(base.QCaps), onoff(patch.QCaps)))
 	}
 	if base.QSCastling != patch.QSCastling {
 		diffs = append(diffs, fmt.Sprintf("qscastling: %s→%s", onoff(base.QSCastling), onoff(patch.QSCastling)))

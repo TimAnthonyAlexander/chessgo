@@ -1672,8 +1672,16 @@ func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 		if ml.Len() == 0 {
 			return -mateScore + ply
 		}
-	} else {
+	} else if s.params.QCaps {
 		pos.GenerateCaptures(&ml)
+		if ml.Len() == 0 {
+			return alpha
+		}
+	} else {
+		// QCaps=off: the pre-optimization path (generate all legal, filter to noisy
+		// in the loop) — kept as a flag purely so the captures-only NPS win can be
+		// A/B'd at movetime (its Elo is invisible at fixed nodes; see §26.3).
+		pos.GenerateLegal(&ml)
 		if ml.Len() == 0 {
 			return alpha
 		}
