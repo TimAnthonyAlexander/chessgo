@@ -3,8 +3,10 @@
 A **production-ready chess website** + a **strong ~3500 CCRL Go chess engine**:
 play chess **vs other humans** (live matchmaking with clocks) and **vs the AI**,
 with all chess rules + the AI implemented in a dedicated Go engine (`gomachine`).
-The engine — bracketed ~3500 CCRL Blitz (floor >3400, ceiling <3700; §Status) —
-is the centerpiece; the website is the front door to it.
+The engine — a **stale 3400–3700 CCRL Blitz floor with a dead ~3700 ceiling** (measured 2026-07-01,
+now superseded upward by ~25 Elo of shipped patches + never triangulated; the ~3700 top is an old
+blowout the engine has gained past, so the band is open-topped — floor >3400, no valid ceiling;
+§Status) — is the centerpiece; the website is the front door to it.
 
 > Read `docs/SPEC.md` for the full design and `docs/COMMANDS.md` to run/deploy.
 > This file is the fast orientation.
@@ -244,13 +246,19 @@ scalar build is a movetime wash). Then a **search-feature wave** (`docs/ENGINE_S
 §13`) shipped **corrhist + singular + futility** (+66.9/+22.2/+21.3 @ 40k nodes; owes a
 movetime re-anchor) and rejected the cheap long tail (conthist/IIR/capthist/probcut/razor
 flat-or-negative; lmr2-on-singular −67 anti-synergy) — the cheap-search-patch well is now
-mostly dry on this baseline. Current strength **bracketed 3400–3700 CCRL Blitz, floor
-comfortably >3400** (2026-07-01, ENGINE_STRENGTH.md §20: **100W–0L vs a ~3400 engine** =
-hard floor; lost hard to a ~3700). Untriangulated — no ~50% opponent yet, so quote the
-**band**, not a point. This **supersedes** the earlier ≈3260 "dirty" read (§15, two-blowout)
-and the one-sided **≈3200** a loss-heavy match produced (a mathematical artifact of scoring
-≈0%, not a measurement — never quote it). Both older reads reconcile with the old SF-UCI_Elo
-**≈2882** (that scale sits ~390 below CCRL). Next:
+mostly dry on this baseline. Current strength **a stale 3400–3700 CCRL Blitz floor with a DEAD
+ceiling** (measured 2026-07-01, ENGINE_STRENGTH.md §20: **100W–0L vs a ~3400 engine** = hard floor;
+an **old** lost match vs a ~3700 engine). **The band is stale two ways (§28):** it predates ~25 Elo
+of shipped movetime patches (recompiled book +33 fixed-nodes §25, qsearch captures-only +20 movetime
+§26.4, nmpgate+qsfut ~+5 movetime §23) and was never triangulated (both reference matches are
+opposite-direction blowouts). The **~3700 loss is stale** — an old blowout the engine has gained past,
+so it is **no longer a valid ceiling**; the band is effectively **open-topped** (floor >3400, no
+established ceiling), still **untriangulated** — **re-anchor vs a ranked NNUE opponent (now ~3700+,
+not the old ~3450–3600) before quoting any point**, and read >3400 as a **floor**, 3700 as a **dead**
+ceiling. (At short movetimes the effective gap to
+full-strength SF is only ~130 Elo / a ~3.7× time-odds ratio — §27.) This **supersedes** the
+earlier ≈3260 "dirty" read (§15, two-blowout) and the one-sided **≈3200** a loss-heavy match
+produced (a mathematical artifact of scoring ≈0%, not a measurement — never quote it). Next:
 NNUE width → **1024** (cheap behind SIMD), hub-restart-durable resume, puzzle generation
 pipeline, reworked-selective versions of the rejected search patches (PV-only IIR,
 scaled capthist, conthist that doesn't double-count history), **SPSA**,

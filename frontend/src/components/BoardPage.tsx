@@ -10,18 +10,18 @@ import { Box } from '@mui/material'
 //  - A 3-column grid `SIDE · board · SIDE`, centered (`fit-content` + `mx:auto`),
 //    with TIGHT gaps so the cards sit close to the board. Both side columns are
 //    ALWAYS rendered (empty when a page has no left/right content) so the layout is
-//    stable. The board is dead-centered when there's no eval bar; when a bar IS
-//    shown it claims a little extra room on the LEFT (where it floats), nudging the
-//    board a few px right so BOTH cards hug the board+bar block evenly instead of
-//    leaving the right card stranded far out.
+//    stable. The eval-bar gap on the board's LEFT is reserved UNCONDITIONALLY, so
+//    the board sits in the identical spot on every page and toggling an eval bar
+//    on/off never shifts it — the bar just fills (or vacates) the reserved gap.
 //  - The board column is a FIXED length (`BOARD_SIZE`), never `1fr`/`auto`, so no
 //    amount of side content can steal or add width to it.
 //  - Side columns are a fixed width AND fixed height (= the board's height), so tall
 //    content scrolls inside the column instead of growing the row and nudging the
 //    board.
-//  - The eval bar (when present) is ABSOLUTELY positioned into the left gap
+//  - The eval bar (when present) is ABSOLUTELY positioned into the reserved left gap
 //    (`right:100%`), contributing zero layout width — so an eval-bar page and an
-//    eval-bar-less page render the exact same board box in the exact same place.
+//    eval-bar-less page render the exact same board box in the exact same place, and
+//    a page that toggles its bar keeps the board perfectly still.
 //
 // The board's top edge is also fixed (top-aligned under the nav + page padding), so
 // it lands at the same y on every page too.
@@ -32,16 +32,17 @@ const SIDE_W = 320
 // eval-bar↔board gap, the right-card↔board gap, and the left-card↔board gap when
 // there's no bar. Keeping them all equal is what makes the spacing read as even.
 const EDGE_GAP = 10
-// Eval-bar width (matches EvalBar's md width). When a bar is shown the left card
-// sits EDGE_GAP from the bar and the bar sits EDGE_GAP from the board, so the left
-// gap grows by (EDGE_GAP + EVAL_W) on top of the base EDGE_GAP.
+// Eval-bar width (matches EvalBar's md width). The bar sits EDGE_GAP from the board
+// and the left card sits EDGE_GAP from the bar, so the board's left gap is always
+// (EDGE_GAP + EVAL_W) larger than its right gap — reserved whether or not a bar shows.
 const EVAL_W = 38
-const GAP_EVAL_EXTRA = EDGE_GAP + EVAL_W // extra left gap only when the bar is present
+const GAP_EVAL_EXTRA = EDGE_GAP + EVAL_W // left gap reserved for the bar, always
 // Horizontal room the layout reserves besides the board: two side columns, the two
 // base edge gaps, the eval-bar's extra left gap (reserved unconditionally so the
 // board SIZE stays identical whether or not a page shows the bar), and the outer
 // page padding (px:3 → 24px each side). The board's width term subtracts this so a
-// width-bound viewport never overflows.
+// width-bound viewport never overflows. GAP_EVAL_EXTRA is reserved here AND applied
+// as the board's left margin unconditionally, so size and position stay in lockstep.
 const H_RESERVE = SIDE_W * 2 + EDGE_GAP * 2 + GAP_EVAL_EXTRA + 48 // = 756
 
 // The board square — the SINGLE source of truth for board size across the app.
@@ -103,10 +104,13 @@ export default function BoardPage({ children, left, right, evalBar }: BoardPageP
                         alignSelf: 'start',
                         width: { xs: '100%', md: BOARD_SIZE },
                         minWidth: 0,
-                        // Extra left gap ONLY when the eval bar is shown, so the floated bar
-                        // claims that space (instead of the right card being left far out).
-                        // The board nudges a few px right; with no bar both gaps are equal.
-                        ml: { md: evalBar ? `${GAP_EVAL_EXTRA}px` : 0 },
+                        // The eval-bar gap is reserved on the left UNCONDITIONALLY (matching
+                        // H_RESERVE, which already reserves it for board SIZE). So the board
+                        // lands in the exact same place on every BoardPage — whether or not a
+                        // page shows the bar, and whether a toggleable bar is on or off. The
+                        // bar (absolutely positioned, zero layout width) floats into this
+                        // reserved space when present; toggling it never moves the board.
+                        ml: { md: `${GAP_EVAL_EXTRA}px` },
                     }}
                 >
                     {evalBar && (

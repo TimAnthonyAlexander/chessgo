@@ -81,10 +81,17 @@ gomachine bench vs-stockfish --sf /opt/homebrew/bin/stockfish --sf-elo 2500 \
   --movetime 100 --games 60 --threads 4
 ```
 
-**Current reading (2026-07-01, §20): bracketed 3400–3700 CCRL Blitz, floor comfortably
->3400** (100–0 vs a ~3400 engine; lost to a ~3700). Untriangulated — no ~50% opponent yet.
-The ≈3260/≈3200 numbers below are **superseded**; the ≈3200 in particular was a one-sided
-all-losses artifact — see §20. The reads below are kept for the record.
+**Current reading — STALE FLOOR, DEAD CEILING, re-anchor pending (see §28): the 3400–3700 CCRL
+Blitz band (measured 2026-07-01, §20) is superseded upward and now open-topped.** It predates ~25 Elo
+of shipped movetime patches (§23/§25/§26.4) and was never triangulated (both reference matches are
+opposite-direction blowouts). The **~3700 top is stale** — that loss is an old match, and the engine
+has gained substantially since, so it is **no longer a valid ceiling**; only the floor (>3400) still
+holds. True strength is **above the floor with no measured upper bound** and still **untriangulated**
+— **re-anchor vs a ranked NNUE opponent (the old ~3450–3600 target is now too weak; use ~3700+)
+before quoting any number** (§28). The 2026-07-01 sub-reading, kept for the record: 100–0 vs a ~3400
+engine (hard floor >3400), plus an **old** lost match vs a ~3700 engine that no longer bounds current
+strength, untriangulated. The ≈3260/≈3200 numbers below are also **superseded**; the ≈3200 in
+particular was a one-sided all-losses artifact — see §20. The reads below are kept for the record.
 
 **Prior reading (2026-06-29, CCRL Blitz anchor — the then-headline figure, now raised to the
 3400–3700 bracket by §20):** **≈3260 "dirty" CCRL Blitz.** Measured by
@@ -354,16 +361,24 @@ the sign of the result.
 | **Output buckets (tested — WASH)** | **≈0 @ movetime** | done | v8 net: +90 @ fixed-nodes but ≈0 @ movetime & fixed-depth — a fixed-nodes mirage (§14.3–14.4). Infra (GNN3 + buckets) banked in code; v8 net **not promoted** |
 | SPSA (Elo-in-the-loop weight tuning) | modest | medium | the *correct* way to tune the few params with no static objective |
 
-Current strength: **≈3260 "dirty" CCRL Blitz** (2026-06-29, §15) — anchored against
-full-strength, officially-CCRL-rated **NNUE** opponents at 100 ms/move (Starzix 5.0
-**3276 ± 83** / Viridithas 17.0.0 **3245 ± 94**, pooled **≈3260**). This is the headline
-strength figure, **superseding** the old SF-UCI_Elo "~2880-class" reading — which wasn't
-wrong, just on a ~390-lower scale (2882 + ~390 ≈ 3270, §15). For reference the SF-UCI_Elo
-anchor read **≈2882** (band 2847–2935 vs SF-2700/2800/2900, 2026-06-22, §2.2); the
+Current strength: **stale 3400–3700 CCRL Blitz band — treat >3400 as a floor and 3700 as a DEAD
+ceiling** (§20, measured 2026-07-01; now **superseded upward** by ~25 Elo of shipped patches —
+§23/§25/§26.4 — and still **untriangulated**, see §28). The ~3700 top is an old blowout, and the
+engine has gained substantially since, so the band is effectively **open-topped**. **Re-anchor vs a
+ranked NNUE opponent — the old ~3450–3600 target is now too weak; use ~3700+ — before quoting a point
+number.** The earlier **≈3260 "dirty"** read (2026-06-29, §15 — Starzix 5.0 **3276 ± 83** /
+Viridithas 17.0.0 **3245 ± 94** @ 100 ms) is itself superseded by that band. Full-strength
+Stockfish 17.1 (**~4080 CCRL Blitz**) sits at *most* ~680 CCRL above the floor *at CCRL time controls*
+(the ~380 lower end used the now-dead 3700 ceiling, so the real gap is smaller/unknown) — and at
+**short** movetimes the effective gap collapses to **~130 Elo / a ~3.7× time-odds ratio** (§27).
+For reference the older SF-UCI_Elo anchor read **≈2882** (band 2847–2935 vs SF-2700/2800/2900,
+2026-06-22, §2.2); the
 **trustworthy relative** figure remains the self-play SPRT (**+212 ± 49 vs HCE @
-movetime**, §11), not any absolute anchor. Full-strength Stockfish 17.1 (**~4080 CCRL
-Blitz**) is still **~800 CCRL above us** — the NNUE width/data levers (§11.4) are how
-that gap narrows.
+movetime**, §11), not any absolute anchor. The NNUE width/data levers (§11.4) are how the
+remaining long-TC gap to full-strength SF narrows (the old "~800 CCRL above us" was measured
+off the superseded ≈3260 read; against the current floor it's **at most ~680** at CCRL TC — the ~380
+lower end used the now-dead 3700 ceiling (§28), so the real gap is smaller/unknown — and far less at
+short movetimes, §27).
 
 **Update — v6 (512-wide) + SIMD now live (§12):** the wider net adds **+124.5 ± 50
 @ fixed nodes** over the 256 net, and `archsimd` SIMD (6.5× eval on amd64) lets that
@@ -1245,13 +1260,20 @@ surgery. See `ENGINE_ROADMAP.md`.
 
 ## 20. CCRL bracket update (2026-07-01) — >3400 hard floor, the "≈3200" was a one-sided artifact
 
+> **Update 2026-07-03 — this band is now a STALE FLOOR with a DEAD CEILING (§28).** It predates
+> ~25 Elo of shipped movetime patches (§23/§25/§26.4) and was never triangulated. The **~3700 top is
+> stale** (an old blowout the engine has gained past), so treat the band as **open-topped**: floor
+> >3400, no valid ceiling, still untriangulated; **re-anchor vs a ranked NNUE opponent — now ~3700+,
+> not the old ~3450–3600 — before quoting a number.** The band below stands as the 2026-07-01
+> measurement of record.
+
 The ≈3260 read of §15/§18 is **stale and, at the low end, wrong**. Two newer full-strength
 matches vs officially-CCRL-rated opponents move the picture up and bracket it:
 
 | Opponent (CCRL Blitz) | gomachine score | What it tells us |
 |---|---|---|
 | **~3400 engine** | **100W – 0L** (clean sweep) | **hard floor: we are objectively >3400.** A 100–0 sweep is not a 3400-vs-3400 coin-flip; the true gap is large, so the floor is *well* above 3400, not at it. |
-| **~3700 engine** | lost hard (losses + draws, **0 wins**) | ceiling: clearly below ~3700. The formula estimate off this match spat out **≈3200**. |
+| **~3700 engine** (STALE — old match) | lost hard (losses + draws, **0 wins**) | **No longer a valid ceiling.** At the time it read "below ~3700," but this match predates the v9 push (§19/§22), book recompile (§25) and §23/§26.4 search patches — substantial Elo the engine has gained since, so it no longer bounds current strength (§28). The formula estimate off it spat out a garbage **≈3200** (one-sided, all-losses). Do **not** treat 3700 as a current upper bound. |
 
 **The ≈3200 is a garbage number — do not quote it.** It is the anchor formula
 (`opponent_Elo + logit(score)`) applied to a **one-sided, near-zero-score** result with **no
@@ -1262,13 +1284,18 @@ a blowout**, not a measurement. The 100–0 sweep at 3400 flatly contradicts it:
 both "≈3200" and "crushes 3400 100–0." When two anchors disagree, the *sweep* is the harder
 evidence — a 3200 engine does not go 100–0 vs a 3400 engine, ever.
 
-**Honest current statement: gomachine is bracketed 3400–3700 CCRL Blitz, untriangulated,
-and the floor is comfortably above 3400** (the sweep margin implies real headroom over it).
+**Honest current statement (as of 2026-07-01; now a stale floor AND a dead ceiling per §28):
+gomachine's floor is comfortably above 3400** (the 100–0 sweep margin implies real headroom over it),
+**and the ~3700 top is stale** — that loss predates the recent gains and no longer bounds the engine.
+So the honest bracket is **open-topped: floor >3400, no valid ceiling**, untriangulated. Since even
+the 2026-07-01 read, ~25 Elo of movetime patches shipped (§23/§26.4) plus the +33 book recompile
+(§25), pushing true strength further above the floor — so read >3400 as a **floor**, treat 3700 as a
+**dead** ceiling, and re-anchor (§28) before quoting a point.
 We still lack a **~50% opponent inside the band** — the pending step §15.2 already flagged.
-Both reference matches remain blowouts in opposite directions (100–0 one way, ~0% the other);
-a proper single number needs an opponent we score ~40–60% against (target a ranked **NNUE**
-CCRL entry in the ~3450–3600 range). Until then, quote the **band**, not a point, and never
-the ≈3200.
+Both reference matches remain blowouts in opposite directions (100–0 one way, ~0% the other) — and
+the ~0% one is **stale**, so it no longer even fixes the top; a proper single number needs an
+opponent we score ~40–60% against (target a ranked **NNUE** CCRL entry — the old ~3450–3600 is now
+too weak, use **~3700+**). Until then, quote the **floor**, not a point, and never the ≈3200.
 
 **Engine-ladder rescale (the real fix, not a frontend trick).** `configForRating`'s ladder
 (`internal/engine/rating.go`) is now **natively CCRL**: `RatingMax` 2900 → **3500** (full
@@ -1742,3 +1769,106 @@ banked; staged-movegen still pending.**
 **Optimal config (shipped defaults, `search.DefaultParams`):** `QCaps=true` (captures-only),
 `QSCastling=true` (search castling — the winning side), VNNI auto-on via CPUID. All three are
 already the defaults; the SPRTs *confirmed* the shipped config rather than changing it.
+
+---
+
+## 27. Time-odds vs full-strength ("Unleashed") Stockfish — the ~3.7× rule (2026-07-03)
+
+**One-line: mid-game, Gomachine needs only ≈ 3.5–4× Stockfish's movetime to draw even with
+*full-strength, uncapped* SF — a near-constant time-odds RATIO, not a per-doubling blowup.**
+This is the maintainer's eyeballed reference state as of this date; write it down so future
+guesstimates anchor to it and not to the CCRL-band extrapolation, which is badly wrong here.
+
+**"Full strength / Unleashed" = uncapped SF** (`elo=0`, no `UCI_Elo`/`Skill` handicap — the
+top notch of the Engine-vs ruler, §20), i.e. the real ~4080-CCRL-Blitz monster, not a
+handicapped setting.
+
+### 27.1 The empirical anchors (mid-game, maintainer observation)
+
+| Full-strength SF movetime | Gomachine movetime for ~even | Ratio | Note |
+|---|---|---|---|
+| 20 ms | ~74 ms (crossover) | ~3.7× | **300 ms beats it HARD** — crossover is far below 300 |
+| 40 ms | ~150 ms (crossover) | ~3.7× | 300 ms still wins clearly |
+| 60 ms | **~220 ms** (roundabout even) | ~3.7× | the firmest anchor of the three |
+
+So: **Gomachine@(≈3.7 × T) ≈ SF_full@T**, and a bit more time flips even → win. At 20 ms SF,
+even a modest 300 ms is a rout.
+
+### 27.2 What it means — the equal-time gap is SMALL down here (~130 Elo, not ~500)
+
+A constant ~3.7× ratio ⇒ at equal time SF is ahead by only `70 × log2(3.7) ≈ 70 × 1.9 ≈ 130
+Elo` (at the ~70-Elo/doubling blitz slope, §16.2). That is **far below the 380–680** the CCRL
+bands imply (SF 4080 vs our 3400–3700, §20). Two non-exclusive reasons, both flattering to
+Gomachine:
+- **Full-strength SF at tiny movetimes is disproportionately weak** — 20–60 ms is deep below
+  any TC SF's 4080 was earned at; its scaling curve is steeper at the bottom, so it sheds Elo
+  fast as the clock shrinks.
+- **Our time-scaling may be steeper than 70/doubling down here** — a good eval + heavy pruning
+  cashes extra nodes into depth efficiently at short TC.
+Either way, the CCRL 4080-vs-3550 gap does **not** apply at 20–60 ms; the measured ~130-Elo
+equal-time gap does.
+
+### 27.3 Correction of record — do NOT extrapolate the CCRL band as a constant 70/doubling
+
+Earlier in this conversation the first-instinct estimate was **"~3 s/move to beat SF@20 ms"**
+— derived by plugging the CCRL band (ΔE ≈ 530) into `Tg = 20 ms × 2^(ΔE/70)`. **Wrong by ~40×:
+300 ms already beats SF@20 ms hard.** The error was assuming (a) the equal-time gap is the full
+CCRL band and (b) both engines share a flat 70-Elo/doubling slope down to 20 ms. Neither holds:
+the gap collapses to ~130 Elo at these movetimes. **The `Tg = 20 ms × 2^(ΔE/70)` formula is only
+as good as ΔE, and at tiny TC the right ΔE is ~130, not ~530.** For any near-future
+"how much time does Gomachine need vs SF" question, **use the measured ~3.7× ratio**, not the
+CCRL-band formula.
+
+### 27.4 Caveats (so it isn't over-trusted either)
+- **Eyeballed, not an SPRT/cutechess crossover sweep.** These are maintainer mid-game
+  observations, directional and firm on the *ratio*, but the exact crossover ms are ±.
+  A formal `bench vs-stockfish --full-strength` movetime sweep (SF pinned at fixed
+  `movetime`, Gomachine swept until it brackets 50%) still owes the precise number and a
+  check that ~3.7× holds as SF's clock grows (it likely *rises* — SF's curve steepens with
+  time, so the ratio may widen at, say, 500 ms+ SF).
+- **Mid-game specifically.** Endgames (TB/horizon, §10) and openings (book, §25) are separate
+  regimes; the ratio is a middlegame read.
+- **The ratio is a middlegame band, the point estimates are illustrative** — quote "≈3.5–4×
+  SF's movetime for parity, a bit more to win," not "exactly 220 ms beats 60 ms."
+
+---
+
+## 28. The 3400–3700 band is a STALE FLOOR with a DEAD CEILING (2026-07-03) — re-anchor before quoting a number
+
+The §20 band (3400–3700 CCRL Blitz, measured 2026-07-01) is stale **two independent ways**, and
+neither is a matter of opinion:
+
+**1. It predates ~25 Elo of shipped movetime patches.** Everything below landed *after* the band
+was measured; **none of it is reflected in the 3400–3700 figure**:
+
+| Patch | Gain | Ruler | Why it's real, post-band |
+|---|---|---|---|
+| §25 recompiled opening book | **+33** | fixed nodes | the HCE→v9 book left ~half the opening tree (44.6% of positions) playing the retired weaker engine's choices; a better book is monotonic Elo for *any* search (§25.2) |
+| §26.4 qsearch captures-only | **+20** | movetime | byte-identical at fixed nodes → the Elo is only visible at movetime (extra nodes → depth) |
+| §23 nmpgate + qsfut | **~+5** | movetime | combined-vs-shipped SPRT, sub-additive-honest |
+
+That's **~+25 Elo at movetime** plus the book's fixed-nodes +33. Sub-additive per §13, so don't
+literally sum — but the direction is unambiguously **up**, and *zero* of it is in the band.
+
+**2. It was never triangulated, and the top of the band is stale.** Both §20 reference matches are
+**opposite-direction blowouts** — 100–0 vs ~3400, ~0% vs ~3700 — so the band is a *bracket*, not a
+measurement. And **the ~3700 loss is an OLD datapoint**: it predates the v9 threat-net movetime push
+(§19/§22), the recompiled opening book (§25), and the nmpgate/qsfut + captures-only search patches
+(§23/§26.4) — substantial movetime Elo the engine has gained since. So **~3700 is no longer a valid
+ceiling**: it bounded an *earlier, weaker* gomachine and does not tell us where the current engine
+tops out. The honest bracket is now **open-topped** — a conservative floor (>3400) with **no
+established ceiling** (the true upper bound is unknown, and higher than that stale blowout implies).
+The ~50% NNUE anchor that **§15.2 and §20 both flag** as the missing step was never run.
+
+**Verdict:** the 3400–3700 band is a **stale floor with a dead ceiling**. The floor (>3400) still
+holds as a conservative bound; the ~3700 top does **not** — it's an old blowout, and the engine has
+gained materially since. True strength is **above the floor with no measured upper bound**, still
+**untriangulated**. Do **not** quote an updated point number off it, and do **not** read 3700 as a
+current ceiling. **Re-anchor against a ranked NNUE opponent — the old ~3450–3600 target is now too
+weak; use a stronger one (~3700+) and let the score place us** (§15.5 rules: ranked, NNUE eval,
+brackets us 40–65%), scoring ~50% before publishing any new figure. Until that match exists, the
+only honest statement is: **"comfortably above the old floor, no valid ceiling, untriangulated —
+re-anchor pending."**
+
+(Consistent with §27: at short movetimes the effective gap to full-strength SF is only ~130 Elo /
+a ~3.7× time-odds ratio — another sign the old CCRL band understates where we actually sit.)
