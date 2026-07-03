@@ -1660,13 +1660,23 @@ func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 		}
 	}
 
+	// In check, every evasion (quiet ones included) must be searched, so use the
+	// full legal generator; out of check, only noisy moves matter, so generate
+	// just those — the pin/check-mask machinery is identical, we skip the legality
+	// work for the quiet majority. GenerateCaptures is a byte-identical subsequence
+	// of the filtered legal list (movegen_captures_test.go), so this changes NPS,
+	// not which moves are searched.
 	var ml chess.MoveList
-	pos.GenerateLegal(&ml)
-	if ml.Len() == 0 {
-		if inCheck {
+	if inCheck {
+		pos.GenerateLegal(&ml)
+		if ml.Len() == 0 {
 			return -mateScore + ply
 		}
-		return alpha
+	} else {
+		pos.GenerateCaptures(&ml)
+		if ml.Len() == 0 {
+			return alpha
+		}
 	}
 
 	var scores [256]int
