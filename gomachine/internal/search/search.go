@@ -186,8 +186,14 @@ var pieceOrderVal = [6]int{100, 320, 330, 500, 900, 20000}
 // Limits bounds a search.
 type Limits struct {
 	Depth    int           // max depth (<=0 → use maxPly)
-	MoveTime time.Duration // soft time budget (0 → none)
+	MoveTime time.Duration // fixed time budget (0 → none); used when no clock info
 	Nodes    uint64        // optional node cap (0 → none)
+
+	// Clock-aware time management: when TimeLeft>0, the search computes adaptive
+	// soft/hard limits from the game clock instead of using the flat MoveTime.
+	TimeLeft  time.Duration // remaining time on our clock (0 → use MoveTime)
+	Increment time.Duration // per-move increment (0 → none)
+	MovesToGo int           // moves until next time control (0 → sudden death)
 }
 
 // Result is the outcome of a search.
@@ -215,12 +221,12 @@ type Searcher struct {
 	// staticEvals[ply] is the static eval at that ply (evalNone while in check), so
 	// a node can ask whether its side is "improving" vs two plies ago.
 	staticEvals [maxPly]int
-	nodes       uint64
-	stop        bool
-	deadline    time.Time
-	useTime     bool
-	nodeCap     uint64
-	keyStack    []uint64
+	nodes   uint64
+	stop    bool
+	tm      timeManager
+	useTime bool
+	nodeCap uint64
+	keyStack []uint64
 
 	// Syzygy tablebase for WDL-in-search (Params.TBSearch). Shared, read-only
 	// pointer (Fathom's WDL probe is thread-safe), copied to every SMP worker.
@@ -581,10 +587,8 @@ func (s *Searcher) reset(limits Limits, gameHistory []uint64) {
 	s.inSingularVerify = false
 	s.contBegin()  // continuation history: clear tables + path, per-search like butterfly
 	s.cont2Begin() // Stormphrax-style continuation history: clear its tables (after contBegin resets the shared path)
-	s.useTime = limits.MoveTime > 0
-	if s.useTime {
-		s.deadline = time.Now().Add(limits.MoveTime)
-	}
+	s.tm = tmFromLimits(limits)
+	s.useTime = s.tm.hasTime()
 	s.nodeCap = limits.Nodes
 	s.keyStack = append(s.keyStack[:0], gameHistory...)
 	s.rootBest = chess.NullMove
@@ -598,7 +602,7 @@ func (s *Searcher) checkStop() {
 	if s.stop {
 		return
 	}
-	if s.useTime && s.nodes&2047 == 0 && time.Now().After(s.deadline) {
+	if s.useTime && s.nodes&2047 == 0 && s.tm.hardExpired() {
 		s.stop = true
 	}
 	if s.nodeCap > 0 && s.nodes >= s.nodeCap {
@@ -692,6 +696,7 @@ func (s *Searcher) runID(pos *chess.Position, limits Limits, gameHistory []uint6
 
 	start := time.Now()
 	var result Result
+	prevScore := 0
 	for d := 1; d <= maxDepth; d++ {
 		s.searchRoot(pos, d, result.Score)
 		if s.stop && d > 1 {
@@ -704,10 +709,21 @@ func (s *Searcher) runID(pos *chess.Position, limits Limits, gameHistory []uint6
 		result.PV = s.extractPV(pos, d)
 		result.MateIn = mateDistance(s.rootScore)
 		if result.MateIn != 0 {
-			break // mate found; no need to search deeper
-		}
-		if s.useTime && time.Now().After(s.deadline) {
 			break
+		}
+		if s.useTime {
+			// Track best-move stability and score drops for adaptive time.
+			s.tm.updateBestMove(uint32(s.rootBest))
+			if d > 1 {
+				drop := prevScore - s.rootScore
+				if drop > 0 {
+					s.tm.scoreDropExtend(drop)
+				}
+			}
+			prevScore = s.rootScore
+			if s.tm.softExpired() {
+				break
+			}
 		}
 	}
 	result.Elapsed = time.Since(start)

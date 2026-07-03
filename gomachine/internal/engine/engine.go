@@ -331,13 +331,19 @@ func (e *Engine) pickWeakened(roots []search.RootMove, cfg LevelConfig, rankDept
 // SearchDirect runs a full-strength search to an explicit depth and/or time
 // budget (depth<=0 means unbounded depth, relying on the time budget).
 func (e *Engine) SearchDirect(pos *chess.Position, depth int, movetime time.Duration, history []uint64) BestResult {
+	return e.SearchDirectLimits(pos, search.Limits{Depth: depth, MoveTime: movetime}, history)
+}
+
+// SearchDirectLimits runs a full-strength search with explicit Limits (supports
+// clock-aware time management via TimeLeft/Increment/MovesToGo).
+func (e *Engine) SearchDirectLimits(pos *chess.Position, limits search.Limits, history []uint64) BestResult {
 	if r, ok := e.tablebaseMove(pos); ok {
 		return r
 	}
 	if r, ok := e.bookMove(pos); ok {
 		return r
 	}
-	r := e.searcher.SearchParallel(pos, search.Limits{Depth: depth, MoveTime: movetime}, history, e.threads)
+	r := e.searcher.SearchParallel(pos, limits, history, e.threads)
 	return BestResult{
 		Move: r.BestMove, Score: r.Score, Depth: r.Depth,
 		Nodes: r.Nodes, PV: r.PV, MateIn: r.MateIn, Level: -1,
