@@ -75,7 +75,7 @@ engine-driven bot that looks like a normal player (random username + rating).
 It is **on by default**; tune or disable it with hub flags:
 
 ```sh
-./bin/gomachine hub                        # default: bots on, level 6, after 15s
+./bin/gomachine hub                        # default: bots on, level 6, after 4s
 ./bin/gomachine hub -bot-level 8 -bot-delay 20s
 ./bin/gomachine hub -bots=false            # humans only (no backfill)
 ```
@@ -84,7 +84,7 @@ It is **on by default**; tune or disable it with hub flags:
 |---|---|---|
 | `-bots` | `true` | offer a bot once a player has waited past `-bot-delay` |
 | `-bot-level` | `6` | bot difficulty (0..10) |
-| `-bot-delay` | `15s` | how long a lone player waits before a bot is offered |
+| `-bot-delay` | `4s` | how long a lone player waits before a bot is offered |
 
 Bot games are always **casual (unrated)**. Two humans in the same pool still
 pair instantly — the bot only fills in for a lone, long-waiting player. Bot
