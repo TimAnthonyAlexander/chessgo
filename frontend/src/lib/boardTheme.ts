@@ -27,7 +27,13 @@ export type BoardThemeId =
     | 'cherry'
     | 'carrara'
     | 'onyx'
-export type PieceSetId = 'cburnett' | 'merida' | 'chessnut' | 'fantasy'
+export type PieceSetId =
+    | 'cburnett'
+    | 'merida'
+    | 'chessnut'
+    | 'fantasy'
+    | 'letters'
+    | 'circles'
 
 export interface BoardTheme {
     id: BoardThemeId
@@ -366,6 +372,8 @@ export const PIECE_SETS: PieceSet[] = [
     { id: 'merida', label: 'Merida', credit: 'Armando H. Marroquin · GPLv2+' },
     { id: 'chessnut', label: 'Chessnut', credit: 'Alexis Luengas · Apache 2.0' },
     { id: 'fantasy', label: 'Fantasy', credit: 'Maurizio Monge · MIT' },
+    { id: 'letters', label: 'Letters', credit: 'chessgo original · CC0' },
+    { id: 'circles', label: 'Circles', credit: 'chessgo original · CC0 — self-handicap' },
 ]
 
 const DEFAULT_BOARD: BoardThemeId = 'cherry'
