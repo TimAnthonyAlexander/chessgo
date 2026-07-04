@@ -18,7 +18,10 @@ import (
 	"github.com/timanthonyalexander/gomachine/internal/uci"
 )
 
-func cmdUCI() { uci.Run() }
+func cmdUCI() {
+	loadEnrichedDefault() // route eval through the v12 lean threats net (else v6) — external UCI tools must play the prod net, not the fast fallback
+	uci.Run()
+}
 
 func cmdServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)

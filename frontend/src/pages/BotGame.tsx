@@ -40,6 +40,7 @@ import {
 import { statusLabel } from '../lib/chess'
 import { useBoardInteraction } from '../lib/useBoardInteraction'
 import { useDuckInteraction } from '../lib/useDuckInteraction'
+import { useMoveNavKeys } from '../lib/useMoveNavKeys'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { useAuth } from '../lib/auth'
 import AdminBestMove from '../components/AdminBestMove'
@@ -344,6 +345,10 @@ export default function BotGame() {
     }
     const goLast = () => setViewIndex(null)
     const selectPly = (p: number) => setViewIndex(p >= liveLen ? null : p)
+
+    // Arrow keys scrub the move history (client-side review only; the live game is
+    // untouched). Enabled once a game exists.
+    useMoveNavKeys({ onPrev: goPrev, onNext: goNext, onFirst: goFirst, onLast: goLast, enabled: !!game })
 
     const resultScore = resigned ? (humanColor === 'w' ? '0-1' : '1-0') : (game?.result ?? null)
     const caption = !atLive

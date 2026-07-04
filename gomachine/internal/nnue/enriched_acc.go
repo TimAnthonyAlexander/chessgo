@@ -34,6 +34,18 @@ type EnrichedStack struct {
 	// move-aware push (enriched_delta.go) scratch: the small per-move sub/add
 	// feature lists for each perspective, reused across Pushes to avoid alloc.
 	dsubW, daddW, dsubB, daddB []uint16
+
+	// Lazy (deferred) materialization state, one entry per slot. When the net has
+	// lazyEnabled(), Push enumerates the changed-edge deltas EAGERLY (cheap, uses the
+	// live pre-move board) and stores them here, but defers the 2 KB parent-copy +
+	// column-apply until ensure() is called. A subtree that never evaluates skips that
+	// apply entirely. pendMove == chess.NullMove marks a null push (child == parent).
+	// Unused when lazy is off. pSub*/pAdd* are per-slot so a deferred chain doesn't
+	// clobber the shared scratch.
+	pendMove             []chess.Move
+	dirty                []bool
+	pSubW, pAddW         [][]uint16
+	pSubB, pAddB         [][]uint16
 }
 
 type enrichedSlot struct {
@@ -59,7 +71,20 @@ func (n *EnrichedNet) NewStack(maxDepth int) *EnrichedStack {
 		net: n, data: data, backing: backing, counts: make([]int16, n.InputDim), sc: n.newScratch(),
 		dsubW: make([]uint16, 0, dcap), daddW: make([]uint16, 0, dcap),
 		dsubB: make([]uint16, 0, dcap), daddB: make([]uint16, 0, dcap),
+		pendMove: make([]chess.Move, slots), dirty: make([]bool, slots),
+		pSubW: makeSliceBufs(slots, dcap), pAddW: makeSliceBufs(slots, dcap),
+		pSubB: makeSliceBufs(slots, dcap), pAddB: makeSliceBufs(slots, dcap),
 	}
+}
+
+// makeSliceBufs allocates n reusable uint16 buffers of the given capacity (the
+// per-slot deferred delta lists for the lazy accumulator path).
+func makeSliceBufs(n, capElems int) [][]uint16 {
+	bufs := make([][]uint16, n)
+	for i := range bufs {
+		bufs[i] = make([]uint16, 0, capElems)
+	}
+	return bufs
 }
 
 // Net returns the net this stack was built for (so the searcher can detect a swap).
@@ -71,6 +96,37 @@ func (st *EnrichedStack) Reset(pos *chess.Position) {
 	s := &st.data[0]
 	st.net.buildAcc(s.w, s.b, pos)
 	s.fw, s.fb = appendEnrichedFeaturesBoth(s.fw[:0], s.fb[:0], pos)
+	if st.net.lazy {
+		for i := range st.dirty {
+			st.dirty[i] = false // slot 0 is materialized; the rest are stale/unused
+		}
+	}
+}
+
+// ensure materializes slot k (and any dirty ancestors) when lazy is on. It finds
+// the nearest clean ancestor and replays the deferred pushes bottom-up, so each
+// slot is built from an already-materialized parent. No-op if slot k is clean.
+func (st *EnrichedStack) ensure(k int) {
+	if !st.dirty[k] {
+		return
+	}
+	lo := k
+	for lo > 0 && st.dirty[lo] {
+		lo-- // lo lands on the nearest clean (materialized) ancestor
+	}
+	for j := lo + 1; j <= k; j++ {
+		if !st.dirty[j] {
+			continue
+		}
+		if st.pendMove[j] == chess.NullMove {
+			// Null push: child accumulator == parent (no piece/occupancy change).
+			copy(st.data[j].w, st.data[j-1].w)
+			copy(st.data[j].b, st.data[j-1].b)
+		} else {
+			st.applyDelta(j, j-1, st.pSubW[j], st.pAddW[j], st.pSubB[j], st.pAddB[j])
+		}
+		st.dirty[j] = false
+	}
 }
 
 // applyDiff applies the multiset symmetric difference (child − parent) to acc via
@@ -78,6 +134,23 @@ func (st *EnrichedStack) Reset(pos *chess.Position) {
 // gained in child are added, with multiplicity. O(len(parent)+len(child)); the
 // counts slice is left all-zero for the next call.
 func (st *EnrichedStack) applyDiff(acc []int16, parent, child []uint16) {
+	net := st.net
+	if net.directApply {
+		// Skip the multiset-diff bookkeeping: subtract every "parent" (removed) edge
+		// and add every "child" (new) edge directly. Bit-exact — int16 column adds
+		// commute & associate, so ordering/cancellation don't change the final acc; we
+		// only re-apply the net-zero pairs the diff would have skipped. Wins when the
+		// changed-edge lists are near-disjoint (they usually are — a moved piece's old
+		// and new attacks target different squares), so cancellation was rare and the
+		// scattered 20 KB counts-array traffic was mostly pure overhead.
+		for _, f := range parent {
+			net.ftSub(acc, int(f))
+		}
+		for _, f := range child {
+			net.ftAdd(acc, int(f))
+		}
+		return
+	}
 	c := st.counts
 	for _, f := range parent {
 		c[f]--
@@ -85,9 +158,16 @@ func (st *EnrichedStack) applyDiff(acc []int16, parent, child []uint16) {
 	for _, f := range child {
 		c[f]++
 	}
-	net := st.net
+	pf := net.prefetchCols
 	apply := func(list []uint16) {
-		for _, f := range list {
+		for i := 0; i < len(list); i++ {
+			f := list[i]
+			// Prefetch the next feature's weight column while this one applies —
+			// the delta lists (move-aware path) are small (changed edges only), so
+			// this hides the scattered-column miss without over-prefetching.
+			if pf && i+1 < len(list) {
+				net.prefetchCol(int(list[i+1]))
+			}
 			d := c[f]
 			if d == 0 {
 				continue
@@ -113,6 +193,21 @@ func (st *EnrichedStack) applyDiff(acc []int16, parent, child []uint16) {
 // immediately BEFORE pos.DoMove (m is read from the PRE-move pos); the move is
 // replayed on a cheap value-type copy to get the child's features.
 func (st *EnrichedStack) Push(pos *chess.Position, m chess.Move) {
+	if st.net.lazyEnabled() {
+		// Defer: enumerate the changed-edge delta now (cheap, uses the live board),
+		// stash it per-slot, and mark dirty. The 2 KB parent-copy + column-apply is
+		// deferred to ensure() and skipped if this subtree never evaluates.
+		subW, addW, subB, addB := st.computeDelta(pos, m)
+		k := st.sp + 1
+		st.pSubW[k] = append(st.pSubW[k][:0], subW...)
+		st.pAddW[k] = append(st.pAddW[k][:0], addW...)
+		st.pSubB[k] = append(st.pSubB[k][:0], subB...)
+		st.pAddB[k] = append(st.pAddB[k][:0], addB...)
+		st.pendMove[k] = m
+		st.dirty[k] = true
+		st.sp++
+		return
+	}
 	if st.net.moveAware {
 		st.pushMoveAware(pos, m)
 		return
@@ -135,6 +230,14 @@ func (st *EnrichedStack) Push(pos *chess.Position, m chess.Move) {
 // PushNull duplicates the top slot — a null move changes no piece placement or
 // occupancy, so neither the accumulator nor the feature sets change.
 func (st *EnrichedStack) PushNull() {
+	if st.net.lazyEnabled() {
+		// Defer: a null child's accumulator equals its parent's. ensure() resolves
+		// it (copy from parent) on demand. fw/fb are unused on the move-aware path.
+		st.pendMove[st.sp+1] = chess.NullMove
+		st.dirty[st.sp+1] = true
+		st.sp++
+		return
+	}
 	src := &st.data[st.sp]
 	dst := &st.data[st.sp+1]
 	copy(dst.w, src.w)
@@ -151,6 +254,9 @@ func (st *EnrichedStack) Pop() { st.sp-- }
 // side to move. With NNUE_ASSERT set it first checks the incremental accumulator
 // against a from-scratch rebuild (int16 ⇒ must be EXACTLY equal).
 func (st *EnrichedStack) Eval(pos *chess.Position) int {
+	if st.net.lazy {
+		st.ensure(st.sp) // materialize the deferred chain up to this node before reading it
+	}
 	n := st.net
 	top := &st.data[st.sp]
 	if assertAccumulator {

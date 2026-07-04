@@ -110,6 +110,13 @@ func (tt *TT) Clear() {
 	tt.age = 0
 }
 
+// prefetch brings the slot for key toward L1 ahead of a probe, hiding the memory
+// latency of the (large, randomly-accessed) table. Cheap PREFETCHT0 on amd64,
+// no-op elsewhere. Bit-exact: a prefetch never changes results.
+func (tt *TT) prefetch(key uint64) {
+	ttPrefetchT0(unsafe.Pointer(&tt.slots[key&tt.mask]))
+}
+
 func (tt *TT) probe(key uint64) (ttEntry, bool) {
 	slot := &tt.slots[key&tt.mask]
 	data := slot.data.Load()

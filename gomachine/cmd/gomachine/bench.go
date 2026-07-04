@@ -359,6 +359,12 @@ func cmdBenchSPRT(args []string) {
 	leanInt8FT := fs.Bool("lean-int8ft", false, "int8 the lean --new net's FT threat columns (halves per-move threat accumulator memory traffic; the movetime NPS lever)")
 	leanMoveAware := fs.Bool("lean-moveaware", false, "O(delta) move-aware push for the lean --new net (skip full re-enumeration + full-list diff; bit-exact, the movetime NPS lever)")
 	oldLeanMoveAware := fs.Bool("old-lean-moveaware", false, "also enable move-aware push on the --old-lean net (for a clean lean-vs-lean move-aware profile)")
+	leanPrefetch := fs.Bool("lean-prefetch", false, "prefetch the next threat-column weights during the accumulator apply on the --new lean net (bit-exact NPS lever)")
+	oldLeanPrefetch := fs.Bool("old-lean-prefetch", false, "same column prefetch on the --old lean net (for a clean lean-vs-lean prefetch A/B)")
+	leanLazy := fs.Bool("lean-lazy", false, "deferred (lazy) accumulator materialization on the --new lean net: skip the push work for subtrees that never evaluate (bit-exact NPS lever)")
+	oldLeanLazy := fs.Bool("old-lean-lazy", false, "same lazy materialization on the --old lean net (for a clean lean-vs-lean lazy A/B)")
+	leanDirect := fs.Bool("lean-direct", false, "skip applyDiff's counts-array multiset-diff on the --new lean net; apply removed/added edges directly (bit-exact NPS lever)")
+	oldLeanDirect := fs.Bool("old-lean-direct", false, "same direct apply on the --old lean net (for a clean lean-vs-lean A/B)")
 	leanNoGeometry := fs.Bool("lean-no-geometry", false, "disable the fast changed-edges threat delta on the --new enriched/lean/pairwise net (fall back to full re-enumeration; bit-identical, for the geometry A/B)")
 	oldLeanNoGeometry := fs.Bool("old-lean-no-geometry", false, "disable the fast changed-edges threat delta on the --old enriched/lean/pairwise net")
 	newLeanPairwise := fs.String("new-lean-pairwise", "", "lean PAIRWISE+threats net for --new: 'path,H,NB' (chessgo_lean_pairwise); forces --concurrency 1")
@@ -408,6 +414,18 @@ func cmdBenchSPRT(args []string) {
 			p.SetMoveAware(true)
 			fmt.Fprintln(os.Stderr, "lean move-aware push: ON (O(delta) incremental)")
 		}
+		if *leanPrefetch {
+			p.SetPrefetchCols(true)
+			fmt.Fprintln(os.Stderr, "lean column prefetch: ON")
+		}
+		if *leanDirect {
+			p.SetDirectApply(true)
+			fmt.Fprintln(os.Stderr, "lean direct apply: ON (no counts-array diff)")
+		}
+		if *leanLazy {
+			p.SetLazy(true)
+			fmt.Fprintln(os.Stderr, "lean lazy accumulator: ON (deferred materialization)")
+		}
 		newEnrichedP = p
 	}
 	if p := loadLeanOrExit(*oldLean); p != nil {
@@ -416,6 +434,15 @@ func cmdBenchSPRT(args []string) {
 		}
 		if *oldLeanMoveAware {
 			p.SetMoveAware(true) // for a clean lean-vs-lean move-aware PROFILE (both sides O(delta))
+		}
+		if *oldLeanPrefetch {
+			p.SetPrefetchCols(true)
+		}
+		if *oldLeanDirect {
+			p.SetDirectApply(true)
+		}
+		if *oldLeanLazy {
+			p.SetLazy(true)
 		}
 		oldEnrichedP = p
 	}

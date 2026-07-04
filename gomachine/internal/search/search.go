@@ -595,7 +595,12 @@ func (s *Searcher) reset(limits Limits, gameHistory []uint64) {
 	s.rootScore = 0
 }
 
-func (s *Searcher) pushKey(k uint64) { s.keyStack = append(s.keyStack, k) }
+func (s *Searcher) pushKey(k uint64) {
+	if s.params.Prefetch && s.tt != nil {
+		s.tt.prefetch(k)
+	}
+	s.keyStack = append(s.keyStack, k)
+}
 func (s *Searcher) popKey()          { s.keyStack = s.keyStack[:len(s.keyStack)-1] }
 
 func (s *Searcher) checkStop() {

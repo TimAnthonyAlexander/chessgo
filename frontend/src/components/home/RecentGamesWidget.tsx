@@ -51,7 +51,7 @@ export default function RecentGamesWidget() {
 
         let cancelled = false
         setState({ kind: 'loading' })
-        getProfileGames(user.name, 0)
+        getProfileGames(user.name, 1)
             .then((res) => {
                 if (cancelled) return
                 if (res.games.length === 0) {

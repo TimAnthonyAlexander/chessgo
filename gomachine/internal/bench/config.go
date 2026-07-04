@@ -467,6 +467,14 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.QCaps = b
+		case "prefetch":
+			// PREFETCHT0 the TT slot on the child key (NPS). OFF = pre-opt baseline
+			// (no prefetch) for the movetime A/B.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.Prefetch = b
 		case "qscastling", "qscastle":
 			// search castling in quiescence (historical quirk). OFF drops it.
 			b, err := parseBool(val)
@@ -683,6 +691,9 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.QSCastling != patch.QSCastling {
 		diffs = append(diffs, fmt.Sprintf("qscastling: %s→%s", onoff(base.QSCastling), onoff(patch.QSCastling)))
+	}
+	if base.Prefetch != patch.Prefetch {
+		diffs = append(diffs, fmt.Sprintf("prefetch: %s→%s", onoff(base.Prefetch), onoff(patch.Prefetch)))
 	}
 	if base.Aggr != patch.Aggr {
 		diffs = append(diffs, fmt.Sprintf("aggr: %d→%d", base.Aggr, patch.Aggr))

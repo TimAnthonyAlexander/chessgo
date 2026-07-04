@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 )
@@ -89,6 +90,32 @@ type EnrichedNet struct {
 	// Only consulted when moveAware is on.
 	changedEdges bool
 
+	// directApply skips applyDiff's multiset-diff (the scattered 20 KB counts-array
+	// bookkeeping): it subtracts every removed edge and adds every new edge directly.
+	// Bit-exact (int16 column adds commute), a win when the changed-edge lists are
+	// near-disjoint so cancellation was rare. Default-off; A/B via --lean-direct.
+	directApply bool
+
+	// prefetchCols enables software-prefetching the next feature's weight column
+	// during the accumulator apply (applyDiff), hiding the memory latency of the
+	// scattered rows of the ~4.7 MB threat weight table (accessed ~25×/node with
+	// scattered indices that MISS L2). Bit-exact (a prefetch never changes results).
+	// MEASURED +17.6% NPS at fixed nodes (coalla, v12) — enabled by loadEnrichedDefault
+	// for prod; --lean-prefetch A/Bs it. The field default stays false so a bare net is
+	// unchanged; the prod path opts in.
+	prefetchCols bool
+
+	// lazy enables deferred (lazy) accumulator materialization: Push enumerates the
+	// changed-edge delta eagerly but defers the 2 KB parent-copy + column-apply until
+	// something reads the slot (ensure). Subtrees that never evaluate skip that apply.
+	// MEASURED A LOSS: −2.4% NPS at fixed nodes (coalla, v12) — the per-push deferral
+	// bookkeeping (per-slot list store + dirty tracking + ensure walk-back) exceeds the
+	// terminal-node savings on this engine's tree (not terminal-heavy enough). Kept
+	// DEFAULT-OFF as inert scaffolding (eager path is byte-identical + bit-exact-gated);
+	// don't enable without a materially different tree shape. Only valid on the
+	// moveAware+changedEdges path.
+	lazy bool
+
 	// LEAN single-layer tail (enriched_lean path). When lean is true, the tail is
 	// v6's FAST shape: SCReLU each FT half, concat (2H), one output dot per bucket —
 	// NO pairwise, NO multilayer (L1W/L2W/OW unused). This banks the threat eval
@@ -147,6 +174,39 @@ func NewEnrichedNet(h, d2, d3, nb int) *EnrichedNet {
 
 // SetMoveAware toggles the O(delta) move-aware incremental push (enriched_delta.go).
 func (n *EnrichedNet) SetMoveAware(on bool) { n.moveAware = on }
+
+// SetDirectApply toggles the counts-array-free direct apply path in applyDiff.
+func (n *EnrichedNet) SetDirectApply(on bool) { n.directApply = on }
+
+// DirectApply reports whether the direct (no multiset-diff) apply path is enabled.
+func (n *EnrichedNet) DirectApply() bool { return n.directApply }
+
+// SetPrefetchCols toggles software-prefetch of the next weight column in applyDiff.
+func (n *EnrichedNet) SetPrefetchCols(on bool) { n.prefetchCols = on }
+
+// PrefetchCols reports whether column prefetch is enabled.
+func (n *EnrichedNet) PrefetchCols() bool { return n.prefetchCols }
+
+// SetLazy toggles deferred accumulator materialization. Only takes effect on the
+// moveAware+changedEdges path (the enriched stack checks lazyEnabled()).
+func (n *EnrichedNet) SetLazy(on bool) { n.lazy = on }
+
+// Lazy reports whether lazy accumulator materialization is enabled.
+func (n *EnrichedNet) Lazy() bool { return n.lazy }
+
+// lazyEnabled reports whether the deferred path is both requested and valid.
+func (n *EnrichedNet) lazyEnabled() bool { return n.lazy && n.moveAware && n.changedEdges }
+
+// prefetchCol brings the first cache line of feature f's weight column toward L1
+// (the SIMD kernel then streams the rest, HW-prefetched). Threat columns live in
+// the int8 W0t8 table when int8FT is on; base-768 columns in the int16 W0i table.
+func (n *EnrichedNet) prefetchCol(f int) {
+	if n.int8FT && f >= InputDim {
+		prefetchT0(unsafe.Pointer(&n.W0t8[(f-InputDim)*n.H]))
+		return
+	}
+	prefetchT0(unsafe.Pointer(&n.W0i[f*n.H]))
+}
 
 // MoveAware reports whether the move-aware push is enabled.
 func (n *EnrichedNet) MoveAware() bool { return n.moveAware }

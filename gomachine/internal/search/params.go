@@ -74,6 +74,7 @@ type Params struct {
 	QCaps            bool // quiescence generates only noisy moves (GenerateCaptures) out of check, instead of all-legal-then-filter. DEFAULT ON. Byte-identical move set either way (movegen_captures_test.go) — a pure NPS lever, flagged only so its movetime Elo can be A/B'd (invisible at fixed nodes).
 	QSCastling       bool // search castling moves in quiescence. Castling is a QUIET move but its (king,rook-origin) encoding has an occupied destination, so it slips through the isCapture noisy filter — a latent quirk. DEFAULT ON preserves the historical behavior byte-for-byte; OFF drops castling from qsearch (a genuinely quiet move has no place in a tactical search). Under SPRT.
 	Aggr             int  // aggression style knob 0..100 (default 50 = neutral). Scales a small king-attack/tropism term ONTO the static eval: 50→off (byte-identical), 100→fully attacking, 0→solid/defensive. Effect = eval.AggressionTerm(pos)·(Aggr-50)/50. Style lever, NOT a strength patch (a deliberate eval distortion — expected to cost a little Elo; SPRT measures how much per level).
+	Prefetch         bool // PREFETCHT0 the TT slot for the child key the moment it's known (in pushKey, right after DoMove). Bit-exact (a prefetch never changes results). DEFAULT OFF — measured a WASH (−5.3 ± 7.4 @ 394 pairs movetime, coalla): our 64MB TT fits entirely in the EPYC's 128MB L3, so probes hit L3 (~15c), not memory — nothing to hide, and the per-call PREFETCHT0 overhead faintly nets negative. Kept as inert scaffolding: flip on IFF the TT ever exceeds L3 (bigger `-tt`, or heavy multi-game prod eviction). amd64 PREFETCHT0; no-op elsewhere.
 }
 
 // DefaultParams returns the engine's current full-strength configuration.
@@ -357,6 +358,7 @@ func DefaultParams() Params {
 		QSFutilityMargin: 100,
 		QCaps:            true, // captures-only qsearch (NPS); OFF is the pre-opt A/B baseline
 		QSCastling:       true, // preserve historical behavior; OFF is under SPRT
+		Prefetch:         false, // TT prefetch: WASH on our 64MB-TT/128MB-L3 box (fits in L3, nothing to hide). Scaffolding — see field comment.
 
 		// Aggression style knob: 50 = neutral. At 50 the term is never evaluated, so
 		// the default engine is byte-identical to before this flag existed. Non-50 is

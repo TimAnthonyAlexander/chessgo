@@ -673,8 +673,11 @@ export interface Profile {
     // Duck Chess rating tile (isolated pool, surfaced separately from time controls).
     duck: RatingTile
     record: ProfileRecord
+    // First page of game history + the total count, so the paginator can render
+    // page numbers without a second request on load.
     games: ProfileGame[]
-    hasMore: boolean
+    gamesTotal: number
+    gamesPerPage: number
 }
 
 /** Public profile by display name (ratings + record + first page of games). */
@@ -684,13 +687,25 @@ export function getProfile(name: string): Promise<Profile> {
 
 export interface ProfileGamesPage {
     games: ProfileGame[]
-    offset: number
-    hasMore: boolean
+    page: number
+    perPage: number
+    total: number
 }
 
-/** A further page of a player's game history ("load more"). */
-export function getProfileGames(name: string, offset: number): Promise<ProfileGamesPage> {
-    return request<ProfileGamesPage>(`/users/${encodeURIComponent(name)}/games?offset=${offset}`)
+/** A single (1-based) page of a player's game history, filtered server-side by
+ * pool category and/or result (empty/`'all'` means no filter on that axis). */
+export function getProfileGames(
+    name: string,
+    page: number,
+    category = '',
+    result = '',
+): Promise<ProfileGamesPage> {
+    const params = new URLSearchParams({ page: String(page) })
+    if (category && category !== 'all') params.set('category', category)
+    if (result && result !== 'all') params.set('result', result)
+    return request<ProfileGamesPage>(
+        `/users/${encodeURIComponent(name)}/games?${params.toString()}`,
+    )
 }
 
 // --- Leaderboard (per-category top players) ---

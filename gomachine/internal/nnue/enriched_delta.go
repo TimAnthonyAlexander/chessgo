@@ -104,11 +104,26 @@ func (st *EnrichedStack) pushMoveAware(pos *chess.Position, m chess.Move) {
 // edges are identical old and new and cancel in applyDiff — it costs a little work,
 // never correctness.
 func (st *EnrichedStack) pushMoveAwareChanged(pos *chess.Position, m chess.Move) {
-	src := &st.data[st.sp]
-	dst := &st.data[st.sp+1]
-	copy(dst.w, src.w)
-	copy(dst.b, src.b)
+	st.buildSlotFrom(st.sp+1, st.sp, pos, m)
+	st.sp++
+}
 
+// buildSlotFrom computes slot dstIdx's accumulator from slot srcIdx (the parent)
+// plus the move m applied to the pre-move position pos, via the O(changed-edges)
+// delta. Index-explicit (does NOT touch st.sp) so both the eager push and the lazy
+// walk-back can drive it. Requires srcIdx to already hold the parent accumulator.
+func (st *EnrichedStack) buildSlotFrom(dstIdx, srcIdx int, pos *chess.Position, m chess.Move) {
+	subW, addW, subB, addB := st.computeDelta(pos, m)
+	st.applyDelta(dstIdx, srcIdx, subW, addW, subB, addB)
+}
+
+// computeDelta enumerates the changed-edge sub/add feature lists (both perspectives)
+// for move m on the pre-move position pos. It reads only pos (the caller's live
+// board — no persisted copy) plus a cheap value-copy child, so it can run EAGERLY at
+// push time while the accumulator apply is deferred (lazy path). The returned slices
+// are backed by st's reusable scratch — copy them out (lazy) or apply them
+// immediately (eager) before the next call overwrites the scratch.
+func (st *EnrichedStack) computeDelta(pos *chess.Position, m chess.Move) (subW, addW, subB, addB []uint16) {
 	child := *pos
 	var u chess.Undo
 	child.DoMove(m, &u)
@@ -116,10 +131,10 @@ func (st *EnrichedStack) pushMoveAwareChanged(pos *chess.Position, m chess.Move)
 	oldOcc := pos.Occupied()
 	newOcc := child.Occupied()
 
-	subW := st.dsubW[:0]
-	addW := st.daddW[:0]
-	subB := st.dsubB[:0]
-	addB := st.daddB[:0]
+	subW = st.dsubW[:0]
+	addW = st.daddW[:0]
+	subB = st.dsubB[:0]
+	addB = st.daddB[:0]
 
 	// A1: changed squares via per-piece bitboard XOR (occupant differs old vs new).
 	// Cheaper than the 64-square PieceOn scan, and D is needed for the geometry.
@@ -158,11 +173,21 @@ func (st *EnrichedStack) pushMoveAwareChanged(pos *chess.Position, m chess.Move)
 		subW, addW, subB, addB = appendChangedEdges(subW, addW, subB, addB, pos, &child, s, oldOcc, newOcc, D)
 	}
 
+	st.dsubW, st.daddW, st.dsubB, st.daddB = subW, addW, subB, addB
+	return subW, addW, subB, addB
+}
+
+// applyDelta materializes slot dstIdx from the parent slot srcIdx: copy the parent
+// accumulator, then apply the sub/add feature deltas. This is the deferrable half
+// (2 KB copy + scattered column adds) — skipped entirely for lazy subtrees that
+// never evaluate. Requires srcIdx already materialized.
+func (st *EnrichedStack) applyDelta(dstIdx, srcIdx int, subW, addW, subB, addB []uint16) {
+	src := &st.data[srcIdx]
+	dst := &st.data[dstIdx]
+	copy(dst.w, src.w)
+	copy(dst.b, src.b)
 	st.applyDiff(dst.w, subW, addW)
 	st.applyDiff(dst.b, subB, addB)
-
-	st.dsubW, st.daddW, st.dsubB, st.daddB = subW, addW, subB, addB
-	st.sp++
 }
 
 // appendChangedEdges emits, for the piece on square s (which is the SAME in the old

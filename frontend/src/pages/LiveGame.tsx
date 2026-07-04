@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Button, Typography } from '@mui/material'
 import { Check, Flag, Handshake, Undo2, User, Volume2, VolumeX, X } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
@@ -14,6 +14,8 @@ import { type Color, gameSocket, type LiveGameState, liveRemaining } from '../li
 import { useGameSocket } from '../lib/useGameSocket'
 import { useBoardInteraction } from '../lib/useBoardInteraction'
 import { useDuckInteraction } from '../lib/useDuckInteraction'
+import { useMoveNavKeys } from '../lib/useMoveNavKeys'
+import { applyUciVisually, type BoardMap, parseFen } from '../lib/chess'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { VARIANT_LABEL } from '../lib/variants'
 import { authStore, useAuth } from '../lib/auth'
@@ -21,6 +23,8 @@ import AdminBestMove from '../components/AdminBestMove'
 import BoardActions from '../components/BoardActions'
 
 const other = (c: Color): Color => (c === 'w' ? 'b' : 'w')
+
+const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 
 // Per-time-control "low time" threshold: ~1/10 of the base clock, clamped to a
 // sane 8s–60s window (bullet warns late, classical not absurdly early).
@@ -84,6 +88,55 @@ export default function LiveGame() {
     const myTurn = !!g && !g.ended && g.sideToMove === g.color && s.conn === 'open'
     const isDuck = g?.variant === 'duck'
 
+    // Client-side history browsing. `viewIndex` (null = follow the live position)
+    // lets the player scrub back through past plies to review them — it never
+    // touches the game: the live position keeps advancing, clocks keep running, and
+    // opponent-move sounds still fire (that effect keys off the move count, not the
+    // viewed ply). While browsing (`atLive` false) the board is read-only.
+    const [viewIndex, setViewIndex] = useState<number | null>(null)
+    const liveLen = g?.moves.length ?? 0
+    const shownPly = viewIndex === null ? liveLen : Math.min(viewIndex, liveLen)
+    const atLive = shownPly === liveLen
+    const boardInteractive = myTurn && atLive
+
+    // The position each game started from, needed to replay UCIs into a past board.
+    // Captured at ply 0 (so Chess960's random back-rank is exact); a game joined
+    // mid-stream (resume) falls back to the standard start — correct for standard/
+    // duck, whose pieces begin standard.
+    const startFenRef = useRef<{ id: string; fen: string } | null>(null)
+    if (g && (!startFenRef.current || startFenRef.current.id !== g.id)) {
+        startFenRef.current = { id: g.id, fen: g.moves.length === 0 ? g.fen : START_FEN }
+    }
+
+    // The board to show when reviewing history: replay UCIs from the start up to the
+    // viewed ply (display-only reconstruction — the duck isn't tracked here). null
+    // while at the live position, where the real fen/overlay drive the board.
+    const historyBoard = useMemo<BoardMap | null>(() => {
+        if (!g || atLive) return null
+        let board = parseFen(startFenRef.current?.fen ?? g.fen)
+        for (let i = 0; i < shownPly; i++) board = applyUciVisually(board, g.moves[i].uci)
+        return board
+    }, [g?.id, atLive, shownPly, g?.moves])
+
+    const historyLast =
+        g && !atLive && shownPly > 0
+            ? {
+                  from: g.moves[shownPly - 1].uci.slice(0, 2),
+                  to: g.moves[shownPly - 1].uci.slice(2, 4),
+              }
+            : null
+
+    // History navigation (client-side review only).
+    const goFirst = () => setViewIndex(0)
+    const goPrev = () => setViewIndex(Math.max(0, shownPly - 1))
+    const goNext = () => {
+        const n = Math.min(liveLen, shownPly + 1)
+        setViewIndex(n >= liveLen ? null : n)
+    }
+    const goLast = () => setViewIndex(null)
+    const selectPly = (p: number) => setViewIndex(p >= liveLen ? null : p)
+    useMoveNavKeys({ onPrev: goPrev, onNext: goNext, onFirst: goFirst, onLast: goLast, enabled: !!g })
+
     // Two board controllers, both hooks called unconditionally (only one is ever
     // "live" — the other is inert with myTurn:false). Standard/Chess960 use the
     // shared optimistic+premove controller; Duck Chess uses the two-phase
@@ -93,16 +146,16 @@ export default function LiveGame() {
     // asynchronously, so the player sees their own duck placement immediately.
     const interaction = useBoardInteraction({
         fen: g?.fen ?? '',
-        myTurn: myTurn && !isDuck,
-        legalMoves: g && myTurn && !isDuck ? g.legalMoves : [],
+        myTurn: boardInteractive && !isDuck,
+        legalMoves: g && boardInteractive && !isDuck ? g.legalMoves : [],
         submit: (uci) => gameSocket.move(uci),
         canPremove: true,
     })
     const duck = useDuckInteraction({
         fen: g?.fen ?? '',
         duck: g?.duck ?? null,
-        myTurn: myTurn && isDuck,
-        legalMoves: g && myTurn && isDuck ? g.legalMoves : [],
+        myTurn: boardInteractive && isDuck,
+        legalMoves: g && boardInteractive && isDuck ? g.legalMoves : [],
         submit: (composite) => gameSocket.move(composite),
     })
 
@@ -327,8 +380,8 @@ export default function LiveGame() {
                     <MoveList
                         fill
                         moves={moveEntries}
-                        currentPly={moveEntries.length}
-                        onSelectPly={() => {}}
+                        currentPly={shownPly}
+                        onSelectPly={selectPly}
                     />
 
                     {/* Admin-only: engine best move toggle for the current position */}
@@ -491,18 +544,22 @@ export default function LiveGame() {
                 fen={g.fen}
                 orientation={g.color}
                 sideToMove={g.sideToMove}
-                legalMoves={myTurn ? g.legalMoves : []}
-                lastMove={activeOptimisticLast ?? g.lastMove}
-                inCheck={isDuck ? false : g.check}
-                interactive={myTurn}
+                legalMoves={boardInteractive ? g.legalMoves : []}
+                lastMove={atLive ? (activeOptimisticLast ?? g.lastMove) : historyLast}
+                inCheck={!atLive || isDuck ? false : g.check}
+                interactive={boardInteractive}
                 onMove={isDuck ? duck.onMove : interaction.onMove}
-                premoveColor={g.ended || isDuck ? null : g.color}
-                premove={isDuck ? null : interaction.premove}
+                premoveColor={g.ended || isDuck || !atLive ? null : g.color}
+                premove={isDuck || !atLive ? null : interaction.premove}
                 onCancelPremove={interaction.cancelPremove}
-                duck={shownDuck}
-                duckTargets={isDuck ? duck.duckTargets : null}
+                duck={atLive ? shownDuck : null}
+                duckTargets={isDuck && atLive ? duck.duckTargets : null}
                 onPlaceDuck={duck.onPlaceDuck}
-                {...(activeOverride ? { overrideBoard: activeOverride } : {})}
+                {...(atLive
+                    ? activeOverride
+                        ? { overrideBoard: activeOverride }
+                        : {}
+                    : { overrideBoard: historyBoard ?? undefined })}
             />
         </BoardPage>
     )

@@ -25,8 +25,8 @@ use App\Services\Glicko2Service;
  */
 class ProfileController extends Controller
 {
-    /** How many recent games to embed in the first profile payload. */
-    private const RECENT_GAMES = 30;
+    /** How many recent games to embed in the first profile payload (page 1). */
+    private const RECENT_GAMES = 10;
 
     /** Bound from path {name}. */
     public string $name = '';
@@ -45,16 +45,14 @@ class ProfileController extends Controller
 
         $id = $user->id;
 
-        $games = Game::query()
+        $paged = Game::query()
             ->where('white_user_id', '=', $id)
             ->orWhere('black_user_id', '=', $id)
             ->orderByDesc('created_at')
-            ->limit(self::RECENT_GAMES + 1) // +1 to know if there's a next page
-            ->get();
-        $hasMore = count($games) > self::RECENT_GAMES;
+            ->paginate(1, self::RECENT_GAMES, self::RECENT_GAMES, withTotal: true);
         $rows = array_map(
             static fn (Game $g): array => $g->summaryRow(),
-            array_slice($games, 0, self::RECENT_GAMES),
+            $paged->data,
         );
 
         $puzzleSolved = PuzzleAttempt::query()
@@ -86,7 +84,8 @@ class ProfileController extends Controller
             ],
             'record' => $this->record($id),
             'games' => $rows,
-            'hasMore' => $hasMore,
+            'gamesTotal' => $paged->total,
+            'gamesPerPage' => self::RECENT_GAMES,
         ]);
     }
 

@@ -1,14 +1,16 @@
-import { useMemo, useState } from 'react'
-import { Box, Button, Typography } from '@mui/material'
-import { Bot } from 'lucide-react'
+import { Box, Typography } from '@mui/material'
+import { Bot, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import type { ProfileGame } from '../../api/client'
 import { DuckGlyph } from '../DuckGlyph'
 import { Panel, PanelHead } from '../home/Panel'
-import { fmtDate, OUTCOME_STYLE, perspective, TC_CATEGORIES } from './shared'
-
-type CatFilter = 'all' | 'bullet' | 'blitz' | 'rapid' | 'classical' | 'duck' | 'chess960'
-type ResultFilter = 'all' | 'win' | 'loss' | 'draw'
+import {
+    type CatFilter,
+    fmtDate,
+    OUTCOME_STYLE,
+    perspective,
+    type ResultFilter,
+} from './shared'
 
 const CAT_LABEL: Record<Exclude<CatFilter, 'all'>, string> = {
     bullet: 'Bullet',
@@ -16,62 +18,39 @@ const CAT_LABEL: Record<Exclude<CatFilter, 'all'>, string> = {
     rapid: 'Rapid',
     classical: 'Classical',
     duck: 'Duck',
-    chess960: '960',
 }
 
-function matchesCat(g: ProfileGame, f: CatFilter): boolean {
-    if (f === 'all') return true
-    if (f === 'duck') return g.variant === 'duck'
-    if (f === 'chess960') return g.variant === 'chess960'
-    return g.variant === 'standard' && g.category === f
-}
-
-/** The player's game history: filterable by pool + result (client-side over the
- * loaded pages), each row a link into analysis. The wide column of the profile
- * dashboard. */
+/** The player's game history: numbered pages (10/page) of rows, each a link into
+ * analysis. Pool + result filtering is server-side (spans the whole history);
+ * this component is presentational — the parent owns filter/page state and does
+ * the fetching. The wide column of the profile dashboard. */
 export default function GamesPanel({
     games,
     userId,
-    hasMore,
-    loadingMore,
-    onLoadMore,
+    page,
+    totalPages,
+    loading,
+    onPage,
+    category,
+    result,
+    availableCats,
+    onCategory,
+    onResult,
 }: {
     games: ProfileGame[]
     userId: string
-    hasMore: boolean
-    loadingMore: boolean
-    onLoadMore: () => void
+    page: number
+    totalPages: number
+    loading: boolean
+    onPage: (n: number) => void
+    category: CatFilter
+    result: ResultFilter
+    availableCats: CatFilter[]
+    onCategory: (cat: CatFilter) => void
+    onResult: (res: ResultFilter) => void
 }) {
     const navigate = useNavigate()
-    const [cat, setCat] = useState<CatFilter>('all')
-    const [result, setResult] = useState<ResultFilter>('all')
-
-    // Only offer pool/variant chips that actually appear in the loaded history.
-    const catFilters = useMemo<CatFilter[]>(() => {
-        const present = new Set<CatFilter>()
-        for (const g of games) {
-            if (g.variant === 'duck') present.add('duck')
-            else if (g.variant === 'chess960') present.add('chess960')
-            else if (g.category) present.add(g.category as CatFilter)
-        }
-        const all: CatFilter[] = [
-            ...TC_CATEGORIES.map((c) => c.key as CatFilter),
-            'duck',
-            'chess960',
-        ]
-        const ordered = all.filter((f) => present.has(f))
-        return ['all', ...ordered]
-    }, [games])
-
-    const filtered = useMemo(
-        () =>
-            games.filter(
-                (g) =>
-                    matchesCat(g, cat) &&
-                    (result === 'all' || perspective(g, userId).outcome === result),
-            ),
-        [games, cat, result, userId],
-    )
+    const unfiltered = category === 'all' && result === 'all'
 
     return (
         <Panel>
@@ -85,27 +64,27 @@ export default function GamesPanel({
                                 label={r === 'all' ? 'All' : OUTCOME_STYLE[r].label}
                                 active={result === r}
                                 color={r === 'all' ? undefined : OUTCOME_STYLE[r].color}
-                                onClick={() => setResult(r)}
+                                onClick={() => onResult(r)}
                             />
                         ))}
                     </Box>
                 }
             />
 
-            {catFilters.length > 2 && (
+            {availableCats.length > 2 && (
                 <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1.5 }}>
-                    {catFilters.map((f) => (
+                    {availableCats.map((f) => (
                         <Chip
                             key={f}
                             label={f === 'all' ? 'All' : CAT_LABEL[f]}
-                            active={cat === f}
-                            onClick={() => setCat(f)}
+                            active={category === f}
+                            onClick={() => onCategory(f)}
                         />
                     ))}
                 </Box>
             )}
 
-            {filtered.length === 0 ? (
+            {games.length === 0 ? (
                 <Box
                     sx={{
                         p: 3,
@@ -114,7 +93,7 @@ export default function GamesPanel({
                         fontSize: 13.5,
                     }}
                 >
-                    {games.length === 0 ? 'No games played yet.' : 'No games match this filter.'}
+                    {unfiltered ? 'No games played yet.' : 'No games match this filter.'}
                 </Box>
             ) : (
                 <Box
@@ -122,9 +101,11 @@ export default function GamesPanel({
                         border: '1px solid var(--line-soft)',
                         borderRadius: '12px',
                         overflow: 'hidden',
+                        opacity: loading ? 0.5 : 1,
+                        transition: 'opacity .12s ease',
                     }}
                 >
-                    {filtered.map((g, i) => (
+                    {games.map((g, i) => (
                         <GameRow
                             key={g.id}
                             game={g}
@@ -136,25 +117,127 @@ export default function GamesPanel({
                 </Box>
             )}
 
-            {hasMore && (
-                <Box sx={{ display: 'flex', justifyContent: 'center', mt: 1.5 }}>
-                    <Button
-                        onClick={onLoadMore}
-                        disabled={loadingMore}
-                        variant="outlined"
-                        color="inherit"
-                        sx={{
-                            textTransform: 'none',
-                            borderColor: 'var(--line)',
-                            color: 'var(--text-dim)',
-                            '&:hover': { borderColor: 'var(--accent)', color: 'var(--accent)' },
-                        }}
-                    >
-                        {loadingMore ? 'Loading…' : 'Load more'}
-                    </Button>
-                </Box>
+            {totalPages > 1 && (
+                <Paginator page={page} totalPages={totalPages} loading={loading} onPage={onPage} />
             )}
         </Panel>
+    )
+}
+
+// Page numbers to render, collapsing long runs to a single ellipsis around the
+// first, last, and current±1 pages.
+function pageRange(current: number, total: number): (number | 'gap')[] {
+    const shown = [...new Set([1, total, current, current - 1, current + 1])]
+        .filter((p) => p >= 1 && p <= total)
+        .sort((a, b) => a - b)
+    const out: (number | 'gap')[] = []
+    let prev = 0
+    for (const p of shown) {
+        if (p - prev > 1) out.push('gap')
+        out.push(p)
+        prev = p
+    }
+    return out
+}
+
+function Paginator({
+    page,
+    totalPages,
+    loading,
+    onPage,
+}: {
+    page: number
+    totalPages: number
+    loading: boolean
+    onPage: (n: number) => void
+}) {
+    return (
+        <Box
+            sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 0.5, mt: 2 }}
+        >
+            <PageBtn
+                disabled={page <= 1 || loading}
+                onClick={() => onPage(page - 1)}
+                label="Previous page"
+            >
+                <ChevronLeft size={16} />
+            </PageBtn>
+            {pageRange(page, totalPages).map((p, i) =>
+                p === 'gap' ? (
+                    <Box
+                        key={`gap-${i}`}
+                        sx={{ px: 0.5, color: 'var(--muted)', fontSize: 13, userSelect: 'none' }}
+                    >
+                        …
+                    </Box>
+                ) : (
+                    <PageBtn
+                        key={p}
+                        active={p === page}
+                        disabled={loading}
+                        onClick={() => onPage(p)}
+                        label={`Page ${p}`}
+                    >
+                        {p}
+                    </PageBtn>
+                ),
+            )}
+            <PageBtn
+                disabled={page >= totalPages || loading}
+                onClick={() => onPage(page + 1)}
+                label="Next page"
+            >
+                <ChevronRight size={16} />
+            </PageBtn>
+        </Box>
+    )
+}
+
+function PageBtn({
+    children,
+    active,
+    disabled,
+    onClick,
+    label,
+}: {
+    children: React.ReactNode
+    active?: boolean
+    disabled?: boolean
+    onClick: () => void
+    label: string
+}) {
+    return (
+        <Box
+            component="button"
+            type="button"
+            aria-label={label}
+            aria-current={active ? 'page' : undefined}
+            disabled={disabled}
+            onClick={onClick}
+            sx={{
+                minWidth: 32,
+                height: 32,
+                px: 0.75,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                borderRadius: '9px',
+                fontFamily: 'var(--font-mono)',
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: disabled ? 'default' : 'pointer',
+                bgcolor: active ? 'var(--accent-soft)' : 'transparent',
+                color: active ? 'var(--accent)' : 'var(--text-dim)',
+                border: `1px solid ${active ? 'var(--accent-line)' : 'var(--line-soft)'}`,
+                opacity: disabled && !active ? 0.4 : 1,
+                transition: 'color .12s ease, border-color .12s ease, background .12s ease',
+                '&:hover': disabled
+                    ? {}
+                    : { color: 'var(--accent)', borderColor: 'var(--accent-line)' },
+            }}
+        >
+            {children}
+        </Box>
     )
 }
 
