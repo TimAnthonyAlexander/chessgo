@@ -126,6 +126,30 @@ func (g *game) moveLog() []map[string]string {
 	return log
 }
 
+// startPly is the number of plies already played BEFORE the game's first
+// recorded move — i.e. the half-move offset implied by a non-standard start
+// position (a puzzle-seeded filler begins mid-game). It's 0 for games that begin
+// from the opening (fullmove 1, White to move), so it only shifts the spectator
+// move-list numbering for mid-game seeds. Derived from startFen; standard/960
+// only (duck fillers don't exist), falling back to 0 on any parse trouble.
+func (g *game) startPly() int {
+	if g.variant == variantDuck || g.startFen == "" {
+		return 0
+	}
+	pos, err := chess.ParseFEN(g.startFen)
+	if err != nil {
+		return 0
+	}
+	plies := (int(pos.FullmoveNumber()) - 1) * 2
+	if pos.SideToMove() == chess.Black {
+		plies++
+	}
+	if plies < 0 {
+		return 0
+	}
+	return plies
+}
+
 func (g *game) playerFor(c chess.Color) *player {
 	if c == chess.White {
 		return g.white

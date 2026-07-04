@@ -85,6 +85,7 @@ func (h *Hub) spectateMsg(g *game) map[string]any {
 		"moves":       g.moveLog(),
 		"lastMove":    g.lastUci(),
 		"ply":         len(g.moves),
+		"startPly":    g.startPly(), // half-move offset for a mid-game seed (filler); 0 from the opening
 		"over":        g.over,
 	})
 }
