@@ -421,7 +421,7 @@ func (n *EnrichedNet) evalFromHalves(stm, opp []int16, bk int, sc *enrichedScrat
 
 	// Tail layer 1: hidden[H] -> l1[D2], SCReLU.
 	l1 := sc.l1
-	gemvF32(l1, hidden, n.L1W, nb*d2, bk*d2)
+	gemvF32(l1, hidden[:h], n.L1W, nb*d2, bk*d2)
 	b1 := n.L1B[bk*d2 : bk*d2+d2]
 	for o := range l1 {
 		l1[o] = screluF(l1[o] + b1[o])

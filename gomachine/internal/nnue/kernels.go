@@ -219,6 +219,31 @@ func quantU8I16Scalar(dst []uint8, src []int16) {
 	}
 }
 
+// pairwiseU8Scalar is the int8-path PAIRWISE FT activation in PURE INTEGER (mirrors
+// quantU8I16Scalar's shift trick, but multiplies the two half-pairs instead of
+// squaring): out[i] = (clamp(half[i],0,ftQA) * clamp(half[i+hh],0,ftQA) + ftRound) >> ftShift,
+// hh = len(half)/2. lo*hi ≤ 255² = 65025, and (65025+256)>>9 = 127, so out ∈ [0,int8QA=127]
+// — the same value (±1) the old float `lo*hi*127/255²` produced, but a shift the SIMD
+// backends reproduce bit-for-bit. Writes hh = len(half)/2 activations.
+func pairwiseU8Scalar(out []uint8, half []int16) {
+	hh := len(half) / 2
+	for i := 0; i < hh; i++ {
+		a := int32(half[i])
+		if a < 0 {
+			a = 0
+		} else if a > ftQA {
+			a = ftQA
+		}
+		b := int32(half[i+hh])
+		if b < 0 {
+			b = 0
+		} else if b > ftQA {
+			b = ftQA
+		}
+		out[i] = uint8((a*b + ftRound) >> ftShift)
+	}
+}
+
 // dotU8I8Scalar computes Σ a[i]·w[i] as int32, modeling the AVX2/AVX-512
 // VPMADDUBSW+VPMADDWD path EXACTLY so the scalar reference and the SIMD backends
 // are bit-identical: VPMADDUBSW forms, per adjacent byte pair, an int16 word
@@ -281,4 +306,7 @@ var (
 	screluActivateI16 = screluActivateI16Scalar
 	// quantU8I16(dst, src): dst = u8 round(SCReLU(src/ftQA)²·int8QA), from int16 acc.
 	quantU8I16 = quantU8I16Scalar
+	// pairwiseU8(out, half): out = u8 (clamp(lo,0,ftQA)·clamp(hi,0,ftQA)+ftRound)>>ftShift,
+	// the int8-path pairwise FT activation over the two half-pairs (writes len/2).
+	pairwiseU8 = pairwiseU8Scalar
 )

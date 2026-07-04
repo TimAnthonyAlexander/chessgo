@@ -41,9 +41,10 @@ func init() {
 	screluActivateF = screluActivateFSIMD
 	dotU8I8 = dotU8I8SIMD
 	quantU8I16 = quantU8I16SIMD
+	pairwiseU8 = pairwiseU8SIMD
 	addColI8 = addColI8SIMD
 	subColI8 = subColI8SIMD
-	kernelBackend = "simd/archsimd-avx512-amd64(addCol,subCol,screluDot,dotF32,gemvF32,screluActivateF,dotU8I8,quantU8I16,addColI8,subColI8)"
+	kernelBackend = "simd/archsimd-avx512-amd64(addCol,subCol,screluDot,dotF32,gemvF32,screluActivateF,dotU8I8,quantU8I16,pairwiseU8,addColI8,subColI8)"
 
 	// Replace the two-step maddubs int8 dot with a single-instruction VPDPBUSD
 	// kernel when the CPU has AVX512_VNNI (bit-identical on the [0,127] domain,
@@ -153,6 +154,43 @@ func quantU8I16SIMD(dst []uint8, src []int16) {
 			c = ftQA
 		}
 		dst[i] = uint8((c*c + ftRound) >> ftShift)
+	}
+}
+
+// pairwiseU8SIMD is the int8-path PAIRWISE FT activation on AVX-512, 16 pairs/iter:
+// clamp both half-pairs (lo = half[i:i+16], hi = half[i+hh:i+hh+16]) to [0,ftQA],
+// widen to int32, multiply the two (NOT square — the one difference from
+// quantU8I16SIMD), (·+ftRound)>>ftShift, and narrow int32→u8 via VPMOVUSDB
+// (Uint32x16.SaturateToUint8). Bit-identical to pairwiseU8Scalar: lo·hi ≤ 255² =
+// 65025 so the int32 product is exact and the shifted result lands in [0,int8QA=127],
+// where the unsigned-saturate narrow is exact and arithmetic == logical shift.
+func pairwiseU8SIMD(out []uint8, half []int16) {
+	hh := len(half) / 2
+	zero := archsimd.BroadcastInt16x16(0)
+	cap255 := archsimd.BroadcastInt16x16(int16(ftQA))
+	round := archsimd.BroadcastInt32x16(ftRound)
+	i := 0
+	for ; i+16 <= hh; i += 16 {
+		lo := archsimd.LoadInt16x16Slice(half[i : i+16]).Max(zero).Min(cap255)      // ∈ [0,ftQA]
+		hi := archsimd.LoadInt16x16Slice(half[i+hh : i+hh+16]).Max(zero).Min(cap255) // ∈ [0,ftQA]
+		cc := lo.ExtendToInt32().Mul(hi.ExtendToInt32())                             // Int32x16 ∈ [0,ftQA²]
+		r := cc.Add(round).ShiftAllRight(ftShift)                                    // (lo·hi+ftRound)>>ftShift ∈ [0,int8QA]
+		r.AsUint32x16().SaturateToUint8().StoreSlice(out[i : i+16])
+	}
+	for ; i < hh; i++ { // scalar tail — identical to pairwiseU8Scalar
+		a := int32(half[i])
+		if a < 0 {
+			a = 0
+		} else if a > ftQA {
+			a = ftQA
+		}
+		b := int32(half[i+hh])
+		if b < 0 {
+			b = 0
+		} else if b > ftQA {
+			b = ftQA
+		}
+		out[i] = uint8((a*b + ftRound) >> ftShift)
 	}
 }
 

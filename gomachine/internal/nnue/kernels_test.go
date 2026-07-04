@@ -186,6 +186,43 @@ func TestQuantU8I16MatchScalar(t *testing.T) {
 	t.Logf("quantU8I16 backend = %q (bit-exact vs scalar)", kernelBackend)
 }
 
+// TestPairwiseU8MatchScalar gates the int8-path pairwise FT activation kernel. The
+// half slice has EVEN length (the kernel writes len/2 outputs from the two
+// half-pairs); inputs span the [0,ftQA] clamp (negatives, in-range, > ftQA, and 0)
+// at widths including the real 2H (512). The AVX-512 + NEON backends must be
+// byte-identical to the pure-integer scalar reference (all outputs land in
+// [0,int8QA] so the int32→u8 narrow is exact); other backends keep the scalar
+// binding and pass trivially.
+func TestPairwiseU8MatchScalar(t *testing.T) {
+	rng := rand.New(rand.NewSource(0x9A17))
+	for _, n := range []int{2, 4, 8, 16, 30, 32, 64, 512, 514} {
+		half := make([]int16, n)
+		for i := range half {
+			switch rng.Intn(4) {
+			case 0:
+				half[i] = int16(rng.Intn(300) - 150) // spans <0 and [0,255]
+			case 1:
+				half[i] = int16(rng.Intn(700)) // spans [0,255] and > ftQA
+			case 2:
+				half[i] = 0 // force the zero boundary
+			default:
+				half[i] = int16(rng.Intn(int(ftQA) + 1)) // in-range [0,ftQA]
+			}
+		}
+		got := make([]uint8, n/2)
+		ref := make([]uint8, n/2)
+		pairwiseU8(got, half)
+		pairwiseU8Scalar(ref, half)
+		for i := range ref {
+			if got[i] != ref[i] {
+				t.Fatalf("pairwiseU8[n=%d] backend=%q: index %d got %d want %d (lo=%d hi=%d)",
+					n, kernelBackend, i, got[i], ref[i], half[i], half[i+n/2])
+			}
+		}
+	}
+	t.Logf("pairwiseU8 backend = %q (bit-exact vs scalar)", kernelBackend)
+}
+
 func randF32(rng *rand.Rand, n int) []float32 {
 	s := make([]float32, n)
 	for i := range s {

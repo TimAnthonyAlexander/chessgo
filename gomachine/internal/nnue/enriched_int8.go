@@ -15,29 +15,11 @@ import "math"
 // L1 weights are PTQ'd here (per-output-row scale), which the closeness gate
 // checks.
 
-// pairwiseU8 is the int8-path analogue of pairwiseHalf: CReLU each half-pair,
-// multiply, and quantize the [0,1] product to u8 ∈ [0,int8QA=127]. Writes H/2
-// activations. (Scalar; the cost is dominated by the int8 L1 dot, not this.)
-func pairwiseU8(out []uint8, half []int16) {
-	hh := len(half) / 2
-	const scale = float64(int8QA) / (float64(ftQA) * float64(ftQA)) // 127/255²
-	for i := 0; i < hh; i++ {
-		a := half[i]
-		if a < 0 {
-			a = 0
-		} else if a > ftQA {
-			a = ftQA
-		}
-		b := half[i+hh]
-		if b < 0 {
-			b = 0
-		} else if b > ftQA {
-			b = ftQA
-		}
-		q := float64(a) * float64(b) * scale // ∈ [0, int8QA]
-		out[i] = uint8(q + 0.5)
-	}
-}
+// The int8-path pairwise FT activation is the kernel seam var pairwiseU8 (see
+// kernels.go): CReLU each half-pair, multiply, and quantize the product to u8 ∈
+// [0,int8QA=127], writing H/2 activations. It defaults to pairwiseU8Scalar (pure
+// integer, mirroring quantU8I16Scalar's shift) and is repointed at a SIMD backend
+// by each archsimd init(); the call sites below are unchanged.
 
 // enrichedL1QB is the FIXED int8 scale for L1 weights (the QB convention). It MUST
 // match the QW the bullet config fake-quantises the L1 weights to (examples/

@@ -52,9 +52,10 @@ func init() {
 	dotF32 = dotF32SIMD
 	gemvF32 = gemvF32SIMD
 	screluActivateF = screluActivateFSIMD
+	pairwiseU8 = pairwiseU8SIMD
 	addColI8 = addColI8SIMD
 	subColI8 = subColI8SIMD
-	kernelBackend = "simd/archsimd-neon-arm64(addCol,subCol,screluDot,dotF32,gemvF32,screluActivateF,addColI8,subColI8)"
+	kernelBackend = "simd/archsimd-neon-arm64(addCol,subCol,screluDot,dotF32,gemvF32,screluActivateF,pairwiseU8,addColI8,subColI8)"
 }
 
 // gemvF32SIMD is the output-stationary tail GEMV: out[o] = Σ_i in[i]·w[i*stride+off+o].
@@ -264,5 +265,50 @@ func screluActivateFSIMD(dst, src []float32) {
 			x = 1
 		}
 		dst[i] = x * x
+	}
+}
+
+// pairwiseU8SIMD is the int8-path PAIRWISE FT activation on NEON, 8 pairs/iter.
+// NEON has no direct int32→u8 narrow (unlike the AVX-512 VPMOVUSDB path), so the
+// two int32 half-lanes are narrowed separately through the VSQXTUN (int32→u16) +
+// VUQXTN (u16→u8) chain and each 4-lane block is StorePart'd (all values land in
+// [0,int8QA=127], so both saturating narrows are exact). Bit-identical to
+// pairwiseU8Scalar: clamp both half-pairs (lo = half[i:i+8], hi = half[i+hh:i+hh+8])
+// to [0,ftQA], widen-multiply (lo·hi ≤ 255² = 65025 fits int32), (·+ftRound)>>ftShift.
+func pairwiseU8SIMD(out []uint8, half []int16) {
+	hh := len(half) / 2
+	zero16 := archsimd.BroadcastInt16x8(0)
+	cap255 := archsimd.BroadcastInt16x8(int16(ftQA))
+	round := archsimd.BroadcastInt32x4(ftRound)
+	i := 0
+	for ; i+8 <= hh; i += 8 {
+		lo := archsimd.LoadInt16x8(half[i : i+8]).Max(zero16).Min(cap255)      // Int16x8 ∈ [0,ftQA]
+		hi := archsimd.LoadInt16x8(half[i+hh : i+hh+8]).Max(zero16).Min(cap255) // Int16x8 ∈ [0,ftQA]
+
+		// lo·hi as int32, low 4 then high 4 lanes (products ≤65025, no overflow).
+		pLo := lo.MulWidenLo(hi)                     // Int32x4: lanes 0..3
+		pHi := lo.HiToLo().MulWidenLo(hi.HiToLo())   // Int32x4: lanes 4..7
+
+		// (p + ftRound) >> ftShift ∈ [0,int8QA]; narrow int32→u16→u8 and store the
+		// low 4 bytes of each block (VSQXTUN then VUQXTN pack to the low lanes).
+		rLo := pLo.Add(round).ShiftAllRight(ftShift)
+		rHi := pHi.Add(round).ShiftAllRight(ftShift)
+		rLo.SaturateToUint16().SaturateToUint8().StorePart(out[i : i+4])
+		rHi.SaturateToUint16().SaturateToUint8().StorePart(out[i+4 : i+8])
+	}
+	for ; i < hh; i++ { // scalar tail — identical to pairwiseU8Scalar
+		a := int32(half[i])
+		if a < 0 {
+			a = 0
+		} else if a > ftQA {
+			a = ftQA
+		}
+		b := int32(half[i+hh])
+		if b < 0 {
+			b = 0
+		} else if b > ftQA {
+			b = ftQA
+		}
+		out[i] = uint8((a*b + ftRound) >> ftShift)
 	}
 }
