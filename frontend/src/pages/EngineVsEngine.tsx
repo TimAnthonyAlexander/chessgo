@@ -11,6 +11,7 @@ import {
 import {
     Bot,
     Cpu,
+    FlipVertical2,
     Pause,
     Play,
     RotateCcw,
@@ -232,14 +233,13 @@ export default function EngineVsEngine() {
     const [running, setRunning] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [sound, setSound] = useState(soundEnabled())
+    const [orientation, setOrientation] = useState<Color>('w')
     const thinkingRef = useRef(false)
 
     const ply = moves.length
     const over = status !== 'ongoing'
     const sideToMove = sideToMoveOf(fen)
     const moverCfg = sideToMove === 'w' ? white : black
-    // In Duck mode BOTH sides are gomachine regardless of the stored engine pick.
-    const moverSide: EngineSide = duckMode ? 'gomachine' : moverCfg.engine
 
     // Book panel: a tree of the game line so far, so the engine-owned OpeningPanel
     // can name the opening + show candidate-move eval bars for the live position.
@@ -469,10 +469,10 @@ export default function EngineVsEngine() {
     const caption = over
         ? `${statusLabel(status)}${result ? ` · ${result}` : ''}`
         : running
-          ? `${engineName(moverSide)} to move…`
+          ? ''
           : ply > 0
             ? 'Paused'
-            : 'Configure both sides and press Start'
+            : ''
 
     return (
         <BoardPage
@@ -502,22 +502,33 @@ export default function EngineVsEngine() {
                         </ToggleButtonGroup>
                     </Box>
 
-                    <SideControls
-                        cfg={black}
-                        onChange={(patch) => setBlack((c) => ({ ...c, ...patch }))}
-                        disabled={running}
-                        duckMode={duckMode}
-                    />
-
-                    <SideControls
-                        cfg={white}
-                        onChange={(patch) => setWhite((c) => ({ ...c, ...patch }))}
-                        disabled={running}
-                        duckMode={duckMode}
-                    />
+                    {/* Top player's card first: the top of the board is Black when
+                        White-oriented, White when flipped. */}
+                    {(orientation === 'w'
+                        ? (['b', 'w'] as const)
+                        : (['w', 'b'] as const)
+                    ).map((c) =>
+                        c === 'w' ? (
+                            <SideControls
+                                key="w"
+                                cfg={white}
+                                onChange={(patch) => setWhite((s) => ({ ...s, ...patch }))}
+                                disabled={running}
+                                duckMode={duckMode}
+                            />
+                        ) : (
+                            <SideControls
+                                key="b"
+                                cfg={black}
+                                onChange={(patch) => setBlack((s) => ({ ...s, ...patch }))}
+                                disabled={running}
+                                duckMode={duckMode}
+                            />
+                        ),
+                    )}
                 </Box>
             }
-            evalBar={<EvalBar ev={whiteEval} orientation="w" />}
+            evalBar={<EvalBar ev={whiteEval} orientation={orientation} />}
             right={
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
                     <Box
@@ -531,30 +542,27 @@ export default function EngineVsEngine() {
                             gap: 1,
                         }}
                     >
-                        <MatchupRow
-                            icon={
-                                duckMode || black.engine === 'gomachine' ? (
-                                    <Cpu size={16} />
-                                ) : (
-                                    <Bot size={16} />
-                                )
-                            }
-                            name={duckMode ? 'gomachine' : engineName(black.engine)}
-                            detail={duckMode ? `~${black.rating} Elo` : sideDetail(black)}
-                            side="b"
-                        />
-                        <MatchupRow
-                            icon={
-                                duckMode || white.engine === 'gomachine' ? (
-                                    <Cpu size={16} />
-                                ) : (
-                                    <Bot size={16} />
-                                )
-                            }
-                            name={duckMode ? 'gomachine' : engineName(white.engine)}
-                            detail={duckMode ? `~${white.rating} Elo` : sideDetail(white)}
-                            side="w"
-                        />
+                        {(orientation === 'w'
+                            ? (['b', 'w'] as const)
+                            : (['w', 'b'] as const)
+                        ).map((c) => {
+                            const cfg = c === 'w' ? white : black
+                            return (
+                                <MatchupRow
+                                    key={c}
+                                    icon={
+                                        duckMode || cfg.engine === 'gomachine' ? (
+                                            <Cpu size={16} />
+                                        ) : (
+                                            <Bot size={16} />
+                                        )
+                                    }
+                                    name={duckMode ? 'gomachine' : engineName(cfg.engine)}
+                                    detail={duckMode ? `~${cfg.rating} Elo` : sideDetail(cfg)}
+                                    side={c}
+                                />
+                            )
+                        })}
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
                             <Typography
                                 sx={{ fontSize: 13, fontWeight: 600, color: 'var(--text-dim)' }}
@@ -586,6 +594,12 @@ export default function EngineVsEngine() {
                                 disabled={running || duckMode}
                             >
                                 <Bot size={18} />
+                            </NavBtn>
+                            <NavBtn
+                                label="Flip board"
+                                onClick={() => setOrientation((o) => (o === 'w' ? 'b' : 'w'))}
+                            >
+                                <FlipVertical2 size={18} />
                             </NavBtn>
                             <NavBtn label={sound ? 'Mute' : 'Unmute'} onClick={toggleSound}>
                                 {sound ? <Volume2 size={18} /> : <VolumeX size={18} />}
@@ -647,7 +661,7 @@ export default function EngineVsEngine() {
         >
             <Board
                 fen={fen}
-                orientation="w"
+                orientation={orientation}
                 sideToMove={sideToMove}
                 legalMoves={[]}
                 lastMove={lastMove}
