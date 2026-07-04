@@ -170,3 +170,56 @@ lever. Blend targets λ≈0.7–0.8 (score-dominant + WDL) for self-labeled data
   eval changes — the v8-buckets +90→≈0 scar).
 - **Every SIMD/int8 kernel needs a bit-exact scalar gate** (`TestKernelsMatchScalar` /
   `NNUE_ASSERT`).
+
+---
+
+## 6. EMPIRICAL VERDICT — enriched-512 measured, ABANDONED (2026-07-04)
+
+Trained the enriched multilayer net (H=512, D2=16, D3=32, NB=8, threats 768+9216)
+to 320 sb with full QAT on ~40GB SF test80 data, then SPRT'd on coalla (AVX-512)
+vs the **lean-v9** champion (`data/nnue/lean.bin`). Clean net, sb 320 (md5
+`c00a621d…`; a corrupt-data first run that lost 100% was discarded — flaky
+`curl|zstd -dc >>` streaming silently truncated the binpack; **always
+download-to-disk + `zstd -t` first**).
+
+**Node cost (coalla, EPYC 9634, SIMD v4):** V6 ~325 ns · **lean-v9 ~882 ns** ·
+**enriched int8(full, incl int8-FT) ~1750 ns (~2× lean)** · enriched float ~3790 ns.
+The 2× tax is the **multilayer TAIL** (D2/D3), not threats — lean-v9 already carries
+the same 9216 threat features at 882 ns.
+
+**Strength ladder (fixed-depth eval vs lean-v9, and movetime):**
+
+| Config | fixed-depth Elo | movetime Elo |
+|---|---|---|
+| Float FT + float tail | **+32 ± 20** (firm, 193 pr) | — (too slow) |
+| int16-FT + int8-L1 | +10 ± 18 (200 pr) | −68 (slow FT) |
+| **int8-FT + int8-L1 (shipping)** | **−19 ± 22** (150 pr) | **~−17** (40 pr) |
+
+**Why it fails:** (1) the float eval ceiling is only **+32** — SF/Stormphrax make
+threats pay via *bigger* nets with larger eval gains, not +32 at width 512; (2) a
+~**51 Elo int8 leak** (float +32 → int8-FT −19). At ~2× node cost even a perfect
+int8 net lands ~break-even at movetime. Well-measured marginal loss → **abandoned**;
+lean-v9 stays champion; pivot to **lean width→512→1024** (higher eval ceiling, better
+Elo/node, less complexity — the NEXT_STEPS ladder).
+
+### The FT-weight-QAT gap (bank this for a future BIGGER threat net)
+
+The int8-FT leak is diagnosed and *fixable*, just not worth it here. Root cause:
+`chessgo_enriched.rs` (and `chessgo_lean_threats.rs`) fake-quantise the FT
+**activation** (`faux_quantise(QA=255)`), the pairwise activation (`QACT=127`), and
+the L1 **weights** (`QW=64`) — but **never the FT *weights* (`l0.weights`)**. Go's
+`QuantizeFTInt8` quantises the threat columns to int8 at the fixed `ftQA=255` grid,
+clamping ±127. Measured weights: base & threat both span **±505** (= AdamW ±1.98 ×
+255); threat has 3,261 weights >127, base 4,502. So int8-FT loses the ±127→±505 tail
+(4× range) → the leak.
+
+**The fix (unbuilt):** fake-quantise *only* the threat **columns** (input 768:) of
+`l0.weights` to the (255-scale, ±127-clamp) grid during training, constraining threat
+weights to |W|≤0.5. Needs bullet graph surgery — `ModelNode` exposes `slice_rows`
+but the threat columns are the *input/col* dim of the `(H, INPUT_SIZE)` weight, so it
+needs a `slice_cols`/col-`concat` patch (or an affine split + save-format + Go-import
+change). **Base must stay int16** (4,502 weights >127 would clamp). Payoff is
+uncertain even then: constraining threats to a 4× smaller range may cost
+expressiveness, so recovery is partial (est. int8-FT eval −19→~+5, movetime
+−17→~break-even). Only worth it once a *wider/bigger* threat net raises the float
+ceiling well past +32 so the recovered int8 net is clearly movetime-positive.
