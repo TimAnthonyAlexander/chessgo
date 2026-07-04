@@ -9,6 +9,24 @@ import {
     type PieceSet,
 } from '../lib/boardTheme'
 import { pieceImageUrl } from '../lib/chess'
+import MiniBoard from './MiniBoard'
+
+// A fixed, pieces-rich middlegame used purely to showcase the active board theme +
+// piece set in the preview. lastMove tints two squares so the highlight color shows.
+const PREVIEW_FEN = 'r2q1rk1/ppp2ppp/2np1n2/2b1p1B1/2B1P1b1/2NP1N2/PPP2PPP/R2Q1RK1 w - - 0 1'
+const PREVIEW_LAST = 'c1g5'
+
+/** A board square's paint: a plain color, or (for photographic themes like Cherry)
+ * a url() texture sized to cover. Keeps color- and image-valued themes uniform. */
+function paintSquare(value: string) {
+    return value.startsWith('url(')
+        ? {
+              backgroundImage: value,
+              backgroundSize: 'cover',
+              backgroundPosition: 'center',
+          }
+        : { bgcolor: value }
+}
 
 /** Appearance picker: choose the board color theme + piece set. Every selection
  * updates the appearance store immediately (live-previewed on the board behind the
@@ -22,14 +40,15 @@ export default function ThemeDialog({ open, onClose }: { open: boolean; onClose:
         <Dialog
             open={open}
             onClose={onClose}
+            maxWidth={false}
             slotProps={{
                 paper: {
                     sx: {
                         bgcolor: 'var(--surface)',
                         border: '1px solid var(--line)',
                         borderRadius: 3,
-                        minWidth: 380,
-                        maxWidth: 460,
+                        width: '92vw',
+                        maxWidth: 860,
                     },
                 },
             }}
@@ -47,30 +66,56 @@ export default function ThemeDialog({ open, onClose }: { open: boolean; onClose:
                 </Typography>
 
                 <SectionHeading>Board — {boardLabel}</SectionHeading>
-                {/* One continuous 8×8 chessboard. Each theme is a 2×2 block (4 per
-                 * band, 4 bands = 64 squares); the checker orientation is shared so
-                 * the whole grid reads as a single, square board. */}
+                {/* Left: the selector (one continuous 8×8 board, each theme a 2×2
+                 * block). Right: a live preview of the active theme + piece set. */}
                 <Box
                     sx={{
-                        border: '1px solid var(--line)',
-                        overflow: 'hidden',
+                        display: 'flex',
+                        gap: 2,
                         mb: 3,
+                        alignItems: 'flex-start',
+                        flexWrap: 'wrap',
                     }}
                 >
-                    <Box
-                        sx={{
-                            display: 'grid',
-                            gridTemplateColumns: 'repeat(4, 1fr)',
-                        }}
-                    >
-                        {BOARD_THEMES.map((theme) => (
-                            <BoardTile
-                                key={theme.id}
-                                theme={theme}
-                                selected={boardId === theme.id}
-                                onSelect={() => themeStore.setBoard(theme.id)}
-                            />
-                        ))}
+                    <Box sx={{ flex: '1 1 260px', minWidth: 240 }}>
+                        <Box
+                            sx={{
+                                border: '1px solid var(--line)',
+                                overflow: 'hidden',
+                            }}
+                        >
+                            <Box
+                                sx={{
+                                    display: 'grid',
+                                    gridTemplateColumns: 'repeat(4, 1fr)',
+                                }}
+                            >
+                                {BOARD_THEMES.map((theme) => (
+                                    <BoardTile
+                                        key={theme.id}
+                                        theme={theme}
+                                        selected={boardId === theme.id}
+                                        onSelect={() => themeStore.setBoard(theme.id)}
+                                    />
+                                ))}
+                            </Box>
+                        </Box>
+                    </Box>
+
+                    <Box sx={{ flex: '1 1 260px', minWidth: 240 }}>
+                        <MiniBoard fen={PREVIEW_FEN} lastMove={PREVIEW_LAST} />
+                        <Typography
+                            sx={{
+                                mt: 1,
+                                fontSize: 11,
+                                textAlign: 'center',
+                                letterSpacing: '0.08em',
+                                textTransform: 'uppercase',
+                                color: 'var(--text-dim)',
+                            }}
+                        >
+                            Live preview
+                        </Typography>
                     </Box>
                 </Box>
 
@@ -78,7 +123,7 @@ export default function ThemeDialog({ open, onClose }: { open: boolean; onClose:
                 <Box
                     sx={{
                         display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+                        gridTemplateColumns: 'repeat(2, 1fr)',
                         gap: 1.25,
                     }}
                 >
@@ -123,7 +168,7 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
     )
 }
 
-/** Shared selection frame styles for both swatches and piece cards. */
+/** Shared selection frame styles for the piece cards. */
 function selectionSx(selected: boolean) {
     return {
         border: selected ? '2px solid var(--accent)' : '2px solid var(--line)',
@@ -178,7 +223,7 @@ function BoardTile({
                     <Box
                         key={i}
                         sx={{
-                            bgcolor: tone === 'light' ? light : dark,
+                            ...paintSquare(tone === 'light' ? light : dark),
                             boxShadow: cellBorder,
                         }}
                     />
@@ -228,15 +273,29 @@ function PieceCard({
                     <Box
                         key={char}
                         sx={{
+                            position: 'relative',
                             aspectRatio: '1 / 1',
-                            bgcolor:
+                            // Cell background follows the active board theme. The
+                            // `background` shorthand takes either a color or a url()
+                            // (resolved from the var at render); cover sizes a texture.
+                            // The piece is an overlay so a url() theme isn't clobbered.
+                            background:
                                 i % 2 === 0 ? 'var(--board-light)' : 'var(--board-dark)',
-                            backgroundImage: `url(${pieceImageUrl(char, set.id)})`,
-                            backgroundSize: '86%',
+                            backgroundSize: 'cover',
                             backgroundPosition: 'center',
-                            backgroundRepeat: 'no-repeat',
                         }}
-                    />
+                    >
+                        <Box
+                            sx={{
+                                position: 'absolute',
+                                inset: 0,
+                                backgroundImage: `url(${pieceImageUrl(char, set.id)})`,
+                                backgroundSize: '86%',
+                                backgroundPosition: 'center',
+                                backgroundRepeat: 'no-repeat',
+                            }}
+                        />
+                    </Box>
                 ))}
             </Box>
             <Typography

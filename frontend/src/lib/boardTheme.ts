@@ -24,7 +24,7 @@ export type BoardThemeId =
     | 'midnight'
     | 'newsprint'
     | 'walnut'
-    | 'oak'
+    | 'cherry'
     | 'carrara'
     | 'onyx'
 export type PieceSetId = 'cburnett' | 'merida' | 'chessnut' | 'fantasy'
@@ -284,20 +284,23 @@ const BOARD_THEME_CATALOG: BoardTheme[] = [
         },
     },
     {
-        // Pale golden-honey wood — light and airy.
-        id: 'oak',
-        label: 'Oak',
+        // Photographic wood: light bamboo on light squares, cherry-stained on dark.
+        // Here --board-light/--board-dark are image URLs (served from /public/board)
+        // rather than colors; Board.css/MiniBoard paint them with background-size:
+        // cover. The remaining values are tuned to read against the two woods.
+        id: 'cherry',
+        label: 'Cherry',
         vars: {
-            '--board-light': '#f0dcb0',
-            '--board-dark': '#c29c5e',
-            '--board-frame': '#4a3a1f',
-            '--last-move': 'rgba(214, 210, 108, 0.55)',
-            '--select': 'rgba(214, 210, 108, 0.66)',
-            '--dot': 'rgba(70, 52, 24, 0.3)',
-            '--dot-light': 'rgba(70, 52, 24, 0.22)',
-            '--check': 'rgba(202, 74, 74, 0.7)',
-            '--coord-on-light': '#c29c5e',
-            '--coord-on-dark': '#f0dcb0',
+            '--board-light': 'url("/board/wood_light.png")',
+            '--board-dark': 'url("/board/wood_cherry.png")',
+            '--board-frame': '#3a2114',
+            '--last-move': 'rgba(230, 205, 100, 0.5)',
+            '--select': 'rgba(230, 205, 100, 0.62)',
+            '--dot': 'rgba(40, 22, 12, 0.34)',
+            '--dot-light': 'rgba(40, 22, 12, 0.28)',
+            '--check': 'rgba(210, 66, 66, 0.72)',
+            '--coord-on-light': '#7a5230',
+            '--coord-on-dark': '#f2e2c8',
             '--board-border-color': 'transparent',
         },
     },
@@ -344,8 +347,8 @@ const BOARD_THEME_CATALOG: BoardTheme[] = [
 // picks. This drives ONLY the on-screen order; the new-user default stays
 // DEFAULT_BOARD regardless of what sits first here (see boardById).
 const BOARD_ORDER: BoardThemeId[] = [
-    'brown', 'green', 'purple', 'ocean', // classic favorites
-    'walnut', 'oak', 'default', 'marble', // woods + clean neutrals
+    'cherry', 'brown', 'green', 'purple', // wood default + classic favorites
+    'ocean', 'walnut', 'default', 'marble', // blues + woods + clean neutrals
     'carrara', 'lagoon', 'ice', 'newsprint', // marble + cool tones
     'coral', 'midnight', 'onyx', 'bubblegum', // warm / dark / playful
 ]
@@ -365,7 +368,7 @@ export const PIECE_SETS: PieceSet[] = [
     { id: 'fantasy', label: 'Fantasy', credit: 'Maurizio Monge · MIT' },
 ]
 
-const DEFAULT_BOARD: BoardThemeId = 'default'
+const DEFAULT_BOARD: BoardThemeId = 'cherry'
 const DEFAULT_PIECES: PieceSetId = 'cburnett'
 const LS_BOARD = 'chessgo.board'
 const LS_PIECES = 'chessgo.pieces'

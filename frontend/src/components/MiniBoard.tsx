@@ -45,29 +45,39 @@ export default function MiniBoard({
                             sx={{
                                 position: 'relative',
                                 background: light ? 'var(--board-light)' : 'var(--board-dark)',
+                                // cover makes url()-valued (photographic) themes fill
+                                // the square; inert for solid-color themes.
+                                backgroundSize: 'cover',
+                                backgroundPosition: 'center',
                                 // Same per-square gridline as the main board (inert
                                 // unless the active theme sets --board-border-color).
                                 boxShadow: 'inset 0 0 0 1px var(--board-border-color)',
-                                ...(piece
-                                    ? {
-                                          backgroundImage: `url(${pieceImageUrl(piece, pieceSet)})`,
-                                          backgroundRepeat: 'no-repeat',
-                                          backgroundPosition: 'center',
-                                          backgroundSize: '86%',
-                                      }
-                                    : {}),
-                                ...(highlight
-                                    ? {
-                                          '&::after': {
-                                              content: '""',
-                                              position: 'absolute',
-                                              inset: 0,
-                                              background: 'var(--last-move)',
-                                          },
-                                      }
-                                    : {}),
                             }}
-                        />
+                        >
+                            {/* Piece + highlight are overlays so they never replace
+                             * the square's own background (texture must survive). */}
+                            {highlight && (
+                                <Box
+                                    sx={{
+                                        position: 'absolute',
+                                        inset: 0,
+                                        background: 'var(--last-move)',
+                                    }}
+                                />
+                            )}
+                            {piece && (
+                                <Box
+                                    sx={{
+                                        position: 'absolute',
+                                        inset: 0,
+                                        backgroundImage: `url(${pieceImageUrl(piece, pieceSet)})`,
+                                        backgroundRepeat: 'no-repeat',
+                                        backgroundPosition: 'center',
+                                        backgroundSize: '86%',
+                                    }}
+                                />
+                            )}
+                        </Box>
                     )
                 }),
             )}

@@ -61,11 +61,18 @@
      * slight tile edge. The `.sq.over` drag ring overrides this box-shadow. */
     box-shadow: inset 0 0 0 1px var(--board-border-color);
 }
+/* --board-light/--board-dark are usually a color, but a photographic theme (e.g.
+ * Cherry) sets them to a url(); background-size/position make the texture fill the
+ * square. Both are inert for solid-color themes. */
 .sq.light {
     background: var(--board-light);
+    background-size: cover;
+    background-position: center;
 }
 .sq.dark {
     background: var(--board-dark);
+    background-size: cover;
+    background-position: center;
 }
 
 .sq.last::after {
