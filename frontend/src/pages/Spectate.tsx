@@ -300,6 +300,7 @@ export default function Spectate() {
                         fill
                         moves={moveEntries}
                         currentPly={moveEntries.length}
+                        startPly={g.startPly}
                         onSelectPly={() => {}}
                     />
 

@@ -29,6 +29,7 @@ export interface SpectateGame {
     clock: { w: number; b: number } // ms remaining at clockAt
     clockAt: number // Date.now() when the clock was received
     moves: { san: string; uci: string }[]
+    startPly: number // half-move offset of a mid-game seed (puzzle-seeded filler); 0 from the opening
     result: string | null
     reason: string | null
     over: boolean
@@ -69,6 +70,7 @@ function buildWatching(m: Msg): SpectateGame {
         clock: m.clock,
         clockAt: Date.now(),
         moves: (m.moves ?? []).map((x: Msg) => ({ san: x.san, uci: x.uci })),
+        startPly: typeof m.startPly === 'number' ? m.startPly : 0,
         result: null,
         reason: null,
         over: !!m.over,

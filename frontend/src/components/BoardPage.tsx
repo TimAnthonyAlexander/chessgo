@@ -90,8 +90,16 @@ export default function BoardPage({ children, left, right, evalBar }: BoardPageP
                 }}
             >
                 {/* Left column — always rendered (empty when unused) so the board stays
-                    centered. Fixed width + board height; content scrolls internally. */}
-                <SideColumn order={{ xs: 3, md: 0 }}>{left}</SideColumn>
+                    centered. Fixed width + board height; content scrolls internally.
+                    When NO eval bar is present, the reserved bar gap on the board's left
+                    would otherwise sit empty between this card and the board, so we slide
+                    the card right to hug the board (matching the tight right-card gap).
+                    The board keeps its reserved margin either way, so it never moves —
+                    only the card shifts, and toggling a page's bar on/off slides just
+                    this card, never the board. */}
+                <SideColumn order={{ xs: 3, md: 0 }} shiftRight={evalBar ? 0 : GAP_EVAL_EXTRA}>
+                    {left}
+                </SideColumn>
 
                 {/* Center — the board, with the eval bar floated into the left gap on md
                     (absolute, no layout width) and inlined on xs. */}
@@ -154,7 +162,18 @@ export default function BoardPage({ children, left, right, evalBar }: BoardPageP
 // A fixed-footprint side column: full width on mobile, a fixed 320px × board-height
 // panel on desktop. `minHeight:0` lets a flex-filling child (e.g. a MoveList panel)
 // scroll internally instead of stretching the row and moving the board.
-function SideColumn({ children, order }: { children?: ReactNode; order: { xs: number; md: number } }) {
+function SideColumn({
+    children,
+    order,
+    shiftRight = 0,
+}: {
+    children?: ReactNode
+    order: { xs: number; md: number }
+    // Desktop-only visual nudge toward the board (px), used to close the reserved
+    // eval-bar gap for the left card when a page has no bar. A transform (not a
+    // margin) so it never reflows the grid or moves the board — mobile is untouched.
+    shiftRight?: number
+}) {
     return (
         <Box
             sx={{
@@ -165,6 +184,7 @@ function SideColumn({ children, order }: { children?: ReactNode; order: { xs: nu
                 minHeight: 0,
                 display: 'flex',
                 flexDirection: 'column',
+                transform: shiftRight ? { md: `translateX(${shiftRight}px)` } : undefined,
             }}
         >
             {children}

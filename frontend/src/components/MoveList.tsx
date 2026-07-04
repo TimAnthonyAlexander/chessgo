@@ -9,6 +9,7 @@ interface MoveListProps {
     onSelectPly: (ply: number) => void
     visibleRows?: number // fixed number of full-move rows the panel shows before scrolling
     fill?: boolean // grow to fill the parent (full-height panel) instead of a fixed height
+    startPly?: number // half-moves already played before moves[0] (mid-game seed); numbers/columns shift accordingly
 }
 
 const ROW_H = 31 // px per row; keep in sync with Cell minHeight so rows fit exactly
@@ -25,10 +26,28 @@ export default function MoveList({
     onSelectPly,
     visibleRows = DEFAULT_VISIBLE_ROWS,
     fill = false,
+    startPly = 0,
 }: MoveListProps) {
-    const rows: { no: number; white?: MoveEntry; black?: MoveEntry }[] = []
-    for (let i = 0; i < moves.length; i += 2) {
-        rows.push({ no: i / 2 + 1, white: moves[i], black: moves[i + 1] })
+    // Number and column-align by ABSOLUTE ply so a mid-game seed (a puzzle-seeded
+    // watch filler that begins at, say, move 24 with Black to move) reads as a game
+    // joined in progress — "24… Qxe5", not "1. Qxe5". moves[i]'s absolute half-move
+    // index is startPly + i: even = White, odd = Black, fullmove = floor(abs/2)+1.
+    // When the seed has Black to move first, the opening row shows a "…" placeholder
+    // in the White column. startPly = 0 (the default) reproduces plain 1-based play.
+    const rows: {
+        no: number
+        white?: MoveEntry
+        black?: MoveEntry
+        whiteElided?: boolean // render "…" for the pre-seed White move on a Black-to-move seed
+    }[] = []
+    let i = 0
+    if (startPly % 2 === 1 && moves.length > 0) {
+        rows.push({ no: Math.floor(startPly / 2) + 1, whiteElided: true, black: moves[0] })
+        i = 1
+    }
+    for (; i < moves.length; i += 2) {
+        const abs = startPly + i
+        rows.push({ no: Math.floor(abs / 2) + 1, white: moves[i], black: moves[i + 1] })
     }
     const padCount = fill ? 0 : Math.max(0, visibleRows - rows.length)
 
@@ -55,12 +74,16 @@ export default function MoveList({
                         sx={{ display: 'grid', gridTemplateColumns: '32px 1fr 1fr' }}
                     >
                         <RowNumber no={r.no} />
-                        <Cell
-                            entry={r.white}
-                            whiteCol
-                            current={currentPly}
-                            onSelect={onSelectPly}
-                        />
+                        {r.whiteElided ? (
+                            <EllipsisCell />
+                        ) : (
+                            <Cell
+                                entry={r.white}
+                                whiteCol
+                                current={currentPly}
+                                onSelect={onSelectPly}
+                            />
+                        )}
                         <Cell entry={r.black} current={currentPly} onSelect={onSelectPly} />
                     </Box>
                 )
@@ -113,6 +136,29 @@ function RowNumber({ no }: { no?: number }) {
             }}
         >
             {no ?? ''}
+        </Box>
+    )
+}
+
+// EllipsisCell fills the White column of the opening row when a game is seeded
+// mid-move with Black to play — a non-clickable "…" standing in for the move
+// history that predates the seed (see startPly in MoveList).
+function EllipsisCell() {
+    return (
+        <Box
+            sx={{
+                minHeight: 31,
+                display: 'flex',
+                alignItems: 'center',
+                px: 1.25,
+                fontFamily: 'var(--font-mono)',
+                fontSize: 13.5,
+                fontWeight: 500,
+                color: 'var(--muted)',
+                bgcolor: 'rgba(255,255,255,0.05)',
+            }}
+        >
+            …
         </Box>
     )
 }
