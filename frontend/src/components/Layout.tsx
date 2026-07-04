@@ -1,5 +1,14 @@
 import { useEffect, useState } from 'react'
-import { Box, Button, Divider, IconButton, Tooltip, Typography } from '@mui/material'
+import {
+    Box,
+    Button,
+    Divider,
+    IconButton,
+    Tooltip,
+    Typography,
+    useMediaQuery,
+    useTheme,
+} from '@mui/material'
 import { ChevronDown, LogOut, Palette, UserRound } from 'lucide-react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { gameSocket } from '../lib/socket'
@@ -323,20 +332,31 @@ const CATEGORIES: { key: RatingCategory; label: string }[] = [
 function UserMenu({ user }: { user: User }) {
     const [open, setOpen] = useState(false)
     const navigate = useNavigate()
+    // Touch/mobile has no hover — there, the button taps open the dropdown
+    // instead of jumping straight to the profile. Desktop keeps hover-to-open
+    // with a click that navigates to the profile.
+    const isMobile = useMediaQuery(useTheme().breakpoints.down('md'))
     const goProfile = () => {
         setOpen(false)
         navigate(`/@/${encodeURIComponent(user.name)}`)
     }
     return (
         <Box
-            onMouseEnter={() => setOpen(true)}
-            onMouseLeave={() => setOpen(false)}
+            onMouseEnter={isMobile ? undefined : () => setOpen(true)}
+            onMouseLeave={isMobile ? undefined : () => setOpen(false)}
             sx={{ position: 'relative', display: 'flex', alignItems: 'center' }}
         >
+            {/* Tap-outside backdrop to dismiss the menu on mobile (no mouseleave). */}
+            {isMobile && open && (
+                <Box
+                    onClick={() => setOpen(false)}
+                    sx={{ position: 'fixed', inset: 0, zIndex: 39 }}
+                />
+            )}
             <Button
                 color="inherit"
                 size="small"
-                onClick={goProfile}
+                onClick={isMobile ? () => setOpen((o) => !o) : goProfile}
                 endIcon={
                     <ChevronDown
                         size={15}
