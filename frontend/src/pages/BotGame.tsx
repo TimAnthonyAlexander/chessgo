@@ -41,6 +41,7 @@ import { statusLabel } from '../lib/chess'
 import { useBoardInteraction } from '../lib/useBoardInteraction'
 import { useDuckInteraction } from '../lib/useDuckInteraction'
 import { useMoveNavKeys } from '../lib/useMoveNavKeys'
+import { type ColorChoice, loadBotSettings, saveBotSettings } from '../lib/botSettings'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { useAuth } from '../lib/auth'
 import AdminBestMove from '../components/AdminBestMove'
@@ -50,7 +51,6 @@ import { type Variant, random960 } from '../lib/variants'
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 const other = (c: Color): Color => (c === 'w' ? 'b' : 'w')
-type ColorChoice = 'w' | 'b' | 'random'
 
 // Eval-bar depth ladder: a shallow first guess lands in a few ms (so the bar
 // tracks the live position instead of lagging a full move behind), then deepens.
@@ -69,12 +69,18 @@ export default function BotGame() {
     // A FEN carried over from the analysis board ("Play bot from this position").
     const navFen = (useLocation().state as { fen?: string } | null)?.fen ?? null
 
+    // Last-used setup, restored from localStorage so a refresh keeps the player's
+    // rating / variant / color instead of snapping back to defaults.
+    const saved = useState(loadBotSettings)[0]
+
     const [game, setGame] = useState<Game | null>(null)
     const [startFen, setStartFen] = useState<string | null>(navFen)
-    const [rating, setRating] = useState(1500)
-    // Default to playing whichever side is to move in the carried-over position.
-    const [colorChoice, setColorChoice] = useState<ColorChoice>(navFen ? sideToMoveOf(navFen) : 'w')
-    const [variant, setVariant] = useState<Variant>('standard')
+    const [rating, setRating] = useState(saved.rating)
+    // A carried-over position dictates the side to play; otherwise use the saved choice.
+    const [colorChoice, setColorChoice] = useState<ColorChoice>(
+        navFen ? sideToMoveOf(navFen) : saved.colorChoice,
+    )
+    const [variant, setVariant] = useState<Variant>(saved.variant)
     const [creating, setCreating] = useState(false)
     const [thinking, setThinking] = useState(false)
     const [error, setError] = useState<string | null>(null)
@@ -96,6 +102,11 @@ export default function BotGame() {
     const ongoing = !!game && !over
 
     const isDuck = game?.variant === 'duck'
+
+    // Persist the setup whenever it changes, so it survives a refresh.
+    useEffect(() => {
+        saveBotSettings({ rating, colorChoice, variant })
+    }, [rating, colorChoice, variant])
 
     const liveLen = game?.moves.length ?? 0
     const shownPly = viewIndex === null ? liveLen : Math.min(viewIndex, liveLen)
