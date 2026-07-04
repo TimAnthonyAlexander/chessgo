@@ -47,15 +47,13 @@ export default function ThemeDialog({ open, onClose }: { open: boolean; onClose:
                 </Typography>
 
                 <SectionHeading>Board — {boardLabel}</SectionHeading>
-                {/* One continuous chessboard, 8 squares wide. Each theme is a 2×2
-                 * block (4 per band); the checker orientation is shared so the whole
-                 * grid reads as a single board. Scrolls vertically as themes grow. */}
+                {/* One continuous 8×8 chessboard. Each theme is a 2×2 block (4 per
+                 * band, 4 bands = 64 squares); the checker orientation is shared so
+                 * the whole grid reads as a single, square board. */}
                 <Box
                     sx={{
-                        maxHeight: 260,
-                        overflowY: 'auto',
-                        borderRadius: 2,
                         border: '1px solid var(--line)',
+                        overflow: 'hidden',
                         mb: 3,
                     }}
                 >

@@ -23,6 +23,10 @@ export type BoardThemeId =
     | 'marble'
     | 'midnight'
     | 'newsprint'
+    | 'walnut'
+    | 'oak'
+    | 'carrara'
+    | 'onyx'
 export type PieceSetId = 'cburnett' | 'merida' | 'chessnut' | 'fantasy'
 
 export interface BoardTheme {
@@ -48,7 +52,9 @@ export interface PieceSet {
 // convention: a coordinate is drawn in the color of the OPPOSITE square, so it
 // reads against its own background.
 
-export const BOARD_THEMES: BoardTheme[] = [
+// The full palette catalog (definition order is irrelevant — the picker renders
+// BOARD_THEMES below, which is this catalog resorted into popularity order).
+const BOARD_THEME_CATALOG: BoardTheme[] = [
     {
         id: 'default',
         label: 'Slate',
@@ -259,7 +265,94 @@ export const BOARD_THEMES: BoardTheme[] = [
             '--board-border-color': 'rgba(60, 60, 58, 0.5)',
         },
     },
+    {
+        // Rich, dark reddish hardwood — deeper and warmer than Wood.
+        id: 'walnut',
+        label: 'Walnut',
+        vars: {
+            '--board-light': '#d8b48a',
+            '--board-dark': '#8a5a34',
+            '--board-frame': '#3a2415',
+            '--last-move': 'rgba(222, 208, 108, 0.55)',
+            '--select': 'rgba(222, 208, 108, 0.66)',
+            '--dot': 'rgba(58, 34, 18, 0.32)',
+            '--dot-light': 'rgba(58, 34, 18, 0.24)',
+            '--check': 'rgba(202, 74, 74, 0.72)',
+            '--coord-on-light': '#8a5a34',
+            '--coord-on-dark': '#d8b48a',
+            '--board-border-color': 'transparent',
+        },
+    },
+    {
+        // Pale golden-honey wood — light and airy.
+        id: 'oak',
+        label: 'Oak',
+        vars: {
+            '--board-light': '#f0dcb0',
+            '--board-dark': '#c29c5e',
+            '--board-frame': '#4a3a1f',
+            '--last-move': 'rgba(214, 210, 108, 0.55)',
+            '--select': 'rgba(214, 210, 108, 0.66)',
+            '--dot': 'rgba(70, 52, 24, 0.3)',
+            '--dot-light': 'rgba(70, 52, 24, 0.22)',
+            '--check': 'rgba(202, 74, 74, 0.7)',
+            '--coord-on-light': '#c29c5e',
+            '--coord-on-dark': '#f0dcb0',
+            '--board-border-color': 'transparent',
+        },
+    },
+    {
+        // White/warm-grey marble — the veining gridline is the point.
+        id: 'carrara',
+        label: 'Carrara',
+        vars: {
+            '--board-light': '#f1efe9',
+            '--board-dark': '#c3bdb0',
+            '--board-frame': '#34302a',
+            '--last-move': 'rgba(212, 200, 116, 0.55)',
+            '--select': 'rgba(212, 200, 116, 0.66)',
+            '--dot': 'rgba(60, 54, 44, 0.3)',
+            '--dot-light': 'rgba(60, 54, 44, 0.2)',
+            '--check': 'rgba(200, 74, 74, 0.68)',
+            '--coord-on-light': '#a49c8b',
+            '--coord-on-dark': '#6b6355',
+            '--board-border-color': 'rgba(120, 110, 92, 0.34)',
+        },
+    },
+    {
+        // Dark polished stone — near-black board with pale marble veins.
+        id: 'onyx',
+        label: 'Onyx',
+        vars: {
+            '--board-light': '#5b5652',
+            '--board-dark': '#3b3733',
+            '--board-frame': '#171512',
+            '--last-move': 'rgba(226, 208, 120, 0.42)',
+            '--select': 'rgba(226, 208, 120, 0.55)',
+            '--dot': 'rgba(212, 206, 196, 0.32)',
+            '--dot-light': 'rgba(212, 206, 196, 0.26)',
+            '--check': 'rgba(226, 92, 92, 0.72)',
+            '--coord-on-light': '#2c2925',
+            '--coord-on-dark': '#8f887e',
+            '--board-border-color': 'rgba(150, 143, 133, 0.28)',
+        },
+    },
 ]
+
+// Picker display order, roughly by perceived popularity — one row (band) per tier:
+// woods and Amethyst lead, then blues/greys, then cool tones, then the playful/niche
+// picks. This drives ONLY the on-screen order; the new-user default stays
+// DEFAULT_BOARD regardless of what sits first here (see boardById).
+const BOARD_ORDER: BoardThemeId[] = [
+    'brown', 'green', 'purple', 'ocean', // classic favorites
+    'walnut', 'oak', 'default', 'marble', // woods + clean neutrals
+    'carrara', 'lagoon', 'ice', 'newsprint', // marble + cool tones
+    'coral', 'midnight', 'onyx', 'bubblegum', // warm / dark / playful
+]
+
+export const BOARD_THEMES: BoardTheme[] = BOARD_ORDER.map(
+    (id) => BOARD_THEME_CATALOG.find((t) => t.id === id)!,
+)
 
 // --- Piece sets -------------------------------------------------------------
 // SVGs live in /public/piece/<id>/{w,b}{K,Q,R,B,N,P}.svg. Sets vendored from the
@@ -278,7 +371,8 @@ const LS_BOARD = 'chessgo.board'
 const LS_PIECES = 'chessgo.pieces'
 
 const boardById = (id: string | null): BoardTheme =>
-    BOARD_THEMES.find((t) => t.id === id) ?? BOARD_THEMES[0]
+    BOARD_THEMES.find((t) => t.id === id) ??
+    BOARD_THEMES.find((t) => t.id === DEFAULT_BOARD)!
 const isPieceSet = (id: string | null): id is PieceSetId =>
     PIECE_SETS.some((p) => p.id === id)
 
