@@ -77,6 +77,12 @@ func (h *Hub) checkFillers() {
 // move along and turn over at a watchable pace.
 var fillerPools = []string{"3+0", "3+2", "5+0", "5+3", "10+0"}
 
+// fillerClassicalPools are the time controls used to keep exactly one classical
+// game in the Watch lobby (categoryForPool → "classical", i.e. est ≥ 1500s). The
+// think-time cap/depth still keep the engines cheap; only the displayed clocks
+// are long, so the lobby always shows one slow game alongside the fast ones.
+var fillerClassicalPools = []string{"30+0", "30+20"}
+
 const (
 	// The Watch page is the site's "top games right now", so fillers sit in a
 	// strong band. Displayed ratings stay within [fillerRatingMin, fillerRatingMax]
@@ -132,7 +138,14 @@ func (h *Hub) pickFillerStart() string {
 // startFillerGame creates one engine-vs-engine game with two believable, near-
 // equally-rated fake opponents. It's filler=true: unrated, never persisted.
 func (h *Hub) startFillerGame() {
-	pool := fillerPools[mrand.IntN(len(fillerPools))]
+	// Keep exactly one classical game in the lobby: if no live filler is classical
+	// yet, this one becomes classical; otherwise it's a normal fast filler.
+	var pool string
+	if h.hasClassicalFiller() {
+		pool = fillerPools[mrand.IntN(len(fillerPools))]
+	} else {
+		pool = fillerClassicalPools[mrand.IntN(len(fillerClassicalPools))]
+	}
 	tc, ok := parseTimeControl(pool)
 	if !ok {
 		return
@@ -172,6 +185,21 @@ func (h *Hub) startFillerGame() {
 	// Schedule the side to move (a bot). From the opening that's White; from a
 	// midgame seed it may be Black — scheduleBotMove keys off pos.SideToMove().
 	h.scheduleBotMove(g)
+}
+
+// hasClassicalFiller reports whether a live (not-over) filler game is currently
+// in the classical category — used to keep exactly one classical game in the
+// Watch lobby. Runs on the Run goroutine (reads h.games), so no locking.
+func (h *Hub) hasClassicalFiller() bool {
+	for _, g := range h.games {
+		if g.over || !g.filler {
+			continue
+		}
+		if categoryForPool(g.pool) == "classical" {
+			return true
+		}
+	}
+	return false
 }
 
 // fillerStartClocks returns believable starting clocks for a filler. An opening
