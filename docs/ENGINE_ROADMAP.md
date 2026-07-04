@@ -1,4 +1,36 @@
-# ★ CURRENT PHASE — closing the gap to Stormphrax (2026-06-30, 17:00) — READ THIS FIRST
+# ★★ CURRENT PHASE — DATA is the lever (2026-07-04) — READ THIS FIRST
+
+> Supersedes the 2026-06-30 block below. A fresh instance continues from here.
+> Full numbers: `docs/ENGINE_STRENGTH.md §29`; arch dead-ends: `docs/NNUE/ARCH_DIRECTION.md §6`.
+
+## The one result that reframes the roadmap
+**v12 = v9's exact config (lean 512+threats, int16) retrained on test80-2024 (Leela T80) instead of
+the Oct-2021 SF14 pool → +24 ± 22 Elo @ 100ms/move (significant, CI>0).** Same arch, same speed,
+**only the data changed.** We are below the distillation ceiling, so a better teacher = real Elo.
+**Ship v12: swap `data/nnue/lean.bin → data/nnue/v12.bin`** (prod `loadEnrichedDefault` already applies
+int8-FT; nothing else changes). Net saved local + coalla, md5 `c26333e3…`.
+
+## What this session proved is NOT the lever (stop re-trying these)
+- **Enriched-512 (threats + multilayer):** float eval +32 fixed-depth but movetime **−17**, node cost
+  **2× v9** — node-cost-bound, **abandoned** (ARCH_DIRECTION §6). v9 is already **2.80× v6** per-node
+  (measured), ~2× past the 1.5× admissibility gate; 1024+threats would be ~4.8× v6.
+- **Width 512→1024 (lean):** not a win at 32sb (−30 fixed-depth, ~parity movetime, **1.7× cost**).
+- **Search flags on v12:** capthist/conthist/probcut/razor/negext/conthist2 all **wash or drag** at
+  movetime (capthist's early +48 was small-sample noise → regressed to 0 @ 184 games). The search is
+  tuned tight; **no cheap flag stacks on top.** int8-FT is already shipped.
+
+## The path forward (data-first, since data is what pays)
+1. **Ship v12** (+24). Done pending your deploy.
+2. **640-sb on test80** — v12's loss was still descending pre-anneal (had more to give). A retrain box
+   is needed (current one disabled; re-fetch test80 from HF or wait). Cheap, likely +.
+3. **More/better data > width > search.** Eventually **self-generated data** — the true
+   ceiling-breaker (distillation asymptotes toward the teacher; §16.5).
+4. Deferred/uncertain: the `wd=0` control run (explains the benign loss-curve center-min); a true
+   ranked re-anchor (§28 — the CCRL band is stale).
+
+---
+
+# ★ CURRENT PHASE — closing the gap to Stormphrax (2026-06-30, 17:00)
 
 > This block supersedes everything below it. The older blocks are kept as history.
 > A fresh instance should be able to continue the engine from this section alone.

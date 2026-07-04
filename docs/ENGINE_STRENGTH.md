@@ -1872,3 +1872,55 @@ re-anchor pending."**
 
 (Consistent with §27: at short movetimes the effective gap to full-strength SF is only ~130 Elo /
 a ~3.7× time-odds ratio — another sign the old CCRL band understates where we actually sit.)
+
+## 29. v12 — the DATA lever wins: +24 movetime from a better teacher (2026-07-04)
+
+**Result in one line: v12 (= v9's *exact* lean 512+threats config, retrained on test80-2024)
+beats v9 by +24.0 ± 22.5 Elo @ 100ms/move (CI excludes 0, 176→250 pairs, coalla AVX-512).**
+Same architecture, same node cost, same everything — **only the training data changed.** This is a
+free movetime upgrade and the cleanest confirmation yet of the distillation-ceiling thesis (§16.5):
+we are below the teacher's ceiling, so a stronger teacher cashes directly as Elo.
+
+### 29.1 The data insight (the whole point)
+The shipped v9 was trained on `pool.binpack` — a **37.5 GB Oct-2021 Stockfish-14-era distillation
+binpack** (joost.vandevondele's set). **test80-2024 = Leela Chess Zero T80 self-play, rescored to
+binpack** — a *stronger, more diverse* teacher (modern-SF scores + Leela's blind-spot coverage; it's
+literally a component of the current SF recipe). The lower loss on the 2021 pool (0.0209 floor,
+§12/Q3) was **weakness, not quality** — it fits easily *because* it's older/narrower/weaker-labeled.
+test80's higher loss (~0.029 at 320sb) is expected and correct. **Cross-dataset loss is not
+comparable; strength is the SPRT.**
+
+### 29.2 What v12 is
+`chessgo_lean_threats`, H=512, NB=8, single-layer + threats, int16 tail — **byte-identical config to
+v9**, 320-sb cosine anneal, ConstantWDL 0.6, on test80. Trained on a rented GPU (~4h, saved
+`data/nnue/v12.bin`, md5 `c26333e3…`; insurance `-240` checkpoint saved too). Prod default
+(`loadEnrichedDefault`) already applies **int8-FT** (`QuantizeFTInt8`, bench.go:261) — so shipping v12
+= swap `data/nnue/lean.bin → v12.bin`, nothing else. int8-FT cancels in the v12−v9 delta (same per-net
+effect), so the +24 measured without it transfers to the prod config.
+
+### 29.3 The flag sweep — nothing durable stacked on top (SPRT discipline lesson)
+Hunted a movetime add-on on v12; **the engine's search is already tuned tight enough that nothing
+survived.** All movetime @100ms, on v12 both sides:
+- **capthist:** early +48/+68 @ ~15–40 pairs → **regressed to 0.0 ± 34 @ 184 games.** A textbook
+  small-sample-noise false positive — do **not** trust <60-pair reads.
+- **conthist:** **−47** (real drag; anti-synergy, poisoned the naive stack).
+- **probcut / razor / negext / conthist2:** washes (−3…+6). probcut/razor confirm their §13 stack
+  rejection holds *individually* at movetime too.
+- **int8-FT:** +11…+28 on-v12 — but **already on in prod**, so not a new win.
+- Naive stack (capthist+conthist+int8-FT): **−23 vs v12** — the classic stack anti-synergy.
+
+### 29.4 Checkpoint: take-final confirmed
+`-240` (near the running-loss minimum) vs `-320` (annealed final): **−56 Elo** — the final is
+*stronger* despite its higher running loss. The center-minimum-then-tail-rise in the loss curve is a
+**t/T-keyed optimizer/schedule artifact, benign for strength** (mechanism unresolved: NOT data
+ordering — refuted by length-invariance, min at ~62–66% of T regardless of length; NOT WDL-lambda
+ramp — our `ConstantWDL 0.6` is flat; leading suspects = Adam flat-basin wander + the ±1.98 QAT weight
+clamp; bullet AdamW default `decay=0.01`; the wd=0 control run is the discriminator, unrun). **Rule
+stands: take the final annealed checkpoint.**
+
+### 29.5 Bottom line
+The lever that paid this session was **data, not search and not width** (enriched-512 abandoned §6/
+ARCH_DIRECTION; 512→1024 not a win at 32sb: −30 fixed-depth, ~parity movetime, 1.7× cost). **Ship v12
+(+24 movetime). The next real gains are more/better data** (a 640-sb run on test80 — the loss was
+still descending pre-anneal, so it likely had more to give — and eventually self-generated data, the
+ceiling-breaker), not another flag.
