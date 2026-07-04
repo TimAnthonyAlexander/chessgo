@@ -41,6 +41,7 @@ import {
 import { useAuth } from '../lib/auth'
 import { statusLabel } from '../lib/chess'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
+import { useMoveNavKeys } from '../lib/useMoveNavKeys'
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 const MAX_PLIES = 400 // hard stop so two shuffling engines can't loop forever
@@ -234,12 +235,48 @@ export default function EngineVsEngine() {
     const [error, setError] = useState<string | null>(null)
     const [sound, setSound] = useState(soundEnabled())
     const [orientation, setOrientation] = useState<Color>('w')
+    // Client-side history browsing (null = follow the live position). The engines
+    // keep playing while you scrub back — this only changes what's DISPLAYED; the
+    // live `fen` below stays authoritative for the engine loop, and new-move sounds
+    // still fire (they're played in the loop, not gated on the viewed ply).
+    const [viewIndex, setViewIndex] = useState<number | null>(null)
     const thinkingRef = useRef(false)
 
     const ply = moves.length
     const over = status !== 'ongoing'
     const sideToMove = sideToMoveOf(fen)
     const moverCfg = sideToMove === 'w' ? white : black
+
+    // The viewed ply: clamped to the live move count so a shrinking list (reset)
+    // snaps back to live. Each move entry carries its own resulting FEN + duck, so
+    // reviewing a past position is a direct lookup — no replay.
+    const shownPly = viewIndex === null ? ply : Math.min(viewIndex, ply)
+    const atLive = shownPly === ply
+    const boardFen = atLive ? fen : shownPly === 0 ? startFen : moves[shownPly - 1].fen
+    const shownLast = atLive
+        ? lastMove
+        : shownPly > 0
+          ? {
+                from: moves[shownPly - 1].uci.slice(0, 2),
+                to: moves[shownPly - 1].uci.slice(2, 4),
+            }
+          : null
+    const shownDuck: string | null = duckMode
+        ? atLive
+            ? duck || null
+            : (moves[shownPly - 1]?.duck ?? null)
+        : null
+
+    // History navigation (client-side review only).
+    const goFirst = () => setViewIndex(0)
+    const goPrev = () => setViewIndex(Math.max(0, shownPly - 1))
+    const goNext = () => {
+        const n = Math.min(ply, shownPly + 1)
+        setViewIndex(n >= ply ? null : n)
+    }
+    const goLast = () => setViewIndex(null)
+    const selectPly = (p: number) => setViewIndex(p >= ply ? null : p)
+    useMoveNavKeys({ onPrev: goPrev, onNext: goNext, onFirst: goFirst, onLast: goLast })
 
     // Book panel: a tree of the game line so far, so the engine-owned OpeningPanel
     // can name the opening + show candidate-move eval bars for the live position.
@@ -430,6 +467,7 @@ export default function EngineVsEngine() {
         setLastMove(null)
         setWhiteEval(null)
         setError(null)
+        setViewIndex(null)
     }
 
     // Re-entering from the editor with a different position: adopt it and reset the
@@ -445,6 +483,7 @@ export default function EngineVsEngine() {
         setLastMove(null)
         setWhiteEval(null)
         setError(null)
+        setViewIndex(null)
     }, [navFen])
 
     function toggleRun() {
@@ -624,7 +663,12 @@ export default function EngineVsEngine() {
 
                     {error && <ErrorBanner>{error}</ErrorBanner>}
                     <Box sx={{ height: 420, display: 'flex' }}>
-                        <MoveList fill moves={moves} currentPly={ply} onSelectPly={() => {}} />
+                        <MoveList
+                            fill
+                            moves={moves}
+                            currentPly={shownPly}
+                            onSelectPly={selectPly}
+                        />
                     </Box>
 
                     {/* Book info: opening name + candidate-move eval bars for the live
@@ -660,16 +704,16 @@ export default function EngineVsEngine() {
             }
         >
             <Board
-                fen={fen}
+                fen={boardFen}
                 orientation={orientation}
-                sideToMove={sideToMove}
+                sideToMove={sideToMoveOf(boardFen)}
                 legalMoves={[]}
-                lastMove={lastMove}
+                lastMove={shownLast}
                 inCheck={false}
                 interactive={false}
                 onMove={() => {}}
-                arrow={arrow}
-                duck={duckMode ? duck || null : null}
+                arrow={atLive ? arrow : null}
+                duck={shownDuck}
             />
         </BoardPage>
     )
