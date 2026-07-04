@@ -10,7 +10,19 @@
 // active set, and Board/MiniBoard subscribe so a change re-renders them.
 import { useSyncExternalStore } from 'react'
 
-export type BoardThemeId = 'default' | 'brown' | 'green' | 'purple'
+export type BoardThemeId =
+    | 'default'
+    | 'brown'
+    | 'green'
+    | 'purple'
+    | 'ocean'
+    | 'ice'
+    | 'lagoon'
+    | 'coral'
+    | 'bubblegum'
+    | 'marble'
+    | 'midnight'
+    | 'newsprint'
 export type PieceSetId = 'cburnett' | 'merida' | 'chessnut' | 'fantasy'
 
 export interface BoardTheme {
@@ -18,7 +30,9 @@ export interface BoardTheme {
     label: string
     /** CSS custom properties applied to <html> for this theme. Every board-facing
      * variable is set explicitly (including for `default`) so switching themes is a
-     * uniform overwrite, never a partial one that leaks the previous theme. */
+     * uniform overwrite, never a partial one that leaks the previous theme. This
+     * includes `--board-border-color` — themes without gridlines set it to
+     * `transparent` so switching away from a bordered theme fully clears the ring. */
     vars: Record<string, string>
 }
 
@@ -49,6 +63,7 @@ export const BOARD_THEMES: BoardTheme[] = [
             '--check': 'rgba(202, 74, 74, 0.66)',
             '--coord-on-light': '#6f828f',
             '--coord-on-dark': '#e4eaef',
+            '--board-border-color': 'transparent',
         },
     },
     {
@@ -65,6 +80,7 @@ export const BOARD_THEMES: BoardTheme[] = [
             '--check': 'rgba(202, 74, 74, 0.7)',
             '--coord-on-light': '#b58863',
             '--coord-on-dark': '#f0d9b5',
+            '--board-border-color': 'transparent',
         },
     },
     {
@@ -81,6 +97,7 @@ export const BOARD_THEMES: BoardTheme[] = [
             '--check': 'rgba(202, 74, 74, 0.7)',
             '--coord-on-light': '#779556',
             '--coord-on-dark': '#ebecd0',
+            '--board-border-color': 'transparent',
         },
     },
     {
@@ -97,6 +114,149 @@ export const BOARD_THEMES: BoardTheme[] = [
             '--check': 'rgba(214, 74, 96, 0.7)',
             '--coord-on-light': '#9f7bbf',
             '--coord-on-dark': '#efe7fb',
+            '--board-border-color': 'transparent',
+        },
+    },
+    {
+        id: 'ocean',
+        label: 'Ocean',
+        vars: {
+            '--board-light': '#dbe6ef',
+            '--board-dark': '#5b82a8',
+            '--board-frame': '#1d2a37',
+            '--last-move': 'rgba(246, 232, 120, 0.5)',
+            '--select': 'rgba(246, 232, 120, 0.62)',
+            '--dot': 'rgba(22, 42, 62, 0.3)',
+            '--dot-light': 'rgba(22, 42, 62, 0.22)',
+            '--check': 'rgba(204, 76, 76, 0.7)',
+            '--coord-on-light': '#5b82a8',
+            '--coord-on-dark': '#dbe6ef',
+            '--board-border-color': 'transparent',
+        },
+    },
+    {
+        // Pale steel blue with low light/dark contrast — the subtle gridline
+        // border is what gives the squares definition.
+        id: 'ice',
+        label: 'Ice',
+        vars: {
+            '--board-light': '#eef3f8',
+            '--board-dark': '#c4d2df',
+            '--board-frame': '#3b4855',
+            '--last-move': 'rgba(226, 208, 120, 0.5)',
+            '--select': 'rgba(226, 208, 120, 0.62)',
+            '--dot': 'rgba(60, 80, 100, 0.3)',
+            '--dot-light': 'rgba(60, 80, 100, 0.2)',
+            '--check': 'rgba(206, 80, 80, 0.66)',
+            '--coord-on-light': '#93a4b5',
+            '--coord-on-dark': '#5c6e80',
+            '--board-border-color': 'rgba(88, 112, 136, 0.38)',
+        },
+    },
+    {
+        id: 'lagoon',
+        label: 'Lagoon',
+        vars: {
+            '--board-light': '#d8ece8',
+            '--board-dark': '#4f9a8f',
+            '--board-frame': '#173430',
+            '--last-move': 'rgba(240, 224, 120, 0.5)',
+            '--select': 'rgba(240, 224, 120, 0.62)',
+            '--dot': 'rgba(18, 52, 48, 0.3)',
+            '--dot-light': 'rgba(18, 52, 48, 0.2)',
+            '--check': 'rgba(202, 74, 74, 0.7)',
+            '--coord-on-light': '#4f9a8f',
+            '--coord-on-dark': '#d8ece8',
+            '--board-border-color': 'transparent',
+        },
+    },
+    {
+        id: 'coral',
+        label: 'Coral',
+        vars: {
+            '--board-light': '#f7e6e2',
+            '--board-dark': '#cd8b8a',
+            '--board-frame': '#3a2528',
+            '--last-move': 'rgba(235, 198, 108, 0.55)',
+            '--select': 'rgba(235, 198, 108, 0.66)',
+            '--dot': 'rgba(74, 40, 40, 0.3)',
+            '--dot-light': 'rgba(74, 40, 40, 0.22)',
+            '--check': 'rgba(198, 64, 82, 0.7)',
+            '--coord-on-light': '#cd8b8a',
+            '--coord-on-dark': '#f7e6e2',
+            '--board-border-color': 'transparent',
+        },
+    },
+    {
+        id: 'bubblegum',
+        label: 'Bubblegum',
+        vars: {
+            '--board-light': '#f6e2ee',
+            '--board-dark': '#d087b0',
+            '--board-frame': '#3a2233',
+            // Teal highlight against the pink board — playful contrast.
+            '--last-move': 'rgba(120, 208, 198, 0.55)',
+            '--select': 'rgba(120, 208, 198, 0.66)',
+            '--dot': 'rgba(74, 34, 60, 0.3)',
+            '--dot-light': 'rgba(74, 34, 60, 0.2)',
+            '--check': 'rgba(214, 74, 96, 0.72)',
+            '--coord-on-light': '#d087b0',
+            '--coord-on-dark': '#f6e2ee',
+            '--board-border-color': 'transparent',
+        },
+    },
+    {
+        // Cool neutral grey — gridline borders read as a marble tile look.
+        id: 'marble',
+        label: 'Marble',
+        vars: {
+            '--board-light': '#eceef0',
+            '--board-dark': '#a2adb6',
+            '--board-frame': '#2b3138',
+            '--last-move': 'rgba(214, 204, 120, 0.55)',
+            '--select': 'rgba(214, 204, 120, 0.66)',
+            '--dot': 'rgba(44, 52, 60, 0.3)',
+            '--dot-light': 'rgba(44, 52, 60, 0.2)',
+            '--check': 'rgba(202, 74, 74, 0.68)',
+            '--coord-on-light': '#8b97a1',
+            '--coord-on-dark': '#5b6772',
+            '--board-border-color': 'rgba(70, 82, 94, 0.4)',
+        },
+    },
+    {
+        // Dark-mode board: both squares are deep navy, dots/coords go light.
+        id: 'midnight',
+        label: 'Midnight',
+        vars: {
+            '--board-light': '#5c6b83',
+            '--board-dark': '#374357',
+            '--board-frame': '#10141c',
+            '--last-move': 'rgba(232, 210, 120, 0.42)',
+            '--select': 'rgba(232, 210, 120, 0.55)',
+            '--dot': 'rgba(200, 212, 230, 0.34)',
+            '--dot-light': 'rgba(200, 212, 230, 0.28)',
+            '--check': 'rgba(226, 92, 92, 0.72)',
+            '--coord-on-light': '#2c3648',
+            '--coord-on-dark': '#8698b2',
+            '--board-border-color': 'transparent',
+        },
+    },
+    {
+        // Monochrome print look — the stronger gridline is the point.
+        id: 'newsprint',
+        label: 'Newsprint',
+        vars: {
+            '--board-light': '#f2f2f0',
+            '--board-dark': '#b9b9b4',
+            '--board-frame': '#26262a',
+            '--last-move': 'rgba(224, 206, 112, 0.5)',
+            '--select': 'rgba(224, 206, 112, 0.62)',
+            '--dot': 'rgba(40, 40, 40, 0.32)',
+            '--dot-light': 'rgba(40, 40, 40, 0.24)',
+            '--check': 'rgba(198, 70, 70, 0.66)',
+            '--coord-on-light': '#8f8f8a',
+            '--coord-on-dark': '#5c5c58',
+            '--board-border-color': 'rgba(60, 60, 58, 0.5)',
         },
     },
 ]

@@ -45,6 +45,9 @@ export default function MiniBoard({
                             sx={{
                                 position: 'relative',
                                 background: light ? 'var(--board-light)' : 'var(--board-dark)',
+                                // Same per-square gridline as the main board (inert
+                                // unless the active theme sets --board-border-color).
+                                boxShadow: 'inset 0 0 0 1px var(--board-border-color)',
                                 ...(piece
                                     ? {
                                           backgroundImage: `url(${pieceImageUrl(piece, pieceSet)})`,

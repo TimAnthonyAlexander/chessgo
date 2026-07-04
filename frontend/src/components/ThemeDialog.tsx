@@ -1,4 +1,4 @@
-import { Box, Button, Dialog, DialogContent, Typography } from '@mui/material'
+import { Box, Button, Dialog, DialogContent, Tooltip, Typography } from '@mui/material'
 import {
     BOARD_THEMES,
     PIECE_SETS,
@@ -16,6 +16,7 @@ import { pieceImageUrl } from '../lib/chess'
 export default function ThemeDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
     const boardId = useBoardThemeId()
     const pieceId = usePieceSet()
+    const boardLabel = BOARD_THEMES.find((t) => t.id === boardId)?.label ?? ''
 
     return (
         <Dialog
@@ -45,23 +46,34 @@ export default function ThemeDialog({ open, onClose }: { open: boolean; onClose:
                     Appearance
                 </Typography>
 
-                <SectionHeading>Board</SectionHeading>
+                <SectionHeading>Board — {boardLabel}</SectionHeading>
+                {/* One continuous chessboard, 8 squares wide. Each theme is a 2×2
+                 * block (4 per band); the checker orientation is shared so the whole
+                 * grid reads as a single board. Scrolls vertically as themes grow. */}
                 <Box
                     sx={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fill, minmax(84px, 1fr))',
-                        gap: 1.25,
+                        maxHeight: 260,
+                        overflowY: 'auto',
+                        borderRadius: 2,
+                        border: '1px solid var(--line)',
                         mb: 3,
                     }}
                 >
-                    {BOARD_THEMES.map((theme) => (
-                        <BoardSwatch
-                            key={theme.id}
-                            theme={theme}
-                            selected={boardId === theme.id}
-                            onSelect={() => themeStore.setBoard(theme.id)}
-                        />
-                    ))}
+                    <Box
+                        sx={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(4, 1fr)',
+                        }}
+                    >
+                        {BOARD_THEMES.map((theme) => (
+                            <BoardTile
+                                key={theme.id}
+                                theme={theme}
+                                selected={boardId === theme.id}
+                                onSelect={() => themeStore.setBoard(theme.id)}
+                            />
+                        ))}
+                    </Box>
                 </Box>
 
                 <SectionHeading>Pieces</SectionHeading>
@@ -128,7 +140,12 @@ function selectionSx(selected: boolean) {
     } as const
 }
 
-function BoardSwatch({
+// A single theme as a 2×2 block of the shared chessboard. The checker pattern is
+// fixed ([dark, light] / [light, dark]) so that, tiled at even offsets, adjacent
+// blocks line up into one continuous board regardless of each block's palette.
+const TILE_PATTERN = ['dark', 'light', 'light', 'dark'] as const
+
+function BoardTile({
     theme,
     selected,
     onSelect,
@@ -139,36 +156,52 @@ function BoardSwatch({
 }) {
     const light = theme.vars['--board-light']
     const dark = theme.vars['--board-dark']
+    const border = theme.vars['--board-border-color']
+    const cellBorder =
+        border && border !== 'transparent' ? `inset 0 0 0 1px ${border}` : undefined
     return (
-        <Box onClick={onSelect} sx={selectionSx(selected)}>
+        <Tooltip title={theme.label} arrow disableInteractive enterDelay={200}>
             <Box
+                onClick={onSelect}
+                role="button"
+                aria-label={theme.label}
+                aria-pressed={selected}
                 sx={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(4, 1fr)',
+                    position: 'relative',
                     aspectRatio: '1 / 1',
-                    borderRadius: '6px',
-                    overflow: 'hidden',
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gridTemplateRows: '1fr 1fr',
+                    cursor: 'pointer',
+                    '&:hover .tile-ring': { opacity: 1 },
                 }}
             >
-                {Array.from({ length: 16 }, (_, i) => {
-                    const row = Math.floor(i / 4)
-                    const col = i % 4
-                    const isLight = (col + row) % 2 === 1
-                    return <Box key={i} sx={{ bgcolor: isLight ? light : dark }} />
-                })}
+                {TILE_PATTERN.map((tone, i) => (
+                    <Box
+                        key={i}
+                        sx={{
+                            bgcolor: tone === 'light' ? light : dark,
+                            boxShadow: cellBorder,
+                        }}
+                    />
+                ))}
+                {/* Selection / hover ring, drawn over the block edges. */}
+                <Box
+                    className="tile-ring"
+                    sx={{
+                        position: 'absolute',
+                        inset: 0,
+                        pointerEvents: 'none',
+                        zIndex: 2,
+                        boxShadow: selected
+                            ? 'inset 0 0 0 3px var(--accent)'
+                            : 'inset 0 0 0 2px var(--accent)',
+                        opacity: selected ? 1 : 0,
+                        transition: 'opacity 120ms',
+                    }}
+                />
             </Box>
-            <Typography
-                sx={{
-                    mt: 0.75,
-                    fontSize: 12.5,
-                    textAlign: 'center',
-                    color: selected ? 'var(--text)' : 'var(--text-dim)',
-                    fontWeight: selected ? 600 : 400,
-                }}
-            >
-                {theme.label}
-            </Typography>
-        </Box>
+        </Tooltip>
     )
 }
 

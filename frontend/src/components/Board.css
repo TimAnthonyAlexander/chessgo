@@ -56,6 +56,10 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    /* Optional per-square gridline. `transparent` (most themes) renders nothing;
+     * bordered themes (Ice/Marble/Newsprint) set --board-border-color to draw a
+     * slight tile edge. The `.sq.over` drag ring overrides this box-shadow. */
+    box-shadow: inset 0 0 0 1px var(--board-border-color);
 }
 .sq.light {
     background: var(--board-light);
