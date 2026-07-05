@@ -5,7 +5,7 @@ import { candidates, type Candidates, type CandidateMove } from '../api/client'
 import { gameOverAt, pathToNode, START_FEN, type Tree } from '../lib/analysisTree'
 
 // How many candidate rows to request/show. The engine ranks best-first.
-const MAX_ROWS = 8
+const MAX_ROWS = 4
 // Per-call search budget (ms). Short enough to feel live as you click around.
 const MOVETIME = 350
 
