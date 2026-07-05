@@ -1,20 +1,25 @@
-# SPSA margin tuning — DEFERRED (low priority)
+# SPSA margin tuning — HIGH PRIORITY (stale defaults = free Elo)
 
-**Status:** DEFERRED — not worth the compute right now. Revisit only after the eval gap closes.
+**Status:** OPEN — HIGH PRIORITY. **Reversal (2026-07-05, later same day):** the earlier "deferred /
+scraps" call was WRONG. The v6-tuned margins from the throwaway run, applied to v12, **SHIPPED +38.7
+± 5.5 Elo movetime** (640 pairs, lb +33.2) — a *defaults change, zero new code*. A proper v12-native
+SPSA almost certainly finds MORE.
 **Owner:** engine
 **Created:** 2026-07-05
 
-## Why deferred (read before re-running)
+## Why this is now HIGH priority (the stale-defaults finding)
 
-Two independent reasons this is picking scraps:
-
-1. **The tuning surface is flat.** A full 1200-iteration SPSA (2026-07-05) landed every margin
-   **mid-range, nothing pinned to an extreme** — i.e. the current defaults are already near-optimal
-   and the gradient is ~zero. Best case a few Elo, and the values likely transfer.
-2. **We are ~280 Elo EVAL-bound** (the 2026-07-05 anchor). Tuning search margins optimizes the 3rd
-   decimal while the 1st is eval. The lever is the **data retrain** (`data-retrain-640sb.md`), not this.
-
-3.5h of coalla compute for a likely-few-Elo, likely-transfers result → not now.
+The "flat surface / scraps" read was a misdiagnosis. The margins landed mid-range not because the
+surface is flat but because the **defaults were stale** — `nullr=4` (an earlier SPSA optimum) and
+`seequietmargin=150` (an earlier sweep peak) were tuned *before* v9→v12 and the full search stack;
+the engine grew past its own hand-tuned constants and the optimum drifted. Even a **v6**-imperfect
+re-tune recovered **+38.7 movetime on v12**. So:
+- **Shipped now:** `singulardepth 8→6, seequietmargin 150→103, captseemaxdepth 6→4, nullr 4→3`
+  (DefaultParams flipped; SPRT above).
+- **Next:** a proper **v12-native** SPSA (binary with `df51c9d`) over these + an expanded registry —
+  it's tuning against the *right* eval and starts from the *current* defaults, so expect further gains.
+- Caveat that still holds: we're also ~280 Elo EVAL-bound (`data-retrain-640sb.md` is the bigger
+  lever). But search is NOT dry — stale defaults left real Elo on the table, and SPSA reclaims it cheaply.
 
 ## The 2026-07-05 run was a THROWAWAY (v6-clobber bug — since fixed)
 

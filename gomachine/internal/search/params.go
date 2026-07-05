@@ -132,7 +132,7 @@ func DefaultParams() Params {
 	return Params{
 		UseTT:          true,
 		NullMove:       true,
-		NullMoveR:      4, // SPSA-tuned 2→4 (under-reduced before); +32 fixed / +10.7 movetime, part of the +19.7 stack
+		NullMoveR:      3, // re-tuned 4→3 as part of the 2026-07-05 stale-defaults margin bundle (see SEEQuietMargin). The old nullr=4 was optimal in an EARLIER regime; the engine grew past it (v9→v12 + the full search stack drifted the optimum). Bundle SPRT: +38.7 ± 5.5 movetime on v12 (640 pairs, lb +33.2).
 		LMR:            true,
 		CheckExtension: true,
 		SEE:            true,
@@ -293,7 +293,7 @@ func DefaultParams() Params {
 		// Singular verification knobs, promoted from consts so they're SPRT-tunable.
 		// Defaults (margin 2·depth, min-depth 8) preserve the banked +22.2 exactly.
 		SingularMargin:   singularMargin,
-		SingularMinDepth: singularMinDepth,
+		SingularMinDepth: 6, // re-tuned 8→6 (2026-07-05 stale-defaults bundle, +38.7 movetime — see NullMoveR)
 		// Multi-cut early-return inside the singular verification. DEFAULT TRUE (part of
 		// singular's accepted +22.2). FINDING (2026-06-30): the fragile multi-cut is what
 		// made lmr2+singular toxic (-67) — lmr2=on,multicut=off was +33 @ fixed nodes.
@@ -361,7 +361,7 @@ func DefaultParams() Params {
 		// peak: 100≈50 (+10, flat), 200<150 (−10 ± 14.7, [31 155 126 188 0]). maxDepth=6.
 		SEEQuiet:         true,
 		SEEQuietMaxDepth: 6,
-		SEEQuietMargin:   150,
+		SEEQuietMargin:   103, // re-tuned 150→103 (2026-07-05 stale-defaults bundle, +38.7 movetime — see NullMoveR)
 		// Capture-move SEE pruning (skip a clearly-losing capture that hangs material
 		// through the recapture sequence near the leaves). The capture analog of
 		// SEEQuiet. DEFAULT ON — margin=100 SPRT'd +77.7 ± 25.2 @ 40k nodes vs off
@@ -372,7 +372,7 @@ func DefaultParams() Params {
 		// 25; the 25→0 gap is steep + unsampled, so leave any fine-tune to joint SPSA.
 		// maxDepth=6.
 		CaptSEE:         true,
-		CaptSEEMaxDepth: 6,
+		CaptSEEMaxDepth: 4, // re-tuned 6→4 (2026-07-05 stale-defaults bundle, +38.7 movetime — see NullMoveR)
 		CaptSEEMargin:   25,
 		// ProbCut: +22.1 @ 40k NODES on the corrhist baseline (1235 pairs, 2026-06-30,
 		// H1) — but part of the day's 5-patch stack that the MOVETIME re-anchor REJECTED
