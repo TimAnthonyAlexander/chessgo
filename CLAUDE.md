@@ -266,8 +266,17 @@ engine (the exact stale-docs trap). What we can honestly say:
 - **Conclusion:** strength is **materially above the old ~3400 v6 mark, upper bound unmeasured,
   untriangulated.** **Re-anchor vs a ranked NNUE opponent (target now ~3700+, not the old
   ~3450–3600), scoring ~50%, before publishing ANY point number.** This **supersedes** the earlier
-  ≈3260 "dirty" read (§15) and the one-sided **≈3200** artifact (scoring ≈0% — never quote it). Next:
-NNUE width → **1024** (NOT "cheap" — a single-SCReLU→1 tail is int16-bound, ~1.7× node cost with
+  ≈3260 "dirty" read (§15) and the one-sided **≈3200** artifact (scoring ≈0% — never quote it).
+
+**★ TOP PRIORITY — the engine is ~280 Elo EVAL-bound (2026-07-05 anchor).** Search is now a proven
+dry well: the cheap Stormphrax-mined flags all washed/lost at movetime (combo −1.7, aspinitdelta −15.5,
+rfpsoft ~wash, nodetm +0.5 — none shipped), and a full SPSA landed every margin **mid-range/flat**
+(near-optimal already; picking scraps). So **do NOT spend more compute on search** — the lever is the
+**EVAL/data retrain** (`docs/open_tasks/data-retrain-640sb.md`: 640-sb test80, locked recipe + D1–D4
+checklist). v12 already proved data cashes directly as movetime Elo; the ~280 lives there. (The
+2026-07-05 SPSA run was a v6-clobber throwaway — bug fixed in `df51c9d`; `docs/open_tasks/spsa-margins.md`.)
+
+Backlog (lower priority, after eval): NNUE width → **1024** (NOT "cheap" — a single-SCReLU→1 tail is int16-bound, ~1.7× node cost with
 no int8-tail relief; the only prior 1024 was a 32-sb *stub*, never tested at maturity — see ARCH_DIRECTION
 §6 / ENGINE_STRENGTH §29.5; data-first (640-sb test80) is the safer next lever), hub-restart-durable resume, puzzle generation
 pipeline, reworked-selective versions of the rejected search patches (PV-only IIR,

@@ -95,6 +95,12 @@ ranked NNUE opponent (~3700+, the old ~3450–3600 target is now too weak), scor
 quoting ANY point number.** The ≈3260/≈3200 reads below are superseded (≈3200 was a one-sided
 all-losses artifact); all reads below are kept **for the record only**, not as current strength.
 
+**★ Priority direction (2026-07-05 anchor):** the anchor indicates the engine is **~280 Elo
+EVAL-bound** — search is near-optimal (cheap Stormphrax flags washed at movetime; a full SPSA landed
+every margin mid-range/flat). So the lever is the **eval/data retrain**, not more search work
+(`docs/open_tasks/data-retrain-640sb.md`). [Anchor methodology: the valid gauntlet path, 2026-07-05;
+confirm/link specifics before quoting the 280 as a hard figure.]
+
 **Prior reading (2026-06-29, CCRL Blitz anchor — the then-headline figure, now raised to the
 3400–3700 bracket by §20):** **≈3260 "dirty" CCRL Blitz.** Measured by
 playing the prod v6+SIMD build at 100 ms/move vs **full-strength, officially-rated NNUE
