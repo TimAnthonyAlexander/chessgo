@@ -33,6 +33,7 @@ type game struct {
 	rated     bool
 	moves     []string // UCI (standard/960); composite "<pieceUCI>:<duckSquare>" for duck
 	sans      []string
+	moveTimes []int64  // ms actually spent on each move (index i = think time for moves[i]); anti-cheat telemetry
 	clockMs   [2]int64 // remaining ms, indexed by chess.Color (White=0, Black=1)
 	turnStart time.Time
 	history   []uint64 // prior-position Zobrist keys (repetition); unused for duck
@@ -240,6 +241,7 @@ func (g *game) applyMove(uci string) (string, bool) {
 	g.pos.DoMove(m, &u)
 	g.moves = append(g.moves, uci)
 	g.sans = append(g.sans, san)
+	g.moveTimes = append(g.moveTimes, now.Sub(g.turnStart).Milliseconds())
 	g.turnStart = now
 	g.clearOffers() // any move declines a pending draw and drops a stale takeback
 	return san, true
@@ -271,6 +273,7 @@ func (g *game) applyDuckMove(composite string) (string, bool) {
 	g.duck = &ns
 	g.moves = append(g.moves, composite)
 	g.sans = append(g.sans, san)
+	g.moveTimes = append(g.moveTimes, now.Sub(g.turnStart).Milliseconds())
 	g.turnStart = now
 	g.clearOffers()
 	return san, true

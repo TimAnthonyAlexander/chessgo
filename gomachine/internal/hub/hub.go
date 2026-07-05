@@ -144,18 +144,19 @@ func (h *Hub) Stats() (online, games int64) {
 
 // FinishedGame is handed to the persistence hook when a game ends.
 type FinishedGame struct {
-	ID       string
-	Pool     string
-	Rated    bool
-	Variant  string // "standard" | "chess960" | "duck"
-	White    auth.Identity
-	Black    auth.Identity
-	WhiteBot bool // bot opponents have a non-anon identity (for display) but no account
-	BlackBot bool
-	Result   string // "1-0" | "0-1" | "1/2-1/2"
-	Reason   string
-	Moves    []string
-	SANs     []string
+	ID        string
+	Pool      string
+	Rated     bool
+	Variant   string // "standard" | "chess960" | "duck"
+	White     auth.Identity
+	Black     auth.Identity
+	WhiteBot  bool // bot opponents have a non-anon identity (for display) but no account
+	BlackBot  bool
+	Result    string // "1-0" | "0-1" | "1/2-1/2"
+	Reason    string
+	Moves     []string
+	SANs      []string
+	MoveTimes []int64 // ms spent per move (anti-cheat move-time telemetry), parallel to Moves
 }
 
 // New creates a Hub authenticating tickets with the given shared secret.
@@ -639,6 +640,7 @@ func (h *Hub) finish(g *game, result, reason string) {
 			White: g.white.id, Black: g.black.id,
 			WhiteBot: g.white.isBot, BlackBot: g.black.isBot,
 			Result: result, Reason: reason, Moves: g.moves, SANs: g.sans,
+			MoveTimes: g.moveTimes,
 		})
 	}
 }

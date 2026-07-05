@@ -729,6 +729,33 @@
             "table": "user_flag",
             "operation": "add_fk",
             "warning": null
+        },
+        {
+            "id": "mig_56636b3ae486",
+            "sql": "ALTER TABLE `game` ADD COLUMN `move_times` TEXT",
+            "destructive": false,
+            "generated_at": "2026-07-05T16:20:36+00:00",
+            "table": "game",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_bb2ebf1ba2a8",
+            "sql": "ALTER TABLE `game` ADD COLUMN `ac_scanned` TINYINT(1) NOT NULL DEFAULT 0",
+            "destructive": false,
+            "generated_at": "2026-07-05T16:20:36+00:00",
+            "table": "game",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_658194f86e77",
+            "sql": "ALTER TABLE `game` ADD INDEX `idx_game_ac_scanned` (`ac_scanned`)",
+            "destructive": false,
+            "generated_at": "2026-07-05T16:20:36+00:00",
+            "table": "game",
+            "operation": "add_index",
+            "warning": null
         }
     ]
 }

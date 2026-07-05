@@ -94,6 +94,29 @@ func TestFillerGamesAreNotLive(t *testing.T) {
 	}
 }
 
+// Each committed move records a think-time, parallel to moves (anti-cheat
+// move-time telemetry).
+func TestMoveTimesCaptured(t *testing.T) {
+	g := makeHumanGame("g1", "alice", "bob")
+
+	for _, uci := range []string{"e2e4", "e7e5", "g1f3"} {
+		if _, ok := g.applyMove(uci); !ok {
+			t.Fatalf("%s should be legal", uci)
+		}
+	}
+	if len(g.moveTimes) != len(g.moves) {
+		t.Fatalf("moveTimes (%d) must be parallel to moves (%d)", len(g.moveTimes), len(g.moves))
+	}
+	if len(g.moveTimes) != 3 {
+		t.Fatalf("expected 3 recorded move times, got %d", len(g.moveTimes))
+	}
+	for i, mt := range g.moveTimes {
+		if mt < 0 {
+			t.Fatalf("move time %d is negative: %d", i, mt)
+		}
+	}
+}
+
 // A bot side of a human-vs-bot game is not tracked (only the human is).
 func TestBotSideNotTracked(t *testing.T) {
 	h := New("secret")

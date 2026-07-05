@@ -77,11 +77,25 @@ class Game extends BaseModel
     public ?string $sans = null;
 
     /**
+     * Per-move think-times in ms as JSON text: [1200, 800, …], parallel to moves.
+     * Anti-cheat telemetry (move-time variance / difficulty correlation). Captured
+     * live by the hub; cannot be back-filled for older games. Use getMoveTimes/set.
+     */
+    public ?string $move_times = null;
+
+    /**
      * Cached full-game engine analysis as JSON text (per-ply eval + best move +
      * blunder judgments), computed once on first request. Internal — stripped
      * from the default serialization; served only via the analysis endpoint.
      */
     public ?string $analysis = null;
+
+    /**
+     * True once the out-of-band anti-cheat engine-correlation scan has processed
+     * this game (scripts/anticheat_scan.php). Lets the scan be idempotent + resume
+     * where it left off. Internal — never client-facing.
+     */
+    public bool $ac_scanned = false;
 
     /**
      * @var array<string, string>
@@ -91,6 +105,7 @@ class Game extends BaseModel
         'white_user_id' => 'index',
         'black_user_id' => 'index',
         'category' => 'index',
+        'ac_scanned' => 'index',
     ];
 
     /**
@@ -99,6 +114,7 @@ class Game extends BaseModel
     public static array $columns = [
         'moves' => ['type' => 'TEXT', 'nullable' => true],
         'sans' => ['type' => 'TEXT', 'nullable' => true],
+        'move_times' => ['type' => 'TEXT', 'nullable' => true],
         'analysis' => ['type' => 'TEXT', 'nullable' => true],
     ];
 
@@ -141,6 +157,18 @@ class Game extends BaseModel
     public function setSans(array $sans): void
     {
         $this->sans = json_encode(array_values($sans));
+    }
+
+    /** @return list<int> Per-move think-times in ms (parallel to moves); [] if not captured. */
+    public function getMoveTimes(): array
+    {
+        return array_map('intval', $this->decodeList($this->move_times));
+    }
+
+    /** @param list<int> $times */
+    public function setMoveTimes(array $times): void
+    {
+        $this->move_times = json_encode(array_values(array_map('intval', $times)));
     }
 
     /**
@@ -197,6 +225,8 @@ class Game extends BaseModel
     {
         $data = parent::jsonSerialize();
         unset($data['analysis']); // large cached blob; served only via the analysis endpoint
+        unset($data['move_times']); // internal anti-cheat telemetry; never client-facing
+        unset($data['ac_scanned']); // internal anti-cheat bookkeeping
         $data['moves'] = $this->getMoves();
         $data['sans'] = $this->getSans();
 

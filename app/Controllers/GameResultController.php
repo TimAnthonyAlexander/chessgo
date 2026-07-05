@@ -8,6 +8,7 @@ use BaseApi\Http\JsonResponse;
 use App\Models\Game;
 use App\Models\User;
 use App\Services\Glicko2Service;
+use App\Services\AnticheatService;
 
 /**
  * Internal endpoint the realtime hub calls when a game ends (SPEC §8.2). Stores
@@ -27,8 +28,10 @@ class GameResultController extends Controller
      */
     private const BOT_RD = 50.0;
 
-    public function __construct(private readonly Glicko2Service $glicko)
-    {
+    public function __construct(
+        private readonly Glicko2Service $glicko,
+        private readonly AnticheatService $anticheat,
+    ) {
     }
 
     public function post(): JsonResponse
@@ -79,6 +82,7 @@ class GameResultController extends Controller
         $game->black_is_bot = (bool)($black['bot'] ?? false);
         $game->setMoves(array_map('strval', (array)($b['moves'] ?? [])));
         $game->setSans(array_map('strval', (array)($b['sans'] ?? [])));
+        $game->setMoveTimes(array_map('intval', (array)($b['moveTimes'] ?? [])));
         $game->ply = count($game->getMoves());
 
         // Resolve real accounts (anon ids and bot-… ids won't match a user).
@@ -110,6 +114,12 @@ class GameResultController extends Controller
         if (!$game->save()) {
             return JsonResponse::error('failed to persist game', 500);
         }
+
+        // Post-game anti-cheat review: the CHEAP signals only (rating velocity +
+        // move-time anomaly). Self-contained + best-effort — a flag never blocks
+        // the persist. The expensive engine-correlation pass runs out-of-band in
+        // scripts/anticheat_scan.php (full-game analysis is too slow for here).
+        $this->anticheat->reviewFinishedGame($game, $whiteUser, $blackUser);
 
         return JsonResponse::created(['id' => $game->id]);
     }
