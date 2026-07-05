@@ -62,6 +62,28 @@ func subColI8Scalar(dst []int16, src []int8) {
 	}
 }
 
+// applyThreatBatchScalar applies a batch of int8 THREAT columns to the int16
+// accumulator in ONE load+store pass per element: acc[i] += Σ_addF col_f[i] −
+// Σ_subF col_f[i], where col_f = w0t8[(f-off)*h : (f-off)*h+h] is feature f's int8
+// weight column (off == InputDim, the threat feature offset). This is the batched
+// equivalent of calling subColI8 for every subF then addColI8 for every addF: it
+// collapses the K per-column full-accumulator load+store passes (the dominant
+// applyDiff cost, per the CPU profile) into a single pass, holding each acc tile
+// across the column loop. Bit-exact to the sequential path — int16 add/sub wraps
+// and is associative/commutative, so the summed order is irrelevant.
+func applyThreatBatchScalar(acc []int16, w0t8 []int8, h int, subF, addF []uint16, off int) {
+	for i := 0; i < h; i++ {
+		var d int16
+		for _, f := range addF {
+			d += int16(w0t8[(int(f)-off)*h+i])
+		}
+		for _, f := range subF {
+			d -= int16(w0t8[(int(f)-off)*h+i])
+		}
+		acc[i] += d
+	}
+}
+
 // screluDotScalar computes Σ_i clamp(acc[i],0,qa)² · w[i] as int64, over the
 // whole acc/w slice (len == net HL). This is exactly the per-half body of the
 // old evalFrom; summing the two halves (stm then opp) reproduces the int forward
@@ -289,6 +311,10 @@ var (
 	addColI8 = addColI8Scalar
 	// subColI8(dst, src): dst -= widen(src), int16 acc -= int8 col.
 	subColI8 = subColI8Scalar
+	// applyThreatBatch(acc, w0t8, h, subF, addF, off): batched int8 threat-column
+	// update, acc += Σ addF cols − Σ subF cols in one pass/element. Bit-exact to
+	// sequential subColI8/addColI8; the profile-driven applyDiff fast path.
+	applyThreatBatch = applyThreatBatchScalar
 	// screluDot(acc, w, qa): Σ clamp(acc,0,qa)²·w as int64.
 	screluDot = screluDotScalar
 	// dotF32(a, w): Σ a·w as float32 (MultiNet tail matmul; bit-CLOSE, not exact).

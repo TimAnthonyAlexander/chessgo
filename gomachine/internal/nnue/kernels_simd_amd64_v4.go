@@ -46,7 +46,8 @@ func init() {
 	pairwiseU8 = pairwiseU8SIMD
 	addColI8 = addColI8SIMD
 	subColI8 = subColI8SIMD
-	kernelBackend = "simd/archsimd-avx512-amd64(addCol,subCol,screluDot,dotF32,gemvF32,screluActivateF,dotU8I8,quantU8I16,pairwiseU8,addColI8,subColI8)"
+	applyThreatBatch = applyThreatBatchSIMD
+	kernelBackend = "simd/archsimd-avx512-amd64(addCol,subCol,screluDot,dotF32,gemvF32,screluActivateF,dotU8I8,quantU8I16,pairwiseU8,addColI8,subColI8,applyThreatBatch)"
 
 	// Replace the two-step maddubs int8 dot with a single-instruction VPDPBUSD
 	// kernel when the CPU has AVX512_VNNI (bit-identical on the [0,127] domain,
@@ -124,6 +125,41 @@ func subColI8SIMD(dst []int16, src []int8) {
 	}
 	for ; i < n; i++ {
 		dst[i] -= int16(src[i])
+	}
+}
+
+// applyThreatBatchSIMD applies a batch of int8 threat columns to the int16 acc in
+// ONE load+store pass per 32-lane tile: for each tile it loads acc once, adds every
+// addF column and subtracts every subF column (widened int8→int16, 32 lanes/iter),
+// stores once. Collapses the K per-column full-accumulator passes of sequential
+// subColI8/addColI8 into a single pass — the profile-driven applyDiff fast path.
+// Bit-exact to applyThreatBatchScalar (int16 add/sub is associative/commutative
+// under wraparound). i+32<=h guards each column read from running off w0t8.
+func applyThreatBatchSIMD(acc []int16, w0t8 []int8, h int, subF, addF []uint16, off int) {
+	i := 0
+	for ; i+32 <= h; i += 32 {
+		d := archsimd.LoadInt16x32Slice(acc[i : i+32])
+		for _, f := range addF {
+			b := (int(f) - off) * h
+			s := archsimd.LoadInt8x32Slice(w0t8[b+i : b+i+32]).ExtendToInt16()
+			d = d.Add(s)
+		}
+		for _, f := range subF {
+			b := (int(f) - off) * h
+			s := archsimd.LoadInt8x32Slice(w0t8[b+i : b+i+32]).ExtendToInt16()
+			d = d.Sub(s)
+		}
+		d.StoreSlice(acc[i : i+32])
+	}
+	for ; i < h; i++ {
+		var d int16
+		for _, f := range addF {
+			d += int16(w0t8[(int(f)-off)*h+i])
+		}
+		for _, f := range subF {
+			d -= int16(w0t8[(int(f)-off)*h+i])
+		}
+		acc[i] += d
 	}
 }
 
