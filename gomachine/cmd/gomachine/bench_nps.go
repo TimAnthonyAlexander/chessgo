@@ -28,6 +28,7 @@ func cmdBenchNPS(args []string) {
 	ttMB := fs.Int("tt", 64, "TT size MB")
 	fenFlag := fs.String("fen", "r1bqk2r/pp2bppp/2n1pn2/2pp4/3P1B2/2PBPN2/PP3PPP/RN1QK2R w KQkq - 0 8", "position FEN")
 	cpuprofile := fs.String("cpuprofile", "", "if set, write a CPU profile of the measured iterations to this file (analyze with: go tool pprof <file>)")
+	baseOnly := fs.Bool("baseonly", false, "run only the prod(base) config (clean single-config profile)")
 	fs.Parse(args)
 
 	parts := strings.Split(*leanSpec, ",")
@@ -68,6 +69,9 @@ func cmdBenchNPS(args []string) {
 		{"batchApply", false, false, false, true},
 		{"batch+pf", false, true, false, true},
 		{"directApply", true, false, false, false},
+	}
+	if *baseOnly {
+		cfgs = cfgs[:1]
 	}
 
 	run := func(c cfg) (uint64, float64) {
