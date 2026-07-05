@@ -129,6 +129,9 @@ class AnticheatService
         if (!$user instanceof User) {
             return; // anonymous / bot side — nothing to flag
         }
+        if ($this->isAdmin($user)) {
+            return; // admins are never flagged
+        }
         $isBot = $side === 'w' ? $game->white_is_bot : $game->black_is_bot;
         if ($isBot) {
             return;
@@ -280,11 +283,12 @@ class AnticheatService
             $whiteUser = $game->white_user_id !== null && !$game->white_is_bot ? User::find($game->white_user_id) : null;
             $blackUser = $game->black_user_id !== null && !$game->black_is_bot ? User::find($game->black_user_id) : null;
 
+            // Admins are never flagged (they analyze / test legitimately).
             $candidates = [];
-            if ($whiteUser instanceof User) {
+            if ($whiteUser instanceof User && !$this->isAdmin($whiteUser)) {
                 $candidates = array_merge($candidates, $this->scoreSide($game, $whiteUser, 'w', $summary['w'] ?? [], $plies));
             }
-            if ($blackUser instanceof User) {
+            if ($blackUser instanceof User && !$this->isAdmin($blackUser)) {
                 $candidates = array_merge($candidates, $this->scoreSide($game, $blackUser, 'b', $summary['b'] ?? [], $plies));
             }
 
@@ -509,6 +513,12 @@ class AnticheatService
         $kb = $this->boardKey($b);
 
         return $ka !== '' && $ka === $kb;
+    }
+
+    /** Admins are exempt from every signal — they use the engine / analysis legitimately. */
+    private function isAdmin(User $user): bool
+    {
+        return $user->role === 'admin';
     }
 
     /** Placement + active-color key ("<placement> <stm>"), or '' if malformed. */
