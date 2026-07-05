@@ -556,6 +556,11 @@ func cmdBenchStockfish(args []string) {
 	tbPath := fs.String("tb-path", "", "Syzygy tablebase directory, probed when --new has tb=on (\"\" disables)")
 	_ = fs.Parse(args)
 
+	// Route OUR engine through the prod eval (v12 lean-threats net if data/nnue/lean.bin
+	// is present, else the embedded v6). Without this the absolute-strength anchor
+	// silently measures v6, NOT the shipped net — every prior anchor did exactly that.
+	loadEnrichedDefault()
+
 	ourParams, err := bench.ParseParams(search.DefaultParams(), *ourSpec)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "bad --new spec:", err)
