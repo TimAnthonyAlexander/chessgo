@@ -55,51 +55,34 @@ export function setSoundEnabled(on: boolean): void {
     }
 }
 
-// Build a fresh context + master bus. A context parked for minutes can wedge
-// (resume() resolves to 'running' but emits no sound — device asleep / older
-// Chrome); the only cure is a new one. We tear the old one down and let `audio()`
-// build this on the next sound.
-function build(): void {
-    const Ctor =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-    if (!Ctor) return
-    ctx = new Ctor()
-    // Real headroom instead of a brickwall limiter: per-voice gains are small and
-    // the master sits below unity, so the in-phase sum stays clear of clipping.
-    master = ctx.createGain()
-    master.gain.value = 0.8
-    master.connect(ctx.destination)
-}
-
-function teardown(): void {
-    if (ctx) {
-        try {
-            void ctx.close()
-        } catch {
-            /* ignore */
-        }
-    }
-    ctx = null
-    master = null
-}
-
+// ONE AudioContext for the whole page lifetime. We deliberately NEVER close and
+// recreate it: Safari leaks closed contexts (there's a per-page cap), and a fresh
+// context built outside a user gesture comes up muted and can't be reliably
+// un-muted. Keeping a single context and resuming it — from a gesture — is the
+// only thing that survives Safari's interruptions. See the lifecycle block below.
 function audio(): { c: AudioContext; out: GainNode } | null {
     if (typeof window === 'undefined') return null
     // Don't even create the context before the first gesture — see `armed`. This is
     // the single most important rule for staying in Safari's good graces.
     if (!armed) return null
     if (!ctx) {
-        build()
-        if (!ctx) return null
+        const Ctor =
+            window.AudioContext ||
+            (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+        if (!Ctor) return null
+        ctx = new Ctor()
+        // Real headroom instead of a brickwall limiter: per-voice gains are small and
+        // the master sits below unity, so the in-phase sum stays clear of clipping.
+        master = ctx.createGain()
+        master.gain.value = 0.8
+        master.connect(ctx.destination)
     }
-    // Resume on ANY non-running state, not just 'suspended'. Safari/iOS (and Chrome
-    // on tab-background / audio-focus loss) park the context in 'interrupted'; only
-    // checking 'suspended' leaves it stuck there forever, so every later sound is
-    // silent. resume() is a no-op when already running. (Once any gesture has
-    // unlocked the context, resume() works outside a gesture too — so this recovers
-    // automatically after an interruption.)
-    if (ctx.state !== 'running') void ctx.resume()
+    // Resume on ANY non-running state, not just 'suspended'. Safari/iOS park the
+    // context in 'interrupted' (another tab/app grabbed the audio session, screen
+    // lock, long idle); Chrome uses 'suspended'. resume() is a no-op when running.
+    // It may reject on an interrupted context — that's fine, the gesture handler
+    // below is what actually recovers it; we just never want to throw here.
+    if (ctx.state !== 'running') void ctx.resume().catch(() => {})
     return { c: ctx, out: master! }
 }
 
@@ -342,67 +325,49 @@ export function playForSan(san: string, gameOver: boolean): void {
     // No check sound: Lichess "standard" maps Check → Silence.
 }
 
-// Unlock audio on the first user gesture ANYWHERE in the app. Browsers create an
-// AudioContext in a "suspended" state when it's first touched outside a gesture
-// and won't play until resumed from one — so a sound driven purely by an event
-// (an opponent/bot move arriving over WebSocket) would never be heard. Creating +
-// resuming the context inside the gesture primes it for all later sounds.
+// Prime audio on EVERY user gesture, for the whole page lifetime — never detached.
 //
-// resume() is async, so we DON'T gate listener removal on the (still-suspended)
-// state synchronously after calling it — we await the resume promise and only
-// then detach. This avoids the race where the very first gesture appears to fail.
+// The first gesture unlocks: browsers create the AudioContext 'suspended' outside a
+// gesture and won't play until resumed from one, so a sound driven purely by an
+// event (an opponent/bot move over WebSocket) would never be heard. Arming + resuming
+// + starting a 1-sample SILENT buffer inside the gesture is the "the user engaged
+// with this site's audio" signal Safari wants (resuming alone is weaker on Safari/iOS).
+//
+// Every LATER gesture recovers: Safari flips a backgrounded tab's context to
+// 'interrupted' whenever another tab/app takes the audio session (the exact
+// two-tab / switch-away-and-back case), and a context can also wedge after a long
+// idle or a screen lock. The ONLY reliable cure is resume() from a real gesture —
+// resume() outside a gesture rejects on an interrupted context. So we must keep the
+// listener attached forever: the next click the user makes (e.g. a board move) is
+// precisely what un-wedges audio, and it can only do that if we're still listening.
+// Detaching after the first unlock (as we used to) is what left audio permanently
+// silent until a full Safari restart. pointerdown covers mouse + touch.
 if (typeof window !== 'undefined') {
-    const detach = () => {
-        window.removeEventListener('pointerdown', unlock)
-        window.removeEventListener('touchstart', unlock)
-        window.removeEventListener('keydown', unlock)
-        window.removeEventListener('click', unlock)
-    }
-    const unlock = () => {
-        // We're inside a real gesture now: arm (so audio() will build the context) and
-        // register engagement by playing a 1-sample SILENT buffer. Resuming alone is
-        // weaker on Safari/iOS — actually starting a source inside the gesture is the
-        // signal Safari treats as "the user engaged with this site's audio", which is
-        // what keeps the domain's Auto-Play permission from being demoted.
+    const prime = () => {
         armed = true
-        const a = audio() // builds + resumes within the gesture
-        if (!a) return
-        const silent = a.c.createBufferSource()
-        silent.buffer = a.c.createBuffer(1, 1, a.c.sampleRate)
-        silent.connect(a.c.destination)
+        const a = audio() // builds the context on the first gesture; resumes on every one
+        if (!a || a.c.state === 'running') return
+        void a.c.resume().catch(() => {})
         try {
+            const silent = a.c.createBufferSource()
+            silent.buffer = a.c.createBuffer(1, 1, a.c.sampleRate)
+            silent.connect(a.c.destination)
             silent.start(0)
         } catch {
             /* ignore */
         }
-        a.c
-            .resume()
-            .then(() => {
-                if (a.c.state === 'running') detach()
-            })
-            .catch(() => {
-                /* will retry on the next gesture */
-            })
     }
-    window.addEventListener('pointerdown', unlock)
-    window.addEventListener('touchstart', unlock)
-    window.addEventListener('keydown', unlock)
-    window.addEventListener('click', unlock)
+    window.addEventListener('pointerdown', prime)
+    window.addEventListener('keydown', prime)
 
-    // Recover after the tab is backgrounded/refocused or the OS interrupts audio
-    // (Safari/iOS → 'interrupted', Chrome → 'suspended'). Once unlocked, resume()
-    // is allowed outside a gesture, so this keeps later WebSocket-driven sounds
-    // audible without requiring a fresh click. If resume() can't restore a running
-    // context, the context is wedged — drop it so the next sound builds a fresh one.
+    // When the tab returns to the foreground (or the OS ends an interruption), try a
+    // gestureless resume — it succeeds in the common auto-recover case and rejects
+    // harmlessly otherwise, in which case the next gesture's prime() recovers it. We
+    // deliberately do NOT tear the context down here: destroying it on every resume
+    // that didn't instantly succeed was what left all later sounds permanently silent.
     document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState !== 'visible' || !ctx || ctx.state === 'running') return
-        const cur = ctx
-        cur.resume()
-            .then(() => {
-                if (cur === ctx && cur.state !== 'running') teardown()
-            })
-            .catch(() => {
-                if (cur === ctx) teardown()
-            })
+        if (document.visibilityState === 'visible' && ctx && ctx.state !== 'running') {
+            void ctx.resume().catch(() => {})
+        }
     })
 }
