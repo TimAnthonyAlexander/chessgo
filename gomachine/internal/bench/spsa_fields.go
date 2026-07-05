@@ -28,6 +28,15 @@ var spsaFields = map[string]spsaField{
 	"captseemaxdepth":  {func(p *search.Params, v int) { p.CaptSEEMaxDepth = v }, func(p search.Params) int { return p.CaptSEEMaxDepth }, 1},
 	"nullmover":        {func(p *search.Params, v int) { p.NullMoveR = v }, func(p search.Params) int { return p.NullMoveR }, 1},
 	"doubleextmargin":  {func(p *search.Params, v int) { p.DoubleExtMargin = v }, func(p search.Params) int { return p.DoubleExtMargin }, 4},
+	// LMR / history / RFP (docs/open_tasks/spsa-margins.md: "the untapped leverage is
+	// LMR/history"). LMR base/div are ×10000 ints; CEnd in those units (≈0.02 base,
+	// ≈0.05 div per step). The rest are direct integer margins.
+	"lmrbasex10k":    {func(p *search.Params, v int) { p.LMRBaseX10k = v }, func(p search.Params) int { return p.LMRBaseX10k }, 200},
+	"lmrdivx10k":     {func(p *search.Params, v int) { p.LMRDivX10k = v }, func(p search.Params) int { return p.LMRDivX10k }, 500},
+	"lmrhistdiv":     {func(p *search.Params, v int) { p.LMRHistDiv = v }, func(p search.Params) int { return p.LMRHistDiv }, 256},
+	"rfpmargin":      {func(p *search.Params, v int) { p.RFPMargin = v }, func(p search.Params) int { return p.RFPMargin }, 8},
+	"histbonusscale": {func(p *search.Params, v int) { p.HistBonusScale = v }, func(p search.Params) int { return p.HistBonusScale }, 4},
+	"histbonusmax":   {func(p *search.Params, v int) { p.HistBonusMax = v }, func(p search.Params) int { return p.HistBonusMax }, 128},
 }
 
 // spsaAliases maps the short spec spellings (shared with bench.ParseParams) to the
@@ -42,6 +51,12 @@ var spsaAliases = map[string]string{
 	"csd":           "captseemaxdepth",
 	"nullr":         "nullmover",
 	"dextm":         "doubleextmargin",
+	"lmrbase":       "lmrbasex10k",
+	"lmrdiv":        "lmrdivx10k",
+	"lmrhd":         "lmrhistdiv",
+	"rfpm":          "rfpmargin",
+	"histscale":     "histbonusscale",
+	"histmax":       "histbonusmax",
 }
 
 func canonSPSAName(name string) (string, bool) {

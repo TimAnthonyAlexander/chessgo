@@ -103,10 +103,10 @@ const (
 // statBonus is the depth-scaled history bonus/malus magnitude (capped). Used both
 // as the bonus for a quiet move that caused a beta cutoff and as the malus for the
 // quiets that were tried first and did not.
-func statBonus(depth int) int {
-	b := 32 * depth * depth
-	if b > histBonusMax {
-		b = histBonusMax
+func (s *Searcher) statBonus(depth int) int {
+	b := s.params.HistBonusScale * depth * depth
+	if b > s.params.HistBonusMax {
+		b = s.params.HistBonusMax
 	}
 	return b
 }
@@ -134,7 +134,7 @@ func (s *Searcher) updateQuietStats(pos *chess.Position, best chess.Move, tried 
 		s.history[pos.PieceOn(best.From())][best.To()] += depth * depth
 		return
 	}
-	bonus := statBonus(depth)
+	bonus := s.statBonus(depth)
 	s.updateHistory(pos.PieceOn(best.From()), best.To(), bonus)
 	for _, q := range tried {
 		if q != best {
@@ -171,7 +171,7 @@ func (s *Searcher) updateCaptureHistory(pos *chess.Position, m chess.Move, bonus
 // penalizes the captures tried before it that did not (−bonus), using the gravity
 // scheme. pos must be restored to the node position (after UndoMove).
 func (s *Searcher) updateCaptureStats(pos *chess.Position, best chess.Move, tried []chess.Move, depth int) {
-	bonus := statBonus(depth)
+	bonus := s.statBonus(depth)
 	s.updateCaptureHistory(pos, best, bonus)
 	for _, c := range tried {
 		if c != best {
@@ -212,6 +212,11 @@ type Searcher struct {
 	tt      *TT
 	params  Params
 	ec      eval.Config // evaluation config derived from params
+	// lmr is the late-move reduction table this searcher reads (log·log surface). It
+	// points at the shared package default (lmrTable) when the LMR params are default,
+	// or a per-searcher table built from Params.LMRBaseX10k/LMRDivX10k otherwise. Read-
+	// only after construction, so it is safe to share across Lazy SMP workers.
+	lmr     *[64][64]int
 	killers [maxPly][2]chess.Move
 	history [12][64]int
 	// captureHist[movedPiece][toSquare][victimType] is the capture-history table
@@ -340,8 +345,28 @@ func NewWithParams(ttSizeMB int, params Params) *Searcher {
 		tt:       NewTT(ttSizeMB),
 		params:   params,
 		ec:       evalConfig(params),
+		lmr:      lmrTableFor(params),
 		keyStack: make([]uint64, 0, 1024),
 	}
+}
+
+// lmrTableFor returns the LMR reduction table for these params: the shared package
+// default when LMR base/divisor are at their defaults (zero alloc, byte-identical),
+// else a freshly built per-searcher table. base/div are stored ×10000 so the default
+// (7844/24696) reproduces int(0.7844 + ln·ln/2.4696) exactly.
+func lmrTableFor(p Params) *[64][64]int {
+	if p.LMRBaseX10k == 7844 && p.LMRDivX10k == 24696 {
+		return &lmrTable
+	}
+	base := float64(p.LMRBaseX10k) / 10000
+	div := float64(p.LMRDivX10k) / 10000
+	t := new([64][64]int)
+	for d := 1; d < 64; d++ {
+		for m := 1; m < 64; m++ {
+			t[d][m] = int(base + math.Log(float64(d))*math.Log(float64(m))/div)
+		}
+	}
+	return t
 }
 
 // SetTablebase attaches the Syzygy handle used for WDL-in-search. The handle is
@@ -559,6 +584,7 @@ func newWithSharedTT(tt *TT, params Params) *Searcher {
 		tt:       tt,
 		params:   params,
 		ec:       evalConfig(params),
+		lmr:      lmrTableFor(params),
 		keyStack: make([]uint64, 0, 1024),
 	}
 }
@@ -1163,7 +1189,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 		rfpDepth = depth - impInt
 	}
 	rfpCap := rfpMaxDepth
-	rfpM := rfpMargin * rfpDepth
+	rfpM := s.params.RFPMargin * rfpDepth
 	if s.params.RFPQuad {
 		rfpCap = 12
 		rfpM = 85*depth + 7*depth*depth - 75*impInt // Stormphrax quadratic margin
@@ -1547,7 +1573,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 					minSearched = 1
 				}
 				if depth >= 2 && !inCheck && !givesCheck && searched >= minSearched {
-					r := lmrTable[minInt(depth, 63)][minInt(searched, 63)]
+					r := s.lmr[minInt(depth, 63)][minInt(searched, 63)]
 					if quiet {
 						hist := s.history[mover][m.To()]
 						if s.params.ContHist && s.cont != nil {
@@ -1556,7 +1582,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 						if s.params.ContHist2 && s.cont2 != nil {
 							hist += s.contScore2(ply, mover, m.To())
 						}
-						r -= hist / lmrHistoryDiv
+						r -= hist / s.params.LMRHistDiv
 					} else {
 						r-- // noisy move: reduce less than a quiet
 						if capture && seeWinning {
@@ -1592,7 +1618,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 					// Smooth log(d)·log(m) base in place of the flat 1/2; reduce
 					// less for good-history quiets, more for malus'd ones. Clamped
 					// to [1, depth-1] so a reduced move still searches ≥1 ply.
-					r := lmrTable[minInt(depth, 63)][minInt(searched, 63)]
+					r := s.lmr[minInt(depth, 63)][minInt(searched, 63)]
 					hist := s.history[mover][m.To()]
 					if s.params.ContHist && s.cont != nil {
 						hist += s.contScore(ply, mover, m.To())
@@ -1600,7 +1626,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 					if s.params.ContHist2 && s.cont2 != nil {
 						hist += s.contScore2(ply, mover, m.To())
 					}
-					r -= hist / lmrHistoryDiv
+					r -= hist / s.params.LMRHistDiv
 					// Cut-node: a node expected to fail high orders its best move first,
 					// so a late move here almost never raises alpha — reduce it harder
 					// (Stormphrax search.cpp:1173, r += cutnode). childCutnode is the

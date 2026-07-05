@@ -116,7 +116,7 @@ func (s *Searcher) updateContHist(pos *chess.Position, best chess.Move, tried []
 	if !s.params.ContHist || s.cont == nil {
 		return
 	}
-	bonus := statBonus(depth)
+	bonus := s.statBonus(depth)
 	s.contUpdate(ply, pos.PieceOn(best.From()), best.To(), bonus)
 	for _, q := range tried {
 		if q != best {

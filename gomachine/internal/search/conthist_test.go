@@ -57,7 +57,7 @@ func TestContHistDirection(t *testing.T) {
 		t.Fatalf("cold continuation score = %d, want 0", before)
 	}
 	for i := 0; i < 16; i++ {
-		s.contUpdate(1, curPc, to, statBonus(8))
+		s.contUpdate(1, curPc, to, s.statBonus(8))
 	}
 	if after := s.contScore(1, curPc, to); after <= 0 {
 		t.Errorf("positive signal did not raise continuation score (got %d)", after)
@@ -81,7 +81,7 @@ func TestContHistNullMoveNoContinuation(t *testing.T) {
 	// makes the child read nothing.
 	s.contMove[0] = contEntry{pc: pos.PieceOn(parent.From()), to: parent.To(), ok: true}
 	for i := 0; i < 16; i++ {
-		s.contUpdate(1, curPc, to, statBonus(8))
+		s.contUpdate(1, curPc, to, s.statBonus(8))
 	}
 	if s.contScore(1, curPc, to) == 0 {
 		t.Fatal("expected a trained continuation score before the null test")
@@ -106,7 +106,7 @@ func TestContHistClearedByReset(t *testing.T) {
 	curPc, to := chess.WhiteKnight, chess.Square(28)
 	s.contMove[0] = pe
 	for i := 0; i < 16; i++ {
-		s.contUpdate(1, curPc, to, statBonus(8))
+		s.contUpdate(1, curPc, to, s.statBonus(8))
 	}
 
 	s.reset(Limits{}, nil) // clears tables + path via contBegin

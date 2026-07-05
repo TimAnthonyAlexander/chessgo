@@ -94,6 +94,19 @@ type Params struct {
 	QSCastling       bool // search castling moves in quiescence. Castling is a QUIET move but its (king,rook-origin) encoding has an occupied destination, so it slips through the isCapture noisy filter — a latent quirk. DEFAULT ON preserves the historical behavior byte-for-byte; OFF drops castling from qsearch (a genuinely quiet move has no place in a tactical search). Under SPRT.
 	Aggr             int  // aggression style knob 0..100 (default 50 = neutral). Scales a small king-attack/tropism term ONTO the static eval: 50→off (byte-identical), 100→fully attacking, 0→solid/defensive. Effect = eval.AggressionTerm(pos)·(Aggr-50)/50. Style lever, NOT a strength patch (a deliberate eval distortion — expected to cost a little Elo; SPRT measures how much per level).
 	Prefetch         bool // PREFETCHT0 the TT slot for the child key the moment it's known (in pushKey, right after DoMove). Bit-exact (a prefetch never changes results). DEFAULT OFF — measured a WASH (−5.3 ± 7.4 @ 394 pairs movetime, coalla): our 64MB TT fits entirely in the EPYC's 128MB L3, so probes hit L3 (~15c), not memory — nothing to hide, and the per-call PREFETCHT0 overhead faintly nets negative. Kept as inert scaffolding: flip on IFF the TT ever exceeds L3 (bigger `-tt`, or heavy multi-game prod eviction). amd64 PREFETCHT0; no-op elsewhere.
+
+	// LMR / history / RFP tunables — promoted from hardcoded consts so SPSA can
+	// re-tune them v12-native (docs/open_tasks/spsa-margins.md: "the untapped leverage
+	// is LMR/history"). All default to their historical constant so DefaultParams is
+	// byte-identical. LMR base/divisor are the classic highest-Elo SPSA target; they
+	// build the per-searcher reduction table (log·log surface) and are stored ×10000
+	// (int) so the default reproduces 0.7844 / 2.4696 EXACTLY.
+	LMRBaseX10k int // LMR base term ×10000 (default 7844 = 0.7844); reduction ≈ base + ln(d)·ln(m)/div
+	LMRDivX10k  int // LMR divisor ×10000 (default 24696 = 2.4696)
+	LMRHistDiv  int // LMR history divisor: r -= hist/LMRHistDiv (default 4096); larger = history moves the reduction less
+	RFPMargin   int // reverse-futility margin per depth in cp (default 75); prune when staticEval - RFPMargin·depth >= beta
+	HistBonusScale int // history bonus/malus scale: bonus = HistBonusScale·depth² capped at HistBonusMax (default 32)
+	HistBonusMax   int // history bonus/malus cap (default 1536)
 }
 
 // DefaultParams returns the engine's current full-strength configuration.
@@ -410,5 +423,15 @@ func DefaultParams() Params {
 		// patch — SPRT it at MOVETIME or fixed DEPTH (it's an EVAL change; fixed-nodes
 		// inflates eval, §2.1).
 		Aggr: 50,
+
+		// LMR / history / RFP tunables — defaults reproduce the historical constants
+		// byte-for-byte (lmrTable = int(0.7844 + ln(d)·ln(m)/2.4696); statBonus =
+		// 32·depth² capped 1536; rfpMargin = 75; lmrHistoryDiv = 4096). SPSA targets.
+		LMRBaseX10k:    7844,
+		LMRDivX10k:     24696,
+		LMRHistDiv:     4096,
+		RFPMargin:      75,
+		HistBonusScale: 32,
+		HistBonusMax:   1536,
 	}
 }
