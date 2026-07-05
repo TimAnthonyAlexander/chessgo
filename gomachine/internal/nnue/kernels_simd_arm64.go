@@ -55,7 +55,8 @@ func init() {
 	pairwiseU8 = pairwiseU8SIMD
 	addColI8 = addColI8SIMD
 	subColI8 = subColI8SIMD
-	kernelBackend = "simd/archsimd-neon-arm64(addCol,subCol,screluDot,dotF32,gemvF32,screluActivateF,pairwiseU8,addColI8,subColI8)"
+	applyThreatBatch = applyThreatBatchSIMD
+	kernelBackend = "simd/archsimd-neon-arm64(addCol,subCol,screluDot,dotF32,gemvF32,screluActivateF,pairwiseU8,addColI8,subColI8,applyThreatBatch)"
 }
 
 // gemvF32SIMD is the output-stationary tail GEMV: out[o] = Σ_i in[i]·w[i*stride+off+o].
@@ -127,6 +128,42 @@ func subColI8SIMD(dst []int16, src []int8) {
 	}
 	for ; i < n; i++ {
 		dst[i] -= int16(src[i])
+	}
+}
+
+// applyThreatBatchSIMD applies a batch of int8 threat columns to the int16 acc in
+// ONE load+store pass per 8-lane tile: for each tile it loads acc once, adds every
+// addF column and subtracts every subF column (widened int8→int16), stores once.
+// This collapses the K per-column full-accumulator passes of sequential
+// subColI8/addColI8 into a single pass — the profile-driven applyDiff fast path.
+// Bit-exact to the scalar reference (int16 add/sub is associative/commutative under
+// wraparound). Same 16-byte int8 load / low-8 widen as addColI8SIMD (guarded by
+// i+16<=h, so a column read never runs off the end of w0t8); ≤15-tail is scalar.
+func applyThreatBatchSIMD(acc []int16, w0t8 []int8, h int, subF, addF []uint16, off int) {
+	i := 0
+	for ; i+16 <= h; i += 8 {
+		d := archsimd.LoadInt16x8(acc[i : i+8])
+		for _, f := range addF {
+			b := (int(f) - off) * h
+			s := archsimd.LoadInt8x16(w0t8[b+i : b+i+16]).ExtendLo8ToInt16()
+			d = d.Add(s)
+		}
+		for _, f := range subF {
+			b := (int(f) - off) * h
+			s := archsimd.LoadInt8x16(w0t8[b+i : b+i+16]).ExtendLo8ToInt16()
+			d = d.Sub(s)
+		}
+		d.Store(acc[i : i+8])
+	}
+	for ; i < h; i++ {
+		var d int16
+		for _, f := range addF {
+			d += int16(w0t8[(int(f)-off)*h+i])
+		}
+		for _, f := range subF {
+			d -= int16(w0t8[(int(f)-off)*h+i])
+		}
+		acc[i] += d
 	}
 }
 

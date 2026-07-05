@@ -50,6 +50,10 @@ type EnrichedStack struct {
 	// In-place (copy-free) accumulator: a single pair of halves that Push mutates by
 	// the delta and Pop restores via the inverse delta. Used when net.inPlaceEnabled().
 	accW, accB []int16
+
+	// batchApply scratch: the threat-only (f>=InputDim) partitions of one applyDiff
+	// call's sub/add lists, reused per call to avoid alloc.
+	batchSub, batchAdd []uint16
 }
 
 type enrichedSlot struct {
@@ -79,6 +83,7 @@ func (n *EnrichedNet) NewStack(maxDepth int) *EnrichedStack {
 		pSubW: makeSliceBufs(slots, dcap), pAddW: makeSliceBufs(slots, dcap),
 		pSubB: makeSliceBufs(slots, dcap), pAddB: makeSliceBufs(slots, dcap),
 		accW: make([]int16, h), accB: make([]int16, h),
+		batchSub: make([]uint16, 0, dcap), batchAdd: make([]uint16, 0, dcap),
 	}
 }
 
@@ -144,6 +149,33 @@ func (st *EnrichedStack) ensure(k int) {
 // counts slice is left all-zero for the next call.
 func (st *EnrichedStack) applyDiff(acc []int16, parent, child []uint16) {
 	net := st.net
+	if net.batchApply && net.int8FT {
+		// Batched threat-column apply (profile-driven): base-768 columns (few per
+		// move) go through the per-column int16 path; the many int8 THREAT columns are
+		// collected and applied in ONE accumulator load+store pass via applyThreatBatch
+		// instead of one pass per column. Like directApply this applies every occurrence
+		// (no counts cancellation) — bit-exact because int16 add/sub commute/associate.
+		off := InputDim
+		sub := st.batchSub[:0]
+		add := st.batchAdd[:0]
+		for _, f := range parent {
+			if int(f) >= off {
+				sub = append(sub, f)
+			} else {
+				net.ftSub(acc, int(f))
+			}
+		}
+		for _, f := range child {
+			if int(f) >= off {
+				add = append(add, f)
+			} else {
+				net.ftAdd(acc, int(f))
+			}
+		}
+		applyThreatBatch(acc, net.W0t8, net.H, sub, add, off)
+		st.batchSub, st.batchAdd = sub, add
+		return
+	}
 	if net.directApply {
 		// Skip the multiset-diff bookkeeping: subtract every "parent" (removed) edge
 		// and add every "child" (new) edge directly. Bit-exact — int16 column adds

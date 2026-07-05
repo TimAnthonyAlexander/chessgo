@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,6 +27,7 @@ func cmdBenchNPS(args []string) {
 	warmup := fs.Int("warmup", 2, "warmup iterations discarded")
 	ttMB := fs.Int("tt", 64, "TT size MB")
 	fenFlag := fs.String("fen", "r1bqk2r/pp2bppp/2n1pn2/2pp4/3P1B2/2PBPN2/PP3PPP/RN1QK2R w KQkq - 0 8", "position FEN")
+	cpuprofile := fs.String("cpuprofile", "", "if set, write a CPU profile of the measured iterations to this file (analyze with: go tool pprof <file>)")
 	fs.Parse(args)
 
 	parts := strings.Split(*leanSpec, ",")
@@ -51,21 +53,28 @@ func cmdBenchNPS(args []string) {
 	}
 	s := search.NewWithParams(*ttMB, search.DefaultParams())
 
-	// scLegacy = int64-mul screluDot (old); slLegacy = branchy selectMove (old).
+	// A/B the three gated, bit-exact accumulator-push optimizations that ship OFF
+	// in prod (loadDefaultLeanNet only enables moveAware+int8FT): directApply
+	// (skip the counts multiset-diff), prefetch (SW-prefetch next weight column),
+	// inPlace (copy-free single-accumulator push). All are node-count-identical, so
+	// any NPS delta is a pure movetime win; a node mismatch => NOT bit-exact (WARN).
 	type cfg struct {
-		name               string
-		scLegacy, slLegacy bool
+		name           string
+		da, pf, ip, ba bool
 	}
 	cfgs := []cfg{
-		{"baseline(old)", true, true},
-		{"screlu32", false, true},
-		{"select-bl", true, false},
-		{"both-new", false, false},
+		{"prod(base)", false, false, false, false},
+		{"prefetch", false, true, false, false},
+		{"batchApply", false, false, false, true},
+		{"batch+pf", false, true, false, true},
+		{"directApply", true, false, false, false},
 	}
 
 	run := func(c cfg) (uint64, float64) {
-		nnue.SetScreluLegacy(c.scLegacy)
-		search.SetSelectLegacy(c.slLegacy)
+		n.SetDirectApply(c.da)
+		n.SetPrefetchCols(c.pf)
+		n.SetInPlace(c.ip)
+		n.SetBatchApply(c.ba)
 		s.ClearTT()
 		r := s.Search(pos, search.Limits{Depth: *depth}, nil)
 		return r.Nodes, r.Elapsed.Seconds()
@@ -75,6 +84,20 @@ func cmdBenchNPS(args []string) {
 		for _, c := range cfgs {
 			run(c)
 		}
+	}
+
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "create cpuprofile:", err)
+			os.Exit(1)
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			fmt.Fprintln(os.Stderr, "start cpuprofile:", err)
+			os.Exit(1)
+		}
+		defer pprof.StopCPUProfile()
 	}
 
 	npsList := map[string][]float64{}
@@ -97,9 +120,9 @@ func cmdBenchNPS(args []string) {
 		return xs[len(xs)/2]
 	}
 	fmt.Printf("depth=%d nodes=%d iters=%d\n", *depth, nodesRef, *iters)
-	base := median(npsList["baseline(old)"])
+	base := median(npsList["prod(base)"])
 	for _, c := range cfgs {
 		m := median(npsList[c.name])
-		fmt.Printf("%-9s medianNPS=%.0f  ratio=%.4f\n", c.name, m, m/base)
+		fmt.Printf("%-12s medianNPS=%.0f  ratio=%.4f\n", c.name, m, m/base)
 	}
 }

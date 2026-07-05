@@ -104,6 +104,14 @@ type EnrichedNet struct {
 	// near-disjoint so cancellation was rare. Default-off; A/B via --lean-direct.
 	directApply bool
 
+	// batchApply routes applyDiff's int8 THREAT columns through applyThreatBatch: one
+	// accumulator load+store pass for the WHOLE changed-edge batch instead of one pass
+	// PER column (the CPU-profile's dominant cost — 63% of runtime is this update, and
+	// its acc load/store dominates). Base-768 columns (few per move) still go through
+	// the per-column path. Bit-exact (int16 add/sub associative/commutative). Requires
+	// int8FT (threat columns must be int8). Default-off; A/B via nps.
+	batchApply bool
+
 	// prefetchCols enables software-prefetching the next feature's weight column
 	// during the accumulator apply (applyDiff), hiding the memory latency of the
 	// scattered rows of the ~4.7 MB threat weight table (accessed ~25×/node with
@@ -191,6 +199,13 @@ func (n *EnrichedNet) InPlace() bool { return n.inPlace }
 
 // inPlaceEnabled reports whether the in-place path is both requested and valid.
 func (n *EnrichedNet) inPlaceEnabled() bool { return n.inPlace && n.moveAware && n.changedEdges }
+
+// SetBatchApply toggles the batched int8 threat-column apply path in applyDiff (one
+// acc pass for the whole batch vs one per column). Requires int8FT; bit-exact.
+func (n *EnrichedNet) SetBatchApply(on bool) { n.batchApply = on }
+
+// BatchApply reports whether the batched threat-column apply path is enabled.
+func (n *EnrichedNet) BatchApply() bool { return n.batchApply }
 
 // SetDirectApply toggles the counts-array-free direct apply path in applyDiff.
 func (n *EnrichedNet) SetDirectApply(on bool) { n.directApply = on }
