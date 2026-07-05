@@ -19,7 +19,14 @@ type analyzeGameRequest struct {
 }
 
 const (
-	analyzeDefaultMoveTime = 600  // ms per position
+	// 300 ms/position is the whole-game OVERVIEW budget (eval graph + blunder tags).
+	// It's deliberately modest because the analysis board re-searches whichever
+	// single node you park on to a much deeper budget on demand (the client's
+	// progressive-deepening /analyze ladder), so accuracy where it matters isn't
+	// bounded by this pass — only the first-open latency is. Combined with the
+	// single-thread analysis pool, an ~80-ply game reviews in a few seconds instead
+	// of ~20 s. Callers can still override up to the clamp ceiling.
+	analyzeDefaultMoveTime = 300  // ms per position
 	analyzeMinMoveTime     = 100  // clamp floor
 	analyzeMaxMoveTime     = 3000 // clamp ceiling
 	analyzeMaxMoves        = 600  // refuse absurdly long inputs
@@ -133,9 +140,9 @@ func (s *Server) analyzePosition(fen string, movetimeMs int) map[string]any {
 		return out
 	}
 
-	eng := s.acquire()
+	eng := s.acquireAnalysis()
 	res := eng.SearchDirect(pos, 0, time.Duration(movetimeMs)*time.Millisecond, nil)
-	s.release(eng)
+	s.releaseAnalysis(eng)
 
 	// No legal move ⇒ the game is over at this position (checkmate or stalemate).
 	if res.Move == chess.NullMove {

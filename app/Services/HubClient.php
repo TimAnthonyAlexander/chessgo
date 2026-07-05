@@ -13,9 +13,54 @@ class HubClient
 {
     private readonly string $baseUrl;
 
+    private readonly string $secret;
+
     public function __construct()
     {
         $this->baseUrl = rtrim((string) (App::config('gomachine.hub_url') ?? 'http://127.0.0.1:6467'), '/');
+        $this->secret = (string) (App::config('gomachine.ws_ticket_secret') ?? '');
+    }
+
+    /**
+     * Anti-cheat probe: is identity `$sub` currently in a live, non-filler game,
+     * and if so, what board are they on? Secret-gated on the hub (X-Hub-Secret).
+     *
+     * FAIL-OPEN by design: any error / unreachable hub returns ['live' => false]
+     * so a hub blip can never (a) block the analysis response or (b) raise a
+     * false flag. A missed flag is acceptable; a false one is not.
+     *
+     * @return array{live: bool, fen: string}
+     */
+    public function livePlayer(string $sub): array
+    {
+        if ($sub === '') {
+            return ['live' => false, 'fen' => ''];
+        }
+
+        $url = $this->baseUrl . '/internal/live-player?sub=' . rawurlencode($sub);
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT_MS => 500,
+            CURLOPT_CONNECTTIMEOUT_MS => 400,
+            CURLOPT_HTTPHEADER => ['X-Hub-Secret: ' . $this->secret],
+        ]);
+        $raw = curl_exec($ch);
+        $code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+
+        if (!is_string($raw) || $code !== 200) {
+            return ['live' => false, 'fen' => ''];
+        }
+
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
+            return ['live' => false, 'fen' => ''];
+        }
+
+        return [
+            'live' => (bool) ($decoded['live'] ?? false),
+            'fen' => (string) ($decoded['fen'] ?? ''),
+        ];
     }
 
     /**

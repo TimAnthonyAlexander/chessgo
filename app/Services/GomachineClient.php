@@ -183,7 +183,7 @@ class GomachineClient
      *   position is {ply?, fen, sideToMove, eval|null, bestmove|null, bestSan|null,
      *   terminal, checkmate, stalemate}
      */
-    public function analyzeGame(array $moves, ?string $startFen = null, int $movetimeMs = 600): array
+    public function analyzeGame(array $moves, ?string $startFen = null, int $movetimeMs = 300): array
     {
         $body = [
             'moves' => array_values($moves),

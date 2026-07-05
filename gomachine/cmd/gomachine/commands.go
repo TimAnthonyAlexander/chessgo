@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -29,6 +30,8 @@ func cmdServe(args []string) {
 	tt := fs.Int("tt", 64, "transposition table size per worker (MB)")
 	workers := fs.Int("workers", 4, "number of engine workers (bounds concurrent searches)")
 	searchThreads := fs.Int("search-threads", 1, "Lazy SMP threads per full-strength search (helps only time-bounded searches; keep workers*search-threads <= cores)")
+	analysisWorkers := fs.Int("analysis-workers", runtime.NumCPU(), "dedicated single-thread engines for the /analyze-game fan-out (a full-game review is a burst of independent positions; size to cores). 0 = share the main pool")
+	analysisTT := fs.Int("analysis-tt", 16, "transposition table size per analysis worker (MB)")
 	pprofAddr := fs.String("pprof", "", "if set (e.g. 127.0.0.1:6480), serve net/http/pprof on this address for profiling")
 	// Auto-loaded from this default if present (committed sidecar; the working dir
 	// is gomachine/ in both the dev screen and the systemd unit) — no flag or
@@ -39,6 +42,9 @@ func cmdServe(args []string) {
 
 	startPprof(*pprofAddr)
 	srv := server.New(*workers, *tt, *searchThreads)
+	if *analysisWorkers > 0 {
+		srv.SetAnalysisPool(*analysisWorkers, *analysisTT)
+	}
 	loadEnrichedDefault() // route eval through the v9 lean threats net if data/nnue/lean.bin is present (else v6)
 	if tb := loadTablebaseDefault(*tbPath); tb != nil {
 		srv.SetTablebase(tb)
@@ -63,6 +69,9 @@ func cmdServe(args []string) {
 		}
 	}
 	fmt.Printf("gomachine engine listening on http://%s (%d workers, %d MB TT each, %d SMP threads/search)\n", *addr, *workers, *tt, *searchThreads)
+	if *analysisWorkers > 0 {
+		fmt.Printf("analysis pool: %d single-thread workers, %d MB TT each (for /analyze-game)\n", *analysisWorkers, *analysisTT)
+	}
 	if err := http.ListenAndServe(*addr, srv.Handler()); err != nil {
 		fmt.Fprintln(os.Stderr, "server error:", err)
 		os.Exit(1)

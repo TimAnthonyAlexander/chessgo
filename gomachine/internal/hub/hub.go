@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	mrand "math/rand/v2"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -71,6 +72,68 @@ type Hub struct {
 	// snapshot of live games rebuilt on the Run goroutine each tick and published
 	// here, read (never mutated) from the HTTP goroutine.
 	lobby atomic.Pointer[[]byte]
+
+	// livePlayers indexes non-bot identities that are currently in a live,
+	// non-filler game, so an out-of-band caller (BaseAPI anti-cheat) can ask "is
+	// this user playing right now, and what's their board?" without touching the
+	// Run goroutine's maps. Written on the Run goroutine alongside playerGames
+	// (markLive/unmarkLive); read via LivePlayer from the HTTP goroutine.
+	livePlayers sync.Map // key: identity UserID (string) -> current board FEN (string)
+}
+
+// LivePlayer reports whether the identity id is currently in a live, non-filler
+// game and, if so, that game's current board FEN. Safe to call from any
+// goroutine (backed by a sync.Map). The FEN lets the caller distinguish "used
+// the analysis board" from "analyzed the exact position they are playing".
+func (h *Hub) LivePlayer(id string) (live bool, fen string) {
+	if id == "" {
+		return false, ""
+	}
+	v, ok := h.livePlayers.Load(id)
+	if !ok {
+		return false, ""
+	}
+	s, _ := v.(string)
+	return true, s
+}
+
+// markLive records both non-bot sides of g as in-game. Called on the Run
+// goroutine at game start (paired with the playerGames writes).
+func (h *Hub) markLive(g *game) {
+	if g.filler {
+		return
+	}
+	fen := g.boardFEN()
+	if !g.white.isBot {
+		h.livePlayers.Store(g.white.id.UserID, fen)
+	}
+	if !g.black.isBot {
+		h.livePlayers.Store(g.black.id.UserID, fen)
+	}
+}
+
+// refreshLive updates the stored board FEN for g's live sides after a move.
+func (h *Hub) refreshLive(g *game) {
+	if g.filler {
+		return
+	}
+	fen := g.boardFEN()
+	if !g.white.isBot {
+		if _, ok := h.livePlayers.Load(g.white.id.UserID); ok {
+			h.livePlayers.Store(g.white.id.UserID, fen)
+		}
+	}
+	if !g.black.isBot {
+		if _, ok := h.livePlayers.Load(g.black.id.UserID); ok {
+			h.livePlayers.Store(g.black.id.UserID, fen)
+		}
+	}
+}
+
+// unmarkLive clears both sides of g from the live index (game teardown).
+func (h *Hub) unmarkLive(g *game) {
+	h.livePlayers.Delete(g.white.id.UserID)
+	h.livePlayers.Delete(g.black.id.UserID)
 }
 
 // Stats returns live lobby counts (connected clients, active games). Safe to call
@@ -297,6 +360,7 @@ func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, r
 	h.games[g.id] = g
 	h.playerGames[white.id.UserID] = g
 	h.playerGames[black.id.UserID] = g
+	h.markLive(g)
 	h.activeGames.Add(1)
 	h.sendMatched(g, white, chess.White)
 	h.sendMatched(g, black, chess.Black)
@@ -343,6 +407,7 @@ func (h *Hub) move(c *Client, uci string) {
 		h.sendErr(c, "illegal move")
 		return
 	}
+	h.refreshLive(g) // keep the anti-cheat live-board FEN current
 	h.broadcast(g, mustJSON(out("state", g.snapshot())))
 	if st := g.status(); st.State != "ongoing" {
 		h.finish(g, st.Result, st.State)
@@ -612,6 +677,7 @@ func (h *Hub) teardown(g *game) {
 	delete(h.games, g.id)
 	delete(h.playerGames, g.white.id.UserID)
 	delete(h.playerGames, g.black.id.UserID)
+	h.unmarkLive(g)
 	h.activeGames.Add(-1)
 }
 

@@ -20,9 +20,10 @@ import (
 // Server holds a bounded pool of engines (each with its own transposition
 // table). A pool both bounds concurrent search load and keeps tables warm.
 type Server struct {
-	pool      chan *engine.Engine
-	book      *book.Book // optional precomputed opening book (nil = disabled)
-	candCache *candCache // memoizes /candidates MultiPV results per position+budget
+	pool         chan *engine.Engine
+	analysisPool chan *engine.Engine // dedicated single-thread pool for the /analyze-game fan-out; nil = fall back to `pool`
+	book         *book.Book          // optional precomputed opening book (nil = disabled)
+	candCache    *candCache          // memoizes /candidates MultiPV results per position+budget
 }
 
 // SetBook attaches a loaded opening book; full-strength analysis paths consult it
@@ -34,12 +35,35 @@ func (s *Server) SetBook(b *book.Book) { s.book = b }
 // before serving (it drains and refills the pool). The same handle is shared across
 // engines — Fathom serializes its own probes. nil detaches.
 func (s *Server) SetTablebase(tb *syzygy.Tablebase) {
-	n := len(s.pool)
-	for i := 0; i < n; i++ {
-		e := <-s.pool
-		e.SetTablebase(tb)
-		s.pool <- e
+	for _, p := range []chan *engine.Engine{s.pool, s.analysisPool} {
+		n := len(p)
+		for i := 0; i < n; i++ {
+			e := <-p
+			e.SetTablebase(tb)
+			p <- e
+		}
 	}
+}
+
+// SetAnalysisPool builds a dedicated pool of `workers` single-threaded engines
+// (each `ttSizeMB` MB) used ONLY by the full-game analyzer's per-position fan-out,
+// decoupling it from the live-play pool. A whole-game pass is a burst of dozens of
+// INDEPENDENT position searches; those parallelize best as many single-thread
+// searches (Lazy SMP scales sub-linearly, so N one-thread engines out-throughput
+// N/2 two-thread ones), and running them here means the burst neither steals
+// threads from live bot moves / the eval bar nor is throttled by that small pool.
+// Size `workers` to the host's cores. Call once at startup, BEFORE SetTablebase
+// (which then also attaches the tablebase to this pool). nil (unset) = the
+// analyzer falls back to the main pool.
+func (s *Server) SetAnalysisPool(workers, ttSizeMB int) {
+	if workers < 1 {
+		workers = 1
+	}
+	pool := make(chan *engine.Engine, workers)
+	for i := 0; i < workers; i++ {
+		pool <- engine.NewWithThreads(ttSizeMB, 1)
+	}
+	s.analysisPool = pool
 }
 
 // bookHit returns a book entry for the position IF the book is loaded, the key is
@@ -79,6 +103,24 @@ func New(workers, ttSizeMB, searchThreads int) *Server {
 
 func (s *Server) acquire() *engine.Engine  { return <-s.pool }
 func (s *Server) release(e *engine.Engine) { s.pool <- e }
+
+// acquireAnalysis/releaseAnalysis draw from the dedicated single-thread analysis
+// pool when one is configured (SetAnalysisPool), else fall back to the main pool
+// (so tests and the default build still work with a single pool).
+func (s *Server) acquireAnalysis() *engine.Engine {
+	if s.analysisPool != nil {
+		return <-s.analysisPool
+	}
+	return <-s.pool
+}
+
+func (s *Server) releaseAnalysis(e *engine.Engine) {
+	if s.analysisPool != nil {
+		s.analysisPool <- e
+		return
+	}
+	s.pool <- e
+}
 
 // Handler returns the configured HTTP mux.
 func (s *Server) Handler() http.Handler {

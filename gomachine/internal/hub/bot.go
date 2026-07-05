@@ -154,6 +154,7 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variant string) 
 	human.game = g
 	h.games[g.id] = g
 	h.playerGames[human.id.UserID] = g
+	h.markLive(g)
 	h.activeGames.Add(1)
 
 	h.sendMatched(g, human, humanColor)
@@ -297,6 +298,7 @@ func (h *Hub) applyBotMove(r botMoveResult) {
 	if _, ok := g.applyMove(r.uci); !ok {
 		return
 	}
+	h.refreshLive(g) // keep the anti-cheat live-board FEN current
 	h.broadcast(g, mustJSON(out("state", g.snapshot())))
 	if st := g.status(); st.State != "ongoing" {
 		h.finish(g, st.Result, st.State)

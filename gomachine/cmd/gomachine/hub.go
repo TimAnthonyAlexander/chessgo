@@ -139,6 +139,20 @@ func cmdHub(args []string) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(h.LobbyJSON())
 	})
+	// Internal anti-cheat probe (secret-gated, no ticket): is identity `sub`
+	// currently in a live, non-filler game, and if so what board are they on?
+	// BaseAPI uses this to flag engine-analysis calls made mid-game. Returns
+	// { live: bool, fen: string }. The FEN lets the caller escalate when the
+	// analyzed position IS the one the user is playing.
+	mux.HandleFunc("GET /internal/live-player", func(w http.ResponseWriter, r *http.Request) {
+		if secret != "" && r.Header.Get("X-Hub-Secret") != secret {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		live, fen := h.LivePlayer(r.URL.Query().Get("sub"))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"live": live, "fen": fen})
+	})
 
 	fmt.Printf("gomachine hub (realtime) listening on http://%s  (ws at /ws)\n", *addr)
 	if err := http.ListenAndServe(*addr, mux); err != nil {

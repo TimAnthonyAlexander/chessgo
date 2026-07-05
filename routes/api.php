@@ -33,6 +33,7 @@ use App\Controllers\ProfileGamesController;
 use App\Controllers\PuzzleController;
 use App\Controllers\DailyPuzzleController;
 use App\Controllers\LeaderboardController;
+use App\Controllers\AdminFlagsController;
 use BaseApi\Http\Middleware\RateLimitMiddleware;
 use BaseApi\Http\SessionStartMiddleware;
 use BaseApi\Permissions\PermissionsMiddleware;
@@ -79,7 +80,11 @@ $router->post('/bot-games/{id}/undo', [
 ]);
 
 // Full-strength eval of a position (drives the eval bar): { fen }
+// SessionStartMiddleware is optional-auth here: it lets the anti-cheat harness
+// attribute the call to a logged-in user (to flag analysis during a live game);
+// anonymous callers still analyze freely.
 $router->post('/analyze', [
+    SessionStartMiddleware::class,
     RateLimitMiddleware::class => ['limit' => '1200/1m'],
     AnalyzeController::class,
 ]);
@@ -108,6 +113,7 @@ $router->post('/duck/analyze', [
 // second-opinion arrow: { fen, movetime? }. Spawns a Stockfish per call, so
 // rate-limit it a little tighter than /analyze.
 $router->post('/sf-analyze', [
+    SessionStartMiddleware::class,
     RateLimitMiddleware::class => ['limit' => '300/1m'],
     SfAnalyzeController::class,
 ]);
@@ -124,6 +130,22 @@ $router->post('/candidates', [
 $router->post('/admin/engine-vs/move', [
     CombinedAuthMiddleware::class,
     EngineMatchController::class,
+]);
+
+// Admin anti-cheat review (SPEC §Anti-cheat). CombinedAuthMiddleware
+// authenticates; the controller enforces role === 'admin'. Detection only
+// flags — an admin reviews here and decides (including banning).
+$router->get('/admin/flags', [
+    CombinedAuthMiddleware::class,
+    AdminFlagsController::class,
+]);
+$router->get('/admin/flags/{userId}', [
+    CombinedAuthMiddleware::class,
+    AdminFlagsController::class,
+]);
+$router->post('/admin/flags/{userId}', [
+    CombinedAuthMiddleware::class,
+    AdminFlagsController::class,
 ]);
 
 // WebSocket ticket for the realtime hub. Session is optional: a logged-in user

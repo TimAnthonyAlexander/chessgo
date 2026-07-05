@@ -113,9 +113,14 @@ export default function OpeningPanel({
     const displayStm: 'w' | 'b' = dataFen.split(' ')[1] === 'b' ? 'b' : 'w'
     // Is the shown data the starting position? (board layout matches the start)
     const dataAtStart = dataFen.split(' ')[0] === START_FEN.split(' ')[0]
+    // Out of book: we have data, no named opening, and we're past the start. Here the
+    // explorer isn't classifying a line anymore — it's just the engine — so show the
+    // single best move, not a whole ranked list.
+    const outOfBook = !!data && !opening && !dataAtStart
     // Header fallback when there's no named opening: distinguish the genuine start
     // from a real out-of-book position, and the very first load (no data yet).
     const fallbackLabel = !data ? 'Exploring…' : dataAtStart ? 'Starting position' : 'Out of book'
+    const displayMoves = outOfBook ? moves.slice(0, 1) : moves
 
     return (
         <Box sx={{ borderTop: '1px solid var(--line-soft)', bgcolor: 'var(--bg-2)' }}>
@@ -176,14 +181,14 @@ export default function OpeningPanel({
 
             {/* Candidate moves with per-move eval bars */}
             <Box sx={{ px: 1, pb: 1, display: 'flex', flexDirection: 'column', gap: 0.25 }}>
-                {moves.length === 0 ? (
+                {displayMoves.length === 0 ? (
                     <Typography
                         sx={{ fontSize: 12, color: 'var(--muted)', fontStyle: 'italic', px: 0.5, py: 0.75 }}
                     >
                         {data ? 'No moves' : 'Exploring moves…'}
                     </Typography>
                 ) : (
-                    moves.map((m) => (
+                    displayMoves.map((m) => (
                         <MoveRow
                             key={m.uci}
                             move={m}

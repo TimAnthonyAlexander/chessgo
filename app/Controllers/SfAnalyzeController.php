@@ -4,7 +4,9 @@ namespace App\Controllers;
 
 use BaseApi\Controllers\Controller;
 use BaseApi\Http\JsonResponse;
+use App\Models\User;
 use App\Services\GomachineClient;
+use App\Services\AnticheatService;
 
 /**
  * Full-strength Stockfish best move for a position — powers the Analysis board's
@@ -29,8 +31,10 @@ class SfAnalyzeController extends Controller
 
     public int $movetime = 0;
 
-    public function __construct(private readonly GomachineClient $engine)
-    {
+    public function __construct(
+        private readonly GomachineClient $engine,
+        private readonly AnticheatService $anticheat,
+    ) {
     }
 
     public function post(): JsonResponse
@@ -38,6 +42,10 @@ class SfAnalyzeController extends Controller
         $this->validate([
             'fen' => 'required|string',
         ]);
+
+        // Anti-cheat: flag a logged-in user requesting a full-strength Stockfish
+        // move while they have a live game in progress (advisory, admin-reviewed).
+        $this->anticheat->checkAnalysisDuringGame($this->currentUser(), $this->fen, 'sf-analyze');
 
         $movetime = $this->movetime > 0 ? max(50, min(2000, $this->movetime)) : 300;
         // elo 0 → full strength (UCI_LimitStrength stays off in the engine handler).
@@ -48,5 +56,29 @@ class SfAnalyzeController extends Controller
             'san' => $res['san'] ?? null,
             'eval' => $res['eval'] ?? null,
         ]);
+    }
+
+    /**
+     * Resolve the optional logged-in user (session cookie for the SPA, or token
+     * auth). Mirrors WsTicketController. Returns null when anonymous.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function currentUser(): ?array
+    {
+        $user = $this->request->user ?? null;
+        if (is_array($user) && !empty($user['id'])) {
+            return $user;
+        }
+
+        $uid = $_SESSION['user_id'] ?? null;
+        if ($uid) {
+            $found = User::find((string) $uid);
+            if ($found instanceof User) {
+                return $found->jsonSerialize();
+            }
+        }
+
+        return null;
     }
 }

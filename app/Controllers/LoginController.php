@@ -35,6 +35,12 @@ class LoginController extends Controller
             return JsonResponse::error('Invalid credentials', 401);
         }
 
+        // A deactivated account (e.g. an admin ban from the anti-cheat review) is
+        // refused login. Kept vague on purpose — no "you are banned" tell.
+        if (!$user->active) {
+            return JsonResponse::error('Invalid credentials', 401);
+        }
+
         // Persist the login by writing $_SESSION directly. Assigning to
         // $this->request->session only mutates a by-value copy on the Request
         // object — PHP persists $_SESSION (not the copy) on shutdown, so writing

@@ -14,6 +14,7 @@ use App\Services\GameAnalysisService;
 use App\Services\WsTicketService;
 use App\Services\HubClient;
 use App\Services\Glicko2Service;
+use App\Services\AnticheatService;
 use BaseApi\Auth\UserProvider;
 
 /**
@@ -38,8 +39,11 @@ class AppServiceProvider extends ServiceProvider
         $container->singleton(GameAnalysisService::class);
         $container->singleton(WsTicketService::class);
 
-        // Realtime hub stats client (homepage lobby counts)
+        // Realtime hub stats client (homepage lobby counts + anti-cheat probe)
         $container->singleton(HubClient::class);
+
+        // Anti-cheat harness: raises advisory flags (never auto-bans) — SPEC §Anti-cheat
+        $container->singleton(AnticheatService::class);
 
         // Glicko-2 ratings (category mapping + rating math)
         $container->singleton(Glicko2Service::class);

@@ -4,7 +4,9 @@ namespace App\Controllers;
 
 use BaseApi\Controllers\Controller;
 use BaseApi\Http\JsonResponse;
+use App\Models\User;
 use App\Services\GomachineClient;
+use App\Services\AnticheatService;
 
 /**
  * Full-strength position analysis for the eval bar (SPEC §6). Stateless: takes a
@@ -36,8 +38,10 @@ class AnalyzeController extends Controller
 
     public int $depth = 0;
 
-    public function __construct(private readonly GomachineClient $engine)
-    {
+    public function __construct(
+        private readonly GomachineClient $engine,
+        private readonly AnticheatService $anticheat,
+    ) {
     }
 
     public function post(): JsonResponse
@@ -45,6 +49,11 @@ class AnalyzeController extends Controller
         $this->validate([
             'fen' => 'required|string',
         ]);
+
+        // Anti-cheat: a logged-in user analyzing a position while they have a live
+        // game in progress is a strong engine-use tell. Advisory only — this
+        // raises a flag for admin review, never blocks the analysis or bans.
+        $this->anticheat->checkAnalysisDuringGame($this->currentUser(), $this->fen, 'analyze');
 
         $depth = $this->depth > 0 ? max(1, min(40, $this->depth)) : 0;
         // With a depth target, movetime is a safety ceiling (deep request can't
@@ -65,5 +74,30 @@ class AnalyzeController extends Controller
             'pv' => $res['pv'] ?? null,
             'depth' => $res['depth'] ?? null,
         ]);
+    }
+
+    /**
+     * Resolve the optional logged-in user (session cookie for the SPA, or token
+     * auth). Mirrors WsTicketController: $request->user is set only on the token
+     * path, so fall back to the session user_id. Returns null when anonymous.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function currentUser(): ?array
+    {
+        $user = $this->request->user ?? null;
+        if (is_array($user) && !empty($user['id'])) {
+            return $user;
+        }
+
+        $uid = $_SESSION['user_id'] ?? null;
+        if ($uid) {
+            $found = User::find((string) $uid);
+            if ($found instanceof User) {
+                return $found->jsonSerialize();
+            }
+        }
+
+        return null;
     }
 }

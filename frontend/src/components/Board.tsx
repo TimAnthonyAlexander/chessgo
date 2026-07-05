@@ -123,8 +123,8 @@ function brushFor(e: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }):
     const ctrl = e.ctrlKey || e.metaKey
     if (e.shiftKey && ctrl) return 'yellow'
     if (e.shiftKey) return 'red'
-    if (ctrl) return 'blue'
-    return 'green'
+    if (ctrl) return 'green'
+    return 'blue'
 }
 
 interface DragState {

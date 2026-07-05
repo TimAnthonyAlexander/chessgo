@@ -657,6 +657,78 @@
             "table": "user",
             "operation": "add_column",
             "warning": null
+        },
+        {
+            "id": "mig_af507acc3698",
+            "sql": "CREATE TABLE `flagged_user` (\n  `user_id` VARCHAR(36) NOT NULL DEFAULT '',\n  `user_name` VARCHAR(255) NOT NULL DEFAULT '',\n  `total_flags` INT NOT NULL DEFAULT 0,\n  `counts` TEXT,\n  `status` VARCHAR(255) NOT NULL DEFAULT 'open',\n  `last_category` VARCHAR(255) NOT NULL DEFAULT '',\n  `top_severity` VARCHAR(255) NOT NULL DEFAULT 'low',\n  `first_flagged_at` TEXT,\n  `last_flagged_at` TEXT,\n  `id` VARCHAR(36) NOT NULL DEFAULT '',\n  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            "destructive": false,
+            "generated_at": "2026-07-05T15:10:43+00:00",
+            "table": "flagged_user",
+            "operation": "create_table",
+            "warning": null
+        },
+        {
+            "id": "mig_3eb1917a0d34",
+            "sql": "CREATE TABLE `user_flag` (\n  `user_id` VARCHAR(36) NOT NULL DEFAULT '',\n  `category` VARCHAR(255) NOT NULL DEFAULT '',\n  `severity` VARCHAR(255) NOT NULL DEFAULT 'medium',\n  `detail` VARCHAR(255) NOT NULL DEFAULT '',\n  `meta` TEXT,\n  `reviewed` TINYINT(1) NOT NULL DEFAULT 0,\n  `id` VARCHAR(36) NOT NULL DEFAULT '',\n  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            "destructive": false,
+            "generated_at": "2026-07-05T15:10:43+00:00",
+            "table": "user_flag",
+            "operation": "create_table",
+            "warning": null
+        },
+        {
+            "id": "mig_d6345d0b5d76",
+            "sql": "ALTER TABLE `flagged_user` ADD UNIQUE KEY `uniq_flagged_user_user_id` (`user_id`)",
+            "destructive": false,
+            "generated_at": "2026-07-05T15:10:43+00:00",
+            "table": "flagged_user",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_75bcc2b36048",
+            "sql": "ALTER TABLE `flagged_user` ADD INDEX `idx_flagged_user_status` (`status`)",
+            "destructive": false,
+            "generated_at": "2026-07-05T15:10:43+00:00",
+            "table": "flagged_user",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_e0106221afca",
+            "sql": "ALTER TABLE `user_flag` ADD INDEX `idx_user_flag_user_id` (`user_id`)",
+            "destructive": false,
+            "generated_at": "2026-07-05T15:10:43+00:00",
+            "table": "user_flag",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_2676a97e9d60",
+            "sql": "ALTER TABLE `user_flag` ADD INDEX `idx_user_flag_category` (`category`)",
+            "destructive": false,
+            "generated_at": "2026-07-05T15:10:43+00:00",
+            "table": "user_flag",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_e87905479453",
+            "sql": "ALTER TABLE `flagged_user` ADD CONSTRAINT `fk_flagged_user_user_id` FOREIGN KEY (`user_id`) REFERENCES `user` (`id`) ON DELETE CASCADE ON UPDATE CASCADE",
+            "destructive": false,
+            "generated_at": "2026-07-05T15:10:43+00:00",
+            "table": "flagged_user",
+            "operation": "add_fk",
+            "warning": null
+        },
+        {
+            "id": "mig_f86154af4eb3",
+            "sql": "ALTER TABLE `user_flag` ADD CONSTRAINT `fk_user_flag_user_id` FOREIGN KEY (`user_id`) REFERENCES `user` (`id`) ON DELETE CASCADE ON UPDATE CASCADE",
+            "destructive": false,
+            "generated_at": "2026-07-05T15:10:43+00:00",
+            "table": "user_flag",
+            "operation": "add_fk",
+            "warning": null
         }
     ]
 }
