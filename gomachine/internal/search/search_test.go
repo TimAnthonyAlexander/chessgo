@@ -195,10 +195,10 @@ func TestForwardPruningKeepsTactics(t *testing.T) {
 // maximum malus converges to ≈−maxHistory. A bounded table is the whole point of
 // gravity (the legacy += depth² scheme had no ceiling).
 func TestHistoryGravityBounds(t *testing.T) {
-	if got := statBonus(1000); got != histBonusMax {
+	s := New(1)
+	if got := s.statBonus(1000); got != histBonusMax {
 		t.Errorf("statBonus(1000) = %d, want cap %d", got, histBonusMax)
 	}
-	s := New(1)
 	pc, sq := chess.WhiteKnight, chess.Square(20)
 	for i := 0; i < 10000; i++ {
 		s.updateHistory(pc, sq, histBonusMax)

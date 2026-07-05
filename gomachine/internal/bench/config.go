@@ -90,6 +90,42 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("doubleextmargin: %q is not an int", val)
 			}
 			base.DoubleExtMargin = n
+		case "lmrbase", "lmrbasex10k":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("lmrbase: %q is not an int", val)
+			}
+			base.LMRBaseX10k = n
+		case "lmrdiv", "lmrdivx10k":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("lmrdiv: %q is not an int", val)
+			}
+			base.LMRDivX10k = n
+		case "lmrhistdiv", "lmrhd":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("lmrhistdiv: %q is not an int", val)
+			}
+			base.LMRHistDiv = n
+		case "rfpmargin", "rfpm":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("rfpmargin: %q is not an int", val)
+			}
+			base.RFPMargin = n
+		case "histbonusscale", "histscale":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("histbonusscale: %q is not an int", val)
+			}
+			base.HistBonusScale = n
+		case "histbonusmax", "histmax":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("histbonusmax: %q is not an int", val)
+			}
+			base.HistBonusMax = n
 		case "lmr":
 			b, err := parseBool(val)
 			if err != nil {
@@ -640,6 +676,24 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.LMR != patch.LMR {
 		diffs = append(diffs, fmt.Sprintf("lmr: %s→%s", onoff(base.LMR), onoff(patch.LMR)))
+	}
+	if base.LMRBaseX10k != patch.LMRBaseX10k {
+		diffs = append(diffs, fmt.Sprintf("lmrbase: %d→%d", base.LMRBaseX10k, patch.LMRBaseX10k))
+	}
+	if base.LMRDivX10k != patch.LMRDivX10k {
+		diffs = append(diffs, fmt.Sprintf("lmrdiv: %d→%d", base.LMRDivX10k, patch.LMRDivX10k))
+	}
+	if base.LMRHistDiv != patch.LMRHistDiv {
+		diffs = append(diffs, fmt.Sprintf("lmrhistdiv: %d→%d", base.LMRHistDiv, patch.LMRHistDiv))
+	}
+	if base.RFPMargin != patch.RFPMargin {
+		diffs = append(diffs, fmt.Sprintf("rfpmargin: %d→%d", base.RFPMargin, patch.RFPMargin))
+	}
+	if base.HistBonusScale != patch.HistBonusScale {
+		diffs = append(diffs, fmt.Sprintf("histbonusscale: %d→%d", base.HistBonusScale, patch.HistBonusScale))
+	}
+	if base.HistBonusMax != patch.HistBonusMax {
+		diffs = append(diffs, fmt.Sprintf("histbonusmax: %d→%d", base.HistBonusMax, patch.HistBonusMax))
 	}
 	if base.CheckExtension != patch.CheckExtension {
 		diffs = append(diffs, fmt.Sprintf("checkext: %s→%s", onoff(base.CheckExtension), onoff(patch.CheckExtension)))
