@@ -1041,7 +1041,15 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 	// PV-only: the all-nodes variant SPRT'd −33.7 Elo (over-broad). Standard IIR
 	// fires on PV (and expected-cut) nodes; we have no cutnode flag, so PV-only
 	// (beta-alpha > 1, same predicate as isPV computed below).
-	if s.params.IIR && beta-alpha > 1 && depth >= iirMinDepth && ttMove == chess.NullMove &&
+	iirPV := beta-alpha > 1
+	iirTrig := ttMove == chess.NullMove
+	if s.params.IIRCutnode {
+		// Broaden IIR to cut-nodes and to shallow TT hits (Stormphrax search.cpp:769):
+		// fire at PV OR cutnode, when the TT move is missing OR too shallow to trust.
+		iirPV = iirPV || cutnode
+		iirTrig = ttMove == chess.NullMove || (ttHit && ttDepth+3 < depth)
+	}
+	if s.params.IIR && iirPV && depth >= iirMinDepth && iirTrig &&
 		excludedMove == chess.NullMove {
 		depth--
 	}
@@ -1134,9 +1142,15 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 	if s.params.Improving {
 		rfpDepth = depth - impInt
 	}
-	if s.params.RFP && !inCheck && !isPV && ply > 0 && depth <= rfpMaxDepth &&
-		absInt(beta) < mateThreshold && staticEval-rfpMargin*rfpDepth >= beta {
-		return staticEval - rfpMargin*rfpDepth
+	rfpCap := rfpMaxDepth
+	rfpM := rfpMargin * rfpDepth
+	if s.params.RFPQuad {
+		rfpCap = 12
+		rfpM = 85*depth + 7*depth*depth - 75*impInt // Stormphrax quadratic margin
+	}
+	if s.params.RFP && !inCheck && !isPV && ply > 0 && depth <= rfpCap &&
+		absInt(beta) < mateThreshold && staticEval-rfpM >= beta {
+		return staticEval - rfpM
 	}
 
 	// Null-move pruning.
@@ -1338,13 +1352,27 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 		quiet := !capture && m.Type() != chess.Promotion
 		mover := pos.PieceOn(m.From()) // captured before DoMove empties m.From()
 
+		// History-adjusted pruning margins (Stormphrax): a good-history quiet survives
+		// LMP longer and clears futility easier; a bad-history one is pruned sooner.
+		histVal := 0
+		if quiet && (s.params.LMPHist || s.params.FutHist) {
+			histVal = s.history[mover][m.To()]
+			if s.params.ContHist && s.cont != nil {
+				histVal += s.contScore(ply, mover, m.To())
+			}
+		}
+
 		// Late move pruning: at a non-PV node near the leaves, once enough quiet
 		// moves have been searched, skip the remaining late quiets (move ordering
 		// puts them last, so they are almost never the best move). Never when in
 		// check or when escaping a mate.
+		lmpLim := lmpLimit
+		if s.params.LMPHist {
+			lmpLim += histVal / 4096 // ±~2 moves of slack from history
+		}
 		if s.params.LMP && quiet && !isPV && !inCheck && searched > 0 &&
 			depth <= lmpMaxDepth && bestScore > -mateThreshold &&
-			searched >= lmpLimit {
+			searched >= lmpLim {
 			continue
 		}
 
@@ -1352,9 +1380,13 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 		// static eval plus a depth-scaled margin still can't reach alpha — it almost
 		// surely won't raise it. The fail-low counterpart to RFP. Quiet only (captures
 		// /promotions excluded), never the first move, never when getting mated.
+		futMargin := s.params.FutilityBase + s.params.FutilitySlope*depth
+		if s.params.FutHist {
+			futMargin += histVal / 128 // ±~64cp from history
+		}
 		if s.params.Futility && quiet && !isPV && !inCheck && searched > 0 &&
 			depth <= futilityMaxDepth && bestScore > -mateThreshold &&
-			staticEval+s.params.FutilityBase+s.params.FutilitySlope*depth <= alpha {
+			staticEval+futMargin <= alpha {
 			continue
 		}
 
@@ -1500,6 +1532,9 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 					if m == ttMove || m == s.killers[ply][0] || m == s.killers[ply][1] {
 						r-- // don't over-reduce ordering-trusted moves
 					}
+					if s.params.LMRCutnode && childCutnode {
+						r += s.params.LMRCutnodeRed // cut-node: reduce late moves harder
+					}
 					if maxR := newDepth - 1; maxR >= 1 {
 						if r < 1 {
 							r = 1
@@ -1524,6 +1559,13 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 						hist += s.contScore2(ply, mover, m.To())
 					}
 					r -= hist / lmrHistoryDiv
+					// Cut-node: a node expected to fail high orders its best move first,
+					// so a late move here almost never raises alpha — reduce it harder
+					// (Stormphrax search.cpp:1173, r += cutnode). childCutnode is the
+					// current node's type.
+					if s.params.LMRCutnode && childCutnode {
+						r += s.params.LMRCutnodeRed
+					}
 					if r < 1 {
 						r = 1
 					}
@@ -1548,9 +1590,22 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 			}
 			sc = -s.negamax(pos, newDepth-reduction, ply+1, -alpha-1, -alpha, scoutCut)
 			if sc > alpha && reduction > 0 {
-				// LMR re-search at full depth (zero window): opposite node type
-				// (!childCutnode, Stormphrax search.cpp:1205).
-				sc = -s.negamax(pos, newDepth, ply+1, -alpha-1, -alpha, !childCutnode)
+				// LMR re-search (zero window), opposite node type (Stormphrax
+				// search.cpp:1205). doDeeper/doShallower: adapt the re-search depth
+				// to how far the reduced scout beat alpha — a big overshoot searches
+				// deeper, a bare pass shallower (Stormphrax search.cpp:1190-1193).
+				rd := newDepth
+				if s.params.LMRDoDeeper {
+					if sc > bestScore+44+4*newDepth {
+						rd = newDepth + 1
+					} else if sc < bestScore+newDepth {
+						rd = newDepth - 1
+						if rd < 1 {
+							rd = 1
+						}
+					}
+				}
+				sc = -s.negamax(pos, rd, ply+1, -alpha-1, -alpha, !childCutnode)
 			}
 			if sc > alpha && sc < beta {
 				// PV full-window re-search: a PV child, never a cut node (false,
@@ -1695,6 +1750,7 @@ func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 	var scores [256]int
 	s.scoreMoves(pos, &ml, chess.NullMove, ply, &scores)
 
+	qSearched := 0
 	for i := 0; i < ml.Len(); i++ {
 		selectMove(&ml, &scores, i)
 		m := ml.Get(i)
@@ -1752,6 +1808,13 @@ func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 		}
 		if sc > alpha {
 			alpha = sc
+		}
+		// Qsearch move-count cap (Stormphrax search.cpp:1579): out of check, the good
+		// captures are searched first, so after a few the rest almost never raise
+		// alpha — stop to bound the qnode explosion. DEFAULT OFF (QSMaxMoves=0).
+		qSearched++
+		if s.params.QSMaxMoves > 0 && !inCheck && qSearched >= s.params.QSMaxMoves {
+			break
 		}
 	}
 	return alpha

@@ -310,3 +310,21 @@ var (
 	// the int8-path pairwise FT activation over the two half-pairs (writes len/2).
 	pairwiseU8 = pairwiseU8Scalar
 )
+
+// screluDotDefault / screluDotLegacy let SetScreluLegacy A/B the fast (int32-mul)
+// SIMD dot against the old (int64-mul) one. An arch init that installs a fast SIMD
+// dot sets both; on scalar/other arches they stay nil and SetScreluLegacy no-ops.
+var (
+	screluDotDefault func(acc, w []int16, qa int32) int64
+	screluDotLegacy  func(acc, w []int16, qa int32) int64
+)
+
+// SetScreluLegacy repoints screluDot to the legacy int64-mul SIMD dot (true) or the
+// fast int32-mul default (false). For NPS A/B only; both are bit-identical.
+func SetScreluLegacy(on bool) {
+	if on && screluDotLegacy != nil {
+		screluDot = screluDotLegacy
+	} else if screluDotDefault != nil {
+		screluDot = screluDotDefault
+	}
+}

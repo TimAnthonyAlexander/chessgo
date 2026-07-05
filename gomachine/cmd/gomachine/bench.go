@@ -283,6 +283,8 @@ func cmdBench(args []string) {
 		cmdBenchBlunders(args[1:])
 	case "calibrate", "levels":
 		cmdBenchCalibrate(args[1:])
+	case "nps":
+		cmdBenchNPS(args[1:])
 	case "-h", "--help", "help":
 		benchUsage()
 	default:

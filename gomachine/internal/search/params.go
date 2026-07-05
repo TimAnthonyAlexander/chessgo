@@ -25,6 +25,14 @@ type Params struct {
 	HistMalus        bool // history gravity update + bonus cap + malus to non-cutoff quiets
 	Improving        bool // "improving" heuristic scales RFP margin + LMP move count
 	LMRFormula       bool // log(d)·log(m) LMR table + PV/improving/history adjustments
+	LMRCutnode       bool // reduce late moves MORE at expected cut-nodes (Stormphrax r+=cutnode). Node-efficiency lever: at a cutnode late moves rarely raise alpha, so reduce them harder. DEFAULT OFF — under SPRT.
+	LMRCutnodeRed    int  // plies of extra LMR reduction at a cutnode (Stormphrax ≈+1.9; default 1).
+	RFPQuad          bool // reverse-futility margin = 85·d + 7·d² − 75·improving, applied to d≤12 (Stormphrax) instead of our linear 75·d @ d≤8. DEFAULT OFF — under SPRT.
+	LMRDoDeeper      bool // after an LMR reduced scout beats alpha, adapt the re-search depth ±1 to how far it beat bestScore (Stormphrax doDeeper/doShallower). The safety net that makes aggressive reduction pay. DEFAULT OFF — under SPRT.
+	QSMaxMoves       int  // qsearch move-count cap: out of check, stop after this many searched moves (Stormphrax=2). 0=off. DEFAULT OFF — under SPRT.
+	IIRCutnode       bool // broaden IIR: reduce depth by 1 at d≥4 PV-or-cutnode when TT move is missing OR shallow (ttDepth+3<depth), instead of PV+no-TT-move only. DEFAULT OFF — under SPRT.
+	LMPHist          bool // history-adjusted LMP: raise the move-count limit by history·k so good-history quiets survive. DEFAULT OFF — under SPRT.
+	FutHist          bool // history term in frontier-futility margin (skip fewer good-history quiets). DEFAULT OFF — under SPRT.
 	Mobility         bool // evaluation: piece mobility term
 	Pawns            bool // evaluation: pawn structure (isolated/doubled/passed)
 	KingSafety       bool // evaluation: king pawn-shield term
@@ -113,7 +121,7 @@ func DefaultParams() Params {
 	return Params{
 		UseTT:          true,
 		NullMove:       true,
-		NullMoveR:      2,
+		NullMoveR:      4, // SPSA-tuned 2→4 (under-reduced before); +32 fixed / +10.7 movetime, part of the +19.7 stack
 		LMR:            true,
 		CheckExtension: true,
 		SEE:            true,
@@ -125,6 +133,10 @@ func DefaultParams() Params {
 		HistMalus:      true,
 		Improving:      true,
 		LMRFormula:     true,
+		LMRCutnode:     true, // SHIPPED as part of the +19.7 movetime stack (coordinated: needs ContHist + LMRDoDeeper; alone it's −7)
+		LMRCutnodeRed:  1,    // extra plies of reduction at a cutnode (cutred=2 measured worse)
+		LMRDoDeeper:    true, // SHIPPED — the adaptive re-search safety net that makes cutnode-LMR pay
+		QSMaxMoves:     0,    // qsearch move cap off by default (Stormphrax uses 2)
 		// Texel-tuned eval (tuned PSQT + knowledge terms), SPRT-accepted as a set
 		// vs the bare PeSTO base: +128 ± 35 Elo @ 40k nodes, +101 ± 29 Elo @
 		// 100ms/move (2026-06-19, internal/eval/tuned_tables.go; tuner in
@@ -214,9 +226,10 @@ func DefaultParams() Params {
 		CorrHistCont: false,
 		// Continuation history (1-ply countermove + 2-ply), blended into quiet move
 		// ordering and the LMR reduction term alongside butterfly history. DEFAULT
-		// OFF — under SPRT (best tested bundled with aggressive LMR, where better
-		// quiet ordering pays off through reductions).
-		ContHist: false,
+		// SHIPPED ON as part of the +19.7 movetime stack. ALONE it is −54 (its per-node
+		// cost isn't worth it), but bundled with cutnode-LMR + doDeeper the better quiet
+		// ordering pays off through the reductions — the coordinated-set win.
+		ContHist: true,
 		// Stormphrax-style continuation history (Params.ContHist2), a stronger VARIANT
 		// of ContHist kept fully independent of it: keys off FOUR ancestor plies
 		// (1/2/4/6 back, vs 1+2) and updates with a COUPLED "updateWithBase" gravity

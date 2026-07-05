@@ -36,6 +36,8 @@ func init() {
 	addCol = addColSIMD
 	subCol = subColSIMD
 	screluDot = screluDotSIMD
+	screluDotDefault = screluDotSIMD
+	screluDotLegacy = screluDotSIMDInt64
 	dotF32 = dotF32SIMD
 	gemvF32 = gemvF32SIMD
 	screluActivateF = screluActivateFSIMD
@@ -339,15 +341,14 @@ func screluDotSIMD(acc, w []int16, qa int32) int64 {
 		// widen w int16→int32 (sign-extend).
 		w32 := wv.ExtendToInt32() // Int32x16
 
-		// int64(c*c) · int64(w): sign-extend both int32 halves to int64 and do a
-		// true 64-bit multiply (VPMULLQ). cc≥0 ⇒ sign-extend == value; w is the
-		// already-sign-extended weight ⇒ exact. |cc·w| ≤ 65025·32767 < 2^31·...
-		// well within int64. Equals the scalar int64(c*c)·int64(w) exactly.
-		ccLo := cc.GetLo().ExtendToInt64() // Int64x8
-		ccHi := cc.GetHi().ExtendToInt64() // Int64x8
-		wLo := w32.GetLo().ExtendToInt64() // Int64x8
-		wHi := w32.GetHi().ExtendToInt64() // Int64x8
-		acc64 = acc64.Add(ccLo.Mul(wLo)).Add(ccHi.Mul(wHi))
+		// c*c (int32, ∈[0,65025]) · w (int32, |w|≤32767): the product satisfies
+		// |cc·w| ≤ 65025·32767 = 2,130,574,575 < 2^31−1 = 2,147,483,647, so it fits
+		// int32 EXACTLY — no 64-bit multiply needed. Multiply in int32 (VPMULLD,
+		// 16-wide, one op) and sign-extend the PRODUCT to int64 for the running sum
+		// (the ~512-term sum still needs int64). Bit-exact vs the old int64 path, but
+		// replaces two 8-wide VPMULLQ with one 16-wide VPMULLD.
+		prod := cc.Mul(w32) // Int32x16, exact low-32 == the true signed product
+		acc64 = acc64.Add(prod.GetLo().ExtendToInt64()).Add(prod.GetHi().ExtendToInt64())
 	}
 
 	// horizontal-sum the 8 int64 lanes (int64 add is exact/associative).
@@ -357,6 +358,44 @@ func screluDotSIMD(acc, w []int16, qa int32) int64 {
 	out := loB.GetElem(0) + loB.GetElem(1) + hiB.GetElem(0) + hiB.GetElem(1)
 
 	// scalar tail — identical arithmetic to screluDotScalar.
+	for ; i < n; i++ {
+		c := int32(acc[i])
+		if c < 0 {
+			c = 0
+		} else if c > qa {
+			c = qa
+		}
+		out += int64(c*c) * int64(w[i])
+	}
+	return out
+}
+
+// screluDotSIMDInt64 is the legacy int64-multiply variant, kept for the NPS A/B
+// (SetScreluLegacy). Bit-identical to screluDotSIMD; slower (two 8-wide VPMULLQ per
+// iter vs one 16-wide VPMULLD).
+func screluDotSIMDInt64(acc, w []int16, qa int32) int64 {
+	n := len(acc)
+	zero16 := archsimd.BroadcastInt16x16(0)
+	qa16 := archsimd.BroadcastInt16x16(int16(qa))
+	acc64 := archsimd.BroadcastInt64x8(0)
+	i := 0
+	for ; i+16 <= n; i += 16 {
+		a := archsimd.LoadInt16x16Slice(acc[i : i+16])
+		wv := archsimd.LoadInt16x16Slice(w[i : i+16])
+		c := a.Max(zero16).Min(qa16)
+		c32 := c.ExtendToInt32()
+		cc := c32.Mul(c32)
+		w32 := wv.ExtendToInt32()
+		ccLo := cc.GetLo().ExtendToInt64()
+		ccHi := cc.GetHi().ExtendToInt64()
+		wLo := w32.GetLo().ExtendToInt64()
+		wHi := w32.GetHi().ExtendToInt64()
+		acc64 = acc64.Add(ccLo.Mul(wLo)).Add(ccHi.Mul(wHi))
+	}
+	s4 := acc64.GetLo().Add(acc64.GetHi())
+	loB := s4.GetLo()
+	hiB := s4.GetHi()
+	out := loB.GetElem(0) + loB.GetElem(1) + hiB.GetElem(0) + hiB.GetElem(1)
 	for ; i < n; i++ {
 		c := int32(acc[i])
 		if c < 0 {

@@ -46,6 +46,10 @@ type EnrichedStack struct {
 	dirty                []bool
 	pSubW, pAddW         [][]uint16
 	pSubB, pAddB         [][]uint16
+
+	// In-place (copy-free) accumulator: a single pair of halves that Push mutates by
+	// the delta and Pop restores via the inverse delta. Used when net.inPlaceEnabled().
+	accW, accB []int16
 }
 
 type enrichedSlot struct {
@@ -74,6 +78,7 @@ func (n *EnrichedNet) NewStack(maxDepth int) *EnrichedStack {
 		pendMove: make([]chess.Move, slots), dirty: make([]bool, slots),
 		pSubW: makeSliceBufs(slots, dcap), pAddW: makeSliceBufs(slots, dcap),
 		pSubB: makeSliceBufs(slots, dcap), pAddB: makeSliceBufs(slots, dcap),
+		accW: make([]int16, h), accB: make([]int16, h),
 	}
 }
 
@@ -93,6 +98,10 @@ func (st *EnrichedStack) Net() *EnrichedNet { return st.net }
 // Reset rebuilds slot 0 from scratch for pos and points the stack at it.
 func (st *EnrichedStack) Reset(pos *chess.Position) {
 	st.sp = 0
+	if st.net.inPlaceEnabled() {
+		st.net.buildAcc(st.accW, st.accB, pos)
+		return
+	}
 	s := &st.data[0]
 	st.net.buildAcc(s.w, s.b, pos)
 	s.fw, s.fb = appendEnrichedFeaturesBoth(s.fw[:0], s.fb[:0], pos)
@@ -193,6 +202,21 @@ func (st *EnrichedStack) applyDiff(acc []int16, parent, child []uint16) {
 // immediately BEFORE pos.DoMove (m is read from the PRE-move pos); the move is
 // replayed on a cheap value-type copy to get the child's features.
 func (st *EnrichedStack) Push(pos *chess.Position, m chess.Move) {
+	if st.net.inPlaceEnabled() {
+		// Copy-free: compute the delta, stash it for the inverse-undo on Pop, and
+		// apply it forward to the single accumulator (subtract removed, add new).
+		subW, addW, subB, addB := st.computeDelta(pos, m)
+		k := st.sp + 1
+		st.pSubW[k] = append(st.pSubW[k][:0], subW...)
+		st.pAddW[k] = append(st.pAddW[k][:0], addW...)
+		st.pSubB[k] = append(st.pSubB[k][:0], subB...)
+		st.pAddB[k] = append(st.pAddB[k][:0], addB...)
+		st.pendMove[k] = m
+		st.applyDiff(st.accW, subW, addW)
+		st.applyDiff(st.accB, subB, addB)
+		st.sp++
+		return
+	}
 	if st.net.lazyEnabled() {
 		// Defer: enumerate the changed-edge delta now (cheap, uses the live board),
 		// stash it per-slot, and mark dirty. The 2 KB parent-copy + column-apply is
@@ -230,6 +254,11 @@ func (st *EnrichedStack) Push(pos *chess.Position, m chess.Move) {
 // PushNull duplicates the top slot — a null move changes no piece placement or
 // occupancy, so neither the accumulator nor the feature sets change.
 func (st *EnrichedStack) PushNull() {
+	if st.net.inPlaceEnabled() {
+		st.pendMove[st.sp+1] = chess.NullMove // null: acc unchanged, nothing to undo
+		st.sp++
+		return
+	}
 	if st.net.lazyEnabled() {
 		// Defer: a null child's accumulator equals its parent's. ensure() resolves
 		// it (copy from parent) on demand. fw/fb are unused on the move-aware path.
@@ -247,8 +276,21 @@ func (st *EnrichedStack) PushNull() {
 	st.sp++
 }
 
-// Pop discards the top slot (call after UndoMove/UndoNullMove).
-func (st *EnrichedStack) Pop() { st.sp-- }
+// Pop discards the top slot (call after UndoMove/UndoNullMove). In the in-place
+// path it first restores the accumulator by applying the inverse of the top ply's
+// delta (applyDiff with add/sub swapped: re-add removed edges, re-remove new ones).
+func (st *EnrichedStack) Pop() {
+	if st.net.inPlaceEnabled() {
+		k := st.sp
+		if st.pendMove[k] != chess.NullMove {
+			st.applyDiff(st.accW, st.pAddW[k], st.pSubW[k])
+			st.applyDiff(st.accB, st.pAddB[k], st.pSubB[k])
+		}
+		st.sp--
+		return
+	}
+	st.sp--
+}
 
 // Eval returns the static eval of the current (top) accumulator oriented to the
 // side to move. With NNUE_ASSERT set it first checks the incremental accumulator
@@ -258,21 +300,25 @@ func (st *EnrichedStack) Eval(pos *chess.Position) int {
 		st.ensure(st.sp) // materialize the deferred chain up to this node before reading it
 	}
 	n := st.net
-	top := &st.data[st.sp]
+	topW, topB := st.accW, st.accB
+	if !n.inPlaceEnabled() {
+		top := &st.data[st.sp]
+		topW, topB = top.w, top.b
+	}
 	if assertAccumulator {
 		fw := make([]int16, n.H)
 		fb := make([]int16, n.H)
 		n.buildAcc(fw, fb, pos)
 		for j := 0; j < n.H; j++ {
-			if top.w[j] != fw[j] || top.b[j] != fb[j] {
+			if topW[j] != fw[j] || topB[j] != fb[j] {
 				panic(fmt.Sprintf("enriched accumulator drift at sp=%d j=%d: w(inc=%d fresh=%d) b(inc=%d fresh=%d) fen=%q",
-					st.sp, j, top.w[j], fw[j], top.b[j], fb[j], pos.FEN()))
+					st.sp, j, topW[j], fw[j], topB[j], fb[j], pos.FEN()))
 			}
 		}
 	}
-	stm, opp := top.w, top.b
+	stm, opp := topW, topB
 	if pos.SideToMove() == chess.Black {
-		stm, opp = top.b, top.w
+		stm, opp = topB, topW
 	}
 	return n.evalFromHalves(stm, opp, materialBucket(pos, n.NB), &st.sc)
 }

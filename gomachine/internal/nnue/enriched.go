@@ -90,6 +90,14 @@ type EnrichedNet struct {
 	// Only consulted when moveAware is on.
 	changedEdges bool
 
+	// inPlace replaces the per-ply parent→child accumulator COPY with a single
+	// accumulator that Push mutates and Pop restores via the inverse delta. Bit-exact.
+	// MEASURED A LOSS (−10% scalar): it trades a cheap ~100 ns copy on Push for a full
+	// ~375 ns inverse delta-apply on Pop (previously free) — doubling the apply work to
+	// save the copy. The copy was never the cost; the column-adds are. Default-off, dead
+	// scaffolding. Only valid on the moveAware+changedEdges path.
+	inPlace bool
+
 	// directApply skips applyDiff's multiset-diff (the scattered 20 KB counts-array
 	// bookkeeping): it subtracts every removed edge and adds every new edge directly.
 	// Bit-exact (int16 column adds commute), a win when the changed-edge lists are
@@ -174,6 +182,15 @@ func NewEnrichedNet(h, d2, d3, nb int) *EnrichedNet {
 
 // SetMoveAware toggles the O(delta) move-aware incremental push (enriched_delta.go).
 func (n *EnrichedNet) SetMoveAware(on bool) { n.moveAware = on }
+
+// SetInPlace toggles the single-accumulator (copy-free) push path.
+func (n *EnrichedNet) SetInPlace(on bool) { n.inPlace = on }
+
+// InPlace reports whether the copy-free in-place accumulator path is enabled.
+func (n *EnrichedNet) InPlace() bool { return n.inPlace }
+
+// inPlaceEnabled reports whether the in-place path is both requested and valid.
+func (n *EnrichedNet) inPlaceEnabled() bool { return n.inPlace && n.moveAware && n.changedEdges }
 
 // SetDirectApply toggles the counts-array-free direct apply path in applyDiff.
 func (n *EnrichedNet) SetDirectApply(on bool) { n.directApply = on }

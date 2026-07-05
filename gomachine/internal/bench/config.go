@@ -467,6 +467,54 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.QCaps = b
+		case "lmrcutnode", "lmrcut":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.LMRCutnode = b
+		case "lmrcutred":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.LMRCutnodeRed = n
+		case "lmrdodeeper", "dodeeper":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.LMRDoDeeper = b
+		case "qsmaxmoves", "qsmax":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.QSMaxMoves = n
+		case "iircutnode", "iirbroad":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.IIRCutnode = b
+		case "lmphist":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.LMPHist = b
+		case "futhist":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.FutHist = b
+		case "rfpquad":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.RFPQuad = b
 		case "prefetch":
 			// PREFETCHT0 the TT slot on the child key (NPS). OFF = pre-opt baseline
 			// (no prefetch) for the movetime A/B.
@@ -694,6 +742,30 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.Prefetch != patch.Prefetch {
 		diffs = append(diffs, fmt.Sprintf("prefetch: %s→%s", onoff(base.Prefetch), onoff(patch.Prefetch)))
+	}
+	if base.LMRCutnode != patch.LMRCutnode {
+		diffs = append(diffs, fmt.Sprintf("lmrcutnode: %s→%s", onoff(base.LMRCutnode), onoff(patch.LMRCutnode)))
+	}
+	if base.LMRCutnodeRed != patch.LMRCutnodeRed {
+		diffs = append(diffs, fmt.Sprintf("lmrcutred: %d→%d", base.LMRCutnodeRed, patch.LMRCutnodeRed))
+	}
+	if base.RFPQuad != patch.RFPQuad {
+		diffs = append(diffs, fmt.Sprintf("rfpquad: %s→%s", onoff(base.RFPQuad), onoff(patch.RFPQuad)))
+	}
+	if base.LMRDoDeeper != patch.LMRDoDeeper {
+		diffs = append(diffs, fmt.Sprintf("lmrdodeeper: %s→%s", onoff(base.LMRDoDeeper), onoff(patch.LMRDoDeeper)))
+	}
+	if base.QSMaxMoves != patch.QSMaxMoves {
+		diffs = append(diffs, fmt.Sprintf("qsmaxmoves: %d→%d", base.QSMaxMoves, patch.QSMaxMoves))
+	}
+	if base.IIRCutnode != patch.IIRCutnode {
+		diffs = append(diffs, fmt.Sprintf("iircutnode: %s→%s", onoff(base.IIRCutnode), onoff(patch.IIRCutnode)))
+	}
+	if base.LMPHist != patch.LMPHist {
+		diffs = append(diffs, fmt.Sprintf("lmphist: %s→%s", onoff(base.LMPHist), onoff(patch.LMPHist)))
+	}
+	if base.FutHist != patch.FutHist {
+		diffs = append(diffs, fmt.Sprintf("futhist: %s→%s", onoff(base.FutHist), onoff(patch.FutHist)))
 	}
 	if base.Aggr != patch.Aggr {
 		diffs = append(diffs, fmt.Sprintf("aggr: %d→%d", base.Aggr, patch.Aggr))

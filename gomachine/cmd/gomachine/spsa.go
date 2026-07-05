@@ -46,6 +46,8 @@ func cmdBenchSPSA(args []string) {
 	checkpoint := fs.String("checkpoint", "", "θ checkpoint log path (empty → spsa_<timestamp>.log in cwd)")
 	_ = fs.Parse(args)
 
+	loadEnrichedDefault() // tune on the PROD eval (v12 lean threats net), not the v6 fallback
+
 	base, err := bench.ParseParams(search.DefaultParams(), *baseSpec)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "bad --base spec:", err)
