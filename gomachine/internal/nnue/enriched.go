@@ -161,7 +161,7 @@ func NewEnrichedNet(h, d2, d3, nb int) *EnrichedNet {
 	if nb < 1 {
 		nb = 1
 	}
-	in := InputDim + ThreatBlock
+	in := PsqSize + ThreatBlock
 	return &EnrichedNet{
 		H: h, D2: d2, D3: d3, NB: nb, InputDim: in,
 		W0:      make([]float32, in*h),
@@ -190,7 +190,10 @@ func (n *EnrichedNet) SetInPlace(on bool) { n.inPlace = on }
 func (n *EnrichedNet) InPlace() bool { return n.inPlace }
 
 // inPlaceEnabled reports whether the in-place path is both requested and valid.
-func (n *EnrichedNet) inPlaceEnabled() bool { return n.inPlace && n.moveAware && n.changedEdges }
+// HARD-DISABLED under king buckets: the in-place path stores a per-ply inverse delta
+// for Pop, which a king-move accumulator REFRESH (buildSlotFrom) can't produce. It was
+// measured-negative anyway; re-enable only with a refresh-aware inverse-undo.
+func (n *EnrichedNet) inPlaceEnabled() bool { return false }
 
 // SetDirectApply toggles the counts-array-free direct apply path in applyDiff.
 func (n *EnrichedNet) SetDirectApply(on bool) { n.directApply = on }
@@ -212,14 +215,17 @@ func (n *EnrichedNet) SetLazy(on bool) { n.lazy = on }
 func (n *EnrichedNet) Lazy() bool { return n.lazy }
 
 // lazyEnabled reports whether the deferred path is both requested and valid.
-func (n *EnrichedNet) lazyEnabled() bool { return n.lazy && n.moveAware && n.changedEdges }
+// HARD-DISABLED under king buckets: lazy stores computeDelta output per slot and
+// replays it in ensure(), but a king move needs a from-scratch refresh, not a stored
+// delta. Measured-negative anyway; re-enable only with a refresh-aware ensure().
+func (n *EnrichedNet) lazyEnabled() bool { return false }
 
 // prefetchCol brings the first cache line of feature f's weight column toward L1
 // (the SIMD kernel then streams the rest, HW-prefetched). Threat columns live in
 // the int8 W0t8 table when int8FT is on; base-768 columns in the int16 W0i table.
 func (n *EnrichedNet) prefetchCol(f int) {
-	if n.int8FT && f >= InputDim {
-		prefetchT0(unsafe.Pointer(&n.W0t8[(f-InputDim)*n.H]))
+	if n.int8FT && f >= PsqSize {
+		prefetchT0(unsafe.Pointer(&n.W0t8[(f-PsqSize)*n.H]))
 		return
 	}
 	prefetchT0(unsafe.Pointer(&n.W0i[f*n.H]))
@@ -288,8 +294,8 @@ func (n *EnrichedNet) quantizeLeanTail() int {
 // convention. The threat geometry is computed on the real board (orientation-
 // independent); only the index encoding is reoriented per perspective.
 func appendEnrichedFeatures(dst []uint16, pos *chess.Position, persp chess.Color) []uint16 {
-	// base 768 (shared with the v6/MultiNet feature set).
-	dst = AppendFeatures(dst, pos, persp)
+	// base 768, king-bucketed (bucket·768 + psqIndex, bucket from persp's own king).
+	dst = appendBucketedBase(dst, pos, persp)
 
 	occ := pos.Occupied()
 	flip := persp == chess.Black
@@ -318,7 +324,7 @@ func appendEnrichedFeatures(dst []uint16, pos *chess.Position, persp chess.Color
 				if flip {
 					rtsq ^= 56
 				}
-				dst = append(dst, uint16(InputDim)+(a*12+v)*64+rtsq)
+				dst = append(dst, uint16(PsqSize)+(a*12+v)*64+rtsq)
 			}
 		}
 	}
@@ -334,8 +340,8 @@ func appendEnrichedFeatures(dst []uint16, pos *chess.Position, persp chess.Color
 // byte-identical (per perspective) to appendEnrichedFeatures — the NNUE_ASSERT gate
 // (which rebuilds via appendEnrichedFeatures) verifies this.
 func appendEnrichedFeaturesBoth(dstW, dstB []uint16, pos *chess.Position) ([]uint16, []uint16) {
-	dstW = AppendFeatures(dstW, pos, chess.White)
-	dstB = AppendFeatures(dstB, pos, chess.Black)
+	dstW = appendBucketedBase(dstW, pos, chess.White)
+	dstB = appendBucketedBase(dstB, pos, chess.Black)
 
 	occ := pos.Occupied()
 	for pc := chess.WhitePawn; pc <= chess.BlackKing; pc++ {
@@ -368,8 +374,8 @@ func appendEnrichedFeaturesBoth(dstW, dstB []uint16, pos *chess.Position) ([]uin
 				vW := vRelW*6 + uint16(victim.Type())
 				vB := vRelB*6 + uint16(victim.Type())
 				t := uint16(tsq)
-				dstW = append(dstW, uint16(InputDim)+(aW*12+vW)*64+t)
-				dstB = append(dstB, uint16(InputDim)+(aB*12+vB)*64+(t^56))
+				dstW = append(dstW, uint16(PsqSize)+(aW*12+vW)*64+t)
+				dstB = append(dstB, uint16(PsqSize)+(aB*12+vB)*64+(t^56))
 			}
 		}
 	}
@@ -382,8 +388,8 @@ func appendEnrichedFeaturesBoth(dstW, dstB []uint16, pos *chess.Position) ([]uin
 // f < 768 is a base piece-square feature, f >= 768 a threat feature.
 func (n *EnrichedNet) ftAdd(acc []int16, f int) {
 	h := n.H
-	if n.int8FT && f >= InputDim {
-		o := (f - InputDim) * h
+	if n.int8FT && f >= PsqSize {
+		o := (f - PsqSize) * h
 		addColI8(acc, n.W0t8[o:o+h])
 		return
 	}
@@ -392,8 +398,8 @@ func (n *EnrichedNet) ftAdd(acc []int16, f int) {
 
 func (n *EnrichedNet) ftSub(acc []int16, f int) {
 	h := n.H
-	if n.int8FT && f >= InputDim {
-		o := (f - InputDim) * h
+	if n.int8FT && f >= PsqSize {
+		o := (f - PsqSize) * h
 		subColI8(acc, n.W0t8[o:o+h])
 		return
 	}
@@ -546,7 +552,7 @@ func ImportBulletLeanNet(path string, h, nb int) (*EnrichedNet, error) {
 	if err != nil {
 		return nil, fmt.Errorf("nnue: read bullet lean net: %w", err)
 	}
-	in := InputDim + ThreatBlock
+	in := PsqSize + ThreatBlock
 	nL0w := in * h
 	nL0b := h
 	nL1w := 2 * h * nb
@@ -607,7 +613,7 @@ func ImportBulletEnrichedNet(path string, h, d2, d3, nb int) (*EnrichedNet, erro
 		return nil, fmt.Errorf("nnue: read bullet enriched net: %w", err)
 	}
 
-	in := InputDim + ThreatBlock
+	in := PsqSize + ThreatBlock
 	nL0w := in * h
 	nL0b := h
 	nL1w := h * (nb * d2)

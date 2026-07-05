@@ -78,13 +78,14 @@ func TestEnrichedLeanLoadSanity(t *testing.T) {
 }
 
 // threatFeatures filters appendEnrichedFeatures down to the threat block (index
-// >= InputDim) for the given perspective, returning a sorted slice.
+// >= PsqSize, the king-bucketed base size) for the given perspective, returning a
+// sorted slice.
 func threatFeatures(pos *chess.Position, persp chess.Color) []int {
 	var buf [maxEnrichedActive]uint16
 	feats := appendEnrichedFeatures(buf[:0], pos, persp)
 	var out []int
 	for _, f := range feats {
-		if int(f) >= InputDim {
+		if int(f) >= PsqSize {
 			out = append(out, int(f))
 		}
 	}
@@ -107,18 +108,19 @@ func TestEnrichedThreatIndices(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Threat offset is PsqSize (king-bucketed base size = 16*768 = 12288), not 768.
 	// White perspective: White pieces are "own" (relColor 0), squares un-flipped.
-	//  Wn b1 -> bn c3 : a=(0*6+1)=1, v=(1*6+1)=7, tsq=c3=18 -> 768+(1*12+7)*64+18 = 2002
-	//  bn c3 -> Wn b1 : a=(1*6+1)=7, v=(0*6+1)=1, tsq=b1=1  -> 768+(7*12+1)*64+1  = 6209
-	wantWhite := []int{2002, 6209}
+	//  Wn b1 -> bn c3 : a=(0*6+1)=1, v=(1*6+1)=7, tsq=c3=18 -> 12288+(1*12+7)*64+18 = 13522
+	//  bn c3 -> Wn b1 : a=(1*6+1)=7, v=(0*6+1)=1, tsq=b1=1  -> 12288+(7*12+1)*64+1  = 17729
+	wantWhite := []int{13522, 17729}
 	if got := threatFeatures(pos, chess.White); !equalInts(got, wantWhite) {
 		t.Errorf("white-perspective threats = %v, want %v", got, wantWhite)
 	}
 
 	// Black perspective: Black pieces "own" (relColor 0), squares flipped (^56).
-	//  Wn b1 -> bn c3 : a=7, v=1, tsq=c3^56=42 -> 768+(7*12+1)*64+42 = 6250
-	//  bn c3 -> Wn b1 : a=1, v=7, tsq=b1^56=57 -> 768+(1*12+7)*64+57 = 2041
-	wantBlack := []int{2041, 6250}
+	//  Wn b1 -> bn c3 : a=7, v=1, tsq=c3^56=42 -> 12288+(7*12+1)*64+42 = 17770
+	//  bn c3 -> Wn b1 : a=1, v=7, tsq=b1^56=57 -> 12288+(1*12+7)*64+57 = 13561
+	wantBlack := []int{13561, 17770}
 	if got := threatFeatures(pos, chess.Black); !equalInts(got, wantBlack) {
 		t.Errorf("black-perspective threats = %v, want %v", got, wantBlack)
 	}
@@ -134,7 +136,7 @@ func TestEnrichedFeatureBounds(t *testing.T) {
 		"r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
 		"8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
 	}
-	lim := InputDim + ThreatBlock
+	lim := PsqSize + ThreatBlock // king-bucketed base (PsqSize) + threats
 	for _, fen := range fens {
 		pos, err := chess.ParseFEN(fen)
 		if err != nil {

@@ -73,7 +73,7 @@ func (n *EnrichedNet) QuantizeFTInt8() int {
 	n.W0t8 = make([]int8, ThreatBlock*h)
 	clamped := 0
 	for j := 0; j < ThreatBlock*h; j++ {
-		v := n.W0i[InputDim*h+j] // threat columns start at feature InputDim (768)
+		v := n.W0i[PsqSize*h+j] // threat columns start at feature InputDim (768)
 		if v > 127 {
 			v = 127
 			clamped++

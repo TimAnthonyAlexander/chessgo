@@ -59,7 +59,7 @@ func appendAttackerEdges(dst []uint16, pos *chess.Position, sq chess.Square, occ
 		if flip {
 			rtsq ^= 56
 		}
-		dst = append(dst, uint16(InputDim)+(a*12+v)*64+rtsq)
+		dst = append(dst, uint16(PsqSize)+(a*12+v)*64+rtsq)
 	}
 	return dst
 }
@@ -113,6 +113,17 @@ func (st *EnrichedStack) pushMoveAwareChanged(pos *chess.Position, m chess.Move)
 // delta. Index-explicit (does NOT touch st.sp) so both the eager push and the lazy
 // walk-back can drive it. Requires srcIdx to already hold the parent accumulator.
 func (st *EnrichedStack) buildSlotFrom(dstIdx, srcIdx int, pos *chess.Position, m chess.Move) {
+	if isKingMove(pos, m) {
+		// King move → king bucket may change → every base feature shifts → the
+		// incremental delta is invalid. Rebuild the child slot's accumulator from
+		// scratch (correct regardless of a bucket change). King moves are infrequent.
+		child := *pos
+		var u chess.Undo
+		child.DoMove(m, &u)
+		dst := &st.data[dstIdx]
+		st.net.buildAcc(dst.w, dst.b, &child)
+		return
+	}
 	subW, addW, subB, addB := st.computeDelta(pos, m)
 	st.applyDelta(dstIdx, srcIdx, subW, addW, subB, addB)
 }
@@ -136,6 +147,12 @@ func (st *EnrichedStack) computeDelta(pos *chess.Position, m chess.Move) (subW, 
 	subB = st.dsubB[:0]
 	addB = st.daddB[:0]
 
+	// King-bucket base offsets. computeDelta only runs for NON-king moves (king moves
+	// take the refresh path in Push), so neither king moved: the parent's king bucket
+	// equals the child's, and offW/offB are constant across the whole base delta.
+	offW := kingBucketOffset(pos, chess.White)
+	offB := kingBucketOffset(pos, chess.Black)
+
 	// A1: changed squares via per-piece bitboard XOR (occupant differs old vs new).
 	// Cheaper than the 64-square PieceOn scan, and D is needed for the geometry.
 	var D chess.Bitboard
@@ -151,14 +168,14 @@ func (st *EnrichedStack) computeDelta(pos *chess.Position, m chess.Move) (subW, 
 		op := pos.PieceOn(s)
 		np := child.PieceOn(s)
 		if op != chess.NoPiece {
-			subW = append(subW, FeatureIndex(chess.White, op, s))
-			subB = append(subB, FeatureIndex(chess.Black, op, s))
+			subW = append(subW, offW+FeatureIndex(chess.White, op, s))
+			subB = append(subB, offB+FeatureIndex(chess.Black, op, s))
 			subW = appendAttackerEdges(subW, pos, s, oldOcc, chess.White)
 			subB = appendAttackerEdges(subB, pos, s, oldOcc, chess.Black)
 		}
 		if np != chess.NoPiece {
-			addW = append(addW, FeatureIndex(chess.White, np, s))
-			addB = append(addB, FeatureIndex(chess.Black, np, s))
+			addW = append(addW, offW+FeatureIndex(chess.White, np, s))
+			addB = append(addB, offB+FeatureIndex(chess.Black, np, s))
 			addW = appendAttackerEdges(addW, &child, s, newOcc, chess.White)
 			addB = appendAttackerEdges(addB, &child, s, newOcc, chess.Black)
 		}
@@ -253,8 +270,8 @@ func appendChangedEdges(
 		vW := vRelW*6 + uint16(victim.Type())
 		vB := vRelB*6 + uint16(victim.Type())
 		tw := uint16(t)
-		subW = append(subW, uint16(InputDim)+(aW*12+vW)*64+tw)
-		subB = append(subB, uint16(InputDim)+(aB*12+vB)*64+(tw^56))
+		subW = append(subW, uint16(PsqSize)+(aW*12+vW)*64+tw)
+		subB = append(subB, uint16(PsqSize)+(aB*12+vB)*64+(tw^56))
 	}
 	for newT != 0 {
 		t := newT.PopLSB()
@@ -269,8 +286,8 @@ func appendChangedEdges(
 		vW := vRelW*6 + uint16(victim.Type())
 		vB := vRelB*6 + uint16(victim.Type())
 		tw := uint16(t)
-		addW = append(addW, uint16(InputDim)+(aW*12+vW)*64+tw)
-		addB = append(addB, uint16(InputDim)+(aB*12+vB)*64+(tw^56))
+		addW = append(addW, uint16(PsqSize)+(aW*12+vW)*64+tw)
+		addB = append(addB, uint16(PsqSize)+(aB*12+vB)*64+(tw^56))
 	}
 	return subW, addW, subB, addB
 }

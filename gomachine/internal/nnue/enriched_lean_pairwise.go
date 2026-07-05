@@ -107,7 +107,7 @@ func ImportBulletLeanPairwiseNet(path string, h, nb int) (*EnrichedNet, error) {
 	if err != nil {
 		return nil, fmt.Errorf("nnue: read bullet lean-pairwise net: %w", err)
 	}
-	in := InputDim + ThreatBlock
+	in := PsqSize + ThreatBlock
 	nL0w := in * h
 	nL0b := h
 	nL1w := h * nb // pairwise tail: [H × NB], not [2H × NB]
