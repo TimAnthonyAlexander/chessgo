@@ -36,9 +36,6 @@ func cmdBookDiff(args []string) {
 	sfTop := fs.Int("sf-top", 25, "run Stockfish on this many of the biggest +Δ and −Δ disagreements each")
 	_ = fs.Parse(args)
 
-	// Our per-move eval must use the SAME net prod plays with (v9 lean-threats).
-	loadEnrichedDefault()
-
 	// 1. Re-enumerate the opening positions → key→FEN (books are keyed by Zobrist).
 	positions := map[uint64]string{}
 	start, _ := chess.ParseFEN(chess.StartFEN)

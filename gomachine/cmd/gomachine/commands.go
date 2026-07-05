@@ -20,7 +20,6 @@ import (
 )
 
 func cmdUCI() {
-	loadEnrichedDefault() // route eval through the v12 lean threats net (else v6) — external UCI tools must play the prod net, not the fast fallback
 	uci.Run()
 }
 
@@ -45,7 +44,6 @@ func cmdServe(args []string) {
 	if *analysisWorkers > 0 {
 		srv.SetAnalysisPool(*analysisWorkers, *analysisTT)
 	}
-	loadEnrichedDefault() // route eval through the v9 lean threats net if data/nnue/lean.bin is present (else v6)
 	if tb := loadTablebaseDefault(*tbPath); tb != nil {
 		srv.SetTablebase(tb)
 	}

@@ -80,7 +80,7 @@ export function useHome() {
                 .then((r) => {
                     if (!cancelled) setStats(r)
                 })
-                .catch(() => {})
+                .catch(() => { })
         }
         tick()
         const id = window.setInterval(tick, 10_000)
@@ -175,16 +175,6 @@ function Hero({ stats }: { stats: LobbyStats | null }) {
                     }}
                 >
                     Your move.
-                </Typography>
-                <Typography
-                    sx={{
-                        mt: 1,
-                        fontSize: { xs: 14.5, md: 15.5 },
-                        color: 'var(--text-dim)',
-                        maxWidth: 540,
-                    }}
-                >
-                    Pick a time control below to get matched, or play the computer.
                 </Typography>
             </Box>
 

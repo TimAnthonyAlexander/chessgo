@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/timanthonyalexander/gomachine/internal/bench"
@@ -249,19 +250,49 @@ const (
 // the exact config the +25-Elo movetime gate used: int8-FT (QuantizeFTInt8) + the
 // move-aware push (default-on in ImportBulletLeanNet). Absent/unreadable file → silent
 // no-op, so the engine stays on v6 (safe rollback = remove the file + restart).
-func loadEnrichedDefault() {
+// loadDefaultLeanNet imports the prod lean-threats net (LEAN_NET_PATH or the
+// cwd-relative data/nnue/lean.bin sidecar) in the shipped int8-FT + move-aware
+// config, or returns nil if absent. Two consumer shapes:
+//   - GLOBAL-eval commands (serve/hub/uci/gauntlet/engine CLIs) install it once via
+//     loadEnrichedDefault and read the process global at eval time.
+//   - PER-SIDE-swap commands (SPRT/SPSA/Calibrate) route every move through
+//     player.play, which re-sets the global from the player's field — a global load
+//     is clobbered there, so they must pass this as the player's default net (else a
+//     nil per-side net silently falls back to the embedded v6, benchmarking the
+//     wrong eval).
+func loadDefaultLeanNet() *nnue.EnrichedNet {
 	path := os.Getenv("LEAN_NET_PATH")
 	if path == "" {
 		path = "data/nnue/lean.bin"
 	}
 	n, err := nnue.ImportBulletLeanNet(path, leanEnrichedH, leanEnrichedNB)
 	if err != nil {
-		return // no lean net on disk → stay on the v6 net
+		return nil // no lean net on disk → caller stays on the v6 net
 	}
-	clamped := n.QuantizeFTInt8() // int8-FT: the movetime config the +25 was measured with
-	nnue.SetEnriched(n)
-	fmt.Printf("enriched eval: lean threats net loaded from %s (H=%d NB=%d, int8-FT %d clamped, move-aware=%v) — routing eval through v9\n",
-		path, leanEnrichedH, leanEnrichedNB, clamped, n.MoveAware())
+	n.QuantizeFTInt8() // int8-FT: the movetime config the prod net ships with
+	return n
+}
+
+var enrichedOnce sync.Once
+
+// loadEnrichedDefault installs the prod lean-threats net as the process-global eval
+// (nnue.SetEnriched) exactly once per process. main() calls it before dispatch, so v12
+// is the default eval for EVERY subcommand — the same way the embedded v6 net is —
+// instead of each entry point having to remember (the drift that silently benchmarked
+// v6). Idempotent via sync.Once, so any leftover call is a harmless no-op. Absent
+// lean.bin → silent no-op → the engine stays on embedded v6 (safe rollback = remove
+// the file). Per-side-swap harnesses (SPRT/SPSA/Calibrate) still read the loaded net
+// via nnue.DefaultEnriched() because player.play clears the global per move.
+func loadEnrichedDefault() {
+	enrichedOnce.Do(func() {
+		n := loadDefaultLeanNet()
+		if n == nil {
+			return
+		}
+		nnue.SetEnriched(n)
+		fmt.Fprintf(os.Stderr, "enriched eval: prod lean threats net loaded (H=%d NB=%d, move-aware=%v)\n",
+			leanEnrichedH, leanEnrichedNB, n.MoveAware())
+	})
 }
 
 // cmdBench dispatches `gomachine bench <subcommand>`.
@@ -522,6 +553,15 @@ func cmdBenchSPRT(args []string) {
 		OldLevel:       -1,
 	}
 
+	// Search-param-only SPRT (no explicit --new-*/--old-* net): run BOTH sides on the
+	// prod eval rather than the embedded v6 — otherwise player.play's per-move
+	// SetEnriched(nil) silently tests search patches against the wrong net. A net-vs-net
+	// A/B (any explicit net flag) keeps its exact semantics: only the all-nil case
+	// injects the shared default, so it never forces --concurrency 1.
+	if newNetP == nil && oldNetP == nil && newMultiP == nil && oldMultiP == nil && newEnrichedP == nil && oldEnrichedP == nil {
+		cfg.DefaultEnriched = nnue.DefaultEnriched() // the prod net main() loaded
+	}
+
 	reporter := bench.NewReporter(cfg)
 	reporter.Header()
 
@@ -555,11 +595,6 @@ func cmdBenchStockfish(args []string) {
 	engBookPath := fs.String("engine-book", "data/book.bin", "precomputed engine opening book consulted when --new has book=on (\"\" disables)")
 	tbPath := fs.String("tb-path", "", "Syzygy tablebase directory, probed when --new has tb=on (\"\" disables)")
 	_ = fs.Parse(args)
-
-	// Route OUR engine through the prod eval (v12 lean-threats net if data/nnue/lean.bin
-	// is present, else the embedded v6). Without this the absolute-strength anchor
-	// silently measures v6, NOT the shipped net — every prior anchor did exactly that.
-	loadEnrichedDefault()
 
 	ourParams, err := bench.ParseParams(search.DefaultParams(), *ourSpec)
 	if err != nil {
@@ -811,7 +846,7 @@ func cmdBenchCalibrate(args []string) {
 
 	t0 := time.Now()
 	levels := bench.Calibrate(ctx, book, *maxLevel, *pairs, *conc, *tt,
-		*anchorElo, time.Duration(*anchorMT)*time.Millisecond,
+		*anchorElo, time.Duration(*anchorMT)*time.Millisecond, nnue.DefaultEnriched(),
 		func(s string) { fmt.Println(s) })
 
 	fmt.Printf("\n  level   Elo    Δ vs below   advertised (ratingForLevel)   gap\n")

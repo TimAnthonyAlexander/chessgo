@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/timanthonyalexander/gomachine/internal/nnue"
 	"github.com/timanthonyalexander/gomachine/internal/search"
 )
 
@@ -25,7 +26,7 @@ type LevelElo struct {
 // Elo `anchorElo` we know from the Stockfish anchor) versus the top level — pins
 // the whole ladder to absolute Elo. This needs Stockfish only once, not per rung.
 func Calibrate(ctx context.Context, book []Opening, maxLevel, pairs, conc, ttMB int,
-	anchorElo float64, anchorMoveTime time.Duration, log func(string)) []LevelElo {
+	anchorElo float64, anchorMoveTime time.Duration, defaultEnriched *nnue.EnrichedNet, log func(string)) []LevelElo {
 
 	run := func(label string, newLevel, oldLevel int, anchorSide bool) (float64, float64) {
 		cfg := Config{
@@ -35,6 +36,9 @@ func Calibrate(ctx context.Context, book []Opening, maxLevel, pairs, conc, ttMB 
 			Elo0: -10000, Elo1: 10000, Alpha: 0.05, Beta: 0.05, // never trips → plays all pairs
 			NewThreads: 1, OldThreads: 1,
 			NewLevel: newLevel, OldLevel: oldLevel,
+			// Calibrate the level→Elo ladder against the PROD eval, not the embedded v6
+			// (player.play would otherwise clear the enriched net every move).
+			DefaultEnriched: defaultEnriched,
 		}
 		if anchorSide {
 			cfg.NewLevel = -1                // new side = full strength

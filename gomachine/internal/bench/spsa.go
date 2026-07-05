@@ -11,6 +11,7 @@ import (
 
 	"github.com/timanthonyalexander/gomachine/internal/book"
 	"github.com/timanthonyalexander/gomachine/internal/engine"
+	"github.com/timanthonyalexander/gomachine/internal/nnue"
 	"github.com/timanthonyalexander/gomachine/internal/search"
 	"github.com/timanthonyalexander/gomachine/internal/syzygy"
 )
@@ -77,6 +78,12 @@ type SPSAConfig struct {
 
 	EngineBook *book.Book        // shared opening book (inert unless a side has UseBook)
 	Tablebase  *syzygy.Tablebase // shared Syzygy tablebase (inert unless a side has UseTablebase)
+
+	// DefaultEnriched is the prod eval both tuning engines run on. Without it, the
+	// per-move SetEnriched in player.play clears the enriched net → the SPSA tunes
+	// against the embedded v6, not the shipped net (which is what search margins have
+	// to be tuned against). nil → tune on v6.
+	DefaultEnriched *nnue.EnrichedNet
 
 	Checkpoint string // if set, append per-iteration θ here (resumable/inspectable)
 }
@@ -219,8 +226,8 @@ func playMatch(ctx context.Context, cfg SPSAConfig, plus, minus search.Params, b
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			plusP := player{eng: engine.NewWithParams(cfg.TTMB, plus), threads: 1, lim: lim, level: -1}
-			minusP := player{eng: engine.NewWithParams(cfg.TTMB, minus), threads: 1, lim: lim, level: -1}
+			plusP := player{eng: engine.NewWithParams(cfg.TTMB, plus), threads: 1, lim: lim, level: -1, defaultEnriched: cfg.DefaultEnriched}
+			minusP := player{eng: engine.NewWithParams(cfg.TTMB, minus), threads: 1, lim: lim, level: -1, defaultEnriched: cfg.DefaultEnriched}
 			plusP.eng.SetBook(cfg.EngineBook)
 			minusP.eng.SetBook(cfg.EngineBook)
 			plusP.eng.SetTablebase(cfg.Tablebase)

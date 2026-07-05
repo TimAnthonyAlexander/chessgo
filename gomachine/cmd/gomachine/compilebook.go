@@ -30,11 +30,8 @@ func cmdCompileBook(args []string) {
 	maxLines := fs.Int("maxlines", 0, "cap opening lines processed (0 = all; for quick tests)")
 	_ = fs.Parse(args)
 
-	// Route eval through the SAME net prod plays with (v9 lean-threats if
-	// data/nnue/lean.bin is present, else the embedded v6) — otherwise we'd bake a
-	// book from a different, weaker evaluator than the one that consults it at
-	// runtime. This is the whole point of recompiling: match the current engine.
-	loadEnrichedDefault()
+	// (main() installs the prod eval net before dispatch, so the book is compiled
+	// with the SAME evaluator that consults it at runtime — the point of recompiling.)
 
 	// 1. Enumerate unique positions (key -> FEN), always including the start.
 	positions := map[uint64]string{}

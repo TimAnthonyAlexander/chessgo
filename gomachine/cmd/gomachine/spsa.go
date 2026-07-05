@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/timanthonyalexander/gomachine/internal/bench"
+	"github.com/timanthonyalexander/gomachine/internal/nnue"
 	"github.com/timanthonyalexander/gomachine/internal/search"
 )
 
@@ -45,8 +46,6 @@ func cmdBenchSPSA(args []string) {
 	tbPath := fs.String("tb-path", "", "Syzygy tablebase directory, probed when a side has tb=on (\"\" disables)")
 	checkpoint := fs.String("checkpoint", "", "θ checkpoint log path (empty → spsa_<timestamp>.log in cwd)")
 	_ = fs.Parse(args)
-
-	loadEnrichedDefault() // tune on the PROD eval (v12 lean threats net), not the v6 fallback
 
 	base, err := bench.ParseParams(search.DefaultParams(), *baseSpec)
 	if err != nil {
@@ -87,6 +86,10 @@ func cmdBenchSPSA(args []string) {
 		EngineBook:   loadEngineBook(*engBookPath),
 		Tablebase:    loadTablebase(*tbPath),
 		Checkpoint:   cpPath,
+		// Tune on the prod eval: player.play swaps the enriched net per move, so the
+		// process-global (installed by main()) is clobbered — the tuning engines need
+		// the net threaded in per-player or they run on the embedded v6.
+		DefaultEnriched: nnue.DefaultEnriched(),
 	}
 
 	budget := fmt.Sprintf("%d nodes/move", *nodes)

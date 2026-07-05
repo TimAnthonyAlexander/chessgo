@@ -81,6 +81,13 @@ type Config struct {
 	// DefaultMulti). Same per-side-swap A/B (forces Concurrency=1).
 	NewEnrichedNet, OldEnrichedNet *nnue.EnrichedNet
 
+	// DefaultEnriched is the prod eval a side falls back to when it specifies NO
+	// explicit net (net/multiNet/enrichedNet all nil). Because player.play re-sets
+	// the process-global enriched net every move, without this a search-only run
+	// would SetEnriched(nil) → the embedded v6 net, silently benchmarking the wrong
+	// eval. Both sides share one pointer, so it never forces Concurrency=1.
+	DefaultEnriched *nnue.EnrichedNet
+
 	NewThreads int // Lazy SMP threads for the patch engine (default 1)
 	OldThreads int // Lazy SMP threads for the baseline engine (default 1)
 
@@ -107,6 +114,10 @@ type player struct {
 	multiNet *nnue.MultiNet
 	// enrichedNet, when non-nil, takes precedence over both (DefaultEnriched first).
 	enrichedNet *nnue.EnrichedNet
+	// defaultEnriched is the prod net this side falls back to when it has NO explicit
+	// net of any kind (net/multiNet/enrichedNet all nil) — so a bare search-param A/B
+	// runs on the prod eval, not the embedded v6. Ignored when any explicit net is set.
+	defaultEnriched *nnue.EnrichedNet
 }
 
 func (p player) play(pos *chess.Position, history []uint64) engine.BestResult {
@@ -114,7 +125,14 @@ func (p player) play(pos *chess.Position, history []uint64) engine.BestResult {
 	// called unconditionally (nil clears it) so the side that uses a single-layer
 	// net isn't left running the other side's multilayer net.
 	nnue.SetMultiNet(p.multiNet)
-	nnue.SetEnriched(p.enrichedNet)
+	// A side with NO explicit net of any kind falls back to the prod net rather than
+	// clearing to the embedded v6. A side that DOES pin a single/multi/enriched net
+	// keeps A/B isolation: the fallback only applies when everything is nil.
+	en := p.enrichedNet
+	if en == nil && p.net == nil && p.multiNet == nil {
+		en = p.defaultEnriched
+	}
+	nnue.SetEnriched(en)
 	if p.net != nil {
 		nnue.SetNet(p.net) // searcher's nnueBegin rebuilds its accumulator when the net changes
 	}
@@ -257,8 +275,8 @@ func RunSPRT(ctx context.Context, cfg Config, onProgress func(Progress)) Summary
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			newP := player{eng: engine.NewWithParams(cfg.TTMB, cfg.NewParams), threads: maxThreads(cfg.NewThreads), lim: newLim, level: cfg.NewLevel, net: cfg.NewNet, multiNet: cfg.NewMultiNet, enrichedNet: cfg.NewEnrichedNet}
-			oldP := player{eng: engine.NewWithParams(cfg.TTMB, cfg.OldParams), threads: maxThreads(cfg.OldThreads), lim: oldLim, level: cfg.OldLevel, net: cfg.OldNet, multiNet: cfg.OldMultiNet, enrichedNet: cfg.OldEnrichedNet}
+			newP := player{eng: engine.NewWithParams(cfg.TTMB, cfg.NewParams), threads: maxThreads(cfg.NewThreads), lim: newLim, level: cfg.NewLevel, net: cfg.NewNet, multiNet: cfg.NewMultiNet, enrichedNet: cfg.NewEnrichedNet, defaultEnriched: cfg.DefaultEnriched}
+			oldP := player{eng: engine.NewWithParams(cfg.TTMB, cfg.OldParams), threads: maxThreads(cfg.OldThreads), lim: oldLim, level: cfg.OldLevel, net: cfg.OldNet, multiNet: cfg.OldMultiNet, enrichedNet: cfg.OldEnrichedNet, defaultEnriched: cfg.DefaultEnriched}
 			newBook, oldBook := cfg.EngineBook, cfg.EngineBook
 			if cfg.NewEngineBook != nil {
 				newBook = cfg.NewEngineBook
