@@ -479,6 +479,72 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.LMRCutnodeRed = n
+		case "lmrimproving", "lmrimp":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.LMRImproving = b
+		case "lmrttnoisy", "lmrttn":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.LMRTtNoisy = b
+		case "lmrttnoisyred", "lmrttnred":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.LMRTtNoisyRed = n
+		case "lmralpha", "lmraise":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.LMRAlpha = b
+		case "lmralphascale", "lmralphasc":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.LMRAlphaScale = n
+		case "lmrcheckreduce", "lmrcheck":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.LMRCheckReduce = b
+		case "lmrcheckred":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.LMRCheckRed = n
+		case "rfpsoft":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.RFPSoft = b
+		case "nmpmargin", "nmpm":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.NmpMargin = b
+		case "nmpmarginbase", "nmpmb":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.NmpMarginBase = n
+		case "nodetm", "ntm":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.NodeTM = b
 		case "lmrdodeeper", "dodeeper":
 			b, err := parseBool(val)
 			if err != nil {
@@ -748,6 +814,39 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.LMRCutnodeRed != patch.LMRCutnodeRed {
 		diffs = append(diffs, fmt.Sprintf("lmrcutred: %d→%d", base.LMRCutnodeRed, patch.LMRCutnodeRed))
+	}
+	if base.LMRImproving != patch.LMRImproving {
+		diffs = append(diffs, fmt.Sprintf("lmrimproving: %s→%s", onoff(base.LMRImproving), onoff(patch.LMRImproving)))
+	}
+	if base.LMRTtNoisy != patch.LMRTtNoisy {
+		diffs = append(diffs, fmt.Sprintf("lmrttnoisy: %s→%s", onoff(base.LMRTtNoisy), onoff(patch.LMRTtNoisy)))
+	}
+	if base.LMRTtNoisyRed != patch.LMRTtNoisyRed {
+		diffs = append(diffs, fmt.Sprintf("lmrttnoisyred: %d→%d", base.LMRTtNoisyRed, patch.LMRTtNoisyRed))
+	}
+	if base.LMRAlpha != patch.LMRAlpha {
+		diffs = append(diffs, fmt.Sprintf("lmralpha: %s→%s", onoff(base.LMRAlpha), onoff(patch.LMRAlpha)))
+	}
+	if base.LMRAlphaScale != patch.LMRAlphaScale {
+		diffs = append(diffs, fmt.Sprintf("lmralphascale: %d→%d", base.LMRAlphaScale, patch.LMRAlphaScale))
+	}
+	if base.LMRCheckReduce != patch.LMRCheckReduce {
+		diffs = append(diffs, fmt.Sprintf("lmrcheckreduce: %s→%s", onoff(base.LMRCheckReduce), onoff(patch.LMRCheckReduce)))
+	}
+	if base.LMRCheckRed != patch.LMRCheckRed {
+		diffs = append(diffs, fmt.Sprintf("lmrcheckred: %d→%d", base.LMRCheckRed, patch.LMRCheckRed))
+	}
+	if base.RFPSoft != patch.RFPSoft {
+		diffs = append(diffs, fmt.Sprintf("rfpsoft: %s→%s", onoff(base.RFPSoft), onoff(patch.RFPSoft)))
+	}
+	if base.NmpMargin != patch.NmpMargin {
+		diffs = append(diffs, fmt.Sprintf("nmpmargin: %s→%s", onoff(base.NmpMargin), onoff(patch.NmpMargin)))
+	}
+	if base.NmpMarginBase != patch.NmpMarginBase {
+		diffs = append(diffs, fmt.Sprintf("nmpmarginbase: %d→%d", base.NmpMarginBase, patch.NmpMarginBase))
+	}
+	if base.NodeTM != patch.NodeTM {
+		diffs = append(diffs, fmt.Sprintf("nodetm: %s→%s", onoff(base.NodeTM), onoff(patch.NodeTM)))
 	}
 	if base.RFPQuad != patch.RFPQuad {
 		diffs = append(diffs, fmt.Sprintf("rfpquad: %s→%s", onoff(base.RFPQuad), onoff(patch.RFPQuad)))

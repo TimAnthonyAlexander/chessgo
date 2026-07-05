@@ -145,6 +145,45 @@ func (tm *timeManager) updateBestMove(move uint32) {
 	tm.softLimit = tm.start.Add(adjusted)
 }
 
+// Node-based time scaling constants (Stormphrax nodeTm, centered form). Stormphrax
+// scales by max(2.59 − bmFrac·1.6, 0.188), but those constants are tuned to ITS
+// base allocation; ported raw onto our node-TM-naive base they would systematically
+// over-extend. Instead we CENTER at bmFrac 0.5 (scale 1.0) so node-TM redistributes
+// time without changing the mean budget: a best move that ate most of the nodes is
+// "obvious" (scale <1, stop sooner); nodes spread across many moves means an unclear
+// position (scale >1, search longer). Retune via SPSA once the mechanism is proven.
+const (
+	nodeTmRef   = 0.5
+	nodeTmSlope = 1.0
+	nodeTmMin   = 0.55
+	nodeTmMax   = 1.55
+)
+
+// applyNodeTm scales the soft limit by how concentrated the iteration's nodes were
+// on the best root move (bmFrac ∈ [0,1]). Composes multiplicatively on top of the
+// current soft limit (stability / score-drop already applied). No-op under flat
+// MoveTime.
+func (tm *timeManager) applyNodeTm(bmFrac float64) {
+	if tm.softDuration == tm.hardDuration {
+		return
+	}
+	scale := 1.0 - (bmFrac-nodeTmRef)*nodeTmSlope
+	if scale < nodeTmMin {
+		scale = nodeTmMin
+	} else if scale > nodeTmMax {
+		scale = nodeTmMax
+	}
+	cur := tm.softLimit.Sub(tm.start)
+	adjusted := time.Duration(float64(cur) * scale)
+	if adjusted > tm.hardDuration {
+		adjusted = tm.hardDuration
+	}
+	if adjusted < 10*time.Millisecond {
+		adjusted = 10 * time.Millisecond
+	}
+	tm.softLimit = tm.start.Add(adjusted)
+}
+
 // scoreDropExtend extends the soft limit when the score drops significantly
 // between iterations (the position may be losing and needs more search to
 // find the best defense). Called after a completed iteration if the score

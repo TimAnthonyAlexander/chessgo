@@ -27,6 +27,17 @@ type Params struct {
 	LMRFormula       bool // log(d)·log(m) LMR table + PV/improving/history adjustments
 	LMRCutnode       bool // reduce late moves MORE at expected cut-nodes (Stormphrax r+=cutnode). Node-efficiency lever: at a cutnode late moves rarely raise alpha, so reduce them harder. DEFAULT OFF — under SPRT.
 	LMRCutnodeRed    int  // plies of extra LMR reduction at a cutnode (Stormphrax ≈+1.9; default 1).
+	LMRImproving     bool // additive LMR term on the shipped formula path: reduce late quiets +1 ply when the node is NOT improving (Stormphrax r += !improving·1242/1024). Independent term, not the rejected LMR2 bundle. DEFAULT OFF — under SPRT.
+	LMRTtNoisy       bool // additive LMR term: reduce late quiets harder when the TT move is a capture (a tactical node — a late quiet rarely beats a noisy TT move; Stormphrax r += ttMoveNoisy·1081/1024). DEFAULT OFF — under SPRT.
+	LMRTtNoisyRed    int  // plies of extra reduction when the TT move is noisy (default 1 ≈ Stormphrax 1081/1024).
+	LMRAlpha         bool // additive LMR term: reduce late moves more the more alpha-raises already occurred at this node (Stormphrax r += alphaRaises·597/1024) — many moves already good here ⇒ reduce the rest harder. DEFAULT OFF — under SPRT.
+	LMRAlphaScale    int  // LMRAlpha: 1024-scaled plies per alpha-raise (default 597 ≈ 0.58 ply; r += alphaRaises·LMRAlphaScale/1024).
+	LMRCheckReduce   bool // LMR a checking quiet (reduce it LESS) instead of skipping it entirely (Stormphrax reduces givesCheck by 852/1024). DEFAULT OFF — under SPRT.
+	LMRCheckRed      int  // plies to subtract from a checking quiet's LMR reduction (default 1).
+	RFPSoft          bool // reverse-futility soft fail-firm: return a beta-blended score (Stormphrax rfpFailFirmT 711/1024) instead of the hard staticEval-margin. DEFAULT OFF — under SPRT.
+	NmpMargin        bool // null-move β-margin gate: fire NMP only when staticEval ≥ beta + NmpMarginBase − depth·10 − improving·41 (Stormphrax nmpBetaMargin), instead of the flat staticEval ≥ beta. Requires NmpGate. DEFAULT OFF — under SPRT.
+	NmpMarginBase    int  // NmpMargin: base cp of the depth/improving-scaled margin (default 213 ≈ Stormphrax).
+	NodeTM           bool // node-based time management: scale the soft time limit by how concentrated the iteration's nodes were on the best root move (Stormphrax nodeTm, centered form). Movetime-only (inert at fixed nodes / flat movetime). DEFAULT OFF — under SPRT.
 	RFPQuad          bool // reverse-futility margin = 85·d + 7·d² − 75·improving, applied to d≤12 (Stormphrax) instead of our linear 75·d @ d≤8. DEFAULT OFF — under SPRT.
 	LMRDoDeeper      bool // after an LMR reduced scout beats alpha, adapt the re-search depth ±1 to how far it beat bestScore (Stormphrax doDeeper/doShallower). The safety net that makes aggressive reduction pay. DEFAULT OFF — under SPRT.
 	QSMaxMoves       int  // qsearch move-count cap: out of check, stop after this many searched moves (Stormphrax=2). 0=off. DEFAULT OFF — under SPRT.
@@ -135,8 +146,28 @@ func DefaultParams() Params {
 		LMRFormula:     true,
 		LMRCutnode:     true, // SHIPPED as part of the +19.7 movetime stack (coordinated: needs ContHist + LMRDoDeeper; alone it's −7)
 		LMRCutnodeRed:  1,    // extra plies of reduction at a cutnode (cutred=2 measured worse)
-		LMRDoDeeper:    true, // SHIPPED — the adaptive re-search safety net that makes cutnode-LMR pay
-		QSMaxMoves:     0,    // qsearch move cap off by default (Stormphrax uses 2)
+		// Individual Stormphrax LMR reduction terms, added on the shipped LMRFormula
+		// path (NOT the rejected aggressive LMR2 bundle — each is an independent
+		// additive term, byte-identical when off, individually SPRT-able). Under SPRT.
+		LMRImproving:  false,
+		LMRTtNoisy:    false,
+		LMRTtNoisyRed: 1,
+		LMRAlpha:      false,
+		LMRAlphaScale: 597,
+		// Batch-2a Stormphrax ports (each independent, byte-identical when off).
+		LMRCheckReduce: false,
+		LMRCheckRed:    1,
+		// RFP soft fail-firm. +44.3 @ 40k FIXED-nodes but at MOVETIME it's volatile and
+		// hovering around a wash (119 pairs read +19/lb+7, but 151 pairs regressed to
+		// +4.6/lb−6.3 — a low-sample spike, not a stable win). NOT shipped; needs the
+		// full pooled run to see if the lower bound settles >0. Sibling batch flags
+		// (aspinitdelta=7 −15.5, combo −1.7, nodetm +0.5) washed/lost at movetime. OFF.
+		RFPSoft:       false,
+		NmpMargin:     false,
+		NmpMarginBase: 213,
+		NodeTM:        false,
+		LMRDoDeeper:   true, // SHIPPED — the adaptive re-search safety net that makes cutnode-LMR pay
+		QSMaxMoves:    0,    // qsearch move cap off by default (Stormphrax uses 2)
 		// Texel-tuned eval (tuned PSQT + knowledge terms), SPRT-accepted as a set
 		// vs the bare PeSTO base: +128 ± 35 Elo @ 40k nodes, +101 ± 29 Elo @
 		// 100ms/move (2026-06-19, internal/eval/tuned_tables.go; tuner in
@@ -369,8 +400,8 @@ func DefaultParams() Params {
 		// confirmed with nmpgate in the strict end-of-queue stack SPRT.
 		QSFutility:       true,
 		QSFutilityMargin: 100,
-		QCaps:            true, // captures-only qsearch (NPS); OFF is the pre-opt A/B baseline
-		QSCastling:       true, // preserve historical behavior; OFF is under SPRT
+		QCaps:            true,  // captures-only qsearch (NPS); OFF is the pre-opt A/B baseline
+		QSCastling:       true,  // preserve historical behavior; OFF is under SPRT
 		Prefetch:         false, // TT prefetch: WASH on our 64MB-TT/128MB-L3 box (fits in L3, nothing to hide). Scaffolding — see field comment.
 
 		// Aggression style knob: 50 = neutral. At 50 the term is never evaluated, so

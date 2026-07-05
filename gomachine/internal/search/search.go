@@ -221,12 +221,12 @@ type Searcher struct {
 	// staticEvals[ply] is the static eval at that ply (evalNone while in check), so
 	// a node can ask whether its side is "improving" vs two plies ago.
 	staticEvals [maxPly]int
-	nodes   uint64
-	stop    bool
-	tm      timeManager
-	useTime bool
-	nodeCap uint64
-	keyStack []uint64
+	nodes       uint64
+	stop        bool
+	tm          timeManager
+	useTime     bool
+	nodeCap     uint64
+	keyStack    []uint64
 
 	// Syzygy tablebase for WDL-in-search (Params.TBSearch). Shared, read-only
 	// pointer (Fathom's WDL probe is thread-safe), copied to every SMP worker.
@@ -238,8 +238,9 @@ type Searcher struct {
 	// convert ≤MaxPieces endings perfectly (which would break levelForRating).
 	weakenedSearch bool
 
-	rootBest  chess.Move
-	rootScore int
+	rootBest      chess.Move
+	rootScore     int
+	rootBestNodes uint64 // nodes spent in the best root move's subtree this iteration (NodeTM)
 
 	// NNUE incremental accumulator (Phase A). accStack is a per-searcher,
 	// ply-indexed accumulator stack; useNNUE is true only while a net is loaded
@@ -601,7 +602,7 @@ func (s *Searcher) pushKey(k uint64) {
 	}
 	s.keyStack = append(s.keyStack, k)
 }
-func (s *Searcher) popKey()          { s.keyStack = s.keyStack[:len(s.keyStack)-1] }
+func (s *Searcher) popKey() { s.keyStack = s.keyStack[:len(s.keyStack)-1] }
 
 func (s *Searcher) checkStop() {
 	if s.stop {
@@ -703,6 +704,7 @@ func (s *Searcher) runID(pos *chess.Position, limits Limits, gameHistory []uint6
 	var result Result
 	prevScore := 0
 	for d := 1; d <= maxDepth; d++ {
+		iterStartNodes := s.nodes
 		s.searchRoot(pos, d, result.Score)
 		if s.stop && d > 1 {
 			break // discard incomplete iteration
@@ -726,6 +728,14 @@ func (s *Searcher) runID(pos *chess.Position, limits Limits, gameHistory []uint6
 				}
 			}
 			prevScore = s.rootScore
+			// Node-based time scaling: redistribute time by how concentrated the
+			// search was on the best root move (composes on top of stability /
+			// score-drop). Inert unless NodeTM is on.
+			if s.params.NodeTM && s.rootBestNodes > 0 {
+				if iterNodes := s.nodes - iterStartNodes; iterNodes > 0 {
+					s.tm.applyNodeTm(float64(s.rootBestNodes) / float64(iterNodes))
+				}
+			}
 			if s.tm.softExpired() {
 				break
 			}
@@ -968,7 +978,17 @@ const multicutFailFirmT = 503
 // ((a*(kOne-t) + b*t)/kOne with a=score, b=beta, t=503, kOne=1024). Used only by
 // the NegExt-gated soft multicut, so it is inert when NegExt is off.
 func ilerpToBeta(score, beta int) int {
-	return (score*(1024-multicutFailFirmT) + beta*multicutFailFirmT) / 1024
+	return ilerpT(score, beta, multicutFailFirmT)
+}
+
+// rfpFailFirmT mirrors Stormphrax's rfpFailFirmT tunable (711 of 1024): the blend
+// weight for the SOFT reverse-futility return (Params.RFPSoft), so the pruned
+// score is nudged toward beta instead of a hard staticEval-margin.
+const rfpFailFirmT = 711
+
+// ilerpT blends score toward beta with weight t/1024 (Stormphrax util::ilerp<1024>).
+func ilerpT(score, beta, t int) int {
+	return (score*(1024-t) + beta*t) / 1024
 }
 
 // negamax is the core alpha-beta search. cutnode is the expected-node-type flag
@@ -1150,12 +1170,23 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 	}
 	if s.params.RFP && !inCheck && !isPV && ply > 0 && depth <= rfpCap &&
 		absInt(beta) < mateThreshold && staticEval-rfpM >= beta {
+		if s.params.RFPSoft {
+			// Soft fail-firm: nudge the returned score toward beta (Stormphrax
+			// rfpFailFirmT) instead of returning the full static margin.
+			return ilerpT(staticEval-rfpM, beta, rfpFailFirmT)
+		}
 		return staticEval - rfpM
 	}
 
-	// Null-move pruning.
+	// Null-move pruning. The NmpGate threshold is normally beta; NmpMargin raises
+	// it to beta + a depth/improving-scaled margin (Stormphrax nmpBetaMargin) so
+	// null-move only fires when the static eval clears beta by a real margin.
+	nmpThresh := beta
+	if s.params.NmpMargin {
+		nmpThresh = beta + s.params.NmpMarginBase - depth*10 - impInt*41
+	}
 	if s.params.NullMove && !inCheck && depth >= 3 && ply > 0 && beta < mateThreshold &&
-		(!s.params.NmpGate || staticEval >= beta) &&
+		(!s.params.NmpGate || staticEval >= nmpThresh) &&
 		pos.NonPawnMaterial(pos.SideToMove()) {
 		s.dbgNullMoves++
 		var u chess.Undo
@@ -1342,11 +1373,22 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 		}
 	}
 
+	// LMR term inputs (Stormphrax): ttMoveNoisy = the TT move is a capture (a
+	// tactical node); alphaRaises = how many moves have already raised alpha at
+	// this node (recomputed as the loop advances). Both feed the additive LMR
+	// reduction terms below; cheap and byte-inert unless their flags are on.
+	ttMoveNoisy := ttMove != chess.NullMove && isCapture(pos, ttMove)
+	alphaRaises := 0
+
 	for i := 0; i < ml.Len(); i++ {
 		selectMove(&ml, &scores, i)
 		m := ml.Get(i)
 		if m == excludedMove { // singular verification: skip the move under test
 			continue
+		}
+		rootNodesBefore := uint64(0)
+		if ply == 0 {
+			rootNodesBefore = s.nodes // attribute this root move's subtree for NodeTM
 		}
 		capture := isCapture(pos, m) // before DoMove, while the victim is still on m.To()
 		quiet := !capture && m.Type() != chess.Promotion
@@ -1545,7 +1587,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 						reduction = r
 					}
 				}
-			} else if s.params.LMR && depth >= 3 && quiet && !inCheck && !givesCheck && searched >= 4 {
+			} else if s.params.LMR && depth >= 3 && quiet && !inCheck && (!givesCheck || s.params.LMRCheckReduce) && searched >= 4 {
 				if s.params.LMRFormula {
 					// Smooth log(d)·log(m) base in place of the flat 1/2; reduce
 					// less for good-history quiets, more for malus'd ones. Clamped
@@ -1565,6 +1607,21 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 					// current node's type.
 					if s.params.LMRCutnode && childCutnode {
 						r += s.params.LMRCutnodeRed
+					}
+					// Individual Stormphrax LMR terms (each independent, additive; the
+					// aggressive LMR2 *bundle* was rejected at movetime — these are not
+					// that). Only fire when their flag is on, so off is byte-identical.
+					if s.params.LMRImproving && !improving {
+						r++ // not improving ⇒ reduce late quiets a ply more
+					}
+					if s.params.LMRTtNoisy && ttMoveNoisy {
+						r += s.params.LMRTtNoisyRed // TT move is a capture ⇒ tactical node
+					}
+					if s.params.LMRAlpha {
+						r += alphaRaises * s.params.LMRAlphaScale / 1024
+					}
+					if s.params.LMRCheckReduce && givesCheck {
+						r -= s.params.LMRCheckRed // reduce a checking quiet LESS (don't skip it)
 					}
 					if r < 1 {
 						r = 1
@@ -1637,9 +1694,11 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 			if ply == 0 {
 				s.rootBest = m
 				s.rootScore = sc
+				s.rootBestNodes = s.nodes - rootNodesBefore
 			}
 			if sc > alpha {
 				alpha = sc
+				alphaRaises++ // feeds the LMRAlpha reduction term for later moves
 				if alpha >= beta {
 					if quiet {
 						s.recordKiller(ply, m)

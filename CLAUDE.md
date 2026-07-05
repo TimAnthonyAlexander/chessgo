@@ -1,12 +1,15 @@
 # CLAUDE.md — chessgo
 
-A **production-ready chess website** + a **strong ~3500 CCRL Go chess engine**:
+A **production-ready chess website** + a **strong NNUE Go chess engine** (`gomachine`):
 play chess **vs other humans** (live matchmaking with clocks) and **vs the AI**,
-with all chess rules + the AI implemented in a dedicated Go engine (`gomachine`).
-The engine — a **stale 3400–3700 CCRL Blitz floor with a dead ~3700 ceiling** (measured 2026-07-01,
-now superseded upward by ~25 Elo of shipped patches + never triangulated; the ~3700 top is an old
-blowout the engine has gained past, so the band is open-topped — floor >3400, no valid ceiling;
-§Status) — is the centerpiece; the website is the front door to it.
+with all chess rules + the AI implemented in a dedicated Go engine.
+The engine's **last actual CCRL-style measurement was v6 (2026-07-01): 100W–0L vs a ~3400
+engine** — a blowout, so an *underestimate* even then. Since then it has shipped **hundreds of
+Elo with NO re-anchor** (v9 threats, v12 Leela/test80 data, the +23.3 search stack, corrhist/
+singular/futility, …), and at blitz movetimes it beats **full-force Stockfish** at a ~3–4× time-odds
+ratio (§27). So **current strength is materially ABOVE the old ~3400 v6 mark, upper bound
+unmeasured — re-anchor pending; do NOT quote 3400 (or 3700, or any point) as current strength.**
+See §Status. The engine is the centerpiece; the website is the front door to it.
 
 > Read `docs/SPEC.md` for the full design and `docs/COMMANDS.md` to run/deploy.
 > This file is the fast orientation.
@@ -246,20 +249,27 @@ scalar build is a movetime wash). Then a **search-feature wave** (`docs/ENGINE_S
 §13`) shipped **corrhist + singular + futility** (+66.9/+22.2/+21.3 @ 40k nodes; owes a
 movetime re-anchor) and rejected the cheap long tail (conthist/IIR/capthist/probcut/razor
 flat-or-negative; lmr2-on-singular −67 anti-synergy) — the cheap-search-patch well is now
-mostly dry on this baseline. Current strength **a stale 3400–3700 CCRL Blitz floor with a DEAD
-ceiling** (measured 2026-07-01, ENGINE_STRENGTH.md §20: **100W–0L vs a ~3400 engine** = hard floor;
-an **old** lost match vs a ~3700 engine). **The band is stale two ways (§28):** it predates ~25 Elo
-of shipped movetime patches (recompiled book +33 fixed-nodes §25, qsearch captures-only +20 movetime
-§26.4, nmpgate+qsfut ~+5 movetime §23) and was never triangulated (both reference matches are
-opposite-direction blowouts). The **~3700 loss is stale** — an old blowout the engine has gained past,
-so it is **no longer a valid ceiling**; the band is effectively **open-topped** (floor >3400, no
-established ceiling), still **untriangulated** — **re-anchor vs a ranked NNUE opponent (now ~3700+,
-not the old ~3450–3600) before quoting any point**, and read >3400 as a **floor**, 3700 as a **dead**
-ceiling. (At short movetimes the effective gap to
-full-strength SF is only ~130 Elo / a ~3.7× time-odds ratio — §27.) This **supersedes** the
-earlier ≈3260 "dirty" read (§15, two-blowout) and the one-sided **≈3200** a loss-heavy match
-produced (a mathematical artifact of scoring ≈0%, not a measurement — never quote it). Next:
-NNUE width → **1024** (cheap behind SIMD), hub-restart-durable resume, puzzle generation
+mostly dry on this baseline. **Current strength: NO valid current measurement exists — the only
+CCRL-style anchor is v6 (2026-07-01), and the engine has shipped hundreds of Elo since with no
+re-measure, so any number on file is STALE and UNDERSTATES today's binary.** Do **not** quote
+3400, 3700, ≈3500, or any point as current — that is quoting a v6-era number for a much stronger
+engine (the exact stale-docs trap). What we can honestly say:
+- **Last real measurement:** v6, ENGINE_STRENGTH.md §20 — **100W–0L vs a ~3400 engine** (a blowout,
+  so an *underestimate* even for v6) and an **old** loss vs a ~3700 engine (stale — an engine we've
+  since gained past; **not** a current ceiling).
+- **Shipped since v6, unmeasured:** v9 threats, **v12 Leela/test80 data (+24 movetime)**, the
+  **+23.3 search stack**, corrhist/singular/futility, nmpgate/qsfut, recompiled book — plus the
+  in-flight search wave. Hundreds of Elo, zero re-anchors.
+- **Empirical tell (§27):** at blitz movetimes gomachine beats **full-force ("Unleashed", elo=0)
+  Stockfish** with only a ~3–4× time-odds ratio in its favor — near-even-with-full-force-SF at
+  blitz; the gap only opens at long/CCRL time controls. You cannot do that at 3400.
+- **Conclusion:** strength is **materially above the old ~3400 v6 mark, upper bound unmeasured,
+  untriangulated.** **Re-anchor vs a ranked NNUE opponent (target now ~3700+, not the old
+  ~3450–3600), scoring ~50%, before publishing ANY point number.** This **supersedes** the earlier
+  ≈3260 "dirty" read (§15) and the one-sided **≈3200** artifact (scoring ≈0% — never quote it). Next:
+NNUE width → **1024** (NOT "cheap" — a single-SCReLU→1 tail is int16-bound, ~1.7× node cost with
+no int8-tail relief; the only prior 1024 was a 32-sb *stub*, never tested at maturity — see ARCH_DIRECTION
+§6 / ENGINE_STRENGTH §29.5; data-first (640-sb test80) is the safer next lever), hub-restart-durable resume, puzzle generation
 pipeline, reworked-selective versions of the rejected search patches (PV-only IIR,
 scaled capthist, conthist that doesn't double-count history), **SPSA**,
 precise level↔Elo *calibration*, a true cross-pool ranked queue. See `docs/SPEC.md` §11 roadmap.

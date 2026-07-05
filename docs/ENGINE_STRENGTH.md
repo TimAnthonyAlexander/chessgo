@@ -81,17 +81,19 @@ gomachine bench vs-stockfish --sf /opt/homebrew/bin/stockfish --sf-elo 2500 \
   --movetime 100 --games 60 --threads 4
 ```
 
-**Current reading — STALE FLOOR, DEAD CEILING, re-anchor pending (see §28): the 3400–3700 CCRL
-Blitz band (measured 2026-07-01, §20) is superseded upward and now open-topped.** It predates ~25 Elo
-of shipped movetime patches (§23/§25/§26.4) and was never triangulated (both reference matches are
-opposite-direction blowouts). The **~3700 top is stale** — that loss is an old match, and the engine
-has gained substantially since, so it is **no longer a valid ceiling**; only the floor (>3400) still
-holds. True strength is **above the floor with no measured upper bound** and still **untriangulated**
-— **re-anchor vs a ranked NNUE opponent (the old ~3450–3600 target is now too weak; use ~3700+)
-before quoting any number** (§28). The 2026-07-01 sub-reading, kept for the record: 100–0 vs a ~3400
-engine (hard floor >3400), plus an **old** lost match vs a ~3700 engine that no longer bounds current
-strength, untriangulated. The ≈3260/≈3200 numbers below are also **superseded**; the ≈3200 in
-particular was a one-sided all-losses artifact — see §20. The reads below are kept for the record.
+**Current reading — THERE IS NO VALID CURRENT MEASUREMENT; re-anchor pending (see §28).** The only
+CCRL-style anchor on file is **v6 (2026-07-01, §20)**, and the engine has shipped **hundreds of Elo
+since with no re-measure** (v9 threats, v12 Leela/test80 data, the +23.3 search stack, corrhist/
+singular/futility, nmpgate/qsfut, book recompile). So every number below is **STALE and
+UNDERSTATES today's binary** — do **not** quote 3400, 3700, ≈3500, ≈3260, or ≈3200 as current;
+that is quoting a v6-era figure for a much stronger engine. What holds: v6's floor (>3400, from a
+100–0 blowout, so an *underestimate* even for v6); the ~3700 loss is an **old** match the engine has
+gained past (**not** a current ceiling); and at blitz movetimes gomachine beats **full-force
+Stockfish** at only a ~3–4× time-odds ratio (§27) — impossible at 3400. **Conclusion: strength is
+materially above the old ~3400 v6 mark, upper bound unmeasured, untriangulated — re-anchor vs a
+ranked NNUE opponent (~3700+, the old ~3450–3600 target is now too weak), scoring ~50%, before
+quoting ANY point number.** The ≈3260/≈3200 reads below are superseded (≈3200 was a one-sided
+all-losses artifact); all reads below are kept **for the record only**, not as current strength.
 
 **Prior reading (2026-06-29, CCRL Blitz anchor — the then-headline figure, now raised to the
 3400–3700 bracket by §20):** **≈3260 "dirty" CCRL Blitz.** Measured by
@@ -361,12 +363,13 @@ the sign of the result.
 | **Output buckets (tested — WASH)** | **≈0 @ movetime** | done | v8 net: +90 @ fixed-nodes but ≈0 @ movetime & fixed-depth — a fixed-nodes mirage (§14.3–14.4). Infra (GNN3 + buckets) banked in code; v8 net **not promoted** |
 | SPSA (Elo-in-the-loop weight tuning) | modest | medium | the *correct* way to tune the few params with no static objective |
 
-Current strength: **stale 3400–3700 CCRL Blitz band — treat >3400 as a floor and 3700 as a DEAD
-ceiling** (§20, measured 2026-07-01; now **superseded upward** by ~25 Elo of shipped patches —
-§23/§25/§26.4 — and still **untriangulated**, see §28). The ~3700 top is an old blowout, and the
-engine has gained substantially since, so the band is effectively **open-topped**. **Re-anchor vs a
-ranked NNUE opponent — the old ~3450–3600 target is now too weak; use ~3700+ — before quoting a point
-number.** The earlier **≈3260 "dirty"** read (2026-06-29, §15 — Starzix 5.0 **3276 ± 83** /
+Current strength: **no valid current measurement — the only anchor is v6 (2026-07-01, §20) and the
+engine has shipped hundreds of Elo since with no re-measure, so the 3400–3700 band is STALE and
+UNDERSTATES the current binary.** Do not quote 3400/3700/any point as current. v6's floor (>3400,
+from a 100–0 blowout = underestimate) and the **old** ~3700 loss (no longer a valid ceiling — engine
+has gained past it) are historical record only. Empirically, gomachine beats **full-force Stockfish**
+at a ~3–4× blitz time-odds ratio (§27) — impossible at 3400. **Re-anchor vs a ranked NNUE opponent
+(~3700+, the old ~3450–3600 target is now too weak), ~50% score, before quoting ANY point number.** The earlier **≈3260 "dirty"** read (2026-06-29, §15 — Starzix 5.0 **3276 ± 83** /
 Viridithas 17.0.0 **3245 ± 94** @ 100 ms) is itself superseded by that band. Full-strength
 Stockfish 17.1 (**~4080 CCRL Blitz**) sits at *most* ~680 CCRL above the floor *at CCRL time controls*
 (the ~380 lower end used the now-dead 3700 ceiling, so the real gap is smaller/unknown) — and at
