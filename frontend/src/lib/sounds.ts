@@ -78,8 +78,8 @@ function audio(): { c: AudioContext; out: GainNode } | null {
         master.connect(ctx.destination)
     }
     // Resume on ANY non-running state, not just 'suspended'. Safari/iOS park the
-    // context in 'interrupted' (another tab/app grabbed the audio session, screen
-    // lock, long idle); Chrome uses 'suspended'. resume() is a no-op when running.
+    // context in 'interrupted' whenever OUR tab is backgrounded/occluded, or after a
+    // screen lock / long idle; Chrome uses 'suspended'. resume() is a no-op when running.
     // It may reject on an interrupted context — that's fine, the gesture handler
     // below is what actually recovers it; we just never want to throw here.
     if (ctx.state !== 'running') void ctx.resume().catch(() => {})
@@ -333,10 +333,12 @@ export function playForSan(san: string, gameOver: boolean): void {
 // + starting a 1-sample SILENT buffer inside the gesture is the "the user engaged
 // with this site's audio" signal Safari wants (resuming alone is weaker on Safari/iOS).
 //
-// Every LATER gesture recovers: Safari flips a backgrounded tab's context to
-// 'interrupted' whenever another tab/app takes the audio session (the exact
-// two-tab / switch-away-and-back case), and a context can also wedge after a long
-// idle or a screen lock. The ONLY reliable cure is resume() from a real gesture —
+// Every LATER gesture recovers: Safari suspends/interrupts a tab's AudioContext
+// whenever THAT tab is backgrounded, minimized, or occluded (WebKit #231105/#237878)
+// — unlike <video>/<audio>, which Safari lets keep playing in the background, so
+// this is Web-Audio-specific, not cross-tab session stealing. It can also wedge
+// after a long idle or a screen lock. The ONLY reliable cure is resume() from a
+// real gesture —
 // resume() outside a gesture rejects on an interrupted context. So we must keep the
 // listener attached forever: the next click the user makes (e.g. a board move) is
 // precisely what un-wedges audio, and it can only do that if we're still listening.
