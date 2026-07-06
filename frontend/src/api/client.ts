@@ -579,6 +579,9 @@ export interface User {
     // Duck Chess — its own isolated rating pool (no time-control split).
     rating_duck: number
     games_duck: number
+    // Crazyhouse — its own isolated rating pool (no time-control split).
+    rating_crazyhouse: number
+    games_crazyhouse: number
     // Per-category Glicko-2 provisional flag (RD > 110): the rating is still
     // settling and is shown with a "?". Keyed by category, incl. 'puzzle' + 'duck'.
     provisional: Record<string, boolean>

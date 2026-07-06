@@ -79,20 +79,24 @@ func resolveConfig(lim Limits) searchConfig {
 // master level.
 func applyRating(cfg *searchConfig, rating int) {
 	r := clampInt(rating, 700, 3500)
+	// Depth ladder lowered a full tier (was 2/3/4/5): the capture+check quiescence
+	// makes even a shallow Crazyhouse search tactically lethal, so it played well
+	// above its nominal rating. A pure UX feel knob for the casual bot — not the
+	// competitive engine.
 	switch {
-	case r < 1600:
+	case r < 1800:
+		cfg.depth = 1
+	case r < 2400:
 		cfg.depth = 2
-	case r < 2200:
+	case r < 3000:
 		cfg.depth = 3
-	case r < 2800:
-		cfg.depth = 4
 	default:
-		cfg.depth = 5
+		cfg.depth = 4
 	}
-	if r < 2800 {
-		u := float64(2800-r) / float64(2800-700) // 0..1, 1 at the 700 floor
-		cfg.noise = int(300.0 * u * u)
-		cfg.blunder = 0.5 * u * u
+	if r < 3000 {
+		u := float64(3000-r) / float64(3000-700) // 0..1, 1 at the 700 floor
+		cfg.noise = int(420.0 * u * u)
+		cfg.blunder = 0.72 * u * u
 	}
 }
 

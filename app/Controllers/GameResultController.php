@@ -64,7 +64,11 @@ class GameResultController extends Controller
         // Chess960 fall back to the duration-derived time-control category. This
         // mirrors the hub's categoryFor().
         $variant = $this->normalizeVariant($b['variant'] ?? null);
-        $category = $variant === 'duck' ? 'duck' : $this->glicko->categoryForPool($pool);
+        $category = match ($variant) {
+            'duck' => 'duck',
+            'crazyhouse' => 'crazyhouse',
+            default => $this->glicko->categoryForPool($pool),
+        };
         $rated = (bool)($b['rated'] ?? false);
 
         $game = new Game();

@@ -20,11 +20,11 @@ import "github.com/timanthonyalexander/gomachine/internal/chess"
 // PieceMove is a single piece move (no duck). Special flags are derived by the
 // generator; the applier trusts them, so a hand-built PieceMove must set them.
 type PieceMove struct {
-	From  chess.Square
-	To    chess.Square
-	Promo chess.PieceType // chess.NoPieceType when not a promotion
-	EP    bool            // en-passant capture
-	Castle bool           // castling (To is the king's destination file g/c)
+	From   chess.Square
+	To     chess.Square
+	Promo  chess.PieceType // chess.NoPieceType when not a promotion
+	EP     bool            // en-passant capture
+	Castle bool            // castling (To is the king's destination file g/c)
 }
 
 // promoFromChar maps a UCI promotion letter to a piece type (NoPieceType on miss).

@@ -25,6 +25,10 @@ import { DuckGlyph } from '../../components/DuckGlyph'
 // own pool separate from the standard time-control queues.
 export const DUCK_POOL = '5+0'
 
+// Crazyhouse quick-pairing pool — one isolated pool (its own rating), like Duck.
+// Blitz suits the sharp, tactical variant.
+export const CRAZYHOUSE_POOL = '3+0'
+
 // Quick-pairing presets, grouped by time-control category.
 export interface Preset {
     time: string
@@ -32,6 +36,7 @@ export interface Preset {
 }
 export const PRESETS: Preset[] = [
     { time: '1+0', cat: 'Bullet' },
+    { time: '1+1', cat: 'Bullet' },
     { time: '2+1', cat: 'Bullet' },
     { time: '3+0', cat: 'Blitz' },
     { time: '3+2', cat: 'Blitz' },
@@ -260,7 +265,38 @@ export function QuickPairingPanel({
                         onClick={() => onQueue(`${p.cat} · ${p.time}`, p.time)}
                     />
                 ))}
+            </Box>
+
+            {/* Variants get their own section + 2-up grid, so it grows independently
+                as new variants ship without knocking the time-control grid off-count. */}
+            <Typography
+                sx={{
+                    mt: 2,
+                    mb: 1,
+                    fontFamily: 'var(--font-display)',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    letterSpacing: 0.6,
+                    textTransform: 'uppercase',
+                    color: 'var(--text-dim)',
+                }}
+            >
+                Variants
+            </Typography>
+            <Box
+                sx={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(2, 1fr)',
+                    gridAutoRows: '1fr',
+                    gap: 1.25,
+                }}
+            >
                 <DuckCell onClick={() => onQueue(`Duck Chess · ${DUCK_POOL}`, DUCK_POOL, 'duck')} />
+                <CrazyhouseCell
+                    onClick={() =>
+                        onQueue(`Crazyhouse · ${CRAZYHOUSE_POOL}`, CRAZYHOUSE_POOL, 'crazyhouse')
+                    }
+                />
             </Box>
         </Panel>
     )
@@ -558,6 +594,80 @@ function DuckCell({ onClick }: { onClick: () => void }) {
                     </Box>
                     <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)', fontWeight: 500 }}>
                         Duck Chess
+                    </Typography>
+                </Box>
+                {eloRange && (
+                    <Typography sx={{ fontSize: 11, color: 'var(--muted)' }}>{eloRange}</Typography>
+                )}
+            </Box>
+        </Box>
+    )
+}
+
+function CrazyhouseCell({ onClick }: { onClick: () => void }) {
+    const { user } = useAuth()
+
+    // Crazyhouse has its own isolated rating — show the same matchmaking Elo range
+    // the time-control cells show, from the user's crazyhouse rating.
+    let eloRange: string | null = null
+    if (user) {
+        const rounded = Math.round(user.rating_crazyhouse / 50) * 50
+        eloRange = `${(rounded - 100).toLocaleString('de-DE')}–${(rounded + 100).toLocaleString('de-DE')}`
+    }
+
+    return (
+        <Box
+            onClick={onClick}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onClick()
+                }
+            }}
+            sx={{
+                position: 'relative',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 1,
+                py: { xs: 2.5, md: 3 },
+                bgcolor: 'var(--surface-2)',
+                border: '1px solid var(--line-soft)',
+                borderRadius: '12px',
+                cursor: 'pointer',
+                overflow: 'hidden',
+                transition: 'border-color 0.12s ease, background 0.12s ease',
+                '&:hover': {
+                    borderColor: 'var(--accent-line)',
+                    bgcolor: 'var(--surface)',
+                },
+            }}
+        >
+            <Typography
+                sx={{
+                    fontFamily: 'var(--font-display)',
+                    fontSize: { xs: 25, md: 30 },
+                    fontWeight: 500,
+                    lineHeight: 1,
+                    letterSpacing: '-0.01em',
+                }}
+            >
+                {CRAZYHOUSE_POOL}
+            </Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                    <Box
+                        component="span"
+                        sx={{ fontSize: 14, lineHeight: 1, display: 'flex' }}
+                        aria-hidden
+                    >
+                        ⇄
+                    </Box>
+                    <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)', fontWeight: 500 }}>
+                        Crazyhouse
                     </Typography>
                 </Box>
                 {eloRange && (

@@ -86,8 +86,8 @@ func TestScriptedMiniGameToKingCapture(t *testing.T) {
 		move       string
 		wantStatus Status
 	}{
-		{"a1a8:c4", Ongoing}, // white: rook to the 8th rank, eyeing the king
-		{"h7h6:e4", Ongoing}, // black: a tempo pawn push (king stays boxed)
+		{"a1a8:c4", Ongoing},  // white: rook to the 8th rank, eyeing the king
+		{"h7h6:e4", Ongoing},  // black: a tempo pawn push (king stays boxed)
 		{"a8e8:g4", WhiteWin}, // white: rook slides a8->e8, capturing the king
 	}
 
@@ -125,8 +125,8 @@ func TestScriptedMiniGameBlackWins(t *testing.T) {
 		move       string
 		wantStatus Status
 	}{
-		{"a8a1:c5", Ongoing}, // black: rook to the 1st rank
-		{"h2h3:e5", Ongoing}, // white: a tempo pawn push
+		{"a8a1:c5", Ongoing},  // black: rook to the 1st rank
+		{"h2h3:e5", Ongoing},  // white: a tempo pawn push
 		{"a1e1:g5", BlackWin}, // black: rook slides a1->e1, capturing the white king
 	}
 	cur := st

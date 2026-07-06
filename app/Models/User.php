@@ -90,6 +90,19 @@ class User extends BaseModel
 
     public int $games_duck = 0;
 
+    // Crazyhouse is likewise a separate, isolated category (its own game, no
+    // time-control split — every crazyhouse game, whatever its clock, is one
+    // "crazyhouse" rating). Fed only by crazyhouse games. See GameResultController.
+    public int $rating_crazyhouse = 1500;
+
+    public float $rd_crazyhouse = 350.0;
+
+    public float $vol_crazyhouse = 0.06;
+
+    public ?string $rated_at_crazyhouse = null;
+
+    public int $games_crazyhouse = 0;
+
     /**
      * Define indexes for this model
      * @var array<string, string>
@@ -111,6 +124,7 @@ class User extends BaseModel
         'rated_at_classical' => ['type' => 'TEXT', 'nullable' => true],
         'rated_at_puzzle' => ['type' => 'TEXT', 'nullable' => true],
         'rated_at_duck' => ['type' => 'TEXT', 'nullable' => true],
+        'rated_at_crazyhouse' => ['type' => 'TEXT', 'nullable' => true],
     ];
 
     public function checkPassword(string $password): bool
@@ -118,8 +132,8 @@ class User extends BaseModel
         return password_verify($password, $this->password);
     }
 
-    /** Categories carrying a Glicko-2 rating, including the isolated puzzle + duck pools. */
-    private const RATING_CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'puzzle', 'duck'];
+    /** Categories carrying a Glicko-2 rating, including the isolated puzzle + duck + crazyhouse pools. */
+    private const RATING_CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'puzzle', 'duck', 'crazyhouse'];
 
     /**
      * Serialize for API output. Overrides BaseModel::jsonSerialize() to strip

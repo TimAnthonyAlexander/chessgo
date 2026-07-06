@@ -100,9 +100,13 @@ func applyRating(cfg *searchConfig, rating int) {
 	}
 	if r < 2800 {
 		u := float64(2800-r) / float64(2800-700) // 0..1, 1 at the 700 floor
-		cfg.noise = int(320.0 * u * u)
-		cfg.blunder = 0.6 * u * u
-		cfg.duckRandom = 0.8 * u * u
+		// Weakening coefficients bumped (~+40%) — the duck bot played well ABOVE its
+		// nominal rating (flawless duck blocks + clean eval even at shallow depth), so
+		// a given rating now injects more eval noise, blunders more often, and places a
+		// sloppy duck more often. Pure UX feel knob (not the competitive engine).
+		cfg.noise = int(450.0 * u * u)
+		cfg.blunder = 0.82 * u * u
+		cfg.duckRandom = 0.92 * u * u
 	}
 }
 

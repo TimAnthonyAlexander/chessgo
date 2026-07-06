@@ -756,6 +756,51 @@
             "table": "game",
             "operation": "add_index",
             "warning": null
+        },
+        {
+            "id": "mig_973c8e52f08a",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rating_crazyhouse` INT NOT NULL DEFAULT 1500",
+            "destructive": false,
+            "generated_at": "2026-07-06T12:44:15+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_c1bd0cea3ca9",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rd_crazyhouse` DOUBLE NOT NULL DEFAULT 350",
+            "destructive": false,
+            "generated_at": "2026-07-06T12:44:15+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_32086159960d",
+            "sql": "ALTER TABLE `user` ADD COLUMN `vol_crazyhouse` DOUBLE NOT NULL DEFAULT 0.06",
+            "destructive": false,
+            "generated_at": "2026-07-06T12:44:15+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_4ea0cd5bafa0",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rated_at_crazyhouse` TEXT",
+            "destructive": false,
+            "generated_at": "2026-07-06T12:44:15+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_125cc882ceee",
+            "sql": "ALTER TABLE `user` ADD COLUMN `games_crazyhouse` INT NOT NULL DEFAULT 0",
+            "destructive": false,
+            "generated_at": "2026-07-06T12:44:15+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
         }
     ]
 }

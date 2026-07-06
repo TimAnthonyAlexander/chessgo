@@ -50,13 +50,16 @@ func parseTimeControl(pool string) (timeControl, bool) {
 }
 
 // categoryFor picks the rating category for a game from BOTH its pool and its
-// variant. Duck Chess is its own isolated pool (no time-control split — every
-// duck game, whatever its clock, is one "duck" rating), mirroring how BaseAPI
-// routes it in GameResultController. Standard/Chess960 fall back to the
-// duration-derived time-control category.
+// variant. Duck Chess and Crazyhouse are each their own isolated pool (no
+// time-control split — every game of that variant, whatever its clock, is one
+// rating), mirroring how BaseAPI routes them in GameResultController.
+// Standard/Chess960 fall back to the duration-derived time-control category.
 func categoryFor(pool, variant string) string {
-	if variant == variantDuck {
+	switch variant {
+	case variantDuck:
 		return "duck"
+	case variantCrazyhouse:
+		return "crazyhouse"
 	}
 	return categoryForPool(pool)
 }

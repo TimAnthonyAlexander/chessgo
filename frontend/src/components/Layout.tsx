@@ -430,6 +430,11 @@ function UserMenu({ user }: { user: User }) {
                             value={`${user.rating_duck}${user.provisional?.duck ? '?' : ''}`}
                             games={user.games_duck}
                         />
+                        <RatingLine
+                            label="Crazyhouse"
+                            value={`${user.rating_crazyhouse}${user.provisional?.crazyhouse ? '?' : ''}`}
+                            games={user.games_crazyhouse}
+                        />
                         <Divider sx={{ borderColor: 'var(--line-soft)', my: 0.5 }} />
                         <MenuAction
                             icon={<LogOut size={15} />}

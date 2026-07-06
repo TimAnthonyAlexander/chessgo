@@ -127,7 +127,7 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variantID string
 		// vs the bot), mirroring startGameWith: standard feeds the time-control pools
 		// and Duck feeds its own isolated "duck" pool, but Chess960 stays unrated.
 		// Anonymous players can't be rated. Explicit /bot games never reach the hub.
-		rated:     !human.id.Anon && (variantID == variantStandard || variantID == variantDuck),
+		rated:     !human.id.Anon && (variantID == variantStandard || variantID == variantDuck || variantID == variantCrazyhouse),
 		clockMs:   [2]int64{tc.Base, tc.Base},
 		turnStart: time.Now(),
 		online:    [2]bool{true, true},

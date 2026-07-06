@@ -8,8 +8,8 @@ import (
 
 // startBotGame with variant "crazyhouse" routes entirely through the variant
 // framework (no crazyhouse-specific hub code): it builds a live state, seats one
-// bot, carries the pocket in the snapshot, and is UNRATED (Crazyhouse has no
-// rating pool, so it falls through the rated gate like Chess960).
+// bot, carries the pocket in the snapshot, and is RATED for a logged-in human on
+// its own isolated "crazyhouse" pool (categoryFor → "crazyhouse").
 func TestStartBotGameCrazyhouse(t *testing.T) {
 	h := New(testSecret)
 	human := &Client{id: auth.Identity{UserID: "u1", Name: "human", Rating: 1500}, send: make(chan []byte, sendBuffer)}
@@ -22,8 +22,8 @@ func TestStartBotGameCrazyhouse(t *testing.T) {
 	if g.variant != variantCrazyhouse {
 		t.Errorf("variant = %q, want crazyhouse", g.variant)
 	}
-	if g.rated {
-		t.Error("Crazyhouse has no rating pool; the game must be unrated")
+	if !g.rated {
+		t.Error("a crazyhouse bot game with a logged-in human must be rated (crazyhouse pool)")
 	}
 	if g.white.isBot == g.black.isBot {
 		t.Errorf("expected exactly one bot side, white=%v black=%v", g.white.isBot, g.black.isBot)
@@ -46,5 +46,17 @@ func TestStartBotGameCrazyhouse(t *testing.T) {
 func TestCrazyhouseQueueKeyDistinct(t *testing.T) {
 	if queueKey("3+0", variantCrazyhouse) == queueKey("3+0", variantStandard) {
 		t.Error("crazyhouse must have a distinct queue key from standard")
+	}
+}
+
+// Crazyhouse routes to its own isolated rating category, independent of the clock.
+func TestCrazyhouseCategory(t *testing.T) {
+	for _, pool := range []string{"1+0", "3+0", "10+0", "30+0"} {
+		if got := categoryFor(pool, variantCrazyhouse); got != "crazyhouse" {
+			t.Errorf("categoryFor(%q, crazyhouse) = %q, want crazyhouse", pool, got)
+		}
+	}
+	if categoryFor("3+0", variantStandard) == "crazyhouse" {
+		t.Error("standard must not use the crazyhouse category")
 	}
 }

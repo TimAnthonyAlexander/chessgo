@@ -324,7 +324,7 @@ func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, r
 	// Chess960 alone stays unrated (no dedicated pool). This is the single funnel
 	// for both public matchmaking and private challenges, so gating rated here
 	// covers every started game.
-	rated = rated && (variantID == variantStandard || variantID == variantDuck)
+	rated = rated && (variantID == variantStandard || variantID == variantDuck || variantID == variantCrazyhouse)
 	// The start position is the ONLY thing standard vs Chess960 changes: standard
 	// uses the classic start FEN, Chess960 a random Fischer-random start. g.startFen
 	// MUST be this FEN (not chess.StartFEN), or a takeback rebuild would replay from
