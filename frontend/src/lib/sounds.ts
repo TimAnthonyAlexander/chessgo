@@ -52,14 +52,19 @@ const LOOKAHEAD = 0.015
 // shares the one AudioContext, so this makes sound instant on ALL of them at once,
 // with no per-page wiring.
 //
-// Strictly gated: only ever started AFTER a real gesture (`armed`) and only while
-// sound is `enabled`, so it can never read as a pre-gesture autoplay attempt and
-// never holds the audio session (or the tab's "playing audio" indicator) open
-// while the user has muted us.
+// Strictly FOREGROUND-ONLY and gated: started only AFTER a real gesture (`armed`),
+// only while sound is `enabled`, and only while the tab is VISIBLE. Running it in a
+// backgrounded tab is what caused the "indicator on but silent, and two chessgo
+// tabs fight" bug: an always-rendering source forces the context to 'running' even
+// after Safari has grabbed the single output session for another tab, which masks
+// the interruption from resume() (a no-op on a 'running' context) and pins the
+// audio indicator. Foreground-only + suspend-on-hide (below) makes tabs take turns
+// cleanly instead of wedging each other.
 let keepAlive: { osc: OscillatorNode; gain: GainNode } | null = null
 
 function startKeepAlive(): void {
     if (keepAlive || !armed || !enabled) return
+    if (typeof document !== 'undefined' && document.hidden) return
     const a = audio()
     if (!a) return
     try {
@@ -392,14 +397,15 @@ export function playForSan(san: string, gameOver: boolean): void {
 // with this site's audio" signal Safari wants (resuming alone is weaker on Safari/iOS).
 //
 // Every LATER gesture recovers: Safari suspends/interrupts a tab's AudioContext
-// whenever THAT tab is backgrounded, minimized, or occluded (WebKit #231105/#237878)
-// — unlike <video>/<audio>, which Safari lets keep playing in the background, so
-// this is Web-Audio-specific, not cross-tab session stealing. It can also wedge
-// after a long idle or a screen lock. The ONLY reliable cure is resume() from a
-// real gesture —
-// resume() outside a gesture rejects on an interrupted context. So we must keep the
-// listener attached forever: the next click the user makes (e.g. a board move) is
-// precisely what un-wedges audio, and it can only do that if we're still listening.
+// whenever THAT tab is backgrounded, minimized, or occluded (WebKit #231105/#237878),
+// AND when another tab (a second chessgo instance, a video, anything) steals the one
+// output session — the backgrounded context can be left 'running' but silent. It can
+// also wedge after a long idle or a screen lock. We defend against the wedge by
+// suspending ourselves on tab-hide (see visibilitychange below), and the ONLY
+// reliable cure once wedged is resume() from a real gesture — resume() outside a
+// gesture rejects on an interrupted context. So we keep the listener attached
+// forever: the next click (e.g. a board move) is what un-wedges audio, and it can
+// only do that if we're still listening.
 // Detaching after the first unlock (as we used to) is what left audio permanently
 // silent until a full Safari restart. pointerdown covers mouse + touch.
 if (typeof window !== 'undefined') {
@@ -430,13 +436,20 @@ if (typeof window !== 'undefined') {
     // deliberately do NOT tear the context down here: destroying it on every resume
     // that didn't instantly succeed was what left all later sounds permanently silent.
     document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible' && ctx && ctx.state !== 'running') {
-            void ctx.resume().catch(() => {})
-            // Safari interrupts the context (and idles the unit) while backgrounded;
-            // on return, make sure the keep-alive is running again so sound stays
-            // instant. The osc persists across suspend/resume, but if it was ever torn
-            // down (mute) this re-warms it.
-            startKeepAlive()
+        if (document.visibilityState === 'hidden') {
+            // Leaving the tab: drop the keep-alive (releases the audio indicator and
+            // stops two chessgo tabs contending) and PROACTIVELY suspend. A context we
+            // suspend ourselves comes back with a plain resume(); the 'running-but-
+            // silent' wedge Safari imposes when another tab steals the output session
+            // does NOT — so we get there first with a clean, recoverable 'suspended'.
+            stopKeepAlive()
+            if (ctx && ctx.state === 'running') void ctx.suspend().catch(() => {})
+            return
         }
+        // Returning to the tab: resume the cleanly-suspended context and re-warm so
+        // sound is instant again. If Safari still wedged it, the next gesture's
+        // prime() (resume + re-warm) is the fallback recovery.
+        if (ctx && ctx.state !== 'running') void ctx.resume().catch(() => {})
+        startKeepAlive()
     })
 }
