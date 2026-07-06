@@ -2010,3 +2010,48 @@ reliable signal (interleaved medians cancel box drift); the absolute base wander
 
 **Multi-thread anchor (rough):** aggregate NPS scales ~9.6× at 12 threads (~3.8M), tapering past 8
 (per-core 605K→320K, memory-bandwidth bound). Prod runs 2 threads, in the near-linear region.
+
+### 30.3 Why the accumulator-kernel well is dry on amd64 — *measured*, not asserted (2026-07-07)
+
+Re-run at HEAD `b5ac57e` (coalla, KB `lean.bin`, `bench nps -depth 18 -iters 12`, node-exact
+1 574 334 both sides). The §30.2 "net-negative, don't enable" verdicts on batch/prefetch were
+correct but had **no mechanism** behind them. This pins it down and the mechanism generalises:
+*any* memory-traffic-reducing kernel rewrite (batch, fuse, lazy-apply) is dead on this arch.
+
+**Refreshed A/B (interleaved ratios vs prod base 549 830 NPS):**
+`prefetch` 0.978 · `batchApply` **0.9999** · `directApply` 1.008 · `splitRefresh` **1.043** · `finny` **1.055**.
+(batchApply is now a *wash* whole-engine, not the §30.2 0.97 — the AVX-512 `applyThreatBatchSIMD`
+widened to 32-lane since. `finny` re-measures **+1.1% over splitRefresh** here, contradicting the
+§30.2 wash — either the intervening `enriched_acc`/`kingbucket` edits helped option-a or it's
+run-noise; **needs one confirming interleaved run before shipping** `SetFinny` in the prod loader.)
+
+**The decisive new datapoint — an *isolated* amd64 kernel A/B.** The existing microbench
+(`batchapply_bench_test.go`) is `//go:build …&& arm64` — so no isolated amd64 kernel number ever
+existed, only whole-engine NPS. Added `batchapply_amd64_bench_test.go` (amd64 twin: `applyThreatBatchSIMD`
+one-load/store-per-32-lane-block vs the sequential `addColI8SIMD` per-column path, same K columns → identical acc):
+
+| K (features/move) | Seq (per-column) | Batch (one pass) | Δ |
+|---|---|---|---|
+| 20 | ~337 ns | ~380 ns | **Batch +13% slower** |
+| 40 | ~666 ns | ~730 ns | **Batch +10% slower** |
+
+Batch does **fewer** acc load/stores yet **loses** → loads were never the bottleneck. `perf stat`
+(K40, `perf_event_paranoid=1`) confirms the resource: both **L1-resident** (L1-dcache miss 1.5% Seq /
+0.2% Batch, LLC `cache-misses`=0) and running at **5.5–5.9 IPC** — at Zen 4's ~6-wide retirement
+ceiling. Batch trades 3.3B (free, L1-resident) loads for ~7B *more* index-math instructions
+(`(f-off)*h` + bounds per feature per block); at peak IPC total-uop-throughput is the binding
+constraint, so the trade loses.
+
+**Conclusion:** the amd64 accumulator apply is **compute/throughput-bound, L1-resident, near-peak
+IPC — NOT memory-bound.** Halving memory traffic optimises a non-bottleneck. This *refutes* the
+standing "a leaner fused kernel could still win" hypothesis on amd64: fusion's only lever is fewer
+loads, loads aren't the constraint, and any fused variant still pays the index uops. Kernel-level
+speed (batch / fuse / lazy-apply) is **structurally dead on the shipping arch** — the only
+arch-transferable eval-speed lever left is **fewer features-per-move** (algorithmic; helps both
+arches, and is the switch that could revive lazy), and the real Elo is in the data retrain
+(Elo-per-node), which this profile cannot see. cf. [[arm64-vs-amd64-speed-divergence]].
+
+**Note:** arm64/M3 profiles make `addColI8SIMD` look like a fat concentrated ~20%-flat target and
+batch wins +50% there — that concentration is an arm64 artifact (weaker/narrower vector units vs
+its huge L1 + HW prefetch). On amd64 the same kernel is spread + L1-resident + near-peak IPC. Never
+conclude an eval-kernel win from arm64 alone.
