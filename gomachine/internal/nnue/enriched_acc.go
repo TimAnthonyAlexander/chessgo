@@ -51,7 +51,7 @@ type EnrichedStack struct {
 	// the delta and Pop restores via the inverse delta. Used when net.inPlaceEnabled().
 	accW, accB []int16
 
-	// batchApply scratch: the threat-only (f>=InputDim) partitions of one applyDiff
+	// batchApply scratch: the threat-only (f>=PsqSize) partitions of one applyDiff
 	// call's sub/add lists, reused per call to avoid alloc.
 	batchSub, batchAdd []uint16
 }
@@ -155,7 +155,7 @@ func (st *EnrichedStack) applyDiff(acc []int16, parent, child []uint16) {
 		// collected and applied in ONE accumulator load+store pass via applyThreatBatch
 		// instead of one pass per column. Like directApply this applies every occurrence
 		// (no counts cancellation) — bit-exact because int16 add/sub commute/associate.
-		off := InputDim
+		off := PsqSize
 		sub := st.batchSub[:0]
 		add := st.batchAdd[:0]
 		for _, f := range parent {
