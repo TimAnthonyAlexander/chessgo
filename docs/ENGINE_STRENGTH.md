@@ -1933,3 +1933,38 @@ ARCH_DIRECTION; 512→1024 not a win at 32sb: −30 fixed-depth, ~parity movetim
 (+24 movetime). The next real gains are more/better data** (a 640-sb run on test80 — the loss was
 still descending pre-anneal, so it likely had more to give — and eventually self-generated data, the
 ceiling-breaker), not another flag.
+
+## 30. Coalla SIMD single-thread NPS baseline (2026-07-06) — the anchor for the KB-net perf push
+
+**Baseline: `605,009` NPS single-thread**, measured on **coalla** (AMD EPYC 9634, Zen 4; AVX-512 incl.
+VNNI/GFNI, fast BMI2/PEXT) with the current **factorized-king-bucket net** (`data/nnue/lean.bin`, 44 MB,
+`H=512 NB=8`, 16 king-buckets: `PsqSize=12288`, `ThreatBlock=9216`, `InputDim=21504`; no v6 fallback).
+Build: `GOEXPERIMENT=simd GOAMD64=v4 ~/go/bin/go1.26.4`. Command:
+`bench nps -baseonly -depth 20 -iters 10 -warmup 3 -lean data/nnue/lean.bin,512,8` (5.84M nodes, deterministic).
+Endgame reference (depth 22): **~1.11M** NPS. This is the number to A/B every no-retrain perf patch against.
+
+**Where the single thread goes** (CPU profile, `bench nps -baseonly -cpuprofile`, mid/endgame):
+- **NNUE accumulator apply + readout ≈ 50% / 40%** — `EnrichedStack.Push`/`pushMoveAware`/`applyDelta`/
+  `applyDiff` + the `addColI8SIMD`/`subColI8SIMD`/`addColSIMD`/`screluDotSIMD` kernels.
+- **`buildAcc` from-scratch rebuild ≈ 10.9%** — and profiling showed it is **100% the king-bucket refresh
+  path** (`buildSlotFrom`), doing a full *dual* rebuild on every bucket-crossing king move. This is the
+  top no-retrain lever (§30.1).
+- **`TT.probe` 9.7% / 12.1%** (single biggest flat — dependent-load stall), move-ordering
+  `selectMove(Legacy)` 8.8% / 4.3%, threat feature-gen `computeDelta` ~10%, chess attacks/SEE + the
+  accumulator `memmove` ~10–13%.
+
+### 30.1 In-flight no-retrain perf work (measured against the 605k baseline)
+Prioritised, all bit-exact / node-count-neutral unless tagged SPRT; each shipped behind a flag, A/B'd
+via `bench nps` (identical node count = bit-exact gate) then a movetime SPRT on coalla:
+1. **Split the king-bucket refresh** — rebuild only the *moving* side's half, delta the opponent half
+   (its king bucket is unchanged). Targets the 10.9% `buildAcc`. Est **+4–7% NPS**. *(in progress)*
+2. **Finny accumulator-refresh cache** — diff-update the moving-side rebuild from a cached
+   `(persp, bucket)` accumulator. Est +2.5–4% on top of #1.
+3. **Staged/lazy move ordering** — try the TT move before scoring the whole list (hash-move fail-highs
+   currently pay a full SEE+contScore scan). Est +5–10% NPS.
+4. **contScore dedup** (reuse the ordering history value in LMR/pruning), **screluDot zmm-widen**,
+   **`see_ge` early-out**, **PEXT sliders** (Zen 4) — smaller bit-exact wins.
+5. **Bucketed TT** (4 slots/64 B line) — strength lever (+5–15 Elo via hit-rate), SPRT-gated.
+
+Fixed en route: `batchApply` used `off := InputDim` (768) as the threat boundary — wrong on a KB net
+(threats start at `PsqSize=12288`) → crash; corrected to `off := PsqSize`.

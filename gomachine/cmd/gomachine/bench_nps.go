@@ -60,15 +60,16 @@ func cmdBenchNPS(args []string) {
 	// inPlace (copy-free single-accumulator push). All are node-count-identical, so
 	// any NPS delta is a pure movetime win; a node mismatch => NOT bit-exact (WARN).
 	type cfg struct {
-		name           string
-		da, pf, ip, ba bool
+		name               string
+		da, pf, ip, ba, sr bool
 	}
 	cfgs := []cfg{
-		{"prod(base)", false, false, false, false},
-		{"prefetch", false, true, false, false},
-		{"batchApply", false, false, false, true},
-		{"batch+pf", false, true, false, true},
-		{"directApply", true, false, false, false},
+		{"prod(base)", false, false, false, false, false},
+		{"prefetch", false, true, false, false, false},
+		{"batchApply", false, false, false, true, false},
+		{"batch+pf", false, true, false, true, false},
+		{"directApply", true, false, false, false, false},
+		{"splitRefresh", false, false, false, false, true},
 	}
 	if *baseOnly {
 		cfgs = cfgs[:1]
@@ -79,6 +80,7 @@ func cmdBenchNPS(args []string) {
 		n.SetPrefetchCols(c.pf)
 		n.SetInPlace(c.ip)
 		n.SetBatchApply(c.ba)
+		n.SetSplitRefresh(c.sr)
 		s.ClearTT()
 		r := s.Search(pos, search.Limits{Depth: *depth}, nil)
 		return r.Nodes, r.Elapsed.Seconds()

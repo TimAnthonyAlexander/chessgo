@@ -114,9 +114,14 @@ func (st *EnrichedStack) pushMoveAwareChanged(pos *chess.Position, m chess.Move)
 // walk-back can drive it. Requires srcIdx to already hold the parent accumulator.
 func (st *EnrichedStack) buildSlotFrom(dstIdx, srcIdx int, pos *chess.Position, m chess.Move) {
 	if kingMoveNeedsRefresh(pos, m) {
-		// King move that CHANGES bucket → every base feature shifts → the incremental
-		// delta is invalid. Rebuild the child slot's accumulator from scratch. Same-
-		// bucket king moves fall through to the normal (correct) delta path below.
+		// King move that CHANGES bucket → the MOVING side's base features shift to a new
+		// bucket copy → its incremental delta is invalid. splitRefresh rebuilds only that
+		// half from scratch and deltas the opponent half (whose king didn't move, so its
+		// bucket offset is unchanged); the default full-rebuild does both halves.
+		if st.net.splitRefresh {
+			st.buildSlotRefreshSplit(dstIdx, srcIdx, pos, m)
+			return
+		}
 		child := *pos
 		var u chess.Undo
 		child.DoMove(m, &u)
@@ -126,6 +131,38 @@ func (st *EnrichedStack) buildSlotFrom(dstIdx, srcIdx int, pos *chess.Position, 
 	}
 	subW, addW, subB, addB := st.computeDelta(pos, m)
 	st.applyDelta(dstIdx, srcIdx, subW, addW, subB, addB)
+}
+
+// buildSlotRefreshSplit handles a bucket-crossing king move by rebuilding ONLY the
+// moving side's accumulator half from scratch (its base features shifted to a new
+// king-bucket copy) and deltaing the OPPONENT half from the parent. computeDelta's
+// offsets come from the parent: the opponent's king didn't move, so its off<opp> is
+// unchanged and its (sub,add) lists are the exact child opponent delta (the moved
+// king appears there as an ordinary relocating piece; threat edges start at PsqSize,
+// bucket-independent). The moving side's lists use a now-stale offset, so we discard
+// them and full-rebuild that half. pos.SideToMove() is the side making m (whose king
+// moves), matching kingBucketOffset's per-perspective base-offset convention.
+func (st *EnrichedStack) buildSlotRefreshSplit(dstIdx, srcIdx int, pos *chess.Position, m chess.Move) {
+	child := *pos
+	var u chess.Undo
+	child.DoMove(m, &u)
+	src := &st.data[srcIdx]
+	dst := &st.data[dstIdx]
+	mover := pos.SideToMove()
+	subW, addW, subB, addB := st.computeDelta(pos, m)
+	if mover == chess.White {
+		st.net.buildAccHalf(dst.w, &child, chess.White) // moving side: full rebuild
+		copy(dst.b, src.b)                              // opponent: delta from parent
+		st.applyDiff(dst.b, subB, addB)
+		_ = subW
+		_ = addW
+	} else {
+		st.net.buildAccHalf(dst.b, &child, chess.Black)
+		copy(dst.w, src.w)
+		st.applyDiff(dst.w, subW, addW)
+		_ = subB
+		_ = addB
+	}
 }
 
 // computeDelta enumerates the changed-edge sub/add feature lists (both perspectives)

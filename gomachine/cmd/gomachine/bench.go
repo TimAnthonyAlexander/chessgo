@@ -269,7 +269,9 @@ func loadDefaultLeanNet() *nnue.EnrichedNet {
 	if err != nil {
 		return nil // no lean net on disk → caller stays on the v6 net
 	}
-	n.QuantizeFTInt8() // int8-FT: the movetime config the prod net ships with
+	n.QuantizeFTInt8()      // int8-FT: the movetime config the prod net ships with
+	n.SetSplitRefresh(true) // bit-exact +2.3% NPS: split king-bucket refresh, rebuild only the moving-side half (§30, 2026-07-06)
+	n.SetDirectApply(true)  // bit-exact +2.5% NPS: skip the counts-array multiset diff (KB-net re-bench of finding A4, §30)
 	return n
 }
 
@@ -398,6 +400,8 @@ func cmdBenchSPRT(args []string) {
 	oldLeanLazy := fs.Bool("old-lean-lazy", false, "same lazy materialization on the --old lean net (for a clean lean-vs-lean lazy A/B)")
 	leanDirect := fs.Bool("lean-direct", false, "skip applyDiff's counts-array multiset-diff on the --new lean net; apply removed/added edges directly (bit-exact NPS lever)")
 	oldLeanDirect := fs.Bool("old-lean-direct", false, "same direct apply on the --old lean net (for a clean lean-vs-lean A/B)")
+	leanSplitRefresh := fs.Bool("lean-splitrefresh", false, "split the king-bucket accumulator refresh: rebuild only the moving side's half, delta the opponent half (bit-exact NPS lever)")
+	oldLeanSplitRefresh := fs.Bool("old-lean-splitrefresh", false, "same split king-bucket refresh on the --old lean net (for a clean lean-vs-lean A/B)")
 	leanNoGeometry := fs.Bool("lean-no-geometry", false, "disable the fast changed-edges threat delta on the --new enriched/lean/pairwise net (fall back to full re-enumeration; bit-identical, for the geometry A/B)")
 	oldLeanNoGeometry := fs.Bool("old-lean-no-geometry", false, "disable the fast changed-edges threat delta on the --old enriched/lean/pairwise net")
 	newLeanPairwise := fs.String("new-lean-pairwise", "", "lean PAIRWISE+threats net for --new: 'path,H,NB' (chessgo_lean_pairwise); forces --concurrency 1")
@@ -455,6 +459,10 @@ func cmdBenchSPRT(args []string) {
 			p.SetDirectApply(true)
 			fmt.Fprintln(os.Stderr, "lean direct apply: ON (no counts-array diff)")
 		}
+		if *leanSplitRefresh {
+			p.SetSplitRefresh(true)
+			fmt.Fprintln(os.Stderr, "lean split king-bucket refresh: ON (moving-side rebuild + opponent delta)")
+		}
 		if *leanLazy {
 			p.SetLazy(true)
 			fmt.Fprintln(os.Stderr, "lean lazy accumulator: ON (deferred materialization)")
@@ -473,6 +481,9 @@ func cmdBenchSPRT(args []string) {
 		}
 		if *oldLeanDirect {
 			p.SetDirectApply(true)
+		}
+		if *oldLeanSplitRefresh {
+			p.SetSplitRefresh(true)
 		}
 		if *oldLeanLazy {
 			p.SetLazy(true)

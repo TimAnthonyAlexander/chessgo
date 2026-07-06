@@ -147,6 +147,15 @@ type EnrichedNet struct {
 	// For leanPairwise, TWi is [NB × H] (the pairwise output is H-wide, not 2H).
 	TWi []int16 // NB * (2H | H)  (bucket-contiguous int16 tail weights)
 
+	// splitRefresh splits the king-bucket accumulator refresh: on a bucket-crossing
+	// king move, only the MOVING side's half is rebuilt from scratch (its base features
+	// shifted to a new bucket copy); the OPPONENT side's half is a plain incremental
+	// delta from the parent (the opponent's king didn't move, so its bucket offset is
+	// unchanged and the moved king is an ordinary relocating piece in its lists). This
+	// replaces the full DUAL from-scratch rebuild (buildAcc) with one half-rebuild +
+	// one delta. Bit-exact; only consulted on the kingMoveNeedsRefresh branch.
+	splitRefresh bool
+
 	// leanPairwise is the LEAN tail with a PAIRWISE FT head (chessgo_lean_pairwise.rs):
 	// CReLU each FT half-pair and multiply → H/2 per perspective, concat → H, one output
 	// dot per bucket. The FT/accumulator/threat-push/int8FT/move-aware path is
@@ -221,6 +230,14 @@ func (n *EnrichedNet) SetPrefetchCols(on bool) { n.prefetchCols = on }
 
 // PrefetchCols reports whether column prefetch is enabled.
 func (n *EnrichedNet) PrefetchCols() bool { return n.prefetchCols }
+
+// SetSplitRefresh toggles the split king-bucket accumulator refresh: rebuild only
+// the moving side's half from scratch, delta the opponent half from the parent.
+// Bit-exact; only consulted on the kingMoveNeedsRefresh branch of buildSlotFrom.
+func (n *EnrichedNet) SetSplitRefresh(on bool) { n.splitRefresh = on }
+
+// SplitRefresh reports whether the split king-bucket refresh path is enabled.
+func (n *EnrichedNet) SplitRefresh() bool { return n.splitRefresh }
 
 // SetLazy toggles deferred accumulator materialization. Only takes effect on the
 // moveAware+changedEdges path (the enriched stack checks lazyEnabled()).
@@ -421,18 +438,23 @@ func (n *EnrichedNet) ftSub(acc []int16, f int) {
 	subCol(acc, n.W0i[f*h:f*h+h])
 }
 
+// buildAccHalf rebuilds ONE perspective's accumulator half from scratch: seed with
+// the FT bias, then enumerate persp's active (base + threat) features and sum their
+// columns via ftAdd. This is the single-side factor of buildAcc, used by the split
+// king-bucket refresh (rebuild only the moving side, delta the opponent).
+func (n *EnrichedNet) buildAccHalf(dst []int16, pos *chess.Position, persp chess.Color) {
+	copy(dst, n.B0i)
+	var buf [maxEnrichedActive]uint16
+	for _, f := range appendEnrichedFeatures(buf[:0], pos, persp) {
+		n.ftAdd(dst, int(f))
+	}
+}
+
 // buildAcc rebuilds the two absolute-color accumulator halves from scratch (the
 // from-scratch reference path), dispatching base/threat columns via ftAdd.
 func (n *EnrichedNet) buildAcc(accW, accB []int16, pos *chess.Position) {
-	copy(accW, n.B0i)
-	copy(accB, n.B0i)
-	var buf [maxEnrichedActive]uint16
-	for _, f := range appendEnrichedFeatures(buf[:0], pos, chess.White) {
-		n.ftAdd(accW, int(f))
-	}
-	for _, f := range appendEnrichedFeatures(buf[:0], pos, chess.Black) {
-		n.ftAdd(accB, int(f))
-	}
+	n.buildAccHalf(accW, pos, chess.White)
+	n.buildAccHalf(accB, pos, chess.Black)
 }
 
 // enrichedScratch holds the per-eval tail working buffers so the hot
