@@ -60,7 +60,7 @@ class BotGameService
     public function create(int $rating, string $humanColor, ?string $startFen = null, string $variant = 'standard'): BotGame
     {
         $game = new BotGame();
-        $game->variant = in_array($variant, ['standard', 'chess960', 'duck'], true) ? $variant : 'standard';
+        $game->variant = in_array($variant, ['standard', 'chess960', 'duck', 'crazyhouse'], true) ? $variant : 'standard';
         $game->rating = max(self::RATING_MIN, min(self::RATING_MAX, $rating));
         $game->human_color = $humanColor === 'b' ? 'b' : 'w';
         $game->setMoves([]);
@@ -73,6 +73,14 @@ class BotGameService
             // is Black.
             if ($game->status === 'ongoing' && $game->side_to_move !== $game->human_color) {
                 $this->playDuckBot($game);
+            }
+        } elseif ($game->variant === 'crazyhouse') {
+            // Crazyhouse always starts from the standard opening with empty
+            // pockets; the FEN carries the pocket ("[]"), so no custom start FEN
+            // and no extra column are needed. Open with a bot move if human is Black.
+            $game->fen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR[] w KQkq - 0 1';
+            if ($game->status === 'ongoing' && $game->side_to_move !== $game->human_color) {
+                $this->playCrazyhouseBot($game);
             }
         } else {
             // Standard and Chess960 share the same flow: applyStartFen validates
@@ -138,6 +146,25 @@ class BotGameService
 
             if ($game->status === 'ongoing') {
                 $this->playDuckBot($game);
+            }
+
+            $game->save();
+
+            return ['ok' => true];
+        }
+
+        if ($game->variant === 'crazyhouse') {
+            // Crazyhouse move ("e2e4" / "e7e8q" / drop "P@e4"); the FEN carries the
+            // pocket, so it reuses the standard apply() (the engine ignores history).
+            $result = $this->engine->crazyhouseMove($game->fen, $move);
+            if (empty($result['legal'])) {
+                return ['ok' => false, 'error' => is_string($result['error'] ?? null) ? $result['error'] : 'illegal move'];
+            }
+
+            $this->apply($game, $move, $result, 'human');
+
+            if ($game->status === 'ongoing') {
+                $this->playCrazyhouseBot($game);
             }
 
             $game->save();
@@ -250,6 +277,25 @@ class BotGameService
     }
 
     /**
+     * Compute and apply one Crazyhouse bot move. The Crazyhouse engine does its
+     * own weakening, so the RAW human rating is passed (no engineRatingForHuman
+     * remap, like Duck). The bestmove is already applied engine-side, so its
+     * response carries the resulting newFen/pocket/status/result.
+     */
+    private function playCrazyhouseBot(BotGame $game): void
+    {
+        if ($game->status !== 'ongoing') {
+            return;
+        }
+        $best = $this->engine->crazyhouseBestMove($game->fen, $game->rating);
+        $uci = $best['bestmove'] ?? null;
+        if (!is_string($uci) || $uci === '') {
+            return;
+        }
+        $this->apply($game, $uci, $best, 'bot', $best);
+    }
+
+    /**
      * Mutate the game with one applied move's result.
      *
      * @param array<string, mixed> $result Engine /move response.
@@ -350,9 +396,11 @@ class BotGameService
         $data = $game->jsonSerialize();
         $data['legal_moves'] = [];
         if ($game->status === 'ongoing') {
-            $legal = $game->variant === 'duck'
-                ? $this->engine->duckLegalMoves($game->fen, $game->duck ?? '')
-                : $this->engine->legalMoves($game->fen);
+            $legal = match ($game->variant) {
+                'duck' => $this->engine->duckLegalMoves($game->fen, $game->duck ?? ''),
+                'crazyhouse' => $this->engine->crazyhouseLegalMoves($game->fen),
+                default => $this->engine->legalMoves($game->fen),
+            };
             $data['legal_moves'] = $legal['moves'] ?? [];
         }
         $data['your_turn'] = $game->status === 'ongoing' && $game->side_to_move === $game->human_color;

@@ -313,6 +313,64 @@ class GomachineClient
         ]);
     }
 
+    /**
+     * Crazyhouse: list the legal moves (UCI long algebraic, incl. drops "P@e4")
+     * for the side to move. The Crazyhouse FEN carries the pocket, so it is
+     * self-describing — no auxiliary field.
+     *
+     * @return array<string, mixed> {moves}
+     */
+    public function crazyhouseLegalMoves(string $fen): array
+    {
+        return $this->post('/crazyhouse/legal-moves', ['fen' => $fen]);
+    }
+
+    /**
+     * Crazyhouse: validate and apply a move ("e2e4", "e7e8q", or a drop "P@e4").
+     * The returned newFen is the canonical Crazyhouse FEN (carries the pocket).
+     *
+     * @return array<string, mixed> {legal, error?, newFen, pocket, san, sideToMove, status, result}
+     */
+    public function crazyhouseMove(string $fen, string $move): array
+    {
+        return $this->post('/crazyhouse/move', [
+            'fen' => $fen,
+            'move' => $move,
+        ]);
+    }
+
+    /**
+     * Crazyhouse: compute the AI's move at a target Elo rating. The Crazyhouse
+     * engine does its own weakening, so pass the raw human rating. The returned
+     * move is ALREADY APPLIED — newFen/pocket reflect the position after it.
+     *
+     * @return array<string, mixed> {bestmove, san, eval, newFen, pocket, sideToMove, status, result}
+     */
+    public function crazyhouseBestMove(
+        string $fen,
+        int $rating,
+        int $movetimeMs = 0,
+        int $depth = 0,
+        int $nodes = 0,
+    ): array {
+        $limits = [];
+        if ($rating > 0) {
+            $limits['rating'] = $rating; // >0 caps strength; omit for full power
+        }
+        if ($depth > 0) {
+            $limits['depth'] = $depth;
+        } elseif ($nodes > 0) {
+            $limits['nodes'] = $nodes;
+        } elseif ($movetimeMs > 0) {
+            $limits['movetime'] = $movetimeMs;
+        }
+
+        return $this->post('/crazyhouse/bestmove', [
+            'fen' => $fen,
+            'limits' => $limits,
+        ]);
+    }
+
     /** Liveness check against the engine. */
     public function healthy(): bool
     {

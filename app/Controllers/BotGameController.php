@@ -56,7 +56,7 @@ class BotGameController extends Controller
             'rating' => 'integer|min:700|max:2900',
             'human_color' => 'in:w,b',
             'fen' => 'string',
-            'variant' => 'string|in:standard,chess960,duck',
+            'variant' => 'string|in:standard,chess960,duck,crazyhouse',
         ]);
 
         try {

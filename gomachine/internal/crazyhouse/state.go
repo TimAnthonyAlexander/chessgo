@@ -50,6 +50,14 @@ var typeLetter = [6]byte{'p', 'n', 'b', 'r', 'q', 'k'}
 // Side returns the side to move.
 func (s *State) Side() chess.Color { return s.pos.SideToMove() }
 
+// SideChar returns "w" or "b" for the side to move.
+func (s *State) SideChar() string {
+	if s.pos.SideToMove() == chess.White {
+		return "w"
+	}
+	return "b"
+}
+
 // Pocket returns how many pieces of type pt color c holds in its pocket.
 func (s *State) Pocket(c chess.Color, pt chess.PieceType) int { return s.pockets[c][pt] }
 

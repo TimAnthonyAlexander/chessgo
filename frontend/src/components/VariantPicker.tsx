@@ -1,7 +1,7 @@
 import { Box, ToggleButton, ToggleButtonGroup, Typography } from '@mui/material'
 import { type Variant, VARIANT_BLURB, VARIANT_LABEL } from '../lib/variants'
 
-const ORDER: Variant[] = ['standard', 'chess960', 'duck']
+const ORDER: Variant[] = ['standard', 'chess960', 'duck', 'crazyhouse']
 
 /**
  * Controlled variant selector for the "New game" setup card — Standard / Chess960 /

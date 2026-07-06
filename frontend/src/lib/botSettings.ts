@@ -12,7 +12,7 @@ export interface BotSettings {
 const KEY = 'botgame:settings'
 const RATING_MIN = 700
 const RATING_MAX = 2900
-const VARIANTS: readonly Variant[] = ['standard', 'chess960', 'duck']
+const VARIANTS: readonly Variant[] = ['standard', 'chess960', 'duck', 'crazyhouse']
 const COLORS: readonly ColorChoice[] = ['w', 'b', 'random']
 
 export const DEFAULT_BOT_SETTINGS: BotSettings = {

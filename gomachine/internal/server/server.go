@@ -148,6 +148,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /duck/move", s.handleDuckMove)
 	mux.HandleFunc("POST /duck/bestmove", s.handleDuckBestMove)
 	mux.HandleFunc("POST /duck/analyze-game", s.handleDuckAnalyzeGame)
+	// Crazyhouse variant (self-contained; internal/crazyhouse). No engine pool.
+	// The Crazyhouse FEN is self-describing (carries the pocket), so no aux field.
+	mux.HandleFunc("POST /crazyhouse/legal-moves", s.handleCrazyhouseLegalMoves)
+	mux.HandleFunc("POST /crazyhouse/move", s.handleCrazyhouseMove)
+	mux.HandleFunc("POST /crazyhouse/bestmove", s.handleCrazyhouseBestMove)
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	return recoverPanics(mux)
 }

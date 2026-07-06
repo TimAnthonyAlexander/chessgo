@@ -40,6 +40,8 @@ import {
 import { statusLabel } from '../lib/chess'
 import { useBoardInteraction } from '../lib/useBoardInteraction'
 import { useDuckInteraction } from '../lib/useDuckInteraction'
+import { useCrazyhouseDrops } from '../lib/useCrazyhouseDrops'
+import PocketPanel from '../components/PocketPanel'
 import { useMoveNavKeys } from '../lib/useMoveNavKeys'
 import { type ColorChoice, loadBotSettings, saveBotSettings } from '../lib/botSettings'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
@@ -47,7 +49,13 @@ import { useAuth } from '../lib/auth'
 import AdminBestMove from '../components/AdminBestMove'
 import BoardActions from '../components/BoardActions'
 import VariantPicker from '../components/VariantPicker'
-import { type Variant, random960 } from '../lib/variants'
+import {
+    type Variant,
+    random960,
+    parsePocket,
+    pocketFromFen,
+    stripCrazyhouseFen,
+} from '../lib/variants'
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 const other = (c: Color): Color => (c === 'w' ? 'b' : 'w')
@@ -102,6 +110,7 @@ export default function BotGame() {
     const ongoing = !!game && !over
 
     const isDuck = game?.variant === 'duck'
+    const isCrazyhouse = game?.variant === 'crazyhouse'
 
     // Persist the setup whenever it changes, so it survives a refresh.
     useEffect(() => {
@@ -179,19 +188,31 @@ export default function BotGame() {
         legalMoves: interactive && isDuck && game ? game.legal_moves : [],
         submit: submitDuckMove,
     })
+    // Crazyhouse drops coexist with the standard controller (piece moves use it):
+    // a drop is submitted as a plain "<P>@<sq>" move via the same submitMove.
+    const drops = useCrazyhouseDrops(
+        interactive && isCrazyhouse && game ? game.legal_moves : [],
+        interactive && isCrazyhouse,
+        submitMove,
+    )
 
     // The optimistic overlay + last-move highlight come from whichever controller
     // is live for this variant.
     const activeOverride = isDuck ? duck.override : interaction.override
     const activeOptimisticLast = isDuck ? duck.optimisticLast : interaction.optimisticLast
 
-    const boardFen = !game
+    // The FEN of the shown position (canonical — for Crazyhouse this still carries
+    // the [pocket] and ~ marks). The board renderer wants a plain FEN, so strip
+    // that markup; the pocket is parsed from the same raw FEN for the pocket strips.
+    const rawShownFen = !game
         ? (startFen ?? START_FEN)
         : atLive
           ? game.fen
           : shownPly === 0
             ? START_FEN
             : game.moves[shownPly - 1].fen
+    const boardFen = isCrazyhouse ? stripCrazyhouseFen(rawShownFen) : rawShownFen
+    const pockets = parsePocket(isCrazyhouse ? pocketFromFen(rawShownFen) : '')
 
     const lastMove =
         activeOverride && atLive && activeOptimisticLast
@@ -223,9 +244,9 @@ export default function BotGame() {
     // full ~1.5s search and only then snapping to the new one. The value is always
     // White-relative (+ = White better, − = Black better), matching every other bar.
     useEffect(() => {
-        if (!game || game.variant === 'duck') {
-            // Duck Chess has no check/checkmate and the /analyze engine doesn't
-            // understand the duck — there's no meaningful eval bar to show.
+        if (!game || game.variant === 'duck' || game.variant === 'crazyhouse') {
+            // Duck Chess and Crazyhouse aren't understood by the standard /analyze
+            // engine (the duck, and pockets/drops) — no meaningful eval bar to show.
             setAnalyzedEval(null)
             return
         }
@@ -386,9 +407,21 @@ export default function BotGame() {
     return (
         <BoardPage
             left={
-                <Box sx={{ display: { xs: 'none', md: 'block' } }}>
-                    <GameModeCard rating={game?.rating ?? rating} variant={game?.variant ?? variant} />
-                </Box>
+                <>
+                    {isCrazyhouse && game && (
+                        <PocketPanel
+                            orientation={orientation}
+                            humanColor={humanColor}
+                            pockets={pockets}
+                            selected={drops.selected}
+                            myTurn={interactive}
+                            onSelect={drops.selectPocket}
+                        />
+                    )}
+                    <Box sx={{ display: { xs: 'none', md: 'block' } }}>
+                        <GameModeCard rating={game?.rating ?? rating} variant={game?.variant ?? variant} />
+                    </Box>
+                </>
             }
             evalBar={<EvalBar ev={analyzedEval} orientation={orientation} />}
             right={
@@ -418,7 +451,7 @@ export default function BotGame() {
                         }}
                         isAdmin={isAdmin}
                         bestFen={boardFen}
-                        bestMyTurn={interactive}
+                        bestMyTurn={interactive && !isCrazyhouse}
                         gameStartFen={startFen ?? START_FEN}
                     />
                 ) : (
@@ -454,6 +487,9 @@ export default function BotGame() {
                 duck={shownDuck}
                 duckTargets={isDuck && atLive ? duck.duckTargets : null}
                 onPlaceDuck={duck.onPlaceDuck}
+                dropTargets={isCrazyhouse && atLive ? drops.dropTargets : null}
+                onDrop={drops.drop}
+                onDropCancel={drops.cancel}
                 {...(activeOverride && atLive ? { overrideBoard: activeOverride } : {})}
             />
         </BoardPage>

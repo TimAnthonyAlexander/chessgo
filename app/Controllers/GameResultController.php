@@ -145,7 +145,7 @@ class GameResultController extends Controller
     {
         $v = is_string($variant) ? $variant : '';
 
-        return in_array($v, ['standard', 'chess960', 'duck'], true) ? $v : 'standard';
+        return in_array($v, ['standard', 'chess960', 'duck', 'crazyhouse'], true) ? $v : 'standard';
     }
 
     private function authorized(): bool

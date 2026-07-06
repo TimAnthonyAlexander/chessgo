@@ -67,6 +67,13 @@ interface BoardProps {
     duckTargets?: Set<Square> | null
     /** Duck Chess: called with the chosen empty square while in duck-placement mode. */
     onPlaceDuck?: (sq: Square) => void
+    /** Crazyhouse: empty squares the armed pocket piece may be dropped on (else null). */
+    dropTargets?: Set<Square> | null
+    /** Crazyhouse: called with the chosen empty square to drop the armed pocket piece. */
+    onDrop?: (sq: Square) => void
+    /** Crazyhouse: called when a click should clear the armed pocket selection (the
+     * user clicked away from a drop target, e.g. to pick a board piece instead). */
+    onDropCancel?: () => void
 }
 
 const PROMO_ORDER = ['q', 'r', 'b', 'n']
@@ -159,6 +166,9 @@ export default function Board({
     duck,
     duckTargets,
     onPlaceDuck,
+    dropTargets,
+    onDrop,
+    onDropCancel,
 }: BoardProps) {
     const boardRef = useRef<HTMLDivElement>(null)
     const pieceSet = usePieceSet() // re-render (with new piece SVGs) when the set changes
@@ -284,6 +294,18 @@ export default function Board({
             return
         }
 
+        // Crazyhouse: a pocket piece is armed. Clicking a legal drop square drops it;
+        // any other click clears the selection and falls through to normal input (so
+        // the same click can instead pick up a board piece).
+        if (dropTargets != null) {
+            const sq = squareFromPoint(e.clientX, e.clientY)
+            if (sq && dropTargets.has(sq)) {
+                onDrop?.(sq)
+                return
+            }
+            onDropCancel?.()
+        }
+
         if (!inputEnabled) return
         const sq = squareFromPoint(e.clientX, e.clientY)
         if (!sq) return
@@ -400,6 +422,7 @@ export default function Board({
                         const light = (file + rank) % 2 === 1
                         const isTarget = targets.has(sq)
                         const isDuckTarget = duckTargets?.has(sq) ?? false
+                        const isDropTarget = dropTargets?.has(sq) ?? false
                         const isLast = lastMove && (lastMove.from === sq || lastMove.to === sq)
                         const isPremove = premove && (premove.from === sq || premove.to === sq)
                         const isDragOrigin = drag?.moved && drag.from === sq
@@ -426,6 +449,7 @@ export default function Board({
                                 {isTarget && !piece && <span className="dot" />}
                                 {isTarget && piece && <span className="ring" />}
                                 {isDuckTarget && !piece && <span className="dot" />}
+                                {isDropTarget && !piece && <span className="dot" />}
                                 {piece && (
                                     <PieceGlyph piece={piece} set={pieceSet} hidden={isDragOrigin} />
                                 )}

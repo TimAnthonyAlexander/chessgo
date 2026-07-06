@@ -31,6 +31,7 @@ export interface LiveGameState {
     lastMove: { from: string; to: string } | null
     check: boolean
     duck: string | null // Duck Chess: the duck's square, or null (non-duck games / before first placement)
+    pocket: string // Crazyhouse: the pocket string ("PPNq", white upper / black lower), "" otherwise
     status: string
     legalMoves: string[]
     clock: { w: number; b: number } // ms remaining at clockAt
@@ -93,6 +94,7 @@ function buildGame(m: Msg): LiveGameState {
         lastMove: null,
         check: false,
         duck: parseDuck(m.duck),
+        pocket: typeof m.pocket === 'string' ? m.pocket : '',
         status: 'ongoing',
         legalMoves: m.legalMoves ?? [],
         clock: m.clock,
@@ -127,6 +129,7 @@ function buildResume(m: Msg): LiveGameState {
         lastMove: parseLast(m.lastMove),
         check: !!m.check,
         duck: parseDuck(m.duck),
+        pocket: typeof m.pocket === 'string' ? m.pocket : '',
         status: m.status,
         legalMoves: m.legalMoves ?? [],
         clock: m.clock,
@@ -540,6 +543,7 @@ class GameSocket {
                 lastMove: parseLast(msg.lastMove),
                 check: !!msg.check,
                 duck: parseDuck(msg.duck),
+                pocket: typeof msg.pocket === 'string' ? msg.pocket : '',
                 status: msg.status,
                 legalMoves: msg.legalMoves ?? [],
                 clock: msg.clock,

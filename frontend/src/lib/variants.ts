@@ -5,7 +5,7 @@
 
 import { applyUciVisually, type BoardMap, type Square } from './chess'
 
-export type Variant = 'standard' | 'chess960' | 'duck'
+export type Variant = 'standard' | 'chess960' | 'duck' | 'crazyhouse'
 
 /** The standard chess start position. */
 export const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
@@ -14,12 +14,68 @@ export const VARIANT_LABEL: Record<Variant, string> = {
     standard: 'Standard',
     chess960: 'Chess960',
     duck: 'Duck Chess',
+    crazyhouse: 'Crazyhouse',
 }
 
 export const VARIANT_BLURB: Record<Variant, string> = {
     standard: 'Classic chess — the normal starting position and rules.',
     chess960: 'Fischer Random — the back rank is shuffled at the start.',
     duck: 'Move a piece, then drop the duck. Capture the king to win.',
+    crazyhouse: 'Captured pieces switch sides — drop them back on the board.',
+}
+
+/** Pocket piece letters (always uppercase; color is by context). */
+export type PocketPiece = 'P' | 'N' | 'B' | 'R' | 'Q'
+
+/** A Crazyhouse pocket: the pieces each side holds in hand. */
+export interface Pockets {
+    w: PocketPiece[]
+    b: PocketPiece[]
+}
+
+/**
+ * Extract the pocket string ("PPNq" — white uppercase, black lowercase) from a
+ * Crazyhouse FEN's "[...]" field, or "" if absent.
+ */
+export function pocketFromFen(fen: string): string {
+    const m = fen.match(/\[([^\]]*)\]/)
+    return m ? m[1] : ''
+}
+
+/**
+ * Parse a Crazyhouse pocket string ("PPNq") into each side's held pieces.
+ * Uppercase letters are White's pocket, lowercase Black's.
+ */
+export function parsePocket(pocket: string): Pockets {
+    const w: PocketPiece[] = []
+    const b: PocketPiece[] = []
+    for (const ch of pocket) {
+        const up = ch.toUpperCase()
+        if (!'PNBRQ'.includes(up)) continue
+        ;(ch === up ? w : b).push(up as PocketPiece)
+    }
+    return { w, b }
+}
+
+/**
+ * Strip Crazyhouse-only markup (the "[pocket]" suffix and "~" promotion marks)
+ * from a FEN, leaving a standard FEN the board renderer understands.
+ */
+export function stripCrazyhouseFen(fen: string): string {
+    return fen.replace(/\[[^\]]*\]/, '').replace(/~/g, '')
+}
+
+/**
+ * The empty squares a pocketed `piece` may be dropped on — every legal move of the
+ * form "<PIECE>@<square>" for the side to move. Display-only; the engine validates.
+ */
+export function dropTargets(legalMoves: string[], piece: PocketPiece): Set<Square> {
+    const out = new Set<Square>()
+    const prefix = piece + '@'
+    for (const mv of legalMoves) {
+        if (mv.startsWith(prefix)) out.add(mv.slice(2) as Square)
+    }
+    return out
 }
 
 const FILES = 'abcdefgh'

@@ -14,6 +14,9 @@ import { type Color, gameSocket, type LiveGameState, liveRemaining } from '../li
 import { useGameSocket } from '../lib/useGameSocket'
 import { useBoardInteraction } from '../lib/useBoardInteraction'
 import { useDuckInteraction } from '../lib/useDuckInteraction'
+import { useCrazyhouseDrops } from '../lib/useCrazyhouseDrops'
+import PocketPanel from '../components/PocketPanel'
+import { parsePocket } from '../lib/variants'
 import { useMoveNavKeys } from '../lib/useMoveNavKeys'
 import { applyUciVisually, type BoardMap, parseFen } from '../lib/chess'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
@@ -87,6 +90,7 @@ export default function LiveGame() {
     // The local player can move when it's their turn and the socket is live.
     const myTurn = !!g && !g.ended && g.sideToMove === g.color && s.conn === 'open'
     const isDuck = g?.variant === 'duck'
+    const isCrazyhouse = g?.variant === 'crazyhouse'
 
     // Client-side history browsing. `viewIndex` (null = follow the live position)
     // lets the player scrub back through past plies to review them — it never
@@ -158,11 +162,21 @@ export default function LiveGame() {
         legalMoves: g && boardInteractive && isDuck ? g.legalMoves : [],
         submit: (composite) => gameSocket.move(composite),
     })
+    // Crazyhouse drops: submitted as a plain "<P>@<sq>" move over the same socket
+    // call (the hub treats a drop like any other move).
+    const drops = useCrazyhouseDrops(
+        g && boardInteractive && isCrazyhouse ? g.legalMoves : [],
+        boardInteractive && isCrazyhouse,
+        (uci) => gameSocket.move(uci),
+    )
 
     // The optimistic overlay + last-move highlight come from whichever controller
     // is live for this variant.
     const activeOverride = isDuck ? duck.override : interaction.override
     const activeOptimisticLast = isDuck ? duck.optimisticLast : interaction.optimisticLast
+    // Crazyhouse pockets (the hub sends the live pocket string). History review
+    // shows the live pocket — the socket doesn't retain per-ply pockets.
+    const pockets = parsePocket(isCrazyhouse && g ? g.pocket : '')
 
     // Sound: voice the OPPONENT's newest move as the position advances. Our own
     // move is played synchronously in onMove (inside the click gesture) — both for
@@ -243,6 +257,17 @@ export default function LiveGame() {
     return (
         <BoardPage
             left={
+                <>
+                {isCrazyhouse && (
+                    <PocketPanel
+                        orientation={g.color}
+                        humanColor={g.color}
+                        pockets={pockets}
+                        selected={drops.selected}
+                        myTurn={boardInteractive && isCrazyhouse}
+                        onSelect={drops.selectPocket}
+                    />
+                )}
                 <Box
                     sx={{
                         display: { xs: 'none', md: 'flex' },
@@ -265,6 +290,7 @@ export default function LiveGame() {
                         disabled={g.ended}
                     />
                 </Box>
+                </>
             }
             right={
                 <Box
@@ -555,6 +581,9 @@ export default function LiveGame() {
                 duck={atLive ? shownDuck : null}
                 duckTargets={isDuck && atLive ? duck.duckTargets : null}
                 onPlaceDuck={duck.onPlaceDuck}
+                dropTargets={isCrazyhouse && atLive ? drops.dropTargets : null}
+                onDrop={drops.drop}
+                onDropCancel={drops.cancel}
                 {...(atLive
                     ? activeOverride
                         ? { overrideBoard: activeOverride }
