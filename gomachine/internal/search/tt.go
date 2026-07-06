@@ -76,15 +76,27 @@ func unpackData(data uint64) (move chess.Move, score, eval int16, depth int8, fl
 
 // TT is a fixed-size, power-of-two, lock-free transposition table with
 // depth-preferred, age-aware replacement.
+//
+// Bucketing (bucketShift): the table is addressed as numBuckets = slots>>bucketShift
+// clusters of (1<<bucketShift) slots each. A key selects a bucket via bucketMask and
+// its base slot index is (key & bucketMask) << bucketShift; probe scans all slots in
+// the bucket (already resident in the same 64-byte cache line for a 4-slot cluster),
+// and store picks the best victim of the bucket. bucketShift==0 is the classic
+// direct-mapped table (one slot per key, bucketMask == slots-1) and is byte-identical
+// to the pre-bucketing behavior. Each slot stays independently self-consistent via
+// the Hyatt XOR scheme, so scanning several slots is race-safe.
 type TT struct {
-	slots []ttSlot
-	mask  uint64
-	age   uint8 // bumped once per search BEFORE any worker starts (then read-only)
+	slots       []ttSlot
+	bucketMask  uint64 // (numBuckets - 1); selects the bucket index
+	bucketShift uint   // log2(slots per bucket): 0 = direct-mapped, 2 = 4-slot clusters
+	age         uint8  // bumped once per search BEFORE any worker starts (then read-only)
 }
 
 // NewTT allocates a table of approximately sizeMB megabytes (rounded down to a
-// power-of-two slot count).
-func NewTT(sizeMB int) *TT {
+// power-of-two slot count). bucketShift sets the cluster width (0 = direct-mapped,
+// 2 = 4 slots per 64-byte line); total memory is independent of it. The shift is
+// clamped down if the table is too small to hold at least one bucket.
+func NewTT(sizeMB int, bucketShift uint) *TT {
 	if sizeMB < 1 {
 		sizeMB = 1
 	}
@@ -94,7 +106,15 @@ func NewTT(sizeMB int) *TT {
 	for size*2 <= n {
 		size *= 2
 	}
-	return &TT{slots: make([]ttSlot, size), mask: uint64(size - 1)}
+	for bucketShift > 0 && (size>>bucketShift) < 1 {
+		bucketShift-- // pathologically tiny table: shrink the cluster to fit
+	}
+	numBuckets := size >> bucketShift
+	return &TT{
+		slots:       make([]ttSlot, size),
+		bucketMask:  uint64(numBuckets - 1),
+		bucketShift: bucketShift,
+	}
 }
 
 // NewSearchAge bumps the generation counter so the next search prefers fresh
@@ -114,24 +134,31 @@ func (tt *TT) Clear() {
 // latency of the (large, randomly-accessed) table. Cheap PREFETCHT0 on amd64,
 // no-op elsewhere. Bit-exact: a prefetch never changes results.
 func (tt *TT) prefetch(key uint64) {
-	ttPrefetchT0(unsafe.Pointer(&tt.slots[key&tt.mask]))
+	// Prefetch the bucket's base slot — the line covering all slots in the cluster.
+	base := (key & tt.bucketMask) << tt.bucketShift
+	ttPrefetchT0(unsafe.Pointer(&tt.slots[base]))
 }
 
 func (tt *TT) probe(key uint64) (ttEntry, bool) {
-	slot := &tt.slots[key&tt.mask]
-	data := slot.data.Load()
-	if data == 0 {
-		return ttEntry{}, false
+	base := (key & tt.bucketMask) << tt.bucketShift
+	n := uint64(1) << tt.bucketShift
+	for i := uint64(0); i < n; i++ {
+		slot := &tt.slots[base+i]
+		data := slot.data.Load()
+		if data == 0 {
+			continue // empty slot
+		}
+		lock := slot.lock.Load()
+		if lock^data != key {
+			continue // different key or torn read
+		}
+		move, score, eval, depth, flag, age := unpackData(data)
+		if flag == ttNone {
+			continue
+		}
+		return ttEntry{key: key, move: move, score: score, eval: eval, depth: depth, flag: flag, age: age}, true
 	}
-	lock := slot.lock.Load()
-	if lock^data != key {
-		return ttEntry{}, false // empty, different key, or torn read
-	}
-	move, score, eval, depth, flag, age := unpackData(data)
-	if flag == ttNone {
-		return ttEntry{}, false
-	}
-	return ttEntry{key: key, move: move, score: score, eval: eval, depth: depth, flag: flag, age: age}, true
+	return ttEntry{}, false
 }
 
 // store writes an entry, adjusting mate scores to be relative to the current
@@ -141,19 +168,78 @@ func (tt *TT) store(key uint64, move chess.Move, score, depth, ply int, flag ttF
 	if depth > 127 {
 		depth = 127
 	}
-	slot := &tt.slots[key&tt.mask]
+	base := (key & tt.bucketMask) << tt.bucketShift
+	n := uint64(1) << tt.bucketShift
 
-	// Depth-preferred replacement: keep a deeper same-generation entry of the
-	// same key. (Read may be slightly stale under races — it is only a heuristic.)
-	if old := slot.data.Load(); old != 0 {
-		if slot.lock.Load()^old == key {
+	// Choose the slot to write within the bucket:
+	//  1. Same-key slot → replace it (keeping the existing depth-preferred,
+	//     same-generation guard: a deeper same-gen entry of this key is kept).
+	//  2. Else an empty slot (data==0), if any.
+	//  3. Else the lowest-priority victim, where a slot's replacement priority is
+	//     its depth, DISCOUNTED by 8 when it belongs to an OLDER generation
+	//     (age != tt.age) — stale entries are cheaper to evict, and the discount
+	//     also breaks depth ties toward the older generation. argmin over the
+	//     bucket, first slot winning an exact tie.
+	// (Reads may be slightly stale under races — replacement is only a heuristic;
+	// each slot is written self-consistently via the Hyatt XOR pair below.)
+	targetOff := uint64(0)
+	if n > 1 {
+		var (
+			haveSameKey bool
+			haveEmpty   bool
+			victimOff   uint64
+			victimPrio  int
+			victimInit  bool
+		)
+		curGen := tt.age & 0x3F
+		for i := uint64(0); i < n; i++ {
+			slot := &tt.slots[base+i]
+			old := slot.data.Load()
+			if old == 0 {
+				if !haveEmpty {
+					haveEmpty = true
+					victimOff = i // empty always wins victim selection
+				}
+				continue
+			}
 			_, _, _, oldDepth, _, oldAge := unpackData(old)
-			if oldAge == (tt.age&0x3F) && int(oldDepth) > depth {
-				return
+			if slot.lock.Load()^old == key {
+				if oldAge == curGen && int(oldDepth) > depth {
+					return // keep the deeper same-generation entry of this key
+				}
+				haveSameKey = true
+				targetOff = i
+				break
+			}
+			if !haveEmpty { // only rank victims until an empty slot is found
+				prio := int(oldDepth)
+				if oldAge != curGen {
+					prio -= 8
+				}
+				if !victimInit || prio < victimPrio {
+					victimInit = true
+					victimPrio = prio
+					victimOff = i
+				}
+			}
+		}
+		if !haveSameKey {
+			targetOff = victimOff
+		}
+	} else {
+		// Direct-mapped fast path (byte-identical to the pre-bucketing table):
+		// depth-preferred same-generation guard on the single slot.
+		if old := tt.slots[base].data.Load(); old != 0 {
+			if tt.slots[base].lock.Load()^old == key {
+				_, _, _, oldDepth, _, oldAge := unpackData(old)
+				if oldAge == (tt.age&0x3F) && int(oldDepth) > depth {
+					return
+				}
 			}
 		}
 	}
 
+	slot := &tt.slots[base+targetOff]
 	sc := score
 	if sc > tbThreshold {
 		sc += ply

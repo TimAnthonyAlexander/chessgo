@@ -341,8 +341,12 @@ func New(ttSizeMB int) *Searcher { return NewWithParams(ttSizeMB, DefaultParams(
 // NewWithParams returns a Searcher configured by params — used by the self-play
 // harness to build the "old" and "new" engines from the same code.
 func NewWithParams(ttSizeMB int, params Params) *Searcher {
+	shift := params.TTBucketShift
+	if shift < 0 {
+		shift = 0
+	}
 	return &Searcher{
-		tt:       NewTT(ttSizeMB),
+		tt:       NewTT(ttSizeMB, uint(shift)),
 		params:   params,
 		ec:       evalConfig(params),
 		lmr:      lmrTableFor(params),

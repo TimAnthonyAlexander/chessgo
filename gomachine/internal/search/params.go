@@ -108,6 +108,14 @@ type Params struct {
 	RFPMargin   int // reverse-futility margin per depth in cp (default 75); prune when staticEval - RFPMargin·depth >= beta
 	HistBonusScale int // history bonus/malus scale: bonus = HistBonusScale·depth² capped at HistBonusMax (default 32)
 	HistBonusMax   int // history bonus/malus cap (default 1536)
+
+	// TTBucketShift sets the transposition-table cluster width at table creation
+	// (log2 slots per bucket): 0 = direct-mapped (current/default, byte-identical),
+	// 2 = 4 slots per 64-byte cache line. Bucketing lets probe scan all slots
+	// already resident in the fetched line and store pick the best victim of the
+	// bucket → higher retention/hit-rate. Fixed when the TT is built, so Lazy-SMP
+	// workers sharing the TT all use the same layout. DEFAULT 0 — under SPRT.
+	TTBucketShift int
 }
 
 // DefaultParams returns the engine's current full-strength configuration.
@@ -435,5 +443,9 @@ func DefaultParams() Params {
 		RFPMargin:      75,
 		HistBonusScale: 32,
 		HistBonusMax:   1536,
+		// TT bucketing: 0 = direct-mapped (byte-identical to the pre-bucketing
+		// table). Flip to 2 (4-slot clusters) via ttcluster=on to SPRT the bucketed
+		// TT — probe scans 4 slots in one cache line, store keeps the best victim.
+		TTBucketShift: 0,
 	}
 }

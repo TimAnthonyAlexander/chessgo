@@ -640,6 +640,29 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.QSCastling = b
+		case "ttcluster", "ttbucket":
+			// bucketed (clustered) TT: on → 4-slot buckets (shift 2), off →
+			// direct-mapped (shift 0). Convenience bool over TTBucketShift.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			if b {
+				base.TTBucketShift = 2
+			} else {
+				base.TTBucketShift = 0
+			}
+		case "ttbucketshift", "ttbs":
+			// explicit TT cluster width (log2 slots per bucket): 0 = direct-mapped,
+			// 2 = 4-slot buckets. For A/B beyond the ttcluster on/off convenience.
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("ttbucketshift: %q is not an int", val)
+			}
+			if n < 0 {
+				return base, fmt.Errorf("ttbucketshift: %d must be >= 0", n)
+			}
+			base.TTBucketShift = n
 		case "aggr", "aggression":
 			// aggression style knob 0..100 (50 = neutral/off). Scales a king-attack
 			// term onto the static eval — EVAL change, so SPRT at --movetime or fixed
@@ -936,6 +959,9 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.NmpEvalDivisor != patch.NmpEvalDivisor {
 		diffs = append(diffs, fmt.Sprintf("nmpdiv: %d→%d", base.NmpEvalDivisor, patch.NmpEvalDivisor))
+	}
+	if base.TTBucketShift != patch.TTBucketShift {
+		diffs = append(diffs, fmt.Sprintf("ttbucketshift: %d→%d", base.TTBucketShift, patch.TTBucketShift))
 	}
 	if len(diffs) == 0 {
 		return "(identical — sanity/noise run)"
