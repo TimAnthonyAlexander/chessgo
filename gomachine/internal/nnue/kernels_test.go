@@ -20,7 +20,10 @@ func TestKernelsMatchScalar(t *testing.T) {
 	const qa = int32(bulletQA)
 	// Widths: the two shipping sizes plus odd/tail lengths so a future SIMD impl
 	// can't pass by only handling multiples of its vector width (e.g. 8 int16).
-	for _, n := range []int{1, 7, 8, 15, 16, 31, 256, 512, 513} {
+	// 47 = 32+15 (512-bit body then scalar tail) and 48 = 32+16 (512-bit body then
+	// 256-bit step) additionally exercise the AVX-512 screluDot's 32-wide body
+	// feeding the 16-wide step / scalar tail — lane groupings the other widths miss.
+	for _, n := range []int{1, 7, 8, 15, 16, 31, 47, 48, 256, 512, 513} {
 		dst := randI16(rng, n)
 		src := randI16(rng, n)
 

@@ -17,10 +17,11 @@ package nnue
 //	    -bench 'SCReLUDot|AccumulatorApply|EvalIncremental' -benchtime 0.5s
 //
 // vs the AVX2 path: addCol/subCol do 32 int16 lanes/iter (Int16x32, VPADDW/
-// VPSUBW on zmm) instead of 16; screluDot does 16 elements/iter (Int16x16 →
-// Int32x16) instead of 8, and uses the AVX-512 int64 multiply (Int64x8.Mul =
-// VPMULLQ) for the int32×int32→int64 widening instead of the AVX2 even/odd
-// VPMULDQ+VPSRLQ dance — wider and simpler.
+// VPSUBW on zmm) instead of 16; screluDot does 32 elements/iter (one Int16x32
+// load + one 32-wide clamp, split into two Int16x16→Int32x16 halves) instead of
+// 8, with the int32 VPMULLD product path (exact, |cc·w|<2^31) sign-extended to
+// int64 for the reduction. (screluDotSIMDInt64 keeps the AVX-512 int64 multiply,
+// Int64x8.Mul = VPMULLQ, for the NPS A/B.)
 //
 // BIT-EXACT CONTRACT (non-negotiable): identical to addColScalar/subColScalar/
 // screluDotScalar in kernels.go for all inputs. clamp is the same int16
@@ -352,15 +353,51 @@ func subColSIMD(dst, src []int16) {
 }
 
 // screluDotSIMD computes Σ_i clamp(acc[i],0,qa)² · w[i] as int64, bit-identical
-// to screluDotScalar. 16 elements/iter (one Int16x16 → Int32x16); a scalar tail
-// handles the remainder (the test exercises widths 1,7,15,31,513).
+// to screluDotScalar. The hot body is 512-bit-wide: ONE Int16x32 load + ONE
+// 32-wide int16 clamp per 32 elements (vs two 256-bit load+clamps), then the
+// clamped Int16x32 and w Int16x32 are split into lo/hi Int16x16 halves and the
+// EXISTING per-16 square→VPMULLD→extend-to-int64 logic runs on each half. A
+// 256-bit (16-wide) step then a scalar tail handle the remainder (the test
+// exercises widths 1,7,15,31,256,512,513). Only the LANE GROUPING of the
+// loads/clamps changes — clamp(0,qa)→int32 square→VPMULLD→sign-extend-int64→
+// int64-accumulate is byte-for-byte the same, and int64 add is associative, so
+// regrouping the reduction is exact.
 func screluDotSIMD(acc, w []int16, qa int32) int64 {
 	n := len(acc)
 	zero16 := archsimd.BroadcastInt16x16(0)
 	qa16 := archsimd.BroadcastInt16x16(int16(qa)) // qa=255 fits int16
-	acc64 := archsimd.BroadcastInt64x8(0)         // running int64 lanes
+	zero32 := archsimd.BroadcastInt16x32(0)
+	qa32 := archsimd.BroadcastInt16x32(int16(qa))
+	acc64 := archsimd.BroadcastInt64x8(0) // running int64 lanes
 
 	i := 0
+	// 512-bit body: 32 int16/iter. The 512-bit load + 512-bit clamp happen once
+	// per 32 elems (vs twice), then each 16-wide half runs the identical square/
+	// VPMULLD/extend-to-int64 path as the 256-bit step below.
+	for ; i+32 <= n; i += 32 {
+		a := archsimd.LoadInt16x32Slice(acc[i : i+32])
+		wv := archsimd.LoadInt16x32Slice(w[i : i+32])
+
+		// clamp(a, 0, qa) in int16, 32-wide: Max(0) then Min(qa). Per-lane
+		// identical to the 16-wide clamp — result ∈ [0,255].
+		c := a.Max(zero32).Min(qa32) // Int16x32
+
+		// lo 256-bit half (elems i..i+15): square→int32 mul→extend to int64.
+		cLo := c.GetLo().ExtendToInt32() // Int32x16
+		ccLo := cLo.Mul(cLo)             // Int32x16, all ≥0, ≤65025
+		wLo := wv.GetLo().ExtendToInt32()
+		pLo := ccLo.Mul(wLo) // VPMULLD, exact (|cc·w|<2^31)
+		acc64 = acc64.Add(pLo.GetLo().ExtendToInt64()).Add(pLo.GetHi().ExtendToInt64())
+
+		// hi 256-bit half (elems i+16..i+31): same logic.
+		cHi := c.GetHi().ExtendToInt32() // Int32x16
+		ccHi := cHi.Mul(cHi)
+		wHi := wv.GetHi().ExtendToInt32()
+		pHi := ccHi.Mul(wHi)
+		acc64 = acc64.Add(pHi.GetLo().ExtendToInt64()).Add(pHi.GetHi().ExtendToInt64())
+	}
+
+	// 256-bit step for a residual ≥16 (n%32 ∈ [16,31]) — the original 16-wide body.
 	for ; i+16 <= n; i += 16 {
 		a := archsimd.LoadInt16x16Slice(acc[i : i+16])
 		wv := archsimd.LoadInt16x16Slice(w[i : i+16])
