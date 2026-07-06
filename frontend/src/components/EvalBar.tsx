@@ -32,13 +32,19 @@ interface EvalBarProps {
 // win-probability BAR is cross-calibrated. A proper fix fits gomachine's own
 // WDL→win% sigmoid from self-play data — this ~2× constant handles the visual.)
 const LICHESS_CP_K = 0.00368208 // Stockfish/Lichess-scale cp
-const GOMACHINE_CP_K = LICHESS_CP_K / 2 // gomachine cp ≈ 2× hot
+const GOMACHINE_CP_SCALE = 0.5 // gomachine cp ≈ 2× hot → ÷2 onto SF scale
 
-function whiteWinPercent(ev: WhiteEval | null, k: number = LICHESS_CP_K): number {
+// `scale` normalizes an engine's cp onto the Stockfish/Lichess scale the coefficient
+// and the ±1000 clamp are calibrated for. It's applied BEFORE the clamp (not as a
+// gentler slope) so BOTH ends stay right: near-center matches SF, and the ±1000
+// saturation is reached at the same real advantage (else a hot-scale engine would
+// asymptote to a too-low ceiling — e.g. halving the slope pinned the bar at ~7/8
+// white for every large eval). SF passes scale 1; gomachine passes 0.5.
+function whiteWinPercent(ev: WhiteEval | null, scale: number = 1): number {
     if (!ev) return 50
     if (ev.type === 'mate') return ev.white > 0 ? 100 : ev.white < 0 ? 0 : 50
-    const cp = Math.max(-1000, Math.min(1000, ev.white))
-    return 50 + 50 * (2 / (1 + Math.exp(-k * cp)) - 1)
+    const cp = Math.max(-1000, Math.min(1000, ev.white * scale))
+    return 50 + 50 * (2 / (1 + Math.exp(-LICHESS_CP_K * cp)) - 1)
 }
 
 // Just the value: pawns (e.g. "2.0") or "M" + moves. No sign, no percentage.
@@ -60,8 +66,8 @@ export default function EvalBar({ ev, orientation, sfEv, sfColor = '#b06bff' }: 
 
     // gomachine's fill is cross-calibrated to Stockfish's win% scale (see whiteWinPercent
     // SCALE NOTE) so the fill and the SF second-opinion line agree when the engines do.
-    const whitePct = whiteWinPercent(shown, GOMACHINE_CP_K)
-    const sfPct = sfEv ? whiteWinPercent(sfEv, LICHESS_CP_K) : 0
+    const whitePct = whiteWinPercent(shown, GOMACHINE_CP_SCALE)
+    const sfPct = sfEv ? whiteWinPercent(sfEv) : 0
     const whiteAhead = shown ? shown.white >= 0 : true
     const whiteAnchor = orientation === 'w' ? 'bottom' : 'top' // White grows from its own side
 
