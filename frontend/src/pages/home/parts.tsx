@@ -16,6 +16,7 @@ import { useAuth } from '../../lib/auth'
 import { getStats, type LobbyStats } from '../../api/client'
 import { CATEGORY_META, type Category } from '../../lib/timeControl'
 import { Panel, PanelHead } from '../../components/home/Panel'
+import HeroFlame from '../../components/home/HeroFlame'
 import ChallengeDialog from '../../components/ChallengeDialog'
 import type { Variant } from '../../lib/variants'
 import { DuckGlyph } from '../../components/DuckGlyph'
@@ -169,19 +170,7 @@ function Hero({ stats }: { stats: LobbyStats | null }) {
                 mb: { xs: 2.5, md: 3 },
             }}
         >
-            <Box sx={{ minWidth: 0 }}>
-                <Typography
-                    sx={{
-                        fontFamily: 'var(--font-display)',
-                        fontWeight: 700,
-                        fontSize: { xs: 34, md: 46 },
-                        lineHeight: 1.04,
-                        letterSpacing: '-0.02em',
-                    }}
-                >
-                    Your move.
-                </Typography>
-            </Box>
+            <HeroFlame />
 
             {/* Live counters */}
             <Box sx={{ display: 'flex', gap: 1.25, flexShrink: 0 }}>

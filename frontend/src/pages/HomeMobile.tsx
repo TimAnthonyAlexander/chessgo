@@ -1,6 +1,6 @@
 import { Box } from '@mui/material'
 import DailyPuzzleWidget from '../components/home/DailyPuzzleWidget'
-import FlameWidget from '../components/home/FlameWidget'
+import HeroFlame from '../components/home/HeroFlame'
 import RecentGamesWidget from '../components/home/RecentGamesWidget'
 import SignUpWidget from '../components/home/SignUpWidget'
 import LiveTvWidget from '../components/home/LiveTvWidget'
@@ -16,13 +16,13 @@ export default function HomeMobile() {
     return (
         <HomeChrome home={home} hero={false}>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
+                <HeroFlame />
                 <PlayPanel
                     onNavigate={home.navigate}
                     onChallenge={() => home.setChallengeOpen(true)}
                 />
                 <QuickPairingPanel onQueue={home.queue} />
                 <LiveTvWidget />
-                <FlameWidget />
                 <DailyPuzzleWidget />
                 <RecentGamesWidget />
                 <SignUpWidget />
