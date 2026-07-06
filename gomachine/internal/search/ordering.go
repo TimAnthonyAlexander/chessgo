@@ -13,6 +13,15 @@ const (
 	// scoreLosingCapture sits below killers and quiet (history) moves so that
 	// SEE-losing captures are tried last (SEE ordering, enabled by Params.SEE).
 	scoreLosingCapture = -2_000_000
+	// seeLosingScoreThreshold splits captureScore's two SEE tiers. A capture with
+	// SEE<0 gets base=scoreLosingCapture (−2,000,000); an equal/winning one gets
+	// base=scoreCapture (+1,000,000). The within-tier adjustments (mvvlva up to
+	// ~14,300 for a queen victim, ±maxHistory=8,192 capthist) are ≪ the 3,000,000
+	// tier gap, so a losing capture's score is always ≤ −1,977,508 and a
+	// winning/equal one always ≥ +973,408. Any score ≤ this mid-gap value therefore
+	// encodes SEE<0 exactly — the qsearch SEE prune (threshold 0) reads it back via
+	// SEEReuseQS instead of recomputing pos.SEE.
+	seeLosingScoreThreshold = -1_000_000
 )
 
 // isCapture reports whether m captures on the (pre-move) position.

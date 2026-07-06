@@ -503,6 +503,14 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.QCaps = b
+		case "seereuseqs":
+			// qsearch double-SEE dedup: reuse the SEE sign from the ordering score.
+			// Node-identical A/B (OFF = recompute pos.SEE in the qsearch loop).
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.SEEReuseQS = b
 		case "lmrcutnode", "lmrcut":
 			b, err := parseBool(val)
 			if err != nil {

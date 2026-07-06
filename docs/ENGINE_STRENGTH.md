@@ -1978,7 +1978,11 @@ reliable signal (interleaved medians cancel box drift); the absolute base wander
 - **directApply** (re-bench of finding A4 on the KB net — the 43 KB counts array is now > L1, so skipping
   it wins where the pre-KB verdict said "noise"): **+2.5%** isolated. `741d404`.
 - **screluDot 256→512-bit widen** (eval readout kernel, v4): **+2.0%**. `54d0271`.
-- **Combined shipped ≈ +6% single-thread NPS**, every config node-count-identical.
+- **qsearch SEE dedup** (`SEEReuseQS`, finding B4): reuse the SEE sign already encoded in the ordering
+  score instead of recomputing `pos.SEE` in the qsearch prune (qsearch ≈ half the tree, SEE is
+  `attackersTo`+magic-heavy). **+2.78%**, node-identical (1 574 334 both sides). Bit-exact because SEE is
+  position-deterministic (no history/mutable-table coupling — the trap that killed #3/#4). Default-on.
+- **Combined shipped ≈ +9% single-thread NPS**, every config node-count-identical.
 
 **MEASURED, NOT SHIPPED (flag default-off):**
 - **finny** (accumulator-refresh cache, option-a = cache the feature *list* + `applyDiff`): **WASH** —

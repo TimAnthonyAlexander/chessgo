@@ -1850,9 +1850,22 @@ func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 			continue
 		}
 		// SEE pruning: out of check, skip captures that lose material outright.
-		if !inCheck && s.params.SEE && isCapture(pos, m) && m.Type() != chess.Promotion &&
-			pos.SEE(m) < 0 {
-			continue
+		// SEEReuseQS reuses the SEE sign already encoded in the ordering score
+		// (captureScore tiered SEE<0 as scoreLosingCapture at THIS position) instead
+		// of a second pos.SEE(m) call. Every move reaching this prune (a genuine
+		// capture or en-passant; promotions are excluded, castling routes through
+		// captureScore's victim branch identically) was scored via captureScore, so
+		// scores[i]≤seeLosingScoreThreshold ⟺ SEE<0 — node-count-identical.
+		if !inCheck && s.params.SEE && isCapture(pos, m) && m.Type() != chess.Promotion {
+			losing := false
+			if s.params.SEEReuseQS {
+				losing = scores[i] <= seeLosingScoreThreshold
+			} else {
+				losing = pos.SEE(m) < 0
+			}
+			if losing {
+				continue
+			}
 		}
 		// Delta pruning: out of check, skip a capture that even in the best case
 		// (winning the victim plus a margin) cannot raise alpha.
