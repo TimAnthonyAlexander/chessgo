@@ -263,37 +263,49 @@ export default function GuessTheElo() {
             }
             right={
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                    <Card sx={{ flexDirection: 'row', alignItems: 'center', gap: 0.5, py: 1.25 }}>
+                    <Card sx={{ gap: 1, py: 1.25 }}>
                         <Typography
-                            sx={{ fontSize: 13, fontWeight: 600, color: 'var(--text-dim)', mr: 1 }}
+                            sx={{ fontSize: 13, fontWeight: 600, color: 'var(--text-dim)' }}
                         >
                             {caption}
                         </Typography>
-                        <Box sx={{ flex: 1 }} />
-                        <NavBtn label="First" onClick={goFirst}>
-                            <ChevronFirst size={18} />
-                        </NavBtn>
-                        <NavBtn label="Previous" onClick={goPrev}>
-                            <ChevronLeft size={18} />
-                        </NavBtn>
-                        <NavBtn label={playing ? 'Pause' : 'Play'} onClick={togglePlay}>
-                            {playing ? <Pause size={18} /> : <Play size={18} />}
-                        </NavBtn>
-                        <NavBtn label="Next" onClick={goNext}>
-                            <ChevronRight size={18} />
-                        </NavBtn>
-                        <NavBtn label="Last" onClick={goLast}>
-                            <ChevronLast size={18} />
-                        </NavBtn>
-                        <NavBtn
-                            label="Flip board"
-                            onClick={() => setOrientation((o) => (o === 'w' ? 'b' : 'w'))}
+                        {/* Controls on their own row: wrap + stay within the card so
+                            the seven buttons never overflow the fixed side column. */}
+                        <Box
+                            sx={{
+                                display: 'flex',
+                                flexWrap: 'wrap',
+                                gap: 0.5,
+                                minWidth: 0,
+                                maxWidth: '100%',
+                            }}
                         >
-                            <FlipVertical2 size={18} />
-                        </NavBtn>
-                        <NavBtn label={sound ? 'Mute' : 'Unmute'} onClick={toggleSound}>
-                            {sound ? <Volume2 size={18} /> : <VolumeX size={18} />}
-                        </NavBtn>
+                            <NavBtn small label="First" onClick={goFirst}>
+                                <ChevronFirst size={17} />
+                            </NavBtn>
+                            <NavBtn small label="Previous" onClick={goPrev}>
+                                <ChevronLeft size={17} />
+                            </NavBtn>
+                            <NavBtn small label={playing ? 'Pause' : 'Play'} onClick={togglePlay}>
+                                {playing ? <Pause size={17} /> : <Play size={17} />}
+                            </NavBtn>
+                            <NavBtn small label="Next" onClick={goNext}>
+                                <ChevronRight size={17} />
+                            </NavBtn>
+                            <NavBtn small label="Last" onClick={goLast}>
+                                <ChevronLast size={17} />
+                            </NavBtn>
+                            <NavBtn
+                                small
+                                label="Flip board"
+                                onClick={() => setOrientation((o) => (o === 'w' ? 'b' : 'w'))}
+                            >
+                                <FlipVertical2 size={17} />
+                            </NavBtn>
+                            <NavBtn small label={sound ? 'Mute' : 'Unmute'} onClick={toggleSound}>
+                                {sound ? <Volume2 size={17} /> : <VolumeX size={17} />}
+                            </NavBtn>
+                        </Box>
                     </Card>
 
                     <Box sx={{ height: 460, display: 'flex' }}>

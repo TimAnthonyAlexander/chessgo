@@ -968,11 +968,11 @@ export type AdminGameFilter = 'all' | 'bot' | 'human'
 /** Optional category/pool axis (a stored `Game.category` value). */
 export type AdminGameCategory = 'all' | 'bullet' | 'blitz' | 'rapid' | 'classical' | 'duck'
 
-// A games-log row is exactly `Game::summaryRow()` — the same shape the profile
-// and anti-cheat surfaces already consume (it carries `white_is_bot` /
-// `black_is_bot`), so we reuse {@link GameSummaryRow} rather than declaring a
-// parallel `AdminGameRow`. Aliased for a self-documenting name at the call sites.
-export type AdminGameRow = GameSummaryRow
+// A games-log row is `Game::summaryRow()` (the same shape the profile and
+// anti-cheat surfaces consume — it carries `white_is_bot` / `black_is_bot`) plus
+// a `seeded` flag the admin endpoint derives from the `seedgame-` hub_game_id
+// prefix, so locally-seeded dev games can be badged when shown.
+export type AdminGameRow = GameSummaryRow & { seeded: boolean }
 
 export interface AdminGamesPage {
     games: AdminGameRow[]
@@ -985,14 +985,18 @@ export interface AdminGamesParams {
     page?: number
     filter?: AdminGameFilter
     category?: AdminGameCategory
+    /** Include locally-seeded dev games (hidden by default). */
+    includeSeeded?: boolean
 }
 
-/** Newest-first, paginated persisted-game log, filterable by bot/human + category. */
+/** Newest-first, paginated persisted-game log, filterable by bot/human + category.
+ * Locally-seeded dev games are hidden unless `includeSeeded` is set. */
 export function getAdminGames(params: AdminGamesParams = {}): Promise<AdminGamesPage> {
     const qs = new URLSearchParams()
     if (params.page) qs.set('page', String(params.page))
     if (params.filter && params.filter !== 'all') qs.set('filter', params.filter)
     if (params.category && params.category !== 'all') qs.set('category', params.category)
+    if (params.includeSeeded) qs.set('include_seeded', '1')
     const suffix = qs.toString() ? `?${qs.toString()}` : ''
     return request<AdminGamesPage>(`/admin/games${suffix}`)
 }

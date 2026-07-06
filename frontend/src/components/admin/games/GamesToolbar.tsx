@@ -1,4 +1,4 @@
-import { Box, MenuItem, TextField } from '@mui/material'
+import { Box, FormControlLabel, MenuItem, Switch, TextField } from '@mui/material'
 import type { AdminGameCategory, AdminGameFilter } from '../../../api/client'
 
 // A dark-theme-consistent select style shared with the Users toolbar, so the
@@ -23,12 +23,16 @@ export default function GamesToolbar({
     onFilter,
     category,
     onCategory,
+    includeSeeded,
+    onIncludeSeeded,
     total,
 }: {
     filter: AdminGameFilter
     onFilter: (v: AdminGameFilter) => void
     category: AdminGameCategory
     onCategory: (v: AdminGameCategory) => void
+    includeSeeded: boolean
+    onIncludeSeeded: (v: boolean) => void
     total: number | null
 }) {
     return (
@@ -71,6 +75,31 @@ export default function GamesToolbar({
                 <MenuItem value="classical">Classical</MenuItem>
                 <MenuItem value="duck">Duck</MenuItem>
             </TextField>
+
+            <FormControlLabel
+                control={
+                    <Switch
+                        checked={includeSeeded}
+                        onChange={(e) => onIncludeSeeded(e.target.checked)}
+                        size="small"
+                        sx={{
+                            '& .MuiSwitch-switchBase.Mui-checked': { color: 'var(--accent)' },
+                            '& .MuiSwitch-switchBase.Mui-checked + .MuiSwitch-track': {
+                                bgcolor: 'var(--accent)',
+                            },
+                        }}
+                    />
+                }
+                label="Show seeded"
+                sx={{
+                    ml: 0,
+                    '& .MuiFormControlLabel-label': {
+                        fontSize: 13,
+                        color: 'var(--muted)',
+                        whiteSpace: 'nowrap',
+                    },
+                }}
+            />
 
             {total != null && (
                 <Box

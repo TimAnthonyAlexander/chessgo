@@ -12,12 +12,14 @@ import GamesTable from '../components/admin/games/GamesTable'
 interface Query {
     filter: AdminGameFilter
     category: AdminGameCategory
+    includeSeeded: boolean
     page: number
 }
 
 const INITIAL_QUERY: Query = {
     filter: 'all',
     category: 'all',
+    includeSeeded: false,
     page: 1,
 }
 
@@ -40,6 +42,7 @@ export default function AdminGames() {
         getAdminGames({
             filter: query.filter,
             category: query.category,
+            includeSeeded: query.includeSeeded,
             page: query.page,
         })
             .then((page) => {
@@ -63,6 +66,8 @@ export default function AdminGames() {
         setQuery((prev) => ({ ...prev, filter, page: 1 }))
     const onCategory = (category: AdminGameCategory) =>
         setQuery((prev) => ({ ...prev, category, page: 1 }))
+    const onIncludeSeeded = (includeSeeded: boolean) =>
+        setQuery((prev) => ({ ...prev, includeSeeded, page: 1 }))
     const onPage = (page: number) => setQuery((prev) => ({ ...prev, page }))
 
     // Preserve the last-known total across an in-flight refetch so the count and
@@ -79,6 +84,8 @@ export default function AdminGames() {
                 onFilter={onFilter}
                 category={query.category}
                 onCategory={onCategory}
+                includeSeeded={query.includeSeeded}
+                onIncludeSeeded={onIncludeSeeded}
                 total={error ? null : total}
             />
 

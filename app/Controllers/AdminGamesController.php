@@ -42,6 +42,13 @@ class AdminGamesController extends Controller
     /** ?category= — a stored category value, or '' for all. */
     public string $category = '';
 
+    /**
+     * ?include_seeded= — when truthy, locally-seeded dev games (`hub_game_id`
+     * prefixed `seedgame-`, inserted by scripts/seed_games.php) are included.
+     * Default false: seeded games are hidden so the log shows only real play.
+     */
+    public string $include_seeded = '';
+
     public function get(): JsonResponse
     {
         if ($denied = $this->requireAdmin($this->request)) {
@@ -68,12 +75,21 @@ class AdminGamesController extends Controller
             $query->where('category', '=', $this->category);
         }
 
+        // Hide locally-seeded dev games by default (scripts/seed_games.php stamps
+        // their hub_game_id with the `seedgame-` prefix). Opt in via ?include_seeded=1.
+        if (!$this->includeSeeded()) {
+            $query->where('hub_game_id', 'NOT LIKE', 'seedgame-%');
+        }
+
         $paged = $query
             ->orderByDesc('created_at')
             ->paginate(max(1, $this->page), self::PER_PAGE, self::PER_PAGE, withTotal: true);
 
+        // Flag any shown seeded game so the client can badge it (never mutating the
+        // shared summaryRow() — the flag is derived here from the hub_game_id prefix).
         $rows = array_map(
-            static fn (Game $g): array => $g->summaryRow(),
+            static fn (Game $g): array => $g->summaryRow()
+                + ['seeded' => str_starts_with($g->hub_game_id, 'seedgame-')],
             $paged->data,
         );
 
@@ -83,5 +99,11 @@ class AdminGamesController extends Controller
             'perPage' => $paged->perPage,
             'total' => $paged->total,
         ]);
+    }
+
+    /** Whether ?include_seeded= was passed truthy ('1' or 'true'); default false. */
+    private function includeSeeded(): bool
+    {
+        return in_array(strtolower(trim($this->include_seeded)), ['1', 'true'], true);
     }
 }

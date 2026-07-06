@@ -5,6 +5,7 @@ import type { AdminGameRow } from '../../../api/client'
 import { fmtRelative } from '../../profile/shared'
 import { DuckGlyph } from '../../DuckGlyph'
 import BotFillBadge from './BotFillBadge'
+import SeededBadge from './SeededBadge'
 import GameResultCell from './GameResultCell'
 
 /** One persisted-game row. The whole row deep-links into the anti-cheat per-game
@@ -70,7 +71,12 @@ export default function GameRow({ game }: { game: AdminGameRow }) {
                 <GameResultCell result={game.result} />
             </TableCell>
 
-            <TableCell>{isBotFill ? <BotFillBadge /> : <HumanChip />}</TableCell>
+            <TableCell>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
+                    {isBotFill ? <BotFillBadge /> : <HumanChip />}
+                    {game.seeded && <SeededBadge />}
+                </Box>
+            </TableCell>
 
             <TableCell>
                 <RatedChip rated={game.rated} />
