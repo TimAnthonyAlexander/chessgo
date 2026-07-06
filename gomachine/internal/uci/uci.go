@@ -105,6 +105,7 @@ func parsePosition(fields []string) (*chess.Position, []uint64, bool) {
 func handleGo(out io.Writer, eng *engine.Engine, pos *chess.Position, history []uint64, fields []string) {
 	depth := 0
 	movetime := time.Duration(0)
+	var nodes uint64
 	var wtime, btime, winc, binc, movestogo int
 
 	for i := 1; i < len(fields); i++ {
@@ -121,6 +122,8 @@ func handleGo(out io.Writer, eng *engine.Engine, pos *chess.Position, history []
 			depth = readInt()
 		case "movetime":
 			movetime = time.Duration(readInt()) * time.Millisecond
+		case "nodes":
+			nodes = uint64(readInt())
 		case "wtime":
 			wtime = readInt()
 		case "btime":
@@ -138,8 +141,8 @@ func handleGo(out io.Writer, eng *engine.Engine, pos *chess.Position, history []
 	}
 
 	// Build search limits: prefer clock-aware time management over flat movetime.
-	limits := search.Limits{Depth: depth, MoveTime: movetime}
-	if movetime == 0 && depth == 0 {
+	limits := search.Limits{Depth: depth, MoveTime: movetime, Nodes: nodes}
+	if movetime == 0 && depth == 0 && nodes == 0 {
 		remaining, inc := wtime, winc
 		if pos.SideToMove() == chess.Black {
 			remaining, inc = btime, binc
