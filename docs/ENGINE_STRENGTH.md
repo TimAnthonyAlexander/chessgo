@@ -1993,6 +1993,11 @@ reliable signal (interleaved medians cancel box drift); the absolute base wander
   enumeration)** could win — untried, higher risk. Kept `SetFinny` flag-gated as the option-b scaffold.
 - **prefetch / batchApply**: net-negative on the KB net (0.97–0.98) — the doc'd +17.6% prefetch number is
   **stale** (pre-KB); do not enable.
+- **bucketed TT** (4 slots/64 B line, `TTBucketShift`, `20a4c0f`): **−5.8 ± 8.6 Elo** at 100 ms / 16 MB
+  (902 pairs, LLR −2.15 → H0). NOT a NPS win — it *costs* probe NPS (scan 4 slots on the #1 hot function)
+  to buy TT retention it can't cash at blitz/low-pressure. Kept flag-gated default-off; only a
+  long-movetime / high-pressure (CCRL) build could flip it — untested, deferred. Contrast the shipped
+  levers, which are pure bit-exact NPS (identical nodes) and so can't lose.
 
 **DROPPED (not bit-exact — search-ordering reads globally-mutated history/conthist/killers):**
 - **staged TT-first ordering** (#3) and **contScore reuse** (#4): both perturb move order → node counts
