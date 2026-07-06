@@ -106,6 +106,32 @@ func (pos *Position) DoMove(m Move, u *Undo) {
 	pos.key ^= zobristSide
 }
 
+// DoDrop places piece p on the empty square s and passes the turn. It is the one
+// primitive the Crazyhouse variant needs on top of standard chess (dropping a
+// pocketed piece); internal/crazyhouse owns all pocket/promotion bookkeeping and
+// only calls this with a legal, empty target and p in the side-to-move's colour.
+//
+// There is no Undo form on purpose: Crazyhouse applies every move on a value copy
+// of the position (immutable style), so a throwaway copy is mutated and discarded
+// — nothing to revert. Keeping this here (rather than exporting addPiece and the
+// Zobrist tables) confines the core's surface to a single, self-contained method.
+func (pos *Position) DoDrop(p Piece, s Square) {
+	// Clear any en-passant contribution (a drop is never a double push) and reset.
+	if pos.epIsReal() {
+		pos.key ^= zobristEP[pos.epSquare.File()]
+	}
+	pos.epSquare = SqNone
+	pos.halfmove++ // a drop neither moves a pawn nor captures
+
+	pos.addPiece(p, s) // maintains bitboards, mailbox and the piece key together
+
+	if pos.side == Black {
+		pos.fullmove++
+	}
+	pos.side = pos.side.Opposite()
+	pos.key ^= zobristSide
+}
+
 // DoNullMove passes the turn (used by null-move pruning). It must not be called
 // while in check.
 func (pos *Position) DoNullMove(u *Undo) {
