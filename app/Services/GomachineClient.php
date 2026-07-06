@@ -65,6 +65,7 @@ class GomachineClient
         int $nodes = 0,
         int $depth = 0,
         bool $book = false,
+        bool $fast = false,
     ): array {
         $limits = ['rating' => $rating];
         // Exactly one budget dimension should be set; the engine applies
@@ -81,6 +82,12 @@ class GomachineClient
         }
         if ($book) {
             $limits['book'] = true; // consult the opening book on the rating path
+        }
+        if ($fast) {
+            // Fast weakened search (RootNearBest): best at full depth + only near-best
+            // alternatives, so it honors $movetimeMs and stays cheap at every rating.
+            // Used by Guess-the-Elo game generation (a full self-play game per call).
+            $limits['fast'] = true;
         }
 
         return $this->post('/bestmove', [

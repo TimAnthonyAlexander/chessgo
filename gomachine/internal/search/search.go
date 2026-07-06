@@ -896,6 +896,90 @@ func (s *Searcher) RootScores(pos *chess.Position, limits Limits, gameHistory []
 	return out
 }
 
+// RootNearBest powers the FAST weakened-bot ranking (the opt-in rating path used
+// by Guess-the-Elo generation). Instead of RootScores' full-window search of EVERY
+// root move at the rating's depth — which is O(moves × depth) and balloons to
+// seconds per move at high-but-still-weakened ratings — it does two cheap steps:
+//
+//  1. One normal search to limits.Depth (honoring MoveTime) for the best move + its
+//     score at the depth actually reached. Single-PV, warms the TT.
+//  2. A margin scan: null-window-test every OTHER root move against
+//     (bestScore - margin) at that same depth. The many clearly-worse moves fail
+//     low cheaply (and are dropped); only genuine near-best alternatives clear the
+//     window and get an exact re-search. `margin` should track the rating's eval
+//     noise, so exactly the moves the noise could plausibly promote survive.
+//
+// The result is the best move plus the near-best alternatives (best at index 0),
+// each with a score at the reached depth — enough for the caller to jitter + pick.
+// weakenedSearch suppresses the WDL probe throughout, like RootScores, so a leveled
+// bot doesn't suddenly convert ≤MaxPieces endings perfectly. Scores are from the
+// root side-to-move's perspective.
+func (s *Searcher) RootNearBest(pos *chess.Position, limits Limits, margin int, gameHistory []uint64) []RootMove {
+	s.weakenedSearch = true
+	defer func() { s.weakenedSearch = false }()
+
+	// Step 1: full-strength best move + score at the target budget (ID; warms TT).
+	res := s.Search(pos, limits, gameHistory)
+	if res.BestMove == chess.NullMove {
+		return nil
+	}
+	best := RootMove{Move: res.BestMove, Score: res.Score}
+	if margin <= 0 {
+		return []RootMove{best}
+	}
+
+	// Scan at the depth actually reached in step 1, so best + alternatives are
+	// scored consistently (and the scan cost tracks the same depth).
+	depth := res.Depth
+	if depth < 1 {
+		depth = 1
+	}
+
+	// Step 2: margin scan over the remaining root moves, reusing the now-warm TT.
+	// Depth-bounded and cheap (few candidates clear the window), so run it without a
+	// clock so a partial iteration can't leave a candidate with an unreliable score.
+	s.reset(limits, gameHistory)
+	s.useTime = false
+	s.nodeCap = 0
+	s.pushKey(pos.Key())
+	s.nnueBegin(pos)
+
+	threshold := res.Score - margin
+	alts := make([]RootMove, 0, 8)
+	alts = append(alts, best)
+
+	var ml chess.MoveList
+	pos.GenerateLegal(&ml)
+	for i := 0; i < ml.Len(); i++ {
+		m := ml.Get(i)
+		if m == best.Move {
+			continue
+		}
+		var u chess.Undo
+		if s.useNNUE {
+			s.accPush(pos, m)
+		}
+		pos.DoMove(m, &u)
+		s.pushKey(pos.Key())
+		// Null-window test: is our score for m above the threshold? Search the child
+		// around (threshold, threshold+1) from our perspective; re-search exact only
+		// if it clears the bar (a real near-best alternative).
+		score := -s.negamax(pos, depth-1, 1, -(threshold + 1), -threshold, false)
+		if score > threshold {
+			score = -s.negamax(pos, depth-1, 1, -infinity, infinity, false)
+		}
+		s.popKey()
+		pos.UndoMove(m, &u)
+		if s.useNNUE {
+			s.accPop()
+		}
+		if score > threshold {
+			alts = append(alts, RootMove{Move: m, Score: score})
+		}
+	}
+	return alts
+}
+
 // RootLine is one candidate root move with its full-strength evaluation: score,
 // signed mate distance, principal variation, and the depth it was searched to.
 type RootLine struct {

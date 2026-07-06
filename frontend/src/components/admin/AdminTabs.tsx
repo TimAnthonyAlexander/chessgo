@@ -1,6 +1,6 @@
 import { Box } from '@mui/material'
 import { Link, useLocation } from 'react-router-dom'
-import { LayoutDashboard, ShieldAlert, Users } from 'lucide-react'
+import { LayoutDashboard, ShieldAlert, Swords, Users } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 interface AdminTab {
@@ -12,6 +12,7 @@ interface AdminTab {
 const TABS: AdminTab[] = [
     { label: 'Dashboard', to: '/admin', icon: <LayoutDashboard size={16} /> },
     { label: 'Users', to: '/admin/users', icon: <Users size={16} /> },
+    { label: 'Games', to: '/admin/games', icon: <Swords size={16} /> },
     { label: 'Anticheat', to: '/admin/anticheat', icon: <ShieldAlert size={16} /> },
 ]
 

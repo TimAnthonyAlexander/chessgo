@@ -959,6 +959,44 @@ export function getAdminUser(id: string): Promise<AdminUserDetail> {
     return request<AdminUserDetail>(`/admin/users/${encodeURIComponent(id)}`)
 }
 
+// --- Admin games log ---
+
+/** Bot/human axis of the persisted-game log. `bot` = either side is a fill-in
+ * bot; `human` = both sides are real players; `all` = no constraint. */
+export type AdminGameFilter = 'all' | 'bot' | 'human'
+
+/** Optional category/pool axis (a stored `Game.category` value). */
+export type AdminGameCategory = 'all' | 'bullet' | 'blitz' | 'rapid' | 'classical' | 'duck'
+
+// A games-log row is exactly `Game::summaryRow()` — the same shape the profile
+// and anti-cheat surfaces already consume (it carries `white_is_bot` /
+// `black_is_bot`), so we reuse {@link GameSummaryRow} rather than declaring a
+// parallel `AdminGameRow`. Aliased for a self-documenting name at the call sites.
+export type AdminGameRow = GameSummaryRow
+
+export interface AdminGamesPage {
+    games: AdminGameRow[]
+    page: number
+    perPage: number
+    total: number
+}
+
+export interface AdminGamesParams {
+    page?: number
+    filter?: AdminGameFilter
+    category?: AdminGameCategory
+}
+
+/** Newest-first, paginated persisted-game log, filterable by bot/human + category. */
+export function getAdminGames(params: AdminGamesParams = {}): Promise<AdminGamesPage> {
+    const qs = new URLSearchParams()
+    if (params.page) qs.set('page', String(params.page))
+    if (params.filter && params.filter !== 'all') qs.set('filter', params.filter)
+    if (params.category && params.category !== 'all') qs.set('category', params.category)
+    const suffix = qs.toString() ? `?${qs.toString()}` : ''
+    return request<AdminGamesPage>(`/admin/games${suffix}`)
+}
+
 // --- Admin anti-cheat: flagged users ---
 
 export type FlagStatus = 'open' | 'reviewing' | 'cleared' | 'banned'

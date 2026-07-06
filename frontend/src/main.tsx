@@ -19,6 +19,7 @@ import Admin from './pages/Admin'
 import AdminDashboard from './pages/AdminDashboard'
 import AdminUsers from './pages/AdminUsers'
 import AdminUserDetail from './pages/AdminUserDetail'
+import AdminGames from './pages/AdminGames'
 import AdminAnticheat from './pages/AdminAnticheat'
 import AdminAnticheatUser from './pages/AdminAnticheatUser'
 import AdminAnticheatGame from './pages/AdminAnticheatGame'
@@ -52,6 +53,7 @@ const router = createBrowserRouter([
                     { index: true, element: <AdminDashboard /> },
                     { path: 'users', element: <AdminUsers /> },
                     { path: 'users/:id', element: <AdminUserDetail /> },
+                    { path: 'games', element: <AdminGames /> },
                     { path: 'anticheat', element: <AdminAnticheat /> },
                     { path: 'anticheat/:userId', element: <AdminAnticheatUser /> },
                     { path: 'anticheat/game/:id', element: <AdminAnticheatGame /> },

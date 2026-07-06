@@ -420,6 +420,7 @@ type bestMoveRequest struct {
 		Nodes    uint64 `json:"nodes"`    // hard node cap (0 → none); admin engine-vs-engine rating path only
 		Aggr     *int   `json:"aggr"`     // aggression style 0..100 (nil/absent → 50 = neutral); applies to the rating path only
 		Book     *bool  `json:"book"`     // admin engine-vs-engine: consult the opening book on the rating path (nil/absent → off)
+		Fast     *bool  `json:"fast"`     // rating path only: use the fast weakened search (RootNearBest) — honors movetime, cheap at every rating (Guess-the-Elo generation)
 	} `json:"limits"`
 }
 
@@ -460,6 +461,12 @@ func (s *Server) handleBestMove(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	var res engine.BestResult
 	switch {
+	case req.Limits.Rating != nil && req.Limits.Fast != nil && *req.Limits.Fast:
+		// Fast weakened path (Guess-the-Elo generation): best at full depth + only
+		// near-best alternatives, so it honors movetime and stays cheap at every
+		// rating. Separate from the SPRT-blessed default rating search below.
+		mt := time.Duration(req.Limits.MoveTime) * time.Millisecond
+		res = eng.BestMoveForRatingFast(pos, *req.Limits.Rating, mt, hist)
 	case req.Limits.Rating != nil:
 		// Aggression is a rating-path (bot) style knob; absent → 50 (neutral, byte-
 		// identical to the plain rating search, so every non-aggression caller is

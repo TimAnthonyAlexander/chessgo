@@ -64,7 +64,15 @@ class GuessGameService
         $result = '1/2-1/2';
 
         for ($ply = 1; $ply <= self::PLY_CAP; $ply++) {
-            $best = $this->engine->bestMove($fen, $engineRating, $history, self::MOVETIME_MS);
+            // fast: the weakened search that honors MOVETIME_MS and stays cheap at
+            // every rating — without it a mid-band game takes minutes to generate.
+            $best = $this->engine->bestMove(
+                $fen,
+                $engineRating,
+                $history,
+                self::MOVETIME_MS,
+                fast: true,
+            );
             $uci = $best['bestmove'] ?? null;
             if (!is_string($uci) || $uci === '') {
                 break; // no legal move (already mated/stalemated — status carried below)

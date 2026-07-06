@@ -63,6 +63,12 @@ type game struct {
 	// only so a fill-in bot opponent can reply in context. Human-vs-human games
 	// don't need it but keep it too — it's tiny and the plumbing is uniform.
 	chatLog []BotChatTurn
+
+	// chat is the fill-in bot's fixed chat character for this game (nil for
+	// human-vs-human / filler). chatCooldownUntil throttles its replies so it
+	// answers a fast burst of human messages once, not line-by-line.
+	chat              *chatPersona
+	chatCooldownUntil time.Time
 }
 
 // appendChat records a chat line (fromBot marks the bot side) into the bounded

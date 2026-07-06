@@ -291,6 +291,74 @@ func (e *Engine) BestMoveForRatingLimitedAggr(pos *chess.Position, rating int, l
 	return e.BestMoveConfig(pos, cfg, history)
 }
 
+// BestMoveForRatingFast is the FAST-weakening variant of the rating path (opt-in
+// via the /bestmove `fast` limit; used by Guess-the-Elo game generation). It plays
+// the SAME strength model as configForRating — depth at the strong end, eval noise
+// + blunders at the weak end — but computes the move through search.RootNearBest
+// (best at full depth + only the near-best alternatives) instead of ranking every
+// root move. That honors the move-time budget and stays cheap at every rating,
+// where the plain rating path spends seconds full-window-searching all ~35 moves at
+// a high depth. movetime>0 overrides the rating's think time.
+//
+// This is deliberately a SEPARATE entry point, not a change to the default rating
+// search: bot games + matchmaking keep the SPRT-blessed path until this one is
+// itself SPRT-validated and promoted.
+func (e *Engine) BestMoveForRatingFast(pos *chess.Position, rating int, movetime time.Duration, history []uint64) BestResult {
+	cfg := configForRating(rating)
+	if movetime > 0 {
+		cfg.MoveTime = movetime
+	}
+	// Clean ratings (no noise/blunder): identical to the normal path — one search.
+	if cfg.NoiseCp == 0 && cfg.Blunder == 0 {
+		return e.BestMoveConfig(pos, cfg, history)
+	}
+
+	limits := search.Limits{Depth: cfg.Depth, MoveTime: cfg.MoveTime}
+	margin := 2 * cfg.NoiseCp // the eval-noise reach: only moves this close can be promoted
+	alts := e.searcher.RootNearBest(pos, limits, margin, history)
+	if len(alts) == 0 {
+		return BestResult{Move: chess.NullMove}
+	}
+	return e.pickWeakenedFrom(pos, alts, cfg)
+}
+
+// pickWeakenedFrom applies the rating weakening to a precomputed candidate set (the
+// best move + near-best alternatives from RootNearBest, best at index 0): an outright
+// blunder chance that plays a random legal move, else a noise-jittered pick among the
+// near-best moves. Mirrors pickWeakened's model, but over the pruned candidate set.
+func (e *Engine) pickWeakenedFrom(pos *chess.Position, alts []search.RootMove, cfg LevelConfig) BestResult {
+	// Outright blunder: play a random legal move — the fast path's analogue of
+	// pickWeakened's "pick from the weaker half of all moves".
+	if cfg.Blunder > 0 && rand.Float64() < cfg.Blunder {
+		var ml chess.MoveList
+		pos.GenerateLegal(&ml)
+		if ml.Len() > 1 {
+			m := ml.Get(rand.IntN(ml.Len()))
+			return BestResult{Move: m, Score: alts[0].Score, Depth: cfg.Depth,
+				Nodes: e.searcher.Nodes(), PV: []chess.Move{m}}
+		}
+	}
+
+	// Imprecision: jitter each candidate's score by ±NoiseCp and take the max. With
+	// small noise (high ratings) this is almost always the true best move.
+	noise := func() int {
+		if cfg.NoiseCp <= 0 {
+			return 0
+		}
+		return rand.IntN(2*cfg.NoiseCp+1) - cfg.NoiseCp
+	}
+	bestIdx, bestJit := 0, alts[0].Score+noise()
+	for i := 1; i < len(alts); i++ {
+		if jit := alts[i].Score + noise(); jit > bestJit {
+			bestJit = jit
+			bestIdx = i
+		}
+	}
+	chosen := alts[bestIdx]
+	return BestResult{Move: chosen.Move, Score: chosen.Score, Depth: cfg.Depth,
+		Nodes: e.searcher.Nodes(), PV: []chess.Move{chosen.Move}}
+}
+
 // pickWeakened applies eval noise + occasional blunders to a root-move ranking.
 func (e *Engine) pickWeakened(roots []search.RootMove, cfg LevelConfig, rankDepth int) BestResult {
 	if len(roots) == 0 {

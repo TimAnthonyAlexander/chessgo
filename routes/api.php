@@ -40,6 +40,7 @@ use App\Controllers\StreakController;
 use App\Controllers\AdminFlagsController;
 use App\Controllers\AdminDashboardController;
 use App\Controllers\AdminUsersController;
+use App\Controllers\AdminGamesController;
 use App\Controllers\AdminGameAnticheatController;
 use BaseApi\Http\Middleware\RateLimitMiddleware;
 use BaseApi\Http\SessionStartMiddleware;
@@ -198,6 +199,12 @@ $router->get('/admin/users', [
 $router->get('/admin/users/{id}', [
     CombinedAuthMiddleware::class,
     AdminUsersController::class,
+]);
+
+// Persisted-game log: newest-first, paginated, filterable by bot/human + category
+$router->get('/admin/games', [
+    CombinedAuthMiddleware::class,
+    AdminGamesController::class,
 ]);
 
 // Per-game anti-cheat telemetry (move times + analysis summary + game flags)

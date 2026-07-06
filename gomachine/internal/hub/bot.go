@@ -147,6 +147,8 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variantID string
 		g.black = &player{client: human, id: human.id}
 	}
 
+	g.chat = newChatPersona() // one fixed chat character for this game
+
 	human.game = g
 	h.games[g.id] = g
 	h.playerGames[human.id.UserID] = g

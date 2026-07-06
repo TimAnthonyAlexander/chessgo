@@ -22,13 +22,61 @@ import (
 // Run goroutine through the SAME chat path a human uses — so the frontend never
 // learns the opponent is a bot.
 
-// Behaviour knobs (per the product spec): a fill-in bot is chatty but not spammy.
-const (
-	botChatOpeningChance = 0.50 // chance it opens the game with a greeting
-	botChatReplyChance   = 0.50 // chance it answers any given human line at all
-	botChatMultiChance   = 0.20 // chance an answer is split into two quick messages
-	botChatMaxHistory    = 16   // recent lines kept per game for reply context
-)
+// botChatMaxHistory bounds the recent chat kept per game for reply context.
+const botChatMaxHistory = 16
+
+// botChatCooldown is the minimum gap between a fill-in bot's replies. It stops
+// the bot from stacking a separate answer onto every line of a fast burst ("are
+// you there??" / "!!!" / ":("), which reads as robotic — a real person answers
+// the burst once. It comfortably covers one reply's think+type delay.
+const botChatCooldown = 7 * time.Second
+
+// chatPersona is a fill-in bot's chat character, rolled ONCE when its game starts
+// and then FIXED for the whole game — so the opponent feels like one consistent
+// person (a quiet player stays quiet, a talkative one stays talkative, in a
+// steady voice) instead of re-rolling its mood on every message. nil for
+// human-vs-human and filler games (they never chat).
+type chatPersona struct {
+	opens       bool    // did this person open the game with a greeting?
+	replyChance float64 // fixed probability they answer a given message
+	multiChance float64 // fixed probability an answer is two quick lines
+	style       string  // a short voice descriptor, sent to the generator for consistency
+}
+
+// chatStyles are the voices a fill-in bot can be given. One is picked per game
+// and held for its whole duration, so the persona (and its phrasing) stays
+// consistent — and so different games don't all sound identical.
+var chatStyles = []string{
+	"friendly and relaxed, easygoing",
+	"quiet and focused on the game, says little",
+	"dry and a bit sarcastic",
+	"upbeat and talkative",
+	"chill, low energy, casual",
+	"competitive and lightly cocky, but not rude",
+	"polite and sportsmanlike",
+	"goofy, likes a bad joke",
+}
+
+// newChatPersona rolls a stable chat character. Talkativeness is bucketed and
+// weighted toward the quiet/normal middle (most online opponents barely chat);
+// each bucket sets a FIXED reply probability for the rest of the game.
+func newChatPersona() *chatPersona {
+	var reply, multi, openChance float64
+	switch r := mrand.Float64(); {
+	case r < 0.35: // quiet: rarely says anything
+		reply, multi, openChance = 0.15, 0.04, 0.20
+	case r < 0.80: // normal
+		reply, multi, openChance = 0.45, 0.10, 0.45
+	default: // chatty
+		reply, multi, openChance = 0.80, 0.18, 0.75
+	}
+	return &chatPersona{
+		opens:       mrand.Float64() < openChance,
+		replyChance: reply,
+		multiChance: multi,
+		style:       chatStyles[mrand.IntN(len(chatStyles))],
+	}
+}
 
 // BotChatTurn is one prior chat line handed to the generator as context (oldest
 // first). FromBot marks the bot's own lines so the model can hold a thread.
@@ -44,6 +92,7 @@ type BotChatRequest struct {
 	Rating   int           `json:"rating"`   // the bot's displayed rating (flavour only)
 	Opponent string        `json:"opponent"` // the human's display name
 	Kind     string        `json:"kind"`     // "opening" (unprompted) or "reply"
+	Style    string        `json:"style"`    // the persona's fixed voice, held all game
 	History  []BotChatTurn `json:"history"`  // recent chat, oldest first
 	Count    int           `json:"count"`    // short lines to produce (1, sometimes 2)
 }
@@ -80,14 +129,12 @@ func (g *game) chatBotSide() (*player, chess.Color, bool) {
 	return g.black, chess.Black, true
 }
 
-// maybeOpeningChat gives a fresh fill-in bot a chance to open with a greeting,
-// after a human-like pause. Run-goroutine entry; the work is off-loop.
+// maybeOpeningChat opens the game with a greeting IF this bot's persona is one
+// that opens (decided once, when the persona was rolled). Run-goroutine entry;
+// the work is off-loop.
 func (h *Hub) maybeOpeningChat(g *game) {
 	bot, _, ok := g.chatBotSide()
-	if !ok || h.botChatFn == nil {
-		return
-	}
-	if mrand.Float64() >= botChatOpeningChance {
+	if !ok || h.botChatFn == nil || g.chat == nil || !g.chat.opens {
 		return
 	}
 	h.generateBotChat(g.id, BotChatRequest{
@@ -95,30 +142,38 @@ func (h *Hub) maybeOpeningChat(g *game) {
 		Rating:   bot.rating,
 		Opponent: g.humanName(),
 		Kind:     "opening",
+		Style:    g.chat.style,
 		Count:    1,
 	}, botChatOpeningDelay())
 }
 
-// maybeReplyChat gives a fill-in bot a chance to answer the human's latest line.
-// Called on the Run goroutine right after the human's message is recorded, so
-// g.chatLog already includes it. Occasionally the answer is two quick messages.
+// maybeReplyChat gives a fill-in bot a chance to answer the human's latest line,
+// using its FIXED persona reply probability (so a quiet opponent stays quiet and
+// a chatty one stays chatty for the whole game). Called on the Run goroutine
+// right after the human's message is recorded, so g.chatLog already includes it.
+// A cooldown keeps it from answering every line of a fast burst.
 func (h *Hub) maybeReplyChat(g *game) {
 	bot, _, ok := g.chatBotSide()
-	if !ok || h.botChatFn == nil || g.over {
+	if !ok || h.botChatFn == nil || g.chat == nil || g.over {
 		return
 	}
-	if mrand.Float64() >= botChatReplyChance {
+	if time.Now().Before(g.chatCooldownUntil) {
+		return // just answered / a reply is in flight — don't stack another
+	}
+	if mrand.Float64() >= g.chat.replyChance {
 		return
 	}
 	count := 1
-	if mrand.Float64() < botChatMultiChance {
+	if mrand.Float64() < g.chat.multiChance {
 		count = 2
 	}
+	g.chatCooldownUntil = time.Now().Add(botChatCooldown)
 	h.generateBotChat(g.id, BotChatRequest{
 		Bot:      bot.id.Name,
 		Rating:   bot.rating,
 		Opponent: g.humanName(),
 		Kind:     "reply",
+		Style:    g.chat.style,
 		History:  append([]BotChatTurn(nil), g.chatLog...),
 		Count:    count,
 	}, botChatReplyDelay())
