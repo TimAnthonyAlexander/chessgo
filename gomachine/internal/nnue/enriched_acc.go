@@ -54,6 +54,30 @@ type EnrichedStack struct {
 	// batchApply scratch: the threat-only (f>=PsqSize) partitions of one applyDiff
 	// call's sub/add lists, reused per call to avoid alloc.
 	batchSub, batchAdd []uint16
+
+	// finny is the per-searcher accumulator-refresh cache (Stockfish AccumulatorRefreshTable
+	// / Koivisto "Finny tables"), indexed [perspective][kingBucket]. Each entry caches the
+	// last FINALIZED moving-side half at that (perspective, bucket) plus the exact feature
+	// list that produced it (half == B0i + Σ ftAdd(features)); on a later cross into the
+	// same bucket, finnyRefreshHalf updates the cached half by the multiset feature diff
+	// vs the current position — bit-exact with a from-scratch buildAccHalf. Consulted only
+	// when net.finny is on (the split-refresh path). Invalidated by Reset.
+	finny [2][NumKingBuckets]finnyEntry
+
+	// finnyHit/finnyHitChanged/finnyMiss are diagnostic counters for the Finny path:
+	// cache hits, hits whose current feature list DIFFERED from the cached one (the
+	// critical "cache hit with a changed board" case the diff must handle), and cold
+	// misses. Used by TestFinnyBitExact to prove the walk exercised changed-board hits.
+	finnyHit, finnyHitChanged, finnyMiss int
+}
+
+// finnyEntry is one Finny-table cache slot: a finalized accumulator half and the exact
+// active feature list that produced it (option (a) — store the feature list, not the
+// bitboards, so the refresh diff is a plain applyDiff(halfCopy, cachedFeatures, current)).
+type finnyEntry struct {
+	half     []int16  // len H; == B0i + Σ ftAdd over features
+	features []uint16 // the perspective's active (base+threat) feature list at this bucket
+	valid    bool
 }
 
 type enrichedSlot struct {
@@ -75,7 +99,7 @@ func (n *EnrichedNet) NewStack(maxDepth int) *EnrichedStack {
 		data[i].fb = make([]uint16, 0, maxEnrichedActive)
 	}
 	const dcap = 4 * maxEnrichedActive // generous: base deltas + affected-attacker edges
-	return &EnrichedStack{
+	st := &EnrichedStack{
 		net: n, data: data, backing: backing, counts: make([]int16, n.InputDim), sc: n.newScratch(),
 		dsubW: make([]uint16, 0, dcap), daddW: make([]uint16, 0, dcap),
 		dsubB: make([]uint16, 0, dcap), daddB: make([]uint16, 0, dcap),
@@ -85,6 +109,15 @@ func (n *EnrichedNet) NewStack(maxDepth int) *EnrichedStack {
 		accW: make([]int16, h), accB: make([]int16, h),
 		batchSub: make([]uint16, 0, dcap), batchAdd: make([]uint16, 0, dcap),
 	}
+	// Finny-table cache: one half + feature list per (perspective, kingBucket). Small
+	// (2 × 16 × (H int16 + ≤288 uint16)); allocate eagerly, invalid until first written.
+	for c := 0; c < 2; c++ {
+		for b := 0; b < NumKingBuckets; b++ {
+			st.finny[c][b].half = make([]int16, h)
+			st.finny[c][b].features = make([]uint16, 0, maxEnrichedActive)
+		}
+	}
+	return st
 }
 
 // makeSliceBufs allocates n reusable uint16 buffers of the given capacity (the
@@ -103,6 +136,16 @@ func (st *EnrichedStack) Net() *EnrichedNet { return st.net }
 // Reset rebuilds slot 0 from scratch for pos and points the stack at it.
 func (st *EnrichedStack) Reset(pos *chess.Position) {
 	st.sp = 0
+	if st.net.finny {
+		// Invalidate the Finny cache so a new root search never diffs against a half from
+		// an unrelated prior position (the entries only guarantee half == B0i+Σfeatures,
+		// which stays true, but a fresh search should start cold for reproducibility).
+		for c := 0; c < 2; c++ {
+			for b := 0; b < NumKingBuckets; b++ {
+				st.finny[c][b].valid = false
+			}
+		}
+	}
 	if st.net.inPlaceEnabled() {
 		st.net.buildAcc(st.accW, st.accB, pos)
 		return

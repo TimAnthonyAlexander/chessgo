@@ -51,6 +51,17 @@ func kingBucketOffset(pos *chess.Position, persp chess.Color) uint16 {
 	return kingBucketTable[ksq] * uint16(InputDim)
 }
 
+// kingBucket returns the king-bucket INDEX (0..NumKingBuckets-1) that persp's own king
+// selects in pos — kingBucketOffset without the ·InputDim scale. Used to key the Finny
+// refresh cache per (perspective, bucket).
+func kingBucket(pos *chess.Position, persp chess.Color) int {
+	ksq := uint16(pos.KingSquare(persp))
+	if persp == chess.Black {
+		ksq ^= 56
+	}
+	return int(kingBucketTable[ksq])
+}
+
 // kingMoveNeedsRefresh reports whether m is a king move that CHANGES the moving
 // side's king bucket — the only case where the incremental accumulator delta is
 // invalid (every base feature for that perspective shifts to a new bucket copy, so a

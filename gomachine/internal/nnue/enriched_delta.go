@@ -151,18 +151,78 @@ func (st *EnrichedStack) buildSlotRefreshSplit(dstIdx, srcIdx int, pos *chess.Po
 	mover := pos.SideToMove()
 	subW, addW, subB, addB := st.computeDelta(pos, m)
 	if mover == chess.White {
-		st.net.buildAccHalf(dst.w, &child, chess.White) // moving side: full rebuild
-		copy(dst.b, src.b)                              // opponent: delta from parent
+		st.refreshHalf(dst.w, &child, chess.White) // moving side: rebuild (Finny or scratch)
+		copy(dst.b, src.b)                         // opponent: delta from parent
 		st.applyDiff(dst.b, subB, addB)
 		_ = subW
 		_ = addW
 	} else {
-		st.net.buildAccHalf(dst.b, &child, chess.Black)
+		st.refreshHalf(dst.b, &child, chess.Black)
 		copy(dst.w, src.w)
 		st.applyDiff(dst.w, subW, addW)
 		_ = subB
 		_ = addB
 	}
+}
+
+// refreshHalf rebuilds the moving side's accumulator half for the child position.
+// With the Finny table off it is a from-scratch buildAccHalf; with it on, the cheaper
+// cache-diff path (finnyRefreshHalf). Both are int16-identical.
+func (st *EnrichedStack) refreshHalf(dstHalf []int16, pos *chess.Position, persp chess.Color) {
+	if st.net.finny {
+		st.finnyRefreshHalf(dstHalf, pos, persp)
+		return
+	}
+	st.net.buildAccHalf(dstHalf, pos, persp)
+}
+
+// finnyRefreshHalf produces persp's accumulator half for pos into dstHalf using the
+// Finny-table cache keyed by (persp, kingBucket). On a cache HIT it starts from a copy
+// of the cached half and applies the multiset feature DIFF (cached features → current
+// features) via applyDiff; because the cached half satisfies half == B0i + Σ ftAdd(cached
+// features) and both feature lists index the SAME king bucket (cache key), the result is
+// B0i + Σ ftAdd(current features) == buildAccHalf(pos, persp), int16-for-int16. On a MISS
+// it falls back to a from-scratch buildAccHalf. Either way it refreshes the cache entry
+// (half + feature list) so the invariant holds for the next cross into this bucket.
+func (st *EnrichedStack) finnyRefreshHalf(dstHalf []int16, pos *chess.Position, persp chess.Color) {
+	bucket := kingBucket(pos, persp)
+	e := &st.finny[persp][bucket]
+
+	var buf [maxEnrichedActive]uint16
+	cur := appendEnrichedFeatures(buf[:0], pos, persp)
+
+	if e.valid {
+		st.finnyHit++
+		if !sliceEqU16(e.features, cur) {
+			st.finnyHitChanged++ // the diff is non-trivial: a hit on a CHANGED board
+		}
+		copy(dstHalf, e.half)                  // start from the cached half
+		st.applyDiff(dstHalf, e.features, cur) // subtract cached features, add current
+	} else {
+		st.finnyMiss++
+		st.net.buildAccHalf(dstHalf, pos, persp) // cold: full rebuild
+		e.valid = true
+	}
+
+	// Refresh the cache so half == B0i + Σ ftAdd(features) stays true for the next hit.
+	copy(e.half, dstHalf)
+	e.features = append(e.features[:0], cur...)
+}
+
+// sliceEqU16 reports whether two uint16 slices are element-wise equal. appendEnriched-
+// Features emits features in a fixed order for a given board, so equal sequences mean the
+// accumulator target is unchanged (the diff is a no-op) — a differing sequence flags the
+// "cache hit with a changed board" case.
+func sliceEqU16(a, b []uint16) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // computeDelta enumerates the changed-edge sub/add feature lists (both perspectives)

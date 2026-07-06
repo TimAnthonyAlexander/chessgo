@@ -163,6 +163,17 @@ type EnrichedNet struct {
 	// forward differs (evalFromHalvesLeanPairwise). TW is input-major [H × NB]; TWi is
 	// bucket-contiguous [NB × H]. Mutually exclusive with lean.
 	leanPairwise bool
+
+	// finny enables the "Finny table" accumulator-refresh cache (Stockfish
+	// AccumulatorRefreshTable / Koivisto): on a bucket-crossing king move the split
+	// refresh normally rebuilds the moving side's half from scratch; with finny on, the
+	// stack instead caches per (perspective, kingBucket) the last finalized half + the
+	// feature list that produced it, and on the next cross into that bucket updates the
+	// cached half by the multiset feature DIFF between the cached and current position —
+	// far cheaper than a full rebuild when the king shuffles between the same few
+	// buckets. Bit-exact with buildAccHalf (int16 add/sub associativity). Builds ON
+	// splitRefresh (only consulted from buildSlotRefreshSplit); default-off.
+	finny bool
 }
 
 // ThreatBlock is the threat feature-block size: (attacker 0..11, victim 0..11,
@@ -238,6 +249,14 @@ func (n *EnrichedNet) SetSplitRefresh(on bool) { n.splitRefresh = on }
 
 // SplitRefresh reports whether the split king-bucket refresh path is enabled.
 func (n *EnrichedNet) SplitRefresh() bool { return n.splitRefresh }
+
+// SetFinny toggles the Finny-table accumulator-refresh cache. Only consulted on the
+// split king-bucket refresh path (buildSlotRefreshSplit), so it implies splitRefresh.
+// Bit-exact; the per-searcher cache lives on EnrichedStack.
+func (n *EnrichedNet) SetFinny(on bool) { n.finny = on }
+
+// Finny reports whether the Finny-table refresh cache is enabled.
+func (n *EnrichedNet) Finny() bool { return n.finny }
 
 // SetLazy toggles deferred accumulator materialization. Only takes effect on the
 // moveAware+changedEdges path (the enriched stack checks lazyEnabled()).

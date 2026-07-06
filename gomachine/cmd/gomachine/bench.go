@@ -402,6 +402,8 @@ func cmdBenchSPRT(args []string) {
 	oldLeanDirect := fs.Bool("old-lean-direct", false, "same direct apply on the --old lean net (for a clean lean-vs-lean A/B)")
 	leanSplitRefresh := fs.Bool("lean-splitrefresh", false, "split the king-bucket accumulator refresh: rebuild only the moving side's half, delta the opponent half (bit-exact NPS lever)")
 	oldLeanSplitRefresh := fs.Bool("old-lean-splitrefresh", false, "same split king-bucket refresh on the --old lean net (for a clean lean-vs-lean A/B)")
+	leanFinny := fs.Bool("lean-finny", false, "Finny-table accumulator-refresh cache on the --new lean net: cache a half per (perspective,kingBucket) and diff on re-cross instead of rebuilding (bit-exact; implies splitrefresh)")
+	oldLeanFinny := fs.Bool("old-lean-finny", false, "same Finny-table refresh cache on the --old lean net (for a clean lean-vs-lean A/B)")
 	leanNoGeometry := fs.Bool("lean-no-geometry", false, "disable the fast changed-edges threat delta on the --new enriched/lean/pairwise net (fall back to full re-enumeration; bit-identical, for the geometry A/B)")
 	oldLeanNoGeometry := fs.Bool("old-lean-no-geometry", false, "disable the fast changed-edges threat delta on the --old enriched/lean/pairwise net")
 	newLeanPairwise := fs.String("new-lean-pairwise", "", "lean PAIRWISE+threats net for --new: 'path,H,NB' (chessgo_lean_pairwise); forces --concurrency 1")
@@ -463,6 +465,11 @@ func cmdBenchSPRT(args []string) {
 			p.SetSplitRefresh(true)
 			fmt.Fprintln(os.Stderr, "lean split king-bucket refresh: ON (moving-side rebuild + opponent delta)")
 		}
+		if *leanFinny {
+			p.SetSplitRefresh(true) // finny is only consulted on the split-refresh path
+			p.SetFinny(true)
+			fmt.Fprintln(os.Stderr, "lean Finny refresh cache: ON (per-(persp,bucket) half + feature-diff re-cross)")
+		}
 		if *leanLazy {
 			p.SetLazy(true)
 			fmt.Fprintln(os.Stderr, "lean lazy accumulator: ON (deferred materialization)")
@@ -484,6 +491,10 @@ func cmdBenchSPRT(args []string) {
 		}
 		if *oldLeanSplitRefresh {
 			p.SetSplitRefresh(true)
+		}
+		if *oldLeanFinny {
+			p.SetSplitRefresh(true)
+			p.SetFinny(true)
 		}
 		if *oldLeanLazy {
 			p.SetLazy(true)

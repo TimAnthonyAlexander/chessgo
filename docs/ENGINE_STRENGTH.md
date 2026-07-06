@@ -1968,3 +1968,31 @@ via `bench nps` (identical node count = bit-exact gate) then a movetime SPRT on 
 
 Fixed en route: `batchApply` used `off := InputDim` (768) as the threat boundary — wrong on a KB net
 (threats start at `PsqSize=12288`) → crash; corrected to `off := PsqSize`.
+
+### 30.2 Results — the no-retrain bit-exact perf push (2026-07-06)
+All via `bench nps` (node count identical = bit-exact gate) on coalla, KB `lean.bin`. Ratios are the
+reliable signal (interleaved medians cancel box drift); the absolute base wanders ±3% between runs.
+
+**SHIPPED (bit-exact, default-on in the prod loader, committed on `perf/nnue-bitexact`):**
+- **splitRefresh** (split KB refresh, only the moving half rebuilt): **+2.3%** isolated. `741d404`.
+- **directApply** (re-bench of finding A4 on the KB net — the 43 KB counts array is now > L1, so skipping
+  it wins where the pre-KB verdict said "noise"): **+2.5%** isolated. `741d404`.
+- **screluDot 256→512-bit widen** (eval readout kernel, v4): **+2.0%**. `54d0271`.
+- **Combined shipped ≈ +6% single-thread NPS**, every config node-count-identical.
+
+**MEASURED, NOT SHIPPED (flag default-off):**
+- **finny** (accumulator-refresh cache, option-a = cache the feature *list* + `applyDiff`): **WASH** —
+  604 426 vs splitRefresh's 605 310 within the same run (−0.15%), node-identical. Root cause: option-a
+  still re-enumerates the current feature set (`appendEnrichedFeatures` = the threat attack-gen, ~20% of
+  `buildAcc`) and only saves the column-sum; after splitRefresh the residual moving-half rebuild is
+  **enumeration-bound**, so caching columns doesn't pay. Only a **bitboard-diff variant (option-b, skips
+  enumeration)** could win — untried, higher risk. Kept `SetFinny` flag-gated as the option-b scaffold.
+- **prefetch / batchApply**: net-negative on the KB net (0.97–0.98) — the doc'd +17.6% prefetch number is
+  **stale** (pre-KB); do not enable.
+
+**DROPPED (not bit-exact — search-ordering reads globally-mutated history/conthist/killers):**
+- **staged TT-first ordering** (#3) and **contScore reuse** (#4): both perturb move order → node counts
+  diverge. Only viable as SPRT-gated tree changes, not free speed. Parked.
+
+**Multi-thread anchor (rough):** aggregate NPS scales ~9.6× at 12 threads (~3.8M), tapering past 8
+(per-core 605K→320K, memory-bandwidth bound). Prod runs 2 threads, in the near-linear region.
