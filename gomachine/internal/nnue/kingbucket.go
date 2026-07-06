@@ -51,13 +51,25 @@ func kingBucketOffset(pos *chess.Position, persp chess.Color) uint16 {
 	return kingBucketTable[ksq] * uint16(InputDim)
 }
 
-// isKingMove reports whether m moves a king (read from the pre-move position). A king
-// move can change that perspective's king bucket, shifting EVERY base feature — so the
-// incremental accumulator delta is invalid and the child slot must be rebuilt from
-// scratch (the refresh path). v1 refreshes on ANY king move; a later optimization can
-// refresh only when the bucket actually changes.
-func isKingMove(pos *chess.Position, m chess.Move) bool {
-	return pos.PieceOn(m.From()).Type() == chess.King
+// kingMoveNeedsRefresh reports whether m is a king move that CHANGES the moving
+// side's king bucket — the only case where the incremental accumulator delta is
+// invalid (every base feature for that perspective shifts to a new bucket copy, so a
+// from-scratch refresh is required). A king move that stays within the same bucket is
+// handled correctly by the normal delta: the bucket offset is constant across the
+// move, so computeDelta's single per-perspective offset applies to both the removed
+// (parent) and added (child) base features. Skipping the refresh on same-bucket king
+// moves recovers most of the king-bucket NPS cost (kings often shuffle within a
+// bucket, e.g. a castled king on the back two ranks).
+func kingMoveNeedsRefresh(pos *chess.Position, m chess.Move) bool {
+	if pos.PieceOn(m.From()).Type() != chess.King {
+		return false
+	}
+	from, to := uint16(m.From()), uint16(m.To())
+	if pos.SideToMove() == chess.Black {
+		from ^= 56 // orient to the moving side's perspective (matches kingBucketOffset)
+		to ^= 56
+	}
+	return kingBucketTable[from] != kingBucketTable[to]
 }
 
 // appendBucketedBase emits persp's active base (piece-square) features with the king-

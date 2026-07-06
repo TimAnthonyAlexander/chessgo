@@ -113,10 +113,10 @@ func (st *EnrichedStack) pushMoveAwareChanged(pos *chess.Position, m chess.Move)
 // delta. Index-explicit (does NOT touch st.sp) so both the eager push and the lazy
 // walk-back can drive it. Requires srcIdx to already hold the parent accumulator.
 func (st *EnrichedStack) buildSlotFrom(dstIdx, srcIdx int, pos *chess.Position, m chess.Move) {
-	if isKingMove(pos, m) {
-		// King move → king bucket may change → every base feature shifts → the
-		// incremental delta is invalid. Rebuild the child slot's accumulator from
-		// scratch (correct regardless of a bucket change). King moves are infrequent.
+	if kingMoveNeedsRefresh(pos, m) {
+		// King move that CHANGES bucket → every base feature shifts → the incremental
+		// delta is invalid. Rebuild the child slot's accumulator from scratch. Same-
+		// bucket king moves fall through to the normal (correct) delta path below.
 		child := *pos
 		var u chess.Undo
 		child.DoMove(m, &u)
