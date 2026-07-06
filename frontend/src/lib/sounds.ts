@@ -34,6 +34,59 @@ let armed = false
 // the threshold of "lag" for a move cue but comfortably past the quantum.
 const LOOKAHEAD = 0.015
 
+// KEEP-ALIVE — the single most important thing for INSTANT sound on Safari.
+//
+// Safari/CoreAudio puts the output audio *unit* to sleep after a short spell of
+// silence. Between moves the board is silent, so the unit idles; the next move
+// cue then has to WAKE the DAC first, and that wake-up is a few-hundred-ms stall
+// you hear as "the sound arrives half a second late." It recurs on every move
+// because every quiet gap re-idles the unit. (This is distinct from the context
+// being 'suspended'/'interrupted' — the context can be 'running' with currentTime
+// advancing while the hardware unit is asleep.)
+//
+// The fix every audio library uses ("warm up with silence"): keep one INAUDIBLE
+// source rendering to the output forever, so the unit never sleeps and every real
+// sound plays immediately. A very-low-frequency, near-zero-gain oscillator is
+// enough continuous work to hold the unit open while being completely silent (a
+// pure-zero signal risks being optimised away). It's global — every BoardPage
+// shares the one AudioContext, so this makes sound instant on ALL of them at once,
+// with no per-page wiring.
+//
+// Strictly gated: only ever started AFTER a real gesture (`armed`) and only while
+// sound is `enabled`, so it can never read as a pre-gesture autoplay attempt and
+// never holds the audio session (or the tab's "playing audio" indicator) open
+// while the user has muted us.
+let keepAlive: { osc: OscillatorNode; gain: GainNode } | null = null
+
+function startKeepAlive(): void {
+    if (keepAlive || !armed || !enabled) return
+    const a = audio()
+    if (!a) return
+    try {
+        const osc = a.c.createOscillator()
+        osc.frequency.value = 1 // sub-audible; the point is continuous render work, not a tone
+        const g = a.c.createGain()
+        g.gain.value = 0.00001 // inaudible, but non-zero so it isn't elided as silence
+        osc.connect(g).connect(a.c.destination) // straight to output, independent of the master bus
+        osc.start()
+        keepAlive = { osc, gain: g }
+    } catch {
+        /* never let the keep-alive break sound */
+    }
+}
+
+function stopKeepAlive(): void {
+    if (!keepAlive) return
+    try {
+        keepAlive.osc.stop()
+        keepAlive.osc.disconnect()
+        keepAlive.gain.disconnect()
+    } catch {
+        /* ignore */
+    }
+    keepAlive = null
+}
+
 function readEnabled(): boolean {
     try {
         return localStorage.getItem('chessgo.sound') !== 'off'
@@ -53,6 +106,11 @@ export function setSoundEnabled(on: boolean): void {
     } catch {
         /* ignore */
     }
+    // Only hold the audio unit awake while we actually make sound. Muting releases
+    // it (power + no tab audio indicator); unmuting re-warms it so the very next
+    // move cue is instant. No-op until the first gesture arms us.
+    if (on) startKeepAlive()
+    else stopKeepAlive()
 }
 
 // ONE AudioContext for the whole page lifetime. We deliberately NEVER close and
@@ -348,6 +406,10 @@ if (typeof window !== 'undefined') {
     const prime = () => {
         armed = true
         const a = audio() // builds the context on the first gesture; resumes on every one
+        // Now that a gesture has armed us, keep the audio unit warm so every move cue
+        // is instant (Safari sleeps the unit during silence otherwise). No-op if
+        // already warm or muted.
+        startKeepAlive()
         if (!a || a.c.state === 'running') return
         void a.c.resume().catch(() => {})
         try {
@@ -370,6 +432,11 @@ if (typeof window !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible' && ctx && ctx.state !== 'running') {
             void ctx.resume().catch(() => {})
+            // Safari interrupts the context (and idles the unit) while backgrounded;
+            // on return, make sure the keep-alive is running again so sound stays
+            // instant. The osc persists across suspend/resume, but if it was ever torn
+            // down (mute) this re-warms it.
+            startKeepAlive()
         }
     })
 }
