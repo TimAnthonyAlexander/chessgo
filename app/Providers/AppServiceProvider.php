@@ -15,6 +15,7 @@ use App\Services\WsTicketService;
 use App\Services\HubClient;
 use App\Services\Glicko2Service;
 use App\Services\AnticheatService;
+use App\Services\StreakService;
 use BaseApi\Auth\UserProvider;
 
 /**
@@ -47,6 +48,9 @@ class AppServiceProvider extends ServiceProvider
 
         // Glicko-2 ratings (category mapping + rating math)
         $container->singleton(Glicko2Service::class);
+
+        // "The Flame" daily-activity streak roll logic (single source of truth)
+        $container->singleton(StreakService::class);
 
         // Example: Register a custom service with manual configuration
         // $container->singleton(SomeService::class, function (ContainerInterface $c) {

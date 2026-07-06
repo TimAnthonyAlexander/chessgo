@@ -757,4 +757,22 @@ export function getDailyPuzzle(): Promise<DailyPuzzle> {
     return request<DailyPuzzle>('/puzzles/daily')
 }
 
+// --- The Flame (daily-activity streak, homepage widget) ---
+
+/** The current user's daily-activity streak. `current` is the live streak (0 once
+ * a miss has broken it, before the next action resets it); `activeToday` is true
+ * once today already qualifies. Anonymous callers get a neutral zeroed streak. */
+export interface Streak {
+    current: number
+    longest: number
+    lastActiveDate: string | null
+    freezeTokens: number
+    activeToday: boolean
+}
+
+/** Read the signed-in user's Flame streak (neutral/empty when not signed in). */
+export function getStreak(): Promise<Streak> {
+    return request<Streak>('/streak')
+}
+
 export { ApiError }

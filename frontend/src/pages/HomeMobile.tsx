@@ -1,5 +1,6 @@
 import { Box } from '@mui/material'
 import DailyPuzzleWidget from '../components/home/DailyPuzzleWidget'
+import FlameWidget from '../components/home/FlameWidget'
 import RecentGamesWidget from '../components/home/RecentGamesWidget'
 import SignUpWidget from '../components/home/SignUpWidget'
 import LiveTvWidget from '../components/home/LiveTvWidget'
@@ -21,6 +22,7 @@ export default function HomeMobile() {
                 />
                 <QuickPairingPanel onQueue={home.queue} />
                 <LiveTvWidget />
+                <FlameWidget />
                 <DailyPuzzleWidget />
                 <RecentGamesWidget />
                 <SignUpWidget />

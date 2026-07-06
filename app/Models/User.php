@@ -103,6 +103,22 @@ class User extends BaseModel
 
     public int $games_crazyhouse = 0;
 
+    // "The Flame" — a daily-activity streak (SPEC dashboard). A day qualifies when
+    // the user solves a puzzle OR plays a rated game; consecutive qualifying UTC
+    // days grow current_streak, a miss resets it to 1 (unless a freeze token
+    // covers a single missed day). Rolled forward in ONE place by StreakService,
+    // called from the puzzle-solve and rated-game-persist hooks. Dates are UTC
+    // 'YYYY-MM-DD', matching how the daily puzzle is keyed by UTC day.
+    public int $current_streak = 0;
+
+    public int $longest_streak = 0;
+
+    public ?string $last_active_date = null;
+
+    // Grace tokens that auto-cover a single missed day (a gap of exactly 2 days).
+    // New accounts start with one; consumed (not regenerated) when it saves a streak.
+    public int $freeze_tokens = 1;
+
     /**
      * Define indexes for this model
      * @var array<string, string>
@@ -125,6 +141,8 @@ class User extends BaseModel
         'rated_at_puzzle' => ['type' => 'TEXT', 'nullable' => true],
         'rated_at_duck' => ['type' => 'TEXT', 'nullable' => true],
         'rated_at_crazyhouse' => ['type' => 'TEXT', 'nullable' => true],
+        // The Flame streak's last-qualifying UTC day, stored as 'YYYY-MM-DD' text.
+        'last_active_date' => ['type' => 'TEXT', 'nullable' => true],
     ];
 
     public function checkPassword(string $password): bool

@@ -33,6 +33,7 @@ use App\Controllers\ProfileGamesController;
 use App\Controllers\PuzzleController;
 use App\Controllers\DailyPuzzleController;
 use App\Controllers\LeaderboardController;
+use App\Controllers\StreakController;
 use App\Controllers\AdminFlagsController;
 use BaseApi\Http\Middleware\RateLimitMiddleware;
 use BaseApi\Http\SessionStartMiddleware;
@@ -172,6 +173,14 @@ $router->get('/watch', [
 $router->get('/leaderboard', [
     RateLimitMiddleware::class => ['limit' => '600/1m'],
     LeaderboardController::class,
+]);
+
+// "The Flame" — the current user's daily-activity streak for the homepage widget.
+// Session is OPTIONAL: anonymous callers get a neutral empty streak (no 401).
+$router->get('/streak', [
+    SessionStartMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '600/1m'],
+    StreakController::class,
 ]);
 
 // Internal: the realtime hub persists finished games here (secret-gated, no session)

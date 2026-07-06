@@ -10,6 +10,7 @@ use App\Models\PuzzleAttempt;
 use App\Models\User;
 use App\Services\Glicko2Service;
 use App\Services\GomachineClient;
+use App\Services\StreakService;
 
 /**
  * Puzzle training (Lichess-style), see docs/SPEC.md §Puzzles.
@@ -50,6 +51,7 @@ class PuzzleController extends Controller
     public function __construct(
         private readonly GomachineClient $engine,
         private readonly Glicko2Service $glicko,
+        private readonly StreakService $streak,
     ) {}
 
     public function get(): JsonResponse
@@ -310,6 +312,13 @@ class PuzzleController extends Controller
     {
         if (!$user instanceof User) {
             return null;
+        }
+
+        // The Flame: solving a puzzle is a qualifying daily action (the daily puzzle
+        // is solved through this same endpoint). Roll the streak on every solve —
+        // even a replay of an already-rated puzzle still counts as activity today.
+        if ($solved) {
+            $this->streak->recordActivity($user);
         }
 
         $alreadyPlayed = App::db()->scalar(

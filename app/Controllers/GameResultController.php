@@ -9,6 +9,7 @@ use App\Models\Game;
 use App\Models\User;
 use App\Services\Glicko2Service;
 use App\Services\AnticheatService;
+use App\Services\StreakService;
 use App\Jobs\AnalyzeGameJob;
 
 /**
@@ -32,6 +33,7 @@ class GameResultController extends Controller
     public function __construct(
         private readonly Glicko2Service $glicko,
         private readonly AnticheatService $anticheat,
+        private readonly StreakService $streak,
     ) {
     }
 
@@ -125,6 +127,19 @@ class GameResultController extends Controller
         // the persist. The expensive engine-correlation pass runs out-of-band in
         // scripts/anticheat_scan.php (full-game analysis is too slow for here).
         $this->anticheat->reviewFinishedGame($game, $whiteUser, $blackUser);
+
+        // The Flame: a rated game is a qualifying daily action. Roll the streak for
+        // each real account that played it (a fill-in bot has no account, so only
+        // the human's streak moves). Best-effort + post-save — never blocks persist.
+        if ($rated) {
+            if ($whiteUser instanceof User) {
+                $this->streak->recordActivity($whiteUser);
+            }
+
+            if ($blackUser instanceof User) {
+                $this->streak->recordActivity($blackUser);
+            }
+        }
 
         // Eagerly precompute the full-game analysis OFF-REQUEST (queue worker), so
         // opening the review board is an instant cache hit instead of a multi-second

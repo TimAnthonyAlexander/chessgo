@@ -1,5 +1,6 @@
 import { Box, useMediaQuery, useTheme } from '@mui/material'
 import DailyPuzzleWidget from '../components/home/DailyPuzzleWidget'
+import FlameWidget from '../components/home/FlameWidget'
 import RecentGamesWidget from '../components/home/RecentGamesWidget'
 import SignUpWidget from '../components/home/SignUpWidget'
 import LiveTvWidget from '../components/home/LiveTvWidget'
@@ -34,6 +35,7 @@ function HomeDesktop() {
                 {/* Column: daily puzzle (left). The second card self-selects on
                     auth: recent games when signed in, a sign-up CTA for guests. */}
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, order: { lg: 1 } }}>
+                    <FlameWidget />
                     <DailyPuzzleWidget />
                     <RecentGamesWidget />
                     <SignUpWidget />

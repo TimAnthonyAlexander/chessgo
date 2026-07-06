@@ -801,6 +801,42 @@
             "table": "user",
             "operation": "add_column",
             "warning": null
+        },
+        {
+            "id": "mig_f2b0d9ba66b5",
+            "sql": "ALTER TABLE `user` ADD COLUMN `current_streak` INT NOT NULL DEFAULT 0",
+            "destructive": false,
+            "generated_at": "2026-07-06T17:53:50+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_2fffe0a18045",
+            "sql": "ALTER TABLE `user` ADD COLUMN `longest_streak` INT NOT NULL DEFAULT 0",
+            "destructive": false,
+            "generated_at": "2026-07-06T17:53:50+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_35819e44dd6c",
+            "sql": "ALTER TABLE `user` ADD COLUMN `last_active_date` TEXT",
+            "destructive": false,
+            "generated_at": "2026-07-06T17:53:50+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_489f38d2acda",
+            "sql": "ALTER TABLE `user` ADD COLUMN `freeze_tokens` INT NOT NULL DEFAULT 1",
+            "destructive": false,
+            "generated_at": "2026-07-06T17:53:50+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
         }
     ]
 }
