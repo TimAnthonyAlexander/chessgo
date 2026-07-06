@@ -25,6 +25,7 @@ import {
 import { useLocation, useParams } from 'react-router-dom'
 import AnalysisAside from '../components/AnalysisAside'
 import Board from '../components/Board'
+import BlunderRewind, { BlunderRewindBanner } from '../components/BlunderRewind'
 import DuckFreeBoard from '../components/DuckFreeBoard'
 import BoardPage from '../components/BoardPage'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
@@ -32,6 +33,7 @@ import MoveTree from '../components/MoveTree'
 import OpeningPanel from '../components/OpeningPanel'
 import { analyze, getGameAnalysis, sfAnalyze, type GameAnalysis } from '../api/client'
 import type { Color } from '../api/client'
+import { buildBlunderPuzzles } from '../lib/blunderRewind'
 import { VARIANT_LABEL } from '../lib/variants'
 import {
     type GameOver,
@@ -170,10 +172,15 @@ export default function Analysis() {
     // Free mode only: interactive Duck Chess. When true (and no game is loaded) the
     // standard board/tree layout is replaced by the self-contained duck board.
     const [duckFree, setDuckFree] = useState(false)
+    // Review mode only: Blunder Rewind — replay the game's blunders as retry puzzles.
+    // When true (and a game is loaded) the review layout is swapped for the
+    // self-contained rewind board.
+    const [rewind, setRewind] = useState(false)
 
     // --- Load a finished game's analysis (review mode) ---
     useEffect(() => {
         setAutoMode('off')
+        setRewind(false) // exit any Blunder Rewind when (re)loading a game
         if (!id) {
             if (importMoves && importMoves.length > 0) {
                 // Seeded free mode: replay an imported game onto a fresh tree.
@@ -241,6 +248,9 @@ export default function Analysis() {
     useEffect(() => {
         if (id) setDuckFree(false)
     }, [id])
+
+    // Blunder Rewind puzzles: every gradeable blunder in the reviewed game.
+    const blunderPuzzles = useMemo(() => (game ? buildBlunderPuzzles(game) : []), [game])
 
     const current = tree.nodes[currentId] ?? tree.nodes[tree.rootId]
     // Reviewing a loaded Duck Chess game: playback only (no client-side duck rules,
@@ -568,6 +578,12 @@ export default function Analysis() {
         return <DuckFreeBoard onExit={() => setDuckFree(false)} />
     }
 
+    // Blunder Rewind replaces the review layout with the self-contained retry board
+    // (only in review mode, only when the game actually has gradeable blunders).
+    if (id && rewind && game && blunderPuzzles.length > 0) {
+        return <BlunderRewind game={game} onExit={() => setRewind(false)} />
+    }
+
     return (
         <BoardPage
             left={
@@ -629,6 +645,14 @@ export default function Analysis() {
                     <MoveTree tree={tree} currentId={currentId} onSelect={selectNode} />
 
                     {id && <Header game={game} loading={loading} loadError={loadError} />}
+
+                    {/* Blunder Rewind: replay the game's blunders as retry puzzles. */}
+                    {id && game && blunderPuzzles.length > 0 && (
+                        <BlunderRewindBanner
+                            count={blunderPuzzles.length}
+                            onStart={() => setRewind(true)}
+                        />
+                    )}
 
                     {/* Footer: auto playback + navigation */}
                     <Box
