@@ -58,6 +58,31 @@ type game struct {
 	// state/end broadcasts as players but never affect the game; a slow one is
 	// dropped by trySend like any client. Lazily allocated on first watcher.
 	spectators map[*Client]struct{}
+
+	// chatLog is a bounded, recent history of the in-game chat (both sides), kept
+	// only so a fill-in bot opponent can reply in context. Human-vs-human games
+	// don't need it but keep it too — it's tiny and the plumbing is uniform.
+	chatLog []BotChatTurn
+}
+
+// appendChat records a chat line (fromBot marks the bot side) into the bounded
+// recent history used for fill-in bot replies. Oldest entries are dropped past
+// botChatMaxHistory.
+func (g *game) appendChat(fromBot bool, text string) {
+	g.chatLog = append(g.chatLog, BotChatTurn{FromBot: fromBot, Text: text})
+	if len(g.chatLog) > botChatMaxHistory {
+		g.chatLog = g.chatLog[len(g.chatLog)-botChatMaxHistory:]
+	}
+}
+
+// humanName returns the display name of the non-bot side in a human-vs-bot game
+// (the bot's chat opponent). Falls back to White's name if both sides are bots
+// (never the case where this is used — chatBotSide guards that).
+func (g *game) humanName() string {
+	if g.white.isBot {
+		return g.black.id.Name
+	}
+	return g.white.id.Name
 }
 
 // colorForID returns which side the given identity id plays.

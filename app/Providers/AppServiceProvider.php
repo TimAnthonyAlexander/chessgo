@@ -10,6 +10,7 @@ use App\Auth\SimpleUserProvider;
 use App\Services\EmailService;
 use App\Services\GomachineClient;
 use App\Services\BotGameService;
+use App\Services\GuessGameService;
 use App\Services\GameAnalysisService;
 use App\Services\WsTicketService;
 use App\Services\HubClient;
@@ -37,6 +38,7 @@ class AppServiceProvider extends ServiceProvider
         // gomachine engine client + bot game logic (SPEC §6, §7)
         $container->singleton(GomachineClient::class);
         $container->singleton(BotGameService::class);
+        $container->singleton(GuessGameService::class);
         $container->singleton(GameAnalysisService::class);
         $container->singleton(WsTicketService::class);
 

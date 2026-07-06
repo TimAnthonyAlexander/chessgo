@@ -8,7 +8,7 @@ import {
     DialogContent,
     Typography,
 } from '@mui/material'
-import { Cpu, Swords, Target, Telescope, UserPlus, Users } from 'lucide-react'
+import { Cpu, Gauge, Swords, Target, Telescope, UserPlus, Users } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { gameSocket, type LiveGameState } from '../../lib/socket'
 import { useGameSocket } from '../../lib/useGameSocket'
@@ -230,6 +230,7 @@ export function QuickPairingPanel({
 }: {
     onQueue: (label: string, pool: string, variant?: Variant) => void
 }) {
+    const navigate = useNavigate()
     return (
         <Panel>
             <PanelHead
@@ -286,8 +287,64 @@ export function QuickPairingPanel({
                         onQueue(`Crazyhouse · ${CRAZYHOUSE_POOL}`, CRAZYHOUSE_POOL, 'crazyhouse')
                     }
                 />
+                <GuessEloCell onClick={() => navigate('/guess-the-elo')} />
             </Box>
         </Panel>
+    )
+}
+
+/** Guess the Elo — watch an engine game played at a hidden strength and guess the
+ * rating. A solo mode that lives beside the variants (it plays like its own game
+ * type), full-width under the 2-up variant grid. */
+function GuessEloCell({ onClick }: { onClick: () => void }) {
+    return (
+        <Box
+            onClick={onClick}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onClick()
+                }
+            }}
+            sx={{
+                gridColumn: '1 / -1', // span both variant columns
+                position: 'relative',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1.5,
+                px: 2,
+                py: { xs: 1.75, md: 2 },
+                bgcolor: 'var(--surface-2)',
+                border: '1px solid var(--line-soft)',
+                borderRadius: '12px',
+                cursor: 'pointer',
+                overflow: 'hidden',
+                transition: 'border-color 0.12s ease, background 0.12s ease',
+                '&:hover': { borderColor: 'var(--accent-line)', bgcolor: 'var(--surface)' },
+            }}
+        >
+            <Box sx={{ color: 'var(--accent)', display: 'flex' }}>
+                <Gauge size={26} />
+            </Box>
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+                <Typography
+                    sx={{
+                        fontFamily: 'var(--font-display)',
+                        fontSize: { xs: 17, md: 19 },
+                        fontWeight: 600,
+                        lineHeight: 1.1,
+                        letterSpacing: '-0.01em',
+                    }}
+                >
+                    Guess the Elo
+                </Typography>
+                <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
+                    Watch a game, guess its rating
+                </Typography>
+            </Box>
+        </Box>
     )
 }
 

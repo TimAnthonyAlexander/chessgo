@@ -154,7 +154,8 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variantID string
 	h.activeGames.Add(1)
 
 	h.sendMatched(g, human, humanColor)
-	h.scheduleBotMove(g) // if the bot plays White, it moves first
+	h.scheduleBotMove(g)   // if the bot plays White, it moves first
+	h.maybeOpeningChat(g)  // ...and it might open with a friendly "hi"
 }
 
 // scheduleBotMove starts async move computation when it is a bot's turn. Works

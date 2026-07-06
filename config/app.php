@@ -95,6 +95,27 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | OpenAI
+    |--------------------------------------------------------------------------
+    |
+    | Resolved HERE at boot for the same reason as the gomachine block above:
+    | under PHP-FPM $_ENV is empty on a worker's 2nd+ request, so the OpenAI
+    | module (which reads App::config('openai.*')) would otherwise fall back to
+    | the empty framework default and throw "API key not configured". Used by
+    | BotChatController (fill-in bot chat).
+    |
+    */
+    'openai' => [
+        'api_key'           => $_ENV['OPENAI_API_KEY'] ?? '',
+        'default_model'     => $_ENV['OPENAI_DEFAULT_MODEL'] ?? 'gpt-4.1-mini',
+        'temperature'       => (float)($_ENV['OPENAI_TEMPERATURE'] ?? 1.0),
+        'max_output_tokens' => (int)($_ENV['OPENAI_MAX_OUTPUT_TOKENS'] ?? 1000),
+        'timeout'           => (int)($_ENV['OPENAI_TIMEOUT'] ?? 30),
+        'max_retries'       => (int)($_ENV['OPENAI_MAX_RETRIES'] ?? 3),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Service Providers
     |--------------------------------------------------------------------------
     |

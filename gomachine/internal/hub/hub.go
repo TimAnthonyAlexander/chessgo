@@ -50,6 +50,14 @@ type Hub struct {
 	botMoves chan botMoveResult // bot moves ready to apply (on the Run goroutine)
 	tb       *syzygy.Tablebase  // optional Syzygy tablebase, attached to every pooled engine (nil = disabled)
 
+	// Fill-in bot chat: a backfill bot opponent chats like a person (opening
+	// hello + occasional short replies). The text is produced by botChatFn (wired
+	// to BaseAPI's OpenAI endpoint) OFF the Run goroutine; finished lines come
+	// back over botChats and broadcast through the normal chat path. nil botChatFn
+	// disables it. See botchat.go.
+	botChatFn BotChatFunc
+	botChats  chan botChatResult
+
 	// Spectator fillers: engine-vs-engine games kept running so the Watch page
 	// is never empty. They run on a SEPARATE, small engine pool so they can't
 	// starve human bot-fill, and only while someone is actually watching (JIT) —
@@ -171,6 +179,7 @@ func New(secret string) *Hub {
 		playerGames: map[string]*game{},
 		challenges:  map[string]*challenge{},
 		botMoves:    make(chan botMoveResult, 64),
+		botChats:    make(chan botChatResult, 64),
 	}
 }
 
@@ -202,6 +211,8 @@ func (h *Hub) Run() {
 			h.handle(cmd)
 		case r := <-h.botMoves:
 			h.applyBotMove(r)
+		case r := <-h.botChats:
+			h.deliverBotChat(r)
 		case fens := <-h.fillerFensCh:
 			// A fetched pool of realistic midgame FENs (from BaseAPI) — assigned on
 			// the Run goroutine so startFillerGame can read it lock-free.
@@ -570,12 +581,15 @@ func (h *Hub) chat(c *Client, text string) {
 	if text = sanitizeChat(text); text == "" {
 		return
 	}
+	g.appendChat(false, text)
 	h.broadcastPlayers(g, mustJSON(out("chat", map[string]any{
 		"gameId": g.id,
 		"by":     colorStr(color),
 		"name":   c.id.Name,
 		"text":   text,
 	})))
+	// If the opponent is a fill-in bot, it may answer (in context, after a beat).
+	h.maybeReplyChat(g)
 }
 
 // firstMoveTimeout is how long a side has to make its (untimed) first move

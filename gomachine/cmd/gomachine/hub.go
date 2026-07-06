@@ -89,6 +89,13 @@ func cmdHub(args []string) {
 		go persistGame(baseURL, secret, g)
 	})
 
+	// A fill-in bot opponent chats like a person: BaseAPI's OpenAI endpoint
+	// generates the short lines; the hub owns the when/how-often/pacing. The hub
+	// calls this OFF its Run goroutine, so the blocking HTTP request is fine.
+	h.OnBotChat(func(req hub.BotChatRequest) []string {
+		return fetchBotChat(baseURL, secret, req)
+	})
+
 	// Seed self-play watch fillers from realistic midgame positions (a pool of
 	// puzzle FENs from BaseAPI). Fetched off the hot path; on any failure the
 	// pool stays empty and fillers start from the opening. Delivered to the Run
@@ -198,6 +205,43 @@ func persistGame(baseURL, secret string, g hub.FinishedGame) {
 	if resp.StatusCode >= 300 {
 		fmt.Fprintf(os.Stderr, "persist game %s: status %d\n", g.ID, resp.StatusCode)
 	}
+}
+
+// fetchBotChat asks BaseAPI to generate short, human-like chat lines for a
+// fill-in bot opponent (POST /internal/bot-chat, hub-secret gated). Best-effort:
+// any error or timeout returns nil, and the bot simply stays quiet. Runs on the
+// hub's off-loop chat goroutine, so a slow OpenAI call never touches live play.
+func fetchBotChat(baseURL, secret string, req hub.BotChatRequest) []string {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil
+	}
+	httpReq, err := http.NewRequest(http.MethodPost, baseURL+"/internal/bot-chat", bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("X-Hub-Secret", secret)
+
+	resp, err := (&http.Client{Timeout: 12 * time.Second}).Do(httpReq)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bot chat: %v\n", err)
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		fmt.Fprintf(os.Stderr, "bot chat: status %d\n", resp.StatusCode)
+		return nil
+	}
+
+	var payload struct {
+		Messages []string `json:"messages"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		fmt.Fprintf(os.Stderr, "bot chat: decode: %v\n", err)
+		return nil
+	}
+	return payload.Messages
 }
 
 // fetchFillerFENs pulls a pool of realistic midgame positions from BaseAPI to

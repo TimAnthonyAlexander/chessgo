@@ -14,6 +14,14 @@ import Profile from './pages/Profile'
 import Watch from './pages/Watch'
 import Spectate from './pages/Spectate'
 import EngineVsEngine from './pages/EngineVsEngine'
+import GuessTheElo from './pages/GuessTheElo'
+import Admin from './pages/Admin'
+import AdminDashboard from './pages/AdminDashboard'
+import AdminUsers from './pages/AdminUsers'
+import AdminUserDetail from './pages/AdminUserDetail'
+import AdminAnticheat from './pages/AdminAnticheat'
+import AdminAnticheatUser from './pages/AdminAnticheatUser'
+import AdminAnticheatGame from './pages/AdminAnticheatGame'
 import { initTheme } from './lib/boardTheme'
 import './styles.css'
 
@@ -27,6 +35,7 @@ const router = createBrowserRouter([
             { path: '/', element: <Home /> },
             { path: '/bot', element: <BotGame /> },
             { path: '/puzzles', element: <Puzzles /> },
+            { path: '/guess-the-elo', element: <GuessTheElo /> },
             { path: '/game/:id', element: <LiveGame /> },
             { path: '/challenge/:code', element: <ChallengeJoin /> },
             { path: '/watch', element: <Watch /> },
@@ -36,6 +45,18 @@ const router = createBrowserRouter([
             { path: '/editor', element: <Editor /> },
             { path: '/@/:name', element: <Profile /> },
             { path: '/admin/engine-vs', element: <EngineVsEngine /> },
+            {
+                path: '/admin',
+                element: <Admin />,
+                children: [
+                    { index: true, element: <AdminDashboard /> },
+                    { path: 'users', element: <AdminUsers /> },
+                    { path: 'users/:id', element: <AdminUserDetail /> },
+                    { path: 'anticheat', element: <AdminAnticheat /> },
+                    { path: 'anticheat/:userId', element: <AdminAnticheatUser /> },
+                    { path: 'anticheat/game/:id', element: <AdminAnticheatGame /> },
+                ],
+            },
         ],
     },
 ])

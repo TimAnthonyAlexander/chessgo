@@ -151,6 +151,51 @@ export function undoMove(id: string): Promise<BotGame> {
     return request<BotGame>(`/bot-games/${id}/undo`, { method: 'POST' })
 }
 
+// --- Guess the Elo ---------------------------------------------------------
+
+/** One ply of a Guess-the-Elo round. Deliberately carries NO strength info — the
+ * rating is the answer and lives only on the server until you guess. */
+export interface GuessMove {
+    ply: number
+    uci: string
+    san: string
+    fen: string // position after this move
+}
+
+/** A generated Guess-the-Elo round: a full gomachine-vs-itself game at a secret
+ * rating. The client only ever receives the moves — never the rating. */
+export interface GuessRound {
+    id: string
+    startFen: string
+    result: string | null
+    status: GameStatus
+    moves: GuessMove[]
+}
+
+/** The reveal, returned only after a guess is locked in. */
+export interface GuessReveal {
+    actual: number
+    guess: number
+    delta: number
+    score: number
+    result: string | null
+}
+
+/** Start a new round — the server plays out a full game at a hidden rating and
+ * returns the moves to watch. Presented to the user as "loading a random game". */
+export function guessEloNew(): Promise<GuessRound> {
+    return request<GuessRound>('/guess-the-elo', { method: 'POST', body: '{}' })
+}
+
+/** Lock in a guess and reveal the true rating + score. Idempotent server-side:
+ * a second call on the same round returns the first guess unchanged. */
+export function guessEloGuess(id: string, guess: number): Promise<GuessReveal> {
+    return request<GuessReveal>(`/guess-the-elo/${id}/guess`, {
+        method: 'POST',
+        body: JSON.stringify({ guess }),
+    })
+}
+
 export interface Analysis {
     eval: { type: 'cp' | 'mate'; value: number } | null
     bestmove: string | null
@@ -773,6 +818,275 @@ export interface Streak {
 /** Read the signed-in user's Flame streak (neutral/empty when not signed in). */
 export function getStreak(): Promise<Streak> {
     return request<Streak>('/streak')
+}
+
+// --- Admin panel (admin-gated; SPEC §Admin). Payloads are UNWRAPPED (top-level
+// keys, no `.data`). Every endpoint below is guarded server-side by AdminGuard. ---
+
+/** One finished-game summary row (the shape `Game::summaryRow()` returns). It is
+ * byte-identical to a {@link ProfileGame}, so the admin surfaces reuse that type
+ * under a name that reads clearly at the anti-cheat call sites. */
+export type GameSummaryRow = ProfileGame
+
+/** Per-side accuracy breakdown of a scanned game — identical to the analysis
+ * board's {@link AnalysisSide} (best/good/…/acpl/accuracy). */
+export type AcSideSummary = AnalysisSide
+
+export type SortDir = 'asc' | 'desc'
+
+// --- Admin dashboard ---
+
+export interface AdminDashboard {
+    users: {
+        total: number
+        admins: number
+        active: number
+        banned: number
+        new_7d: number
+    }
+    games: {
+        total: number
+        rated: number
+        scanned: number
+        unscanned: number
+    }
+    anticheat: {
+        flagged_users_total: number
+        by_status: {
+            open: number
+            reviewing: number
+            cleared: number
+            banned: number
+        }
+        flag_events_total: number
+        events_by_category: {
+            analysis_during_game: number
+            rating_velocity: number
+            move_time_anomaly: number
+            engine_correlation: number
+            accuracy_rating_mismatch: number
+        }
+    }
+    live: {
+        players_online: number
+        active_games: number
+    }
+}
+
+/** Aggregate counts for the admin dashboard (users, games, anti-cheat, live lobby). */
+export function getAdminDashboard(): Promise<AdminDashboard> {
+    return request<AdminDashboard>('/admin/dashboard')
+}
+
+// --- Admin users directory ---
+
+export type AdminUserSort =
+    | 'created_at'
+    | 'name'
+    | 'rating_bullet'
+    | 'rating_blitz'
+    | 'rating_rapid'
+    | 'rating_classical'
+export type AdminUserRole = 'user' | 'admin'
+export type AdminUserStatus = 'active' | 'banned'
+
+/** One row of the admin user directory. */
+export interface AdminUserRow {
+    id: string
+    name: string
+    email: string
+    role: string
+    active: boolean
+    created_at: string
+    rating_bullet: number
+    rating_blitz: number
+    rating_rapid: number
+    rating_classical: number
+    games_bullet: number
+    games_blitz: number
+    games_rapid: number
+    games_classical: number
+    flagged: boolean
+    flag_status: string | null
+    total_flags: number
+}
+
+export interface AdminUsersPage {
+    users: AdminUserRow[]
+    page: number
+    perPage: number
+    total: number
+}
+
+/** The full account record for the detail view (the User model serialized with
+ * its password hash stripped): every {@link User} field plus admin-only columns. */
+export interface AdminUserRecord extends User {
+    active: boolean
+    created_at: string
+    updated_at?: string
+}
+
+export interface AdminUserDetail {
+    user: AdminUserRecord
+    flag_rollup: FlaggedUserRollup | null
+    recent_games: GameSummaryRow[]
+}
+
+export interface AdminUsersParams {
+    q?: string
+    page?: number
+    sort?: AdminUserSort
+    dir?: SortDir
+    role?: AdminUserRole
+    status?: AdminUserStatus
+}
+
+/** Filtered, sorted, paginated admin user directory. */
+export function getAdminUsers(params: AdminUsersParams = {}): Promise<AdminUsersPage> {
+    const qs = new URLSearchParams()
+    if (params.q) qs.set('q', params.q)
+    if (params.page) qs.set('page', String(params.page))
+    if (params.sort) qs.set('sort', params.sort)
+    if (params.dir) qs.set('dir', params.dir)
+    if (params.role) qs.set('role', params.role)
+    if (params.status) qs.set('status', params.status)
+    const suffix = qs.toString() ? `?${qs.toString()}` : ''
+    return request<AdminUsersPage>(`/admin/users${suffix}`)
+}
+
+/** One account (full, password-stripped) + flag rollup + recent games. */
+export function getAdminUser(id: string): Promise<AdminUserDetail> {
+    return request<AdminUserDetail>(`/admin/users/${encodeURIComponent(id)}`)
+}
+
+// --- Admin anti-cheat: flagged users ---
+
+export type FlagStatus = 'open' | 'reviewing' | 'cleared' | 'banned'
+export type FlagSeverity = 'low' | 'medium' | 'high'
+export type FlagSortKey = 'total_flags' | 'top_severity' | 'last_flagged_at'
+
+/** A per-user rollup of flag events: how many, of what kind, and the human verdict. */
+export interface FlaggedUserRollup {
+    user_id: string
+    user_name: string
+    total_flags: number
+    counts: Record<string, number>
+    status: FlagStatus
+    top_severity: FlagSeverity
+    last_category: string
+    first_flagged_at: string
+    last_flagged_at: string
+}
+
+/** One anti-cheat flag event. `user_id` is present on the per-game endpoint and
+ * omitted on the flagged-user detail events (which are already scoped to a user). */
+export interface FlagEvent {
+    id: string
+    user_id?: string
+    category: string
+    severity: FlagSeverity
+    detail: string
+    meta: Record<string, unknown>
+    reviewed: boolean
+    created_at: string
+}
+
+export interface FlaggedUsersPage {
+    flagged: FlaggedUserRollup[]
+    page: number
+    perPage: number
+    total: number
+}
+
+/** A flagged user's rollup plus their recent flag events (the review detail view).
+ * Note: unlike the rollup, this omits `last_category` and carries the `events`. */
+export interface FlaggedUserDetail {
+    user_id: string
+    user_name: string
+    total_flags: number
+    counts: Record<string, number>
+    status: FlagStatus
+    top_severity: FlagSeverity
+    first_flagged_at: string
+    last_flagged_at: string
+    events: FlagEvent[]
+}
+
+export interface FlaggedUsersParams {
+    status?: FlagStatus
+    sort?: FlagSortKey
+    dir?: SortDir
+    page?: number
+}
+
+/** The anti-cheat review queue: flagged users, filterable by verdict status. */
+export function getFlaggedUsers(params: FlaggedUsersParams = {}): Promise<FlaggedUsersPage> {
+    const qs = new URLSearchParams()
+    if (params.status) qs.set('status', params.status)
+    if (params.sort) qs.set('sort', params.sort)
+    if (params.dir) qs.set('dir', params.dir)
+    if (params.page) qs.set('page', String(params.page))
+    const suffix = qs.toString() ? `?${qs.toString()}` : ''
+    return request<FlaggedUsersPage>(`/admin/flags${suffix}`)
+}
+
+/** One flagged user's rollup + recent flag events. */
+export function getFlaggedUser(userId: string): Promise<FlaggedUserDetail> {
+    return request<FlaggedUserDetail>(`/admin/flags/${encodeURIComponent(userId)}`)
+}
+
+export interface FlagVerdictResult {
+    user_id: string
+    status: string
+    banned: boolean
+    reinstated: boolean
+}
+
+/** Set the account-level anti-cheat verdict. `status` is the admin's call
+ * ('open'|'reviewing'|'cleared'|'banned'); `ban:true` (or status 'banned') also
+ * deactivates the account, and an explicit `ban:false` reinstates it. */
+export function setFlagVerdict(
+    userId: string,
+    body: { status?: string; ban?: boolean },
+): Promise<FlagVerdictResult> {
+    return request<FlagVerdictResult>(`/admin/flags/${encodeURIComponent(userId)}`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+    })
+}
+
+export interface FlagEventReviewResult {
+    id: string
+    user_id: string
+    reviewed: boolean
+}
+
+/** Mark a single flag event reviewed/unreviewed (the event must belong to the user). */
+export function setFlagEventReviewed(
+    userId: string,
+    eventId: string,
+    reviewed: boolean,
+): Promise<FlagEventReviewResult> {
+    return request<FlagEventReviewResult>(
+        `/admin/flags/${encodeURIComponent(userId)}/events/${encodeURIComponent(eventId)}`,
+        { method: 'POST', body: JSON.stringify({ reviewed }) },
+    )
+}
+
+// --- Admin per-game anti-cheat telemetry ---
+
+export interface GameAnticheat {
+    game: GameSummaryRow
+    move_times: number[]
+    ac_scanned: boolean
+    analysis_summary: { w: AcSideSummary; b: AcSideSummary } | null
+    flags_for_game: FlagEvent[]
+}
+
+/** Per-game anti-cheat telemetry: move times, cached accuracy summary, and any
+ * flag events tied to this game. `{id}` is the hub game id. */
+export function getGameAnticheat(id: string): Promise<GameAnticheat> {
+    return request<GameAnticheat>(`/admin/games/${encodeURIComponent(id)}/anticheat`)
 }
 
 export { ApiError }

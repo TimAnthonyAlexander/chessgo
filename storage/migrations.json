@@ -837,6 +837,33 @@
             "table": "user",
             "operation": "add_column",
             "warning": null
+        },
+        {
+            "id": "mig_c52240a9dfe8",
+            "sql": "CREATE TABLE `guess_game` (\n  `rating` INT NOT NULL DEFAULT 1500,\n  `status` VARCHAR(255) NOT NULL DEFAULT 'ongoing',\n  `result` VARCHAR(255) NOT NULL DEFAULT '1/2-1/2',\n  `moves` TEXT,\n  `user_id` VARCHAR(36),\n  `guess` INT,\n  `score` INT,\n  `answered_at` VARCHAR(255),\n  `id` VARCHAR(36) NOT NULL DEFAULT '',\n  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            "destructive": false,
+            "generated_at": "2026-07-06T19:32:09+00:00",
+            "table": "guess_game",
+            "operation": "create_table",
+            "warning": null
+        },
+        {
+            "id": "mig_74f451b3062f",
+            "sql": "ALTER TABLE `guess_game` ADD INDEX `idx_guess_game_user_id` (`user_id`)",
+            "destructive": false,
+            "generated_at": "2026-07-06T19:32:09+00:00",
+            "table": "guess_game",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_dc1884a8ac3a",
+            "sql": "ALTER TABLE `guess_game` ADD CONSTRAINT `fk_guess_game_user_id` FOREIGN KEY (`user_id`) REFERENCES `user` (`id`) ON DELETE CASCADE ON UPDATE CASCADE",
+            "destructive": false,
+            "generated_at": "2026-07-06T19:32:09+00:00",
+            "table": "guess_game",
+            "operation": "add_fk",
+            "warning": null
         }
     ]
 }

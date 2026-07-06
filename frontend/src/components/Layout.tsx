@@ -50,6 +50,7 @@ function navItems(isAdmin: boolean): NavItem[] {
         { kind: 'link', label: 'Puzzles', to: '/puzzles' },
         { kind: 'link', label: 'Watch', to: '/watch' },
         { kind: 'menu', label: 'Tools', items: tools },
+        ...(isAdmin ? [{ kind: 'link' as const, label: 'Admin', to: '/admin' }] : []),
     ]
 }
 
@@ -65,7 +66,7 @@ export interface LayoutOutletContext {
 // Pages built around a large board need the full viewport — the footer would
 // either push the board up or add an awkward scroll, so we drop it on them:
 // live play, bot play, puzzles, watch/spectate, and analysis.
-const BOARD_ROUTE_PREFIXES = ['/game', '/bot', '/puzzles', '/watch', '/analysis', '/admin/engine-vs', '/editor']
+const BOARD_ROUTE_PREFIXES = ['/game', '/bot', '/puzzles', '/watch', '/analysis', '/admin', '/editor']
 const hideFooter = (pathname: string): boolean =>
     BOARD_ROUTE_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))
 
