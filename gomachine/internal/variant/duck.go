@@ -25,9 +25,13 @@ func newDuckState(fen string) (State, error) {
 
 func (d duckState) Side() chess.Color        { return d.s.Side() }
 func (d duckState) FEN() string              { return d.s.FEN() }
-func (d duckState) Duck() string             { return d.s.DuckString() }
+func (d duckState) BoardFEN() string         { return d.s.FEN() }
 func (d duckState) History() []uint64        { return nil }
 func (d duckState) CanMate(chess.Color) bool { return true } // a king is always capturable
+
+// Extras carries the duck square (the FEN doesn't hold it — the duck rides
+// separately). Always present so the wire's "duck" field is stable.
+func (d duckState) Extras() map[string]string { return map[string]string{"duck": d.s.DuckString()} }
 
 func (d duckState) LegalMoves() []string {
 	pms := d.s.LegalPieceMoves()

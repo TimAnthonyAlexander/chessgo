@@ -17,8 +17,11 @@ func TestStandardRuleset(t *testing.T) {
 		if st.Side() != chess.White {
 			t.Errorf("%q: side = %v, want White", id, st.Side())
 		}
-		if st.Duck() != "" {
-			t.Errorf("%q: Duck() = %q, want empty", id, st.Duck())
+		if st.Extras() != nil {
+			t.Errorf("%q: Extras() = %v, want nil (no auxiliary state)", id, st.Extras())
+		}
+		if st.BoardFEN() != st.FEN() {
+			t.Errorf("%q: BoardFEN should equal FEN for standard", id)
 		}
 		if len(st.LegalMoves()) != 20 {
 			t.Errorf("%q: %d opening moves, want 20", id, len(st.LegalMoves()))
@@ -57,15 +60,15 @@ func TestDuckRuleset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New(duck): %v", err)
 	}
-	if st.Duck() != "" {
-		t.Errorf("fresh duck square = %q, want empty (unplaced)", st.Duck())
+	if st.Extras()["duck"] != "" {
+		t.Errorf("fresh duck square = %q, want empty (unplaced)", st.Extras()["duck"])
 	}
 	next, san, ok := st.Apply("e2e4:e5")
 	if !ok || san == "" {
 		t.Fatalf("Apply(e2e4:e5) = (%q, %v), want a SAN and true", san, ok)
 	}
-	if next.Duck() != "e5" {
-		t.Errorf("duck square after move = %q, want e5", next.Duck())
+	if next.Extras()["duck"] != "e5" {
+		t.Errorf("duck square after move = %q, want e5", next.Extras()["duck"])
 	}
 	if next.PrimaryUCI("e2e4:e5") != "e2e4" {
 		t.Errorf("PrimaryUCI(composite) = %q, want e2e4", next.PrimaryUCI("e2e4:e5"))
@@ -75,9 +78,37 @@ func TestDuckRuleset(t *testing.T) {
 	}
 }
 
+// Crazyhouse plugs in as a Tier-2 variant: its canonical FEN carries the pocket,
+// the board FEN is standard-shape, the pocket rides in Extras, and it self-searches.
+func TestCrazyhouseRuleset(t *testing.T) {
+	st, err := New(Crazyhouse, chess.StartFEN)
+	if err != nil {
+		t.Fatalf("New(crazyhouse): %v", err)
+	}
+	if st.Extras()["pocket"] != "" {
+		t.Errorf("fresh pocket = %q, want empty", st.Extras()["pocket"])
+	}
+	if st.BoardFEN() == st.FEN() {
+		t.Error("Crazyhouse BoardFEN (standard) should differ from the canonical FEN (has [pocket])")
+	}
+	next, san, ok := st.Apply("e2e4")
+	if !ok || san != "e4" {
+		t.Fatalf("Apply(e2e4) = (%q, %v), want (e4, true)", san, ok)
+	}
+	if next.Side() != chess.Black {
+		t.Errorf("side after e4 = %v, want Black", next.Side())
+	}
+	// A canonical FEN with a pocket must reconstruct (self-describing).
+	if _, err := New(Crazyhouse, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR[Pn] w KQkq - 0 1"); err != nil {
+		t.Errorf("New(crazyhouse, pocketed FEN): %v", err)
+	}
+}
+
 func TestSelfSearches(t *testing.T) {
-	if !SelfSearches(Duck) {
-		t.Error("Duck must self-search (Tier 2)")
+	for _, id := range []string{Duck, Crazyhouse} {
+		if !SelfSearches(id) {
+			t.Errorf("%q must self-search (Tier 2)", id)
+		}
 	}
 	for _, id := range []string{Standard, Chess960, "unknown"} {
 		if SelfSearches(id) {

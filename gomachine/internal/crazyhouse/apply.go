@@ -20,6 +20,17 @@ func (s State) Apply(move string) (State, error) {
 	return s.applyLegal(m), nil
 }
 
+// ApplyUCI validates and plays a UCI move ("e2e4", "e7e8q" or a drop "P@e4"),
+// returning the next state, the move's SAN, and whether it was legal — the shape
+// the variant adapter needs (SAN is rendered relative to the pre-move state).
+func (s State) ApplyUCI(move string) (State, string, bool) {
+	m, ok := parseUCI(move)
+	if !ok || !s.isLegal(m) {
+		return State{}, "", false
+	}
+	return s.applyLegal(m), s.SAN(m), true
+}
+
 // isLegal reports whether m is among the legal moves for the side to move.
 func (s State) isLegal(m Move) bool {
 	for _, lm := range s.LegalMoves() {
@@ -30,13 +41,23 @@ func (s State) isLegal(m Move) bool {
 	return false
 }
 
-// applyLegal plays a move already known to be legal, returning the next state. It
-// handles the two Crazyhouse-specific bits of bookkeeping: a capture drops the
-// victim into the mover's pocket (a captured promoted piece reverts to a pawn),
-// and the promoted-square set follows the pieces.
+// applyLegal plays a legal move and returns the next state WITH the pre-move key
+// appended to the threefold history. It wraps advance, which does the board work.
 func (s State) applyLegal(m Move) State {
-	ns := s
+	ns := s.advance(m)
 	ns.history = append(append([]uint64(nil), s.history...), s.key())
+	return ns
+}
+
+// advance plays a move already known to be legal and returns the next state
+// WITHOUT recording repetition history — the search hot path uses this (in-tree
+// threefold is not tracked). It handles the two Crazyhouse-specific bits of
+// bookkeeping: a capture drops the victim into the mover's pocket (a captured
+// promoted piece reverts to a pawn), and the promoted-square set follows the
+// pieces.
+func (s State) advance(m Move) State {
+	ns := s
+	ns.history = nil // caller (applyLegal) sets history when needed
 	us := s.pos.SideToMove()
 
 	if m.IsDrop {

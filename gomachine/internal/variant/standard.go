@@ -24,7 +24,8 @@ func newStandardState(fen string) (State, error) {
 
 func (s standardState) Side() chess.Color          { return s.pos.SideToMove() }
 func (s standardState) FEN() string                { return s.pos.FEN() }
-func (s standardState) Duck() string               { return "" }
+func (s standardState) BoardFEN() string           { return s.pos.FEN() }
+func (s standardState) Extras() map[string]string  { return nil }
 func (s standardState) History() []uint64          { return s.history }
 func (s standardState) PrimaryUCI(m string) string { return m }
 

@@ -87,19 +87,22 @@ func categoryForPool(pool string) string {
 // its many comparisons; variant.New/State turn an id into a live ruleset, so the
 // game flow never branches on the id itself.
 const (
-	variantStandard = variant.Standard
-	variantChess960 = variant.Chess960
-	variantDuck     = variant.Duck
+	variantStandard   = variant.Standard
+	variantChess960   = variant.Chess960
+	variantDuck       = variant.Duck
+	variantCrazyhouse = variant.Crazyhouse
 )
 
 // normalizeVariant clamps any client-supplied variant to a known value. Anything
-// other than Chess960 or Duck is treated as standard chess.
+// other than a recognized variant is treated as standard chess.
 func normalizeVariant(v string) string {
 	switch v {
 	case variantChess960:
 		return variantChess960
 	case variantDuck:
 		return variantDuck
+	case variantCrazyhouse:
+		return variantCrazyhouse
 	default:
 		return variantStandard
 	}

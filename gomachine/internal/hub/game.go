@@ -71,13 +71,23 @@ func (g *game) colorForID(id string) chess.Color {
 // sideToMove returns the color to move, variant-agnostically.
 func (g *game) sideToMove() chess.Color { return g.state.Side() }
 
-// boardFEN returns the (standard-shape) board FEN. Any auxiliary token (the duck)
-// rides separately (see duckSquare) and is never inside the FEN.
-func (g *game) boardFEN() string { return g.state.FEN() }
+// boardFEN returns the (standard-shape) board FEN for the client renderer. Any
+// auxiliary state (the duck square, the Crazyhouse pocket) rides separately in the
+// wire's extras (see addExtras); the canonical FEN (g.state.FEN) is used only for
+// reconstruction, not the wire.
+func (g *game) boardFEN() string { return g.state.BoardFEN() }
 
 // duckSquare returns the duck's current square ("" if unplaced), or "" for any
 // variant without one — so the wire's "duck" field is always safe to include.
-func (g *game) duckSquare() string { return g.state.Duck() }
+func (g *game) duckSquare() string { return g.state.Extras()["duck"] }
+
+// addExtras merges the variant's auxiliary wire fields (the duck square, the
+// Crazyhouse pocket, …) into a wire payload. A no-op for variants with none.
+func (g *game) addExtras(m map[string]any) {
+	for k, v := range g.state.Extras() {
+		m[k] = v
+	}
+}
 
 // lastUci returns the wire form of the last move played, or "". For duck this is
 // just the PIECE portion of the composite ("e2e4:e5" -> "e2e4") — the duck target
@@ -258,20 +268,20 @@ func (g *game) flaggedSide() (chess.Color, bool) {
 	return 0, false
 }
 
-// snapshot builds the per-move state payload sent to both players. For duck games
-// fen is the board FEN, duck is the duck's square, legalMoves are the piece moves,
-// and check is always false; non-duck games send duck="".
+// snapshot builds the per-move state payload sent to both players. fen is the
+// standard board FEN; variant-specific state rides in the extras merged on top —
+// the duck square ("duck") for Duck, the pocket ("pocket") for Crazyhouse.
 func (g *game) snapshot() map[string]any {
 	st := g.status()
 	var lastSan string
 	if len(g.moves) > 0 {
 		lastSan = g.sans[len(g.sans)-1]
 	}
-	return map[string]any{
+	snap := map[string]any{
 		"gameId":     g.id,
 		"variant":    g.variant,
 		"fen":        g.boardFEN(),
-		"duck":       g.duckSquare(),
+		"duck":       g.duckSquare(), // kept for wire stability; "" for non-duck
 		"sideToMove": st.SideToMove,
 		"lastMove":   g.lastUci(),
 		"san":        lastSan,
@@ -281,6 +291,8 @@ func (g *game) snapshot() map[string]any {
 		"ply":        len(g.moves),
 		"legalMoves": g.legalMoves(),
 	}
+	g.addExtras(snap)
+	return snap
 }
 
 // legalMoves returns the legal moves for the side to move (empty if over). For

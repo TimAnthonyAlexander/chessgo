@@ -368,7 +368,7 @@ func (h *Hub) sendMatched(g *game, c *Client, color chess.Color) {
 	if color == chess.Black {
 		colStr = "b"
 	}
-	c.trySend(mustJSON(out("matched", map[string]any{
+	payload := map[string]any{
 		"gameId":      g.id,
 		"color":       colStr,
 		"rated":       g.rated,
@@ -380,7 +380,9 @@ func (h *Hub) sendMatched(g *game, c *Client, color chess.Color) {
 		"clock":       map[string]int64{"w": g.clockMs[chess.White], "b": g.clockMs[chess.Black]},
 		"opponent":    map[string]any{"name": opp.Name, "rating": opp.RatingFor(categoryFor(g.pool, g.variant)), "anon": opp.Anon},
 		"legalMoves":  g.legalMoves(),
-	})))
+	}
+	g.addExtras(payload)
+	c.trySend(mustJSON(out("matched", payload)))
 }
 
 // --- gameplay ---
@@ -712,7 +714,7 @@ func (h *Hub) resumeMsg(g *game, color chess.Color) map[string]any {
 	if color == chess.Black {
 		colStr = "b"
 	}
-	return out("resume", map[string]any{
+	payload := map[string]any{
 		"gameId":         g.id,
 		"color":          colStr,
 		"rated":          g.rated,
@@ -730,7 +732,9 @@ func (h *Hub) resumeMsg(g *game, color chess.Color) map[string]any {
 		"moves":          g.moveLog(),
 		"lastMove":       g.lastUci(),
 		"opponentOnline": g.online[color.Opposite()],
-	})
+	}
+	g.addExtras(payload)
+	return out("resume", payload)
 }
 
 // handleDisconnect keeps the game alive (no abandon): it marks the player

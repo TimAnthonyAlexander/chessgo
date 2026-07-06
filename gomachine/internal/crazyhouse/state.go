@@ -53,6 +53,14 @@ func (s *State) Side() chess.Color { return s.pos.SideToMove() }
 // Pocket returns how many pieces of type pt color c holds in its pocket.
 func (s *State) Pocket(c chess.Color, pt chess.PieceType) int { return s.pockets[c][pt] }
 
+// BoardFEN returns the standard-shape board FEN (no pocket, no "~" marks) — what a
+// normal chess board renderer expects. The pocket rides alongside via PocketString.
+func (s *State) BoardFEN() string { return s.pos.FEN() }
+
+// PocketString renders both pockets (white uppercase, then black lowercase) as in
+// the FEN's "[...]" field, e.g. "PPNq".
+func (s *State) PocketString() string { return s.pocketString() }
+
 // Parse builds a State from a Crazyhouse FEN: a standard FEN whose piece-placement
 // field carries a "[pocket]" suffix and may mark promoted pieces with "~".
 func Parse(fen string) (State, error) {

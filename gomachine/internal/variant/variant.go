@@ -18,9 +18,10 @@ import (
 // Variant ids. Standard and Chess960 share the standard ruleset — they differ
 // only in the start FEN — so both resolve to the same State implementation.
 const (
-	Standard = "standard"
-	Chess960 = "chess960"
-	Duck     = "duck"
+	Standard   = "standard"
+	Chess960   = "chess960"
+	Duck       = "duck"
+	Crazyhouse = "crazyhouse"
 )
 
 // State is one live variant position. It is immutable: Apply returns the next
@@ -29,12 +30,16 @@ const (
 type State interface {
 	// Side is the color to move.
 	Side() chess.Color
-	// FEN is the board in standard FEN shape (auxiliary tokens ride separately).
+	// FEN is the CANONICAL, self-describing FEN — enough to fully reconstruct the
+	// position (Crazyhouse includes its [pocket]). Used for reconstruction/history.
 	FEN() string
-	// Duck is the auxiliary board token (the duck's square), or "" for variants
-	// that have none. Named for its only current user; a general "extras" map can
-	// replace it once a second variant needs auxiliary state.
-	Duck() string
+	// BoardFEN is the standard-shape board FEN a normal chess renderer expects (no
+	// pocket, no promotion marks). Equals FEN for standard/960/duck.
+	BoardFEN() string
+	// Extras are the wire's auxiliary fields for this variant, keyed by name —
+	// {"duck": square} for Duck, {"pocket": "PPNq"} for Crazyhouse — or nil for
+	// variants with none. This is the general replacement for the old Duck() token.
+	Extras() map[string]string
 	// LegalMoves lists the legal moves for the side to move, as UCI (or a variant's
 	// composite move string), empty if the game is over.
 	LegalMoves() []string
@@ -58,6 +63,8 @@ func New(id, fen string) (State, error) {
 	switch id {
 	case Duck:
 		return newDuckState(fen)
+	case Crazyhouse:
+		return newCrazyhouseState(fen)
 	default: // Standard, Chess960, and anything unknown → standard rules.
 		return newStandardState(fen)
 	}
@@ -65,15 +72,18 @@ func New(id, fen string) (State, error) {
 
 // SelfSearches reports whether a variant provides its own bot search (Tier 2)
 // rather than playing through the hub's shared engine pool (Tier 1).
-func SelfSearches(id string) bool { return id == Duck }
+func SelfSearches(id string) bool { return id == Duck || id == Crazyhouse }
 
 // SelfSearchMove computes a bot move for a self-searching (Tier 2) variant from a
-// position snapshot (board FEN + auxiliary token). ok is false for engine-pool
-// variants, which never call this.
-func SelfSearchMove(id, fen, duck string, rating int) (uci string, ok bool) {
+// position snapshot: the canonical FEN plus the wire extras (the auxiliary fields
+// a variant needs that its FEN may not carry, e.g. Duck's square). ok is false for
+// engine-pool variants, which never call this.
+func SelfSearchMove(id, fen string, extras map[string]string, rating int) (uci string, ok bool) {
 	switch id {
 	case Duck:
-		return duckSelfSearchMove(fen, duck, rating)
+		return duckSelfSearchMove(fen, extras["duck"], rating)
+	case Crazyhouse:
+		return crazyhouseSelfSearchMove(fen, rating)
 	default:
 		return "", false
 	}

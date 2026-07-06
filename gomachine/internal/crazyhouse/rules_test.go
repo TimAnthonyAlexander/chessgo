@@ -122,3 +122,26 @@ func TestThreefoldRepetition(t *testing.T) {
 		t.Errorf("status after threefold = %v, want draw", st.Status())
 	}
 }
+
+// SAN renders drops with @ and a Crazyhouse-correct check/mate suffix.
+func TestSAN(t *testing.T) {
+	// Drop mate: R@e8 walls in g8 -> "R@e8#".
+	st := mustParse(t, "6k1/5ppp/8/8/8/8/8/4K3[R] w - - 0 1")
+	if got := st.SAN(mustMove(t, "R@e8")); got != "R@e8#" {
+		t.Errorf("drop-mate SAN = %q, want R@e8#", got)
+	}
+	// Plain capture reuses core SAN.
+	cap := mustParse(t, "4k3/8/8/8/4n3/8/4R3/4K3[] w - - 0 1")
+	if got := cap.SAN(mustMove(t, "e2e4")); got != "Rxe4+" {
+		t.Errorf("capture SAN = %q, want Rxe4+", got)
+	}
+}
+
+func mustMove(t *testing.T, uci string) Move {
+	t.Helper()
+	m, ok := parseUCI(uci)
+	if !ok {
+		t.Fatalf("parseUCI(%q) failed", uci)
+	}
+	return m
+}

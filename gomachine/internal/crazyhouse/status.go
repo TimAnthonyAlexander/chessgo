@@ -16,6 +16,9 @@ const (
 // safety valve so a pathological game cannot run forever (real games are shorter).
 const drawMoveCap = 400
 
+// InCheck reports whether the side to move is in check (standard chess check).
+func (s *State) InCheck() bool { return s.pos.InCheck() }
+
 // winFor maps the winning color to a terminal status.
 func winFor(c chess.Color) Status {
 	if c == chess.White {

@@ -214,8 +214,8 @@ func (h *Hub) scheduleSelfSearchBotMove(g *game) {
 	gameID := g.id
 	ply := len(g.moves)
 	variantID := g.variant
-	fen := g.state.FEN()
-	duck := g.state.Duck()
+	fen := g.state.FEN() // canonical (self-describing) FEN for reconstruction
+	extras := g.state.Extras()
 	rating := bot.rating
 	tc := g.tc
 	remainingMs := g.remainingMs(botColor)
@@ -223,7 +223,7 @@ func (h *Hub) scheduleSelfSearchBotMove(g *game) {
 
 	go func() {
 		start := time.Now()
-		uci, ok := variant.SelfSearchMove(variantID, fen, duck, rating)
+		uci, ok := variant.SelfSearchMove(variantID, fen, extras, rating)
 		if !ok {
 			return
 		}
