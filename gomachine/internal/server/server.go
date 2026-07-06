@@ -122,6 +122,16 @@ func (s *Server) releaseAnalysis(e *engine.Engine) {
 	s.pool <- e
 }
 
+// analysisPoolSize is how many engines the analysis fan-out can run in parallel:
+// the dedicated analysis pool if configured, else the shared main pool. Used to
+// size the /analyze-game block-stealing workers (one engine held per worker).
+func (s *Server) analysisPoolSize() int {
+	if s.analysisPool != nil {
+		return cap(s.analysisPool)
+	}
+	return cap(s.pool)
+}
+
 // Handler returns the configured HTTP mux.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()

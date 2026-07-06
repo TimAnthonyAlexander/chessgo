@@ -1,0 +1,25 @@
+[Unit]
+Description=chessgo queue worker #%i (mason queue:work — game-analysis precompute)
+After=network.target mysql.service chessgo-engine.service
+Wants=mysql.service
+# Never give up restarting a crash-looping worker
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/chessgo
+ExecStart=/usr/bin/php /var/www/chessgo/mason queue:work
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# logs go to journald, tagged per-instance
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=chessgo-queue-%i
+
+[Install]
+WantedBy=multi-user.target

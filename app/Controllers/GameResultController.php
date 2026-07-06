@@ -9,6 +9,7 @@ use App\Models\Game;
 use App\Models\User;
 use App\Services\Glicko2Service;
 use App\Services\AnticheatService;
+use App\Jobs\AnalyzeGameJob;
 
 /**
  * Internal endpoint the realtime hub calls when a game ends (SPEC §8.2). Stores
@@ -120,6 +121,17 @@ class GameResultController extends Controller
         // the persist. The expensive engine-correlation pass runs out-of-band in
         // scripts/anticheat_scan.php (full-game analysis is too slow for here).
         $this->anticheat->reviewFinishedGame($game, $whiteUser, $blackUser);
+
+        // Eagerly precompute the full-game analysis OFF-REQUEST (queue worker), so
+        // opening the review board is an instant cache hit instead of a multi-second
+        // engine burst. Rated games only — the ones worth the background engine cost;
+        // a user who opens the review before the job lands just triggers the lazy
+        // compute (the GET path is unchanged) and the client's 404-retry covers the
+        // brief not-yet-persisted window. Requires QUEUE_DRIVER=database + a running
+        // `mason queue:work` worker; under the sync driver this would run inline.
+        if ($rated) {
+            dispatch(new AnalyzeGameJob($game->hub_game_id));
+        }
 
         return JsonResponse::created(['id' => $game->id]);
     }
