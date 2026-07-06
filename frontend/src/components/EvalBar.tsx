@@ -20,11 +20,25 @@ interface EvalBarProps {
 
 // Lichess "Winning chances": a sigmoid of centipawns fit from real game data, so
 // swings near 0.0 move the bar a lot and distant swings barely move it.
-function whiteWinPercent(ev: WhiteEval | null): number {
+//
+// SCALE NOTE: the Lichess coefficient was fit to STOCKFISH-scale cp. gomachine's
+// NNUE cp runs ~2× hotter (raw SCALE=400, no win-probability normalization like
+// SF's NormalizeToPawnValue — measured ratio 1.9–2.5 across the eval range), so
+// its eval needs a gentler coefficient. Using one coefficient for both would draw
+// gomachine's fill ~2× farther from center than the Stockfish second-opinion line
+// for the SAME position — the two would look like they disagree when they don't.
+// So the fill (gomachine) uses GOMACHINE_CP_K; the SF line uses LICHESS_CP_K.
+// (The displayed cp NUMBER is left as each engine's own honest eval; only the
+// win-probability BAR is cross-calibrated. A proper fix fits gomachine's own
+// WDL→win% sigmoid from self-play data — this ~2× constant handles the visual.)
+const LICHESS_CP_K = 0.00368208 // Stockfish/Lichess-scale cp
+const GOMACHINE_CP_K = LICHESS_CP_K / 2 // gomachine cp ≈ 2× hot
+
+function whiteWinPercent(ev: WhiteEval | null, k: number = LICHESS_CP_K): number {
     if (!ev) return 50
     if (ev.type === 'mate') return ev.white > 0 ? 100 : ev.white < 0 ? 0 : 50
     const cp = Math.max(-1000, Math.min(1000, ev.white))
-    return 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * cp)) - 1)
+    return 50 + 50 * (2 / (1 + Math.exp(-k * cp)) - 1)
 }
 
 // Just the value: pawns (e.g. "2.0") or "M" + moves. No sign, no percentage.
@@ -44,8 +58,10 @@ export default function EvalBar({ ev, orientation, sfEv, sfColor = '#b06bff' }: 
     }, [ev])
     const shown = ev ?? lastRef.current
 
-    const whitePct = whiteWinPercent(shown)
-    const sfPct = sfEv ? whiteWinPercent(sfEv) : 0
+    // gomachine's fill is cross-calibrated to Stockfish's win% scale (see whiteWinPercent
+    // SCALE NOTE) so the fill and the SF second-opinion line agree when the engines do.
+    const whitePct = whiteWinPercent(shown, GOMACHINE_CP_K)
+    const sfPct = sfEv ? whiteWinPercent(sfEv, LICHESS_CP_K) : 0
     const whiteAhead = shown ? shown.white >= 0 : true
     const whiteAnchor = orientation === 'w' ? 'bottom' : 'top' // White grows from its own side
 
