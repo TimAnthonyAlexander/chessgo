@@ -3,6 +3,8 @@ package hub
 import (
 	"strconv"
 	"strings"
+
+	"github.com/timanthonyalexander/gomachine/internal/variant"
 )
 
 // inMsg is a message from a client. Type is one of: queue, cancel, move,
@@ -80,14 +82,14 @@ func categoryForPool(pool string) string {
 	}
 }
 
-// Board variants understood by the hub. Standard and Chess960 differ only in the
-// start position (the chess package handles 960 castling, validation, SAN and
-// adjudication). Duck Chess is a wholly different ruleset driven by the
-// internal/duckchess package — the game branches on it throughout game.go/hub.go.
+// Board variant ids understood by the hub, aliased from the internal/variant
+// package (the single source of truth). The hub keeps these short local names for
+// its many comparisons; variant.New/State turn an id into a live ruleset, so the
+// game flow never branches on the id itself.
 const (
-	variantStandard = "standard"
-	variantChess960 = "chess960"
-	variantDuck     = "duck"
+	variantStandard = variant.Standard
+	variantChess960 = variant.Chess960
+	variantDuck     = variant.Duck
 )
 
 // normalizeVariant clamps any client-supplied variant to a known value. Anything

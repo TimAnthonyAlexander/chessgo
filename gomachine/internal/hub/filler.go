@@ -6,6 +6,7 @@ import (
 
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 	"github.com/timanthonyalexander/gomachine/internal/engine"
+	"github.com/timanthonyalexander/gomachine/internal/variant"
 )
 
 // EnableSpectatorFillers turns on engine-vs-engine "watch" games that keep the
@@ -160,11 +161,17 @@ func (h *Hub) startFillerGame() {
 		pos, _ = chess.ParseFEN(chess.StartFEN)
 		startFen = chess.StartFEN
 	}
+	// Watch fillers are always standard chess; pos above is reused only for the
+	// clock seed. g.state is the board's single source of truth.
+	st, err := variant.New(variantStandard, startFen)
+	if err != nil {
+		return
+	}
 	g := &game{
 		id:    newID(),
 		white: &player{id: newBotIdentity(rW), isBot: true, rating: rW},
 		black: &player{id: newBotIdentity(rB), isBot: true, rating: rB},
-		pos:   pos,
+		state: st,
 		tc:    tc,
 		pool:  pool,
 		// Display as Rated so the lobby looks like real ranked play. This is the

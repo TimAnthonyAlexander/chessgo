@@ -8,8 +8,8 @@ import (
 
 	"github.com/timanthonyalexander/gomachine/internal/auth"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
-	"github.com/timanthonyalexander/gomachine/internal/duckchess"
 	"github.com/timanthonyalexander/gomachine/internal/engine"
+	"github.com/timanthonyalexander/gomachine/internal/variant"
 )
 
 // engineHandle is a pooled search engine used to compute bot moves.
@@ -96,47 +96,43 @@ func (h *Hub) checkBotFill() {
 
 // startBotGame pairs a human with a fresh random bot opponent. To the client it
 // looks like any other match (name + rating in the matched payload).
-func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variant string) {
+func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variantID string) {
 	if human.game != nil {
 		return
 	}
-	variant = normalizeVariant(variant)
+	variantID = normalizeVariant(variantID)
 	// Anchor the bot near the human's rating in this category so a one-sided rated
 	// game is fair: the bot's displayed rating (what the human's Elo moves against)
 	// sits within a small jitter of the human's, and the engine plays at roughly
 	// that strength. Anonymous players have no rating, so fall back to the
 	// configured default level's nominal rating.
-	userRating := human.id.RatingFor(categoryFor(pool, variant))
+	userRating := human.id.RatingFor(categoryFor(pool, variantID))
 	if userRating <= 0 {
 		userRating = ratingForLevel(h.botLevel)
 	}
 	displayed := botDisplayRating(userRating)
 	bot := newBotIdentity(displayed)
-	pos, _ := chess.ParseFEN(chess.StartFEN)
+	// A bot backfill always starts from the standard opening (960/mid-game seeds are
+	// human-only); variant.New builds the right ruleset (Duck begins duck-unplaced).
+	st, err := variant.New(variantID, chess.StartFEN)
+	if err != nil {
+		return // defensive: the standard start always parses
+	}
 	g := &game{
-		id:   newID(),
-		pos:  pos,
-		tc:   tc,
-		pool: pool,
+		id:    newID(),
+		state: st,
+		tc:    tc,
+		pool:  pool,
 		// A matchmaking bot fill-in is rated for a logged-in human (one-sided Elo
 		// vs the bot), mirroring startGameWith: standard feeds the time-control pools
 		// and Duck feeds its own isolated "duck" pool, but Chess960 stays unrated.
 		// Anonymous players can't be rated. Explicit /bot games never reach the hub.
-		rated:     !human.id.Anon && (variant == variantStandard || variant == variantDuck),
+		rated:     !human.id.Anon && (variantID == variantStandard || variantID == variantDuck),
 		clockMs:   [2]int64{tc.Base, tc.Base},
 		turnStart: time.Now(),
 		online:    [2]bool{true, true},
 		startFen:  chess.StartFEN,
-		// Standard/Chess960 differ only in start position; both drive play off g.pos.
-		// Duck is a separate ruleset carried by g.duck (initialized just below).
-		variant: variant,
-	}
-	if variant == variantDuck {
-		// Duck backfill: the game runs off g.duck (from the standard start, duck not
-		// yet placed); g.pos stays the unused standard start so nil-safe paths hold.
-		if ds, err := duckchess.Parse(chess.StartFEN, ""); err == nil {
-			g.duck = &ds
-		}
+		variant:   variantID,
 	}
 
 	humanColor := chess.White
@@ -168,12 +164,12 @@ func (h *Hub) scheduleBotMove(g *game) {
 	if g.over {
 		return
 	}
-	if g.isDuck() {
-		h.scheduleDuckBotMove(g)
+	if variant.SelfSearches(g.variant) {
+		h.scheduleSelfSearchBotMove(g)
 		return
 	}
 	bot, botColor, ok := g.botPlayer()
-	if !ok || g.pos.SideToMove() != botColor {
+	if !ok || g.state.Side() != botColor {
 		return
 	}
 	engines := h.engines
@@ -190,8 +186,8 @@ func (h *Hub) scheduleBotMove(g *game) {
 	go h.computeBotMove(botSnapshot{
 		gameID:  g.id,
 		ply:     len(g.moves),
-		fen:     g.pos.FEN(),
-		history: append([]uint64(nil), g.history...),
+		fen:     g.state.FEN(),
+		history: append([]uint64(nil), g.state.History()...),
 		// Weaken to actual human strength (human scale), then lift onto the engine's
 		// native CCRL ladder so the search produces the same play as before the rescale.
 		rating:         engine.EngineRatingForHuman(humanizedEngineRating(bot.rating)),
@@ -200,39 +196,35 @@ func (h *Hub) scheduleBotMove(g *game) {
 		searchDepthCap: depthCap,
 		tc:             g.tc,
 		remainingMs:    g.remainingMs(botColor),
-		legalCount:     len(g.pos.LegalMoveStrings(chess.SqNone)),
+		legalCount:     len(g.state.LegalMoves()),
 	}, engines)
 }
 
-// scheduleDuckBotMove computes a Duck Chess bot reply OFF the Run goroutine and
-// hands it back via botMoves — the same channel the standard path uses, so the
-// move is applied on the Run goroutine (never mutating game state off it). Duck
-// uses the self-contained duckchess search (no engine pool / no shared TT), so it
-// leases nothing; there is no filler/960 duck path (Duck backfill is human-vs-bot
-// only). Snapshots all needed immutable values here, then reads nothing shared in
-// the goroutine.
-func (h *Hub) scheduleDuckBotMove(g *game) {
+// scheduleSelfSearchBotMove computes a bot reply for a Tier-2 variant (its own
+// search, e.g. Duck) OFF the Run goroutine and hands it back via botMoves — the
+// same channel the engine-pool path uses, so the move is applied on the Run
+// goroutine (never mutating game state off it). It leases no engine (the variant
+// search is self-contained). Snapshots every value it needs here, then reads
+// nothing shared in the goroutine.
+func (h *Hub) scheduleSelfSearchBotMove(g *game) {
 	bot, botColor, ok := g.botPlayer()
-	if !ok || g.sideToMove() != botColor {
+	if !ok || g.state.Side() != botColor {
 		return
 	}
 	gameID := g.id
 	ply := len(g.moves)
-	fen := g.boardFEN()
-	duckSq := g.duckSquare()
+	variantID := g.variant
+	fen := g.state.FEN()
+	duck := g.state.Duck()
 	rating := bot.rating
 	tc := g.tc
 	remainingMs := g.remainingMs(botColor)
-	legalCount := len(g.duck.LegalPieceMoves())
+	legalCount := len(g.state.LegalMoves())
 
 	go func() {
 		start := time.Now()
-		st, err := duckchess.Parse(fen, duckSq)
-		if err != nil {
-			return
-		}
-		res := duckchess.BestMove(st, duckchess.Limits{Rating: rating})
-		if !res.HasMove {
+		uci, ok := variant.SelfSearchMove(variantID, fen, duck, rating)
+		if !ok {
 			return
 		}
 		// Pace with the same variant-agnostic delay as standard bots (real time, so it
@@ -242,7 +234,7 @@ func (h *Hub) scheduleDuckBotMove(g *game) {
 			time.Sleep(delay - elapsed)
 		}
 		select {
-		case h.botMoves <- botMoveResult{gameID: gameID, ply: ply, uci: res.MoveString()}:
+		case h.botMoves <- botMoveResult{gameID: gameID, ply: ply, uci: uci}:
 		case <-time.After(2 * time.Second):
 			// Run goroutine wedged/gone; drop rather than leak.
 		}
@@ -290,8 +282,7 @@ func (h *Hub) applyBotMove(r botMoveResult) {
 	if g == nil || g.over {
 		return
 	}
-	// Use sideToMove() (variant-agnostic): for duck, g.pos is the unused standard
-	// start, so g.pos.SideToMove() would be wrong — the real side lives in g.duck.
+	// sideToMove()/botPlayer() read g.state, so this is variant-agnostic.
 	if _, botColor, ok := g.botPlayer(); !ok || g.sideToMove() != botColor || len(g.moves) != r.ply {
 		return
 	}

@@ -19,8 +19,8 @@ import (
 	"github.com/coder/websocket"
 	"github.com/timanthonyalexander/gomachine/internal/auth"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
-	"github.com/timanthonyalexander/gomachine/internal/duckchess"
 	"github.com/timanthonyalexander/gomachine/internal/syzygy"
+	"github.com/timanthonyalexander/gomachine/internal/variant"
 )
 
 type command struct {
@@ -317,30 +317,32 @@ func (h *Hub) startGame(a, b *Client, tc timeControl, pool, variant string) {
 // startGameWith creates a game between two clients with explicit colors and a
 // caller-decided rated flag. Shared by public matchmaking (random colors, rated
 // iff both accounts) and private challenges (creator's color/rated preference).
-func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, rated bool, variant string) {
-	variant = normalizeVariant(variant)
+func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, rated bool, variantID string) {
+	variantID = normalizeVariant(variantID)
 	// Rating eligibility by variant. Standard chess feeds the time-control Glicko
 	// pools; Duck Chess feeds its own isolated "duck" pool (categoryFor routes it).
 	// Chess960 alone stays unrated (no dedicated pool). This is the single funnel
 	// for both public matchmaking and private challenges, so gating rated here
 	// covers every started game.
-	rated = rated && (variant == variantStandard || variant == variantDuck)
-	// For standard/960 the start position is the ONLY thing the variant changes:
-	// standard uses the classic start FEN, Chess960 a random Fischer-random start.
-	// Everything downstream (applyMove, status, legal moves, takeback, clocks) works
-	// from g.pos / g.startFen — so g.startFen MUST be this FEN, not chess.StartFEN,
-	// or the takeback rebuild would replay from the wrong root. Duck is a wholly
-	// different ruleset carried by g.duck (initialized below) from the standard start.
+	rated = rated && (variantID == variantStandard || variantID == variantDuck)
+	// The start position is the ONLY thing standard vs Chess960 changes: standard
+	// uses the classic start FEN, Chess960 a random Fischer-random start. g.startFen
+	// MUST be this FEN (not chess.StartFEN), or a takeback rebuild would replay from
+	// the wrong root. Duck begins from the standard start with the duck unplaced —
+	// variant.New handles that; g.state is the single source of board truth.
 	startFen := chess.StartFEN
-	if variant == variantChess960 {
+	if variantID == variantChess960 {
 		startFen = chess.RandomChess960FEN()
 	}
-	pos, _ := chess.ParseFEN(startFen)
+	st, err := variant.New(variantID, startFen)
+	if err != nil {
+		return // defensive: our start FENs always parse
+	}
 	g := &game{
 		id:        newID(),
 		white:     &player{client: white, id: white.id},
 		black:     &player{client: black, id: black.id},
-		pos:       pos,
+		state:     st,
 		tc:        tc,
 		pool:      pool,
 		rated:     rated,
@@ -348,14 +350,7 @@ func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, r
 		turnStart: time.Now(),
 		online:    [2]bool{true, true},
 		startFen:  startFen,
-		variant:   variant,
-	}
-	if variant == variantDuck {
-		// Duck starts from the standard board with the duck not yet placed; g.pos is
-		// left as the (unused) standard start so any bot no-op path stays nil-safe.
-		if ds, err := duckchess.Parse(chess.StartFEN, ""); err == nil {
-			g.duck = &ds
-		}
+		variant:   variantID,
 	}
 	white.game, black.game = g, g
 	h.games[g.id] = g
@@ -600,9 +595,10 @@ func (h *Hub) checkClocks() {
 		}
 		opp := side.Opposite()
 		result, reason := "1/2-1/2", "timeout-insufficient-material"
-		// Duck Chess has no insufficient-material draw: a king can always be captured,
-		// so a flag is always a straight loss for the flagged side.
-		if g.isDuck() || g.pos.CanAnyoneMate(opp) {
+		// A flag is a loss only if the opponent can still mate. Standard/960 check
+		// material; Duck Chess always can (a king is always capturable) — g.state
+		// answers for the variant.
+		if g.state.CanMate(opp) {
 			reason = "timeout"
 			if opp == chess.White {
 				result = "1-0"

@@ -5,16 +5,17 @@ import (
 
 	"github.com/timanthonyalexander/gomachine/internal/auth"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
+	"github.com/timanthonyalexander/gomachine/internal/variant"
 )
 
 // makeHumanGame builds a minimal standard game between two account identities,
 // enough to exercise the anti-cheat live-player index.
 func makeHumanGame(id string, whiteSub, blackSub string) *game {
-	pos, _ := chess.ParseFEN(chess.StartFEN)
+	st, _ := variant.New(variantStandard, chess.StartFEN)
 	return &game{
 		id:       id,
 		startFen: chess.StartFEN,
-		pos:      pos,
+		state:    st,
 		variant:  variantStandard,
 		white:    &player{id: auth.Identity{UserID: whiteSub}},
 		black:    &player{id: auth.Identity{UserID: blackSub}},

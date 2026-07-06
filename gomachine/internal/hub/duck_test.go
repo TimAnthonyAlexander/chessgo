@@ -7,22 +7,22 @@ import (
 	"time"
 
 	"github.com/timanthonyalexander/gomachine/internal/auth"
-	"github.com/timanthonyalexander/gomachine/internal/duckchess"
+	"github.com/timanthonyalexander/gomachine/internal/variant"
 )
 
 // newDuckGame builds a minimal in-memory duck game seeded from a crafted FEN, so
 // tests can drive applyMove/status directly without a full hub/socket.
 func newDuckGame(t *testing.T, fen string) *game {
 	t.Helper()
-	ds, err := duckchess.Parse(fen, "")
+	st, err := variant.New(variantDuck, fen)
 	if err != nil {
-		t.Fatalf("parse duck fen: %v", err)
+		t.Fatalf("build duck state: %v", err)
 	}
 	return &game{
 		id:        "duck-test",
 		white:     &player{id: auth.Identity{UserID: "w"}},
 		black:     &player{id: auth.Identity{UserID: "b"}},
-		duck:      &ds,
+		state:     st,
 		tc:        timeControl{Base: 300_000, Inc: 0},
 		clockMs:   [2]int64{300_000, 300_000},
 		turnStart: time.Now(),
@@ -95,7 +95,7 @@ func TestDuckGameRejectsIllegalMove(t *testing.T) {
 	if len(g.moves) != 0 {
 		t.Fatalf("rejected moves must not append: moves=%v", g.moves)
 	}
-	if g.sideToMove() != g.duck.Side() {
+	if g.status().SideToMove != "w" {
 		t.Fatalf("side to move changed after rejected moves")
 	}
 }
@@ -115,7 +115,7 @@ func TestDuckRebuildTo(t *testing.T) {
 	if g.duckSquare() != "a1" {
 		t.Errorf("rebuilt duck square = %q, want a1", g.duckSquare())
 	}
-	if got := g.duck.SideChar(); got != "b" {
+	if got := g.status().SideToMove; got != "b" {
 		t.Errorf("rebuilt side to move = %q, want b", got)
 	}
 }
@@ -152,7 +152,7 @@ func TestQueueKeyRoundTrip(t *testing.T) {
 	}
 }
 
-// startBotGame with variant "duck" builds a Duck game: a non-nil g.duck, exactly
+// startBotGame with variant "duck" builds a Duck game: a live duck state, exactly
 // one bot side, and RATED for a logged-in (non-anon) human — Duck feeds its own
 // isolated "duck" Glicko pool (same gate as startGameWith).
 func TestStartBotGameDuck(t *testing.T) {
@@ -167,8 +167,8 @@ func TestStartBotGameDuck(t *testing.T) {
 	if g.variant != variantDuck {
 		t.Errorf("variant = %q, want duck", g.variant)
 	}
-	if g.duck == nil {
-		t.Fatal("a duck bot game must have a non-nil duck state")
+	if g.state == nil {
+		t.Fatal("a duck bot game must have a live state")
 	}
 	if !g.rated {
 		t.Error("a duck bot game with a logged-in human must be rated (duck pool)")

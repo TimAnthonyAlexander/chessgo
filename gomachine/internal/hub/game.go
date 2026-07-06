@@ -1,13 +1,12 @@
 package hub
 
 import (
-	"strings"
 	"time"
 
 	"github.com/timanthonyalexander/gomachine/internal/auth"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
-	"github.com/timanthonyalexander/gomachine/internal/duckchess"
 	"github.com/timanthonyalexander/gomachine/internal/engine"
+	"github.com/timanthonyalexander/gomachine/internal/variant"
 )
 
 // player is one side of a live game. A bot opponent has isBot=true and a nil
@@ -26,8 +25,7 @@ type game struct {
 	id        string
 	white     *player
 	black     *player
-	pos       *chess.Position
-	duck      *duckchess.State // non-nil ONLY for variant=="duck"; standard/960 use pos
+	state     variant.State // the live board, variant-agnostic (see internal/variant)
 	tc        timeControl
 	pool      string
 	rated     bool
@@ -36,11 +34,10 @@ type game struct {
 	moveTimes []int64  // ms actually spent on each move (index i = think time for moves[i]); anti-cheat telemetry
 	clockMs   [2]int64 // remaining ms, indexed by chess.Color (White=0, Black=1)
 	turnStart time.Time
-	history   []uint64 // prior-position Zobrist keys (repetition); unused for duck
 	over      bool
 	online    [2]bool // per-color connection presence
 	startFen  string
-	variant   string // board ruleset: "standard", "chess960" or "duck"
+	variant   string // board ruleset id: "standard", "chess960" or "duck" (see internal/variant)
 
 	// Pending draw / takeback offers. At most one of each may be outstanding; the
 	// `*By` color is the side that made the offer. Any committed move clears both
@@ -71,51 +68,25 @@ func (g *game) colorForID(id string) chess.Color {
 	return chess.Black
 }
 
-// isDuck reports whether this is a Duck Chess game (branches the whole game flow
-// onto internal/duckchess instead of the standard chess core).
-func (g *game) isDuck() bool { return g.variant == variantDuck }
+// sideToMove returns the color to move, variant-agnostically.
+func (g *game) sideToMove() chess.Color { return g.state.Side() }
 
-// sideToMove returns the color to move, variant-agnostically. Standard/960 read
-// the chess position; duck reads the duck state (g.pos may be a stale start).
-func (g *game) sideToMove() chess.Color {
-	if g.isDuck() {
-		return g.duck.Side()
-	}
-	return g.pos.SideToMove()
-}
-
-// boardFEN returns the (standard) board FEN. For duck the duck rides separately
-// (see duckSquare) and is never inside the FEN.
-func (g *game) boardFEN() string {
-	if g.isDuck() {
-		return g.duck.FEN()
-	}
-	return g.pos.FEN()
-}
+// boardFEN returns the (standard-shape) board FEN. Any auxiliary token (the duck)
+// rides separately (see duckSquare) and is never inside the FEN.
+func (g *game) boardFEN() string { return g.state.FEN() }
 
 // duckSquare returns the duck's current square ("" if unplaced), or "" for any
-// non-duck variant — so the wire's "duck" field is always safe to include.
-func (g *game) duckSquare() string {
-	if g.isDuck() {
-		return g.duck.DuckString()
-	}
-	return ""
-}
+// variant without one — so the wire's "duck" field is always safe to include.
+func (g *game) duckSquare() string { return g.state.Duck() }
 
-// lastUci returns the last move played, or "". For duck it returns just the PIECE
-// portion of the composite ("e2e4:e5" -> "e2e4") — the wire's lastMove is the
-// piece move; the duck target rides in the separate "duck" field.
+// lastUci returns the wire form of the last move played, or "". For duck this is
+// just the PIECE portion of the composite ("e2e4:e5" -> "e2e4") — the duck target
+// rides in the separate "duck" field.
 func (g *game) lastUci() string {
 	if len(g.moves) == 0 {
 		return ""
 	}
-	last := g.moves[len(g.moves)-1]
-	if g.isDuck() {
-		if piece, _, ok := strings.Cut(last, ":"); ok {
-			return piece
-		}
-	}
-	return last
+	return g.state.PrimaryUCI(g.moves[len(g.moves)-1])
 }
 
 // moveLog returns the full move history as {uci, san} pairs (for resume).
@@ -134,7 +105,7 @@ func (g *game) moveLog() []map[string]string {
 // move-list numbering for mid-game seeds. Derived from startFen; standard/960
 // only (duck fillers don't exist), falling back to 0 on any parse trouble.
 func (g *game) startPly() int {
-	if g.variant == variantDuck || g.startFen == "" {
+	if g.startFen == "" {
 		return 0
 	}
 	pos, err := chess.ParseFEN(g.startFen)
@@ -162,7 +133,7 @@ func (g *game) playerFor(c chess.Color) *player {
 // human-vs-human game. With a filler (engine-vs-engine) game both sides are
 // bots; this returns whichever side is to move so callers schedule the right one.
 func (g *game) botPlayer() (*player, chess.Color, bool) {
-	side := g.pos.SideToMove()
+	side := g.state.Side()
 	if p := g.playerFor(side); p.isBot {
 		return p, side, true
 	}
@@ -212,20 +183,18 @@ func (g *game) remainingMs(c chess.Color) int64 {
 }
 
 // applyMove validates and plays a move, updating the mover's clock. Returns the
-// SAN and whether the move was legal. Duck games take the composite path; all
-// other variants use the standard chess core (byte-identical to before duck).
+// SAN and whether the move was legal. The board transition is variant-agnostic
+// (g.state.Apply); the clock logic below is identical for every variant. The
+// move string is plain UCI for standard/960 and the composite
+// "<pieceUCI>:<duckSquare>" for duck — g.state knows how to parse its own.
 func (g *game) applyMove(uci string) (string, bool) {
-	if g.isDuck() {
-		return g.applyDuckMove(uci)
-	}
-	m, ok := g.pos.ParseUCIMove(uci)
+	side := g.state.Side() // pre-move side — read BEFORE g.state is reassigned
+	next, san, ok := g.state.Apply(uci)
 	if !ok {
 		return "", false
 	}
-	san := g.pos.SAN(m)
 
 	now := time.Now()
-	side := g.pos.SideToMove()
 	// The clock only runs once both sides have made their first move. Until then
 	// (this side's opening ply) the move is untimed — no deduction, no increment.
 	if g.clocksRunning() {
@@ -236,46 +205,12 @@ func (g *game) applyMove(uci string) (string, bool) {
 		g.clockMs[side] += g.tc.Inc
 	}
 
-	g.history = append(g.history, g.pos.Key())
-	var u chess.Undo
-	g.pos.DoMove(m, &u)
+	g.state = next
 	g.moves = append(g.moves, uci)
 	g.sans = append(g.sans, san)
 	g.moveTimes = append(g.moveTimes, now.Sub(g.turnStart).Milliseconds())
 	g.turnStart = now
 	g.clearOffers() // any move declines a pending draw and drops a stale takeback
-	return san, true
-}
-
-// applyDuckMove validates and applies a composite Duck Chess move
-// "<pieceUCI>:<duckSquare>", mirroring server/duck.go's handleDuckMove. The clock
-// logic is variant-agnostic (identical to the standard path); duck games keep NO
-// Zobrist repetition history (termination comes from duck status, not threefold).
-func (g *game) applyDuckMove(composite string) (string, bool) {
-	ns, pm, _, err := g.duck.ApplyComposite(composite)
-	if err != nil {
-		return "", false
-	}
-	// SAN is rendered relative to the PRE-move state (g.duck), with the new duck
-	// square — same call shape as the HTTP handler.
-	san := g.duck.SAN(pm, ns.Duck())
-
-	now := time.Now()
-	side := g.sideToMove() // pre-move side (read before g.duck is reassigned)
-	if g.clocksRunning() {
-		g.clockMs[side] -= now.Sub(g.turnStart).Milliseconds()
-		if g.clockMs[side] < 0 {
-			g.clockMs[side] = 0
-		}
-		g.clockMs[side] += g.tc.Inc
-	}
-
-	g.duck = &ns
-	g.moves = append(g.moves, composite)
-	g.sans = append(g.sans, san)
-	g.moveTimes = append(g.moveTimes, now.Sub(g.turnStart).Milliseconds())
-	g.turnStart = now
-	g.clearOffers()
 	return san, true
 }
 
@@ -290,96 +225,26 @@ func (g *game) clearOffers() {
 // an agreed takeback. Clocks are intentionally left as-is (takeback is consensual);
 // the turn timer restarts so neither side is charged for the negotiation.
 func (g *game) rebuildTo(plies int) {
-	if g.isDuck() {
-		g.rebuildDuckTo(plies)
-		return
-	}
-	pos, err := chess.ParseFEN(g.startFen)
+	st, err := variant.New(g.variant, g.startFen)
 	if err != nil {
 		return
 	}
-	hist := make([]uint64, 0, plies)
 	for i := 0; i < plies; i++ {
-		m, ok := pos.ParseUCIMove(g.moves[i])
+		next, _, ok := st.Apply(g.moves[i])
 		if !ok {
 			break
 		}
-		hist = append(hist, pos.Key())
-		var u chess.Undo
-		pos.DoMove(m, &u)
+		st = next
 	}
-	g.pos = pos
-	g.history = hist
-	g.moves = g.moves[:plies]
-	g.sans = g.sans[:plies]
-	g.turnStart = time.Now()
-}
-
-// rebuildDuckTo reconstructs a duck game to its first `plies` moves by replaying
-// the composite moves from the start (duck unplaced) through duckchess. Duck games
-// have no Zobrist history, so nothing repetition-related is rebuilt.
-func (g *game) rebuildDuckTo(plies int) {
-	ds, err := duckchess.Parse(g.startFen, "")
-	if err != nil {
-		return
-	}
-	for i := 0; i < plies; i++ {
-		ns, _, _, aerr := ds.ApplyComposite(g.moves[i])
-		if aerr != nil {
-			break
-		}
-		ds = ns
-	}
-	g.duck = &ds
+	g.state = st
 	g.moves = g.moves[:plies]
 	g.sans = g.sans[:plies]
 	g.turnStart = time.Now()
 }
 
 // status adjudicates the current position (checkmate/stalemate/draws/ongoing for
-// standard/960; duck terminal semantics for duck).
-func (g *game) status() engine.Status {
-	if g.isDuck() {
-		return g.duckStatus()
-	}
-	return engine.Adjudicate(g.pos, g.history)
-}
-
-// duckStatus maps duckchess terminal detection onto the hub's engine.Status shape.
-// There is no check in Duck Chess (Check is always false); a win is either a king
-// capture or the loser having no legal piece move; the move cap forces a draw.
-func (g *game) duckStatus() engine.Status {
-	st := engine.Status{State: "ongoing", Check: false, SideToMove: g.duck.SideChar()}
-	switch g.duck.Status() {
-	case duckchess.Ongoing:
-		// still playing
-	case duckchess.Draw:
-		st.State, st.Result = "draw-move-cap", "1/2-1/2"
-	case duckchess.WhiteWin:
-		st.State, st.Result = duckTerminalReason(g.duck), "1-0"
-	case duckchess.BlackWin:
-		st.State, st.Result = duckTerminalReason(g.duck), "0-1"
-	}
-	return st
-}
-
-// duckTerminalReason distinguishes the two ways a Duck Chess game is won: a
-// captured (missing) king vs. the side to move having no legal piece move.
-func duckTerminalReason(st *duckchess.State) string {
-	var whiteKing, blackKing bool
-	for sq := chess.Square(0); sq < 64; sq++ {
-		switch st.PieceOn(sq) {
-		case chess.WhiteKing:
-			whiteKing = true
-		case chess.BlackKing:
-			blackKing = true
-		}
-	}
-	if !whiteKing || !blackKing {
-		return "king-captured"
-	}
-	return "no-legal-moves"
-}
+// standard/960; king-capture/no-moves/move-cap for duck) — the variant decides.
+func (g *game) status() engine.Status { return g.state.Status() }
 
 // flaggedSide returns the color whose clock has run out, or false if neither.
 func (g *game) flaggedSide() (chess.Color, bool) {
@@ -425,13 +290,5 @@ func (g *game) legalMoves() []string {
 	if g.over {
 		return []string{}
 	}
-	if g.isDuck() {
-		pms := g.duck.LegalPieceMoves()
-		moves := make([]string, len(pms))
-		for i, m := range pms {
-			moves[i] = m.UCI()
-		}
-		return moves
-	}
-	return g.pos.LegalMoveStrings(chess.SqNone)
+	return g.state.LegalMoves()
 }
