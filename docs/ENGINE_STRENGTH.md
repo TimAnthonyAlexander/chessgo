@@ -1982,7 +1982,12 @@ reliable signal (interleaved medians cancel box drift); the absolute base wander
   score instead of recomputing `pos.SEE` in the qsearch prune (qsearch ≈ half the tree, SEE is
   `attackersTo`+magic-heavy). **+2.78%**, node-identical (1 574 334 both sides). Bit-exact because SEE is
   position-deterministic (no history/mutable-table coupling — the trap that killed #3/#4). Default-on.
-- **Combined shipped ≈ +9% single-thread NPS**, every config node-count-identical.
+- **PEXT slider attacks** (finding C2): replace the magic multiply-shift in `rookAttacksBB`/`bishopAttacksBB`
+  with a `PEXTQ` asm stub + dense tables on amd64 (build-tag split; arm64/M3 stays on magic via `nopext`).
+  **+2.37%** (581 642 vs magic 568 194, nodes identical, perft + exhaustive equiv green). Both prod boxes
+  (coalla, lairner) are **EPYC 9634 / Zen 4** = 3-cycle hardware PEXT, so it's safe as the amd64 default.
+  Tables are the same size as our fancy-magic — the win is purely dropping the `imul`+shift, not cache.
+- **Combined shipped ≈ +11–12% single-thread NPS**, every config node-count-identical.
 
 **MEASURED, NOT SHIPPED (flag default-off):**
 - **finny** (accumulator-refresh cache, option-a = cache the feature *list* + `applyDiff`): **WASH** —
