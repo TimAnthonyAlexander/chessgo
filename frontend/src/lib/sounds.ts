@@ -13,6 +13,7 @@
 // AudioContext is created lazily on the first sound (always after a gesture).
 
 import { type BoardMap, fileOf } from './chess'
+import { type MaterialId, soundThemeStore } from './soundTheme'
 
 let ctx: AudioContext | null = null
 let master: GainNode | null = null
@@ -195,14 +196,26 @@ interface Mode {
     at?: number
     detune?: number
     attack?: number
+    // Oscillator waveform. Defaults to 'sine' (a true damped sinusoid = the modal
+    // model). A 'square' partial is how the 8-bit material gets its retro timbre —
+    // a genuine square wave from Web Audio, not a modal approximation.
+    type?: OscillatorType
 }
-function mode({ freq, dur, gain, at = 0, detune = 0, attack = 0.002 }: Mode): void {
+function mode({
+    freq,
+    dur,
+    gain,
+    at = 0,
+    detune = 0,
+    attack = 0.002,
+    type = 'sine',
+}: Mode): void {
     const a = audio()
     if (!a) return
     const { c, out } = a
     const t = c.currentTime + LOOKAHEAD + at
     const o = c.createOscillator()
-    o.type = 'sine'
+    o.type = type
     o.frequency.value = freq
     o.detune.value = detune
     const g = c.createGain()
@@ -225,8 +238,20 @@ interface WoodHit {
     attack: number
     noise?: { dur: number; cutoff: number; gain: number }
     at?: number
+    // Partial waveform (see Mode.type). Threaded through so a material can pick a
+    // non-sine timbre (8-bit → 'square'); omitted → 'sine' = the wood model.
+    type?: OscillatorType
 }
-function woodHit({ fundamental, ratios, gains, decays, attack, noise, at = 0 }: WoodHit): void {
+function woodHit({
+    fundamental,
+    ratios,
+    gains,
+    decays,
+    attack,
+    noise,
+    at = 0,
+    type = 'sine',
+}: WoodHit): void {
     ratios.forEach((r, i) => {
         mode({
             freq: fundamental * r,
@@ -235,6 +260,7 @@ function woodHit({ fundamental, ratios, gains, decays, attack, noise, at = 0 }: 
             at: at + i * 0.0003,
             detune: (i - 1) * 3,
             attack,
+            type,
         })
     })
     if (noise) {
@@ -286,34 +312,44 @@ function guard(fn: () => void): void {
 
 const RATIOS = [1, 2.756, 5.404] // free-free wooden bar — the "wood" timbre
 
-export const sounds = {
-    // Piece → board: soft felt-muted contact + inharmonic wood ring, highs die fast.
-    move: () =>
-        guard(() => {
-            woodHit({
+// A sound MATERIAL is a preset for the move + capture cues fed to the SAME modal
+// synth. Every material reuses `woodHit`/`mode`; only the parameters differ —
+// modal ratios, brightness (noise cutoff), decay length, gains, and (for 8-bit)
+// the oscillator waveform. `moveHits`/`captureHits` are lists of struck hits; a
+// capture is two contacts a hair apart. `moveLow` is the optional low "body"
+// weight under a move. Wood reproduces the original sound BYTE-FOR-BYTE and is the
+// default, so an unset preference is unchanged from before this feature existed.
+interface MaterialSynth {
+    moveHits: WoodHit[]
+    moveLow?: Mode
+    captureHits: WoodHit[]
+}
+
+const MATERIAL_PRESETS: Record<MaterialId, MaterialSynth> = {
+    // WOOD — the original: inharmonic free-free bar, felt-soft ~3kHz contact,
+    // highs die fast. Values copied verbatim from the pre-material sound.
+    wood: {
+        moveHits: [
+            {
                 fundamental: 440,
                 ratios: RATIOS,
                 gains: [0.36, 0.216, 0.12],
                 decays: [0.09, 0.045, 0.018],
                 attack: 0.003,
                 noise: { dur: 0.006, cutoff: 3000, gain: 0.144 }, // ~3kHz lowpass = felt-soft contact
-            })
-            mode({ freq: 95, dur: 0.06, gain: 0.144, attack: 0.003 }) // subtle low weight (board body)
-        }),
-
-    // Piece → piece: TWO wooden contacts a hair apart (they don't touch at once) —
-    // a louder/higher main strike, then a lower/lighter second tap.
-    capture: () =>
-        guard(() => {
-            woodHit({
+            },
+        ],
+        moveLow: { freq: 95, dur: 0.06, gain: 0.144, attack: 0.003 }, // subtle low weight (board body)
+        captureHits: [
+            {
                 fundamental: 1050,
                 ratios: RATIOS,
                 gains: [0.384, 0.216, 0.12],
                 decays: [0.03, 0.016, 0.008],
                 attack: 0.0012,
                 noise: { dur: 0.004, cutoff: 6500, gain: 0.216 },
-            })
-            woodHit({
+            },
+            {
                 fundamental: 720,
                 ratios: RATIOS,
                 gains: [0.228, 0.132, 0.072],
@@ -321,7 +357,176 @@ export const sounds = {
                 attack: 0.0018,
                 at: 0.018,
                 noise: { dur: 0.004, cutoff: 5000, gain: 0.132 },
-            })
+            },
+        ],
+    },
+
+    // GLASS — brighter, higher & more inharmonic ratios, a very bright contact and
+    // LONG decays so it rings/shimmers like struck crystal.
+    glass: {
+        moveHits: [
+            {
+                fundamental: 620,
+                ratios: [1, 2.76, 5.18, 8.8],
+                gains: [0.26, 0.19, 0.13, 0.07],
+                decays: [0.55, 0.4, 0.26, 0.14],
+                attack: 0.001,
+                noise: { dur: 0.004, cutoff: 9000, gain: 0.1 },
+            },
+        ],
+        captureHits: [
+            {
+                fundamental: 1240,
+                ratios: [1, 2.76, 5.18, 8.8],
+                gains: [0.3, 0.2, 0.13, 0.07],
+                decays: [0.4, 0.28, 0.18, 0.1],
+                attack: 0.0008,
+                noise: { dur: 0.003, cutoff: 11000, gain: 0.14 },
+            },
+            {
+                fundamental: 930,
+                ratios: [1, 2.76, 5.18],
+                gains: [0.2, 0.13, 0.08],
+                decays: [0.34, 0.22, 0.12],
+                attack: 0.001,
+                at: 0.016,
+                noise: { dur: 0.003, cutoff: 9000, gain: 0.09 },
+            },
+        ],
+    },
+
+    // MARBLE — hard, bright, and SHORT: a very bright contact with fast-decaying
+    // modes reads as a sharp stone click-clack, plus a hard low tap for weight.
+    marble: {
+        moveHits: [
+            {
+                fundamental: 520,
+                ratios: [1, 3.1, 5.8],
+                gains: [0.34, 0.16, 0.08],
+                decays: [0.05, 0.022, 0.01],
+                attack: 0.0006,
+                noise: { dur: 0.004, cutoff: 8000, gain: 0.22 },
+            },
+        ],
+        moveLow: { freq: 120, dur: 0.03, gain: 0.11, attack: 0.001 },
+        captureHits: [
+            {
+                fundamental: 1300,
+                ratios: [1, 3.1, 5.8],
+                gains: [0.36, 0.16, 0.08],
+                decays: [0.028, 0.014, 0.006],
+                attack: 0.0005,
+                noise: { dur: 0.003, cutoff: 12000, gain: 0.26 },
+            },
+            {
+                fundamental: 900,
+                ratios: [1, 3.1, 5.8],
+                gains: [0.22, 0.11, 0.06],
+                decays: [0.03, 0.015, 0.007],
+                attack: 0.0006,
+                at: 0.016,
+                noise: { dur: 0.003, cutoff: 9000, gain: 0.16 },
+            },
+        ],
+    },
+
+    // FELT — muffled and soft: a LOW contact cutoff kills the brightness, gains are
+    // gentle and decays short, and a rounded low body dominates → a soft thud.
+    felt: {
+        moveHits: [
+            {
+                fundamental: 300,
+                ratios: [1, 2.4, 4.2],
+                gains: [0.3, 0.12, 0.05],
+                decays: [0.07, 0.03, 0.012],
+                attack: 0.006,
+                noise: { dur: 0.008, cutoff: 1100, gain: 0.16 },
+            },
+        ],
+        moveLow: { freq: 80, dur: 0.08, gain: 0.2, attack: 0.005 },
+        captureHits: [
+            {
+                fundamental: 520,
+                ratios: [1, 2.4, 4.2],
+                gains: [0.26, 0.1, 0.04],
+                decays: [0.045, 0.02, 0.009],
+                attack: 0.004,
+                noise: { dur: 0.006, cutoff: 1600, gain: 0.18 },
+            },
+            {
+                fundamental: 360,
+                ratios: [1, 2.4],
+                gains: [0.18, 0.07],
+                decays: [0.05, 0.022],
+                attack: 0.005,
+                at: 0.02,
+                noise: { dur: 0.006, cutoff: 1200, gain: 0.12 },
+            },
+        ],
+    },
+
+    // 8-BIT — genuine SQUARE oscillators (Web Audio 'square'), integer harmonics,
+    // no contact-noise transient, quick decay → a retro chip "blip". The capture is
+    // a descending two-blip zap. NOTE: this is the one material that leaves the
+    // pure modal model — the square wave IS the retro character (no samples).
+    eightbit: {
+        moveHits: [
+            {
+                fundamental: 330,
+                ratios: [1, 2],
+                gains: [0.13, 0.045],
+                decays: [0.1, 0.05],
+                attack: 0.001,
+                type: 'square',
+            },
+        ],
+        captureHits: [
+            {
+                fundamental: 660,
+                ratios: [1, 2],
+                gains: [0.14, 0.05],
+                decays: [0.05, 0.03],
+                attack: 0.0008,
+                type: 'square',
+            },
+            {
+                fundamental: 440,
+                ratios: [1, 2],
+                gains: [0.11, 0.04],
+                decays: [0.06, 0.035],
+                attack: 0.001,
+                at: 0.02,
+                type: 'square',
+            },
+        ],
+    },
+}
+
+function playHits(hits: WoodHit[]): void {
+    hits.forEach((h) => woodHit(h))
+}
+
+/** The move/capture params for the active material (defaults to Wood). Resolved
+ * at play-time so a change in the picker takes effect on the very next cue. */
+function activeMaterial(): MaterialSynth {
+    return MATERIAL_PRESETS[soundThemeStore.get()]
+}
+
+export const sounds = {
+    // Piece → board: the active material's move cue (Wood = soft contact + wood
+    // ring). Read from the store each call so switching material is instant.
+    move: () =>
+        guard(() => {
+            const m = activeMaterial()
+            playHits(m.moveHits)
+            if (m.moveLow) mode(m.moveLow)
+        }),
+
+    // Piece → piece: the active material's capture cue — two contacts a hair apart
+    // (a main strike then a lighter second tap).
+    capture: () =>
+        guard(() => {
+            playHits(activeMaterial().captureHits)
         }),
 
     // Lichess "standard" has no distinct castle/promotion/check sound — they just
@@ -357,6 +562,19 @@ export const sounds = {
             body({ freq: 759, dur: 0.4, gain: 0.095 })
             body({ freq: 1122, dur: 0.3, gain: 0.06 })
         }),
+}
+
+/** Audition a material WITHOUT changing the stored preference: plays its move
+ * cue, then its capture cue a beat later, so the picker can preview a timbre on
+ * click. Called from a click handler, so the AudioContext is already armed. */
+export function previewMaterial(id: MaterialId): void {
+    guard(() => {
+        const m = MATERIAL_PRESETS[id]
+        playHits(m.moveHits)
+        if (m.moveLow) mode(m.moveLow)
+        const CAPTURE_AT = 0.26 // demo the capture timbre shortly after the move
+        m.captureHits.forEach((h) => woodHit({ ...h, at: (h.at ?? 0) + CAPTURE_AT }))
+    })
 }
 
 /** Pick the right sound for a UCI move, given the board BEFORE it's applied.

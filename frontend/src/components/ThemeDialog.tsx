@@ -8,6 +8,13 @@ import {
     type BoardTheme,
     type PieceSet,
 } from '../lib/boardTheme'
+import {
+    SOUND_MATERIALS,
+    soundThemeStore,
+    useSoundMaterial,
+    type SoundMaterial,
+} from '../lib/soundTheme'
+import { previewMaterial } from '../lib/sounds'
 import { pieceImageUrl } from '../lib/chess'
 import MiniBoard from './MiniBoard'
 
@@ -34,6 +41,7 @@ function paintSquare(value: string) {
 export default function ThemeDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
     const boardId = useBoardThemeId()
     const pieceId = usePieceSet()
+    const materialId = useSoundMaterial()
     const boardLabel = BOARD_THEMES.find((t) => t.id === boardId)?.label ?? ''
 
     return (
@@ -135,6 +143,29 @@ export default function ThemeDialog({ open, onClose }: { open: boolean; onClose:
                             onSelect={() => themeStore.setPieces(set.id)}
                         />
                     ))}
+                </Box>
+
+                <Box sx={{ mt: 3 }}>
+                    <SectionHeading>Sound — click to hear</SectionHeading>
+                    <Box
+                        sx={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                            gap: 1.25,
+                        }}
+                    >
+                        {SOUND_MATERIALS.map((material) => (
+                            <MaterialCard
+                                key={material.id}
+                                material={material}
+                                selected={materialId === material.id}
+                                onSelect={() => {
+                                    soundThemeStore.set(material.id)
+                                    previewMaterial(material.id)
+                                }}
+                            />
+                        ))}
+                    </Box>
                 </Box>
 
                 <Box sx={{ mt: 3, textAlign: 'right' }}>
@@ -245,6 +276,48 @@ function BoardTile({
                 />
             </Box>
         </Tooltip>
+    )
+}
+
+/** A sound-material option. Selecting it both persists the choice and auditions
+ * the timbre (the synth is instant, so a click plays a sample move + capture). */
+function MaterialCard({
+    material,
+    selected,
+    onSelect,
+}: {
+    material: SoundMaterial
+    selected: boolean
+    onSelect: () => void
+}) {
+    return (
+        <Box
+            onClick={onSelect}
+            role="button"
+            aria-label={material.label}
+            aria-pressed={selected}
+            sx={selectionSx(selected)}
+        >
+            <Typography
+                sx={{
+                    fontSize: 13.5,
+                    fontWeight: selected ? 600 : 500,
+                    color: 'var(--text)',
+                }}
+            >
+                {material.label}
+            </Typography>
+            <Typography
+                sx={{
+                    mt: 0.25,
+                    fontSize: 10.5,
+                    color: 'var(--text-dim)',
+                    lineHeight: 1.4,
+                }}
+            >
+                {material.description}
+            </Typography>
+        </Box>
     )
 }
 
