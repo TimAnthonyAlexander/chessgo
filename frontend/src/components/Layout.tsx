@@ -26,6 +26,9 @@ import type { RatingCategory, User } from '../api/client'
 interface Leaf {
     label: string
     to: string
+    // Router state carried on navigation — e.g. Play → Duck Chess/Crazyhouse land on
+    // Home ("/") and start quick pairing instantly via useHome's quickPair intent.
+    state?: { quickPair: 'duck' | 'crazyhouse' }
 }
 type NavItem =
     | { kind: 'link'; label: string; to: string }
@@ -45,6 +48,9 @@ function navItems(isAdmin: boolean): NavItem[] {
             items: [
                 { label: 'Online', to: '/' },
                 { label: 'Computer', to: '/bot' },
+                { label: 'Duck Chess', to: '/', state: { quickPair: 'duck' } },
+                { label: 'Crazyhouse', to: '/', state: { quickPair: 'crazyhouse' } },
+                { label: 'Guess the Elo', to: '/guess-the-elo' },
             ],
         },
         { kind: 'link', label: 'Puzzles', to: '/puzzles' },
@@ -96,7 +102,11 @@ export default function Layout() {
     const sections: MobileNavSection[] = navItems(user?.role === 'admin').map((item) =>
         item.kind === 'link'
             ? { label: item.label, to: item.to }
-            : { label: item.label, to: item.to, items: item.items },
+            : {
+                  label: item.label,
+                  to: item.to,
+                  items: item.items.map((c) => ({ label: c.label, to: c.to, state: c.state })),
+              },
     )
 
     // Open the realtime socket + resolve the session once on load.
@@ -285,12 +295,15 @@ function NavGroup({
                         }}
                     >
                         {item.items.map((c) => {
-                            const active = isActive(c.to, pathname)
+                            // Quick-pair leaves are actions (they navigate to "/" only to
+                            // start matchmaking), so they never read as the active page.
+                            const active = !c.state && isActive(c.to, pathname)
                             return (
                                 <Box
                                     key={c.label}
                                     component={Link}
                                     to={c.to}
+                                    state={c.state}
                                     onClick={() => setOpen(false)}
                                     sx={{
                                         px: 1.25,

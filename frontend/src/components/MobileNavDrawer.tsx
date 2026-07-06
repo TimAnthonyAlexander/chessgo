@@ -10,6 +10,8 @@ import { Menu, X, LogOut, UserRound } from 'lucide-react'
 export interface MobileNavLink {
     label: string
     to: string
+    // Router state carried on tap (e.g. Duck Chess/Crazyhouse → Home quick pairing).
+    state?: { quickPair: 'duck' | 'crazyhouse' }
 }
 
 export interface MobileNavSection {
@@ -27,11 +29,22 @@ export interface MobileNavDrawerProps {
 
 // A single tappable destination row. Generous py keeps the hit target ≥44px for
 // comfortable touch use; hover/active tint to the accent.
-function NavRow({ label, to, onNavigate }: { label: string; to: string; onNavigate: () => void }) {
+function NavRow({
+    label,
+    to,
+    state,
+    onNavigate,
+}: {
+    label: string
+    to: string
+    state?: MobileNavLink['state']
+    onNavigate: () => void
+}) {
     return (
         <Box
             component={Link}
             to={to}
+            state={state}
             onClick={onNavigate}
             sx={{
                 display: 'flex',
@@ -172,6 +185,7 @@ export default function MobileNavDrawer({
                                             key={item.label}
                                             label={item.label}
                                             to={item.to}
+                                            state={item.state}
                                             onNavigate={close}
                                         />
                                     ))}

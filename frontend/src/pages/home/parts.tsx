@@ -9,7 +9,7 @@ import {
     Typography,
 } from '@mui/material'
 import { Cpu, Gauge, Swords, Target, Telescope, UserPlus, Users } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { gameSocket, type LiveGameState } from '../../lib/socket'
 import { useGameSocket } from '../../lib/useGameSocket'
 import { useAuth } from '../../lib/auth'
@@ -55,6 +55,7 @@ export const PRESETS: Preset[] = [
  * desktop and mobile layouts call this — only their arrangement differs. */
 export function useHome() {
     const navigate = useNavigate()
+    const location = useLocation()
     const s = useGameSocket()
     const live = s.game
     const [search, setSearch] = useState<string | null>(null)
@@ -72,6 +73,18 @@ export function useHome() {
         void gameSocket.queue(pool, variant)
         setSearch(label)
     }
+
+    // Quick-pairing intent carried in from the navbar (Play → Duck Chess / Crazyhouse):
+    // land on Home and start matchmaking instantly. Consumed once, then cleared from
+    // history state so a refresh/back doesn't silently re-queue.
+    useEffect(() => {
+        const qp = (location.state as { quickPair?: Variant } | null)?.quickPair
+        if (qp !== 'duck' && qp !== 'crazyhouse') return
+        navigate(location.pathname, { replace: true, state: null })
+        if (qp === 'duck') queue(`Duck Chess · ${DUCK_POOL}`, DUCK_POOL, 'duck')
+        else queue(`Crazyhouse · ${CRAZYHOUSE_POOL}`, CRAZYHOUSE_POOL, 'crazyhouse')
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [location.key])
 
     // Either source: our optimistic label, or a queue we landed in (e.g. "New game"
     // from a finished live game, which queues before routing here).
