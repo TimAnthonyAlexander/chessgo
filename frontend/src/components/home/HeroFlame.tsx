@@ -4,40 +4,52 @@ import { Flame } from 'lucide-react'
 import { useAuth } from '../../lib/auth'
 import { getStreak, type Streak } from '../../api/client'
 
-/** The hero headline. For a signed-in player on an active daily streak it becomes
- * a compact flame + day count; otherwise it stays the plain "Your move." headline,
- * so signed-out visitors and cold streaks never see a bare "0". A day counts by
- * solving a puzzle or playing a rated game (StreakService, server-side). */
+type LoadState =
+    | { kind: 'loading' }
+    | { kind: 'ready'; streak: Streak }
+    | { kind: 'error' }
+
+/** The hero headline. A signed-in player sees a compact flame + streak count (dim
+ * at 0, lit once it's rolling); a confirmed guest sees the plain "Your move."
+ * A day counts by solving a puzzle or playing a rated game (StreakService).
+ *
+ * "Your move." is shown ONLY once auth has resolved to no user — never while the
+ * session or the streak is still loading, so a signed-in player never flashes the
+ * guest headline before their flame appears. Undetermined states render a neutral
+ * fixed-height slot (no layout shift). */
 export default function HeroFlame() {
     const { user, status } = useAuth()
-    const [streak, setStreak] = useState<Streak | null>(null)
+    const [state, setState] = useState<LoadState>({ kind: 'loading' })
 
     useEffect(() => {
-        if (status !== 'ready' || !user) {
-            setStreak(null)
-            return
-        }
+        if (status !== 'ready' || !user) return
+
         let cancelled = false
+        setState({ kind: 'loading' })
         getStreak()
-            .then((s) => {
-                if (!cancelled) setStreak(s)
+            .then((streak) => {
+                if (!cancelled) setState({ kind: 'ready', streak })
             })
             .catch(() => {
-                if (!cancelled) setStreak(null)
+                if (!cancelled) setState({ kind: 'error' })
             })
         return () => {
             cancelled = true
         }
     }, [user, status])
 
-    // Guests (or a load failure) keep the plain headline. A signed-in player always
-    // sees the flame — dim with a nudge at 0, lit with the count once it's rolling.
-    if (!user || !streak) {
-        return <Headline>Your move.</Headline>
-    }
+    // Session not yet resolved: hold a neutral slot rather than guessing.
+    if (status !== 'ready') return <Slot />
 
-    const lit = streak.current > 0
-    const glow = streak.activeToday
+    // Confirmed anonymous — now (and only now) the guest headline is correct.
+    if (!user) return <Headline>Your move.</Headline>
+
+    // Signed in but the streak hasn't loaded (or failed): a neutral slot, never
+    // the guest headline.
+    if (state.kind !== 'ready') return <Slot />
+
+    const { current, activeToday } = state.streak
+    const lit = current > 0
 
     return (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0 }}>
@@ -48,7 +60,7 @@ export default function HeroFlame() {
                     flexShrink: 0,
                     color: lit ? 'var(--accent)' : 'var(--text-dim)',
                     opacity: lit ? 1 : 0.6,
-                    filter: glow ? 'drop-shadow(0 0 10px rgba(255, 138, 40, 0.45))' : 'none',
+                    filter: activeToday ? 'drop-shadow(0 0 10px rgba(255, 138, 40, 0.45))' : 'none',
                 }}
             >
                 <Flame size={38} strokeWidth={2} />
@@ -63,10 +75,16 @@ export default function HeroFlame() {
                     color: lit ? 'var(--text)' : 'var(--text-dim)',
                 }}
             >
-                {streak.current}
+                {current}
             </Typography>
         </Box>
     )
+}
+
+/** A neutral placeholder that reserves the hero headline's height while auth or the
+ * streak is still resolving — keeps the row from jumping when the flame lands. */
+function Slot() {
+    return <Box aria-hidden sx={{ minWidth: 0, height: { xs: 38, md: 48 } }} />
 }
 
 function Headline({ children }: { children: ReactNode }) {
