@@ -70,8 +70,20 @@ export function isRecovered(g: Grade): boolean {
     return g === 'best' || g === 'good'
 }
 
-/** Extract every blunder in a reviewed game as a retry puzzle (in game order). */
-export function buildBlunderPuzzles(game: GameAnalysis): BlunderPuzzle[] {
+/** Which color the named player played in this game, or null if not a participant. */
+export function colorInGame(game: GameAnalysis, name: string | undefined): Color | null {
+    if (!name) return null
+    if (name === game.whiteName) return 'w'
+    if (name === game.blackName) return 'b'
+    return null
+}
+
+/**
+ * Extract every blunder in a reviewed game as a retry puzzle (in game order).
+ * When `onlyColor` is given, only that side's blunders are returned (the review
+ * replays your own blunders, not the opponent's); omit it for both sides.
+ */
+export function buildBlunderPuzzles(game: GameAnalysis, onlyColor?: Color): BlunderPuzzle[] {
     const plies = game.plies
     const out: BlunderPuzzle[] = []
     for (let k = 0; k < plies.length; k++) {
@@ -80,6 +92,7 @@ export function buildBlunderPuzzles(game: GameAnalysis): BlunderPuzzle[] {
         // Only blunders we can actually grade (the engine gave us a best move).
         if (!mv || mv.judgment !== 'blunder' || !p.bestUci) continue
         const playerColor = mv.color
+        if (onlyColor && playerColor !== onlyColor) continue
         out.push({
             ply: p.ply,
             fen: p.fen,

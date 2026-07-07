@@ -52,12 +52,15 @@ const GRADE_META: Record<Grade, { label: string; color: string; Icon: typeof Che
  */
 export default function BlunderRewind({
     game,
+    onlyColor,
     onExit,
 }: {
     game: GameAnalysis
+    /** Restrict the rewind to one side's blunders (the viewer's own). */
+    onlyColor?: Color
     onExit: () => void
 }) {
-    const puzzles = useMemo(() => buildBlunderPuzzles(game), [game])
+    const puzzles = useMemo(() => buildBlunderPuzzles(game, onlyColor), [game, onlyColor])
 
     const [index, setIndex] = useState(0)
     const [results, setResults] = useState<Record<number, Attempt>>({})

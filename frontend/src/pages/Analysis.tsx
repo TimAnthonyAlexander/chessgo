@@ -33,7 +33,7 @@ import MoveTree from '../components/MoveTree'
 import OpeningPanel from '../components/OpeningPanel'
 import { analyze, getGameAnalysis, sfAnalyze, type GameAnalysis } from '../api/client'
 import type { Color } from '../api/client'
-import { buildBlunderPuzzles } from '../lib/blunderRewind'
+import { buildBlunderPuzzles, colorInGame } from '../lib/blunderRewind'
 import { VARIANT_LABEL } from '../lib/variants'
 import {
     type GameOver,
@@ -136,6 +136,7 @@ function playMoveSound(node?: TreeNode) {
 
 export default function Analysis() {
     const { id } = useParams<{ id?: string }>()
+    const { user } = useAuth()
     // Free mode can be seeded with an in-memory game (moves replayed from a start
     // position) passed via navigation state — e.g. from Engine vs Engine, which is
     // never persisted so it can't be loaded by id.
@@ -249,8 +250,21 @@ export default function Analysis() {
         if (id) setDuckFree(false)
     }, [id])
 
-    // Blunder Rewind puzzles: every gradeable blunder in the reviewed game.
-    const blunderPuzzles = useMemo(() => (game ? buildBlunderPuzzles(game) : []), [game])
+    // Which side the viewer played (by name), or null if they weren't a participant.
+    const myColor = useMemo(() => (game ? colorInGame(game, user?.name) : null), [game, user])
+
+    // Coming from a game analysis, auto-orient so the viewer is always at the bottom
+    // (falls back to White for spectators / non-participants).
+    useEffect(() => {
+        if (game) setOrientation(myColor ?? 'w')
+    }, [game, myColor])
+
+    // Blunder Rewind puzzles: the viewer's own gradeable blunders (both sides' when
+    // the viewer isn't a participant, so a spectator still gets a full rewind).
+    const blunderPuzzles = useMemo(
+        () => (game ? buildBlunderPuzzles(game, myColor ?? undefined) : []),
+        [game, myColor],
+    )
 
     const current = tree.nodes[currentId] ?? tree.nodes[tree.rootId]
     // Reviewing a loaded Duck Chess game: playback only (no client-side duck rules,
@@ -581,7 +595,13 @@ export default function Analysis() {
     // Blunder Rewind replaces the review layout with the self-contained retry board
     // (only in review mode, only when the game actually has gradeable blunders).
     if (id && rewind && game && blunderPuzzles.length > 0) {
-        return <BlunderRewind game={game} onExit={() => setRewind(false)} />
+        return (
+            <BlunderRewind
+                game={game}
+                onlyColor={myColor ?? undefined}
+                onExit={() => setRewind(false)}
+            />
+        )
     }
 
     return (
