@@ -640,6 +640,12 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.QSCastling = b
+		case "ttmovefirst", "ttmf", "ttfirst":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.TTMoveFirst = b
 		case "ttcluster", "ttbucket":
 			// bucketed (clustered) TT: on → 4-slot buckets (shift 2), off →
 			// direct-mapped (shift 0). Convenience bool over TTBucketShift.
@@ -890,6 +896,9 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.QSCastling != patch.QSCastling {
 		diffs = append(diffs, fmt.Sprintf("qscastling: %s→%s", onoff(base.QSCastling), onoff(patch.QSCastling)))
+	}
+	if base.TTMoveFirst != patch.TTMoveFirst {
+		diffs = append(diffs, fmt.Sprintf("ttmovefirst: %s→%s", onoff(base.TTMoveFirst), onoff(patch.TTMoveFirst)))
 	}
 	if base.Prefetch != patch.Prefetch {
 		diffs = append(diffs, fmt.Sprintf("prefetch: %s→%s", onoff(base.Prefetch), onoff(patch.Prefetch)))

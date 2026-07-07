@@ -69,7 +69,7 @@ const (
 	// runs at reduced depth (depth−1)/2 with the TT move excluded; if every other
 	// move fails low under singularBeta the TT move is "singular" and is extended a
 	// ply. Margin/depth follow Stockfish-class defaults (depth≥~6–8, margin ~2–3·d).
-	singularMinDepth = 8
+	singularMinDepth = 6 // re-tuned 8→6 (2026-07-05 stale-defaults bundle, +38.7 movetime)
 	singularMargin   = 2
 	// Internal iterative reduction (Params.IIR): at a node this deep with no TT
 	// move to guide ordering, search a ply shallower (seeds the TT, cheaper redo).
@@ -272,6 +272,7 @@ type Searcher struct {
 	dbgNullMoves uint64
 	dbgQNodes    uint64
 	dbgSingular  uint64 // singular extensions applied (TT move extended a ply)
+	dbgTTMFFires uint64 // TTMoveFirst: TT move found in move list (pre-search attempted)
 	dbgDoubleExt uint64 // double extensions applied (TT move extended 2 plies; Params.DoubleExt)
 	dbgMultiCut  uint64 // singular verification multi-cuts (early fail-high)
 	dbgHistPrune uint64 // late quiets skipped by history pruning (Params.HistPrune)
@@ -316,6 +317,7 @@ func (s *Searcher) DbgQNodes() uint64    { return s.dbgQNodes }
 // DbgSingular and DbgMultiCut report how many singular extensions and singular
 // multi-cuts the last search performed (test/diagnostic only).
 func (s *Searcher) DbgSingular() uint64 { return s.dbgSingular }
+func (s *Searcher) DbgTTMFFires() uint64 { return s.dbgTTMFFires }
 func (s *Searcher) DbgMultiCut() uint64 { return s.dbgMultiCut }
 
 // DbgDoubleExt reports how many double extensions the last search applied
@@ -605,6 +607,7 @@ func (s *Searcher) reset(limits Limits, gameHistory []uint64) {
 	s.dbgNullMoves = 0
 	s.dbgQNodes = 0
 	s.dbgSingular = 0
+	s.dbgTTMFFires = 0
 	s.dbgDoubleExt = 0
 	s.dbgMultiCut = 0
 	s.dbgHistPrune = 0
@@ -1344,6 +1347,144 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 		return 0 // stalemate
 	}
 
+	// Declared before scoreMoves so TTMoveFirst can pre-search the TT move
+	// and record its result here (skipped in the main loop on non-cutoff).
+	var ttFirstSearched bool
+	var ttFirstIdx int = -1
+	var alphaRaises int
+	var bestScore int = -infinity
+	var bestMove chess.Move = chess.NullMove
+	origAlpha := alpha
+	var searched int
+	var triedQuiets [256]chess.Move
+	var nQuiets int
+	var triedCaptures [256]chess.Move
+	var nCaptures int
+
+	// TTMoveFirst: try the TT move before scoring any other moves.
+	// NOT byte-identical: searching the TT move here mutates history tables
+	// that scoreMoves reads → different move-order scores → different tree.
+	// Kept behind the flag as scaffolding for deferred quiet scoring (#4).
+	// On a beta cutoff (the common α-β case) we skip scoreMoves entirely.
+	// On a non-cutoff, record the result so the main loop skips this move.
+	if s.params.TTMoveFirst && ttMove != chess.NullMove && excludedMove == chess.NullMove {
+		s.dbgTTMFFires++
+		for i := 0; i < ml.Len(); i++ {
+			if ml.Get(i) == ttMove {
+				ttFirstIdx = i
+				break
+			}
+		}
+	}
+	if ttFirstIdx >= 0 {
+		// Compute singular extension (duplicated from the main-loop
+		// computation below — identical inputs give identical results).
+		extTT := 0
+		if s.params.Singular && !inCheck && ply > 0 &&
+			ttHit && depth >= s.params.SingularMinDepth &&
+			ttDepth >= depth-3 && (ttFlag == ttLower || ttFlag == ttExact) &&
+			absInt(ttScore) < tbThreshold {
+			singularBeta := ttScore - s.params.SingularMargin*depth
+			rDepth := (depth - 1) / 2
+			s.excluded[ply] = ttMove
+			prevVerify := s.inSingularVerify
+			s.inSingularVerify = true
+			singScore := s.negamax(pos, rDepth, ply, singularBeta-1, singularBeta, cutnode)
+			s.inSingularVerify = prevVerify
+			s.excluded[ply] = chess.NullMove
+			if s.stop {
+				return 0
+			}
+			if singScore < singularBeta {
+				if s.params.DoubleExt && !isPV && singScore < singularBeta-s.params.DoubleExtMargin {
+					extTT = 2
+				} else {
+					extTT = 1
+				}
+			} else if s.params.NegExt {
+				if !isPV && singScore >= beta {
+					if absInt(singScore) < tbThreshold {
+						return ilerpToBeta(singScore, beta)
+					}
+					return singScore
+				} else if ttScore >= beta {
+					extTT = -3
+				} else if cutnode {
+					extTT = -2
+				}
+			} else if s.params.MultiCut && singularBeta >= beta {
+				return singularBeta
+			}
+		}
+
+		m := ttMove
+		captureTT := isCapture(pos, m)
+		quietTT := !captureTT && m.Type() != chess.Promotion
+		moverTT := pos.PieceOn(m.From())
+
+		var u chess.Undo
+		if s.useNNUE {
+			s.accPush(pos, m)
+		}
+		pos.DoMove(m, &u)
+		s.pushKey(pos.Key())
+		s.contMove[ply] = contEntry{pc: moverTT, to: m.To(), ok: true}
+
+		newDepthTT := depth - 1
+		if extTT != 0 {
+			newDepthTT += extTT
+		}
+		childCut := cutnode
+		if extTT < 0 {
+			childCut = true
+		}
+		fc := !childCut
+		if isPV {
+			fc = false
+		}
+		sc := -s.negamax(pos, newDepthTT, ply+1, -beta, -alpha, fc)
+
+		s.popKey()
+		pos.UndoMove(m, &u)
+		if s.useNNUE {
+			s.accPop()
+		}
+		if s.stop {
+			return 0
+		}
+
+		if sc >= beta {
+			if quietTT {
+				s.recordKiller(ply, m)
+				s.history[moverTT][m.To()] += depth * depth
+			}
+			if s.params.UseTT {
+				ev := ttEvalNone
+				if !inCheck && rawEval > -32000 && rawEval < 32000 {
+					ev = int16(rawEval)
+				}
+				s.tt.store(pos.Key(), m, sc, depth, ply, ttLower, ev)
+			}
+			return sc
+		}
+
+		bestScore = sc
+		bestMove = m
+		searched = 1
+		if sc > alpha {
+			alpha = sc
+			alphaRaises = 1
+		}
+		if quietTT {
+			triedQuiets[0] = m
+			nQuiets = 1
+		} else if s.params.CaptHist && captureTT {
+			triedCaptures[0] = m
+			nCaptures = 1
+		}
+		ttFirstSearched = true
+	}
+
 	var scores [256]int
 	s.scoreMoves(pos, &ml, ttMove, ply, &scores)
 
@@ -1393,21 +1534,6 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 			}
 		}
 	}
-
-	bestScore := -infinity
-	bestMove := chess.NullMove
-	origAlpha := alpha
-	searched := 0
-
-	// Quiet moves searched at this node (in order), so a beta cutoff can reward the
-	// cutting quiet and penalize the earlier quiets that failed (HistMalus).
-	var triedQuiets [256]chess.Move
-	nQuiets := 0
-
-	// Captures searched at this node (in order), so a capture beta cutoff can reward
-	// the cutting capture and penalize earlier captures that failed (CaptHist).
-	var triedCaptures [256]chess.Move
-	nCaptures := 0
 
 	// Late-move-pruning move-count limit. Improving lets more late quiets through
 	// (2−improving halves the budget when the position is not trending our way).
@@ -1492,11 +1618,13 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 	// this node (recomputed as the loop advances). Both feed the additive LMR
 	// reduction terms below; cheap and byte-inert unless their flags are on.
 	ttMoveNoisy := ttMove != chess.NullMove && isCapture(pos, ttMove)
-	alphaRaises := 0
 
 	for i := 0; i < ml.Len(); i++ {
 		selectMove(&ml, &scores, i)
 		m := ml.Get(i)
+		if ttFirstSearched && i == ttFirstIdx {
+			continue // already searched above
+		}
 		if m == excludedMove { // singular verification: skip the move under test
 			continue
 		}
