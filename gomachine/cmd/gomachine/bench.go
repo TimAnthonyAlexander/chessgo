@@ -244,14 +244,14 @@ const (
 // loadEnrichedDefault auto-discovers the lean single-layer+threats net (v9) for the
 // prod serve/hub paths and, if found, installs it as the process-wide enriched eval
 // (nnue.SetEnriched) — the searcher then routes eval through it (search.go) instead
-// of the v6 piece-square net. Mirror of loadTablebaseDefault: the LEAN_NET_PATH env
-// override wins, else the cwd-relative data/nnue/lean.bin gitignored sidecar (working
+// of the v6 piece-square net. Mirror of loadTablebaseDefault: the KB_NET_PATH env
+// override wins, else the cwd-relative data/nnue/kb-mirror.bin gitignored sidecar (working
 // dir is gomachine/ in both the dev screen and the systemd unit). The net ships in
-// the exact config the +25-Elo movetime gate used: int8-FT (QuantizeFTInt8) + the
+// the exact config the movetime gate used: int8-FT (QuantizeFTInt8) + the
 // move-aware push (default-on in ImportBulletLeanNet). Absent/unreadable file → silent
 // no-op, so the engine stays on v6 (safe rollback = remove the file + restart).
-// loadDefaultLeanNet imports the prod lean-threats net (LEAN_NET_PATH or the
-// cwd-relative data/nnue/lean.bin sidecar) in the shipped int8-FT + move-aware
+// loadDefaultKBNet imports the prod king-bucket mirrored net (KB_NET_PATH or the
+// cwd-relative data/nnue/kb-mirror.bin sidecar) in the shipped int8-FT + move-aware
 // config, or returns nil if absent. Two consumer shapes:
 //   - GLOBAL-eval commands (serve/hub/uci/gauntlet/engine CLIs) install it once via
 //     loadEnrichedDefault and read the process global at eval time.
@@ -260,10 +260,10 @@ const (
 //     is clobbered there, so they must pass this as the player's default net (else a
 //     nil per-side net silently falls back to the embedded v6, benchmarking the
 //     wrong eval).
-func loadDefaultLeanNet() *nnue.EnrichedNet {
-	path := os.Getenv("LEAN_NET_PATH")
+func loadDefaultKBNet() *nnue.EnrichedNet {
+	path := os.Getenv("KB_NET_PATH")
 	if path == "" {
-		path = "data/nnue/lean.bin"
+		path = "data/nnue/kb-mirror.bin"
 	}
 	n, err := nnue.ImportBulletLeanNet(path, leanEnrichedH, leanEnrichedNB)
 	if err != nil {
@@ -278,22 +278,22 @@ func loadDefaultLeanNet() *nnue.EnrichedNet {
 
 var enrichedOnce sync.Once
 
-// loadEnrichedDefault installs the prod lean-threats net as the process-global eval
-// (nnue.SetEnriched) exactly once per process. main() calls it before dispatch, so v12
-// is the default eval for EVERY subcommand — the same way the embedded v6 net is —
-// instead of each entry point having to remember (the drift that silently benchmarked
-// v6). Idempotent via sync.Once, so any leftover call is a harmless no-op. Absent
-// lean.bin → silent no-op → the engine stays on embedded v6 (safe rollback = remove
-// the file). Per-side-swap harnesses (SPRT/SPSA/Calibrate) still read the loaded net
-// via nnue.DefaultEnriched() because player.play clears the global per move.
+// loadEnrichedDefault installs the prod king-bucket mirrored net as the process-global
+// eval (nnue.SetEnriched) exactly once per process. main() calls it before dispatch, so
+// the KB net is the default eval for EVERY subcommand — the same way the embedded v6 net
+// is — instead of each entry point having to remember (the drift that silently
+// benchmarked v6). Idempotent via sync.Once, so any leftover call is a harmless no-op.
+// Absent kb-mirror.bin → silent no-op → the engine stays on embedded v6 (safe rollback =
+// remove the file). Per-side-swap harnesses (SPRT/SPSA/Calibrate) still read the loaded
+// net via nnue.DefaultEnriched() because player.play clears the global per move.
 func loadEnrichedDefault() {
 	enrichedOnce.Do(func() {
-		n := loadDefaultLeanNet()
+		n := loadDefaultKBNet()
 		if n == nil {
 			return
 		}
 		nnue.SetEnriched(n)
-		fmt.Fprintf(os.Stderr, "enriched eval: prod lean threats net loaded (H=%d NB=%d, move-aware=%v)\n",
+		fmt.Fprintf(os.Stderr, "kb eval: mirrored king-bucket net loaded (H=%d NB=%d, move-aware=%v)\n",
 			leanEnrichedH, leanEnrichedNB, n.MoveAware())
 	})
 }

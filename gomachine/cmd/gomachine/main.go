@@ -20,9 +20,9 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
-	// v12 (the prod lean-threats net) is the default eval for every subcommand — the
-	// same way the embedded v6 net is — loaded once here so no entry point can forget.
-	// Silent no-op if data/nnue/lean.bin is absent (engine stays on embedded v6).
+	// The prod king-bucket mirrored net is the default eval for every subcommand —
+	// the same way the embedded v6 net is — loaded once here so no entry point can forget.
+	// Silent no-op if data/nnue/kb-mirror.bin is absent (engine stays on embedded v6).
 	loadEnrichedDefault()
 	switch os.Args[1] {
 	case "uci":

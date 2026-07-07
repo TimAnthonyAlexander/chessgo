@@ -55,7 +55,7 @@ func cmdBenchNPS(args []string) {
 	s := search.NewWithParams(*ttMB, search.DefaultParams())
 
 	// A/B the three gated, bit-exact accumulator-push optimizations that ship OFF
-	// in prod (loadDefaultLeanNet only enables moveAware+int8FT): directApply
+	// in prod (loadDefaultKBNet only enables moveAware+int8FT): directApply
 	// (skip the counts multiset-diff), prefetch (SW-prefetch next weight column),
 	// inPlace (copy-free single-accumulator push). All are node-count-identical, so
 	// any NPS delta is a pure movetime win; a node mismatch => NOT bit-exact (WARN).
