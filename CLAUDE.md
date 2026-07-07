@@ -257,9 +257,10 @@ engine (the exact stale-docs trap). What we can honestly say:
 - **Last real measurement:** v6, ENGINE_STRENGTH.md §20 — **100W–0L vs a ~3400 engine** (a blowout,
   so an *underestimate* even for v6) and an **old** loss vs a ~3700 engine (stale — an engine we've
   since gained past; **not** a current ceiling).
-- **Shipped since v6, unmeasured:** v9 threats, **v12 Leela/test80 data (+24 movetime)**, the
-  **+23.3 search stack**, corrhist/singular/futility, nmpgate/qsfut, recompiled book — plus the
-  in-flight search wave. Hundreds of Elo, zero re-anchors.
+- **Shipped since v6, unmeasured:** v9 threats, v12 Leela/test80 data (+24 movetime), the
+  +23.3 search stack, corrhist/singular/futility, nmpgate/qsfut, recompiled book,
+  **king-bucket horizontal mirror (§31)**, **32-key Finny refresh cache (Stormphrax pattern)**
+  — hundreds of Elo, zero re-anchors.
 - **Empirical tell (§27):** at blitz movetimes gomachine beats **full-force ("Unleashed", elo=0)
   Stockfish** with only a ~3–4× time-odds ratio in its favor — near-even-with-full-force-SF at
   blitz; the gap only opens at long/CCRL time controls. You cannot do that at 3400.
@@ -268,16 +269,20 @@ engine (the exact stale-docs trap). What we can honestly say:
   ~3450–3600), scoring ~50%, before publishing ANY point number.** This **supersedes** the earlier
   ≈3260 "dirty" read (§15) and the one-sided **≈3200** artifact (scoring ≈0% — never quote it).
 
-**★ TOP LEVER — the engine is ~280 Elo EVAL-bound (2026-07-05 anchor).** The biggest gain is the
-**EVAL/data retrain** (`docs/open_tasks/data-retrain-640sb.md`: 640-sb test80, locked recipe + D1–D4);
-v12 proved data cashes directly as movetime Elo; the ~280 lives there.
+**★ TOP LEVER — the mirror KB net is shipped; now the data retrain.** The KB v2 horizontal mirror
+(+10 fixed-nodes, +4.5 movetime over the old no-mirror KB net) densifies the king-bucket weights
+~2× for ~0 extra params. The 32-key Finny refresh cache (Stormphrax's
+`kRefreshTableSize = kBucketCount * 2 = 32`) was the load-bearing fix that made the mirror
+movetime-positive (§31). The next lever is **more epochs** (640-sb test80 on the mirrored arch —
+`docs/open_tasks/data-retrain-640sb.md`, locked recipe + D1–D4); v12 proved data cashes directly
+as movetime Elo, and the current 320-sb mirror net is still epoch-poor at ~4 epochs.
 
 **BUT search is NOT dry — the "dry well" call was retracted same day.** Re-tuning the SEE/singular/
 null-move margins **SHIPPED +38.7 ± 5.5 Elo movetime** (`singulardepth 8→6, seequietmargin 150→103,
 captseemaxdepth 6→4, nullr 4→3`; 640 pairs, lb +33.2) — because the OLD defaults were **stale**
-(tuned pre-v12; the engine grew past its own hand-set constants). The cheap Stormphrax on/off flags
+(tuned pre-v12/mirror; the engine grew past its own hand-set constants). The cheap Stormphrax on/off flags
 *did* wash at movetime (combo −1.7, aspinitdelta −15.5, rfpsoft/nodetm ~wash — none shipped), but
-**defaults-re-tuning via SPSA is a LIVE lever**: a proper v12-native SPSA (binary w/ `df51c9d`;
+**defaults-re-tuning via SPSA is a LIVE lever**: a proper mirror-native SPSA (binary w/ `df51c9d`;
 `docs/open_tasks/spsa-margins.md`) is high-priority and likely finds more. Lesson: our hand-tuned
 constants go stale as the engine evolves — periodically re-SPSA them.
 
