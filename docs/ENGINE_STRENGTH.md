@@ -1989,13 +1989,16 @@ reliable signal (interleaved medians cancel box drift); the absolute base wander
   Tables are the same size as our fancy-magic — the win is purely dropping the `imul`+shift, not cache.
 - **Combined shipped ≈ +11–12% single-thread NPS**, every config node-count-identical.
 
-**MEASURED, NOT SHIPPED (flag default-off):**
-- **finny** (accumulator-refresh cache, option-a = cache the feature *list* + `applyDiff`): **WASH** —
-  604 426 vs splitRefresh's 605 310 within the same run (−0.15%), node-identical. Root cause: option-a
-  still re-enumerates the current feature set (`appendEnrichedFeatures` = the threat attack-gen, ~20% of
-  `buildAcc`) and only saves the column-sum; after splitRefresh the residual moving-half rebuild is
-  **enumeration-bound**, so caching columns doesn't pay. Only a **bitboard-diff variant (option-b, skips
-  enumeration)** could win — untried, higher risk. Kept `SetFinny` flag-gated as the option-b scaffold.
+**MEASURED, ONE LATER SHIPPED:**
+- **finny** (accumulator-refresh cache, option-a = cache the feature *list* + `applyDiff`): **WASH on
+  2026-07-06** — 604 426 vs splitRefresh's 605 310 (−0.15%), node-identical; root cause: option-a still
+  re-enumerates the current feature set (`appendEnrichedFeatures`) and only saves the column-sum, so after
+  splitRefresh the residual moving-half rebuild is enumeration-bound. **RE-MEASURED +2.3% AND SHIPPED on
+  2026-07-07** (§30.4): 3 interleaved reps `finny/splitRefresh` = +1.5/+3.3/+2.3%, all positive, still
+  node-identical. The `enriched_acc`/`kingbucket` edits between the two dates made option-a pay (the cache
+  now short-circuits enough of the refresh to clear the enumeration cost). Now `SetFinny(true)` in
+  `loadDefaultLeanNet` (disjoint from `directApply`'s incremental path → additive). Lesson: a "wash" on one
+  baseline is not permanent — re-bench the flag-gated scaffolds after the surrounding code moves.
 - **prefetch / batchApply**: net-negative on the KB net (0.97–0.98) — the doc'd +17.6% prefetch number is
   **stale** (pre-KB); do not enable.
 - **bucketed TT** (4 slots/64 B line, `TTBucketShift`, `20a4c0f`): **−5.8 ± 8.6 Elo** at 100 ms / 16 MB
@@ -2023,7 +2026,23 @@ correct but had **no mechanism** behind them. This pins it down and the mechanis
 (batchApply is now a *wash* whole-engine, not the §30.2 0.97 — the AVX-512 `applyThreatBatchSIMD`
 widened to 32-lane since. `finny` re-measures **+1.1% over splitRefresh** here, contradicting the
 §30.2 wash — either the intervening `enriched_acc`/`kingbucket` edits helped option-a or it's
-run-noise; **needs one confirming interleaved run before shipping** `SetFinny` in the prod loader.)
+run-noise. **CONFIRMED +2.3% and SHIPPED** (§30.4): a dedicated high-iteration run, 3 interleaved reps
+`finny/splitRefresh` = +1.5/+3.3/+2.3%, all positive → `SetFinny(true)` in `loadDefaultLeanNet`.)
+
+### 30.4 finny confirmed + shipped (2026-07-07) — the post-kernel lever sweep's one win
+
+A full post-kernel NPS lever sweep (`docs/PROFILING/amd/6Jul2026.md` "NPS lever sweep") tried every
+remaining eval/search speed lever under the uop-throughput-bound framing; **all measured ≤0 except
+finny**: batchApply (−6%/wash), the base/threat feature **partition** (−2.5% — trades a per-feature
+branch for append bookkeeping, net more uops on the retirement-bound path), **BCE** kernel hoists
+(−1.5%/neutral — Go's predicted bounds-check branches issue on integer ports off the vector-bound
+critical path, so removing them frees nothing; verified against the disassembly), **staged movegen**
+(−2.5% — the node-neutral selection-scan slice; true staging isn't node-neutral here because move
+ordering reads *global* history tables that mutate mid-search), and **TT child-prefetch** (killed by
+the gate: search is branch-miss-bound, not TT/LLC-bound). **finny** re-benched **+2.3%** (above) and
+shipped. Instruction-level tail: `objdump` confirms `archsimd` emits optimal kernel code (clean
+5-op loop, no spills) — no hand-asm headroom. **Conclusion: the pre-retrain NPS well is dry; the
+~280 Elo is in the data retrain, not movetime.**
 
 **The decisive new datapoint — an *isolated* amd64 kernel A/B.** The existing microbench
 (`batchapply_bench_test.go`) is `//go:build …&& arm64` — so no isolated amd64 kernel number ever
