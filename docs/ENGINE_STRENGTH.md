@@ -1001,7 +1001,90 @@ The cause is **partial-iteration cutoff**:
 
 ---
 
-## 15. CCRL Blitz anchor (2026-06-29) — ≈3260 "dirty", replacing the SF-UCI_Elo number
+## 31. King-bucket horizontal mirror (KB v2) — SHIPPED to prod (2026-07-07)
+
+The KB net's bottleneck was **density**: 16 buckets, no mirror, ~4 epochs on test80.
+Every strong KB engine mirrors (SF18 HalfKAv2_hm, Stormphrax KingBucketsMergedMirrored,
+Viridithas 16+hm, Renegade 768x14hm) — nobody runs a large non-mirrored KB net.
+
+### 31.1 What the mirror does
+
+When the perspective's king is on the e–h half (file ≥ 4), reflect the board
+horizontally (`file ^ 7`) so it always sits on files a–d. Halves the king-square
+parameter space → ~2× effective training data per bucket for ~0 extra params.
+
+The canonicalization per perspective P (`orient = P==Black ? 56 : 0`, applied first):
+```
+ksqO = kingSq(P) ^ orient          // king in P's view
+mir  = file(ksqO) >= 4 ? 7 : 0     // reflect if king on e–h half
+s_final = s ^ orient ^ mir         // EVERY feature sq: base + threat target
+bucket  = mirBucket(ksqO ^ mir)    // ksqO^mir has file 0–3 (32 half-squares → 16)
+```
+
+`orient` (^56, rank bits) and `mir` (^7, file bits) are disjoint masks → they compose
+and commute. The bucket map is `rank·2 + (file>>1)` — 8 rank levels × 2 file bands,
+preserving king-safety rank resolution. Byte-exact parity between Go production and the
+Rust bullet trainer, verified by `kb_verify_test.go` (independent Rust replica, 6 checks).
+
+A king move crossing the d/e file boundary now also triggers a full accumulator refresh
+(the entire board reflects → every feature square changes). The refresh predicate fires on
+bucket-change OR mirror-flip.
+
+### 31.2 Training
+
+Trained `mirror_kbhm_320.bin` (44 MB) on the same test80 Jan–Apr 2024 data as `kbfact_320`,
+identical pipeline (ply≥16, ConstantWDL 0.6, 320-sb cosine anneal) — **mirror is the only
+variable**. 2h 55m on an RTX 4090 with data in /dev/shm (~2.8M pos/sec).
+
+### 31.3 SPRT results (coalla, AVX-512, fastchess)
+
+| Test | Budget | Result | Games | Notes |
+|---|---|---|---:|---|
+| Fixed-nodes | 100k nodes/move | **+10.0 ± 5.0** (LLR 1.97) | 1600 | mirror eval vs kbfact_320 |
+| Movetime (16-key Finny) | 8+0.08 | **−4.93 ± 7.02** | 634 | d/e-crossing refresh cost ate the eval gain |
+| Movetime (32-key Finny) | 8+0.08 | **+4.74 ± 6.27** (LLR 0.55) | 880 | Stormphrax refresh-table pattern recovered the NPS |
+| Movetime (32-key + bitboard) | 8+0.08 | **+4.36 ± 6.72** (LLR 0.43) | 796 | bitboard fast path is real but small |
+
+The 16-key→32-key Finny change flipped movetime from −5 to +4.5 — a ~10 Elo swing. The
+mirror KB net is now **net positive at movetime** over the old no-mirror KB net and ships
+as the default eval.
+
+### 31.4 32-key Finny refresh cache (Stormphrax pattern)
+
+The original Finny cache keyed by `kingBucket` (0–15). With the horizontal mirror, bucket 0
+represents BOTH king on a1 (mir=0) AND king on h1 (mir=7) — same bucket, completely disjoint
+feature sets. On a d/e crossing, the old Finny cache collided those mirror halves, forcing an
+expensive full-diff computation (subtract all ~30 old features, add all ~30 new ones).
+
+The fix: `NumKingRefreshKeys = NumKingBuckets * 2 = 32`, keyed by `kingRefreshKey = bucket*2 + mirHalf`
+where `mirHalf = (file(ksq) >= 4) ? 1 : 0`. Each mirror half gets its own cache entry, so the
+diff on a revisit is small (only the pieces that actually moved). This is exactly Stormphrax's
+`kRefreshTableSize = kBucketCount * 2 = 32`, indexed `bucket*2 + flipped`.
+
+Stormphrax exploration (`~/stormphrax/src/eval/nnue/`) also found:
+- They store **piece bitboards** per refresh-table entry (not feature lists) — we adopted this
+  as a fast "no change" path (below)
+- They batch process 4 features at a time (not directly applicable — our SIMD kernels are
+  already compute/uop-bound at 5.5–5.9 IPC)
+- They use `MaterialCount<8>` output bucketing (separate lever, not yet shipped)
+- No factoriser (our factoriser is a parameter-efficiency advantage)
+
+### 31.5 Bitboard fast path
+
+Added `[12]chess.Bitboard` to each `finnyEntry`. On cache hit, compare the 12 piece bitboards
+against the current board: if identical (transposition), copy the cached half directly — skips
+`appendEnrichedFeatures` (magic attack generation + feature list build) entirely. If bitboards
+differ, fall back to the existing feature-list diff path. Strict bit-exact improvement; too
+small to cleanly SPRT-isolate but committed.
+
+### 31.6 Shipped as default
+
+The mirror net ships as `data/nnue/kb-mirror.bin` (formerly `lean.bin`). The default loader
+renamed: `LEAN_NET_PATH` → `KB_NET_PATH`, `loadDefaultLeanNet` → `loadDefaultKBNet`. All three
+systems (local M3, coalla, lairner) on `main`, consistent. SPRT harness fixed so `--new-lean=X`
+without `--old-lean` defaults the old side to the prod net (not embedded v6).
+
+## 15. CCRL Blitz anchor (2026-06-29) — ≈3260 "dirty" (SUPERSEDED, historical record)
 
 > **SUPERSEDED by §20 (2026-07-01):** the bracket is now **3400–3700, floor >3400** (100–0 vs
 > a ~3400 engine). The ≈3260 here was a two-blowout "dirty" read; keep it as method/record,

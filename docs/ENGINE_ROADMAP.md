@@ -1,32 +1,53 @@
-# ★★ CURRENT PHASE — DATA is the lever (2026-07-04) — READ THIS FIRST
+# ★★ CURRENT PHASE — King-bucket mirrored net SHIPPED (2026-07-07)
 
-> Supersedes the 2026-06-30 block below. A fresh instance continues from here.
-> Full numbers: `docs/ENGINE_STRENGTH.md §29`; arch dead-ends: `docs/NNUE/ARCH_DIRECTION.md §6`.
+> Supersedes all blocks below. A fresh instance continues from here.
+> Full numbers: `docs/ENGINE_STRENGTH.md §31`; profiling: `docs/PROFILING/`.
 
-## The one result that reframes the roadmap
-**v12 = v9's exact config (lean 512+threats, int16) retrained on test80-2024 (Leela T80) instead of
-the Oct-2021 SF14 pool → +24 ± 22 Elo @ 100ms/move (significant, CI>0).** Same arch, same speed,
-**only the data changed.** We are below the distillation ceiling, so a better teacher = real Elo.
-**Ship v12: swap `data/nnue/lean.bin → data/nnue/v12.bin`** (prod `loadEnrichedDefault` already applies
-int8-FT; nothing else changes). Net saved local + coalla, md5 `c26333e3…`.
+## Where we are
+- **Shipped/prod: king-bucket mirrored enriched-threats net** — `kb-mirror.bin` (44 MB, H=512 NB=8,
+  move-aware, int8-FT), 16 mirrored buckets (8×2), 320-sb on test80. Loaded by default via
+  `KB_NET_PATH` / `data/nnue/kb-mirror.bin`. Binary built `GOEXPERIMENT=simd GOAMD64=v4 go1.26.4`.
+  **+10 fixed-nodes / +4.5 movetime over the old no-mirror KB net** (§31.3).
+- **32-key Finny refresh cache (Stormphrax pattern):** `kRefreshTableSize = kBucketCount * 2 = 32`,
+  separating a-d and e-h mirror halves so they don't collide in the cache. This was the load-bearing
+  fix: the original 16-key Finny lost −5 at movetime because d/e crossings forced expensive
+  full-diff computations; 32-key flipped it to +4.5 (§31.4).
+- **Bitboard fast path:** `[12]chess.Bitboard` per cache entry, skip `appendEnrichedFeatures` on
+  transposition hits. Strict improvement, committed (§31.5).
+- All three systems (local M3, coalla, lairner) on `main`, built from source, consistent.
 
-## What this session proved is NOT the lever (stop re-trying these)
-- **Enriched-512 (threats + multilayer):** float eval +32 fixed-depth but movetime **−17**, node cost
-  **2× v9** — node-cost-bound, **abandoned** (ARCH_DIRECTION §6). v9 is already **2.80× v6** per-node
-  (measured), ~2× past the 1.5× admissibility gate; 1024+threats would be ~4.8× v6.
-- **Width 512→1024 (lean):** not a win at 32sb (−30 fixed-depth, ~parity movetime, **1.7× cost**).
-- **Search flags on v12:** capthist/conthist/probcut/razor/negext/conthist2 all **wash or drag** at
-  movetime (capthist's early +48 was small-sample noise → regressed to 0 @ 184 games). The search is
-  tuned tight; **no cheap flag stacks on top.** int8-FT is already shipped.
+## What we learned from Stormphrax (2026-07-07)
+Explored `~/stormphrax/src/eval/nnue/` for their mirrored-KB + refresh-table implementation.
+Key findings that informed our changes:
+- **Refresh table = 32 entries** (`kBucketCount * 2`, indexed `bucket*2 + flipped`) — same design
+  we shipped as 32-key Finny.
+- **Bitboard-based refresh:** stores piece bitboards per entry, diffs at the piece level instead of
+  building full feature lists. We adopted this as the fast "no change" path.
+- **Batch-4 feature processing** (`activateFourFeatures`): not applicable to us — our SIMD kernels
+  are already compute/uop-bound at 5.5–5.9 IPC (§30.3).
+- **MaterialCount<8> output bucketing:** separate lever, not yet shipped.
+- **No factoriser:** Stormphrax has full weight matrices per bucket. Our factoriser (shared
+  king-agnostic 768 base) is a parameter-efficiency advantage.
 
-## The path forward (data-first, since data is what pays)
-1. **Ship v12** (+24). Done pending your deploy.
-2. **640-sb on test80** — v12's loss was still descending pre-anneal (had more to give). A retrain box
-   is needed (current one disabled; re-fetch test80 from HF or wait). Cheap, likely +.
-3. **More/better data > width > search.** Eventually **self-generated data** — the true
-   ceiling-breaker (distillation asymptotes toward the teacher; §16.5).
-4. Deferred/uncertain: the `wd=0` control run (explains the benign loss-curve center-min); a true
-   ranked re-anchor (§28 — the CCRL band is stale).
+Profiling notes: `docs/PROFILING/amd/competitors-7Jul2026.md` and `arm/` counterparts have
+single-thread CPU profiles of SF18 (threats added, FT narrowed 3072→1024) and Stormphrax
+(king-buckets + threats + pairwise multilayer) on both arches.
+
+## The path forward
+1. **640-sb retrain on test80** — the current 320-sb mirror net is still epoch-poor at ~4 epochs.
+   v12 proved data cashes as movetime Elo (+24 for a better teacher; a longer train on the same
+   teacher is the same shape). The GPU server recipe is ready (bullet `chessgo_lean_threats.rs`
+   with the mirrored `768x16kbhm+threats` input type, `new_concat_multiple` loader for Jan–Apr
+   test80 months, `final_superbatch=640`).
+2. **Data > width > search.** The factoriser already densifies the king-agnostic base; the mirror
+   densifies the king-specific buckets. Next is more epochs or better data (fresh test80 months,
+   self-generated data). Widening to 1024 is the capacity lever once density is fixed.
+3. **MaterialCount<8> output bucketing** — Stormphrax has it, the GNN3 infra is already in our
+   codebase from the v8 experiment (§14.3). Low-effort to try behind the mirrored net.
+4. **SPSA re-tune of search margins** — the old margins were tuned pre-v12/mirror; the engine
+   outgrew them. The last re-tune banked +38.7 movetime (§13.5). Re-run on the mirror baseline.
+5. **Re-anchor vs actual engines** — the CCRL band is stale (≥3400 floor, dead ~3700 ceiling,
+   §28). Anchor against a ranked NNUE opponent at ~50% score before quoting any number.
 
 ---
 
