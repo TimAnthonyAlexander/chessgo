@@ -21,11 +21,16 @@ import (
 
 // ---- Independent Rust map_features replica (CPU-only, own attack gen) -------
 
-// rustKbucket replicates chessgo_lean_threats.rs kbucket(sq).
+// rustKbucket replicates chessgo_lean_threats.rs kbucket(sq): the ORIENTED king
+// square (0..63) → mirrored bucket. If the king is on the e–h half, reflect the file
+// (^7) so it lands on a–d, then bucket = rank·2 + (file>>1) over the 32 half-squares.
 func rustKbucket(sq int) int {
-	r := sq >> 3
-	f := sq & 7
-	return (r>>1)*4 + (f >> 1)
+	mir := 0
+	if sq&7 >= 4 {
+		mir = 7
+	}
+	m := sq ^ mir
+	return (m>>3)*2 + (m&7)>>1
 }
 
 // rustRay replicates the Rust ray(): slide from sq in (df,dr) until off-board or
@@ -144,8 +149,17 @@ func rustMapFeatures(pos *chess.Position) (stm, ntm []int) {
 	const PSQ = 16 * BASE // 12288
 	offStm := rustKbucket(wk) * BASE
 	offNtm := rustKbucket(bk^56) * BASE
+	// Horizontal-mirror masks (per perspective, from the oriented king's half).
+	mirStm := 0
+	if wk&7 >= 4 {
+		mirStm = 7
+	}
+	mirNtm := 0
+	if (bk^56)&7 >= 4 {
+		mirNtm = 7
+	}
 
-	// base 768, king-bucketed
+	// base 768, king-bucketed + mirrored
 	for s := 0; s < 64; s++ {
 		if at[s] == 255 {
 			continue
@@ -158,8 +172,8 @@ func rustMapFeatures(pos *chess.Position) (stm, ntm []int) {
 		t := 64 * int(pc&7)
 		stmOwn := [2]int{0, 384}[c]
 		ntmOwn := [2]int{384, 0}[c]
-		stm = append(stm, offStm+stmOwn+t+s)
-		ntm = append(ntm, offNtm+ntmOwn+t+(s^56))
+		stm = append(stm, offStm+stmOwn+t+(s^mirStm))
+		ntm = append(ntm, offNtm+ntmOwn+t+((s^56)^mirNtm))
 	}
 
 	// threats
@@ -186,11 +200,11 @@ func rustMapFeatures(pos *chess.Position) (stm, ntm []int) {
 
 			aStm := cAtt*6 + tAtt
 			vStm := cVic*6 + tVic
-			stm = append(stm, PSQ+(aStm*12+vStm)*64+tsq)
+			stm = append(stm, PSQ+(aStm*12+vStm)*64+(tsq^mirStm))
 
 			aNtm := (1-cAtt)*6 + tAtt
 			vNtm := (1-cVic)*6 + tVic
-			ntm = append(ntm, PSQ+(aNtm*12+vNtm)*64+(tsq^56))
+			ntm = append(ntm, PSQ+(aNtm*12+vNtm)*64+((tsq^56)^mirNtm))
 		}
 	}
 	return stm, ntm
@@ -250,7 +264,7 @@ func TestKBVerify1BucketTable(t *testing.T) {
 	var goT, rustT [64]int
 	mismatch := 0
 	for sq := 0; sq < 64; sq++ {
-		goT[sq] = int(kingBucketTable[sq])
+		goT[sq] = int(mirBucket(uint16(sq) ^ kingMirror(uint16(sq))))
 		rustT[sq] = rustKbucket(sq)
 		if goT[sq] != rustT[sq] {
 			mismatch++

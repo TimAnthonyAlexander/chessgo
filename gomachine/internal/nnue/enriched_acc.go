@@ -56,13 +56,13 @@ type EnrichedStack struct {
 	batchSub, batchAdd []uint16
 
 	// finny is the per-searcher accumulator-refresh cache (Stockfish AccumulatorRefreshTable
-	// / Koivisto "Finny tables"), indexed [perspective][kingBucket]. Each entry caches the
-	// last FINALIZED moving-side half at that (perspective, bucket) plus the exact feature
-	// list that produced it (half == B0i + Σ ftAdd(features)); on a later cross into the
-	// same bucket, finnyRefreshHalf updates the cached half by the multiset feature diff
-	// vs the current position — bit-exact with a from-scratch buildAccHalf. Consulted only
-	// when net.finny is on (the split-refresh path). Invalidated by Reset.
-	finny [2][NumKingBuckets]finnyEntry
+	// / Koivisto "Finny tables"), indexed [perspective][kingBucket,mirrorHalf]. Each entry
+	// caches the last FINALIZED moving-side half at that key plus the exact feature list
+	// that produced it (half == B0i + Σ ftAdd(features)); on a later cross into the same
+	// key, finnyRefreshHalf updates the cached half by the multiset feature diff vs the
+	// current position — bit-exact with a from-scratch buildAccHalf. Consulted only when
+	// net.finny is on (the split-refresh path). Invalidated by Reset.
+	finny [2][NumKingRefreshKeys]finnyEntry
 
 	// finnyHit/finnyHitChanged/finnyMiss are diagnostic counters for the Finny path:
 	// cache hits, hits whose current feature list DIFFERED from the cached one (the
@@ -109,10 +109,10 @@ func (n *EnrichedNet) NewStack(maxDepth int) *EnrichedStack {
 		accW: make([]int16, h), accB: make([]int16, h),
 		batchSub: make([]uint16, 0, dcap), batchAdd: make([]uint16, 0, dcap),
 	}
-	// Finny-table cache: one half + feature list per (perspective, kingBucket). Small
-	// (2 × 16 × (H int16 + ≤288 uint16)); allocate eagerly, invalid until first written.
+	// Finny-table cache: one half + feature list per (perspective, kingBucket,mirrorHalf).
+	// Small (2 × 32 × (H int16 + ≤288 uint16)); allocate eagerly, invalid until first written.
 	for c := 0; c < 2; c++ {
-		for b := 0; b < NumKingBuckets; b++ {
+		for b := 0; b < NumKingRefreshKeys; b++ {
 			st.finny[c][b].half = make([]int16, h)
 			st.finny[c][b].features = make([]uint16, 0, maxEnrichedActive)
 		}

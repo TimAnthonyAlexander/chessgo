@@ -34,14 +34,24 @@ func findKingMove(t *testing.T, pos *chess.Position, from, to chess.Square) ches
 	return chess.Move(0)
 }
 
-// orientedBucket returns kingBucketTable[sq] with Black's perspective orientation
-// (^56) applied — the SAME table the engine indexes in kingMoveNeedsRefresh.
+// orientedBucket returns the MIRRORED king bucket for sq with Black's perspective
+// orientation (^56) applied — the SAME mapping the engine uses in kingMoveNeedsRefresh.
 func orientedBucket(sq chess.Square, mover chess.Color) int {
 	s := uint16(sq)
 	if mover == chess.Black {
 		s ^= 56
 	}
-	return int(kingBucketTable[s])
+	return int(mirBucket(s ^ kingMirror(s)))
+}
+
+// orientedMir returns the horizontal-mirror mask (7/0) for sq oriented to the mover —
+// the second term of the refresh predicate (a d/e-file crossing flips every square).
+func orientedMir(sq chess.Square, mover chess.Color) uint16 {
+	s := uint16(sq)
+	if mover == chess.Black {
+		s ^= 56
+	}
+	return kingMirror(s)
 }
 
 // ---- TASK A: refresh-predicate generalization across boundaries ------------
@@ -95,7 +105,9 @@ func TestKBGenRefreshBoundaries(t *testing.T) {
 
 		bFrom := orientedBucket(c.from, c.mover)
 		bTo := orientedBucket(c.to, c.mover)
-		wantCross := bFrom != bTo
+		// Refresh needed iff the mirrored bucket changes OR the mirror half flips
+		// (king crosses the d/e file) — the whole perspective re-encodes either way.
+		wantCross := bFrom != bTo || orientedMir(c.from, c.mover) != orientedMir(c.to, c.mover)
 
 		// (1) predicate matches the table-derived expectation exactly
 		gotCross := kingMoveNeedsRefresh(pos, mv)

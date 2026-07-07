@@ -46,6 +46,7 @@ func appendAttackerEdges(dst []uint16, pos *chess.Position, sq chess.Square, occ
 	}
 	a := aRel*6 + uint16(pc.Type())
 	flip := persp == chess.Black
+	mir := perspMirror(pos, persp) // constant across a non-refresh move (king-half unchanged)
 	targets := chess.PseudoAttacks(pc, sq, occ) & occ
 	for targets != 0 {
 		tsq := targets.PopLSB()
@@ -59,6 +60,7 @@ func appendAttackerEdges(dst []uint16, pos *chess.Position, sq chess.Square, occ
 		if flip {
 			rtsq ^= 56
 		}
+		rtsq ^= mir
 		dst = append(dst, uint16(PsqSize)+(a*12+v)*64+rtsq)
 	}
 	return dst
@@ -177,16 +179,17 @@ func (st *EnrichedStack) refreshHalf(dstHalf []int16, pos *chess.Position, persp
 }
 
 // finnyRefreshHalf produces persp's accumulator half for pos into dstHalf using the
-// Finny-table cache keyed by (persp, kingBucket). On a cache HIT it starts from a copy
-// of the cached half and applies the multiset feature DIFF (cached features → current
-// features) via applyDiff; because the cached half satisfies half == B0i + Σ ftAdd(cached
-// features) and both feature lists index the SAME king bucket (cache key), the result is
-// B0i + Σ ftAdd(current features) == buildAccHalf(pos, persp), int16-for-int16. On a MISS
-// it falls back to a from-scratch buildAccHalf. Either way it refreshes the cache entry
-// (half + feature list) so the invariant holds for the next cross into this bucket.
+// Finny-table cache keyed by (persp, kingBucket,mirrorHalf). On a cache HIT it starts
+// from a copy of the cached half and applies the multiset feature DIFF (cached features
+// → current features) via applyDiff; because the cached half satisfies
+// half == B0i + Σ ftAdd(cached features) and both feature lists index the same bucket
+// and mirror half (cache key), the result is B0i + Σ ftAdd(current features) ==
+// buildAccHalf(pos, persp), int16-for-int16. On a MISS it falls back to a from-scratch
+// buildAccHalf. Either way it refreshes the cache entry (half + feature list) so the
+// invariant holds for the next cross into this key.
 func (st *EnrichedStack) finnyRefreshHalf(dstHalf []int16, pos *chess.Position, persp chess.Color) {
-	bucket := kingBucket(pos, persp)
-	e := &st.finny[persp][bucket]
+	key := kingRefreshKey(pos, persp)
+	e := &st.finny[persp][key]
 
 	var buf [maxEnrichedActive]uint16
 	cur := appendEnrichedFeatures(buf[:0], pos, persp)
@@ -249,6 +252,10 @@ func (st *EnrichedStack) computeDelta(pos *chess.Position, m chess.Move) (subW, 
 	// equals the child's, and offW/offB are constant across the whole base delta.
 	offW := kingBucketOffset(pos, chess.White)
 	offB := kingBucketOffset(pos, chess.Black)
+	// Horizontal mirror masks — constant across a non-king move (king-half unchanged),
+	// XORed into every base square so it matches appendBucketedBase's reflected encoding.
+	mirW := chess.Square(perspMirror(pos, chess.White))
+	mirB := chess.Square(perspMirror(pos, chess.Black))
 
 	// A1: changed squares via per-piece bitboard XOR (occupant differs old vs new).
 	// Cheaper than the 64-square PieceOn scan, and D is needed for the geometry.
@@ -265,14 +272,14 @@ func (st *EnrichedStack) computeDelta(pos *chess.Position, m chess.Move) (subW, 
 		op := pos.PieceOn(s)
 		np := child.PieceOn(s)
 		if op != chess.NoPiece {
-			subW = append(subW, offW+FeatureIndex(chess.White, op, s))
-			subB = append(subB, offB+FeatureIndex(chess.Black, op, s))
+			subW = append(subW, offW+FeatureIndex(chess.White, op, s^mirW))
+			subB = append(subB, offB+FeatureIndex(chess.Black, op, s^mirB))
 			subW = appendAttackerEdges(subW, pos, s, oldOcc, chess.White)
 			subB = appendAttackerEdges(subB, pos, s, oldOcc, chess.Black)
 		}
 		if np != chess.NoPiece {
-			addW = append(addW, offW+FeatureIndex(chess.White, np, s))
-			addB = append(addB, offB+FeatureIndex(chess.Black, np, s))
+			addW = append(addW, offW+FeatureIndex(chess.White, np, s^mirW))
+			addB = append(addB, offB+FeatureIndex(chess.Black, np, s^mirB))
 			addW = appendAttackerEdges(addW, &child, s, newOcc, chess.White)
 			addB = appendAttackerEdges(addB, &child, s, newOcc, chess.Black)
 		}
@@ -339,6 +346,11 @@ func appendChangedEdges(
 	aW := aRelW*6 + uint16(pt)
 	aB := aRelB*6 + uint16(pt)
 
+	// Mirror masks — this runs only for non-king moves (computeDelta), so neither king
+	// moved and mirW/mirB are identical in oldPos and child.
+	mirW := perspMirror(oldPos, chess.White)
+	mirB := perspMirror(oldPos, chess.Black)
+
 	var oldT, newT chess.Bitboard
 	if pt == chess.Bishop || pt == chess.Rook || pt == chess.Queen {
 		var mask chess.Bitboard
@@ -367,8 +379,8 @@ func appendChangedEdges(
 		vW := vRelW*6 + uint16(victim.Type())
 		vB := vRelB*6 + uint16(victim.Type())
 		tw := uint16(t)
-		subW = append(subW, uint16(PsqSize)+(aW*12+vW)*64+tw)
-		subB = append(subB, uint16(PsqSize)+(aB*12+vB)*64+(tw^56))
+		subW = append(subW, uint16(PsqSize)+(aW*12+vW)*64+(tw^mirW))
+		subB = append(subB, uint16(PsqSize)+(aB*12+vB)*64+((tw^56)^mirB))
 	}
 	for newT != 0 {
 		t := newT.PopLSB()
@@ -383,8 +395,8 @@ func appendChangedEdges(
 		vW := vRelW*6 + uint16(victim.Type())
 		vB := vRelB*6 + uint16(victim.Type())
 		tw := uint16(t)
-		addW = append(addW, uint16(PsqSize)+(aW*12+vW)*64+tw)
-		addB = append(addB, uint16(PsqSize)+(aB*12+vB)*64+(tw^56))
+		addW = append(addW, uint16(PsqSize)+(aW*12+vW)*64+(tw^mirW))
+		addB = append(addB, uint16(PsqSize)+(aB*12+vB)*64+((tw^56)^mirB))
 	}
 	return subW, addW, subB, addB
 }
@@ -406,6 +418,13 @@ func (st *EnrichedStack) pushMoveAwareEnumerate(pos *chess.Position, m chess.Mov
 	oldOcc := pos.Occupied()
 	newOcc := child.Occupied()
 
+	// King-bucket base offsets + mirror masks (this reference path, like computeDelta,
+	// is only correct for non-king moves — it has no bucket-crossing refresh).
+	offW := kingBucketOffset(pos, chess.White)
+	offB := kingBucketOffset(pos, chess.Black)
+	mirW := chess.Square(perspMirror(pos, chess.White))
+	mirB := chess.Square(perspMirror(pos, chess.Black))
+
 	subW := st.dsubW[:0]
 	addW := st.daddW[:0]
 	subB := st.dsubB[:0]
@@ -420,12 +439,12 @@ func (st *EnrichedStack) pushMoveAwareEnumerate(pos *chess.Position, m chess.Mov
 			continue
 		}
 		if op != chess.NoPiece {
-			subW = append(subW, FeatureIndex(chess.White, op, s))
-			subB = append(subB, FeatureIndex(chess.Black, op, s))
+			subW = append(subW, offW+FeatureIndex(chess.White, op, s^mirW))
+			subB = append(subB, offB+FeatureIndex(chess.Black, op, s^mirB))
 		}
 		if np != chess.NoPiece {
-			addW = append(addW, FeatureIndex(chess.White, np, s))
-			addB = append(addB, FeatureIndex(chess.Black, np, s))
+			addW = append(addW, offW+FeatureIndex(chess.White, np, s^mirW))
+			addB = append(addB, offB+FeatureIndex(chess.Black, np, s^mirB))
 		}
 		affected |= s.BB()
 		affected |= pos.AttackersTo(s, oldOcc)

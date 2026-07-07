@@ -345,11 +345,12 @@ func (n *EnrichedNet) quantizeLeanTail() int {
 // convention. The threat geometry is computed on the real board (orientation-
 // independent); only the index encoding is reoriented per perspective.
 func appendEnrichedFeatures(dst []uint16, pos *chess.Position, persp chess.Color) []uint16 {
-	// base 768, king-bucketed (bucket·768 + psqIndex, bucket from persp's own king).
+	// base 768, king-bucketed + mirrored (bucket·768 + psqIndex, from persp's own king).
 	dst = appendBucketedBase(dst, pos, persp)
 
 	occ := pos.Occupied()
 	flip := persp == chess.Black
+	mir := perspMirror(pos, persp) // horizontal mirror mask (7/0) for this perspective
 	for pc := chess.WhitePawn; pc <= chess.BlackKing; pc++ {
 		bb := pos.PieceBB(pc)
 		if bb == 0 {
@@ -375,6 +376,7 @@ func appendEnrichedFeatures(dst []uint16, pos *chess.Position, persp chess.Color
 				if flip {
 					rtsq ^= 56
 				}
+				rtsq ^= mir
 				dst = append(dst, uint16(PsqSize)+(a*12+v)*64+rtsq)
 			}
 		}
@@ -395,6 +397,8 @@ func appendEnrichedFeaturesBoth(dstW, dstB []uint16, pos *chess.Position) ([]uin
 	dstB = appendBucketedBase(dstB, pos, chess.Black)
 
 	occ := pos.Occupied()
+	mirW := perspMirror(pos, chess.White) // horizontal mirror mask per perspective
+	mirB := perspMirror(pos, chess.Black)
 	for pc := chess.WhitePawn; pc <= chess.BlackKing; pc++ {
 		bb := pos.PieceBB(pc)
 		if bb == 0 {
@@ -425,8 +429,8 @@ func appendEnrichedFeaturesBoth(dstW, dstB []uint16, pos *chess.Position) ([]uin
 				vW := vRelW*6 + uint16(victim.Type())
 				vB := vRelB*6 + uint16(victim.Type())
 				t := uint16(tsq)
-				dstW = append(dstW, uint16(PsqSize)+(aW*12+vW)*64+t)
-				dstB = append(dstB, uint16(PsqSize)+(aB*12+vB)*64+(t^56))
+				dstW = append(dstW, uint16(PsqSize)+(aW*12+vW)*64+(t^mirW))
+				dstB = append(dstB, uint16(PsqSize)+(aB*12+vB)*64+((t^56)^mirB))
 			}
 		}
 	}

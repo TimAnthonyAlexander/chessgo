@@ -6,39 +6,57 @@ import "github.com/timanthonyalexander/gomachine/internal/chess"
 // REPLICATED per king bucket: a piece's base feature is bucket(kingSq)·768 + psqIndex,
 // where the bucket is chosen by the PERSPECTIVE's own king square. This lets the net
 // learn king-relative piece values (castled vs central king) — the biggest structural
-// eval lever the frontier (SF/Reckless/Stormphrax) has and we lacked.
+// eval lever the frontier (SF/Reckless/Stormphrax) has.
 //
-// v1 is NO-mirror, NO king-merge: the minimal, low-risk form. The base block grows
-// 768 → NumKingBuckets·768 (= PsqSize) and the threat block simply shifts to start at
-// PsqSize instead of 768. Threat feature internals are UNCHANGED. A future v2 adds the
-// file-mirror (halves psq params) once v1 validates.
+// v2 (2026-07-07): HORIZONTAL FILE-MIRROR. Every strong king-bucket net mirrors
+// (SF18 HalfKAv2_hm, Viridithas 16+hm, Renegade 768x14hm, Stormphrax
+// KingBucketsMergedMirrored) — nobody runs a large non-mirrored KB net. The mirror
+// halves the king-square parameter space: when the perspective's king is on the e–h
+// half we reflect the board horizontally (file ^ 7) so the king always sits on files
+// a–d. That gives ~2× effective training data per bucket for ~0 extra params — the
+// exact density lever at our measured ~4 epochs (docs/open_tasks/king-bucket-mirror-v2.md).
+//
+// The canonicalization per perspective P (orient = P==Black ? 56 : 0, applied first):
+//	ksqO = kingSq(P) ^ orient                 // king in P's view
+//	mir  = file(ksqO) >= 4 ? 7 : 0            // reflect if king on e–h half
+//	s_final = s ^ orient ^ mir                // EVERY feature sq: base + threat target
+//	bucket  = mirBucket(ksqO ^ mir)          // ksqO^mir has file 0–3 (32 half-squares → 16)
+// orient (^56, rank bits) and mir (^7, file bits) are DISJOINT masks, so they compose
+// and commute — s^orient^mir is order-independent.
 //
 // The v6 Net / MultiNet feature sets are untouched — they keep InputDim(768). King
 // buckets live only in the enriched feature emission + EnrichedNet sizing.
 //
 // CONTRACT: this indexing MUST match the bullet trainer (chessgo_lean_threats.rs
-// map_features) byte-for-byte, or the trained net sees a scrambled input. The bucket
-// table below is duplicated there verbatim.
+// map_features) byte-for-byte, or the trained net sees a scrambled input. The
+// kb_verify_test.go independent Rust replica pins it.
 const (
-	// NumKingBuckets is the number of king-square buckets (v1 = 16, a 4×4 grid).
+	// NumKingBuckets is the number of king-square buckets (16, mirrored 8×2 layout).
 	NumKingBuckets = 16
+	// NumKingRefreshKeys is the Finny refresh-cache key count. Mirrored buckets share
+	// weights, but the accumulator feature coordinates differ by mirror half; keeping
+	// separate cache entries avoids d/e crossings diffing against the opposite mirror.
+	NumKingRefreshKeys = NumKingBuckets * 2
 	// PsqSize is the king-bucketed base-psq input size: NumKingBuckets copies of the
 	// 768 psq block. Replaces InputDim(768) as the enriched threat-feature offset.
 	PsqSize = NumKingBuckets * InputDim // 16 * 768 = 12288
 )
 
-// kingBucketTable maps a perspective-ORIENTED king square (White: sq; Black: sq^56,
-// matching FeatureIndex's relSq so both colors share the same weights) to a bucket.
-// v1: a 4×4 grid — bucket = (rank>>1)·4 + (file>>1). Identical table in the bullet
-// trainer. Tunable later (a king-safety-aware map likely beats the uniform grid).
-var kingBucketTable = func() [64]uint16 {
-	var t [64]uint16
-	for sq := 0; sq < 64; sq++ {
-		r, f := sq>>3, sq&7
-		t[sq] = uint16((r>>1)*4 + (f >> 1))
+// kingMirror returns the horizontal-mirror mask (7 or 0) for a perspective-ORIENTED
+// king square: 7 (reflect file) when the king is on the e–h half (file >= 4), else 0.
+func kingMirror(ksqOriented uint16) uint16 {
+	if ksqOriented&7 >= 4 {
+		return 7
 	}
-	return t
-}()
+	return 0
+}
+
+// mirBucket maps a mirrored+oriented king square (file 0–3, so 32 half-board squares)
+// to a bucket 0..15: rank·2 + (file>>1) — 8 rank levels × 2 file bands, keeping king-
+// safety rank resolution. Identical to the bullet trainer's kbucket(). Tunable later.
+func mirBucket(ksqMirrored uint16) uint16 {
+	return (ksqMirrored>>3)*2 + (ksqMirrored&7)>>1
+}
 
 // kingBucketOffset returns the base-feature offset (bucket·InputDim) that persp's own
 // king selects in pos — which of the NumKingBuckets copies of the 768 psq block this
@@ -48,7 +66,8 @@ func kingBucketOffset(pos *chess.Position, persp chess.Color) uint16 {
 	if persp == chess.Black {
 		ksq ^= 56
 	}
-	return kingBucketTable[ksq] * uint16(InputDim)
+	mir := kingMirror(ksq)
+	return mirBucket(ksq^mir) * uint16(InputDim)
 }
 
 // kingBucket returns the king-bucket INDEX (0..NumKingBuckets-1) that persp's own king
@@ -59,18 +78,42 @@ func kingBucket(pos *chess.Position, persp chess.Color) int {
 	if persp == chess.Black {
 		ksq ^= 56
 	}
-	return int(kingBucketTable[ksq])
+	mir := kingMirror(ksq)
+	return int(mirBucket(ksq ^ mir))
 }
 
-// kingMoveNeedsRefresh reports whether m is a king move that CHANGES the moving
-// side's king bucket — the only case where the incremental accumulator delta is
-// invalid (every base feature for that perspective shifts to a new bucket copy, so a
-// from-scratch refresh is required). A king move that stays within the same bucket is
-// handled correctly by the normal delta: the bucket offset is constant across the
-// move, so computeDelta's single per-perspective offset applies to both the removed
-// (parent) and added (child) base features. Skipping the refresh on same-bucket king
-// moves recovers most of the king-bucket NPS cost (kings often shuffle within a
-// bucket, e.g. a castled king on the back two ranks).
+// kingRefreshKey returns the Finny refresh-cache key for persp's own king. It keeps
+// the two horizontal mirror halves separate even when they map to the same bucket.
+func kingRefreshKey(pos *chess.Position, persp chess.Color) int {
+	ksq := uint16(pos.KingSquare(persp))
+	if persp == chess.Black {
+		ksq ^= 56
+	}
+	mir := kingMirror(ksq)
+	mirHalf := int(mir >> 2) // 0 for a-d, 1 for e-h (mir is 0 or 7)
+	return int(mirBucket(ksq^mir))*2 + mirHalf
+}
+
+// perspMirror returns the horizontal-mirror mask (7 or 0) for persp's own king in pos.
+// The mask is XORed into EVERY feature square (base piece squares AND threat target
+// squares) for that perspective, AFTER the ^56 orient. Constant across any move that
+// does not cross the d/e file boundary — a boundary-crossing king move flips every
+// square, so kingMoveNeedsRefresh forces a full from-scratch refresh instead of a delta.
+func perspMirror(pos *chess.Position, persp chess.Color) uint16 {
+	ksq := uint16(pos.KingSquare(persp))
+	if persp == chess.Black {
+		ksq ^= 56
+	}
+	return kingMirror(ksq)
+}
+
+// kingMoveNeedsRefresh reports whether m is a king move that INVALIDATES the moving
+// side's incremental accumulator delta — i.e. it changes the king bucket OR flips the
+// mirror half (king crosses the d/e file). Either changes the feature encoding for the
+// whole perspective (a new bucket copy, or every square reflected), so a from-scratch
+// refresh is required. A king move that stays in the same bucket AND the same mirror
+// half is handled correctly by the normal delta (bucket offset + mir are constant, so
+// computeDelta's single per-perspective transform applies to both parent and child).
 func kingMoveNeedsRefresh(pos *chess.Position, m chess.Move) bool {
 	if pos.PieceOn(m.From()).Type() != chess.King {
 		return false
@@ -80,15 +123,22 @@ func kingMoveNeedsRefresh(pos *chess.Position, m chess.Move) bool {
 		from ^= 56 // orient to the moving side's perspective (matches kingBucketOffset)
 		to ^= 56
 	}
-	return kingBucketTable[from] != kingBucketTable[to]
+	mirFrom, mirTo := kingMirror(from), kingMirror(to)
+	return mirBucket(from^mirFrom) != mirBucket(to^mirTo) || mirFrom != mirTo
 }
 
 // appendBucketedBase emits persp's active base (piece-square) features with the king-
-// bucket offset applied: off + (relColor·6+type)·64 + relSq. Same as AppendFeatures
-// but shifted into this perspective's king-bucket copy of the 768 block. Used by the
-// enriched feature set only (v6/MultiNet keep the plain AppendFeatures).
+// bucket offset and horizontal mirror applied: off + (relColor·6+type)·64 + (relSq^mir).
+// Same as AppendFeatures but shifted into this perspective's king-bucket copy of the
+// 768 block and reflected when the king is on the e–h half. Used by the enriched
+// feature set only (v6/MultiNet keep the plain AppendFeatures).
 func appendBucketedBase(dst []uint16, pos *chess.Position, persp chess.Color) []uint16 {
-	off := kingBucketOffset(pos, persp)
+	ksq := uint16(pos.KingSquare(persp))
+	if persp == chess.Black {
+		ksq ^= 56
+	}
+	mir := kingMirror(ksq)
+	off := mirBucket(ksq^mir) * uint16(InputDim)
 	flip := persp == chess.Black
 	for pc := chess.WhitePawn; pc <= chess.BlackKing; pc++ {
 		bb := pos.PieceBB(pc)
@@ -106,6 +156,7 @@ func appendBucketedBase(dst []uint16, pos *chess.Position, persp chess.Color) []
 			if flip {
 				rsq ^= 56
 			}
+			rsq ^= mir
 			dst = append(dst, off+base+rsq)
 		}
 	}
