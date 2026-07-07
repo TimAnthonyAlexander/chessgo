@@ -71,12 +71,15 @@ type EnrichedStack struct {
 	finnyHit, finnyHitChanged, finnyMiss int
 }
 
-// finnyEntry is one Finny-table cache slot: a finalized accumulator half and the exact
-// active feature list that produced it (option (a) — store the feature list, not the
-// bitboards, so the refresh diff is a plain applyDiff(halfCopy, cachedFeatures, current)).
+// finnyEntry is one Finny-table cache slot: a finalized accumulator half, the
+// piece-bitboard snapshot that produced it, and the active feature list. The
+// bitboards enable a fast "no change" path (bitboard equality → skip the expensive
+// appendEnrichedFeatures + diff); the feature list handles the non-trivial-diff case.
+// half == B0i + Σ ftAdd(features) always holds when valid.
 type finnyEntry struct {
-	half     []int16  // len H; == B0i + Σ ftAdd over features
-	features []uint16 // the perspective's active (base+threat) feature list at this bucket
+	half     []int16           // len H; == B0i + Σ ftAdd over features
+	features []uint16          // the perspective's active (base+threat) feature list
+	bbs      [12]chess.Bitboard // piece bitboards (WhitePawn..BlackKing) when cached
 	valid    bool
 }
 
@@ -141,7 +144,7 @@ func (st *EnrichedStack) Reset(pos *chess.Position) {
 		// an unrelated prior position (the entries only guarantee half == B0i+Σfeatures,
 		// which stays true, but a fresh search should start cold for reproducibility).
 		for c := 0; c < 2; c++ {
-			for b := 0; b < NumKingBuckets; b++ {
+			for b := 0; b < NumKingRefreshKeys; b++ {
 				st.finny[c][b].valid = false
 			}
 		}

@@ -179,37 +179,49 @@ func (st *EnrichedStack) refreshHalf(dstHalf []int16, pos *chess.Position, persp
 }
 
 // finnyRefreshHalf produces persp's accumulator half for pos into dstHalf using the
-// Finny-table cache keyed by (persp, kingBucket,mirrorHalf). On a cache HIT it starts
-// from a copy of the cached half and applies the multiset feature DIFF (cached features
-// → current features) via applyDiff; because the cached half satisfies
-// half == B0i + Σ ftAdd(cached features) and both feature lists index the same bucket
-// and mirror half (cache key), the result is B0i + Σ ftAdd(current features) ==
-// buildAccHalf(pos, persp), int16-for-int16. On a MISS it falls back to a from-scratch
-// buildAccHalf. Either way it refreshes the cache entry (half + feature list) so the
-// invariant holds for the next cross into this key.
+// Finny-table cache keyed by (persp, kingBucket,mirrorHalf). On a cache HIT with
+// identical piece bitboards it copies the cached half directly (fast path, no feature
+// list build). On a HIT with changed bitboards it falls back to the multiset feature
+// diff (current behaviour). On a MISS it builds from scratch. Either way it refreshes
+// the cache entry (half + feature list + bitboards) for the next hit.
 func (st *EnrichedStack) finnyRefreshHalf(dstHalf []int16, pos *chess.Position, persp chess.Color) {
 	key := kingRefreshKey(pos, persp)
 	e := &st.finny[persp][key]
 
-	var buf [maxEnrichedActive]uint16
-	cur := appendEnrichedFeatures(buf[:0], pos, persp)
+	// Snapshot the 12 piece bitboards for the fast no-change check.
+	var curBBs [12]chess.Bitboard
+	for pc := chess.WhitePawn; pc <= chess.BlackKing; pc++ {
+		curBBs[pc] = pos.PieceBB(pc)
+	}
 
 	if e.valid {
 		st.finnyHit++
-		if !sliceEqU16(e.features, cur) {
-			st.finnyHitChanged++ // the diff is non-trivial: a hit on a CHANGED board
+		if e.bbs == curBBs {
+			// Fast path: exact same board state → accumulator is already correct.
+			copy(dstHalf, e.half)
+			return
 		}
-		copy(dstHalf, e.half)                  // start from the cached half
-		st.applyDiff(dstHalf, e.features, cur) // subtract cached features, add current
-	} else {
-		st.finnyMiss++
-		st.net.buildAccHalf(dstHalf, pos, persp) // cold: full rebuild
-		e.valid = true
+		st.finnyHitChanged++
+
+		// Slow path: board changed — fall back to feature-list diff.
+		var buf [maxEnrichedActive]uint16
+		cur := appendEnrichedFeatures(buf[:0], pos, persp)
+		copy(dstHalf, e.half)
+		st.applyDiff(dstHalf, e.features, cur)
+		// Refresh the cache.
+		copy(e.half, dstHalf)
+		e.features = append(e.features[:0], cur...)
+		e.bbs = curBBs
+		return
 	}
 
-	// Refresh the cache so half == B0i + Σ ftAdd(features) stays true for the next hit.
+	// Cold miss: full rebuild.
+	st.finnyMiss++
+	st.net.buildAccHalf(dstHalf, pos, persp)
+	e.valid = true
 	copy(e.half, dstHalf)
-	e.features = append(e.features[:0], cur...)
+	e.features = appendEnrichedFeatures(e.features[:0], pos, persp)
+	e.bbs = curBBs
 }
 
 // sliceEqU16 reports whether two uint16 slices are element-wise equal. appendEnriched-
