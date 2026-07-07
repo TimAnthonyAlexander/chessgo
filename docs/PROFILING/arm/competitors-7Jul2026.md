@@ -2,7 +2,7 @@
 
 Symbolized single-thread CPU profiles of **Stockfish 18** (current release) and
 **Stormphrax 8.0.0** on this M3, for comparison against gomachine's own arm64/NEON
-profile (`arm/6Jul2026.md`). The **Stockfish 17.1** profile is retained below as a
+profile (`arm/7Jul2026.md`, current; see `arm/6Jul2026.md` for the previous baseline). The **Stockfish 17.1** profile is retained below as a
 last-gen datapoint, because 17.1→18 is an architecture change directly relevant to
 chessgo: **SF 18 added threat input features** to its NNUE net. Profiler: macOS
 `sample`, 18s. Uniform workload for every engine: `setoption Threads 1`, `Hash

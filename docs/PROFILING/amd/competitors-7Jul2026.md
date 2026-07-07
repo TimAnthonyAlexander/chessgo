@@ -2,7 +2,7 @@
 
 Symbolized single-thread CPU profiles of **Stockfish 18** (current release) and
 **Stormphrax**, both built for **AVX-512** on coalla, for comparison against
-gomachine's own amd64/AVX-512 profile (`amd/6Jul2026.md`). The **Stockfish 17.1**
+gomachine's own amd64/AVX-512 profile (`amd/7Jul2026.md`, current; see `amd/6Jul2026.md` for the previous baseline). The **Stockfish 17.1**
 profile is retained below as a last-gen datapoint, because 17.1→18 is an
 architecture change directly relevant to chessgo: **SF 18 added threat input
 features** to its NNUE net. Profiler: Linux `perf record -F 999 --call-graph fp`,
