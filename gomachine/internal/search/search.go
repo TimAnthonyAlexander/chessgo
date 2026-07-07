@@ -1361,6 +1361,11 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 	var triedCaptures [256]chess.Move
 	var nCaptures int
 
+	// ttMoveNoisy is used by quiet-stage LMR terms; declared here so both
+	// the DeferredQuiets=on and off paths can read it.
+	ttMoveNoisy := ttMove != chess.NullMove && isCapture(pos, ttMove)
+	flag := ttExact
+
 	// TTMoveFirst: try the TT move before scoring any other moves.
 	// NOT byte-identical: searching the TT move here mutates history tables
 	// that scoreMoves reads → different move-order scores → different tree.
@@ -1485,8 +1490,588 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 		ttFirstSearched = true
 	}
 
-	var scores [256]int
-	s.scoreMoves(pos, &ml, ttMove, ply, &scores)
+	if s.params.DeferredQuiets {
+		// === Staged move picking (Stormphrax/SF pattern) ===
+		// Stage 1: TT move — search immediately, skip scoring.
+		// Reuses the TTMoveFirst scaffolding (ttFirstIdx, ttFirstSearched).
+		ttIdx := -1
+		if ttMove != chess.NullMove && excludedMove == chess.NullMove {
+			for i := 0; i < ml.Len(); i++ {
+				if ml.Get(i) == ttMove {
+					ttIdx = i
+					break
+				}
+			}
+		}
+		if ttIdx >= 0 {
+			s.dbgTTMFFires++
+			// Singular extension for the TT move (same as the existing
+			// computation below — identical inputs, identical result).
+			extTT := 0
+			if s.params.Singular && !inCheck && ply > 0 &&
+				ttHit && depth >= s.params.SingularMinDepth &&
+				ttDepth >= depth-3 && (ttFlag == ttLower || ttFlag == ttExact) &&
+				absInt(ttScore) < tbThreshold {
+				singularBeta := ttScore - s.params.SingularMargin*depth
+				rDepth := (depth - 1) / 2
+				s.excluded[ply] = ttMove
+				prevVerify := s.inSingularVerify
+				s.inSingularVerify = true
+				singScore := s.negamax(pos, rDepth, ply, singularBeta-1, singularBeta, cutnode)
+				s.inSingularVerify = prevVerify
+				s.excluded[ply] = chess.NullMove
+				if s.stop {
+					return 0
+				}
+				if singScore < singularBeta {
+					if s.params.DoubleExt && !isPV && singScore < singularBeta-s.params.DoubleExtMargin {
+						extTT = 2
+					} else {
+						extTT = 1
+					}
+				} else if s.params.NegExt {
+					if !isPV && singScore >= beta {
+						if absInt(singScore) < tbThreshold {
+							return ilerpToBeta(singScore, beta)
+						}
+						return singScore
+					} else if ttScore >= beta {
+						extTT = -3
+					} else if cutnode {
+						extTT = -2
+					}
+				} else if s.params.MultiCut && singularBeta >= beta {
+					return singularBeta
+				}
+			}
+
+			m := ttMove
+			captureTT := isCapture(pos, m)
+			quietTT := !captureTT && m.Type() != chess.Promotion
+			moverTT := pos.PieceOn(m.From())
+
+			var u chess.Undo
+			if s.useNNUE {
+				s.accPush(pos, m)
+			}
+			pos.DoMove(m, &u)
+			s.pushKey(pos.Key())
+			s.contMove[ply] = contEntry{pc: moverTT, to: m.To(), ok: true}
+
+			newDepthTT := depth - 1
+			if extTT != 0 {
+				newDepthTT += extTT
+			}
+			childCut := cutnode
+			if extTT < 0 {
+				childCut = true
+			}
+			fc := !childCut
+			if isPV {
+				fc = false
+			}
+			sc := -s.negamax(pos, newDepthTT, ply+1, -beta, -alpha, fc)
+
+			s.popKey()
+			pos.UndoMove(m, &u)
+			if s.useNNUE {
+				s.accPop()
+			}
+			if s.stop {
+				return 0
+			}
+
+			if sc >= beta {
+				if quietTT {
+					s.recordKiller(ply, m)
+					s.history[moverTT][m.To()] += depth * depth
+				}
+				if s.params.UseTT {
+					ev := ttEvalNone
+					if !inCheck && rawEval > -32000 && rawEval < 32000 {
+						ev = int16(rawEval)
+					}
+					s.tt.store(pos.Key(), m, sc, depth, ply, ttLower, ev)
+				}
+				return sc
+			}
+
+			bestScore = sc
+			bestMove = m
+			searched = 1
+			if sc > alpha {
+				alpha = sc
+				alphaRaises = 1
+			}
+			if quietTT {
+				triedQuiets[0] = m
+				nQuiets = 1
+			} else if s.params.CaptHist && captureTT {
+				triedCaptures[0] = m
+				nCaptures = 1
+			}
+		}
+
+		// === Stage 2: Captures and promotions ===
+		caps := s.scoreCaptures(pos, &ml, ttMove, excludedMove, ply)
+
+		// ProbCut (unchanged — scans the move list, needs no scores).
+		if s.params.ProbCut && !isPV && !inCheck && excludedMove == chess.NullMove &&
+			depth >= probcutMinDepth && beta < tbThreshold-probcutMargin {
+			probcutBeta := beta + probcutMargin
+			probcutDepth := depth - probcutReduction
+			if probcutDepth < 1 {
+				probcutDepth = 1
+			}
+			for i := 0; i < ml.Len(); i++ {
+				m := ml.Get(i)
+				if !isCapture(pos, m) && m.Type() != chess.Promotion {
+					continue
+				}
+				if s.params.SEE && !pos.SEEGE(m, 0) {
+					continue
+				}
+				mover := pos.PieceOn(m.From())
+				var u chess.Undo
+				if s.useNNUE {
+					s.accPush(pos, m)
+				}
+				pos.DoMove(m, &u)
+				s.pushKey(pos.Key())
+				s.contMove[ply] = contEntry{pc: mover, to: m.To(), ok: true}
+				score := -s.quiescence(pos, ply+1, -probcutBeta, -probcutBeta+1)
+				if score >= probcutBeta {
+					score = -s.negamax(pos, probcutDepth, ply+1, -probcutBeta, -probcutBeta+1, !cutnode)
+				}
+				s.popKey()
+				pos.UndoMove(m, &u)
+				if s.useNNUE {
+					s.accPop()
+				}
+				if s.stop {
+					return 0
+				}
+				if score >= probcutBeta {
+					return probcutBeta
+				}
+			}
+		}
+
+		// LMP limit (shared by quiet stage).
+		lmpLimitDQ := 3 + depth*depth
+		if s.params.Improving {
+			lmpLimitDQ = (3 + depth*depth) / (2 - impInt)
+		}
+
+		// Search good captures (score ≥ scoreCapture = winning/equal).
+		for _, ce := range caps {
+			if ce.score < scoreCapture {
+				continue
+			}
+			m := ce.Move
+			capture := isCapture(pos, m)
+			mover := pos.PieceOn(m.From())
+
+			if s.params.CaptSEE && capture && m.Type() != chess.Promotion && !isPV &&
+				!inCheck && searched > 0 && depth <= s.params.CaptSEEMaxDepth &&
+				bestScore > -mateThreshold {
+				if !pos.SEEGE(m, -s.params.CaptSEEMargin*depth) {
+					s.dbgCaptSEE++
+					continue
+				}
+			}
+
+			seeWinning := false
+			if s.params.LMR2 && s.params.SEE && capture {
+				seeWinning = pos.SEEGE(m, 0)
+			}
+
+			var u chess.Undo
+			if s.useNNUE {
+				s.accPush(pos, m)
+			}
+			pos.DoMove(m, &u)
+			s.pushKey(pos.Key())
+			s.contMove[ply] = contEntry{pc: mover, to: m.To(), ok: true}
+			givesCheck := pos.InCheck()
+
+			newDepth := depth - 1
+			childCutnode := cutnode
+
+			var sc int
+			if searched == 0 {
+				firstCut := !childCutnode
+				if isPV {
+					firstCut = false
+				}
+				sc = -s.negamax(pos, newDepth, ply+1, -beta, -alpha, firstCut)
+			} else {
+				reduction := 0
+				if s.params.LMR2 && !(s.params.CleanVerify && s.inSingularVerify) {
+					minSearched := 2
+					if !isPV {
+						minSearched = 1
+					}
+					if depth >= 2 && !inCheck && !givesCheck && searched >= minSearched {
+						r := s.lmr[minInt(depth, 63)][minInt(searched, 63)]
+						r--
+						if capture && seeWinning {
+							r--
+						}
+						if isPV {
+							r--
+						} else {
+							r++
+						}
+						if !improving {
+							r++
+						}
+						if s.params.LMRCutnode && childCutnode {
+							r += s.params.LMRCutnodeRed
+						}
+						if maxR := newDepth - 1; maxR >= 1 {
+							if r < 1 {
+								r = 1
+							}
+							if r > maxR {
+								r = maxR
+							}
+							reduction = r
+						}
+					}
+				}
+				scoutCut := true
+				if reduction == 0 {
+					scoutCut = !childCutnode
+				}
+				sc = -s.negamax(pos, newDepth-reduction, ply+1, -alpha-1, -alpha, scoutCut)
+				if sc > alpha && reduction > 0 {
+					rd := newDepth
+					if s.params.LMRDoDeeper {
+						if sc > bestScore+44+4*newDepth {
+							rd = newDepth + 1
+						} else if sc < bestScore+newDepth {
+							rd = newDepth - 1
+							if rd < 1 {
+								rd = 1
+							}
+						}
+					}
+					sc = -s.negamax(pos, rd, ply+1, -alpha-1, -alpha, !childCutnode)
+				}
+				if sc > alpha && sc < beta {
+					sc = -s.negamax(pos, newDepth, ply+1, -beta, -alpha, false)
+				}
+			}
+
+			s.popKey()
+			pos.UndoMove(m, &u)
+			if s.useNNUE {
+				s.accPop()
+			}
+			if s.stop {
+				return 0
+			}
+			searched++
+			if s.params.CaptHist && capture {
+				triedCaptures[nCaptures] = m
+				nCaptures++
+			}
+
+			if sc > bestScore {
+				bestScore = sc
+				bestMove = m
+				if ply == 0 {
+					s.rootBest = m
+					s.rootScore = sc
+				}
+				if sc > alpha {
+					alpha = sc
+					alphaRaises++
+					if alpha >= beta {
+						if s.params.CaptHist && capture {
+							s.updateCaptureStats(pos, m, triedCaptures[:nCaptures], depth)
+						}
+						goto postLoopDeferred
+					}
+				}
+			}
+		}
+
+		// === Stage 3: Quiets — scored lazily ===
+		for i := 0; i < ml.Len(); i++ {
+			m := ml.Get(i)
+			if m == ttMove || m == excludedMove {
+				continue
+			}
+			if isCapture(pos, m) || m.Type() == chess.Promotion {
+				continue
+			}
+			mover := pos.PieceOn(m.From())
+
+			histVal := s.history[mover][m.To()]
+			if s.params.ContHist && s.cont != nil {
+				histVal += s.contScore(ply, mover, m.To())
+			}
+			if s.params.ContHist2 && s.cont2 != nil {
+				histVal += s.contScore2(ply, mover, m.To())
+			}
+
+			lmpLim := lmpLimitDQ
+			if s.params.LMPHist {
+				lmpLim += histVal / 4096
+			}
+			if s.params.LMP && !isPV && !inCheck && searched > 0 &&
+				depth <= lmpMaxDepth && bestScore > -mateThreshold &&
+				searched >= lmpLim {
+				continue
+			}
+
+			futMargin := s.params.FutilityBase + s.params.FutilitySlope*depth
+			if s.params.FutHist {
+				futMargin += histVal / 128
+			}
+			if s.params.Futility && !isPV && !inCheck && searched > 0 &&
+				depth <= futilityMaxDepth && bestScore > -mateThreshold &&
+				staticEval+futMargin <= alpha {
+				continue
+			}
+
+			if s.params.HistPrune && !isPV && !inCheck && searched > 0 &&
+				depth <= histPruneMaxDepth && bestScore > -mateThreshold {
+				if histVal < histPruneMargin*depth {
+					s.dbgHistPrune++
+					continue
+				}
+			}
+
+			if s.params.SEEQuiet && !isPV && !inCheck && searched > 0 &&
+				depth <= s.params.SEEQuietMaxDepth && bestScore > -mateThreshold {
+				if !pos.SEEGE(m, -s.params.SEEQuietMargin*depth) {
+					s.dbgSEEQuiet++
+					continue
+				}
+			}
+
+			var u chess.Undo
+			if s.useNNUE {
+				s.accPush(pos, m)
+			}
+			pos.DoMove(m, &u)
+			s.pushKey(pos.Key())
+			s.contMove[ply] = contEntry{pc: mover, to: m.To(), ok: true}
+			givesCheck := pos.InCheck()
+
+			newDepth := depth - 1
+			childCutnode := cutnode
+
+			var sc int
+			reduction := 0
+			if s.params.LMR2 && !(s.params.CleanVerify && s.inSingularVerify) {
+				minSearched := 2
+				if !isPV {
+					minSearched = 1
+				}
+				if depth >= 2 && !inCheck && !givesCheck && searched >= minSearched {
+					r := s.lmr[minInt(depth, 63)][minInt(searched, 63)]
+					r -= histVal / s.params.LMRHistDiv
+					if isPV {
+						r--
+					} else {
+						r++
+					}
+					if !improving {
+						r++
+					}
+					if s.params.LMRCutnode && childCutnode {
+						r += s.params.LMRCutnodeRed
+					}
+					if maxR := newDepth - 1; maxR >= 1 {
+						if r < 1 {
+							r = 1
+						}
+						if r > maxR {
+							r = maxR
+						}
+						reduction = r
+					}
+				}
+			} else if s.params.LMR && depth >= 3 && !inCheck && (!givesCheck || s.params.LMRCheckReduce) && searched >= 4 {
+				if s.params.LMRFormula {
+					r := s.lmr[minInt(depth, 63)][minInt(searched, 63)]
+					r -= histVal / s.params.LMRHistDiv
+					if s.params.LMRCutnode && childCutnode {
+						r += s.params.LMRCutnodeRed
+					}
+					if s.params.LMRImproving && !improving {
+						r++
+					}
+					if s.params.LMRTtNoisy && ttMoveNoisy {
+						r += s.params.LMRTtNoisyRed
+					}
+					if s.params.LMRAlpha {
+						r += alphaRaises * s.params.LMRAlphaScale / 1024
+					}
+					if s.params.LMRCheckReduce && givesCheck {
+						r -= s.params.LMRCheckRed
+					}
+					if r < 1 {
+						r = 1
+					}
+					if r > depth-1 {
+						r = depth - 1
+					}
+					reduction = r
+				} else {
+					reduction = 1
+					if searched >= 8 {
+						reduction = 2
+					}
+				}
+			}
+			scoutCut := true
+			if reduction == 0 {
+				scoutCut = !childCutnode
+			}
+			sc = -s.negamax(pos, newDepth-reduction, ply+1, -alpha-1, -alpha, scoutCut)
+			if sc > alpha && reduction > 0 {
+				rd := newDepth
+				if s.params.LMRDoDeeper {
+					if sc > bestScore+44+4*newDepth {
+						rd = newDepth + 1
+					} else if sc < bestScore+newDepth {
+						rd = newDepth - 1
+						if rd < 1 {
+							rd = 1
+						}
+					}
+				}
+				sc = -s.negamax(pos, rd, ply+1, -alpha-1, -alpha, !childCutnode)
+			}
+			if sc > alpha && sc < beta {
+				sc = -s.negamax(pos, newDepth, ply+1, -beta, -alpha, false)
+			}
+
+			s.popKey()
+			pos.UndoMove(m, &u)
+			if s.useNNUE {
+				s.accPop()
+			}
+			if s.stop {
+				return 0
+			}
+			searched++
+			triedQuiets[nQuiets] = m
+			nQuiets++
+
+			if sc > bestScore {
+				bestScore = sc
+				bestMove = m
+				if ply == 0 {
+					s.rootBest = m
+					s.rootScore = sc
+				}
+				if sc > alpha {
+					alpha = sc
+					alphaRaises++
+					if alpha >= beta {
+						s.recordKiller(ply, m)
+						s.updateQuietStats(pos, m, triedQuiets[:nQuiets], depth)
+						s.updateContHist(pos, m, triedQuiets[:nQuiets], depth, ply)
+						s.updateContHist2(pos, m, triedQuiets[:nQuiets], depth, ply)
+						goto postLoopDeferred
+					}
+				}
+			}
+		}
+
+		// === Stage 4: Losing captures ===
+		for _, ce := range caps {
+			if ce.score >= scoreCapture {
+				continue
+			}
+			m := ce.Move
+			capture := isCapture(pos, m)
+			mover := pos.PieceOn(m.From())
+
+			var u chess.Undo
+			if s.useNNUE {
+				s.accPush(pos, m)
+			}
+			pos.DoMove(m, &u)
+			s.pushKey(pos.Key())
+			s.contMove[ply] = contEntry{pc: mover, to: m.To(), ok: true}
+
+			newDepth := depth - 1
+			childCutnode := cutnode
+
+			reduction := 0
+			if s.params.LMR2 && !(s.params.CleanVerify && s.inSingularVerify) && depth >= 2 && !inCheck {
+				r := s.lmr[minInt(depth, 63)][minInt(searched, 63)]
+				r--
+				if !isPV {
+					r++
+				}
+				if maxR := newDepth - 1; maxR >= 1 {
+					if r < 1 {
+						r = 1
+					}
+					if r > maxR {
+						r = maxR
+					}
+					reduction = r
+				}
+			}
+			scoutCut := true
+			if reduction == 0 {
+				scoutCut = !childCutnode
+			}
+			sc := -s.negamax(pos, newDepth-reduction, ply+1, -alpha-1, -alpha, scoutCut)
+			if sc > alpha && reduction > 0 {
+				sc = -s.negamax(pos, newDepth, ply+1, -alpha-1, -alpha, !childCutnode)
+			}
+			if sc > alpha && sc < beta {
+				sc = -s.negamax(pos, newDepth, ply+1, -beta, -alpha, false)
+			}
+
+			s.popKey()
+			pos.UndoMove(m, &u)
+			if s.useNNUE {
+				s.accPop()
+			}
+			if s.stop {
+				return 0
+			}
+			searched++
+			if s.params.CaptHist && capture {
+				triedCaptures[nCaptures] = m
+				nCaptures++
+			}
+
+			if sc > bestScore {
+				bestScore = sc
+				bestMove = m
+				if ply == 0 {
+					s.rootBest = m
+					s.rootScore = sc
+				}
+				if sc > alpha {
+					alpha = sc
+					alphaRaises++
+					if alpha >= beta {
+						if s.params.CaptHist && capture {
+							s.updateCaptureStats(pos, m, triedCaptures[:nCaptures], depth)
+						}
+						goto postLoopDeferred
+					}
+				}
+			}
+		}
+
+	postLoopDeferred:
+	} else {
+		var scores [256]int
+		s.scoreMoves(pos, &ml, ttMove, ply, &scores)
 
 	// ProbCut: before searching the node properly, try good captures at a reduced
 	// depth against a beta raised by a margin. If one already beats that raised beta,
@@ -1617,7 +2202,6 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 	// tactical node); alphaRaises = how many moves have already raised alpha at
 	// this node (recomputed as the loop advances). Both feed the additive LMR
 	// reduction terms below; cheap and byte-inert unless their flags are on.
-	ttMoveNoisy := ttMove != chess.NullMove && isCapture(pos, ttMove)
 
 	for i := 0; i < ml.Len(); i++ {
 		selectMove(&ml, &scores, i)
@@ -1956,7 +2540,6 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 		}
 	}
 
-	flag := ttExact
 	if bestScore <= origAlpha {
 		flag = ttUpper
 	} else if bestScore >= beta {
@@ -1968,7 +2551,9 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 	if excludedMove != chess.NullMove {
 		return bestScore
 	}
+} // end else (DeferredQuiets=off, existing code path)
 
+// Shared post-loop: corrhist update, TT store (both paths reach here).
 	// Correction history update: teach the tables the static-eval-vs-search error at
 	// this node. Only when the signal is trustworthy: out of check (static defined),
 	// a non-noisy best move (not a capture/promotion), a non-mate/non-TB score, and

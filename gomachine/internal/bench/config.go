@@ -646,6 +646,12 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.TTMoveFirst = b
+		case "deferredquiets", "dqu", "deferred":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.DeferredQuiets = b
 		case "ttcluster", "ttbucket":
 			// bucketed (clustered) TT: on → 4-slot buckets (shift 2), off →
 			// direct-mapped (shift 0). Convenience bool over TTBucketShift.
@@ -899,6 +905,9 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.TTMoveFirst != patch.TTMoveFirst {
 		diffs = append(diffs, fmt.Sprintf("ttmovefirst: %s→%s", onoff(base.TTMoveFirst), onoff(patch.TTMoveFirst)))
+	}
+	if base.DeferredQuiets != patch.DeferredQuiets {
+		diffs = append(diffs, fmt.Sprintf("deferredquiets: %s→%s", onoff(base.DeferredQuiets), onoff(patch.DeferredQuiets)))
 	}
 	if base.Prefetch != patch.Prefetch {
 		diffs = append(diffs, fmt.Sprintf("prefetch: %s→%s", onoff(base.Prefetch), onoff(patch.Prefetch)))
