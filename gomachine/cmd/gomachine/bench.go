@@ -576,13 +576,16 @@ func cmdBenchSPRT(args []string) {
 		OldLevel:       -1,
 	}
 
-	// Search-param-only SPRT (no explicit --new-*/--old-* net): run BOTH sides on the
-	// prod eval rather than the embedded v6 — otherwise player.play's per-move
-	// SetEnriched(nil) silently tests search patches against the wrong net. A net-vs-net
-	// A/B (any explicit net flag) keeps its exact semantics: only the all-nil case
-	// injects the shared default, so it never forces --concurrency 1.
-	if newNetP == nil && oldNetP == nil && newMultiP == nil && oldMultiP == nil && newEnrichedP == nil && oldEnrichedP == nil {
-		cfg.DefaultEnriched = nnue.DefaultEnriched() // the prod net main() loaded
+	// Any side with NO explicit net falls back to the prod eval (the net main() loaded
+	// at startup) rather than the embedded v6 — so --new-lean=X tests X against prod
+	// automatically. A side that DOES pin a net keeps A/B isolation.
+	if cfg.DefaultEnriched = nnue.DefaultEnriched(); cfg.DefaultEnriched == nil {
+		// Prod net didn't load (kb-mirror.bin absent) — both sides must bring their own
+		// nets or fall back to embedded v6. The all-nil check below is now a no-op.
+		if newNetP == nil && oldNetP == nil && newMultiP == nil && oldMultiP == nil &&
+			newEnrichedP == nil && oldEnrichedP == nil {
+			cfg.DefaultEnriched = nnue.DefaultEnriched() // nil — v6 fallback
+		}
 	}
 
 	reporter := bench.NewReporter(cfg)
