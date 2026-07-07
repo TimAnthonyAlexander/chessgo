@@ -272,6 +272,7 @@ func loadDefaultLeanNet() *nnue.EnrichedNet {
 	n.QuantizeFTInt8()      // int8-FT: the movetime config the prod net ships with
 	n.SetSplitRefresh(true) // bit-exact +2.3% NPS: split king-bucket refresh, rebuild only the moving-side half (§30, 2026-07-06)
 	n.SetDirectApply(true)  // bit-exact +2.5% NPS: skip the counts-array multiset diff (KB-net re-bench of finding A4, §30)
+	n.SetFinny(true)        // bit-exact +2.3% NPS over splitRefresh: refresh-cache on the king-bucket refresh path (re-measured 2026-07-07, 3 interleaved reps +1.5/+3.3/+2.3%; overturns the §30.2 wash — disjoint from directApply's path so additive)
 	return n
 }
 
