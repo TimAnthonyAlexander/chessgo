@@ -26,6 +26,7 @@ var spsaFields = map[string]spsaField{
 	"seequietmaxdepth": {func(p *search.Params, v int) { p.SEEQuietMaxDepth = v }, func(p search.Params) int { return p.SEEQuietMaxDepth }, 1},
 	"captseemargin":    {func(p *search.Params, v int) { p.CaptSEEMargin = v }, func(p search.Params) int { return p.CaptSEEMargin }, 8},
 	"captseemaxdepth":  {func(p *search.Params, v int) { p.CaptSEEMaxDepth = v }, func(p search.Params) int { return p.CaptSEEMaxDepth }, 1},
+	"deltamargin":      {func(p *search.Params, v int) { p.DeltaMargin = v }, func(p search.Params) int { return p.DeltaMargin }, 25},
 	"nullmover":        {func(p *search.Params, v int) { p.NullMoveR = v }, func(p search.Params) int { return p.NullMoveR }, 1},
 	"doubleextmargin":  {func(p *search.Params, v int) { p.DoubleExtMargin = v }, func(p search.Params) int { return p.DoubleExtMargin }, 4},
 	// LMR / history / RFP (docs/open_tasks/spsa-margins.md: "the untapped leverage is
@@ -37,6 +38,10 @@ var spsaFields = map[string]spsaField{
 	"rfpmargin":      {func(p *search.Params, v int) { p.RFPMargin = v }, func(p search.Params) int { return p.RFPMargin }, 8},
 	"histbonusscale": {func(p *search.Params, v int) { p.HistBonusScale = v }, func(p search.Params) int { return p.HistBonusScale }, 4},
 	"histbonusmax":   {func(p *search.Params, v int) { p.HistBonusMax = v }, func(p search.Params) int { return p.HistBonusMax }, 128},
+	// Aspiration variance window (scaffold, AspVariance-gated). AspBaseDelta is a
+	// small cp base (~7); AspVarScale the |prevScore|²·scale/2²⁰ numerator (~65).
+	"aspbasedelta": {func(p *search.Params, v int) { p.AspBaseDelta = v }, func(p search.Params) int { return p.AspBaseDelta }, 2},
+	"aspvarscale":  {func(p *search.Params, v int) { p.AspVarScale = v }, func(p search.Params) int { return p.AspVarScale }, 10},
 }
 
 // spsaAliases maps the short spec spellings (shared with bench.ParseParams) to the
@@ -49,6 +54,7 @@ var spsaAliases = map[string]string{
 	"sqd":           "seequietmaxdepth",
 	"csm":           "captseemargin",
 	"csd":           "captseemaxdepth",
+	"dm":            "deltamargin",
 	"nullr":         "nullmover",
 	"dextm":         "doubleextmargin",
 	"lmrbase":       "lmrbasex10k",
@@ -57,6 +63,8 @@ var spsaAliases = map[string]string{
 	"rfpm":          "rfpmargin",
 	"histscale":     "histbonusscale",
 	"histmax":       "histbonusmax",
+	"aspbase":       "aspbasedelta",
+	"aspvar":        "aspvarscale",
 }
 
 func canonSPSAName(name string) (string, bool) {

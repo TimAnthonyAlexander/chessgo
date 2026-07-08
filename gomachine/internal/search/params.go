@@ -18,12 +18,18 @@ type Params struct {
 	CheckExtension   bool // extend search by one ply when in check
 	SEE              bool // order captures by SEE; prune losing captures in quiescence
 	DeltaPrune       bool // delta pruning in quiescence (skip captures that can't raise alpha)
+	DeltaExemptChecks bool // qsearch delta pruning: never prune a check-giving capture or a recapture on the just-vacated square (SF search.cpp givesCheck / to!=prevSq exemptions). DEFAULT OFF — under SPRT.
 	Aspiration       bool // aspiration windows around the previous iteration's score
 	AspInitDelta     int  // aspiration: initial half-window (centipawns) around prevScore; widening logic unchanged. Default 25 (the old aspInitDelta const) → byte-identical. Lower = tighter opening window (Stormphrax-style)
+	AspVariance      bool // aspiration: size the initial window as base + |prevScore|²·scale (SF/Stormphrax) instead of flat AspInitDelta. DEFAULT OFF — under SPRT.
+	AspBaseDelta     int  // AspVariance: base half-window before the variance term (Stormphrax initialAspWindow=7)
+	AspVarScale      int  // AspVariance: numerator of the |prevScore|²·scale/2²⁰ variance term (Stormphrax aspSqScoreScale=65)
+	AspFailHighReduce bool // aspiration: on repeated fail-highs, reduce the re-search depth by the fail-high count (capped 3), à la SF failedHighCnt / Stormphrax aspReduction. DEFAULT OFF — under SPRT.
 	RFP              bool // reverse futility pruning (static null move) near leaves
 	LMP              bool // late move pruning (move-count pruning) of late quiets near leaves
 	HistMalus        bool // history gravity update + bonus cap + malus to non-cutoff quiets
 	Improving        bool // "improving" heuristic scales RFP margin + LMP move count
+	ImprovingRich    bool // richer improving: ply-4 fallback + default-true-when-unknown + (staticEval>=beta) upgrade (Stormphrax/SF). DEFAULT OFF — under SPRT.
 	LMRFormula       bool // log(d)·log(m) LMR table + PV/improving/history adjustments
 	LMRCutnode       bool // reduce late moves MORE at expected cut-nodes (Stormphrax r+=cutnode). Node-efficiency lever: at a cutnode late moves rarely raise alpha, so reduce them harder. DEFAULT OFF — under SPRT.
 	LMRCutnodeRed    int  // plies of extra LMR reduction at a cutnode (Stormphrax ≈+1.9; default 1).
@@ -90,6 +96,7 @@ type Params struct {
 	NmpEvalDivisor   int  // NMP eval-scaled reduction: R += min((staticEval-beta)/NmpEvalDivisor, NmpEvalMax). Default 200.
 	QSFutility       bool // qsearch node-level futility (Stormphrax qsearchFp): out of check, once standPat + QSFutilityMargin <= alpha, skip any remaining capture that isn't a SEE-winning exchange (all such captures are futile — the node floor can't reach alpha and the move wins no material). ADDITIVE to per-move delta pruning (which subtracts the specific victim value); this is a node-level floor gated by SEE instead. DEFAULT OFF — under SPRT.
 	QSFutilityMargin int  // QSFutility: cp margin above stand-pat for the futility base (default 100).
+	DeltaMargin      int  // qsearch delta-pruning margin (cp) added to captured-piece value; was a hardcoded const, promoted for SPSA/SPRT tuning; default 200 = byte-identical. Sibling of SEEQuietMargin/QSFutilityMargin.
 	QCaps            bool // quiescence generates only noisy moves (GenerateCaptures) out of check, instead of all-legal-then-filter. DEFAULT ON. Byte-identical move set either way (movegen_captures_test.go) — a pure NPS lever, flagged only so its movetime Elo can be A/B'd (invisible at fixed nodes).
 	QSCastling       bool // search castling moves in quiescence. Castling is a QUIET move but its (king,rook-origin) encoding has an occupied destination, so it slips through the isCapture noisy filter — a latent quirk. DEFAULT ON preserves the historical behavior byte-for-byte; OFF drops castling from qsearch (a genuinely quiet move has no place in a tactical search). Under SPRT.
 	TTMoveFirst      bool // try the TT move immediately after movegen, before scoreMoves — if it causes a beta cutoff, skip scoring entirely. NOT byte-identical: searching the TT move before scoreMoves mutates history tables that scoreMoves reads, changing move-order scores → different tree. A search-behavior change (not a pure NPS win), gated behind a flag for future pairing with deferred quiet scoring. DEFAULT OFF.
@@ -161,12 +168,20 @@ func DefaultParams() Params {
 		CheckExtension: true,
 		SEE:            true,
 		DeltaPrune:     true,
+		DeltaExemptChecks: false, // qsearch delta-prune exemptions (gives-check TODO / recapture wired); scaffold under SPRT
+
 		Aspiration:     true,
 		AspInitDelta:   aspInitDelta, // 25; keeps the aspiration setup byte-identical
+		AspVariance:    false, // variance-scaled initial window (base + |prevScore|²·scale); scaffold under SPRT
+		AspBaseDelta:   7,     // Stormphrax initialAspWindow
+		AspVarScale:    65,    // Stormphrax aspSqScoreScale
+		AspFailHighReduce: false, // reduce re-search depth by fail-high count; scaffold under SPRT
 		RFP:            true,
 		LMP:            true,
 		HistMalus:      true,
 		Improving:      true,
+		ImprovingRich:  false, // richer improving (ply-4 fallback + default-true + eval>=beta); scaffold under SPRT
+
 		LMRFormula:     true,
 		LMRCutnode:     true, // SHIPPED as part of the +19.7 movetime stack (coordinated: needs ContHist + LMRDoDeeper; alone it's −7)
 		LMRCutnodeRed:  1,    // extra plies of reduction at a cutnode (cutred=2 measured worse)
@@ -424,6 +439,10 @@ func DefaultParams() Params {
 		// confirmed with nmpgate in the strict end-of-queue stack SPRT.
 		QSFutility:       true,
 		QSFutilityMargin: 100,
+		// Qsearch delta-pruning margin, promoted from the hardcoded deltaMargin const.
+		// 200 was an HCE-era constant (June 2026, +22.0 Elo with DeltaPrune) never
+		// re-measured on the NNUE eval — a live SPSA target now that it's a field.
+		DeltaMargin: 200,
 		QCaps:            true,  // captures-only qsearch (NPS); OFF is the pre-opt A/B baseline
 		QSCastling:       true,  // preserve historical behavior; OFF is under SPRT
 		TTMoveFirst:      false, // try TT move before scoring; NOT byte-identical — scaffolding for DeferredQuiets

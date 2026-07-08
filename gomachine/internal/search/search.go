@@ -44,8 +44,6 @@ const (
 	// reaches tbThreshold, so this is inert when TBSearch is off.
 	tbWin       = mateThreshold - 1
 	tbThreshold = tbWin - maxPly
-	// deltaMargin is the safety cushion (centipawns) for quiescence delta pruning.
-	deltaMargin = 200
 	// Reverse futility pruning: margin per depth and the max depth it applies at.
 	rfpMargin   = 75
 	rfpMaxDepth = 8
@@ -804,10 +802,24 @@ func (s *Searcher) searchRoot(pos *chess.Position, depth, prevScore int) {
 		return
 	}
 	delta := s.params.AspInitDelta
+	if s.params.AspVariance {
+		// base + |prevScore|²·scale/2²⁰ (Stormphrax aspSqScoreScale form; SF sizes
+		// the window by meanSquaredScore/10588). int64 square: prevScore is bounded
+		// below mateThreshold here, but prevScore²·scale overflows int32.
+		delta = s.params.AspBaseDelta + int((int64(prevScore)*int64(prevScore)*int64(s.params.AspVarScale))>>20)
+		if delta > aspMaxDelta {
+			delta = aspMaxDelta
+		}
+	}
 	alpha := maxInt(prevScore-delta, -infinity)
 	beta := minInt(prevScore+delta, infinity)
+	failHighCnt := 0 // fail-highs so far this iteration (AspFailHighReduce only)
 	for {
-		score := s.negamax(pos, depth, 0, alpha, beta, false) // root is a PV node → non-cut
+		searchDepth := depth
+		if s.params.AspFailHighReduce && failHighCnt > 0 {
+			searchDepth = maxInt(depth-failHighCnt, 1) // SF adjustedDepth: reduce re-search by the fail-high count
+		}
+		score := s.negamax(pos, searchDepth, 0, alpha, beta, false) // root is a PV node → non-cut
 		if s.stop {
 			return
 		}
@@ -815,8 +827,14 @@ func (s *Searcher) searchRoot(pos *chess.Position, depth, prevScore int) {
 		case score <= alpha: // fail low: lower alpha, pull beta toward center
 			beta = (alpha + beta) / 2
 			alpha = maxInt(score-delta, -infinity)
+			if s.params.AspFailHighReduce {
+				failHighCnt = 0 // SF: a fail-low clears the fail-high count
+			}
 		case score >= beta: // fail high: raise beta
 			beta = minInt(score+delta, infinity)
+			if s.params.AspFailHighReduce && failHighCnt < 3 {
+				failHighCnt++ // capped at 3 (Stormphrax aspReduction cap)
+			}
 		default:
 			return // score inside the window
 		}
@@ -1249,7 +1267,23 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 	// turn)? A position trending our way warrants pruning less; default false when
 	// unknown (in check, near the root, or after an in-check ancestor).
 	improving := false
-	if !inCheck && ply >= 2 && s.staticEvals[ply-2] != evalNone {
+	if s.params.ImprovingRich {
+		// Richer improving (Stormphrax/SF): ply-2 comparison, then a ply-4 fallback we
+		// currently lack, defaulting TRUE when neither ancestor eval is known, plus the
+		// SF `improving |= eval>=beta` upgrade. In check stays false (unchanged).
+		if inCheck {
+			improving = false
+		} else if ply >= 2 && s.staticEvals[ply-2] != evalNone {
+			improving = staticEval > s.staticEvals[ply-2]
+		} else if ply >= 4 && s.staticEvals[ply-4] != evalNone {
+			improving = staticEval > s.staticEvals[ply-4]
+		} else {
+			improving = true
+		}
+		if !inCheck {
+			improving = improving || staticEval >= beta
+		}
+	} else if !inCheck && ply >= 2 && s.staticEvals[ply-2] != evalNone {
 		improving = staticEval > s.staticEvals[ply-2]
 	}
 	impInt := 0
@@ -2671,8 +2705,24 @@ func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 		// Delta pruning: out of check, skip a capture that even in the best case
 		// (winning the victim plus a margin) cannot raise alpha.
 		if !inCheck && s.params.DeltaPrune && isCapture(pos, m) && m.Type() != chess.Promotion {
-			if standPat+captureGain(pos, m)+deltaMargin <= alpha {
-				continue
+			if standPat+captureGain(pos, m)+s.params.DeltaMargin <= alpha {
+				// DeltaExemptChecks: don't prune a recapture on the square the previous
+				// move moved to — an in-progress exchange the stand-pat can't see resolve
+				// (SF search.cpp `to != prevSq` exemption). prevSq comes from the shared
+				// continuation-move path (contMove[ply-1]), which for this feature is also
+				// maintained ACROSS qsearch recursion (recorded at DoMove below when the
+				// flag is on) so deep recapture chains keep the exemption.
+				// TODO(DeltaExemptChecks): the gives-check exemption (SF `givesCheck`) is
+				// NOT wired — gomachine has no cheap pre-move gives-check primitive (the
+				// main search derives givesCheck only AFTER DoMove via pos.InCheck()), and
+				// a real one needs direct+discovered+ep/castle/promo machinery; a
+				// make/InCheck/unmake purely to test the exemption would defeat the prune.
+				// Left for a follow-up. Only the recapture exemption ships in this scaffold.
+				exempt := s.params.DeltaExemptChecks && ply >= 1 &&
+					s.contMove[ply-1].ok && m.To() == s.contMove[ply-1].to
+				if !exempt {
+					continue
+				}
 			}
 		}
 		// Qsearch node-level futility (QSFutility; Stormphrax qsearchFp, DEFAULT OFF):
@@ -2692,6 +2742,14 @@ func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 		var u chess.Undo
 		if s.useNNUE {
 			s.accPush(pos, m)
+		}
+		// DeltaExemptChecks: record this qsearch move on the shared continuation-move
+		// path so the child qsearch node's recapture exemption sees the correct prevSq
+		// (negamax normally maintains this path, but plain qsearch does not). Flag-gated
+		// so the off-path is byte-identical; negamax overwrites contMove[ply] before it
+		// reads it, so this stale write never leaks into the main search.
+		if s.params.DeltaExemptChecks {
+			s.contMove[ply] = contEntry{pc: pos.PieceOn(m.From()), to: m.To(), ok: true}
 		}
 		pos.DoMove(m, &u)
 		sc := -s.quiescence(pos, ply+1, -beta, -alpha)
