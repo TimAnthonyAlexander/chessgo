@@ -38,7 +38,7 @@ func cmdBenchSPSA(args []string) {
 	bigA := fs.Float64("bigA", 0, "SPSA stability constant A (0 → 0.1·iterations)")
 	alpha := fs.Float64("alpha", 0.602, "learning-rate decay exponent")
 	gamma := fs.Float64("gamma", 0.101, "perturbation decay exponent")
-	tt := fs.Int("tt", 16, "transposition table size per engine (MB)")
+	tt := fs.Int("tt", 64, "transposition table size per engine (MB) — matches prod serve (2026-07-08; was 16, a stale mismatch)")
 	conc := fs.Int("concurrency", runtime.NumCPU(), "parallel game-pair workers per batch")
 	seed := fs.Int64("seed", 1, "RNG seed (Rademacher draws + per-batch book shuffles); reproducible")
 	bookPath := fs.String("book", "", "opening book (.epd/.fen or UCI move-lines); default: embedded")

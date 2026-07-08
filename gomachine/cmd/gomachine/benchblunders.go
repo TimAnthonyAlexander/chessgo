@@ -28,7 +28,7 @@ func cmdBenchBlunders(args []string) {
 	judgeMovetime := fs.Int("judge-movetime", 200, "full-strength judge ms per move (ground truth)")
 	ourMovetime := fs.Int("movetime", 100, "gomachine ms per move")
 	ourThreads := fs.Int("threads", 1, "gomachine Lazy SMP threads")
-	tt := fs.Int("tt", 16, "gomachine transposition table size (MB)")
+	tt := fs.Int("tt", 64, "gomachine transposition table size (MB) — matches prod serve (2026-07-08; was 16)")
 	games := fs.Int("games", 50, "number of games (rounded to color-swapped pairs)")
 	conc := fs.Int("concurrency", 4, "parallel games (each spawns 2 Stockfish processes)")
 	blunderWP := fs.Float64("blunder-wp", 0.30, "win-prob drop on one move to flag a blunder (Lichess blunder = 0.30)")
