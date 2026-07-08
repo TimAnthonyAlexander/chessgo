@@ -113,6 +113,12 @@ not flip silently.
 
 ## 6. Open items
 
+- **Widened-floor margin refinement pending.** In the killed margin SPSA, `nullmover` (floor 3) and
+  `captseemaxdepth` (floor 4) sat pinned at the *bottom* of their ranges — the optimum is likely
+  below. A follow-up run with `nullmover:2:5`, `captseemaxdepth:2:8` should recover that.
+- **The +15±31 margin adoption is deploy-gated.** Before deploying this branch, run a clean
+  full-stack **tt=64 movetime validation** of the new DefaultParams vs the last-deployed prod
+  defaults (lower bound stably >0). The self-play SPRTs here are the coarse gate, not the deploy gate.
 - `DeltaExemptChecks` gives-check exemption is a TODO (needs a cheap pre-move gives-check
   primitive gomachine lacks; recapture exemption is wired, so the flag currently tests that).
 - CLAUDE.md still frames the Texel-tuned eval as live strength ("+101 @ movetime") — it's
@@ -134,5 +140,19 @@ not flip silently.
 - **2026-07-08 — startpos anomaly.** Benign brittle test (embedded net; startpos ~+0.8 pawn is
   genuine). Widened band. Commit `e64b51e`.
 - **2026-07-08 — margin SPSA launched** (coalla pid 693945). Direction @ k≈194: more aggressive
-  SEE prune + more singular. Awaiting convergence → movetime validation SPRT.
-- _(next: SPSA convergence + validation SPRT result …)_
+  SEE prune + more singular.
+- **2026-07-08 — killed margin SPSA at k≈360** (not converged; low-value/flat run, and see the tt
+  finding below). Ran a quick **tt=64 movetime SPRT** of the k≈353 snapshot
+  (`singulardepth=5,seequietmargin=75,captseemargin=23`) vs the old defaults: **+15 ± 31 Elo**, LLR
+  climbing, positive-leaning (not a formal cross; draw-heavy flat surface).
+- **2026-07-08 — ADOPTED the snapshot as the new base** (commit `53112b2`): DefaultParams
+  `singulardepth 6→5`, `seequietmargin 103→75`, `captseemargin 25→23`. Prod *candidate*, not live —
+  deploy-gated on a clean full-stack tt=64 validation. Const `singularMinDepth` synced.
+- **2026-07-08 — TT-mismatch finding + fix** (commit `5afeb82`): `bench spsa`/`sprt`/`calibrate`/
+  `blunders` all defaulted **tt=16**; `b80da65` fixed only the vs-stockfish gauntlet to 64. So ALL
+  self-play tuning (incl. the shipped +38.7) was measured at 16MB against a **64MB prod**. Bumped all
+  four to 64. coalla synced to branch + rebuilt SIMD v4 (tt=64 default confirmed).
+- **2026-07-08 — next = LMR/history SPSA** (decided: option A, the untapped lever). tt=64, from the
+  new base: `lmrbasex10k:5000:11000, lmrdivx10k:18000:32000, lmrhistdiv:1024:8192, rfpmargin:40:150,
+  histbonusscale:8:80, histbonusmax:512:3072`. Launches when the quick SPRT frees the box.
+- _(next: LMR/history SPSA convergence → tt=64 movetime validation …)_
