@@ -38,6 +38,8 @@ var spsaFields = map[string]spsaField{
 	"rfpmargin":      {func(p *search.Params, v int) { p.RFPMargin = v }, func(p search.Params) int { return p.RFPMargin }, 8},
 	"histbonusscale": {func(p *search.Params, v int) { p.HistBonusScale = v }, func(p search.Params) int { return p.HistBonusScale }, 4},
 	"histbonusmax":   {func(p *search.Params, v int) { p.HistBonusMax = v }, func(p search.Params) int { return p.HistBonusMax }, 128},
+	"histmalusscale": {func(p *search.Params, v int) { p.HistMalusScale = v }, func(p search.Params) int { return p.HistMalusScale }, 4},
+	"histmalusmax":   {func(p *search.Params, v int) { p.HistMalusMax = v }, func(p search.Params) int { return p.HistMalusMax }, 128},
 	// Aspiration variance window (scaffold, AspVariance-gated). AspBaseDelta is a
 	// small cp base (~7); AspVarScale the |prevScore|²·scale/2²⁰ numerator (~65).
 	"aspbasedelta": {func(p *search.Params, v int) { p.AspBaseDelta = v }, func(p search.Params) int { return p.AspBaseDelta }, 2},
@@ -63,6 +65,8 @@ var spsaAliases = map[string]string{
 	"rfpm":          "rfpmargin",
 	"histscale":     "histbonusscale",
 	"histmax":       "histbonusmax",
+	"histmscale":    "histmalusscale",
+	"histmmax":      "histmalusmax",
 	"aspbase":       "aspbasedelta",
 	"aspvar":        "aspvarscale",
 }

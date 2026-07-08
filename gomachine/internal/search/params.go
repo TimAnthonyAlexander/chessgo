@@ -37,6 +37,7 @@ type Params struct {
 	LMRImproving     bool // additive LMR term on the shipped formula path: reduce late quiets +1 ply when the node is NOT improving (Stormphrax r += !improving·1242/1024). Independent term, not the rejected LMR2 bundle. DEFAULT OFF — under SPRT.
 	LMRTtNoisy       bool // additive LMR term: reduce late quiets harder when the TT move is a capture (a tactical node — a late quiet rarely beats a noisy TT move; Stormphrax r += ttMoveNoisy·1081/1024). DEFAULT OFF — under SPRT.
 	LMRTtNoisyRed    int  // plies of extra reduction when the TT move is noisy (default 1 ≈ Stormphrax 1081/1024).
+	LMRPvRelief      bool // reduce PV nodes one ply LESS in the default LMR path (SF/Stormphrax apply PV relief unconditionally). DEFAULT OFF — under SPRT.
 	LMRAlpha         bool // additive LMR term: reduce late moves more the more alpha-raises already occurred at this node (Stormphrax r += alphaRaises·597/1024) — many moves already good here ⇒ reduce the rest harder. DEFAULT OFF — under SPRT.
 	LMRAlphaScale    int  // LMRAlpha: 1024-scaled plies per alpha-raise (default 597 ≈ 0.58 ply; r += alphaRaises·LMRAlphaScale/1024).
 	LMRCheckReduce   bool // LMR a checking quiet (reduce it LESS) instead of skipping it entirely (Stormphrax reduces givesCheck by 852/1024). DEFAULT OFF — under SPRT.
@@ -118,6 +119,8 @@ type Params struct {
 	RFPMargin   int // reverse-futility margin per depth in cp (default 75); prune when staticEval - RFPMargin·depth >= beta
 	HistBonusScale int // history bonus/malus scale: bonus = HistBonusScale·depth² capped at HistBonusMax (default 32)
 	HistBonusMax   int // history bonus/malus cap (default 1536)
+	HistMalusScale int // history malus scale, decoupled from the bonus (SF/Stormphrax tune malus separately). DEFAULT = the bonus values → byte-identical until tuned.
+	HistMalusMax   int // history malus cap, decoupled from the bonus (SF/Stormphrax tune malus separately). DEFAULT = the bonus values → byte-identical until tuned.
 
 	// TTBucketShift sets the transposition-table cluster width at table creation
 	// (log2 slots per bucket): 0 = direct-mapped (current/default, byte-identical),
@@ -468,6 +471,11 @@ func DefaultParams() Params {
 		RFPMargin:      75,
 		HistBonusScale: 32,
 		HistBonusMax:   1536,
+		// History malus decoupled from the bonus (SF/Stormphrax tune it separately).
+		// DEFAULT equals the bonus (32 / 1536) → statMalus == statBonus → the malus
+		// sites are byte-identical to the shared-knob behavior until SPSA moves these.
+		HistMalusScale: 32,
+		HistMalusMax:   1536,
 		// TT bucketing: 0 = direct-mapped (byte-identical to the pre-bucketing
 		// table). Flip to 2 (4-slot clusters) via ttcluster=on to SPRT the bucketed
 		// TT — probe scans 4 slots in one cache line, store keeps the best victim.

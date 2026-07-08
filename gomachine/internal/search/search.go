@@ -117,6 +117,19 @@ func (s *Searcher) statBonus(depth int) int {
 	return b
 }
 
+// statMalus is the depth-scaled history MALUS magnitude (capped), decoupled from
+// statBonus so the penalty applied to searched-but-not-cutoff quiets can be tuned
+// separately (SF18/Stormphrax both do). Mirrors statBonus but off HistMalusScale/
+// HistMalusMax. DEFAULT: HistMalus{Scale,Max} == HistBonus{Scale,Max}, so
+// statMalus == statBonus exactly → the malus sites are byte-identical until tuned.
+func (s *Searcher) statMalus(depth int) int {
+	b := s.params.HistMalusScale * depth * depth
+	if b > s.params.HistMalusMax {
+		b = s.params.HistMalusMax
+	}
+	return b
+}
+
 // updateHistory applies the "history gravity" update: the entry is nudged toward
 // ±maxHistory by bonus, with a pull proportional to the current magnitude, so the
 // table self-ages (old evidence decays as new arrives) and stays bounded.
@@ -141,10 +154,11 @@ func (s *Searcher) updateQuietStats(pos *chess.Position, best chess.Move, tried 
 		return
 	}
 	bonus := s.statBonus(depth)
+	malus := s.statMalus(depth)
 	s.updateHistory(pos.PieceOn(best.From()), best.To(), bonus)
 	for _, q := range tried {
 		if q != best {
-			s.updateHistory(pos.PieceOn(q.From()), q.To(), -bonus)
+			s.updateHistory(pos.PieceOn(q.From()), q.To(), -malus)
 		}
 	}
 }
@@ -2502,6 +2516,12 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 						}
 						// Whole-ply reduction, then the same [1, depth-1] clamp as OFF.
 						r := r1024 / 1024
+						// PV relief: reduce PV nodes one ply LESS (SF/Stormphrax apply this
+						// unconditionally). DEFAULT OFF → byte-identical; applied identically
+						// in both LMRFixedPoint branches, before the shared clamp.
+						if s.params.LMRPvRelief && isPV && r > 1 {
+							r--
+						}
 						if r < 1 {
 							r = 1
 						}
@@ -2543,6 +2563,12 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 					}
 					if s.params.LMRCheckReduce && givesCheck {
 						r -= s.params.LMRCheckRed // reduce a checking quiet LESS (don't skip it)
+					}
+					// PV relief: reduce PV nodes one ply LESS (SF/Stormphrax apply this
+					// unconditionally). DEFAULT OFF → byte-identical; applied identically
+					// in both LMRFixedPoint branches, before the shared clamp.
+					if s.params.LMRPvRelief && isPV && r > 1 {
+						r--
 					}
 					if r < 1 {
 						r = 1
