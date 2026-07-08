@@ -189,4 +189,22 @@ not flip silently.
 6. **Phase 3 scaffolds**: `RFPQuad`/`RFPSoft`, `AspVariance`, `ImprovingRich`, `DeltaExemptChecks`,
    `DeltaMargin` SPSA, widened-floor margin SPSA (`nullmover:2:5`,`captseemaxdepth:2:8`).
 
-- _(next: LMR/history convergence → run the queue above …)_
+- **2026-07-08 — LMR/history SPSA (integer table): dry.** Killed at k365; its one mover
+  (`rfpmargin 75→58`) feel-SPRT'd **−0.6 ± 16.3** at movetime — a fixed-nodes "prune more" artifact.
+  `lmrbase`/`lmrdiv` jittered (quantization), `histbonus`/`lmrhistdiv` flat. Nothing shipped.
+- **2026-07-08 — harness fixes:** `tt=16→64` everywhere (`5afeb82`); wired round-2 flags into
+  `ParseParams` so `--base "lmrfixedpoint=on"` / `--new "lmrpvrelief=on"` parse (`2820ca0`).
+- **2026-07-08 — fixed-point LMR SPSA: LMR base/div CLOSED.** Ran `--base lmrfixedpoint=on` on
+  `lmrbasex10k`/`lmrdivx10k` (the smooth ×1024 table that finally gives them a gradient). θ jittered
+  around defaults — an apparent drift at k200 (`lmrdiv↑/lmrbase↓`) **reversed** by k224. Feel-SPRT of
+  the θ washed **−0.0 ± 16.0** (perfectly symmetric pentanomial). Verdict: **integer quantization was
+  strength-neutral AND hid no gain** — the fixed-point unblock confirmed there was nothing to grab.
+  (`LMRFixedPoint` scaffold stays default-off; no reason to ship it.)
+- **2026-07-08 — decoupled-malus SPSA launched** (pid 745246, tt=64): `histmalusscale:8:80,
+  histmalusmax:512:3072`, init 32/1536 (= bonus, byte-identical). The one search sub-lever with real
+  headroom — both SF and Stormphrax sit at a steeper asymmetric malus we've never reached.
+- **Standing verdict:** search tuning is largely exhausted on this engine — small margin win banked
+  (+8.6, unvalidated-but-adopted), LMR/history + LMR-fixed-point both dry. If the malus lever also
+  washes, the honest highest-EV move is the **data retrain** (`data-retrain-640sb.md`), not more
+  search-constant squeezing.
+- _(next: decoupled-malus convergence → feel-SPRT; else → Phase-2 on/off re-SPRTs / data retrain …)_
