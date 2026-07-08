@@ -160,4 +160,18 @@ not flip silently.
   from the new base): `lmrbasex10k:5000:11000, lmrdivx10k:18000:32000, lmrhistdiv:1024:8192,
   rfpmargin:40:150, histbonusscale:8:80, histbonusmax:512:3072`. ~19s/iter → ~6.3h. Log
   `/tmp/spsa_lmrhist.out`.
-- _(next: LMR/history convergence → tt=64 movetime validation …)_
+- **2026-07-08 — round-2 audits (LMR formula, history mechanics, SEE)**, run in parallel with the
+  LMR/history SPSA. Again ZERO logic bugs (**8 audits total, 0 bugs**). Leverage found, ranked:
+  1. **★ LMR reduction table is INTEGER plies (0..7); refs use ×1024 fixed-point.** So `lmrbase`/
+     `lmrdiv` are quantization-crippled — nearly INERT to SPSA (a +0.01 base step flips ~26/3969
+     cells). The running run validly tunes only `rfpmargin`/`lmrhistdiv`/`histbonus*`; the 2
+     LMR-table params are noise. Fix = ×1024 fixed-point (`LMRFixedPoint`), then a real lmrbase SPSA.
+  2. **History bonus & malus share one knob** (malus = −bonus) → SPSA can't reach the asymmetric
+     optimum both refs use. Fix = decouple `HistMalus{Scale,Max}` (default = bonus → byte-identical).
+  3. **Default LMR lacks PV-relief + improving** (both refs apply always; `LMRImproving` is built but
+     default-off) — free standard terms.
+  4. **SEE omits pin handling** (mild mis-sign in pinned positions); no x-ray/pin/EP test coverage.
+- **2026-07-08 — scaffolding round-2 fixes** (wait-window, byte-identical-off): `LMRFixedPoint`
+  (×1024 table — unblocks a real lmrbase/div SPSA) in progress; then decoupled malus + LMR PV-relief.
+- _(next: LMR/history convergence → tt=64 validation; then SPRT the fixed-point table ~neutral →
+  dedicated lmrbase/div SPSA on the smooth table; SPRT the other round-2 scaffolds …)_
