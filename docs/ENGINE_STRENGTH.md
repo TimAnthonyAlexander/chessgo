@@ -379,7 +379,7 @@ at a ~3–4× blitz time-odds ratio (§27) — impossible at 3400. **Re-anchor v
 Viridithas 17.0.0 **3245 ± 94** @ 100 ms) is itself superseded by that band. Full-strength
 Stockfish 17.1 (**~4080 CCRL Blitz**) sits at *most* ~680 CCRL above the floor *at CCRL time controls*
 (the ~380 lower end used the now-dead 3700 ceiling, so the real gap is smaller/unknown) — and at
-**short** movetimes the effective gap collapses to **~130 Elo / a ~3.7× time-odds ratio** (§27).
+**short** movetimes the effective gap collapses to **~70 Elo / a ~2× time-odds ratio** (§27).
 For reference the older SF-UCI_Elo anchor read **≈2882** (band 2847–2935 vs SF-2700/2800/2900,
 2026-06-22, §2.2); the
 **trustworthy relative** figure remains the self-play SPRT (**+212 ± 49 vs HCE @
@@ -1864,41 +1864,57 @@ already the defaults; the SPRTs *confirmed* the shipped config rather than chang
 
 ---
 
-## 27. Time-odds vs full-strength ("Unleashed") Stockfish — the ~3.7× rule (2026-07-03)
+## 27. Time-odds vs full-strength ("Unleashed") Stockfish — the ~2× rule (2026-07-03, updated 2026-07-08)
 
-**One-line: mid-game, Gomachine needs only ≈ 3.5–4× Stockfish's movetime to draw even with
-*full-strength, uncapped* SF — a near-constant time-odds RATIO, not a per-doubling blowup.**
-This is the maintainer's eyeballed reference state as of this date; write it down so future
-guesstimates anchor to it and not to the CCRL-band extrapolation, which is badly wrong here.
+**One-line: mid-game, Gomachine needs only ≈ 2× Stockfish's movetime to beat
+*full-strength, uncapped* SF — and at equal TC (100ms vs 100ms) it sometimes wins
+outright.** This is the maintainer's eyeballed reference state; write it down so
+future guesstimates anchor to it and not to the CCRL-band extrapolation, which is
+badly wrong here.
 
-**"Full strength / Unleashed" = uncapped SF** (`elo=0`, no `UCI_Elo`/`Skill` handicap — the
-top notch of the Engine-vs ruler, §20), i.e. the real ~4080-CCRL-Blitz monster, not a
-handicapped setting.
+**The ratio has been dropping steadily** as the engine improves: ~3.7× (2026-07-03,
+original measurement) → ~2× (long-standing, 200ms Gomachine reliably beats 100ms
+SF) → **parity** (2026-07-08: 100ms Gomachine sometimes beats 100ms SF — not
+reliably, but it's crossing the equal-TC line for the first time). This is a real
+milestone: the engine no longer needs a time handicap to compete with full-force
+Stockfish at blitz.
+
+**"Full strength / Unleashed" = uncapped SF** (`elo=0`, no `UCI_Elo`/`Skill`
+handicap — the top notch of the Engine-vs ruler, §20), i.e. the real
+~4080-CCRL-Blitz monster, not a handicapped setting.
 
 ### 27.1 The empirical anchors (mid-game, maintainer observation)
 
-| Full-strength SF movetime | Gomachine movetime for ~even | Ratio | Note |
+| Full-strength SF movetime | Gomachine movetime | Result | Ratio |
 |---|---|---|---|
-| 20 ms | ~74 ms (crossover) | ~3.7× | **300 ms beats it HARD** — crossover is far below 300 |
-| 40 ms | ~150 ms (crossover) | ~3.7× | 300 ms still wins clearly |
-| 60 ms | **~220 ms** (roundabout even) | ~3.7× | the firmest anchor of the three |
+| 20 ms | ~70 ms | roughly even | ~3.5× |
+| 20 ms | 300 ms | **Gomachine rout** | — |
+| 40 ms | ~80 ms | roughly even | ~2× |
+| 60 ms | ~120 ms | roughly even | ~2× |
+| 100 ms | 100 ms | **Gomachine sometimes wins** | **1× — parity!** |
+| 100 ms | 200 ms | **Gomachine reliably wins** | 2× |
 
-So: **Gomachine@(≈3.7 × T) ≈ SF_full@T**, and a bit more time flips even → win. At 20 ms SF,
-even a modest 300 ms is a rout.
+So: **Gomachine@(≈2 × T) reliably beats SF_full@T**, and at equal TC it crosses
+into winning territory some of the time. The ratio has halved since the original
+§27 measurement (~3.7× → ~2×), driven by the mirror KB net (§31), the v12 data
+upgrade (§29), the §30 perf push, and the accumulated search-stack improvements.
 
-### 27.2 What it means — the equal-time gap is SMALL down here (~130 Elo, not ~500)
+### 27.2 What it means — the equal-time gap is TINY down here (~70 Elo, not ~500)
 
-A constant ~3.7× ratio ⇒ at equal time SF is ahead by only `70 × log2(3.7) ≈ 70 × 1.9 ≈ 130
-Elo` (at the ~70-Elo/doubling blitz slope, §16.2). That is **far below the 380–680** the CCRL
-bands imply (SF 4080 vs our 3400–3700, §20). Two non-exclusive reasons, both flattering to
-Gomachine:
-- **Full-strength SF at tiny movetimes is disproportionately weak** — 20–60 ms is deep below
-  any TC SF's 4080 was earned at; its scaling curve is steeper at the bottom, so it sheds Elo
-  fast as the clock shrinks.
-- **Our time-scaling may be steeper than 70/doubling down here** — a good eval + heavy pruning
-  cashes extra nodes into depth efficiently at short TC.
-Either way, the CCRL 4080-vs-3550 gap does **not** apply at 20–60 ms; the measured ~130-Elo
-equal-time gap does.
+A constant ~2× ratio ⇒ at equal time SF is ahead by only `70 × log2(2) ≈ 70
+Elo` (at the ~70-Elo/doubling blitz slope, §16.2) — and at parity (1×) the gap is
+**~0 Elo at blitz movetimes**. That is **far below** the CCRL bands (SF 4080 vs
+our 3400–3700, §20). Same two reasons as before, now confirmed by direct
+observation:
+- **Full-strength SF at tiny movetimes is disproportionately weak** — 20–100 ms
+  is deep below any TC SF's 4080 was earned at; its scaling curve is steeper at
+  the bottom, so it sheds Elo fast as the clock shrinks.
+- **Our time-scaling is steeper than 70/doubling down here** — a good eval +
+  heavy pruning cashes extra nodes into depth efficiently at short TC, and the
+  accumulated improvements (mirror KB, v12 data, §30 perf, search stack) have
+  pushed the crossover point all the way to equal TC.
+Either way, the CCRL 4080-vs-3550 gap does **not** apply at blitz movetimes; the
+measured ~0–70 Elo equal-time gap does.
 
 ### 27.3 Correction of record — do NOT extrapolate the CCRL band as a constant 70/doubling
 
@@ -1908,7 +1924,7 @@ Earlier in this conversation the first-instinct estimate was **"~3 s/move to bea
 CCRL band and (b) both engines share a flat 70-Elo/doubling slope down to 20 ms. Neither holds:
 the gap collapses to ~130 Elo at these movetimes. **The `Tg = 20 ms × 2^(ΔE/70)` formula is only
 as good as ΔE, and at tiny TC the right ΔE is ~130, not ~530.** For any near-future
-"how much time does Gomachine need vs SF" question, **use the measured ~3.7× ratio**, not the
+"how much time does Gomachine need vs SF" question, **use the measured ~2× ratio**, not the
 CCRL-band formula.
 
 ### 27.4 Caveats (so it isn't over-trusted either)
@@ -1916,12 +1932,12 @@ CCRL-band formula.
   observations, directional and firm on the *ratio*, but the exact crossover ms are ±.
   A formal `bench vs-stockfish --full-strength` movetime sweep (SF pinned at fixed
   `movetime`, Gomachine swept until it brackets 50%) still owes the precise number and a
-  check that ~3.7× holds as SF's clock grows (it likely *rises* — SF's curve steepens with
+  check that ~2× holds as SF's clock grows (it likely *rises* — SF's curve steepens with
   time, so the ratio may widen at, say, 500 ms+ SF).
 - **Mid-game specifically.** Endgames (TB/horizon, §10) and openings (book, §25) are separate
   regimes; the ratio is a middlegame read.
-- **The ratio is a middlegame band, the point estimates are illustrative** — quote "≈3.5–4×
-  SF's movetime for parity, a bit more to win," not "exactly 220 ms beats 60 ms."
+- **The ratio is a middlegame band, the point estimates are illustrative** — quote "≈2×
+  SF's movetime to win reliably, sometimes wins at equal TC," not exact ms numbers.
 
 ---
 
@@ -1962,8 +1978,8 @@ brackets us 40–65%), scoring ~50% before publishing any new figure. Until that
 only honest statement is: **"comfortably above the old floor, no valid ceiling, untriangulated —
 re-anchor pending."**
 
-(Consistent with §27: at short movetimes the effective gap to full-strength SF is only ~130 Elo /
-a ~3.7× time-odds ratio — another sign the old CCRL band understates where we actually sit.)
+(Consistent with §27: at short movetimes the effective gap to full-strength SF is only ~70 Elo /
+a ~2× time-odds ratio — another sign the old CCRL band understates where we actually sit.)
 
 ## 29. v12 — the DATA lever wins: +24 movetime from a better teacher (2026-07-04)
 
