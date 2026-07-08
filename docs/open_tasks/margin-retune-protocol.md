@@ -171,7 +171,22 @@ not flip silently.
   3. **Default LMR lacks PV-relief + improving** (both refs apply always; `LMRImproving` is built but
      default-off) — free standard terms.
   4. **SEE omits pin handling** (mild mis-sign in pinned positions); no x-ray/pin/EP test coverage.
-- **2026-07-08 — scaffolding round-2 fixes** (wait-window, byte-identical-off): `LMRFixedPoint`
-  (×1024 table — unblocks a real lmrbase/div SPSA) in progress; then decoupled malus + LMR PV-relief.
-- _(next: LMR/history convergence → tt=64 validation; then SPRT the fixed-point table ~neutral →
-  dedicated lmrbase/div SPSA on the smooth table; SPRT the other round-2 scaffolds …)_
+- **2026-07-08 — round-2 scaffolds DONE** (wait-window, all default-off/byte-identical, verified
+  build+test+perft): `LMRFixedPoint` (×1024 table, commit `ecb4c92`); decoupled malus
+  `HistMalusScale`/`HistMalusMax` + `LMRPvRelief` (commit `ae2217c`). Every audit finding now has
+  ready SPRT/SPSA ammo.
+
+## Ready coalla queue (after the LMR/history SPSA converges — the box is the serialized resource)
+
+1. **Validate LMR/history θ** — tt=64 movetime SPRT of converged θ vs new base; ship `rfpmargin`/
+   `lmrhistdiv`/`histbonus*` if lb stably >0 (expect weak/no signal on `lmrbase`/`lmrdiv` — quantized).
+2. **`LMRFixedPoint=on` SPRT** vs off (expect ~neutral, it's byte-ish at default base/div) → if
+   non-negative, ship → then a **dedicated `lmrbasex10k`/`lmrdivx10k` SPSA on the smooth table** (the
+   real lmrbase payoff the integer table blocked).
+3. **Decoupled-malus SPSA**: `histmalusscale:8:80,histmalusmax:512:3072` (asymmetric optimum) → validate.
+4. **Free-LMR-terms SPRTs**: `LMRPvRelief=on`, `LMRImproving=on` (both refs apply always).
+5. **Phase 2 on/off re-SPRTs**: `RFP`/`Aspiration`/`DeltaPrune`/`LMP`/`Improving` =off vs default.
+6. **Phase 3 scaffolds**: `RFPQuad`/`RFPSoft`, `AspVariance`, `ImprovingRich`, `DeltaExemptChecks`,
+   `DeltaMargin` SPSA, widened-floor margin SPSA (`nullmover:2:5`,`captseemaxdepth:2:8`).
+
+- _(next: LMR/history convergence → run the queue above …)_
