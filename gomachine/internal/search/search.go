@@ -21,10 +21,18 @@ import (
 // after init, so it is safe to share across Lazy SMP workers.
 var lmrTable [64][64]int
 
+// lmrTable1024[depth][moveCount] is the SAME log(d)·log(m) surface as lmrTable but
+// stored in ×1024 fixed-point (the SF18/Stormphrax representation): the reduction in
+// 1024ths of a ply rather than truncated whole plies. Used only by the default-off
+// Params.LMRFixedPoint path, where a fine-grained table lets SPSA move lmrbase/lmrdiv
+// meaningfully (an integer table flips only a handful of cells per small perturbation).
+var lmrTable1024 [64][64]int
+
 func init() {
 	for d := 1; d < 64; d++ {
 		for m := 1; m < 64; m++ {
 			lmrTable[d][m] = int(0.7844 + math.Log(float64(d))*math.Log(float64(m))/2.4696)
+			lmrTable1024[d][m] = int(1024.0 * (0.7844 + math.Log(float64(d))*math.Log(float64(m))/2.4696))
 		}
 	}
 }
@@ -215,6 +223,10 @@ type Searcher struct {
 	// or a per-searcher table built from Params.LMRBaseX10k/LMRDivX10k otherwise. Read-
 	// only after construction, so it is safe to share across Lazy SMP workers.
 	lmr     *[64][64]int
+	// lmr1024 is the ×1024 fixed-point LMR table read only by the default-off
+	// Params.LMRFixedPoint path; nil/unused on the integer OFF path. Read-only after
+	// construction, so it is safe to share across Lazy SMP workers.
+	lmr1024 *[64][64]int
 	killers [maxPly][2]chess.Move
 	history [12][64]int
 	// captureHist[movedPiece][toSquare][victimType] is the capture-history table
@@ -350,6 +362,7 @@ func NewWithParams(ttSizeMB int, params Params) *Searcher {
 		params:   params,
 		ec:       evalConfig(params),
 		lmr:      lmrTableFor(params),
+		lmr1024:  lmrTable1024For(params),
 		keyStack: make([]uint64, 0, 1024),
 	}
 }
@@ -368,6 +381,24 @@ func lmrTableFor(p Params) *[64][64]int {
 	for d := 1; d < 64; d++ {
 		for m := 1; m < 64; m++ {
 			t[d][m] = int(base + math.Log(float64(d))*math.Log(float64(m))/div)
+		}
+	}
+	return t
+}
+
+// lmrTable1024For is lmrTableFor's ×1024 fixed-point twin (SF/Stormphrax): the shared
+// package default when base/div are default, else a per-searcher table. Read only by the
+// default-off Params.LMRFixedPoint path.
+func lmrTable1024For(p Params) *[64][64]int {
+	if p.LMRBaseX10k == 7844 && p.LMRDivX10k == 24696 {
+		return &lmrTable1024
+	}
+	base := float64(p.LMRBaseX10k) / 10000
+	div := float64(p.LMRDivX10k) / 10000
+	t := new([64][64]int)
+	for d := 1; d < 64; d++ {
+		for m := 1; m < 64; m++ {
+			t[d][m] = int(1024.0 * (base + math.Log(float64(d))*math.Log(float64(m))/div))
 		}
 	}
 	return t
@@ -589,6 +620,7 @@ func newWithSharedTT(tt *TT, params Params) *Searcher {
 		params:   params,
 		ec:       evalConfig(params),
 		lmr:      lmrTableFor(params),
+		lmr1024:  lmrTable1024For(params),
 		keyStack: make([]uint64, 0, 1024),
 	}
 }
@@ -2449,6 +2481,35 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 				}
 			} else if s.params.LMR && depth >= 3 && quiet && !inCheck && (!givesCheck || s.params.LMRCheckReduce) && searched >= 4 {
 				if s.params.LMRFormula {
+					if s.params.LMRFixedPoint {
+						// ×1024 fixed-point reduction (SF18/Stormphrax): accumulate the
+						// reduction in 1024ths of a ply off the fine-grained lmr1024 table,
+						// so lmrbase/lmrdiv perturbations move it smoothly (an SPSA lever the
+						// integer table can't give). Same terms as the integer path below,
+						// each scaled to 1024ths; the default-off Stormphrax sub-terms are
+						// intentionally omitted here (this is scaffolding — under SPRT).
+						r1024 := s.lmr1024[minInt(depth, 63)][minInt(searched, 63)]
+						hist := s.history[mover][m.To()]
+						if s.params.ContHist && s.cont != nil {
+							hist += s.contScore(ply, mover, m.To())
+						}
+						if s.params.ContHist2 && s.cont2 != nil {
+							hist += s.contScore2(ply, mover, m.To())
+						}
+						r1024 -= hist * 1024 / s.params.LMRHistDiv
+						if s.params.LMRCutnode && childCutnode {
+							r1024 += s.params.LMRCutnodeRed * 1024
+						}
+						// Whole-ply reduction, then the same [1, depth-1] clamp as OFF.
+						r := r1024 / 1024
+						if r < 1 {
+							r = 1
+						}
+						if r > depth-1 {
+							r = depth - 1
+						}
+						reduction = r
+					} else {
 					// Smooth log(d)·log(m) base in place of the flat 1/2; reduce
 					// less for good-history quiets, more for malus'd ones. Clamped
 					// to [1, depth-1] so a reduced move still searches ≥1 ply.
@@ -2490,6 +2551,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 						r = depth - 1
 					}
 					reduction = r
+					}
 				} else {
 					reduction = 1
 					if searched >= 8 {

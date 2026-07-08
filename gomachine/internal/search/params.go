@@ -31,6 +31,7 @@ type Params struct {
 	Improving        bool // "improving" heuristic scales RFP margin + LMP move count
 	ImprovingRich    bool // richer improving: ply-4 fallback + default-true-when-unknown + (staticEval>=beta) upgrade (Stormphrax/SF). DEFAULT OFF — under SPRT.
 	LMRFormula       bool // log(d)·log(m) LMR table + PV/improving/history adjustments
+	LMRFixedPoint    bool // LMR reduction in ×1024 fixed-point (SF/Stormphrax) instead of integer plies — makes lmrbase/lmrdiv finely tunable. DEFAULT OFF — under SPRT.
 	LMRCutnode       bool // reduce late moves MORE at expected cut-nodes (Stormphrax r+=cutnode). Node-efficiency lever: at a cutnode late moves rarely raise alpha, so reduce them harder. DEFAULT OFF — under SPRT.
 	LMRCutnodeRed    int  // plies of extra LMR reduction at a cutnode (Stormphrax ≈+1.9; default 1).
 	LMRImproving     bool // additive LMR term on the shipped formula path: reduce late quiets +1 ply when the node is NOT improving (Stormphrax r += !improving·1242/1024). Independent term, not the rejected LMR2 bundle. DEFAULT OFF — under SPRT.
@@ -183,7 +184,8 @@ func DefaultParams() Params {
 		ImprovingRich:  false, // richer improving (ply-4 fallback + default-true + eval>=beta); scaffold under SPRT
 
 		LMRFormula:     true,
-		LMRCutnode:     true, // SHIPPED as part of the +19.7 movetime stack (coordinated: needs ContHist + LMRDoDeeper; alone it's −7)
+		LMRFixedPoint:  false, // ×1024 fixed-point LMR scaffold for SPSA of lmrbase/lmrdiv; under SPRT
+		LMRCutnode:     true,  // SHIPPED as part of the +19.7 movetime stack (coordinated: needs ContHist + LMRDoDeeper; alone it's −7)
 		LMRCutnodeRed:  1,    // extra plies of reduction at a cutnode (cutred=2 measured worse)
 		// Individual Stormphrax LMR reduction terms, added on the shipped LMRFormula
 		// path (NOT the rejected aggressive LMR2 bundle — each is an independent
