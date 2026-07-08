@@ -28,8 +28,11 @@
 1. **`early-fen-skipping=28`** — skip ply ≤ 28. Openings are noise for eval. **BIGGEST
    single lever.** Raw T80 without this burns capacity on the opening.
 2. `random-fen-skipping=10`.
-3. **Lambda anneal: 1.0 (S1) → ~0.85 → ~0.75.** Shifts the target from game-result toward
-   eval across training.
+3. **Lambda anneal: 1.0 (S1) → ~0.85 → ~0.75.** SF `lambda` = weight on **eval**, so this
+   lowers eval-weight from 1.0 → 0.75, i.e. shifts the target from pure eval **toward WDL
+   (game-result)** across training (start pure-eval, end 75% eval / 25% WDL). NOTE bullet's
+   `wdl` value is the **inverse** (weight on game-result), so the faithful bullet translation is
+   `LinearWDL{start:0.0, end:0.25}` — anneal result-weight **up**, NOT `0.75→0.5`.
 4. Best-move export > played-move on Elo, but breaks binpack compression (tradeoff).
 5. Hyperparams: `max_epochs=800`, `repetitions=3`/stage, `batch=16384`, `lr≈1.08e-3`,
    `gamma≈0.9944`. SPSA-tuned scaling (`pow-exp`, `qp-asymmetry`, `in/out-scaling/offset`)
