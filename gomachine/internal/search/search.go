@@ -67,7 +67,7 @@ const (
 	// runs at reduced depth (depth−1)/2 with the TT move excluded; if every other
 	// move fails low under singularBeta the TT move is "singular" and is extended a
 	// ply. Margin/depth follow Stockfish-class defaults (depth≥~6–8, margin ~2–3·d).
-	singularMinDepth = 6 // re-tuned 8→6 (2026-07-05 stale-defaults bundle, +38.7 movetime)
+	singularMinDepth = 5 // re-tuned 6→5 (2026-07-08 mirror-KB SPSA snapshot, adopted as new base) — tracks DefaultParams.SingularMinDepth (guarded by TestSingularParamsPreserveDefault)
 	singularMargin   = 2
 	// Internal iterative reduction (Params.IIR): at a node this deep with no TT
 	// move to guide ordering, search a ply shallower (seeds the TT, cheaper redo).
