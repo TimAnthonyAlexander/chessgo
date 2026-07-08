@@ -126,6 +126,30 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("histbonusmax: %q is not an int", val)
 			}
 			base.HistBonusMax = n
+		case "histmalusscale", "histmscale":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("histmalusscale: %q is not an int", val)
+			}
+			base.HistMalusScale = n
+		case "histmalusmax", "histmmax":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("histmalusmax: %q is not an int", val)
+			}
+			base.HistMalusMax = n
+		case "lmrfixedpoint", "lmrfp":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.LMRFixedPoint = b
+		case "lmrpvrelief", "lmrpv":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.LMRPvRelief = b
 		case "lmr":
 			b, err := parseBool(val)
 			if err != nil {
