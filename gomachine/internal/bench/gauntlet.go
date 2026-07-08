@@ -29,6 +29,14 @@ type GauntletConfig struct {
 	SFElo     int               // opponent's nominal Elo (the anchor for our estimate)
 	SFBudget  UCIBudget         // opponent's per-move budget
 
+	// SFCold replicates the frontend's admin engine-vs-engine Stockfish path
+	// (server.handleStockfishMove): a FRESH Stockfish process every move, fed only
+	// `position fen <current>` with NO move history and a cold 16MB hash — instead of
+	// one persistent, warm-hash, full-history process per game. Diagnostic only: it
+	// measures how much the frontend's per-move cold spawn handicaps SF vs the honest
+	// warm gauntlet, to explain the frontend-vs-bench result gap.
+	SFCold bool
+
 	Games       int // total games (rounded up to whole color-swapped pairs)
 	Concurrency int
 	Book        []Opening
@@ -95,22 +103,28 @@ func RunGauntlet(ctx context.Context, cfg GauntletConfig, onProgress func(Gauntl
 			ours := engine.NewWithParams(cfg.TTMB, cfg.OurParams)
 			ours.SetBook(cfg.EngineBook)
 			ours.SetTablebase(cfg.Tablebase)
-			sf, err := StartUCI(cfg.SFPath, cfg.SFOptions)
-			if err != nil {
-				select {
-				case errCh <- err:
-				default:
+			// Warm mode: one persistent SF for the whole worker. Cold mode: none here —
+			// playVsUCI spawns a fresh SF per move (mirroring the frontend).
+			var sf *UCIEngine
+			if !cfg.SFCold {
+				var err error
+				sf, err = StartUCI(cfg.SFPath, cfg.SFOptions)
+				if err != nil {
+					select {
+					case errCh <- err:
+					default:
+					}
+					cancel()
+					return
 				}
-				cancel()
-				return
+				defer sf.Close()
 			}
-			defer sf.Close()
 
 			for idx := range jobs {
 				open := cfg.Book[idx%len(cfg.Book)]
 				// Game A: we are White. Game B: we are Black (same opening).
 				for _, ourColor := range []chess.Color{chess.White, chess.Black} {
-					s, err := playVsUCI(ctx, ours, maxThreads(cfg.OurThreads), sf, open.FEN, ourColor, ourLim, cfg.SFBudget)
+					s, err := playVsUCI(ctx, ours, maxThreads(cfg.OurThreads), sf, cfg.SFPath, cfg.SFOptions, cfg.SFCold, open.FEN, ourColor, ourLim, cfg.SFBudget)
 					if err != nil {
 						select {
 						case errCh <- err:
@@ -194,10 +208,12 @@ func RunGauntlet(ctx context.Context, cfg GauntletConfig, onProgress func(Gauntl
 
 // playVsUCI plays one game from openFEN. ourColor is the side our engine plays;
 // the opponent (sf) plays the other side. Returns our score (1, 0.5, 0).
-func playVsUCI(ctx context.Context, ours *engine.Engine, ourThreads int, sf *UCIEngine, openFEN string, ourColor chess.Color, ourLim search.Limits, sfBudget UCIBudget) (float64, error) {
+func playVsUCI(ctx context.Context, ours *engine.Engine, ourThreads int, sf *UCIEngine, sfPath string, sfOpts map[string]string, sfCold bool, openFEN string, ourColor chess.Color, ourLim search.Limits, sfBudget UCIBudget) (float64, error) {
 	ours.NewGame()
-	if err := sf.NewGame(); err != nil {
-		return 0, err
+	if !sfCold {
+		if err := sf.NewGame(); err != nil {
+			return 0, err
+		}
 	}
 	pos, err := chess.ParseFEN(openFEN)
 	if err != nil {
@@ -227,6 +243,20 @@ func playVsUCI(ctx context.Context, ours *engine.Engine, ourThreads int, sf *UCI
 				return 0.5, nil
 			}
 			uci = res.Move.String()
+		} else if sfCold {
+			// Frontend parity: fresh SF process, bare current FEN, no move history,
+			// cold hash — exactly server.handleStockfishMove. Spawn/handshake happens
+			// BEFORE `go`, so it never eats the search budget.
+			csf, err := StartUCI(sfPath, sfOpts)
+			if err != nil {
+				return 0, fmt.Errorf("stockfish cold spawn: %w", err)
+			}
+			mv, err := csf.BestMove(pos.FEN(), nil, sfBudget)
+			_ = csf.Close()
+			if err != nil {
+				return 0, fmt.Errorf("stockfish (cold): %w", err)
+			}
+			uci = mv
 		} else {
 			mv, err := sf.BestMove(openFEN, moves, sfBudget)
 			if err != nil {

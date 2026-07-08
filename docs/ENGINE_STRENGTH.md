@@ -88,9 +88,12 @@ singular/futility, nmpgate/qsfut, book recompile). So every number below is **ST
 UNDERSTATES today's binary** — do **not** quote 3400, 3700, ≈3500, ≈3260, or ≈3200 as current;
 that is quoting a v6-era figure for a much stronger engine. What holds: v6's floor (>3400, from a
 100–0 blowout, so an *underestimate* even for v6); the ~3700 loss is an **old** match the engine has
-gained past (**not** a current ceiling); and at blitz movetimes gomachine beats **full-force
-Stockfish** at only a ~3–4× time-odds ratio (§27) — impossible at 3400. **Conclusion: strength is
-materially above the old ~3400 v6 mark, upper bound unmeasured, untriangulated — re-anchor vs a
+gained past (**not** a current ceiling). **(The old "beats full-force SF at a ~2–4× time-odds
+ratio" tell is RETRACTED — §27.5: it was measured vs a cold-per-move frontend Stockfish, worth
+~235 Elo of handicap; vs a *warm* full-force SF, Gomachine scores ~12.5% at equal 100 ms TC and
+wins ~0 even at 3× odds. Do not cite it as evidence of strength.)** **Conclusion: strength is
+materially above the old ~3400 v6 mark** (from the v6 100–0 floor, not the retracted SF tell)**,
+upper bound unmeasured, untriangulated — re-anchor vs a
 ranked NNUE opponent (~3700+, the old ~3450–3600 target is now too weak), scoring ~50%, before
 quoting ANY point number.** The ≈3260/≈3200 reads below are superseded (≈3200 was a one-sided
 all-losses artifact); all reads below are kept **for the record only**, not as current strength.
@@ -373,21 +376,26 @@ Current strength: **no valid current measurement — the only anchor is v6 (2026
 engine has shipped hundreds of Elo since with no re-measure, so the 3400–3700 band is STALE and
 UNDERSTATES the current binary.** Do not quote 3400/3700/any point as current. v6's floor (>3400,
 from a 100–0 blowout = underestimate) and the **old** ~3700 loss (no longer a valid ceiling — engine
-has gained past it) are historical record only. Empirically, gomachine beats **full-force Stockfish**
-at a ~3–4× blitz time-odds ratio (§27) — impossible at 3400. **Re-anchor vs a ranked NNUE opponent
+has gained past it) are historical record only. **(The "beats full-force Stockfish at a ~2–4× blitz
+time-odds ratio" tell is RETRACTED — §27.5: it was measured against a cold-per-move frontend SF
+(~235 Elo handicap); vs a warm full-force SF, Gomachine scores ~12.5% at equal 100 ms TC and wins
+~0 even at 3× odds. It is no longer evidence of anything.)** **Re-anchor vs a ranked NNUE opponent
 (~3700+, the old ~3450–3600 target is now too weak), ~50% score, before quoting ANY point number.** The earlier **≈3260 "dirty"** read (2026-06-29, §15 — Starzix 5.0 **3276 ± 83** /
 Viridithas 17.0.0 **3245 ± 94** @ 100 ms) is itself superseded by that band. Full-strength
 Stockfish 17.1 (**~4080 CCRL Blitz**) sits at *most* ~680 CCRL above the floor *at CCRL time controls*
-(the ~380 lower end used the now-dead 3700 ceiling, so the real gap is smaller/unknown) — and at
-**short** movetimes the effective gap collapses to **~70 Elo / a ~2× time-odds ratio** (§27).
+(the ~380 lower end used the now-dead 3700 ceiling, so the real gap is smaller/unknown). ~~and at
+**short** movetimes the effective gap collapses to **~70 Elo / a ~2× time-odds ratio** (§27)~~
+**[RETRACTED — §27.5: that "~70 Elo at short TC" reading came from the cold-per-move frontend SF;
+vs a *warm* full-force SF the equal-100 ms gap is ~335 Elo, not ~70].**
 For reference the older SF-UCI_Elo anchor read **≈2882** (band 2847–2935 vs SF-2700/2800/2900,
 2026-06-22, §2.2); the
 **trustworthy relative** figure remains the self-play SPRT (**+212 ± 49 vs HCE @
 movetime**, §11), not any absolute anchor. The NNUE width/data levers (§11.4) are how the
 remaining long-TC gap to full-strength SF narrows (the old "~800 CCRL above us" was measured
 off the superseded ≈3260 read; against the current floor it's **at most ~680** at CCRL TC — the ~380
-lower end used the now-dead 3700 ceiling (§28), so the real gap is smaller/unknown — and far less at
-short movetimes, §27).
+lower end used the now-dead 3700 ceiling (§28), so the real gap is smaller/unknown. (The old "far
+less at short movetimes" caveat is **retracted** — §27.5: that rested on the cold frontend SF; vs a
+warm SF the short-TC gap is *large*, ~335 Elo at 100 ms.)
 
 **Update — v6 (512-wide) + SIMD now live (§12):** the wider net adds **+124.5 ± 50
 @ fixed nodes** over the 256 net, and `archsimd` SIMD (6.5× eval on amd64) lets that
@@ -1864,13 +1872,23 @@ already the defaults; the SPRTs *confirmed* the shipped config rather than chang
 
 ---
 
-## 27. Time-odds vs full-strength ("Unleashed") Stockfish — the ~2× rule (2026-07-03, updated 2026-07-08)
+## 27. Time-odds vs full-strength ("Unleashed") Stockfish — ⚠️ CORRECTED: the "~2× rule" was a COLD-Stockfish artifact (2026-07-03, corrected 2026-07-08)
 
-**One-line: mid-game, Gomachine needs only ≈ 2× Stockfish's movetime to beat
+> **⚠️ RETRACTED — READ §27.5 FIRST. The entire "~2× time-odds / equal-TC parity /
+> ~70-Elo gap" story below was measured through the admin frontend Engine-vs-Engine
+> view, which drives Stockfish via `server.handleStockfishMove` — a *fresh SF process
+> every move* (empty 16 MB hash, no move history, cold). A controlled bench
+> (§27.5) shows that cold-per-move spawn handicaps SF by ~235 Elo vs a warm,
+> persistent, full-history SF. Against a WARM full-force SF at equal 100 ms TC,
+> Gomachine scores ~12.5% (W0 D15 L45 / 60) ≈ −335 Elo — a rout, NOT parity. The
+> "parity milestone" and "~2× rule" do not survive contact with a warm opponent.
+> §27.1–27.4 are preserved as the (mistaken) record; do NOT quote them as current.**
+
+**Original (now-retracted) one-line: mid-game, Gomachine needs only ≈ 2× Stockfish's movetime to beat
 *full-strength, uncapped* SF — and at equal TC (100ms vs 100ms) it sometimes wins
-outright.** This is the maintainer's eyeballed reference state; write it down so
-future guesstimates anchor to it and not to the CCRL-band extrapolation, which is
-badly wrong here.
+outright.** This was the maintainer's eyeballed reference state from the frontend
+Engine-vs-Engine view — which we now know pits Gomachine against a **cold-per-move
+Stockfish** (§27.5), so the observation flatters Gomachine by *at least* ~235 Elo.
 
 **The ratio has been dropping steadily** as the engine improves: ~3.7× (2026-07-03,
 original measurement) → ~2× (long-standing, 200ms Gomachine reliably beats 100ms
@@ -1939,6 +1957,45 @@ CCRL-band formula.
 - **The ratio is a middlegame band, the point estimates are illustrative** — quote "≈2×
   SF's movetime to win reliably, sometimes wins at equal TC," not exact ms numbers.
 
+### 27.5 CORRECTION OF RECORD — the frontend Stockfish is COLD-per-move; the ~2× rule dies (2026-07-08)
+
+The §27.1–27.4 observations were all taken through the admin **Engine-vs-Engine** page, which
+gets Stockfish's move from `server.handleStockfishMove`: it **spawns a brand-new Stockfish
+process for every move**, feeds it only `position fen <current>` with **no move history**, and
+searches with an **empty 16 MB hash** each time (`defer sf.Close()` — it's torn down after one
+move). The honest bench harness (`bench vs-stockfish`) instead runs **one persistent SF per game**
+with `ucinewgame` at the start, the full `position fen <open> moves …` history, and a **warm hash
+that accumulates across the game**. Those are different-strength opponents.
+
+**Controlled measurement** (coalla, `GOEXPERIMENT=simd GOAMD64=v4` build, KB net loaded, commit
+`b80da65`; 60 games, **100 ms vs 100 ms**, full-strength/uncapped SF; the only variable flipped is
+warm↔cold, via the new `bench vs-stockfish --sf-cold` flag that replicates the frontend spawn):
+
+| Stockfish mode | Record (our POV) | Score | Elo diff |
+|---|---|---|---|
+| **Warm** (persistent, warm hash, full history — the honest bench) | **W0 D15 L45** | **12.5%** | **≈ −335** |
+| **Cold** (fresh process/move, bare FEN, no history — the frontend path) | **W4 D35 L21** | **35.8%** | **≈ −102** |
+
+**The cold-per-move spawn is worth ≈ 235 Elo of Stockfish strength.** At short TC the fresh process
+loses its hash carryover *and* all game context, and the proportional hit at 100 ms is far larger
+than the ~50–80 Elo one might guess for "clear hash each move." So:
+
+- **There is no equal-TC parity.** Against a warm full-force SF at 100 ms Gomachine scores ~12.5%
+  (0 wins in 60), ≈ −335 Elo. Even at **3× time-odds** (300 ms vs 100 ms warm — the maintainer's
+  original bench) Gomachine still wins ~0 and mostly loses/draws. The "~2× ratio / ~70-Elo gap /
+  parity milestone" of §27.1–27.4 were all reading the crippled cold opponent.
+- **The frontend is still MORE optimistic than the cold bench reproduces.** The cold run lands at
+  35.8% (W4:L21 among decisives), but the maintainer eyeballs the live frontend closer to ~60:40
+  W:L. So cold-per-move SF explains the *bulk* of the frontend-vs-bench gap but **not all of it** —
+  a residual factor still flatters the frontend Gomachine, currently unquantified. Net: the frontend
+  Engine-vs-Engine view overstates Gomachine by **at least** ~235 Elo and is **retired as a strength
+  signal** — use `bench vs-stockfish` (warm, default) for any SF-relative read.
+
+**What survives:** nothing about warm-SF strength was wrong in the bench — the bench was right all
+along; the frontend was weakening the *opponent*. This does **not** touch the §20 CCRL v6 result (a
+real external engine, not this cold path). It **does** delete "beats full-force SF at blitz" as
+evidence for current strength, and makes the §28 re-anchor the *only* path to a defensible number.
+
 ---
 
 ## 28. The 3400–3700 band is a STALE FLOOR with a DEAD CEILING (2026-07-03) — re-anchor before quoting a number
@@ -1978,8 +2035,11 @@ brackets us 40–65%), scoring ~50% before publishing any new figure. Until that
 only honest statement is: **"comfortably above the old floor, no valid ceiling, untriangulated —
 re-anchor pending."**
 
-(Consistent with §27: at short movetimes the effective gap to full-strength SF is only ~70 Elo /
-a ~2× time-odds ratio — another sign the old CCRL band understates where we actually sit.)
+(~~Consistent with §27: at short movetimes the effective gap to full-strength SF is only ~70 Elo /
+a ~2× time-odds ratio — another sign the old CCRL band understates where we actually sit.~~
+**RETRACTED — §27.5:** that "~70 Elo at short TC" was a cold-per-move frontend-Stockfish artifact;
+vs a *warm* full-force SF the equal-100 ms gap is ~335 Elo. This line is **no longer** support for
+"the band understates us" — the re-anchor is the only evidence that can move the number.)
 
 ## 29. v12 — the DATA lever wins: +24 movetime from a better teacher (2026-07-04)
 

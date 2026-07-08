@@ -608,6 +608,7 @@ func cmdBenchStockfish(args []string) {
 	sfElo := fs.Int("sf-elo", 1500, "Stockfish UCI_Elo (1320..3190); the anchor for our estimate")
 	sfSkill := fs.Int("sf-skill", -1, "Stockfish Skill Level 0..20 (overrides --sf-elo if ≥0)")
 	sfMovetime := fs.Int("sf-movetime", 100, "Stockfish ms per move")
+	sfCold := fs.Bool("sf-cold", false, "spawn a FRESH Stockfish per move (bare current FEN, no move history, cold hash) — replicates the frontend admin engine-vs-engine path; diagnostic for the frontend-vs-bench strength gap")
 	fullStrength := fs.Bool("full-strength", false, "run the opponent at FULL strength (skip UCI_LimitStrength/Skill); --sf-elo is then ONLY the anchor rating — use for a CCRL-rated reference engine, e.g. --sf ./stash --full-strength --sf-elo 2880 --opp-name 'Stash v24'")
 	oppName := fs.String("opp-name", "", "opponent label for the report (e.g. \"Stash v24\"); blank → a generic name")
 	oppOpts := fs.String("opp-opts", "", "extra opponent UCI options as Name=Value,Name=Value (e.g. \"Hash=64,Threads=1,EvalFile=net.nnue\"); merged AFTER strength options — set hash/threads/net for a fair anchor")
@@ -685,6 +686,7 @@ func cmdBenchStockfish(args []string) {
 		SFOptions:   sfOpts,
 		SFElo:       anchorElo,
 		SFBudget:    bench.UCIBudget{MoveTime: time.Duration(*sfMovetime) * time.Millisecond},
+		SFCold:      *sfCold,
 		Games:       *games,
 		Concurrency: *conc,
 		Book:        book,

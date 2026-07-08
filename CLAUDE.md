@@ -6,8 +6,11 @@ with all chess rules + the AI implemented in a dedicated Go engine.
 The engine's **last actual CCRL-style measurement was v6 (2026-07-01): 100W–0L vs a ~3400
 engine** — a blowout, so an *underestimate* even then. Since then it has shipped **hundreds of
 Elo with NO re-anchor** (v9 threats, v12 Leela/test80 data, the +23.3 search stack, corrhist/
-singular/futility, …), and at blitz movetimes it beats **full-force Stockfish** at a ~2× time-odds
-ratio and sometimes wins at equal TC (§27). So **current strength is materially ABOVE the old ~3400 v6 mark, upper bound
+singular/futility, …). (**The old "beats full-force Stockfish at ~2× time-odds / equal-TC parity"
+tell is RETRACTED** — ENGINE_STRENGTH §27.5: it was measured through the admin frontend
+Engine-vs-Engine view, which spawns a *cold Stockfish every move* worth ~235 Elo of handicap; vs a
+*warm* full-force SF, gomachine scores ~12.5% at equal 100ms TC and wins ~0 even at 3× time-odds.
+Do NOT cite the SF time-odds tell as strength evidence.) So **current strength is materially ABOVE the old ~3400 v6 mark** (from the v6 100–0 floor, not the retracted SF tell)**, upper bound
 unmeasured — re-anchor pending; do NOT quote 3400 (or 3700, or any point) as current strength.**
 See §Status. The engine is the centerpiece; the website is the front door to it.
 
@@ -261,9 +264,15 @@ engine (the exact stale-docs trap). What we can honestly say:
   +23.3 search stack, corrhist/singular/futility, nmpgate/qsfut, recompiled book,
   **king-bucket horizontal mirror (§31)**, **32-key Finny refresh cache (Stormphrax pattern)**
   — hundreds of Elo, zero re-anchors.
-- **Empirical tell (§27):** at blitz movetimes gomachine beats **full-force ("Unleashed", elo=0)
-  Stockfish** with only a ~2× time-odds ratio and sometimes wins at equal TC — the gap to
-  full-force SF at blitz is ~70 Elo, not ~500. You cannot do that at 3400.
+- **Empirical tell (§27) — ⚠️ RETRACTED (§27.5, 2026-07-08):** the "beats full-force SF at ~2×
+  time-odds / sometimes at equal TC / ~70-Elo blitz gap" claim came from the admin frontend
+  Engine-vs-Engine view, which drives Stockfish via `handleStockfishMove` — a **fresh SF process
+  every move** (empty hash, no move history, cold), worth **~235 Elo** of handicap. Controlled
+  bench (coalla, 100/100, full-strength SF, 60 games, `--sf-cold` flag): **warm SF → W0 D15 L45
+  (12.5%, ≈ −335 Elo); cold SF → W4 D35 L21 (35.8%)**. So vs a warm full-force SF there is **no
+  parity** — gomachine wins ~0 even at 3× time-odds. The frontend Engine-vs-Engine view is
+  **retired as a strength signal**; use `bench vs-stockfish` (warm, default). This does not touch
+  the v6 CCRL floor — it just deletes "beats full-force SF at blitz" as evidence.
 - **Conclusion:** strength is **materially above the old ~3400 v6 mark, upper bound unmeasured,
   untriangulated.** **Re-anchor vs a ranked NNUE opponent (target now ~3700+, not the old
   ~3450–3600), scoring ~50%, before publishing ANY point number.** This **supersedes** the earlier
