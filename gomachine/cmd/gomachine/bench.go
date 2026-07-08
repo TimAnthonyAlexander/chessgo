@@ -373,7 +373,7 @@ func cmdBenchSPRT(args []string) {
 	engBookPath := fs.String("engine-book", "data/book.bin", "precomputed engine opening book consulted when a side has book=on (\"\" disables)")
 	newEngBookPath := fs.String("new-engine-book", "", "engine opening book for --new only (book-vs-book A/B; overrides --engine-book on the new side; needs --new \"book=on\")")
 	oldEngBookPath := fs.String("old-engine-book", "", "engine opening book for --old only (e.g. the shipped data/book.bin vs a recompiled one)")
-	tbPath := fs.String("tb-path", "", "Syzygy tablebase directory, probed when a side has tb=on (\"\" disables)")
+	tbPath := fs.String("tb-path", "", "Syzygy tablebase directory; \"\" auto-discovers (SYZYGY_PATH env, then data/syzygy; matches serve default)")
 	pprofAddr := fs.String("pprof", "", "if set (e.g. 127.0.0.1:6480), serve net/http/pprof for CPU profiling this run (scrape with: go tool pprof http://addr/debug/pprof/profile?seconds=30)")
 	newThreads := fs.Int("new-threads", 1, "Lazy SMP threads for --new (use with --movetime)")
 	oldThreads := fs.Int("old-threads", 1, "Lazy SMP threads for --old")
@@ -563,7 +563,7 @@ func cmdBenchSPRT(args []string) {
 		EngineBook:     loadEngineBook(*engBookPath),
 		NewEngineBook:  loadEngineBook(*newEngBookPath),
 		OldEngineBook:  loadEngineBook(*oldEngBookPath),
-		Tablebase:      loadTablebase(*tbPath),
+		Tablebase:      loadTablebaseDefault(*tbPath),
 		NewNet:         newNetP,
 		OldNet:         oldNetP,
 		NewMultiNet:    newMultiP,
@@ -614,12 +614,12 @@ func cmdBenchStockfish(args []string) {
 	ourNodes := fs.Uint64("nodes", 0, "our fixed nodes per move (0 → use --movetime)")
 	ourMovetime := fs.Int("movetime", 100, "our ms per move (if --nodes 0)")
 	ourThreads := fs.Int("threads", 1, "our Lazy SMP threads")
-	tt := fs.Int("tt", 16, "our transposition table size (MB)")
+	tt := fs.Int("tt", 64, "our transposition table size (MB)")
 	games := fs.Int("games", 60, "number of games (rounded to color-swapped pairs)")
 	conc := fs.Int("concurrency", 4, "parallel games (each spawns its own Stockfish)")
 	bookPath := fs.String("book", "", "opening book (.epd/.fen or UCI move-lines); default: embedded")
 	engBookPath := fs.String("engine-book", "data/book.bin", "precomputed engine opening book consulted when --new has book=on (\"\" disables)")
-	tbPath := fs.String("tb-path", "", "Syzygy tablebase directory, probed when --new has tb=on (\"\" disables)")
+	tbPath := fs.String("tb-path", "", "Syzygy tablebase directory; \"\" auto-discovers (SYZYGY_PATH env, then data/syzygy; matches serve default)")
 	_ = fs.Parse(args)
 
 	ourParams, err := bench.ParseParams(search.DefaultParams(), *ourSpec)
@@ -689,7 +689,7 @@ func cmdBenchStockfish(args []string) {
 		Concurrency: *conc,
 		Book:        book,
 		EngineBook:  loadEngineBook(*engBookPath),
-		Tablebase:   loadTablebase(*tbPath),
+		Tablebase:   loadTablebaseDefault(*tbPath),
 	}
 
 	reporter := bench.NewGauntletReporter(anchorElo, sfDesc, ourDesc, budget)
