@@ -45,8 +45,14 @@ func TestSearchStartposSane(t *testing.T) {
 	if r.BestMove == chess.NullMove {
 		t.Fatal("no best move from start position")
 	}
-	if r.Score < -100 || r.Score > 100 {
-		t.Errorf("startpos score = %d, expected near-equal", r.Score)
+	// Sane opening eval. NOTE: `go test` never runs main()'s loadEnrichedDefault, so
+	// this evaluates on the EMBEDDED net (not the prod KB-mirror net); both nets give
+	// startpos a WDL-calibrated first-move advantage of ~+0.7-0.8 pawn (cp-hot vs the
+	// classical ~+0.25), and shallow search peaks higher. ±250 still catches a real
+	// sign/scale/material blowup; the old ±100 was an HCE-era band the current NNUE
+	// legitimately exceeds (score ~+120 @ d7), which made this a false failure.
+	if r.Score < -250 || r.Score > 250 {
+		t.Errorf("startpos score = %d, expected near-equal (|score| < 250)", r.Score)
 	}
 	if len(r.PV) == 0 {
 		t.Error("expected a non-empty principal variation")
