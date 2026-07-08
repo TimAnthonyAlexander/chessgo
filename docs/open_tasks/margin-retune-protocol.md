@@ -152,7 +152,12 @@ not flip silently.
   `blunders` all defaulted **tt=16**; `b80da65` fixed only the vs-stockfish gauntlet to 64. So ALL
   self-play tuning (incl. the shipped +38.7) was measured at 16MB against a **64MB prod**. Bumped all
   four to 64. coalla synced to branch + rebuilt SIMD v4 (tt=64 default confirmed).
-- **2026-07-08 — next = LMR/history SPSA** (decided: option A, the untapped lever). tt=64, from the
-  new base: `lmrbasex10k:5000:11000, lmrdivx10k:18000:32000, lmrhistdiv:1024:8192, rfpmargin:40:150,
-  histbonusscale:8:80, histbonusmax:512:3072`. Launches when the quick SPRT frees the box.
-- _(next: LMR/history SPSA convergence → tt=64 movetime validation …)_
+- **2026-07-08 — quick SPRT final: +8.6 ± 16.0 over 300 pairs** (inconclusive by SPRT[0,5] — CI spans
+  0 — but a stable small-positive that never went negative; LLR climbed monotonically). **Banked** the
+  margin adoption on this coarse read (user call); the binding gate stays the deploy-time full-stack
+  tt=64 validation.
+- **2026-07-08 — LMR/history SPSA launched** (option A, the untapped lever; coalla pid 704381, tt=64,
+  from the new base): `lmrbasex10k:5000:11000, lmrdivx10k:18000:32000, lmrhistdiv:1024:8192,
+  rfpmargin:40:150, histbonusscale:8:80, histbonusmax:512:3072`. ~19s/iter → ~6.3h. Log
+  `/tmp/spsa_lmrhist.out`.
+- _(next: LMR/history convergence → tt=64 movetime validation …)_
