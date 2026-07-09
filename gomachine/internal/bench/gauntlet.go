@@ -4,6 +4,10 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,6 +55,13 @@ type GauntletConfig struct {
 	// (an opponent with its own tablebases wouldn't give up these endings) — the
 	// self-play SPRT (tb=on vs tb=off) is the honest gate; this is a rough anchor.
 	Tablebase *syzygy.Tablebase
+
+	// SaveWinsDir, if non-empty, writes a PGN of every game OUR engine wins into
+	// this directory (one file per won game). Off by default — enabling it turns on
+	// per-move SAN recording, so leave empty for pure measurement runs.
+	SaveWinsDir string
+	// OppName labels the opponent in saved PGNs (blank → "Stockfish").
+	OppName string
 }
 
 func (c *GauntletConfig) ourLimits() search.Limits {
@@ -123,8 +134,8 @@ func RunGauntlet(ctx context.Context, cfg GauntletConfig, onProgress func(Gauntl
 			for idx := range jobs {
 				open := cfg.Book[idx%len(cfg.Book)]
 				// Game A: we are White. Game B: we are Black (same opening).
-				for _, ourColor := range []chess.Color{chess.White, chess.Black} {
-					s, err := playVsUCI(ctx, ours, maxThreads(cfg.OurThreads), sf, cfg.SFPath, cfg.SFOptions, cfg.SFCold, open.FEN, ourColor, ourLim, cfg.SFBudget)
+				for ci, ourColor := range []chess.Color{chess.White, chess.Black} {
+					s, san, resW, err := playVsUCI(ctx, ours, maxThreads(cfg.OurThreads), sf, cfg.SFPath, cfg.SFOptions, cfg.SFCold, open.FEN, ourColor, ourLim, cfg.SFBudget, cfg.SaveWinsDir != "")
 					if err != nil {
 						select {
 						case errCh <- err:
@@ -132,6 +143,9 @@ func RunGauntlet(ctx context.Context, cfg GauntletConfig, onProgress func(Gauntl
 						}
 						cancel()
 						return
+					}
+					if cfg.SaveWinsDir != "" && s == 1 {
+						writeWinPGN(cfg.SaveWinsDir, idx*2+ci, ourColor, open.FEN, san, resW, cfg.OppName)
 					}
 					select {
 					case results <- gameRes{ourScore: s}:
@@ -208,31 +222,35 @@ func RunGauntlet(ctx context.Context, cfg GauntletConfig, onProgress func(Gauntl
 
 // playVsUCI plays one game from openFEN. ourColor is the side our engine plays;
 // the opponent (sf) plays the other side. Returns our score (1, 0.5, 0).
-func playVsUCI(ctx context.Context, ours *engine.Engine, ourThreads int, sf *UCIEngine, sfPath string, sfOpts map[string]string, sfCold bool, openFEN string, ourColor chess.Color, ourLim search.Limits, sfBudget UCIBudget) (float64, error) {
+// playVsUCI plays one game from openFEN. ourColor is the side our engine plays.
+// Returns our score (1, 0.5, 0), the game's moves in SAN (only when recordSAN is
+// set — else nil), and the White-perspective result string ("1-0"/"0-1"/"1/2-1/2").
+func playVsUCI(ctx context.Context, ours *engine.Engine, ourThreads int, sf *UCIEngine, sfPath string, sfOpts map[string]string, sfCold bool, openFEN string, ourColor chess.Color, ourLim search.Limits, sfBudget UCIBudget, recordSAN bool) (float64, []string, string, error) {
 	ours.NewGame()
 	if !sfCold {
 		if err := sf.NewGame(); err != nil {
-			return 0, err
+			return 0, nil, "", err
 		}
 	}
 	pos, err := chess.ParseFEN(openFEN)
 	if err != nil {
-		return 0, err
+		return 0, nil, "", err
 	}
 	history := make([]uint64, 0, 128)
 	moves := make([]string, 0, 128) // UCI moves since openFEN (for SF's position cmd)
+	var san []string                // SAN moves, only tracked when recordSAN
 
 	for ply := 0; ply < maxPlies; ply++ {
 		st := engine.Adjudicate(pos, history)
 		if st.State != "ongoing" {
-			return scoreFor(resultToWhite(st.Result), ourColor), nil
+			return scoreFor(resultToWhite(st.Result), ourColor), san, st.Result, nil
 		}
 		if containsAny(st.ClaimableDraws, "threefold", "fifty") {
-			return 0.5, nil
+			return 0.5, san, "1/2-1/2", nil
 		}
 		select {
 		case <-ctx.Done():
-			return 0.5, ctx.Err()
+			return 0.5, nil, "", ctx.Err()
 		default:
 		}
 
@@ -240,7 +258,7 @@ func playVsUCI(ctx context.Context, ours *engine.Engine, ourThreads int, sf *UCI
 		if pos.SideToMove() == ourColor {
 			res := ours.PlayThreads(pos, ourLim, history, ourThreads)
 			if res.Move == chess.NullMove {
-				return 0.5, nil
+				return 0.5, san, "1/2-1/2", nil
 			}
 			uci = res.Move.String()
 		} else if sfCold {
@@ -249,18 +267,18 @@ func playVsUCI(ctx context.Context, ours *engine.Engine, ourThreads int, sf *UCI
 			// BEFORE `go`, so it never eats the search budget.
 			csf, err := StartUCI(sfPath, sfOpts)
 			if err != nil {
-				return 0, fmt.Errorf("stockfish cold spawn: %w", err)
+				return 0, nil, "", fmt.Errorf("stockfish cold spawn: %w", err)
 			}
 			mv, err := csf.BestMove(pos.FEN(), nil, sfBudget)
 			_ = csf.Close()
 			if err != nil {
-				return 0, fmt.Errorf("stockfish (cold): %w", err)
+				return 0, nil, "", fmt.Errorf("stockfish (cold): %w", err)
 			}
 			uci = mv
 		} else {
 			mv, err := sf.BestMove(openFEN, moves, sfBudget)
 			if err != nil {
-				return 0, fmt.Errorf("stockfish: %w", err)
+				return 0, nil, "", fmt.Errorf("stockfish: %w", err)
 			}
 			uci = mv
 		}
@@ -270,16 +288,82 @@ func playVsUCI(ctx context.Context, ours *engine.Engine, ourThreads int, sf *UCI
 			// Whoever produced an illegal move (per OUR rules) loses. In practice
 			// this only ever flags an engine bug or a desync.
 			if pos.SideToMove() == ourColor {
-				return 0.5, fmt.Errorf("our engine produced illegal move %q at %s", uci, pos.FEN())
+				return 0.5, nil, "", fmt.Errorf("our engine produced illegal move %q at %s", uci, pos.FEN())
 			}
-			return scoreFor(resultFor(ourColor), ourColor), nil // SF illegal → we win
+			return scoreFor(resultFor(ourColor), ourColor), san, whiteResultForWin(ourColor), nil // SF illegal → we win
+		}
+		if recordSAN {
+			san = append(san, pos.SAN(m)) // SAN needs the pre-move position
 		}
 		history = append(history, pos.Key())
 		var u chess.Undo
 		pos.DoMove(m, &u)
 		moves = append(moves, uci)
 	}
-	return 0.5, nil // ply cap → draw
+	return 0.5, san, "1/2-1/2", nil // ply cap → draw
+}
+
+// whiteResultForWin is the White-perspective PGN result when ourColor wins.
+func whiteResultForWin(ourColor chess.Color) string {
+	if ourColor == chess.White {
+		return "1-0"
+	}
+	return "0-1"
+}
+
+// writeWinPGN writes a single won game to dir as a standard PGN. gameNo makes the
+// filename unique across concurrent workers (pair index × 2 + color).
+func writeWinPGN(dir string, gameNo int, ourColor chess.Color, openFEN string, san []string, resultWhite, oppName string) {
+	if oppName == "" {
+		oppName = "Stockfish"
+	}
+	whiteName, blackName, colorTag := "gomachine", oppName, "w"
+	if ourColor == chess.Black {
+		whiteName, blackName, colorTag = oppName, "gomachine", "b"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "[Event \"gomachine vs %s gauntlet\"]\n", oppName)
+	fmt.Fprintf(&b, "[Site \"bench vs-stockfish\"]\n")
+	fmt.Fprintf(&b, "[Round \"%d\"]\n", gameNo+1)
+	fmt.Fprintf(&b, "[White \"%s\"]\n", whiteName)
+	fmt.Fprintf(&b, "[Black \"%s\"]\n", blackName)
+	fmt.Fprintf(&b, "[Result \"%s\"]\n", resultWhite)
+	fmt.Fprintf(&b, "[FEN \"%s\"]\n", openFEN)
+	fmt.Fprintf(&b, "[SetUp \"1\"]\n\n")
+	b.WriteString(formatMoveText(openFEN, san, resultWhite))
+	b.WriteString("\n")
+	fname := filepath.Join(dir, fmt.Sprintf("win_%05d_%s.pgn", gameNo, colorTag))
+	_ = os.WriteFile(fname, []byte(b.String()), 0o644)
+}
+
+// formatMoveText renders SAN moves with correct move numbers derived from the
+// opening FEN's side-to-move and fullmove number (handles a Black-to-move start).
+func formatMoveText(openFEN string, san []string, result string) string {
+	side, fullmove := "w", 1
+	if parts := strings.Fields(openFEN); len(parts) >= 6 {
+		side = parts[1]
+		if n, err := strconv.Atoi(parts[5]); err == nil && n > 0 {
+			fullmove = n
+		}
+	}
+	var b strings.Builder
+	num := fullmove
+	whiteToMove := side == "w"
+	for i, mv := range san {
+		if whiteToMove {
+			fmt.Fprintf(&b, "%d. %s ", num, mv)
+		} else {
+			if i == 0 {
+				fmt.Fprintf(&b, "%d... %s ", num, mv)
+			} else {
+				fmt.Fprintf(&b, "%s ", mv)
+			}
+			num++
+		}
+		whiteToMove = !whiteToMove
+	}
+	b.WriteString(result)
+	return b.String()
 }
 
 // scoreFor converts a White-perspective outcome to our-perspective score.

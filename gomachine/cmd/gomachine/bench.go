@@ -621,6 +621,7 @@ func cmdBenchStockfish(args []string) {
 	bookPath := fs.String("book", "", "opening book (.epd/.fen or UCI move-lines); default: embedded")
 	engBookPath := fs.String("engine-book", "data/book.bin", "precomputed engine opening book consulted when --new has book=on (\"\" disables)")
 	tbPath := fs.String("tb-path", "", "Syzygy tablebase directory; \"\" auto-discovers (SYZYGY_PATH env, then data/syzygy; matches serve default)")
+	saveWins := fs.String("save-wins", "", "if set, write a PGN of every game gomachine WINS into this directory (one file per win)")
 	_ = fs.Parse(args)
 
 	ourParams, err := bench.ParseParams(search.DefaultParams(), *ourSpec)
@@ -692,6 +693,15 @@ func cmdBenchStockfish(args []string) {
 		Book:        book,
 		EngineBook:  loadEngineBook(*engBookPath),
 		Tablebase:   loadTablebaseDefault(*tbPath),
+		SaveWinsDir: *saveWins,
+		OppName:     *oppName,
+	}
+	if *saveWins != "" {
+		if err := os.MkdirAll(*saveWins, 0o755); err != nil {
+			fmt.Fprintln(os.Stderr, "save-wins dir:", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "saving won games as PGN → %s/\n", *saveWins)
 	}
 
 	reporter := bench.NewGauntletReporter(anchorElo, sfDesc, ourDesc, budget)
