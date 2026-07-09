@@ -6,6 +6,7 @@ import Board from '../components/Board'
 import Clock from '../components/Clock'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveList from '../components/MoveList'
+import { MoveSan } from '../components/MoveSan'
 import { Avatar, NavBtn, PANEL_SHADOW } from '../components/PanelUI'
 import BoardActions from '../components/BoardActions'
 import BoardPage from '../components/BoardPage'
@@ -528,7 +529,7 @@ function AdminControls({
                             }}
                             noWrap
                         >
-                            {bestSan}
+                            <MoveSan san={bestSan} />
                         </Typography>
                     )}
                     {whiteEval && (

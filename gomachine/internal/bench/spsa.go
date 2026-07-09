@@ -79,10 +79,10 @@ type SPSAConfig struct {
 	EngineBook *book.Book        // shared opening book (inert unless a side has UseBook)
 	Tablebase  *syzygy.Tablebase // shared Syzygy tablebase (inert unless a side has UseTablebase)
 
-	// DefaultEnriched is the prod eval both tuning engines run on. Without it, the
-	// per-move SetEnriched in player.play clears the enriched net → the SPSA tunes
-	// against the embedded v6, not the shipped net (which is what search margins have
-	// to be tuned against). nil → tune on v6.
+	// DefaultEnriched is the prod eval both tuning engines run on. Without it,
+	// player.play installs no enriched override → the searcher falls back to the
+	// process globals (embedded v6), and the SPSA would tune against v6, not the
+	// shipped net (which is what search margins have to be tuned against). nil → v6.
 	DefaultEnriched *nnue.EnrichedNet
 
 	Checkpoint string // if set, append per-iteration θ here (resumable/inspectable)

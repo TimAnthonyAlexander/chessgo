@@ -536,10 +536,6 @@ func cmdBenchSPRT(args []string) {
 		oldEnrichedP.SetChangedEdges(false)
 		fmt.Fprintln(os.Stderr, "old enriched net: changed-edges geometry OFF (full re-enumeration)")
 	}
-	if (newNetP != nil || oldNetP != nil || newMultiP != nil || oldMultiP != nil || newEnrichedP != nil || oldEnrichedP != nil) && *conc != 1 {
-		fmt.Fprintln(os.Stderr, "note: --new-*/--old-* net flags force --concurrency 1 (the NNUE net is a process global)")
-		*conc = 1
-	}
 
 	cfg := bench.Config{
 		NewParams:      newParams,

@@ -1,18 +1,21 @@
 import { Fragment, type ReactNode } from 'react'
 import { Box } from '@mui/material'
-import { sanToGlyph } from '../lib/chess'
+import { formatSan, useNotation } from '../lib/settings'
 import { DuckGlyph } from './DuckGlyph'
 
 /**
- * Render a move's SAN with piece glyphs, and — for Duck Chess — the literal 🦆 in
- * the SAN (e.g. "e4 🦆c5") swapped for the DuckGlyph SVG so the move table matches
- * the board. Non-duck SANs render exactly as `sanToGlyph` returns them.
+ * The ONE place a move is rendered for display. Formats the SAN per the user's
+ * notation preference (plain SAN by default, figurine piece glyphs when chosen)
+ * and — for Duck Chess — swaps the literal 🦆 in the SAN (e.g. "e4 🦆c5") for the
+ * DuckGlyph SVG so the move table matches the board. Every move-list / notation
+ * surface routes through this so notation is unified app-wide.
  */
 export function MoveSan({ san }: { san: string }): ReactNode {
-    const glyphed = sanToGlyph(san)
-    if (!glyphed.includes('🦆')) return glyphed
+    const notation = useNotation()
+    const text = formatSan(san, notation)
+    if (!text.includes('🦆')) return text
 
-    const parts = glyphed.split('🦆')
+    const parts = text.split('🦆')
     return (
         <>
             {parts.map((part, i) => (

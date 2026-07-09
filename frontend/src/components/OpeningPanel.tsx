@@ -3,6 +3,7 @@ import { Box, Tooltip, Typography } from '@mui/material'
 import { BookOpen } from 'lucide-react'
 import { candidates, type Candidates, type CandidateMove } from '../api/client'
 import { gameOverAt, pathToNode, START_FEN, type Tree } from '../lib/analysisTree'
+import { MoveSan } from './MoveSan'
 
 // How many candidate rows to request/show. The engine ranks best-first.
 const MAX_ROWS = 4
@@ -252,7 +253,7 @@ function MoveRow({
                     color: 'var(--text)',
                 }}
             >
-                {move.san}
+                <MoveSan san={move.san} />
             </Typography>
 
             {/* Eval bar: cream (White) grows from the left over a dark (Black) track. */}

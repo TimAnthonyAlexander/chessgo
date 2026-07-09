@@ -87,6 +87,12 @@ func (n *MultiNet) tailEvalInt8(aq []uint8, bk int, l2, l3 []float32) int {
 		l2[o] = creluF(float32(dot)*inv[o] + b2[o])
 	}
 
+	return n.l2l3out(bk, l2, l3)
+}
+
+// l2l3out runs the L1-independent tail (L2 → L3 → output) shared by the dense and
+// sparse int8 L1 paths. l2 holds the CReLU'd L1 outputs.
+func (n *MultiNet) l2l3out(bk int, l2, l3 []float32) int {
 	// L2: l2[D2] → l3[D3], CReLU (float). (dotF32 SIMD seam handles the small
 	// widths fine on AVX-512 — an inline scalar variant measured slower.)
 	w3 := n.L3W[bk*n.D3*n.D2 : (bk+1)*n.D3*n.D2]

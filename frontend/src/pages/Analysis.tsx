@@ -30,6 +30,7 @@ import DuckFreeBoard from '../components/DuckFreeBoard'
 import BoardPage from '../components/BoardPage'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveTree from '../components/MoveTree'
+import { MoveSan } from '../components/MoveSan'
 import OpeningPanel from '../components/OpeningPanel'
 import { analyze, getGameAnalysis, sfAnalyze, type GameAnalysis } from '../api/client'
 import type { Color } from '../api/client'
@@ -1109,7 +1110,7 @@ function EngineLine({
                                         component="span"
                                         sx={{ color: 'var(--text)', fontWeight: 600 }}
                                     >
-                                        {bestSan}
+                                        <MoveSan san={bestSan} />
                                     </Box>
                                 </Box>
                             ) : (
@@ -1132,7 +1133,8 @@ function EngineLine({
                                         mr: t.num ? 0.4 : 0.8,
                                     }}
                                 >
-                                    {t.text}
+                                    {/* Move-number tokens are plain; SAN tokens follow the notation pref. */}
+                                    {t.num ? t.text : <MoveSan san={t.text} />}
                                 </Box>
                             ))
                         )}

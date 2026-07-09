@@ -65,6 +65,11 @@ type MultiNet struct {
 	int8L1 bool
 	L1W8   []int8    // NB * D2 * (2*H), per-output-row int8 quantized L1 weights
 	L1Inv  []float32 // NB * D2, per-output descale 1/(255·Sw[o]) applied to the int32 dot
+
+	// int8Sparse (multilayer_sparse.go): when true (and int8L1), the L1 matmul
+	// skips aq's all-zero 4-byte dwords (the SF/Stormphrax find_nnz pattern).
+	// Bit-exact with the dense int8 path; a movetime speed lever, default off.
+	int8Sparse bool
 }
 
 // ftQA is the feature-transformer quantization scale: the int16 accumulator holds

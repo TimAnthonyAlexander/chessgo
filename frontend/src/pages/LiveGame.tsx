@@ -22,6 +22,8 @@ import { applyUciVisually, type BoardMap, parseFen } from '../lib/chess'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { VARIANT_LABEL } from '../lib/variants'
 import { authStore, useAuth } from '../lib/auth'
+import { usePrefs } from '../lib/settings'
+import ConfirmDialog from '../components/ConfirmDialog'
 import AdminBestMove from '../components/AdminBestMove'
 import BoardActions from '../components/BoardActions'
 
@@ -38,7 +40,7 @@ function lowTimeThreshold(baseMs: number): number {
 // Fire the low-time cue once when our own clock crosses the threshold; re-arm if
 // an increment lifts us back above it. Reads the latest game via a ref (the
 // authoritative clock advances outside React) and checks on a light interval.
-function useLowTimeWarning(g: LiveGameState | null): void {
+function useLowTimeWarning(g: LiveGameState | null, enabled: boolean): void {
     const armed = useRef(true)
     const gRef = useRef(g)
     gRef.current = g
@@ -46,7 +48,7 @@ function useLowTimeWarning(g: LiveGameState | null): void {
         armed.current = true
     }, [g?.id])
     useEffect(() => {
-        if (!g || g.ended) return
+        if (!g || g.ended || !enabled) return
         const id = window.setInterval(() => {
             const cur = gRef.current
             if (!cur || cur.ended || !cur.timeControl || cur.moves.length < 2) return
@@ -60,7 +62,7 @@ function useLowTimeWarning(g: LiveGameState | null): void {
             }
         }, 250)
         return () => window.clearInterval(id)
-    }, [g?.id, g?.ended])
+    }, [g?.id, g?.ended, enabled])
 }
 
 export default function LiveGame() {
@@ -68,10 +70,13 @@ export default function LiveGame() {
     const s = useGameSocket()
     const g = s.game
     const { user } = useAuth()
+    const prefs = usePrefs()
     const isAdmin = user?.role === 'admin'
 
     const [, force] = useState(0)
     const [sound, setSound] = useState(soundEnabled())
+    // Resign confirmation modal (only used when the confirmResign pref is on).
+    const [confirmResignOpen, setConfirmResignOpen] = useState(false)
 
     function toggleSound() {
         const next = !sound
@@ -153,7 +158,7 @@ export default function LiveGame() {
         myTurn: boardInteractive && !isDuck,
         legalMoves: g && boardInteractive && !isDuck ? g.legalMoves : [],
         submit: (uci) => gameSocket.move(uci),
-        canPremove: true,
+        canPremove: prefs.premoves,
     })
     const duck = useDuckInteraction({
         fen: g?.fen ?? '',
@@ -200,7 +205,7 @@ export default function LiveGame() {
 
     // Sound: warn once when our own clock enters "low time" (threshold scales with
     // the time control). Re-arms if we climb back above it via increment.
-    useLowTimeWarning(g)
+    useLowTimeWarning(g, prefs.soundLowTime)
 
     // Sound: one game-over tone when the game ends (once per game).
     const endedSound = useRef<string | null>(null)
@@ -246,6 +251,10 @@ export default function LiveGame() {
     // placement, until the authoritative position advances).
     const shownDuck: string | null = isDuck ? (activeOverride ? null : g.duck) : null
 
+    // Zen mode hides distraction chrome (ratings, clocks, move list, mode card) while
+    // a game is in progress. It lapses once the game ends so the result shows normally.
+    const zen = prefs.zenMode && !g.ended
+
     const moveEntries: MoveEntry[] = g.moves.map((m, i) => ({
         ply: i + 1,
         san: m.san,
@@ -277,13 +286,15 @@ export default function LiveGame() {
                         flex: 1,
                     }}
                 >
-                    <LiveModeCard
-                        pool={g.pool}
-                        rated={g.rated}
-                        color={g.color}
-                        opponent={g.opponent}
-                        variant={g.variant}
-                    />
+                    {!zen && (
+                        <LiveModeCard
+                            pool={g.pool}
+                            rated={g.rated}
+                            color={g.color}
+                            opponent={g.opponent}
+                            variant={g.variant}
+                        />
+                    )}
                     <ChatPanel
                         messages={g.messages}
                         onSend={(t) => gameSocket.sendChat(t)}
@@ -374,11 +385,16 @@ export default function LiveGame() {
                     {/* Opponent */}
                     <PlayerBar
                         name={g.opponent.name}
-                        rating={g.opponent.anon ? null : g.opponent.rating}
+                        rating={
+                            g.opponent.anon || !prefs.showOpponentRating
+                                ? null
+                                : g.opponent.rating
+                        }
                         ms={liveRemaining(g, other(g.color))}
                         active={!g.ended && g.sideToMove === other(g.color)}
                         online={g.opponentOnline}
                         divider="bottom"
+                        zen={zen}
                     />
 
                     {s.conn !== 'open' && !g.ended && (
@@ -402,13 +418,19 @@ export default function LiveGame() {
                         </Box>
                     )}
 
-                    {/* Moves (fills the panel) */}
-                    <MoveList
-                        fill
-                        moves={moveEntries}
-                        currentPly={shownPly}
-                        onSelectPly={selectPly}
-                    />
+                    {/* Moves (fills the panel). Hidden under zen mode or when the
+                        showMoveList pref is off; a flex spacer then keeps the panel's
+                        bottom controls anchored where the list would have pushed them. */}
+                    {!zen && prefs.showMoveList ? (
+                        <MoveList
+                            fill
+                            moves={moveEntries}
+                            currentPly={shownPly}
+                            onSelectPly={selectPly}
+                        />
+                    ) : (
+                        <Box sx={{ flex: 1, minHeight: 0 }} />
+                    )}
 
                     {/* Admin-only: engine best move toggle for the current position */}
                     {isAdmin && (
@@ -495,7 +517,11 @@ export default function LiveGame() {
                                 tone="danger"
                                 icon={<Flag size={15} />}
                                 label="Resign"
-                                onClick={() => gameSocket.resign()}
+                                onClick={() =>
+                                    prefs.confirmResign
+                                        ? setConfirmResignOpen(true)
+                                        : gameSocket.resign()
+                                }
                             />
                         </Box>
                     ) : (
@@ -562,6 +588,17 @@ export default function LiveGame() {
                         ms={liveRemaining(g, g.color)}
                         active={myTurn}
                         divider="top"
+                        zen={zen}
+                    />
+
+                    <ConfirmDialog
+                        open={confirmResignOpen}
+                        title="Resign this game?"
+                        message="You'll lose the game. This can't be undone."
+                        confirmLabel="Resign"
+                        danger
+                        onConfirm={() => gameSocket.resign()}
+                        onClose={() => setConfirmResignOpen(false)}
                     />
                 </Box>
             }
@@ -575,7 +612,7 @@ export default function LiveGame() {
                 inCheck={!atLive || isDuck ? false : g.check}
                 interactive={boardInteractive}
                 onMove={isDuck ? duck.onMove : interaction.onMove}
-                premoveColor={g.ended || isDuck || !atLive ? null : g.color}
+                premoveColor={g.ended || isDuck || !atLive || !prefs.premoves ? null : g.color}
                 premove={isDuck || !atLive ? null : interaction.premove}
                 onCancelPremove={interaction.cancelPremove}
                 duck={atLive ? shownDuck : null}
@@ -601,6 +638,7 @@ function PlayerBar({
     active,
     online,
     divider,
+    zen = false,
 }: {
     name: string
     rating: number | null
@@ -608,6 +646,8 @@ function PlayerBar({
     active: boolean
     online?: boolean
     divider?: 'top' | 'bottom'
+    /** Zen mode: suppress the rating badge and the clock (kept minimal — just the name). */
+    zen?: boolean
 }) {
     return (
         <Box
@@ -633,7 +673,7 @@ function PlayerBar({
                     >
                         {name}
                     </Typography>
-                    {rating != null && (
+                    {!zen && rating != null && (
                         <Typography
                             sx={{
                                 fontFamily: 'var(--font-mono)',
@@ -651,9 +691,11 @@ function PlayerBar({
                     </Typography>
                 )}
             </Box>
-            <Box sx={{ ml: 'auto' }}>
-                <Clock ms={ms} active={active} />
-            </Box>
+            {!zen && (
+                <Box sx={{ ml: 'auto' }}>
+                    <Clock ms={ms} active={active} />
+                </Box>
+            )}
         </Box>
     )
 }

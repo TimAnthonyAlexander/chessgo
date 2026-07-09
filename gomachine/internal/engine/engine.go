@@ -11,6 +11,7 @@ import (
 
 	"github.com/timanthonyalexander/gomachine/internal/book"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
+	"github.com/timanthonyalexander/gomachine/internal/nnue"
 	"github.com/timanthonyalexander/gomachine/internal/search"
 	"github.com/timanthonyalexander/gomachine/internal/syzygy"
 )
@@ -48,6 +49,14 @@ type Engine struct {
 // SetBook attaches a precomputed opening book. It's consulted only when the
 // engine's params have UseBook set (otherwise it's inert). Pass nil to detach.
 func (e *Engine) SetBook(b *book.Book) { e.book = b }
+
+// SetNetOverride installs per-engine NNUE nets that this engine's searches use
+// instead of the process-global default eval — so the self-play harness can run
+// each side's own net concurrently (Concurrency>1) without a shared global swap.
+// All-nil restores the global default. See search.Searcher.SetNetOverride.
+func (e *Engine) SetNetOverride(n *nnue.Net, m *nnue.MultiNet, en *nnue.EnrichedNet) {
+	e.searcher.SetNetOverride(n, m, en)
+}
 
 // New creates a full-strength, single-threaded Engine with a transposition table
 // of ttSizeMB megabytes.

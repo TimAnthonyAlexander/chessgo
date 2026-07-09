@@ -16,6 +16,7 @@ import {
     targetsFrom,
 } from '../lib/chess'
 import { usePieceSet } from '../lib/boardTheme'
+import { usePrefs, type ArrowColor } from '../lib/settings'
 import { DuckGlyph } from './DuckGlyph'
 
 function PieceGlyph({ piece, set, hidden }: { piece: string; set: string; hidden?: boolean }) {
@@ -125,12 +126,15 @@ interface Shape {
     to: Square
     brush: Brush
 }
-function brushFor(e: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }): Brush {
+function brushFor(
+    e: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean },
+    base: ArrowColor,
+): Brush {
     const ctrl = e.ctrlKey || e.metaKey
     if (e.shiftKey && ctrl) return 'yellow'
     if (e.shiftKey) return 'red'
     if (ctrl) return 'green'
-    return 'blue'
+    return base // no-modifier brush follows the user's default-arrow-color preference
 }
 
 interface DragState {
@@ -168,6 +172,11 @@ export default function Board({
 }: BoardProps) {
     const boardRef = useRef<HTMLDivElement>(null)
     const pieceSet = usePieceSet() // re-render (with new piece SVGs) when the set changes
+    const prefs = usePrefs() // user display/input preferences (legal-move dots, coords, …)
+    // Move method: 'both' allows drag + click-to-move; 'click' disables drag;
+    // 'drag' disables the select-then-tap commit (must drag the piece).
+    const allowDrag = prefs.moveMethod !== 'click'
+    const allowClick = prefs.moveMethod !== 'drag'
     const [selected, setSelected] = useState<Square | null>(null)
     const [promo, setPromo] = useState<{ from: Square; to: Square; options: string[] } | null>(null)
     const [drag, setDrag] = useState<DragState | null>(null)
@@ -197,7 +206,7 @@ export default function Board({
         interactive ? targetsFrom(legalMoves, from) : premoveTargets(board, from)
 
     const targets = selected ? destsFor(selected) : new Set<Square>()
-    const checkKing = inCheck ? kingSquare(board, sideToMove === 'w') : null
+    const checkKing = inCheck && prefs.highlightCheck ? kingSquare(board, sideToMove === 'w') : null
 
     // Square center in an 80×80 coordinate space (10 units / square), oriented.
     const center = (sq: Square) => {
@@ -237,6 +246,13 @@ export default function Board({
         if (interactive) {
             const options = promotionsFor(legalMoves, from, to)
             if (options.length > 0) {
+                // Auto-queen preference skips the picker and promotes to a queen
+                // directly (matching the premove behavior below).
+                if (prefs.autoQueen) {
+                    setSelected(null)
+                    onMove(from + to + 'q')
+                    return
+                }
                 setPromo({ from, to, options })
                 return
             }
@@ -275,7 +291,7 @@ export default function Board({
             } catch {
                 /* ignore */
             }
-            setDrawing({ from: sq, to: sq, brush: brushFor(e) })
+            setDrawing({ from: sq, to: sq, brush: brushFor(e, prefs.arrowColor) })
             return
         }
 
@@ -308,23 +324,27 @@ export default function Board({
 
         if (ownPieceAt(sq)) {
             e.preventDefault()
-            const size = (boardRef.current?.getBoundingClientRect().width ?? 0) / 8
-            try {
-                boardRef.current?.setPointerCapture(e.pointerId)
-            } catch {
-                /* ignore */
+            // Drag is suppressed in click-to-move-only mode; the piece still
+            // selects so the second click can commit.
+            if (allowDrag) {
+                const size = (boardRef.current?.getBoundingClientRect().width ?? 0) / 8
+                try {
+                    boardRef.current?.setPointerCapture(e.pointerId)
+                } catch {
+                    /* ignore */
+                }
+                setDrag({
+                    from: sq,
+                    piece: board[sq],
+                    x: e.clientX,
+                    y: e.clientY,
+                    over: sq,
+                    size,
+                    reselect: selected === sq,
+                })
             }
-            setDrag({
-                from: sq,
-                piece: board[sq],
-                x: e.clientX,
-                y: e.clientY,
-                over: sq,
-                size,
-                reselect: selected === sq,
-            })
             setSelected(sq)
-        } else if (selected && targets.has(sq)) {
+        } else if (allowClick && selected && targets.has(sq)) {
             commit(selected, sq)
         } else {
             setSelected(null)
@@ -389,8 +409,17 @@ export default function Board({
         onMove(from + to + letter)
     }
 
+    const coordsOutside = prefs.showCoordinates === 'outside'
+
     return (
-        <div className="board-wrap">
+        <div className={`board-wrap${coordsOutside ? ' coords-outside' : ''}`}>
+            {coordsOutside && (
+                <div className="ranks-gutter" aria-hidden>
+                    {ranks.map((r) => (
+                        <span key={r}>{r + 1}</span>
+                    ))}
+                </div>
+            )}
             <div
                 ref={boardRef}
                 className={`board${drag ? ' dragging' : ''}`}
@@ -411,10 +440,17 @@ export default function Board({
                         const isTarget = targets.has(sq)
                         const isDuckTarget = duckTargets?.has(sq) ?? false
                         const isDropTarget = dropTargets?.has(sq) ?? false
-                        const isLast = lastMove && (lastMove.from === sq || lastMove.to === sq)
+                        const isLast =
+                            prefs.highlightLastMove &&
+                            lastMove &&
+                            (lastMove.from === sq || lastMove.to === sq)
                         const isPremove = premove && (premove.from === sq || premove.to === sq)
                         const isDragOrigin = !!drag && drag.from === sq
-                        const isOver = !!drag && drag.over === sq && destsFor(drag.from).has(sq)
+                        const isOver =
+                            prefs.highlightDragOver &&
+                            !!drag &&
+                            drag.over === sq &&
+                            destsFor(drag.from).has(sq)
                         const classes = [
                             'sq',
                             light ? 'light' : 'dark',
@@ -428,17 +464,26 @@ export default function Board({
                             .filter(Boolean)
                             .join(' ')
 
-                        const showFile = orientation === 'w' ? rank === 0 : rank === 7
-                        const showRank = orientation === 'w' ? file === 0 : file === 7
+                        // In-square coordinates only in 'inside' mode ('outside' draws
+                        // them in the gutter layer below; 'off' hides them entirely).
+                        const coordsInside = prefs.showCoordinates === 'inside'
+                        const showFile =
+                            coordsInside && (orientation === 'w' ? rank === 0 : rank === 7)
+                        const showRank =
+                            coordsInside && (orientation === 'w' ? file === 0 : file === 7)
 
                         return (
                             <div key={sq} className={classes}>
-                                {isTarget && !piece && <span className="dot" />}
-                                {isTarget && piece && <span className="ring" />}
+                                {prefs.showLegalMoves && isTarget && !piece && <span className="dot" />}
+                                {prefs.showLegalMoves && isTarget && piece && <span className="ring" />}
                                 {isDuckTarget && !piece && <span className="dot" />}
                                 {isDropTarget && !piece && <span className="dot" />}
                                 {piece && (
-                                    <PieceGlyph piece={piece} set={pieceSet} hidden={isDragOrigin} />
+                                    <PieceGlyph
+                                        piece={piece}
+                                        set={pieceSet}
+                                        hidden={isDragOrigin || prefs.blindfold}
+                                    />
                                 )}
                                 {duck === sq && (
                                     <span className="duck" aria-hidden>
@@ -647,6 +692,14 @@ export default function Board({
                 )}
             </div>
 
+            {coordsOutside && (
+                <div className="files-gutter" aria-hidden>
+                    {files.map((f) => (
+                        <span key={f}>{'abcdefgh'[f]}</span>
+                    ))}
+                </div>
+            )}
+
             {drag && (
                 <span
                     className="drag-ghost"
@@ -655,7 +708,10 @@ export default function Board({
                         top: drag.y,
                         width: drag.size,
                         height: drag.size,
-                        backgroundImage: `url(${pieceImageUrl(drag.piece)})`,
+                        // Blindfold hides the ghost image too, so a drag can't reveal the piece.
+                        backgroundImage: prefs.blindfold
+                            ? 'none'
+                            : `url(${pieceImageUrl(drag.piece)})`,
                     }}
                 />
             )}

@@ -24,10 +24,13 @@ import AdminAnticheat from './pages/AdminAnticheat'
 import AdminAnticheatUser from './pages/AdminAnticheatUser'
 import AdminAnticheatGame from './pages/AdminAnticheatGame'
 import { initTheme } from './lib/boardTheme'
+import { initSettings } from './lib/settings'
 import './styles.css'
 
-// Apply the persisted board/piece appearance before first paint (no theme flash).
+// Apply the persisted board/piece appearance + user preferences before first
+// paint (no theme flash; CSS-var-driven settings land on <html> up front).
 initTheme()
+initSettings()
 
 const router = createBrowserRouter([
     {

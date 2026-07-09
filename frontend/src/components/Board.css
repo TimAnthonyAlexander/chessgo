@@ -3,6 +3,50 @@
     margin: 0 auto;
 }
 
+/* Coordinates = "outside": lay the board out in a grid with a thin left gutter
+ * (rank numbers) and bottom gutter (file letters). The board keeps its square
+ * aspect ratio and simply insets by the gutter width, so the board-wrap footprint
+ * (BOARD_SIZE, owned by BoardPage) is unchanged — only the playable board shrinks
+ * slightly. board-wrap is the container so the labels scale in cqi with it. */
+.board-wrap.coords-outside {
+    container-type: inline-size;
+    display: grid;
+    grid-template-columns: 2.8cqi 1fr;
+    grid-template-rows: 1fr 2.8cqi;
+    align-items: stretch;
+}
+.coords-outside .board {
+    grid-column: 2;
+    grid-row: 1;
+}
+.coords-outside .ranks-gutter {
+    grid-column: 1;
+    grid-row: 1;
+    flex-direction: column;
+}
+.coords-outside .files-gutter {
+    grid-column: 2;
+    grid-row: 2;
+    flex-direction: row;
+}
+.ranks-gutter,
+.files-gutter {
+    display: flex;
+    font-family: var(--font-mono);
+    font-size: 1.7cqi;
+    font-weight: 600;
+    color: var(--text-dim);
+    user-select: none;
+    pointer-events: none;
+}
+.ranks-gutter span,
+.files-gutter span {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
 .board {
     position: relative;
     container-type: inline-size;
@@ -18,6 +62,19 @@
         0 0 0 1px rgba(0, 0, 0, 0.35);
     user-select: none;
     touch-action: none;
+}
+
+/* Board-brightness preference: a black scrim over the squares (and legal-move
+ * dots) but UNDER the pieces (z-index 2) and coords (z-index 3), so lowering
+ * brightness dims the board without washing out the pieces. --board-dim is
+ * (1 - brightness); at 100% brightness it's 0 (fully transparent = no-op). */
+.board::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    background: rgba(0, 0, 0, var(--board-dim, 0));
 }
 
 .sq.interactive {
@@ -113,7 +170,9 @@
     background-repeat: no-repeat;
     background-position: center;
     background-size: 88%;
-    animation: pieceIn 0.16s ease;
+    /* Duration follows the Piece animation preference (--piece-anim, set on
+     * <html> by settings.ts). 0ms = effectively no animation. */
+    animation: pieceIn var(--piece-anim, 0.16s) ease;
 }
 
 /* Duck Chess: the duck glyph, drawn above its square (blocks all pieces). */
@@ -128,7 +187,7 @@
     line-height: 1;
     pointer-events: none;
     filter: drop-shadow(0 0.3cqi 0.5cqi rgba(0, 0, 0, 0.55));
-    animation: pieceIn 0.16s ease;
+    animation: pieceIn var(--piece-anim, 0.16s) ease;
 }
 
 /* Legal-move markers */

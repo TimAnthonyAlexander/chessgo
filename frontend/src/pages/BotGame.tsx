@@ -29,6 +29,7 @@ import MoveList from '../components/MoveList'
 import GameModeCard from '../components/GameModeCard'
 import BoardPage from '../components/BoardPage'
 import { ActionBtn, Avatar, ErrorBanner, NavBtn } from '../components/PanelUI'
+import ConfirmDialog from '../components/ConfirmDialog'
 import {
     analyze,
     type BotGame as Game,
@@ -46,6 +47,7 @@ import { useMoveNavKeys } from '../lib/useMoveNavKeys'
 import { type ColorChoice, loadBotSettings, saveBotSettings } from '../lib/botSettings'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { useAuth } from '../lib/auth'
+import { usePrefs } from '../lib/settings'
 import AdminBestMove from '../components/AdminBestMove'
 import BoardActions from '../components/BoardActions'
 import VariantPicker from '../components/VariantPicker'
@@ -100,12 +102,14 @@ export default function BotGame() {
     // Duck Chess: the human's just-placed duck square, shown during the brief
     // reveal hold before the bot's reply lands (null when not holding).
     const [duckReveal, setDuckReveal] = useState<string | null>(null)
+    // Guarded-resign modal (only shown when the confirmResign preference is on).
+    const [confirmResignOpen, setConfirmResignOpen] = useState(false)
 
     const { user } = useAuth()
     const isAdmin = user?.role === 'admin'
+    const prefs = usePrefs()
 
     const humanColor: Color = game?.human_color ?? (colorChoice === 'random' ? 'w' : colorChoice)
-    const orientation: Color = flipped ? other(humanColor) : humanColor
     const over = resigned || (game != null && game.status !== 'ongoing')
     const ongoing = !!game && !over
 
@@ -178,7 +182,7 @@ export default function BotGame() {
         fen: game?.fen ?? startFen ?? START_FEN,
         myTurn: interactive && !isDuck,
         legalMoves: interactive && !isDuck && game ? game.legal_moves : [],
-        canPremove: true,
+        canPremove: prefs.premoves,
         submit: submitMove,
     })
     const duck = useDuckInteraction({
@@ -214,6 +218,20 @@ export default function BotGame() {
     const boardFen = isCrazyhouse ? stripCrazyhouseFen(rawShownFen) : rawShownFen
     const pockets = parsePocket(isCrazyhouse ? pocketFromFen(rawShownFen) : '')
 
+    // Board orientation. Auto-flip (a preference) OVERRIDES the manual flip button:
+    // the board re-orients to the side to move each ply (in play and in review).
+    // Otherwise the flip button toggles between the human's view and its mirror.
+    const orientation: Color = prefs.autoFlip
+        ? sideToMoveOf(rawShownFen)
+        : flipped
+          ? other(humanColor)
+          : humanColor
+
+    // Whether the side to move in the SHOWN position is in check — derived from the
+    // last played move's SAN (a checking move ends in "+" / a mating one in "#"), so
+    // the king glow works in bot games without any extra engine/network probe.
+    const shownInCheck = shownPly > 0 && /[+#]$/.test(game?.moves[shownPly - 1]?.san ?? '')
+
     const lastMove =
         activeOverride && atLive && activeOptimisticLast
             ? activeOptimisticLast
@@ -244,6 +262,11 @@ export default function BotGame() {
     // full ~1.5s search and only then snapping to the new one. The value is always
     // White-relative (+ = White better, − = Black better), matching every other bar.
     useEffect(() => {
+        if (!prefs.showEvalBar) {
+            // Bar hidden by preference — don't spend engine calls analyzing it.
+            setAnalyzedEval(null)
+            return
+        }
         if (!game || game.variant === 'duck' || game.variant === 'crazyhouse') {
             // Duck Chess and Crazyhouse aren't understood by the standard /analyze
             // engine (the duck, and pockets/drops) — no meaningful eval bar to show.
@@ -287,7 +310,7 @@ export default function BotGame() {
             cancelled = true
             ac.abort()
         }
-    }, [game?.fen, game?.status, game?.side_to_move])
+    }, [game?.fen, game?.status, game?.side_to_move, prefs.showEvalBar])
 
     // Re-entering /bot from the analysis board with a different position: adopt it
     // and drop back to the setup screen (the initial state only reads navFen once).
@@ -361,6 +384,14 @@ export default function BotGame() {
         sounds.end()
     }
 
+    // Resign action for the UI: confirm first when the preference asks for it,
+    // otherwise resign immediately. The dialog's onConfirm calls resign() directly.
+    function requestResign() {
+        if (!ongoing) return
+        if (prefs.confirmResign) setConfirmResignOpen(true)
+        else resign()
+    }
+
     function toggleSound() {
         const next = !sound
         setSound(next)
@@ -423,7 +454,11 @@ export default function BotGame() {
                     </Box>
                 </>
             }
-            evalBar={<EvalBar ev={analyzedEval} orientation={orientation} />}
+            evalBar={
+                prefs.showEvalBar && !(prefs.zenMode && ongoing) ? (
+                    <EvalBar ev={analyzedEval} orientation={orientation} />
+                ) : undefined
+            }
             right={
                 game ? (
                     <MovePanel
@@ -444,11 +479,13 @@ export default function BotGame() {
                         onFlip={() => setFlipped((f) => !f)}
                         onToggleSound={toggleSound}
                         onUndo={undo}
-                        onResign={resign}
+                        onResign={requestResign}
                         onNewGame={() => {
                             setGame(null)
                             setStartFen(null)
                         }}
+                        showMoveList={prefs.showMoveList}
+                        zen={prefs.zenMode && ongoing}
                         isAdmin={isAdmin}
                         bestFen={boardFen}
                         bestMyTurn={interactive && !isCrazyhouse}
@@ -478,10 +515,10 @@ export default function BotGame() {
                 sideToMove={game?.side_to_move ?? 'w'}
                 legalMoves={interactive ? game.legal_moves : []}
                 lastMove={lastMove}
-                inCheck={false}
+                inCheck={shownInCheck}
                 interactive={interactive}
                 onMove={isDuck ? duck.onMove : interaction.onMove}
-                premoveColor={ongoing && atLive && !isDuck ? humanColor : null}
+                premoveColor={ongoing && atLive && !isDuck && prefs.premoves ? humanColor : null}
                 premove={atLive && !isDuck ? interaction.premove : null}
                 onCancelPremove={interaction.cancelPremove}
                 duck={shownDuck}
@@ -491,6 +528,17 @@ export default function BotGame() {
                 onDrop={drops.drop}
                 onDropCancel={drops.cancel}
                 {...(activeOverride && atLive ? { overrideBoard: activeOverride } : {})}
+            />
+            {/* Resign confirmation — only reached when the confirmResign preference
+                is on (requestResign resigns directly otherwise). */}
+            <ConfirmDialog
+                open={confirmResignOpen}
+                title="Resign this game?"
+                message="You'll forfeit the game — this counts as a loss."
+                confirmLabel="Resign"
+                danger
+                onConfirm={resign}
+                onClose={() => setConfirmResignOpen(false)}
             />
         </BoardPage>
     )
@@ -523,6 +571,8 @@ function MovePanel({
     onUndo,
     onResign,
     onNewGame,
+    showMoveList,
+    zen,
     isAdmin,
     bestFen,
     bestMyTurn,
@@ -547,6 +597,10 @@ function MovePanel({
     onUndo: () => void
     onResign: () => void
     onNewGame: () => void
+    /** Show the SAN move grid (preference). Nav controls stay either way. */
+    showMoveList: boolean
+    /** Zen mode active for this (ongoing) game — hide rating chrome. */
+    zen: boolean
     isAdmin: boolean
     bestFen: string
     bestMyTurn: boolean
@@ -587,16 +641,24 @@ function MovePanel({
                     >
                         gomachine
                     </Typography>
-                    <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
-                        Engine · ~{game.rating ?? rating} Elo
-                    </Typography>
+                    {/* Zen mode hides the rating chrome (distraction-free play). */}
+                    {!zen && (
+                        <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
+                            Engine · ~{game.rating ?? rating} Elo
+                        </Typography>
+                    )}
                 </Box>
             </Box>
 
             {error && <ErrorBanner>{error}</ErrorBanner>}
 
-            {/* Move grid (fills the panel) */}
-            <MoveList fill moves={game.moves} currentPly={shownPly} onSelectPly={onSelectPly} />
+            {/* Move grid (fills the panel). Hidden by preference keeps the nav
+                controls below — a flex spacer holds the footer at the bottom. */}
+            {showMoveList ? (
+                <MoveList fill moves={game.moves} currentPly={shownPly} onSelectPly={onSelectPly} />
+            ) : (
+                <Box sx={{ flex: 1, minHeight: 0 }} />
+            )}
 
             {/* Footer: you + status, navigation, actions */}
             <Box

@@ -3,6 +3,7 @@ import { Box, Switch, Tooltip, Typography } from '@mui/material'
 import { Sparkles } from 'lucide-react'
 import { analyze, duckEval, type Analysis, type Color } from '../api/client'
 import { pvToSan } from '../lib/analysisTree'
+import { MoveSan } from './MoveSan'
 
 // Convert the engine's UCI best move (e.g. "e2e4", "b1c3") into SAN piece
 // notation ("e4", "Nc3") for display. Falls back to the raw UCI if the move
@@ -164,7 +165,7 @@ export default function AdminBestMove({
                                 }}
                                 noWrap
                             >
-                                {best.san}
+                                <MoveSan san={best.san} />
                             </Typography>
                             <Typography
                                 sx={{

@@ -290,6 +290,17 @@ type Searcher struct {
 	enrichedStack      *nnue.EnrichedStack
 	enrichedStackCache *nnue.EnrichedStack
 
+	// Per-searcher NNUE net overrides. When ANY is non-nil, nnueBegin uses these
+	// three (with the usual enriched>multi>single precedence) INSTEAD of the process
+	// globals — so the self-play harness gives each side its own net and a net A/B
+	// runs at Concurrency>1 without a shared global swap (each engine's searcher
+	// carries its own net; globals become read-only after startup). All three nil ⇒
+	// read the globals (prod serve/hub, and param-only A/B share one startup default).
+	// Set via SetNetOverride before search; propagated to Lazy-SMP workers.
+	netOverride      *nnue.Net
+	multiOverride    *nnue.MultiNet
+	enrichedOverride *nnue.EnrichedNet
+
 	// Diagnostic counters (cheap, like nodes) — used by tests to confirm the
 	// accumulator gate actually covered null-move and quiescence nodes, and that the
 	// singular-extension paths fire.
@@ -547,6 +558,15 @@ func (s *Searcher) accEval(pos *chess.Position) int {
 	return s.accStack.Eval(pos)
 }
 
+// SetNetOverride installs this searcher's per-side NNUE nets, used by nnueBegin
+// INSTEAD of the process globals (enriched>multi>single precedence; all-nil ⇒ read
+// the globals). The self-play harness sets each engine's own net so a net A/B runs
+// at Concurrency>1 without a shared global swap. Idempotent; propagated to Lazy-SMP
+// workers when they spawn.
+func (s *Searcher) SetNetOverride(n *nnue.Net, m *nnue.MultiNet, en *nnue.EnrichedNet) {
+	s.netOverride, s.multiOverride, s.enrichedOverride = n, m, en
+}
+
 // nnueBegin prepares the incremental accumulator for a search rooted at pos. It
 // sets useNNUE only when NNUE is on AND a net is loaded, (re)allocating the stack
 // if the default net changed, and rebuilds slot 0 from scratch. Cheap and
@@ -558,10 +578,18 @@ func (s *Searcher) nnueBegin(pos *chess.Position) {
 	if !s.ec.NNUE {
 		return
 	}
+	// Prefer this searcher's per-side net overrides (set by the A/B harness); when it
+	// carries none, read the process globals (prod serve/hub, param-only A/B). This is
+	// the ONLY net read in search — the harness never swaps a global mid-run, so nets
+	// stay effectively read-only and concurrent games can't race.
+	en, m, net := s.enrichedOverride, s.multiOverride, s.netOverride
+	if en == nil && m == nil && net == nil {
+		en, m, net = nnue.DefaultEnriched(), nnue.DefaultMulti(), nnue.Default()
+	}
 	// An enriched (threats) net, if installed, takes precedence and drives its own
 	// incremental accumulator (enrichedStack), shadowing accStack at the push/pop
 	// sites. enrichedStackCache keeps the allocation across searches.
-	if en := nnue.DefaultEnriched(); en != nil {
+	if en != nil {
 		if s.enrichedStackCache == nil || s.enrichedStackCache.Net() != en {
 			s.enrichedStackCache = en.NewStack(maxPly + 8)
 		}
@@ -574,7 +602,7 @@ func (s *Searcher) nnueBegin(pos *chess.Position) {
 	// incremental accumulator (multiStack), shadowing accStack at the same push/pop
 	// sites. multiStackCache keeps the allocation across searches (rebuilt only on
 	// a net swap); multiStack==nil for the v6 path leaves accStack in charge.
-	if m := nnue.DefaultMulti(); m != nil {
+	if m != nil {
 		if s.multiStackCache == nil || s.multiStackCache.Net() != m {
 			s.multiStackCache = m.NewStack(maxPly + 8)
 		}
@@ -583,7 +611,6 @@ func (s *Searcher) nnueBegin(pos *chess.Position) {
 		s.useNNUE = true
 		return
 	}
-	net := nnue.Default()
 	if net == nil {
 		return
 	}
@@ -746,6 +773,9 @@ func (s *Searcher) SearchParallel(pos *chess.Position, limits Limits, gameHistor
 		if i > 0 {
 			worker = newWithSharedTT(s.tt, s.params)
 			worker.tb, worker.tbMax = s.tb, s.tbMax // share the read-only TB handle
+			// Inherit the coordinator's per-side net overrides so every SMP worker
+			// evaluates with the same net (worker 0 is s, already has them).
+			worker.netOverride, worker.multiOverride, worker.enrichedOverride = s.netOverride, s.multiOverride, s.enrichedOverride
 		}
 		go func(i int, w *Searcher) {
 			defer wg.Done()

@@ -12,6 +12,7 @@ import type { Color, GameAnalysis, MoveEntry } from '../../../api/client'
 import Board from '../../Board'
 import EvalBar from '../../EvalBar'
 import MoveList from '../../MoveList'
+import { MoveSan } from '../../MoveSan'
 import { useMoveNavKeys } from '../../../lib/useMoveNavKeys'
 import { JUDGMENT_COLOR, JUDGMENT_GLYPH } from './shared'
 
@@ -197,7 +198,7 @@ function JudgmentBar({
                     color,
                 }}
             >
-                {move.san}
+                <MoveSan san={move.san} />
                 {glyph}
             </Typography>
             <Typography

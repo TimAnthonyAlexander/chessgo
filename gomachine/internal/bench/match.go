@@ -64,28 +64,27 @@ type Config struct {
 
 	// NewNet/OldNet give each side its OWN NNUE net file — a net-vs-net A/B (e.g.
 	// v5 vs v4), which the Params flags can't express (they only toggle nnue on/off
-	// against the single process-global net). When either is set, the run is FORCED
-	// to Concurrency=1 and the active net is swapped (nnue.SetNet) before each side's
-	// search; the searcher's nnueBegin rebuilds its accumulator on the change. nil →
-	// that side uses the process default net (data/nnue/net.nnue).
+	// against the single process-global net). Each side's net is installed as a
+	// per-engine override (player.play → Engine.SetNetOverride), NOT a process global,
+	// so a net A/B runs at Concurrency>1 and nnueBegin rebuilds its accumulator on the
+	// change. nil → that side uses the process default net (data/nnue/net.nnue).
 	NewNet, OldNet *nnue.Net
 
 	// NewMultiNet/OldMultiNet give a side a multilayer (GNN4) net instead of a
-	// single-layer one — the same per-side-swap A/B (forces Concurrency=1), used to
+	// single-layer one — the same per-side-override A/B (Concurrency>1 OK), used to
 	// measure the multilayer architecture vs the shipped v6 (fixed depth, NEXT_ARCH
 	// Phase 1). A side may set at most one of NewNet/NewMultiNet.
 	NewMultiNet, OldMultiNet *nnue.MultiNet
 
 	// NewEnrichedNet/OldEnrichedNet give a side the ENRICHED (threats) net — its
-	// from-scratch forward (nnueBegin checks DefaultEnriched first, before
-	// DefaultMulti). Same per-side-swap A/B (forces Concurrency=1).
+	// from-scratch forward (nnueBegin checks the enriched override first, before
+	// multi). Same per-side-override A/B (Concurrency>1 OK).
 	NewEnrichedNet, OldEnrichedNet *nnue.EnrichedNet
 
 	// DefaultEnriched is the prod eval a side falls back to when it specifies NO
-	// explicit net (net/multiNet/enrichedNet all nil). Because player.play re-sets
-	// the process-global enriched net every move, without this a search-only run
-	// would SetEnriched(nil) → the embedded v6 net, silently benchmarking the wrong
-	// eval. Both sides share one pointer, so it never forces Concurrency=1.
+	// explicit net (net/multiNet/enrichedNet all nil). player.play installs it as the
+	// side's enriched override so a search-only run benchmarks the prod eval, not the
+	// embedded v6; both sides share one read-only pointer.
 	DefaultEnriched *nnue.EnrichedNet
 
 	NewThreads int // Lazy SMP threads for the patch engine (default 1)
@@ -107,12 +106,12 @@ type player struct {
 	threads int
 	lim     search.Limits
 	level   int
-	net     *nnue.Net // per-side NNUE net; when non-nil, made active before each search (requires Concurrency==1, since the net is a process global)
+	net     *nnue.Net // per-side NNUE net; when non-nil, installed as this engine's override before each search (per-searcher, Concurrency>1 OK)
 	// multiNet, when non-nil, gives this side a multilayer (GNN4) net — it takes
-	// precedence over net in the searcher (nnueBegin checks DefaultMulti first).
-	// Same per-side-swap A/B; requires Concurrency==1.
+	// precedence over net in the searcher (nnueBegin checks the multi override first).
+	// Same per-side-override A/B; Concurrency>1 OK.
 	multiNet *nnue.MultiNet
-	// enrichedNet, when non-nil, takes precedence over both (DefaultEnriched first).
+	// enrichedNet, when non-nil, takes precedence over both (enriched override first).
 	enrichedNet *nnue.EnrichedNet
 	// defaultEnriched is the prod net this side falls back to when it has NO explicit
 	// net of any kind (net/multiNet/enrichedNet all nil) — so a bare search-param A/B
@@ -121,21 +120,16 @@ type player struct {
 }
 
 func (p player) play(pos *chess.Position, history []uint64) engine.BestResult {
-	// Per-side eval swap (process globals; requires Concurrency==1). SetMultiNet is
-	// called unconditionally (nil clears it) so the side that uses a single-layer
-	// net isn't left running the other side's multilayer net.
-	nnue.SetMultiNet(p.multiNet)
-	// A side with NO explicit net of any kind falls back to the prod net rather than
-	// clearing to the embedded v6. A side that DOES pin a single/multi/enriched net
-	// keeps A/B isolation: the fallback only applies when everything is nil.
+	// Per-side eval: install this side's own net(s) on its OWN engine's searcher (a
+	// per-searcher override, NOT a process global), so concurrent games never race on
+	// the active net — net A/Bs run at Concurrency>1. A side with NO explicit net of
+	// any kind falls back to the prod net (defaultEnriched); all-nil ⇒ the searcher
+	// reads the process globals (embedded v6 when prod is absent).
 	en := p.enrichedNet
 	if en == nil && p.net == nil && p.multiNet == nil {
 		en = p.defaultEnriched
 	}
-	nnue.SetEnriched(en)
-	if p.net != nil {
-		nnue.SetNet(p.net) // searcher's nnueBegin rebuilds its accumulator when the net changes
-	}
+	p.eng.SetNetOverride(p.net, p.multiNet, en)
 	if p.level >= 0 {
 		return p.eng.BestMove(pos, p.level, history)
 	}
@@ -248,11 +242,9 @@ func RunSPRT(ctx context.Context, cfg Config, onProgress func(Progress)) Summary
 	if cfg.Concurrency < 1 {
 		cfg.Concurrency = 1
 	}
-	// Per-side net A/B swaps a process-global (nnue.SetNet) before each search, so
-	// parallel workers would clobber each other's net — force sequential.
-	if cfg.NewNet != nil || cfg.OldNet != nil {
-		cfg.Concurrency = 1
-	}
+	// Net A/Bs no longer force sequential: each side's net is a per-engine override
+	// (player.play → Engine.SetNetOverride), not a process global, so concurrent
+	// workers can't clobber each other's active net.
 	newLim := cfg.limitsFor(cfg.NewMoveTime, cfg.NewDepth)
 	oldLim := cfg.limitsFor(cfg.OldMoveTime, cfg.OldDepth)
 	lower, upper := Bounds(cfg.Alpha, cfg.Beta)

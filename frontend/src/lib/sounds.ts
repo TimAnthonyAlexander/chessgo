@@ -14,10 +14,27 @@
 
 import { type BoardMap, fileOf } from './chess'
 import { type MaterialId, soundThemeStore } from './soundTheme'
+import { settingsStore } from './settings'
 
 let ctx: AudioContext | null = null
 let master: GainNode | null = null
 let enabled = readEnabled()
+
+// The engine's headroom ceiling — the master gain at 100% volume. Per-voice gains
+// are tuned so the in-phase sum stays clear of clipping at this level; the volume
+// preference scales linearly from 0 to this. (Was a hard-coded 0.8.)
+const MASTER_CEILING = 0.8
+
+/** Master gain for the current volume preference (0–100 → 0–MASTER_CEILING). */
+function masterGain(): number {
+    const vol = settingsStore.get('soundVolume')
+    return (MASTER_CEILING * Math.min(100, Math.max(0, vol))) / 100
+}
+
+/** Push the current volume preference onto the live master node (if built). */
+function applyMasterVolume(): void {
+    if (master) master.gain.value = masterGain()
+}
 
 // True once a REAL user gesture has touched the audio graph. Until then we never
 // create/resume an AudioContext or emit a sound — because audio emitted without a
@@ -138,7 +155,7 @@ function audio(): { c: AudioContext; out: GainNode } | null {
         // Real headroom instead of a brickwall limiter: per-voice gains are small and
         // the master sits below unity, so the in-phase sum stays clear of clipping.
         master = ctx.createGain()
-        master.gain.value = 0.8
+        master.gain.value = masterGain()
         master.connect(ctx.destination)
     }
     // Resume on ANY non-running state, not just 'suspended'. Safari/iOS park the
@@ -647,6 +664,10 @@ if (typeof window !== 'undefined') {
     }
     window.addEventListener('pointerdown', prime)
     window.addEventListener('keydown', prime)
+
+    // Live-apply the volume preference: any settings change re-reads the volume and
+    // updates the master node (no-op until the context is built). Cheap.
+    settingsStore.subscribe(applyMasterVolume)
 
     // When the tab returns to the foreground (or the OS ends an interruption), try a
     // gestureless resume — it succeeds in the common auto-recover case and rejects

@@ -73,18 +73,20 @@ func (n *MultiNet) evalFromAcc(acc *MultiAccumulator, pos *chess.Position) int {
 // the hot path (MultiStack.Eval) reuses them instead of allocating ~5 KB/eval —
 // the per-eval make() calls were a large fraction of the multilayer eval cost.
 type multiScratch struct {
-	ft []float32 // 2H float activation (float tail path)
-	aq []uint8   // 2H u8 activation (int8 L1 path)
-	l2 []float32 // D2 (tail layer-1 output)
-	l3 []float32 // D3 (tail layer-2 output)
+	ft  []float32 // 2H float activation (float tail path)
+	aq  []uint8   // 2H u8 activation (int8 L1 path)
+	nnz []uint16  // 2H/4 nonzero-dword index scratch (sparse int8 L1 path)
+	l2  []float32 // D2 (tail layer-1 output)
+	l3  []float32 // D3 (tail layer-2 output)
 }
 
 func (n *MultiNet) newScratch() multiScratch {
 	return multiScratch{
-		ft: make([]float32, 2*n.H),
-		aq: make([]uint8, 2*n.H),
-		l2: make([]float32, n.D2),
-		l3: make([]float32, n.D3),
+		ft:  make([]float32, 2*n.H),
+		aq:  make([]uint8, 2*n.H),
+		nnz: make([]uint16, n.H/2), // 2H/4 dwords
+		l2:  make([]float32, n.D2),
+		l3:  make([]float32, n.D3),
 	}
 }
 
@@ -95,6 +97,9 @@ func (n *MultiNet) evalInto(stmHalf, oppHalf []int16, bk int, sc *multiScratch) 
 	if n.int8L1 {
 		quantU8I16(sc.aq[:h], stmHalf) // SCReLU(int16/QA) + quantize to u8
 		quantU8I16(sc.aq[h:], oppHalf)
+		if n.int8Sparse {
+			return n.tailEvalInt8Sparse(sc.aq, bk, sc.l2, sc.l3, sc.nnz)
+		}
 		return n.tailEvalInt8(sc.aq, bk, sc.l2, sc.l3)
 	}
 	screluActivateI16(sc.ft[:h], stmHalf) // stm half → SCReLU (int16 → float)
