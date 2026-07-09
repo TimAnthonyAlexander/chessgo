@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Box, Button, Typography } from '@mui/material'
+import { Box, Button, type SxProps, type Theme, Typography } from '@mui/material'
 import {
     Check,
     Flag,
@@ -369,6 +369,14 @@ export default function LiveGame() {
                         />
                     )}
                     {!zen && g.variant === 'standard' && <LiveOpening fen={g.fen} />}
+                    {!zen && (
+                        <CapturedPanel
+                            mat={mat}
+                            opponentColor={other(g.color)}
+                            opponentName={g.opponent.name}
+                            humanColor={g.color}
+                        />
+                    )}
                     <ChatPanel
                         messages={g.messages}
                         onSend={(t) => gameSocket.sendChat(t)}
@@ -807,6 +815,134 @@ function sideMaterial(
     return { captured, glyphColor: color === 'w' ? 'b' : 'w', adv }
 }
 
+// Captured-piece glyph row: overlapping cburnett SVGs for the pieces a side has
+// captured, plus its signed material advantage. Shared by the player bar (mobile)
+// and the desktop CapturedPanel. Renders nothing when there's nothing to show.
+function CapturedGlyphs({
+    captured,
+    glyphColor,
+    adv,
+    size = 16,
+    sx,
+}: {
+    captured: string[]
+    glyphColor: Color
+    adv: number
+    size?: number
+    sx?: SxProps<Theme>
+}) {
+    if (captured.length === 0 && adv <= 0) return null
+    return (
+        <Box
+            sx={[
+                {
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                    gap: '1px',
+                    minWidth: 0,
+                },
+                ...(Array.isArray(sx) ? sx : [sx]),
+            ]}
+        >
+            {captured.map((t, i) => (
+                <Box
+                    key={i}
+                    component="img"
+                    src={`/piece/cburnett/${glyphColor}${t}.svg`}
+                    alt={t}
+                    sx={{
+                        width: size,
+                        height: size,
+                        ml: i > 0 && captured[i - 1] === t ? `${-size * 0.375}px` : 0,
+                    }}
+                />
+            ))}
+            {adv > 0 && (
+                <Typography
+                    sx={{
+                        ml: 0.5,
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        color: 'var(--accent)',
+                    }}
+                >
+                    +{adv}
+                </Typography>
+            )}
+        </Box>
+    )
+}
+
+// Desktop captured-material panel for the left column: both players' captured
+// pieces with room to breathe (the narrow player bar wraps after ~2 glyphs).
+// Renders nothing until the first capture so it never shifts the layout early.
+function CapturedPanel({
+    mat,
+    opponentColor,
+    opponentName,
+    humanColor,
+}: {
+    mat: Material
+    opponentColor: Color
+    opponentName: string
+    humanColor: Color
+}) {
+    const opp = sideMaterial(mat, opponentColor)
+    const you = sideMaterial(mat, humanColor)
+    if (
+        opp.captured.length === 0 &&
+        opp.adv === 0 &&
+        you.captured.length === 0 &&
+        you.adv === 0
+    ) {
+        return null
+    }
+    const rows = [
+        { label: opponentName, side: opp },
+        { label: 'You', side: you },
+    ]
+    return (
+        <Box
+            sx={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 0.75,
+                px: 1.5,
+                py: 1.25,
+                bgcolor: 'var(--surface)',
+                border: '1px solid var(--line-soft)',
+                borderRadius: '12px',
+                boxShadow: PANEL_SHADOW,
+            }}
+        >
+            {rows.map(({ label, side }, i) => (
+                <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 1, minHeight: 20 }}>
+                    <Typography
+                        noWrap
+                        sx={{
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: 11,
+                            color: 'var(--text-dim)',
+                            width: 64,
+                            flexShrink: 0,
+                        }}
+                    >
+                        {label}
+                    </Typography>
+                    <CapturedGlyphs
+                        captured={side.captured}
+                        glyphColor={side.glyphColor}
+                        adv={side.adv}
+                        size={18}
+                    />
+                </Box>
+            ))}
+        </Box>
+    )
+}
+
 function PlayerBar({
     name,
     rating,
@@ -875,44 +1011,15 @@ function PlayerBar({
                     </Typography>
                 )}
             </Box>
-            {!zen && (captured.length > 0 || adv > 0) && (
-                <Box
-                    sx={{
-                        display: 'flex',
-                        flexWrap: 'wrap',
-                        alignItems: 'center',
-                        gap: '1px',
-                        minWidth: 0,
-                        maxWidth: 150,
-                    }}
-                >
-                    {captured.map((t, i) => (
-                        <Box
-                            key={i}
-                            component="img"
-                            src={`/piece/cburnett/${glyphColor}${t}.svg`}
-                            alt={t}
-                            sx={{
-                                width: 16,
-                                height: 16,
-                                ml: i > 0 && captured[i - 1] === t ? '-6px' : 0,
-                            }}
-                        />
-                    ))}
-                    {adv > 0 && (
-                        <Typography
-                            sx={{
-                                ml: 0.5,
-                                fontFamily: 'var(--font-mono)',
-                                fontSize: 12,
-                                fontWeight: 700,
-                                color: 'var(--accent)',
-                            }}
-                        >
-                            +{adv}
-                        </Typography>
-                    )}
-                </Box>
+            {/* Compact strip in the bar on MOBILE only — on desktop the captured
+                pieces live in the roomy left-column CapturedPanel (no wrapping). */}
+            {!zen && (
+                <CapturedGlyphs
+                    captured={captured}
+                    glyphColor={glyphColor}
+                    adv={adv}
+                    sx={{ display: { xs: 'flex', md: 'none' }, maxWidth: 150 }}
+                />
             )}
             {!zen && (
                 <Box sx={{ ml: 'auto' }}>
