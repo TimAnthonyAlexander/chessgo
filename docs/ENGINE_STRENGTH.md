@@ -1984,6 +1984,10 @@ than the ~50–80 Elo one might guess for "clear hash each move." So:
   (0 wins in 60), ≈ −335 Elo. Even at **3× time-odds** (300 ms vs 100 ms warm — the maintainer's
   original bench) Gomachine still wins ~0 and mostly loses/draws. The "~2× ratio / ~70-Elo gap /
   parity milestone" of §27.1–27.4 were all reading the crippled cold opponent.
+  **⚠️ CONTESTED (2026-07-09, §33):** a later two-machine warm run (lairner + coalla, efs28 net, many
+  games) put warm full-strength SF at **~33% / −120**, not 12.5% / −335 — a ~215 Elo gap the +19 net
+  can't explain. This −335 warm row is **under reconciliation** (SF thread/hash config unpinned, or a
+  60-game low-sample read); see §33.1. Don't quote −335 as settled until a pinned-`--opp-opts` rerun resolves it.
 - **The frontend is still MORE optimistic than the cold bench reproduces.** The cold run lands at
   35.8% (W4:L21 among decisives), but the maintainer eyeballs the live frontend closer to ~60:40
   W:L. So cold-per-move SF explains the *bulk* of the frontend-vs-bench gap but **not all of it** —
@@ -2278,3 +2282,36 @@ throttled). Final running loss 0.02646 (the benign §29.4 center-min-then-tail-r
 - Found+guarded a pre-existing panic: illegal FENs (side-not-to-move in check) fed to the raw `uci`
   entry crash the search (king-capture → empty king bitboard → index 64). Prod entries (server/hub/
   bots) already guard with `pos.Legal()`; only `uci` handleGo didn't — now guarded (`internal/uci`).
+
+## 33. Warm-SF gauntlet on the efs28 net — −120/−140 Elo at 100/100 ms, two-machine agreement (2026-07-09)
+
+**gomachine (efs28 net) scores ~31–35% vs full-strength WARM Stockfish at 100 ms/100 ms — a
+head-to-head of −120 to −140 Elo — measured independently on lairner AND coalla over many games,
+both boxes converging on the same band.** Warm = the honest bench path (persistent SF, warm hash,
+full move history; NOT `--sf-cold`), confirmed by the maintainer. The cross-machine agreement is the
+strongest part: it rules out a single-box config fluke. Also added `bench vs-stockfish --save-wins
+<dir>` (PGN per won game) so these wins can actually be reviewed, not just counted.
+
+### 33.1 Open reconciliation with §27.5 — flagged, NOT resolved
+§27.5 (2026-07-08, coalla, `b80da65`, 60 games) put warm full-strength SF at **12.5% / −335**. This
+is **~33% / −120** warm — a **~215 Elo swing** under the same nominal "warm full-strength 100/100,"
+on (among others) the same coalla box. The efs28 net gained only **+19**, so the net does NOT explain
+it. Candidates: (a) §27.5's 60-game **W0 was a low-sample/unlucky read**; (b) an **SF-config
+difference** — `--opp-opts` Threads/Hash: SF's 100 ms strength swings hugely with both, and
+"full-strength" pins *skill*, not threads/hash, so the two runs may have faced different-strength warm
+SFs; (c) a real change in the warm bench path across the 18 commits since `b80da65`. **A single
+warm-vs-warm run with pinned `--opp-opts` + matched net on both boxes settles which** (~20 min on
+coalla). Until then §27.5's −335 and this −120 are treated as measured against **possibly
+different-strength warm SFs** — do not silently overwrite one with the other.
+
+### 33.2 The absolute stays pending (§28 holds)
+−120/−140 is a solid, reproducible **relative** diff. Mapping it to "≈3780–3980" assumes warm SF at
+100 ms ≈ 3900–4100 — but that band is SF's **long-TC / many-thread CCRL** rating, NOT its **100 ms /
+few-thread** strength (materially lower). So:
+- **Quote:** "≈ −120 to −140 Elo vs warm full-strength Stockfish at 100/100 ms, agreed across lairner + coalla."
+- **Do NOT** convert it to a point Elo (≈3900) — that pins our number to SF's wrong-TC rating, the exact
+  §28 trap. A CCRL-rated NNUE opponent (Stash/Viridithas/Starzix, `--full-strength --sf-elo <its real CCRL>`)
+  remains the only defensible absolute.
+
+**Net:** the most encouraging warm-SF read to date and reproducible across two machines — a real signal
+the efs28 engine is strong. The absolute waits on a proper anchor; the §27.5 gap wants one clean run.

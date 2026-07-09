@@ -8,10 +8,12 @@ engine** — a blowout, so an *underestimate* even then. Since then it has shipp
 Elo with NO re-anchor** (v9 threats, v12 Leela/test80 data, the +23.3 search stack, corrhist/
 singular/futility, …). (**The old "beats full-force Stockfish at ~2× time-odds / equal-TC parity"
 tell is RETRACTED** — ENGINE_STRENGTH §27.5: it was measured through the admin frontend
-Engine-vs-Engine view, which spawns a *cold Stockfish every move* worth ~235 Elo of handicap; vs a
-*warm* full-force SF, gomachine scores ~12.5% at equal 100ms TC and wins ~0 even at 3× time-odds.
-Do NOT cite the SF time-odds tell as strength evidence.) So **current strength is materially ABOVE the old ~3400 v6 mark** (from the v6 100–0 floor, not the retracted SF tell)**, upper bound
-unmeasured — re-anchor pending; do NOT quote 3400 (or 3700, or any point) as current strength.**
+Engine-vs-Engine view, which spawns a *cold Stockfish every move* worth ~235 Elo of handicap; the
+warm-SF equal-100ms score is **contested — §27.5 read ~12.5% / −335, a later two-machine efs28 run
+(§33, 2026-07-09) read ~33% / −120 to −140; reconciliation pending**. Either way the frontend tell is
+retired.) So **current strength is materially ABOVE the old ~3400 v6 mark** (from the v6 100–0 floor,
+not the retracted SF tell)**, upper bound unmeasured — re-anchor pending; do NOT quote 3400 (or 3700,
+or ~3900, or any point) as current strength.**
 See §Status. The engine is the centerpiece; the website is the front door to it.
 
 > Read `docs/SPEC.md` for the full design and `docs/COMMANDS.md` to run/deploy.
@@ -269,10 +271,15 @@ engine (the exact stale-docs trap). What we can honestly say:
   Engine-vs-Engine view, which drives Stockfish via `handleStockfishMove` — a **fresh SF process
   every move** (empty hash, no move history, cold), worth **~235 Elo** of handicap. Controlled
   bench (coalla, 100/100, full-strength SF, 60 games, `--sf-cold` flag): **warm SF → W0 D15 L45
-  (12.5%, ≈ −335 Elo); cold SF → W4 D35 L21 (35.8%)**. So vs a warm full-force SF there is **no
-  parity** — gomachine wins ~0 even at 3× time-odds. The frontend Engine-vs-Engine view is
+  (12.5%, ≈ −335 Elo); cold SF → W4 D35 L21 (35.8%)**. The frontend Engine-vs-Engine view is
   **retired as a strength signal**; use `bench vs-stockfish` (warm, default). This does not touch
   the v6 CCRL floor — it just deletes "beats full-force SF at blitz" as evidence.
+- **⚠️ §27.5 warm number is CONTESTED (§33, 2026-07-09):** a later two-machine warm run (lairner +
+  coalla, efs28 net, many games) put warm full-strength SF at **~33% / −120 to −140 Elo**, NOT the
+  12.5% / −335 above — a ~215 Elo gap the +19 net can't explain (likely SF thread/hash config
+  unpinned, or the 60-game W0 was low-sample). **Reconciliation pending** a pinned-`--opp-opts`
+  rerun. The −120/−140 is a solid *relative* diff, reproduced on two boxes — but do **NOT** map it
+  to a point Elo (≈3900): that anchors us to SF's long-TC/many-thread rating, not its 100ms strength.
 - **Conclusion:** strength is **materially above the old ~3400 v6 mark, upper bound unmeasured,
   untriangulated.** **Re-anchor vs a ranked NNUE opponent (target now ~3700+, not the old
   ~3450–3600), scoring ~50%, before publishing ANY point number.** This **supersedes** the earlier
