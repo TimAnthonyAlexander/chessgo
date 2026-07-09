@@ -77,7 +77,6 @@ interface BoardProps {
 }
 
 const PROMO_ORDER = ['q', 'r', 'b', 'n']
-const DRAG_THRESHOLD = 5 // px before a press becomes a drag
 
 // Build an arrow as a SINGLE filled polygon (shaft + head) from a→b in the 80×80
 // board space. Used for the "both engines agree" arrow, where we want ONE arrow
@@ -137,13 +136,10 @@ function brushFor(e: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }):
 interface DragState {
     from: Square
     piece: string
-    startX: number
-    startY: number
     x: number
     y: number
     over: Square | null
     size: number
-    moved: boolean
     reselect: boolean
 }
 
@@ -321,13 +317,10 @@ export default function Board({
             setDrag({
                 from: sq,
                 piece: board[sq],
-                startX: e.clientX,
-                startY: e.clientY,
                 x: e.clientX,
                 y: e.clientY,
                 over: sq,
                 size,
-                moved: false,
                 reselect: selected === sq,
             })
             setSelected(sq)
@@ -346,15 +339,11 @@ export default function Board({
             return
         }
         if (!drag) return
-        const moved =
-            drag.moved ||
-            Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > DRAG_THRESHOLD
         setDrag({
             ...drag,
             x: e.clientX,
             y: e.clientY,
             over: squareFromPoint(e.clientX, e.clientY),
-            moved,
         })
     }
 
@@ -379,18 +368,17 @@ export default function Board({
             /* ignore */
         }
 
-        if (d.moved) {
-            const dropSq = squareFromPoint(e.clientX, e.clientY)
-            if (dropSq && destsFor(d.from).has(dropSq)) {
-                commit(d.from, dropSq)
-            } else {
-                setSelected(null) // failed drag → deselect
-                if (premoveActive) onCancelPremove?.()
-            }
-        } else if (d.reselect) {
-            setSelected(null) // tapped an already-selected piece → toggle off
+        const dropSq = squareFromPoint(e.clientX, e.clientY)
+        if (dropSq === d.from) {
+            // Released on the origin square — a plain tap, not a drag.
+            if (d.reselect) setSelected(null) // tapped an already-selected piece → toggle off
+            // else: keep it selected (dots shown)
+        } else if (dropSq && destsFor(d.from).has(dropSq)) {
+            commit(d.from, dropSq)
+        } else {
+            setSelected(null) // dropped off-board or on an invalid square → deselect
+            if (premoveActive) onCancelPremove?.()
         }
-        // else: a plain tap that selected the piece — keep it selected (dots shown)
     }
 
     function choosePromotion(letter: string) {
@@ -405,7 +393,7 @@ export default function Board({
         <div className="board-wrap">
             <div
                 ref={boardRef}
-                className={`board${drag?.moved ? ' dragging' : ''}`}
+                className={`board${drag ? ' dragging' : ''}`}
                 onPointerDown={onPointerDown}
                 onPointerMove={onPointerMove}
                 onPointerUp={onPointerUp}
@@ -425,9 +413,8 @@ export default function Board({
                         const isDropTarget = dropTargets?.has(sq) ?? false
                         const isLast = lastMove && (lastMove.from === sq || lastMove.to === sq)
                         const isPremove = premove && (premove.from === sq || premove.to === sq)
-                        const isDragOrigin = drag?.moved && drag.from === sq
-                        const isOver =
-                            drag?.moved && drag.over === sq && destsFor(drag.from).has(sq)
+                        const isDragOrigin = !!drag && drag.from === sq
+                        const isOver = !!drag && drag.over === sq && destsFor(drag.from).has(sq)
                         const classes = [
                             'sq',
                             light ? 'light' : 'dark',
@@ -660,7 +647,7 @@ export default function Board({
                 )}
             </div>
 
-            {drag?.moved && (
+            {drag && (
                 <span
                     className="drag-ghost"
                     style={{
