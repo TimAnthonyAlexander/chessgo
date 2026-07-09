@@ -65,18 +65,33 @@ export default function HeroFlame() {
             >
                 <Flame size={38} strokeWidth={2} />
             </Box>
-            <Typography
-                sx={{
-                    fontFamily: 'var(--font-display)',
-                    fontWeight: 700,
-                    fontSize: { xs: 34, md: 46 },
-                    lineHeight: 1.04,
-                    letterSpacing: '-0.02em',
-                    color: lit ? 'var(--text)' : 'var(--text-dim)',
-                }}
-            >
-                {current}
-            </Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                <Typography
+                    sx={{
+                        fontFamily: 'var(--font-display)',
+                        fontWeight: 700,
+                        fontSize: { xs: 34, md: 46 },
+                        lineHeight: 1.04,
+                        letterSpacing: '-0.02em',
+                        color: lit ? 'var(--text)' : 'var(--text-dim)',
+                    }}
+                >
+                    {current}
+                </Typography>
+                <Typography
+                    sx={{
+                        fontFamily: 'var(--font-display)',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        letterSpacing: 0.6,
+                        textTransform: 'uppercase',
+                        color: 'var(--text-dim)',
+                        opacity: lit ? 1 : 0.6,
+                    }}
+                >
+                    day streak
+                </Typography>
+            </Box>
         </Box>
     )
 }

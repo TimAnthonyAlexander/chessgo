@@ -35,6 +35,34 @@ const theme = createTheme({
                 },
             },
         },
+        MuiTooltip: {
+            styleOverrides: {
+                tooltip: {
+                    background: 'var(--surface)',
+                    border: '1px solid var(--line)',
+                    color: 'var(--text)',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 13,
+                    borderRadius: 8,
+                    paddingInline: 10,
+                    paddingBlock: 6,
+                },
+                arrow: {
+                    color: 'var(--surface)',
+                    '&::before': { border: '1px solid var(--line)' },
+                },
+            },
+        },
+        MuiDialog: {
+            styleOverrides: {
+                paper: {
+                    backgroundColor: 'var(--surface)',
+                    backgroundImage: 'none',
+                    border: '1px solid var(--line)',
+                    borderRadius: 14,
+                },
+            },
+        },
     },
 })
 

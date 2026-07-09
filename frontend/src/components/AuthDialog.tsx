@@ -70,6 +70,7 @@ export default function AuthDialog({
         <Dialog
             open={open}
             onClose={close}
+            aria-labelledby="auth-dialog-title"
             slotProps={{
                 paper: {
                     sx: {
@@ -83,6 +84,8 @@ export default function AuthDialog({
         >
             <DialogContent sx={{ p: 3 }}>
                 <Typography
+                    id="auth-dialog-title"
+                    component="h2"
                     sx={{
                         fontFamily: 'var(--font-display)',
                         fontWeight: 600,
@@ -112,6 +115,8 @@ export default function AuthDialog({
                             required
                             autoFocus
                             fullWidth
+                            // ≥16px input font on phones so iOS Safari doesn't auto-zoom on focus.
+                            sx={{ '& .MuiInputBase-input': { fontSize: { xs: 16 } } }}
                         />
                     )}
                     <TextField
@@ -123,6 +128,7 @@ export default function AuthDialog({
                         required
                         autoFocus={mode === 'login'}
                         fullWidth
+                        sx={{ '& .MuiInputBase-input': { fontSize: { xs: 16 } } }}
                     />
                     <TextField
                         label="Password"
@@ -133,6 +139,7 @@ export default function AuthDialog({
                         required
                         fullWidth
                         helperText={mode === 'signup' ? 'At least 8 characters.' : undefined}
+                        sx={{ '& .MuiInputBase-input': { fontSize: { xs: 16 } } }}
                     />
 
                     {error && (

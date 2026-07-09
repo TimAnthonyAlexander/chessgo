@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import {
     Box,
@@ -30,6 +30,7 @@ import GameModeCard from '../components/GameModeCard'
 import BoardPage from '../components/BoardPage'
 import { ActionBtn, Avatar, ErrorBanner, NavBtn } from '../components/PanelUI'
 import ConfirmDialog from '../components/ConfirmDialog'
+import OpeningPanel from '../components/OpeningPanel'
 import {
     analyze,
     type BotGame as Game,
@@ -39,6 +40,8 @@ import {
     undoMove,
 } from '../api/client'
 import { statusLabel } from '../lib/chess'
+import { computeMaterial } from '../lib/material'
+import { buildFromMoves } from '../lib/analysisTree'
 import { useBoardInteraction } from '../lib/useBoardInteraction'
 import { useDuckInteraction } from '../lib/useDuckInteraction'
 import { useCrazyhouseDrops } from '../lib/useCrazyhouseDrops'
@@ -104,6 +107,9 @@ export default function BotGame() {
     const [duckReveal, setDuckReveal] = useState<string | null>(null)
     // Guarded-resign modal (only shown when the confirmResign preference is on).
     const [confirmResignOpen, setConfirmResignOpen] = useState(false)
+    // Guarded "New game" modal — only shown when a game is still ongoing (starting
+    // a fresh one would silently throw the live game away).
+    const [confirmNewGameOpen, setConfirmNewGameOpen] = useState(false)
 
     const { user } = useAuth()
     const isAdmin = user?.role === 'admin'
@@ -392,6 +398,19 @@ export default function BotGame() {
         else resign()
     }
 
+    // Drop the current game and return to the setup screen.
+    function discardGame() {
+        setGame(null)
+        setStartFen(null)
+    }
+
+    // "New game" action for the UI: confirm first when a game is still in progress
+    // (one click would otherwise wipe it), otherwise return to setup immediately.
+    function requestNewGame() {
+        if (ongoing) setConfirmNewGameOpen(true)
+        else discardGame()
+    }
+
     function toggleSound() {
         const next = !sound
         setSound(next)
@@ -480,10 +499,7 @@ export default function BotGame() {
                         onToggleSound={toggleSound}
                         onUndo={undo}
                         onResign={requestResign}
-                        onNewGame={() => {
-                            setGame(null)
-                            setStartFen(null)
-                        }}
+                        onNewGame={requestNewGame}
                         showMoveList={prefs.showMoveList}
                         zen={prefs.zenMode && ongoing}
                         isAdmin={isAdmin}
@@ -539,6 +555,16 @@ export default function BotGame() {
                 danger
                 onConfirm={resign}
                 onClose={() => setConfirmResignOpen(false)}
+            />
+            {/* "New game" guard — only opened mid-game (requestNewGame returns to
+                setup directly once the game is over). */}
+            <ConfirmDialog
+                open={confirmNewGameOpen}
+                title="Abandon this game?"
+                message="Your game in progress will be discarded."
+                confirmLabel="New game"
+                onConfirm={discardGame}
+                onClose={() => setConfirmNewGameOpen(false)}
             />
         </BoardPage>
     )
@@ -606,6 +632,25 @@ function MovePanel({
     bestMyTurn: boolean
     gameStartFen: string
 }) {
+    // Captured-material readout for the player rows, derived from the SHOWN board
+    // (so it tracks history review, like the eval bar). `captured(c)` = the pieces
+    // color `c` has taken (its opponent's color); `advantage(c)` = c's point lead.
+    const mat = useMemo(() => computeMaterial(bestFen), [bestFen])
+    const human = game.human_color
+    const opp = other(human)
+    const captured = (c: Color) => (c === 'w' ? mat.capturedByWhite : mat.capturedByBlack)
+    const advantage = (c: Color) => {
+        const d = c === 'w' ? mat.diff : -mat.diff
+        return d > 0 ? d : 0
+    }
+
+    // A linear tree of the game so far, so the engine-owned OpeningPanel can name
+    // the opening (and show candidate lines) for the live position during play.
+    const book = useMemo(
+        () => buildFromMoves(gameStartFen, game.moves.map((m) => m.uci)),
+        [gameStartFen, game.moves],
+    )
+
     return (
         <Box
             sx={{
@@ -648,6 +693,7 @@ function MovePanel({
                         </Typography>
                     )}
                 </Box>
+                <MaterialStrip pieces={captured(opp)} color={human} adv={advantage(opp)} />
             </Box>
 
             {error && <ErrorBanner>{error}</ErrorBanner>}
@@ -658,6 +704,18 @@ function MovePanel({
                 <MoveList fill moves={game.moves} currentPly={shownPly} onSelectPly={onSelectPly} />
             ) : (
                 <Box sx={{ flex: 1, minHeight: 0 }} />
+            )}
+
+            {/* Opening name (+ candidate lines) for the live position. Standard-only
+                (the explorer/engine only understand standard chess); hidden in zen
+                mode, like the eval bar. Self-fetches and swaps without layout shift. */}
+            {game.variant === 'standard' && (
+                <OpeningPanel
+                    tree={book.tree}
+                    currentId={book.lastId}
+                    engineOn={!zen}
+                    onMove={() => {}}
+                />
             )}
 
             {/* Footer: you + status, navigation, actions */}
@@ -680,6 +738,7 @@ function MovePanel({
                     >
                         You
                     </Typography>
+                    <MaterialStrip pieces={captured(human)} color={opp} adv={advantage(human)} />
                     <Box sx={{ flex: 1 }} />
                     <Typography
                         sx={{ fontSize: 13, fontWeight: 600, color: TONE_COLOR[statusTone] }}
@@ -755,6 +814,47 @@ function MovePanel({
                     />
                 )}
             </Box>
+        </Box>
+    )
+}
+
+/** A player row's captured pieces (opponent's color, overlapped) + a signed "+N"
+ * material-advantage badge. Mirrors the SpectateInfoCard readout so material reads
+ * the same across the app. Renders nothing when there's nothing captured and no lead. */
+function MaterialStrip({
+    pieces,
+    color,
+    adv,
+}: {
+    pieces: string[]
+    color: Color
+    adv: number
+}) {
+    if (pieces.length === 0 && adv <= 0) return null
+    return (
+        <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '1px', minWidth: 0 }}>
+            {pieces.map((t, i) => (
+                <Box
+                    key={i}
+                    component="img"
+                    src={`/piece/cburnett/${color}${t}.svg`}
+                    alt={t}
+                    sx={{ width: 18, height: 18, ml: i > 0 && pieces[i - 1] === t ? '-6px' : 0 }}
+                />
+            ))}
+            {adv > 0 && (
+                <Typography
+                    sx={{
+                        ml: pieces.length > 0 ? 0.5 : 0,
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 12.5,
+                        fontWeight: 700,
+                        color: 'var(--accent)',
+                    }}
+                >
+                    +{adv}
+                </Typography>
+            )}
         </Box>
     )
 }

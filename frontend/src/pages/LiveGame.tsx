@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Button, Typography } from '@mui/material'
-import { Check, Flag, Handshake, Undo2, User, Volume2, VolumeX, X } from 'lucide-react'
+import {
+    Check,
+    Flag,
+    FlipVertical2,
+    Handshake,
+    Undo2,
+    User,
+    Volume2,
+    VolumeX,
+    X,
+} from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import Board from '../components/Board'
 import BoardPage from '../components/BoardPage'
@@ -9,8 +19,10 @@ import Clock from '../components/Clock'
 import LiveModeCard from '../components/LiveModeCard'
 import MoveList from '../components/MoveList'
 import { ActionBtn, Avatar, NavBtn, PANEL_SHADOW } from '../components/PanelUI'
-import type { MoveEntry } from '../api/client'
+import { candidates, type MoveEntry, type Opening, type User as AuthUser } from '../api/client'
 import { type Color, gameSocket, type LiveGameState, liveRemaining } from '../lib/socket'
+import { computeMaterial, type Material } from '../lib/material'
+import { categoryFor } from '../lib/timeControl'
 import { useGameSocket } from '../lib/useGameSocket'
 import { useBoardInteraction } from '../lib/useBoardInteraction'
 import { useDuckInteraction } from '../lib/useDuckInteraction'
@@ -20,7 +32,7 @@ import { parsePocket } from '../lib/variants'
 import { useMoveNavKeys } from '../lib/useMoveNavKeys'
 import { applyUciVisually, type BoardMap, parseFen } from '../lib/chess'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
-import { VARIANT_LABEL } from '../lib/variants'
+import { type Variant, VARIANT_LABEL } from '../lib/variants'
 import { authStore, useAuth } from '../lib/auth'
 import { usePrefs } from '../lib/settings'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -30,6 +42,25 @@ import BoardActions from '../components/BoardActions'
 const other = (c: Color): Color => (c === 'w' ? 'b' : 'w')
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
+
+// The signed-in user's rating for THIS game's rated pool: variant games map to
+// their own rating (duck / crazyhouse), everything else to the pool's time-control
+// category. Null when signed out — anonymous players have no rating to show.
+function userRatingFor(user: AuthUser | null, variant: Variant, pool: string): number | null {
+    if (!user) return null
+    if (variant === 'duck') return user.rating_duck
+    if (variant === 'crazyhouse') return user.rating_crazyhouse
+    switch (categoryFor(pool)) {
+        case 'Bullet':
+            return user.rating_bullet
+        case 'Blitz':
+            return user.rating_blitz
+        case 'Rapid':
+            return user.rating_rapid
+        case 'Classical':
+            return user.rating_classical
+    }
+}
 
 // Per-time-control "low time" threshold: ~1/10 of the base clock, clamped to a
 // sane 8s–60s window (bullet warns late, classical not absurdly early).
@@ -73,10 +104,18 @@ export default function LiveGame() {
     const prefs = usePrefs()
     const isAdmin = user?.role === 'admin'
 
-    const [, force] = useState(0)
     const [sound, setSound] = useState(soundEnabled())
     // Resign confirmation modal (only used when the confirmResign pref is on).
     const [confirmResignOpen, setConfirmResignOpen] = useState(false)
+    // Manual board flip — mirror the opponent's view. Independent of your color.
+    const [flipped, setFlipped] = useState(false)
+    // The rating change once a rated game ends (new rating + signed delta), keyed to
+    // the game it belongs to so a stale delta never bleeds into the next game.
+    const [ratingDelta, setRatingDelta] = useState<{
+        id: string
+        after: number
+        delta: number
+    } | null>(null)
 
     function toggleSound() {
         const next = !sound
@@ -85,17 +124,13 @@ export default function LiveGame() {
         if (next) sounds.move()
     }
 
-    // Tick for live clock countdown while a game is running.
-    useEffect(() => {
-        if (!g || g.ended) return
-        const id = window.setInterval(() => force((n) => n + 1), 200)
-        return () => window.clearInterval(id)
-    }, [g?.id, g?.ended])
-
     // The local player can move when it's their turn and the socket is live.
     const myTurn = !!g && !g.ended && g.sideToMove === g.color && s.conn === 'open'
     const isDuck = g?.variant === 'duck'
     const isCrazyhouse = g?.variant === 'crazyhouse'
+
+    // Board orientation: your own color at the bottom, flipped on demand.
+    const orientation: Color = g ? (flipped ? other(g.color) : g.color) : 'w'
 
     // Client-side history browsing. `viewIndex` (null = follow the live position)
     // lets the player scrub back through past plies to review them — it never
@@ -216,15 +251,47 @@ export default function LiveGame() {
         }
     }, [g?.id, g?.ended])
 
-    // A rated game changes the player's rating server-side; refresh the cached
-    // user (once per game) so the navbar rating isn't stale.
+    // Snapshot the player's pre-result rating for this pool. Tracked live while the
+    // game is unfinished, so at the moment it ends the ref holds the last value
+    // BEFORE the server applies the new Elo — the baseline for the signed delta.
+    const preRating = useRef<number | null>(null)
+    if (g && !g.ended) preRating.current = userRatingFor(user, g.variant, g.pool)
+
+    // A rated game changes the player's rating server-side; refresh the cached user
+    // (once per game) so the navbar rating isn't stale, then diff the freshly-landed
+    // rating against the pre-result snapshot to show the change in the result panel.
     const ratedRefresh = useRef<string | null>(null)
     useEffect(() => {
         if (g && g.ended && g.rated && ratedRefresh.current !== g.id) {
             ratedRefresh.current = g.id
-            void authStore.refresh()
+            const before = preRating.current
+            const id = g.id
+            const variant = g.variant
+            const pool = g.pool
+            void authStore.refresh().then(() => {
+                const after = userRatingFor(authStore.getState().user, variant, pool)
+                if (before != null && after != null) {
+                    setRatingDelta({ id, after, delta: after - before })
+                }
+            })
         }
     }, [g?.id, g?.ended, g?.rated])
+
+    // Tab-title nudge: when the tab is backgrounded AND it's your move, flag the
+    // title so a waiting player notices from another tab; clear it on focus or once
+    // it's no longer your move. Self-contained — no socket/notification changes.
+    const myMove = !!g && !g.ended && g.sideToMove === g.color
+    useEffect(() => {
+        const apply = () => {
+            document.title = document.hidden && myMove ? '● Your move — chessgo' : 'chessgo'
+        }
+        apply()
+        document.addEventListener('visibilitychange', apply)
+        return () => {
+            document.removeEventListener('visibilitychange', apply)
+            document.title = 'chessgo'
+        }
+    }, [myMove])
 
     if (!g) {
         return (
@@ -255,6 +322,12 @@ export default function LiveGame() {
     // a game is in progress. It lapses once the game ends so the result shows normally.
     const zen = prefs.zenMode && !g.ended
 
+    // Captured material (approximate, from the live FEN) for the player-bar readouts.
+    const mat = computeMaterial(g.fen)
+
+    // The player's own rating for this pool (shown in the "You" bar; hidden under zen).
+    const myRating = userRatingFor(user, g.variant, g.pool)
+
     const moveEntries: MoveEntry[] = g.moves.map((m, i) => ({
         ply: i + 1,
         san: m.san,
@@ -269,7 +342,7 @@ export default function LiveGame() {
                 <>
                 {isCrazyhouse && (
                     <PocketPanel
-                        orientation={g.color}
+                        orientation={orientation}
                         humanColor={g.color}
                         pockets={pockets}
                         selected={drops.selected}
@@ -295,6 +368,7 @@ export default function LiveGame() {
                             variant={g.variant}
                         />
                     )}
+                    {!zen && g.variant === 'standard' && <LiveOpening fen={g.fen} />}
                     <ChatPanel
                         messages={g.messages}
                         onSend={(t) => gameSocket.sendChat(t)}
@@ -377,6 +451,9 @@ export default function LiveGame() {
                         >
                             {g.rated ? 'Rated' : 'Casual'}
                         </Box>
+                        <NavBtn small label="Flip board" onClick={() => setFlipped((f) => !f)}>
+                            <FlipVertical2 size={18} />
+                        </NavBtn>
                         <NavBtn small label={sound ? 'Mute' : 'Unmute'} onClick={toggleSound}>
                             {sound ? <Volume2 size={18} /> : <VolumeX size={18} />}
                         </NavBtn>
@@ -390,8 +467,11 @@ export default function LiveGame() {
                                 ? null
                                 : g.opponent.rating
                         }
-                        ms={liveRemaining(g, other(g.color))}
+                        getMs={() => liveRemaining(g, other(g.color))}
                         active={!g.ended && g.sideToMove === other(g.color)}
+                        running={!g.ended && g.moves.length >= 2}
+                        mat={mat}
+                        color={other(g.color)}
                         online={g.opponentOnline}
                         divider="bottom"
                         zen={zen}
@@ -545,6 +625,34 @@ export default function LiveGame() {
                             >
                                 {resultText(g)}
                             </Typography>
+                            {g.rated && ratingDelta && ratingDelta.id === g.id && (
+                                <Typography
+                                    sx={{
+                                        fontFamily: 'var(--font-mono)',
+                                        fontSize: 14,
+                                        fontWeight: 700,
+                                        textAlign: 'center',
+                                        color: 'var(--text-dim)',
+                                        mt: -0.5,
+                                    }}
+                                >
+                                    {ratingDelta.after}{' '}
+                                    <Box
+                                        component="span"
+                                        sx={{
+                                            color:
+                                                ratingDelta.delta > 0
+                                                    ? 'var(--good, #7bb661)'
+                                                    : ratingDelta.delta < 0
+                                                      ? 'var(--danger, #e07a5f)'
+                                                      : 'var(--text-dim)',
+                                        }}
+                                    >
+                                        ({ratingDelta.delta > 0 ? '+' : ''}
+                                        {ratingDelta.delta})
+                                    </Box>
+                                </Typography>
+                            )}
                             <Box sx={{ display: 'flex', gap: 1 }}>
                                 <ActionBtn
                                     tone="neutral"
@@ -584,9 +692,12 @@ export default function LiveGame() {
                     {/* You */}
                     <PlayerBar
                         name="You"
-                        rating={null}
-                        ms={liveRemaining(g, g.color)}
+                        rating={myRating}
+                        getMs={() => liveRemaining(g, g.color)}
                         active={myTurn}
+                        running={!g.ended && g.moves.length >= 2}
+                        mat={mat}
+                        color={g.color}
                         divider="top"
                         zen={zen}
                     />
@@ -603,9 +714,10 @@ export default function LiveGame() {
                 </Box>
             }
         >
+            <Box sx={{ position: 'relative', width: '100%' }}>
             <Board
                 fen={g.fen}
-                orientation={g.color}
+                orientation={orientation}
                 sideToMove={g.sideToMove}
                 legalMoves={boardInteractive ? g.legalMoves : []}
                 lastMove={atLive ? (activeOptimisticLast ?? g.lastMove) : historyLast}
@@ -627,28 +739,100 @@ export default function LiveGame() {
                         : {}
                     : { overrideBoard: historyBoard ?? undefined })}
             />
+            {s.conn !== 'open' && !g.ended && (
+                <Box
+                    sx={{
+                        position: 'absolute',
+                        inset: 0,
+                        zIndex: 5,
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        justifyContent: 'center',
+                        pt: '14%',
+                        pointerEvents: 'none',
+                    }}
+                >
+                    <Box
+                        sx={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 1,
+                            px: 2,
+                            py: 1,
+                            borderRadius: '10px',
+                            bgcolor: 'rgba(0,0,0,0.74)',
+                            border: '1px solid var(--accent-line)',
+                            boxShadow: '0 10px 34px -12px rgba(0,0,0,0.75)',
+                        }}
+                    >
+                        <Box
+                            sx={{
+                                width: 9,
+                                height: 9,
+                                borderRadius: '50%',
+                                bgcolor: 'var(--accent)',
+                                animation: 'pulse 1.1s ease-in-out infinite',
+                                '@keyframes pulse': {
+                                    '0%, 100%': { opacity: 0.35 },
+                                    '50%': { opacity: 1 },
+                                },
+                            }}
+                        />
+                        <Typography
+                            sx={{
+                                fontSize: 13.5,
+                                fontWeight: 600,
+                                color: 'var(--text)',
+                                fontFamily: 'var(--font-mono)',
+                            }}
+                        >
+                            Connection lost — reconnecting…
+                        </Typography>
+                    </Box>
+                </Box>
+            )}
+            </Box>
         </BoardPage>
     )
+}
+
+// This bar's own captured pieces + material advantage, derived from the shared
+// FEN-based material read (same logic the spectator info card uses).
+function sideMaterial(
+    mat: Material,
+    color: Color,
+): { captured: string[]; glyphColor: Color; adv: number } {
+    const captured = color === 'w' ? mat.capturedByWhite : mat.capturedByBlack
+    const adv = color === 'w' ? Math.max(0, mat.diff) : Math.max(0, -mat.diff)
+    return { captured, glyphColor: color === 'w' ? 'b' : 'w', adv }
 }
 
 function PlayerBar({
     name,
     rating,
-    ms,
+    getMs,
     active,
+    running,
+    mat,
+    color,
     online,
     divider,
     zen = false,
 }: {
     name: string
     rating: number | null
-    ms: number
+    getMs: () => number
     active: boolean
+    running: boolean
+    /** Live material read (shared) + which side this bar is, for the captured strip. */
+    mat: Material
+    color: Color
     online?: boolean
     divider?: 'top' | 'bottom'
-    /** Zen mode: suppress the rating badge and the clock (kept minimal — just the name). */
+    /** Zen mode: suppress the rating badge, captured strip and clock (just the name). */
     zen?: boolean
 }) {
+    const { captured, glyphColor, adv } = sideMaterial(mat, color)
     return (
         <Box
             sx={{
@@ -691,11 +875,128 @@ function PlayerBar({
                     </Typography>
                 )}
             </Box>
-            {!zen && (
-                <Box sx={{ ml: 'auto' }}>
-                    <Clock ms={ms} active={active} />
+            {!zen && (captured.length > 0 || adv > 0) && (
+                <Box
+                    sx={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        alignItems: 'center',
+                        gap: '1px',
+                        minWidth: 0,
+                        maxWidth: 150,
+                    }}
+                >
+                    {captured.map((t, i) => (
+                        <Box
+                            key={i}
+                            component="img"
+                            src={`/piece/cburnett/${glyphColor}${t}.svg`}
+                            alt={t}
+                            sx={{
+                                width: 16,
+                                height: 16,
+                                ml: i > 0 && captured[i - 1] === t ? '-6px' : 0,
+                            }}
+                        />
+                    ))}
+                    {adv > 0 && (
+                        <Typography
+                            sx={{
+                                ml: 0.5,
+                                fontFamily: 'var(--font-mono)',
+                                fontSize: 12,
+                                fontWeight: 700,
+                                color: 'var(--accent)',
+                            }}
+                        >
+                            +{adv}
+                        </Typography>
+                    )}
                 </Box>
             )}
+            {!zen && (
+                <Box sx={{ ml: 'auto' }}>
+                    <Clock getMs={getMs} active={active} running={running} />
+                </Box>
+            )}
+        </Box>
+    )
+}
+
+// A subtle opening-name strip for live play. Self-fetches the position's opening
+// name (ECO + name) as the game develops, showing NOTHING until one is known so it
+// never shifts the layout. Renders only the name — never candidate moves or evals —
+// so it gives no engine assistance during the game.
+function LiveOpening({ fen }: { fen: string }) {
+    const [opening, setOpening] = useState<Opening | null>(null)
+    useEffect(() => {
+        // The starting position has no opening to name yet.
+        if (fen.split(' ')[0] === START_FEN.split(' ')[0]) {
+            setOpening(null)
+            return
+        }
+        const ac = new AbortController()
+        let alive = true
+        void candidates(fen, { multipv: 1, movetime: 120, signal: ac.signal })
+            .then((res) => {
+                if (alive) setOpening(res.opening)
+            })
+            .catch(() => {
+                /* aborted / transient — keep the last shown name */
+            })
+        return () => {
+            alive = false
+            ac.abort()
+        }
+    }, [fen])
+
+    if (!opening) return null
+    return (
+        <Box
+            sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+                px: 1.5,
+                py: 1,
+                bgcolor: 'var(--surface)',
+                border: '1px solid var(--line-soft)',
+                borderRadius: '12px',
+                boxShadow: PANEL_SHADOW,
+            }}
+        >
+            <Box
+                component="span"
+                sx={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    letterSpacing: 0.5,
+                    color: 'var(--accent)',
+                    bgcolor: 'var(--accent-soft)',
+                    border: '1px solid var(--accent-line)',
+                    borderRadius: '5px',
+                    px: 0.6,
+                    py: '1px',
+                    flexShrink: 0,
+                }}
+            >
+                {opening.eco}
+            </Box>
+            <Typography
+                title={opening.name}
+                sx={{
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: 'var(--text)',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    minWidth: 0,
+                }}
+            >
+                {opening.name}
+            </Typography>
         </Box>
     )
 }

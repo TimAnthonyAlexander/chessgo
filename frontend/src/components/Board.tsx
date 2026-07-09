@@ -1,4 +1,11 @@
-import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
+import {
+    type PointerEvent as ReactPointerEvent,
+    useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+} from 'react'
 import './Board.css'
 import type { Color } from '../api/client'
 import {
@@ -78,6 +85,13 @@ interface BoardProps {
 }
 
 const PROMO_ORDER = ['q', 'r', 'b', 'n']
+// Full piece names for the promotion picker's accessible labels ("Promote to Queen").
+const PROMO_NAMES: Record<string, string> = {
+    q: 'Queen',
+    r: 'Rook',
+    b: 'Bishop',
+    n: 'Knight',
+}
 
 // Build an arrow as a SINGLE filled polygon (shaft + head) from a→b in the 80×80
 // board space. Used for the "both engines agree" arrow, where we want ONE arrow
@@ -114,12 +128,16 @@ function arrowPolygon(a: { x: number; y: number }, b: { x: number; y: number }):
 // Lichess-style right-click annotations. A shape with from === to is a square
 // highlight (ring); otherwise it's an arrow. The modifier held while drawing
 // picks the brush colour.
-type Brush = 'green' | 'red' | 'blue' | 'yellow'
+type Brush = 'green' | 'red' | 'blue' | 'yellow' | 'accent'
 const BRUSHES: Record<Brush, string> = {
-    green: '#15781b',
-    red: '#882020',
-    blue: '#1f6fde',
-    yellow: '#e0a000',
+    // Brighter, higher-chroma variants of the Lichess brushes so they read on both
+    // light and dark (incl. photographic) board themes.
+    green: '#37a93c',
+    red: '#d64541',
+    blue: '#3b7fe4',
+    yellow: '#e8b02a',
+    // The no-modifier default arrow derives from the site accent so it feels native.
+    accent: 'var(--accent)',
 }
 interface Shape {
     from: Square
@@ -134,7 +152,10 @@ function brushFor(
     if (e.shiftKey && ctrl) return 'yellow'
     if (e.shiftKey) return 'red'
     if (ctrl) return 'green'
-    return base // no-modifier brush follows the user's default-arrow-color preference
+    // No modifier → the user's default-arrow-color preference. The built-in default
+    // ('green') maps to the site accent so the plain arrow feels native and stays
+    // legible on dark board themes; an explicitly-chosen color is honored as-is.
+    return base === 'green' ? 'accent' : base
 }
 
 interface DragState {
@@ -190,7 +211,17 @@ export default function Board({
         setDrawing(null)
     }, [fen])
 
-    const board: BoardMap = overrideBoard ?? parseFen(fen)
+    // Dismiss the promotion picker on Escape (keyboard accessibility).
+    useEffect(() => {
+        if (!promo) return
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') setPromo(null)
+        }
+        window.addEventListener('keydown', onKey)
+        return () => window.removeEventListener('keydown', onKey)
+    }, [promo])
+
+    const board: BoardMap = useMemo(() => overrideBoard ?? parseFen(fen), [overrideBoard, fen])
 
     // Premove mode: while it isn't our turn but we're a player, we let the user
     // queue a move. Inputs come from the same handlers; the only differences are
@@ -205,21 +236,41 @@ export default function Board({
     const destsFor = (from: Square): Set<Square> =>
         interactive ? targetsFrom(legalMoves, from) : premoveTargets(board, from)
 
-    const targets = selected ? destsFor(selected) : new Set<Square>()
-    const checkKing = inCheck && prefs.highlightCheck ? kingSquare(board, sideToMove === 'w') : null
+    // Recomputed only when the selection / legal targets actually change — not on
+    // every render (e.g. the continuous setDrag during a drag).
+    const targets = useMemo(
+        () => (selected ? destsFor(selected) : new Set<Square>()),
+        [selected, interactive, legalMoves, board],
+    )
+    const checkKing = useMemo(
+        () => (inCheck && prefs.highlightCheck ? kingSquare(board, sideToMove === 'w') : null),
+        [inCheck, prefs.highlightCheck, board, sideToMove],
+    )
 
     // Square center in an 80×80 coordinate space (10 units / square), oriented.
-    const center = (sq: Square) => {
-        const col = orientation === 'w' ? fileOf(sq) : 7 - fileOf(sq)
-        const row = orientation === 'w' ? 7 - rankOf(sq) : rankOf(sq)
-        return { x: col * 10 + 5, y: row * 10 + 5 }
-    }
-    const arrowGeom = arrow ? { a: center(arrow.from), b: center(arrow.to) } : null
+    const center = useCallback(
+        (sq: Square) => {
+            const col = orientation === 'w' ? fileOf(sq) : 7 - fileOf(sq)
+            const row = orientation === 'w' ? 7 - rankOf(sq) : rankOf(sq)
+            return { x: col * 10 + 5, y: row * 10 + 5 }
+        },
+        [orientation],
+    )
+    const arrowGeom = useMemo(
+        () => (arrow ? { a: center(arrow.from), b: center(arrow.to) } : null),
+        [arrow, center],
+    )
     const arrowColor = arrow?.color ?? 'var(--accent)'
     const arrowOutline = arrow?.outline ?? null
-    const arrow2Geom = arrow2 ? { a: center(arrow2.from), b: center(arrow2.to) } : null
+    const arrow2Geom = useMemo(
+        () => (arrow2 ? { a: center(arrow2.from), b: center(arrow2.to) } : null),
+        [arrow2, center],
+    )
     const arrow2Color = arrow2?.color ?? 'var(--accent)'
-    const circleGeom = circle ? center(circle.square) : null
+    const circleGeom = useMemo(
+        () => (circle ? center(circle.square) : null),
+        [circle, center],
+    )
     const circleColor = circle?.color ?? 'var(--accent)'
 
     const ranks = orientation === 'w' ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7]
@@ -679,7 +730,7 @@ export default function Board({
                                 <button
                                     key={p}
                                     onClick={() => choosePromotion(p)}
-                                    aria-label={`Promote to ${p}`}
+                                    aria-label={`Promote to ${PROMO_NAMES[p] ?? p}`}
                                 >
                                     <PieceGlyph
                                         piece={sideToMove === 'w' ? p.toUpperCase() : p}

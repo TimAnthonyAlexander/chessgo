@@ -49,7 +49,7 @@ const H_RESERVE = SIDE_W * 2 + EDGE_GAP * 2 + GAP_EVAL_EXTRA + 48 // = 756
 // Binds to whichever hits first: the viewport height minus the 60px nav + padding
 // (the usual desktop case), the viewport width minus the reserved side room, or a
 // generous absolute cap. Side columns reuse this as their height so they align.
-export const BOARD_SIZE = `min(calc(100vh - 112px), calc(100vw - ${H_RESERVE}px), 1160px)`
+export const BOARD_SIZE = `min(calc(100dvh - 112px), calc(100vw - ${H_RESERVE}px), 1160px)`
 
 interface BoardPageProps {
     /** The board itself (a `<Board/>`), rendered at the fixed board size. */

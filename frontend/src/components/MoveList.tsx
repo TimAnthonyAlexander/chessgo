@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { memo, useEffect, useMemo, useRef } from 'react'
 import { Box, useMediaQuery, useTheme } from '@mui/material'
 import type { MoveEntry } from '../api/client'
 import { MoveSan } from './MoveSan'
@@ -20,7 +20,7 @@ const DEFAULT_VISIBLE_ROWS = 10
  * when there are fewer, scrollable once there are more — so the panel height never
  * jumps. In `fill` mode it grows to fill the parent and scrolls, for full-height
  * panels. */
-export default function MoveList({
+function MoveList({
     moves,
     currentPly,
     onSelectPly,
@@ -34,21 +34,26 @@ export default function MoveList({
     // index is startPly + i: even = White, odd = Black, fullmove = floor(abs/2)+1.
     // When the seed has Black to move first, the opening row shows a "…" placeholder
     // in the White column. startPly = 0 (the default) reproduces plain 1-based play.
-    const rows: {
-        no: number
-        white?: MoveEntry
-        black?: MoveEntry
-        whiteElided?: boolean // render "…" for the pre-seed White move on a Black-to-move seed
-    }[] = []
-    let i = 0
-    if (startPly % 2 === 1 && moves.length > 0) {
-        rows.push({ no: Math.floor(startPly / 2) + 1, whiteElided: true, black: moves[0] })
-        i = 1
-    }
-    for (; i < moves.length; i += 2) {
-        const abs = startPly + i
-        rows.push({ no: Math.floor(abs / 2) + 1, white: moves[i], black: moves[i + 1] })
-    }
+    // Memoized on [moves, startPly] so an unrelated parent re-render doesn't rebuild
+    // the grid (the component itself is React.memo'd too).
+    const rows = useMemo(() => {
+        const out: {
+            no: number
+            white?: MoveEntry
+            black?: MoveEntry
+            whiteElided?: boolean // render "…" for the pre-seed White move on a Black-to-move seed
+        }[] = []
+        let i = 0
+        if (startPly % 2 === 1 && moves.length > 0) {
+            out.push({ no: Math.floor(startPly / 2) + 1, whiteElided: true, black: moves[0] })
+            i = 1
+        }
+        for (; i < moves.length; i += 2) {
+            const abs = startPly + i
+            out.push({ no: Math.floor(abs / 2) + 1, white: moves[i], black: moves[i + 1] })
+        }
+        return out
+    }, [moves, startPly])
     const padCount = fill ? 0 : Math.max(0, visibleRows - rows.length)
 
     // Keep the active (latest-played / selected) row in view as moves come in, so the
@@ -122,6 +127,10 @@ export default function MoveList({
     )
 }
 
+// Memoized: the move grid only changes when its props do, so an unrelated parent
+// re-render (a clock tick, an eval update) no longer rebuilds the whole list.
+export default memo(MoveList)
+
 function RowNumber({ no }: { no?: number }) {
     return (
         <Box
@@ -179,13 +188,23 @@ function Cell({
         return <Box sx={{ minHeight: 31, bgcolor: base }} />
     }
     const isCurrent = entry.ply === current
+    const ply = entry.ply
     return (
         <Box
-            onClick={() => onSelect(entry.ply)}
+            component="button"
+            type="button"
+            aria-current={isCurrent ? 'step' : undefined}
+            onClick={() => onSelect(ply)}
             sx={{
-                minHeight: 31,
+                // Comfortable touch target on phones, unchanged 31px look on desktop.
+                minHeight: { xs: 44, md: 31 },
                 display: 'flex',
                 alignItems: 'center',
+                justifyContent: 'flex-start',
+                width: '100%',
+                textAlign: 'left',
+                border: 'none',
+                m: 0,
                 px: 1.25,
                 cursor: 'pointer',
                 fontFamily: 'var(--font-mono)',
@@ -195,6 +214,7 @@ function Cell({
                 bgcolor: isCurrent ? '#3a4880' : base,
                 transition: 'background 0.1s ease',
                 '&:hover': { bgcolor: isCurrent ? '#3a4880' : 'rgba(255,255,255,0.09)' },
+                '&:focus-visible': { outline: '2px solid #5a6bd8', outlineOffset: '-2px' },
             }}
         >
             <MoveSan san={entry.san} />

@@ -151,7 +151,7 @@
     content: '';
     position: absolute;
     inset: 0;
-    background: rgba(229, 116, 92, 0.5);
+    background: var(--premove);
     pointer-events: none;
 }
 .sq.check::before {
@@ -198,6 +198,9 @@
     height: 30%;
     border-radius: 50%;
     background: var(--dot);
+    /* Subtle light halo so the dot separates from board texture (e.g. wood grain
+       on photographic themes); inert-looking on flat light themes. */
+    box-shadow: 0 0 0.5cqi 0.1cqi var(--dot-halo);
     pointer-events: none;
 }
 .sq.light .dot {
@@ -209,6 +212,7 @@
     inset: 7%;
     border-radius: 50%;
     border: 0.6cqi solid var(--dot);
+    box-shadow: 0 0 0.4cqi var(--dot-halo);
     pointer-events: none;
 }
 .sq.light .ring {

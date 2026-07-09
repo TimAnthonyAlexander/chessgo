@@ -10,7 +10,9 @@
     /* Ink — warm off-white */
     --text: #ece9e1;
     --text-dim: #9fa1ac;
-    --muted: #6c6f7d;
+    /* Lightened from #6c6f7d to clear WCAG AA (≈4.5:1) on --bg for small text
+       (counts, coordinates, row numbers). */
+    --muted: #8a8d99;
 
     /* Single accent — brass / amber */
     --accent: #d8a657;
@@ -24,6 +26,13 @@
     /* Status */
     --live: #7bb661; /* live/online green */
 
+    /* Off-palette accents used across the app — tokenized so they stop drifting. */
+    --warn: #e9c46a; /* amber — warnings / low-clock */
+    --danger: #e07a5f; /* coral/red — errors / destructive */
+    --premove: rgba(229, 116, 92, 0.5); /* queued-premove square highlight */
+    --eval-white: #f3eee2; /* eval-bar white share */
+    --eval-black: #191c22; /* eval-bar black share */
+
     /* Board — Lichess-style cool grey-blue two-tone */
     --board-light: #dde2e6;
     --board-dark: #8198a6;
@@ -32,6 +41,10 @@
     --select: rgba(174, 196, 110, 0.72);
     --dot: rgba(40, 54, 64, 0.3);
     --dot-light: rgba(40, 54, 64, 0.22);
+    /* Soft light glow ringing legal-move dots so they read against textured
+       (photographic) boards; near-invisible on flat light themes. Global (never
+       set per-theme) so it can't leak when switching themes. */
+    --dot-halo: rgba(248, 246, 240, 0.4);
     --check: rgba(202, 74, 74, 0.66);
     --coord-on-light: #6f828f;
     --coord-on-dark: #e4eaef;
@@ -128,4 +141,46 @@ a {
         animation-duration: 0.001ms !important;
         transition-duration: 0.001ms !important;
     }
+}
+
+/* MiniBoard (Watch previews): a static 8×8 grid of plain divs. Kept here (global)
+   rather than styled per-cell so a 250ms-tick re-render is cheap. Mirrors the main
+   board's square painting (background shorthand first, then size/position so
+   photographic themes still fill the square). */
+.mini-board {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    grid-template-rows: repeat(8, 1fr);
+    aspect-ratio: 1;
+    width: 100%;
+    border-radius: 8px;
+    overflow: hidden;
+}
+.mini-sq {
+    position: relative;
+    /* Same per-square gridline as the main board (inert unless the active theme
+       sets --board-border-color). */
+    box-shadow: inset 0 0 0 1px var(--board-border-color);
+}
+.mini-sq.light {
+    background: var(--board-light);
+    background-size: cover;
+    background-position: center;
+}
+.mini-sq.dark {
+    background: var(--board-dark);
+    background-size: cover;
+    background-position: center;
+}
+.mini-highlight {
+    position: absolute;
+    inset: 0;
+    background: var(--last-move);
+}
+.mini-piece {
+    position: absolute;
+    inset: 0;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 86%;
 }

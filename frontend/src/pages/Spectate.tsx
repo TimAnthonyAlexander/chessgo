@@ -52,7 +52,6 @@ export default function Spectate() {
     const isAdmin = user?.role === 'admin'
     const s = useSpectate()
     const g = s.game
-    const [, force] = useState(0)
     const [sound, setSound] = useState(soundEnabled())
 
     function toggleSound() {
@@ -109,13 +108,6 @@ export default function Spectate() {
         spectateSocket.open(id)
         return () => spectateSocket.close()
     }, [id])
-
-    // Tick the clocks while the game is running.
-    useEffect(() => {
-        if (!g || g.over) return
-        const t = window.setInterval(() => force((n) => n + 1), 200)
-        return () => window.clearInterval(t)
-    }, [g?.id, g?.over])
 
     // Sound: voice each new move as the position advances. A spectator isn't
     // playing, so we voice BOTH sides (unlike LiveGame, which only sounds the
@@ -292,8 +284,9 @@ export default function Spectate() {
                     {/* Black (top) */}
                     <PlayerBar
                         side={g.black}
-                        ms={spectateRemaining(g, 'b')}
+                        getMs={() => spectateRemaining(g, 'b')}
                         active={!g.over && g.sideToMove === 'b' && g.moves.length >= 2}
+                        running={!g.over && g.moves.length >= 2}
                         divider="bottom"
                     />
 
@@ -377,8 +370,9 @@ export default function Spectate() {
                     {/* White (bottom) */}
                     <PlayerBar
                         side={g.white}
-                        ms={spectateRemaining(g, 'w')}
+                        getMs={() => spectateRemaining(g, 'w')}
                         active={!g.over && g.sideToMove === 'w' && g.moves.length >= 2}
+                        running={!g.over && g.moves.length >= 2}
                         divider="top"
                     />
                 </Box>
@@ -402,13 +396,15 @@ export default function Spectate() {
 
 function PlayerBar({
     side,
-    ms,
+    getMs,
     active,
+    running,
     divider,
 }: {
     side: SpectateSide
-    ms: number
+    getMs: () => number
     active: boolean
+    running: boolean
     divider?: 'top' | 'bottom'
 }) {
     return (
@@ -449,7 +445,7 @@ function PlayerBar({
                 </Box>
             </Box>
             <Box sx={{ ml: 'auto' }}>
-                <Clock ms={ms} active={active} />
+                <Clock getMs={getMs} active={active} running={running} />
             </Box>
         </Box>
     )

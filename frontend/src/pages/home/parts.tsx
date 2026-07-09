@@ -161,7 +161,14 @@ export function HomeChrome({
                     gameSocket.cancelQueue()
                     home.setSearch(null)
                 }}
-                onBot={() => home.navigate('/bot')}
+                onBot={() => {
+                    // Leave the queue before routing to /bot — otherwise the hub can
+                    // still pair/backfill us into a live game while we're playing the
+                    // computer. Mirror onCancel, then navigate.
+                    gameSocket.cancelQueue()
+                    home.setSearch(null)
+                    home.navigate('/bot')
+                }}
             />
             <ChallengeDialog
                 open={home.challengeOpen}
@@ -372,10 +379,38 @@ function SearchingDialog({
     onCancel: () => void
     onBot: () => void
 }) {
+    const open = searching !== null
+
+    // Elapsed-seconds counter, driven by a start timestamp captured when the dialog
+    // opens (never a module-scope Date.now()). Reset + ticked while open; cleaned up
+    // on close/unmount.
+    const [elapsed, setElapsed] = useState(0)
+    useEffect(() => {
+        if (!open) return
+        const start = Date.now()
+        setElapsed(0)
+        const id = window.setInterval(() => {
+            setElapsed(Math.floor((Date.now() - start) / 1000))
+        }, 1000)
+        return () => window.clearInterval(id)
+    }, [open])
+
+    const mm = Math.floor(elapsed / 60)
+    const ss = String(elapsed % 60).padStart(2, '0')
+
+    // After a short wait the hub backfills a rating-matched bot, so a game is
+    // effectively guaranteed — soften the copy to say so.
+    const softened = elapsed >= 10
+
     return (
         <Dialog
-            open={searching !== null}
-            onClose={onCancel}
+            open={open}
+            // Only the explicit Cancel button leaves the queue — a stray backdrop
+            // click or Escape must NOT drop us from matchmaking.
+            onClose={(_event, reason) => {
+                if (reason === 'backdropClick' || reason === 'escapeKeyDown') return
+                onCancel()
+            }}
             slotProps={{
                 paper: {
                     sx: {
@@ -401,7 +436,7 @@ function SearchingDialog({
                 </Typography>
                 <CircularProgress sx={{ color: 'var(--accent)', my: 3 }} />
                 <Typography sx={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 20 }}>
-                    Finding an opponent…
+                    Searching… {mm}:{ss}
                 </Typography>
                 <Typography
                     sx={{
@@ -413,7 +448,9 @@ function SearchingDialog({
                     }}
                 >
                     {error ??
-                        'Hang tight while we match you with another player. Prefer not to wait? Play the computer instead.'}
+                        (softened
+                            ? "Still searching — we'll add a computer opponent shortly if no one's free."
+                            : 'Hang tight while we match you with another player. Prefer not to wait? Play the computer instead.')}
                 </Typography>
             </DialogContent>
             <DialogActions sx={{ justifyContent: 'center', pb: 3, gap: 1 }}>

@@ -1,11 +1,16 @@
-import { Box } from '@mui/material'
+import { memo } from 'react'
 import { parseFen, pieceImageUrl, squareAt } from '../lib/chess'
 import { usePieceSet } from '../lib/boardTheme'
 import type { Color } from '../api/client'
 
 /** A small, non-interactive board rendered from a FEN — for Watch previews.
- * Always drawn from White's perspective with an optional last-move highlight. */
-export default function MiniBoard({
+ * Always drawn from White's perspective with an optional last-move highlight.
+ *
+ * Memoized (React.memo): consumers re-render it on a ~250ms tick, but its
+ * fen/lastMove props are stable between ticks, so the 64-cell grid only rebuilds
+ * when the position actually changes. Squares are plain <div>s + static CSS
+ * classes (see styles.css) rather than emotion-styled MUI Boxes. */
+function MiniBoard({
     fen,
     lastMove,
     orientation = 'w',
@@ -22,17 +27,7 @@ export default function MiniBoard({
     const files = orientation === 'w' ? [0, 1, 2, 3, 4, 5, 6, 7] : [7, 6, 5, 4, 3, 2, 1, 0]
 
     return (
-        <Box
-            sx={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(8, 1fr)',
-                gridTemplateRows: 'repeat(8, 1fr)',
-                aspectRatio: '1',
-                width: '100%',
-                borderRadius: '8px',
-                overflow: 'hidden',
-            }}
-        >
+        <div className="mini-board">
             {ranks.map((rank) =>
                 files.map((file) => {
                     const sq = squareAt(file, rank)
@@ -40,47 +35,24 @@ export default function MiniBoard({
                     const light = (file + rank) % 2 === 1
                     const highlight = sq === from || sq === to
                     return (
-                        <Box
-                            key={sq}
-                            sx={{
-                                position: 'relative',
-                                background: light ? 'var(--board-light)' : 'var(--board-dark)',
-                                // cover makes url()-valued (photographic) themes fill
-                                // the square; inert for solid-color themes.
-                                backgroundSize: 'cover',
-                                backgroundPosition: 'center',
-                                // Same per-square gridline as the main board (inert
-                                // unless the active theme sets --board-border-color).
-                                boxShadow: 'inset 0 0 0 1px var(--board-border-color)',
-                            }}
-                        >
+                        <div key={sq} className={`mini-sq ${light ? 'light' : 'dark'}`}>
                             {/* Piece + highlight are overlays so they never replace
                              * the square's own background (texture must survive). */}
-                            {highlight && (
-                                <Box
-                                    sx={{
-                                        position: 'absolute',
-                                        inset: 0,
-                                        background: 'var(--last-move)',
-                                    }}
-                                />
-                            )}
+                            {highlight && <div className="mini-highlight" />}
                             {piece && (
-                                <Box
-                                    sx={{
-                                        position: 'absolute',
-                                        inset: 0,
+                                <div
+                                    className="mini-piece"
+                                    style={{
                                         backgroundImage: `url(${pieceImageUrl(piece, pieceSet)})`,
-                                        backgroundRepeat: 'no-repeat',
-                                        backgroundPosition: 'center',
-                                        backgroundSize: '86%',
                                     }}
                                 />
                             )}
-                        </Box>
+                        </div>
                     )
                 }),
             )}
-        </Box>
+        </div>
     )
 }
+
+export default memo(MiniBoard)

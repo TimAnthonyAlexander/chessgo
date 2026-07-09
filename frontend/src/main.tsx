@@ -1,28 +1,32 @@
+import { lazy, Suspense, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
-import { CssBaseline, ThemeProvider } from '@mui/material'
+import { Box, CircularProgress, CssBaseline, ThemeProvider } from '@mui/material'
 import theme from './theme'
 import Layout from './components/Layout'
 import Home from './pages/Home'
-import BotGame from './pages/BotGame'
 import LiveGame from './pages/LiveGame'
 import ChallengeJoin from './pages/ChallengeJoin'
-import Puzzles from './pages/Puzzles'
-import Analysis from './pages/Analysis'
-import Editor from './pages/Editor'
-import Profile from './pages/Profile'
 import Watch from './pages/Watch'
 import Spectate from './pages/Spectate'
-import EngineVsEngine from './pages/EngineVsEngine'
-import GuessTheElo from './pages/GuessTheElo'
-import Admin from './pages/Admin'
-import AdminDashboard from './pages/AdminDashboard'
-import AdminUsers from './pages/AdminUsers'
-import AdminUserDetail from './pages/AdminUserDetail'
-import AdminGames from './pages/AdminGames'
-import AdminAnticheat from './pages/AdminAnticheat'
-import AdminAnticheatUser from './pages/AdminAnticheatUser'
-import AdminAnticheatGame from './pages/AdminAnticheatGame'
+import Profile from './pages/Profile'
+// Heavy / rare routes are split into their own chunks so the critical path
+// (home, live game, layout) isn't gated on Analysis (~1.4k lines), the whole
+// /admin/* subtree, the editor, or chess.js (only pulled by analysis/editor).
+const BotGame = lazy(() => import('./pages/BotGame'))
+const Puzzles = lazy(() => import('./pages/Puzzles'))
+const Analysis = lazy(() => import('./pages/Analysis'))
+const Editor = lazy(() => import('./pages/Editor'))
+const EngineVsEngine = lazy(() => import('./pages/EngineVsEngine'))
+const GuessTheElo = lazy(() => import('./pages/GuessTheElo'))
+const Admin = lazy(() => import('./pages/Admin'))
+const AdminDashboard = lazy(() => import('./pages/AdminDashboard'))
+const AdminUsers = lazy(() => import('./pages/AdminUsers'))
+const AdminUserDetail = lazy(() => import('./pages/AdminUserDetail'))
+const AdminGames = lazy(() => import('./pages/AdminGames'))
+const AdminAnticheat = lazy(() => import('./pages/AdminAnticheat'))
+const AdminAnticheatUser = lazy(() => import('./pages/AdminAnticheatUser'))
+const AdminAnticheatGame = lazy(() => import('./pages/AdminAnticheatGame'))
 import { initTheme } from './lib/boardTheme'
 import { initSettings } from './lib/settings'
 import './styles.css'
@@ -32,34 +36,57 @@ import './styles.css'
 initTheme()
 initSettings()
 
+// Centered spinner shown while a lazy route chunk loads. Kept inside the Layout
+// content area (per-element Suspense) so the nav/header stay painted.
+function RouteFallback() {
+    return (
+        <Box
+            sx={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                minHeight: '60vh',
+            }}
+        >
+            <CircularProgress size={22} sx={{ color: 'var(--muted)' }} />
+        </Box>
+    )
+}
+
+// Wrap a (possibly lazy) route element in a Suspense boundary so only the
+// outlet content falls back to the spinner, not the whole app shell.
+function suspended(node: ReactNode): ReactNode {
+    return <Suspense fallback={<RouteFallback />}>{node}</Suspense>
+}
+
 const router = createBrowserRouter([
     {
         element: <Layout />,
         children: [
             { path: '/', element: <Home /> },
-            { path: '/bot', element: <BotGame /> },
-            { path: '/puzzles', element: <Puzzles /> },
-            { path: '/guess-the-elo', element: <GuessTheElo /> },
+            { path: '/bot', element: suspended(<BotGame />) },
+            { path: '/puzzles', element: suspended(<Puzzles />) },
+            { path: '/guess-the-elo', element: suspended(<GuessTheElo />) },
             { path: '/game/:id', element: <LiveGame /> },
             { path: '/challenge/:code', element: <ChallengeJoin /> },
             { path: '/watch', element: <Watch /> },
             { path: '/watch/:id', element: <Spectate /> },
-            { path: '/analysis', element: <Analysis /> },
-            { path: '/analysis/:id', element: <Analysis /> },
-            { path: '/editor', element: <Editor /> },
+            { path: '/analysis', element: suspended(<Analysis />) },
+            { path: '/analysis/:id', element: suspended(<Analysis />) },
+            { path: '/editor', element: suspended(<Editor />) },
             { path: '/@/:name', element: <Profile /> },
-            { path: '/admin/engine-vs', element: <EngineVsEngine /> },
+            { path: '/admin/engine-vs', element: suspended(<EngineVsEngine />) },
             {
                 path: '/admin',
-                element: <Admin />,
+                element: suspended(<Admin />),
                 children: [
-                    { index: true, element: <AdminDashboard /> },
-                    { path: 'users', element: <AdminUsers /> },
-                    { path: 'users/:id', element: <AdminUserDetail /> },
-                    { path: 'games', element: <AdminGames /> },
-                    { path: 'anticheat', element: <AdminAnticheat /> },
-                    { path: 'anticheat/:userId', element: <AdminAnticheatUser /> },
-                    { path: 'anticheat/game/:id', element: <AdminAnticheatGame /> },
+                    { index: true, element: suspended(<AdminDashboard />) },
+                    { path: 'users', element: suspended(<AdminUsers />) },
+                    { path: 'users/:id', element: suspended(<AdminUserDetail />) },
+                    { path: 'games', element: suspended(<AdminGames />) },
+                    { path: 'anticheat', element: suspended(<AdminAnticheat />) },
+                    { path: 'anticheat/:userId', element: suspended(<AdminAnticheatUser />) },
+                    { path: 'anticheat/game/:id', element: suspended(<AdminAnticheatGame />) },
                 ],
             },
         ],
