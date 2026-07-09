@@ -103,6 +103,18 @@ func parsePosition(fields []string) (*chess.Position, []uint64, bool) {
 
 // handleGo parses time controls and runs a full-strength search.
 func handleGo(out io.Writer, eng *engine.Engine, pos *chess.Position, history []uint64, fields []string) {
+	// Reject illegal positions (side not to move already in check, or a king
+	// missing) before searching. Pseudo-legal-derived movegen would otherwise
+	// generate a king-capturing move whose resulting position has no king for
+	// the side to move, and InCheck() would index the attack tables at square
+	// 64 (kingSq of an empty king bitboard) and panic. The internal HTTP engine
+	// already guards this via server.parseLegal; the raw uci entry did not.
+	if !pos.Legal() {
+		fmt.Fprintln(out, "info string illegal position: side not to move is in check, or a king is missing")
+		fmt.Fprintln(out, "bestmove 0000")
+		return
+	}
+
 	depth := 0
 	movetime := time.Duration(0)
 	var nodes uint64

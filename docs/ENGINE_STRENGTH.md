@@ -2052,8 +2052,14 @@ we are below the teacher's ceiling, so a stronger teacher cashes directly as Elo
 ### 29.1 The data insight (the whole point)
 The shipped v9 was trained on `pool.binpack` — a **37.5 GB Oct-2021 Stockfish-14-era distillation
 binpack** (joost.vandevondele's set). **test80-2024 = Leela Chess Zero T80 self-play, rescored to
-binpack** — a *stronger, more diverse* teacher (modern-SF scores + Leela's blind-spot coverage; it's
-literally a component of the current SF recipe). The lower loss on the 2021 pool (0.0209 floor,
+binpack** — a *stronger, more diverse* teacher; it's literally a component of the current SF recipe.
+**Provenance correction (2026-07-08):** the score field is **Leela's own search eval** (Q→cp,
+`--nnue-best-score`), NOT "modern-SF scores" — the lc0 "rescore" is **syzygy 7-piece TB on the
+*outcome*** (Z), not an SF-search relabel of the score (`DATA_RECIPE_SF_2026.md:19–21`). So both
+training targets (eval Q + result Z) are **Leela-grade**, from the same self-play — which is why
+`ConstantWDL 0.6` (60% Z) is defensible: it sits near the top of the Leela-data band (result-weight
+0.25 SF-on-Leela → 0.5 lczero-final), not the outlier it'd be against a deep-SF eval teacher. The
+lower loss on the 2021 pool (0.0209 floor,
 §12/Q3) was **weakness, not quality** — it fits easily *because* it's older/narrower/weaker-labeled.
 test80's higher loss (~0.029 at 320sb) is expected and correct. **Cross-dataset loss is not
 comparable; strength is the SPRT.**
@@ -2233,3 +2239,42 @@ arches, and is the switch that could revive lazy), and the real Elo is in the da
 batch wins +50% there — that concentration is an arm64 artifact (weaker/narrower vector units vs
 its huge L1 + HW prefetch). On amd64 the same kernel is spread + L1-resident + near-peak IPC. Never
 conclude an eval-kernel win from arm64 alone.
+
+## 32. efs28 + 640-sb data-pipeline retrain — **+19 movetime, SHIPPED** (2026-07-09)
+
+**Result in one line: the mirror-KB arch retrained on the FIXED data pipeline beats the prod
+`kb-mirror` net by +18.8 ± 13.8 Elo @ 100ms/move** (443 pairs, W199 L151 D536, LLR +1.64, CI lower
+bound **+5.0**, coalla movetime SPRT[0,5], tt=64, int8-FT + move-aware both sides). Accepted on a
+stable-positive lower bound over a 400+-pair sample (not a low-pair spike) and file-swap shipped.
+
+### 32.1 What changed (vs kb-mirror: ply≥16 / 320-sb / ConstantWDL 0.6)
+Two pipeline knobs, arch byte-identical:
+- **early-fen-skipping `ply≥16 → ply≥28`** — SF master-net cutoff (`nn-60fa44e376d9`, PR #4314). The
+  "single biggest lever" in the recipe audit: opening positions are book-driven, near-equal, and
+  massively over-represented, so a fixed training budget spent on them is wasted; skipping them
+  reallocates capacity to decisive midd/endgames. The loader already did smart-fen-skipping
+  (capture/promo best-move drop) — efs28 stacks on it.
+- **superbatches `320 → 640`** — v12's 320 loss was still descending pre-anneal.
+- **WDL kept `ConstantWDL 0.6`** — settled by a two-AI debate (§ retrain-efs28-wdlanneal.md): the
+  test80 eval field is **Leela's own search eval** (Q→cp), NOT a deep-SF relabel (the lc0 "rescore"
+  is syzygy-TB on the *outcome* Z only — §29.1 corrected). Both targets are Leela-grade, so the
+  optimum sits mid-band (result-weight 0.25 SF-on-Leela → 0.5 lczero-final); 0.6 is a hair above,
+  not the 2.4×-SF outlier it looks like against a deep-SF teacher. A blind drop to 0.4 was rejected
+  as an overcorrection; the WDL anneal is deferred to its own single-variable run.
+
+### 32.2 Net + provenance
+`chessgo_efs28_wdl06_640`, 44 MB (md5 `92294de3…`), H=512 NB=8 mirror-KB + threats. Trained on a
+rented vast RTX 4090 (~7.5h for 640 sb; slowed mid-run by shared-host CPU contention — GPU never
+throttled). Final running loss 0.02646 (the benign §29.4 center-min-then-tail-rise; final annealed
+`-640` taken per rule, `-560` saved as insurance). Ships by file-swap over `data/nnue/kb-mirror.bin`
+(no code change — `loadEnrichedDefault` applies int8-FT + move-aware automatically).
+
+### 32.3 Notes
+- **`--new-lean` forces concurrency 1** (the NNUE net is a process global), so the SPRT ran one game
+  at a time (~130 pairs/hr) — accepted on trend at 443 pairs rather than waiting for the formal
+  LLR=+2.9 cross. Lower bound was stably positive (+3.0 @ 338 → +5.0 @ 437).
+- Lesson reaffirmed: our hand-set data-pipeline defaults go stale as the engine evolves; the recipe
+  audit (`docs/NNUE/DATA_RECIPE_SF_2026.md`) cashed directly as movetime Elo, same as v12's data win.
+- Found+guarded a pre-existing panic: illegal FENs (side-not-to-move in check) fed to the raw `uci`
+  entry crash the search (king-capture → empty king bitboard → index 64). Prod entries (server/hub/
+  bots) already guard with `pos.Legal()`; only `uci` handleGo didn't — now guarded (`internal/uci`).

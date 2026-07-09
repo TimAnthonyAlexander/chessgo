@@ -278,13 +278,15 @@ engine (the exact stale-docs trap). What we can honestly say:
   ~3450–3600), scoring ~50%, before publishing ANY point number.** This **supersedes** the earlier
   ≈3260 "dirty" read (§15) and the one-sided **≈3200** artifact (scoring ≈0% — never quote it).
 
-**★ TOP LEVER — the mirror KB net is shipped; now the data retrain.** The KB v2 horizontal mirror
-(+10 fixed-nodes, +4.5 movetime over the old no-mirror KB net) densifies the king-bucket weights
-~2× for ~0 extra params. The 32-key Finny refresh cache (Stormphrax's
-`kRefreshTableSize = kBucketCount * 2 = 32`) was the load-bearing fix that made the mirror
-movetime-positive (§31). The next lever is **more epochs** (640-sb test80 on the mirrored arch —
-`docs/open_tasks/data-retrain-640sb.md`, locked recipe + D1–D4); v12 proved data cashes directly
-as movetime Elo, and the current 320-sb mirror net is still epoch-poor at ~4 epochs.
+**★ DATA RETRAIN SHIPPED (2026-07-09): efs28 + 640-sb → +19 movetime.** The mirror-KB arch retrained
+on the FIXED data pipeline (early-fen-skipping `ply≥16→28` = SF's master-net cutoff PR #4314, +
+superbatches `320→640`; WDL kept `ConstantWDL 0.6` after the Leela-grade-eval debate) beats the prod
+kb-mirror net by **+18.8 ± 13.8 Elo @ 100ms** (443 pairs, LLR +1.64, CI lb +5.0). Net
+`chessgo_efs28_wdl06_640` (md5 92294de3) is the new prod `data/nnue/kb-mirror.bin` (file-swap ship).
+See `ENGINE_STRENGTH.md §32`, `docs/open_tasks/retrain-efs28-wdlanneal.md`. **Next data lever:** the
+WDL anneal (deferred single-variable run), more epochs, or T78/T79 syzygy-rescored data. The prior
+KB v2 horizontal mirror (+10 fixed / +4.5 movetime, §31; Finny 32-key cache load-bearing) is now the
+retrained base.
 
 **BUT search is NOT dry — the "dry well" call was retracted same day.** Re-tuning the SEE/singular/
 null-move margins **SHIPPED +38.7 ± 5.5 Elo movetime** (`singulardepth 8→6, seequietmargin 150→103,
