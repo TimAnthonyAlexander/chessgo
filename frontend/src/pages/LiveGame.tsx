@@ -19,7 +19,7 @@ import Clock from '../components/Clock'
 import LiveModeCard from '../components/LiveModeCard'
 import MoveList from '../components/MoveList'
 import { ActionBtn, Avatar, NavBtn, PANEL_SHADOW } from '../components/PanelUI'
-import { candidates, type MoveEntry, type Opening, type User as AuthUser } from '../api/client'
+import { candidates, getGame, type MoveEntry, type Opening, type User as AuthUser } from '../api/client'
 import { type Color, gameSocket, type LiveGameState, liveRemaining } from '../lib/socket'
 import { computeMaterial, type Material } from '../lib/material'
 import { categoryFor } from '../lib/timeControl'
@@ -251,29 +251,45 @@ export default function LiveGame() {
         }
     }, [g?.id, g?.ended])
 
-    // Snapshot the player's pre-result rating for this pool. Tracked live while the
-    // game is unfinished, so at the moment it ends the ref holds the last value
-    // BEFORE the server applies the new Elo — the baseline for the signed delta.
-    const preRating = useRef<number | null>(null)
-    if (g && !g.ended) preRating.current = userRatingFor(user, g.variant, g.pool)
-
-    // A rated game changes the player's rating server-side; refresh the cached user
-    // (once per game) so the navbar rating isn't stale, then diff the freshly-landed
-    // rating against the pre-result snapshot to show the change in the result panel.
+    // A rated game's rating change is AUTHORITATIVE on the persisted Game record
+    // (white/black_rating_before/after) — the very same source the profile reads,
+    // so it always matches and can never show the wrong sign. Read it from there
+    // rather than diffing a live client snapshot against a post-game refresh, which
+    // races the hub's fire-and-forget persist and produced bogus (even negative-on-a-
+    // win) deltas. The hub saves the game just after we see it end, so poll a few
+    // times to cover the brief not-yet-persisted window. Also refresh the cached user
+    // (once per game) so the navbar rating isn't stale.
     const ratedRefresh = useRef<string | null>(null)
     useEffect(() => {
-        if (g && g.ended && g.rated && ratedRefresh.current !== g.id) {
-            ratedRefresh.current = g.id
-            const before = preRating.current
-            const id = g.id
-            const variant = g.variant
-            const pool = g.pool
-            void authStore.refresh().then(() => {
-                const after = userRatingFor(authStore.getState().user, variant, pool)
-                if (before != null && after != null) {
-                    setRatingDelta({ id, after, delta: after - before })
+        if (!g || !g.ended || !g.rated || ratedRefresh.current === g.id) return
+        ratedRefresh.current = g.id
+        const id = g.id
+        const myColor = g.color
+        let cancelled = false
+
+        void authStore.refresh()
+
+        void (async () => {
+            for (let attempt = 0; attempt < 8 && !cancelled; attempt++) {
+                try {
+                    const rec = await getGame(id)
+                    const before =
+                        myColor === 'w' ? rec.white_rating_before : rec.black_rating_before
+                    const after =
+                        myColor === 'w' ? rec.white_rating_after : rec.black_rating_after
+                    if (before != null && after != null) {
+                        if (!cancelled) setRatingDelta({ id, after, delta: after - before })
+                        return
+                    }
+                } catch {
+                    // Not persisted yet (404) or a transient error — retry shortly.
                 }
-            })
+                await new Promise((r) => setTimeout(r, 600))
+            }
+        })()
+
+        return () => {
+            cancelled = true
         }
     }, [g?.id, g?.ended, g?.rated])
 
