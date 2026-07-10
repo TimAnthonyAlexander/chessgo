@@ -351,7 +351,7 @@ export function QuickPairingPanel({
                         sm: 'repeat(3, 1fr)',
                     },
                     gridAutoRows: '1fr',
-                    gap: 1.25,
+                    gap: 0.75,
                 }}
             >
                 {PRESETS.map((p) => (
@@ -367,8 +367,8 @@ export function QuickPairingPanel({
                 as new variants ship without knocking the time-control grid off-count. */}
             <Typography
                 sx={{
-                    mt: 2,
-                    mb: 1,
+                    mt: '6px',
+                    mb: 0.5,
                     fontFamily: 'var(--font-display)',
                     fontSize: 12,
                     fontWeight: 700,
@@ -384,7 +384,7 @@ export function QuickPairingPanel({
                     display: 'grid',
                     gridTemplateColumns: 'repeat(2, 1fr)',
                     gridAutoRows: '1fr',
-                    gap: 1.25,
+                    gap: 0.75,
                 }}
             >
                 <DuckCell onClick={() => onQueue(`Duck Chess · ${DUCK_POOL}`, DUCK_POOL, 'duck')} />
@@ -670,8 +670,8 @@ function TimeCell({ preset, onClick }: { preset: Preset; onClick: () => void }) 
                 flexDirection: 'column',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: 1,
-                py: { xs: 2.5, md: 3 },
+                gap: 0.75,
+                py: { xs: 1.75, md: 2 },
                 bgcolor: 'var(--surface-2)',
                 border: '1px solid var(--line-soft)',
                 borderRadius: '12px',
@@ -687,7 +687,7 @@ function TimeCell({ preset, onClick }: { preset: Preset; onClick: () => void }) 
             <Typography
                 sx={{
                     fontFamily: 'var(--font-display)',
-                    fontSize: { xs: 25, md: 30 },
+                    fontSize: { xs: 22, md: 26 },
                     fontWeight: 500,
                     lineHeight: 1,
                     letterSpacing: '-0.01em',
@@ -740,8 +740,8 @@ function DuckCell({ onClick }: { onClick: () => void }) {
                 flexDirection: 'column',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: 1,
-                py: { xs: 2.5, md: 3 },
+                gap: 0.75,
+                py: { xs: 1.75, md: 2 },
                 bgcolor: 'var(--surface-2)',
                 border: '1px solid var(--line-soft)',
                 borderRadius: '12px',
@@ -757,7 +757,7 @@ function DuckCell({ onClick }: { onClick: () => void }) {
             <Typography
                 sx={{
                     fontFamily: 'var(--font-display)',
-                    fontSize: { xs: 25, md: 30 },
+                    fontSize: { xs: 22, md: 26 },
                     fontWeight: 500,
                     lineHeight: 1,
                     letterSpacing: '-0.01em',
@@ -814,8 +814,8 @@ function CrazyhouseCell({ onClick }: { onClick: () => void }) {
                 flexDirection: 'column',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: 1,
-                py: { xs: 2.5, md: 3 },
+                gap: 0.75,
+                py: { xs: 1.75, md: 2 },
                 bgcolor: 'var(--surface-2)',
                 border: '1px solid var(--line-soft)',
                 borderRadius: '12px',
@@ -831,7 +831,7 @@ function CrazyhouseCell({ onClick }: { onClick: () => void }) {
             <Typography
                 sx={{
                     fontFamily: 'var(--font-display)',
-                    fontSize: { xs: 25, md: 30 },
+                    fontSize: { xs: 22, md: 26 },
                     fontWeight: 500,
                     lineHeight: 1,
                     letterSpacing: '-0.01em',
