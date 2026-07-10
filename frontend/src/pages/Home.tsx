@@ -4,7 +4,7 @@ import RecentGamesWidget from '../components/home/RecentGamesWidget'
 import SignUpWidget from '../components/home/SignUpWidget'
 import LiveTvWidget from '../components/home/LiveTvWidget'
 import LeaderboardWidget from '../components/home/LeaderboardWidget'
-import { HomeChrome, PlayPanel, QuickPairingPanel, useHome } from './home/parts'
+import { HomeChrome, LobbyStatLines, PlayBar, QuickPairingPanel, useHome } from './home/parts'
 import HomeMobile from './HomeMobile'
 
 export default function Home() {
@@ -19,7 +19,14 @@ function HomeDesktop() {
     const home = useHome()
     return (
         <HomeChrome home={home}>
-            {/* Dashboard: quick pairing + play + live/community widgets */}
+            {/* Primary actions as a slim full-width bar above the grid, so the
+                three dashboard columns stay balanced in height. */}
+            <PlayBar
+                onNavigate={home.navigate}
+                onChallenge={() => home.setChallengeOpen(true)}
+            />
+
+            {/* Dashboard: quick pairing + live/community widgets */}
             <Box
                 sx={{
                     display: 'grid',
@@ -39,7 +46,7 @@ function HomeDesktop() {
                     <SignUpWidget />
                 </Box>
 
-                {/* Column: play actions + quick pairing (center, biggest) */}
+                {/* Column: quick pairing (center, biggest) */}
                 <Box
                     sx={{
                         display: 'flex',
@@ -48,10 +55,6 @@ function HomeDesktop() {
                         order: { xs: 1, lg: 2 },
                     }}
                 >
-                    <PlayPanel
-                        onNavigate={home.navigate}
-                        onChallenge={() => home.setChallengeOpen(true)}
-                    />
                     <QuickPairingPanel onQueue={home.queue} />
                 </Box>
 
@@ -59,6 +62,7 @@ function HomeDesktop() {
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, order: { lg: 3 } }}>
                     <LiveTvWidget />
                     <LeaderboardWidget />
+                    <LobbyStatLines stats={home.stats} />
                 </Box>
             </Box>
         </HomeChrome>
