@@ -295,7 +295,16 @@ func loadDefaultKBNet() *nnue.EnrichedNet {
 	if n.IsLean() {
 		n.QuantizeFTInt8()
 	} else {
-		n.QuantizeForInt8()
+		n.QuantizeForInt8() // int8 the multilayer TAIL (L1)
+		// Enable the O(delta) move-aware incremental push — bit-exact and strictly
+		// better (enriched.go:648). ImportBulletEnrichedNet leaves it OFF, so the
+		// multilayer prod net eagerly recomputed the full base+threat feature set on
+		// every accumulator push. A real-search profile showed the FT accumulator at
+		// ~51% of the node (vs ~22% for lean) → ~3–4× fewer nodes at movetime → the
+		// multilayer net lost head-to-head to lean despite ~equal fixed-depth NPS.
+		// This is the eval-neutral fix the prod-ship wiring forgot (int8-FT on this
+		// non-QAT net would instead clamp ~2718 threat weights — lossy).
+		n.SetMoveAware(true)
 	}
 	n.SetSplitRefresh(true) // bit-exact +2.3% NPS: split king-bucket refresh, rebuild only the moving-side half (§30, 2026-07-06)
 	n.SetDirectApply(true)  // bit-exact +2.5% NPS: skip the counts-array multiset diff (KB-net re-bench of finding A4, §30)
@@ -342,6 +351,8 @@ func cmdBench(args []string) {
 		cmdBenchSPSA(args[1:])
 	case "vs-stockfish", "stockfish", "sf":
 		cmdBenchStockfish(args[1:])
+	case "abitur", "gauntlet-rr", "arena":
+		cmdBenchAbitur(args[1:])
 	case "game":
 		cmdBenchGame(args[1:])
 	case "blunders", "blunder", "mine":
@@ -366,6 +377,7 @@ Usage:
   gomachine bench sprt          [flags]   self-play: does --new beat --old?
   gomachine bench spsa          [flags]   SPSA-tune integer search margins by self-play
   gomachine bench vs-stockfish  [flags]   absolute Elo anchor vs Stockfish
+  gomachine bench abitur        [flags]   multi-engine round-robin/gauntlet ("fishtest") from a JSON config
   gomachine bench blunders      [flags]   mine gomachine's eval blind spots vs SF → EPD
 
 A patch is a search.Params diff. --old is the baseline config, --new is the

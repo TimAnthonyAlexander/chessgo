@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -40,10 +41,37 @@ type UCIEngine struct {
 	name  string
 }
 
+// UCISpec fully specifies how to launch a UCI engine process. Path is required;
+// Args are extra CLI args (e.g. gomachine needs "uci"); Env is appended to the
+// parent environment (e.g. "KB_NET_PATH=/nets/lean.bin" to pick a net); Dir is
+// the working directory (gomachine auto-loads its net/book/TB relative to cwd, so
+// it must run from gomachine/); Options are UCI setoption pairs.
+type UCISpec struct {
+	Path    string
+	Args    []string
+	Env     []string
+	Dir     string
+	Options map[string]string
+}
+
 // StartUCI launches the engine at path, performs the uci/isready handshake, and
 // applies options (e.g. {"UCI_LimitStrength":"true","UCI_Elo":"1800"}).
 func StartUCI(path string, options map[string]string) (*UCIEngine, error) {
-	cmd := exec.Command(path)
+	return StartUCISpec(UCISpec{Path: path, Options: options})
+}
+
+// StartUCISpec is StartUCI with full control over args/env/dir — the launcher the
+// Abitur gauntlet uses so gomachine (which needs a "uci" arg, a KB_NET_PATH env,
+// and a cwd) is just another UCI participant.
+func StartUCISpec(spec UCISpec) (*UCIEngine, error) {
+	options := spec.Options
+	cmd := exec.Command(spec.Path, spec.Args...)
+	if spec.Dir != "" {
+		cmd.Dir = spec.Dir
+	}
+	if len(spec.Env) > 0 {
+		cmd.Env = append(os.Environ(), spec.Env...)
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -57,13 +85,13 @@ func StartUCI(path string, options map[string]string) (*UCIEngine, error) {
 	}
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 1<<20), 1<<20)
-	e := &UCIEngine{cmd: cmd, stdin: stdin, out: sc, name: path}
+	e := &UCIEngine{cmd: cmd, stdin: stdin, out: sc, name: spec.Path}
 
 	if err := e.send("uci"); err != nil {
 		return nil, err
 	}
 	if err := e.waitFor("uciok"); err != nil {
-		return nil, fmt.Errorf("%s: no uciok: %w", path, err)
+		return nil, fmt.Errorf("%s: no uciok: %w", spec.Path, err)
 	}
 	for k, v := range options {
 		if err := e.send(fmt.Sprintf("setoption name %s value %s", k, v)); err != nil {

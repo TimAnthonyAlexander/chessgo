@@ -1,0 +1,10 @@
+{
+  "_comment": "Abitur milestone 1: the three external opponents head-to-head at equal 100ms, to calibrate them against each other and prove the harness on real strong engines. Run from a dir that has engines/ (see setup-engines.sh). Elo values are rough CCRL-ish reference anchors — the round-robin measures their RELATIVE strength at this TC, which differs from long-TC CCRL.",
+  "games": 50,
+  "concurrency": 10,
+  "participants": [
+    {"name": "stockfish",  "path": "engines/stockfish",  "movetime_ms": 100, "elo": 3630, "options": {"Hash": "128", "Threads": "1"}},
+    {"name": "stormphrax", "path": "engines/stormphrax", "movetime_ms": 100, "elo": 3500, "options": {"Hash": "128", "Threads": "1"}},
+    {"name": "reckless",   "path": "engines/reckless",   "movetime_ms": 100, "elo": 3400, "options": {"Hash": "128", "Threads": "1"}}
+  ]
+}

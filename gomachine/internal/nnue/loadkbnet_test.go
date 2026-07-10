@@ -16,26 +16,42 @@ func TestLoadKBNet_DetectsLeanVsMultilayer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse start fen: %v", err)
 	}
-	cases := []struct {
-		path     string
-		wantLean bool
-	}{
-		{"../../data/nnue/kb-mirror.bin", true},        // prod lean net
-		{"../../data/nnue/ml_efs28_smoke.bin", false},  // multilayer (efs28 smoke)
+	// Canonical net file sizes (docs/open_tasks HANDOFF §4A): the multilayer layout is
+	// strictly larger, which is exactly what the size auto-detect keys off. Ground-truth
+	// the expected arch from the file's actual size so this test is robust to WHICH net
+	// is currently deployed at kb-mirror.bin (lean vs multilayer are file-swapped).
+	const (
+		leanSize  = 44075072 // single-layer int16 tail
+		multiSize = 44323392 // multilayer 16→32 tail
+	)
+	paths := []string{
+		"../../data/nnue/kb-mirror.bin",       // whichever net is currently shipped
+		"../../data/nnue/ml_efs28_smoke.bin",  // multilayer (efs28 smoke fixture)
 	}
 	any := false
-	for _, c := range cases {
-		if _, statErr := os.Stat(c.path); statErr != nil {
-			t.Logf("net %s absent (gitignored) — skipping", c.path)
+	for _, path := range paths {
+		fi, statErr := os.Stat(path)
+		if statErr != nil {
+			t.Logf("net %s absent (gitignored) — skipping", path)
+			continue
+		}
+		var wantLean bool
+		switch fi.Size() {
+		case leanSize:
+			wantLean = true
+		case multiSize:
+			wantLean = false
+		default:
+			t.Logf("net %s size %d is neither known arch — skipping", path, fi.Size())
 			continue
 		}
 		any = true
-		n, err := LoadKBNet(c.path, 512, 16, 32, 8)
+		n, err := LoadKBNet(path, 512, 16, 32, 8)
 		if err != nil {
-			t.Fatalf("LoadKBNet(%s): %v", c.path, err)
+			t.Fatalf("LoadKBNet(%s): %v", path, err)
 		}
-		if n.IsLean() != c.wantLean {
-			t.Fatalf("%s: IsLean()=%v, want %v (size auto-detect misfired)", c.path, n.IsLean(), c.wantLean)
+		if n.IsLean() != wantLean {
+			t.Fatalf("%s (size %d): IsLean()=%v, want %v (size auto-detect misfired)", path, fi.Size(), n.IsLean(), wantLean)
 		}
 		// Apply int8 exactly as the prod loader does for the detected arch, then a
 		// from-scratch eval must produce a finite, sane cp value.
@@ -46,9 +62,9 @@ func TestLoadKBNet_DetectsLeanVsMultilayer(t *testing.T) {
 		}
 		ev := n.Eval(pos)
 		if ev < -3000 || ev > 3000 {
-			t.Fatalf("%s: start-pos eval %d cp out of sane range", c.path, ev)
+			t.Fatalf("%s: start-pos eval %d cp out of sane range", path, ev)
 		}
-		t.Logf("%s: lean=%v startEval=%dcp", c.path, n.IsLean(), ev)
+		t.Logf("%s: lean=%v startEval=%dcp", path, n.IsLean(), ev)
 	}
 	if !any {
 		t.Skip("no net sidecars present — nothing to detect")
