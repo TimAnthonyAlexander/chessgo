@@ -2315,3 +2315,128 @@ few-thread** strength (materially lower). So:
 
 **Net:** the most encouraging warm-SF read to date and reproducible across two machines — a real signal
 the efs28 engine is strong. The absolute waits on a proper anchor; the §27.5 gap wants one clean run.
+
+## 34. Long-run direction: the SF-grade DATA PIPELINE is our biggest untapped lever — a TWO-TRACK program (2026-07-10)
+
+**Source:** user pulled the *current* SF pipeline (SFNNv10+ `threats.yaml`, PRs #4295/#4314, the nnue-pytorch
+wiki, linrock's `relabel-BT4-tf13tune` nets). Extends `docs/NNUE/DATA_RECIPE_SF_2026.md` (the *recipe*) with the
+*strategy* — what to build, in what order, and the honest ceiling. Prompted by the "for-fun" `-352` mid-checkpoint
+SPRTs (a NAIVELY-trained net read −124 MT / −140 FN vs prod-lean, un-annealed): our nets are built by a **naive
+pipeline** (one source, one stage, constant lambda, no rescore, no relabel, 4 raw months), so **most of our
+remaining Elo is pipeline *maturity*, not architecture.** We have been polishing width/tail while training on ~10%
+of the field's data breadth.
+
+### 34.1 The scale gap — we're undertrained AND under-diversified
+- **Us:** ~100M pos/superbatch (≈ one nnue-pytorch "epoch"), 640 sb ⇒ ~640 epoch-equiv, on **test80 Jan–Apr 2024 ONLY**.
+- **SF from-scratch:** ~4 stages, **~3,800–4,800 epoch-equiv** (est), on **~3 years** of Leela (test60→test80-2024-**06**)
+  INTERLEAVED with SF self-play (`dfrc_n5000`), TB positions (`tb5dtm.binpack`), UHO book — with much of the OLD data
+  **relabeled with BT4** (a stronger later Leela net, `relabel-BT4-tf13tune`), syzygy-rescored + deduped.
+- ⇒ we're at **~15% of SF's training VOLUME on ~10% of its data DIVERSITY**. **The compute is NOT the constraint:**
+  SF-scale volume is only **~72–90 GPU-hours on the 4090 (~$25–32)**. The constraint is **pipeline engineering.**
+  (Volume/epoch figures are user estimates from the PRs/wiki — order-of-magnitude, not exact.)
+
+### 34.2 The levers, ranked (evidence-backed; detail in DATA_RECIPE_SF_2026.md)
+1. **Data breadth + syzygy rescore + MULTI-SOURCE.** The wiki finding "training *solely* on Lc0 data is worse" —
+   **we violate it.** SF-generated / DFRC data at λ=1.0 gives broad off-distribution positions that regularize
+   pretraining before specializing on Leela. Cheapest high-EV fix (pull community `dfrc_n5000`/UHO, or generate our
+   own gomachine self-play for breadth). Rescore = 6/7-piece syzygy during conversion (endgame label upgrade).
+2. **Lambda schedule** (SF anneals eval-weight 1.0→0.7–0.75). Most evidence-backed knob we're NOT turning — **but
+   COUPLED to relabeling, see §34.3.** Don't blind-copy 0.7.
+3. **Early-fen skipping across stages** (SF ramps 12→24→27/28; we run ply≥28 flat — already have the biggest single
+   piece, per DATA_RECIPE lever #1).
+4. **Multi-stage CURRICULUM** — the real structural unlock, not a knob: broad+SF-gen @ λ=1.0 → high-quality Leela →
+   fine-tune relabeled, with per-stage LR/lambda/fen-skip.
+5. **Filtering** (depth-N multipv capture-drop, PR #4295/#4314) — real but ~5-Elo-range; do LAST.
+
+### 34.3 ⚠ The lambda↔relabel COUPLING (nuance — do NOT just copy SF's 0.7)
+SF runs eval-heavy (λ 1.0→0.7 = 70%+ eval) **because they relabel with BT4** — distilling a strong, clean net, not
+raw self-play Q. Our `ConstantWDL 0.6` (bullet convention = **60% RESULT**, far more result-heavy than SF's *end*
+state) was deliberately calibrated by the §32 two-AI debate to **noisy, un-relabeled test80-Q.** Pushing toward SF's
+eval-heavy end on our RAW labels risks **fitting Leela's noise harder** — exactly what 0.6 hedges. **Sequence:
+relabel (or a deeper teacher) FIRST, THEN go eval-heavy — or run lambda-anneal as a true single-variable SPRT.**
+They rise together; 0.7 does not transfer to raw labels.
+
+### 34.4 The phased roadmap (each phase gated on a ≥250-pair movetime SPRT vs current best)
+- **Phase 1** (~1 wk, mostly data work + one ~12 h run): expand to **test80 2023-01 → 2024-06** + **6-piece syzygy
+  rescore** + dedup + ply≤28 at load. Same 640 sb. Measure. *(Highest-EV, matches our own "data is the live lever".)*
+- **Phase 2** (24–48 h GPU): same data, **1,280–2,560 sb**, stretched LR. **Rides on Phase 1** — 4× on the same 4
+  months just overfits; length pays only once the data is broad enough to hold that much signal.
+- **Phase 3** (biggest expected jump if not done): **lambda anneal 1.0→0.7**, two-stage (broad λ=1.0 → recent
+  λ=0.7). Measure per stage. Heed §34.3.
+- **Phase 4** (later): **relabel** the data with our best net once it clearly beats the labels (BT4-style). Not before.
+- **Prereq infra:** make `internal/tune` + the bullet recipe **STAGE-AWARE** (ordered stages, per-stage
+  LR/lambda/fen-skip) — one engineering task that unblocks Phases 1–4.
+
+### 34.5 The honest ceiling — the TWO-TRACK thesis (the actual long-run answer)
+Matching SF's *net* pipeline closes maybe **HALF** the gap. SF total strength = **net × search × ~a decade of
+fishtest-tuned search params** — and that half comes from no dataset.
+- **Track A (net):** the pipeline above — reachable, cheap-ish, mostly engineering + a few hundred GPU-hrs. **Move
+  fast here.**
+- **Track B (search):** SPSA/margin re-tuning (the §31-era +38.7 was real, well NOT dry), NPS/kernels, selective
+  search patches. **Slow** — accumulated SPRT volume we can't shortcut, only grind (SF got it from a decade of
+  fishtest we can't replay).
+- **Verdict:** the net track can take a big bite (the "<200 on the AVX-512 box" goal is plausible net-side); **full
+  parity needs Track B sustained.** The trap: nail Track A, think we're done — a great net on under-tuned search
+  leaves Elo on the floor, the same shape as a great eval eaten by node cost.
+
+### 34.6 Immediate implication
+Finish + measure `-640` — it answers the **arch** question (is the multilayer tail worth it), a clean *separate*
+axis. But the **next program after it is NOT width or the asm-tail**; it's **standing up the stage-aware,
+multi-source, syzygy-rescored, lambda-annealed pipeline** (§34.4). That is the SF-shaped path, and it's where the
+hundreds of Elo we're missing actually live.
+
+## 35. Step-B result: the 512 multilayer-tail net (`chessgo_ml_efs28`, 640-sb) — **+22 movetime, SHIPS** (2026-07-10)
+
+The step-B multilayer net trained (640 sb on test80 Jan–Apr, efs28 inputs + pairwise-CReLU→L1(16)→L2(32)→out int8
+tail, QAT). Measured on coalla (SIMD, `main` binary, conc=1) vs the shipped prod-lean net (`data/nnue/kb-mirror.bin`).
+
+### 35.1 Results
+| SPRT | Elo | pairs | note |
+|---|---|---|---|
+| **MT `-640` vs prod-lean** (movetime 100ms) | **+21.9 ± 16.9, LB +5.0** | 300 | **WIN — ships** |
+| FN `-640` vs prod-lean (fixed 40k nodes) | −9.8 ± 19.0 | 300 | wash / marginally negative |
+| MT `-560` vs prod-lean (movetime 100ms) | +0.7 ± 13.1 | ~300 | wash |
+| anneal `-640` vs `-560` (movetime, `--old-enriched`) | −36.3 ± 19.6 | 200 | **ANOMALOUS — discard, see §35.3** |
+
+### 35.2 The headline: a MOVETIME win at fixed-nodes parity
+`-640` **beats prod-lean by +22 Elo at movetime (LB +5, stably positive) — but is a wash at fixed nodes (−10).**
+Because **MT > FN**, the win is NOT eval-per-node quality (there it's ~parity); it's a **real-time-control edge**
+(the multilayer net reaches effectively better play in 100 ms — a speed / search-depth interaction that the equal-
+node FN test hides). This also means the earlier "tail cost ≈ 0" mid-checkpoint read was right that cost isn't the
+story — but the *direction* flipped: the net is actually *stronger* at movetime than at fixed nodes, not equal.
+**The anneal swing from the un-annealed valley was huge** (FN −140 at mid `-352` → −10 at `-640`, ~+130) —
+confirming the anneal-trap thesis emphatically; the mid-checkpoint pessimism (§ the −124/−173 "for-fun" reads) was
+entirely the un-annealed valley, exactly as predicted.
+
+### 35.3 ⚠️ The `-560` over-anneal red herring + the transitivity lesson
+The anneal SPRT read `-640` vs `-560` = **−36** (implying `-560` was +36 *better* — an "over-anneal" story). But the
+two **direct vs-prod** SPRTs contradict it: `-640` = +22, `-560` = +0.7, so `-640` is **+21 better** than `-560`,
+NOT −36. A ~57-Elo inconsistency. The odd one out is the anneal run — the only one using the **two-multilayer
+`--new-enriched`/`--old-enriched` per-side swap on coalla's PRE-concurrency-refactor `main` binary** (the exact
+fragility the branch `nnue-int8-tail-then-width` refactor removes). **Treat the −36 as a harness artifact; trust the
+direct vs-prod reads.** *So `-640` (final annealed) IS the ship candidate — the normal "ship the annealed final"
+rule holds; there was no real over-anneal.*
+**Lesson:** measure each ship candidate **directly vs prod**; do NOT infer strength through transitive chains across
+intermediate nets — especially two-multilayer swaps on the pre-refactor binary. Re-run `-640` vs `-560` with the
+refactor binary (conc>1, per-Searcher net) to confirm the −36 vanishes. (Verifying `-560` directly instead of
+trusting the +58 transitive inference is what caught this.)
+
+### 35.4 SHIP
+**Ship `-640`** by file-swap: `data/nnue/kb-mirror.bin` → the `-640` net (local `gomachine/data/nnue/ml640.bin`,
+also on coalla; md5 `e7f524093727dace72c5ce9288fd8d7d`, 44,323,392 bytes). The prod loader (§4A `loadDefaultKBNet`)
+**auto-detects the multilayer arch by size** and applies the `--enriched-int8` config — **no code change**. NOT
+auto-deployed here — user pulls the trigger. Full `-640`/`-560` checkpoints (weights + optimiser) preserved on
+coalla `~/chessgo-nnue-backup`; training log local.
+
+### 35.5 Retrospective + next
+- **Multilayer arch: a modest movetime win (+22).** Worth shipping, but small — it did NOT unlock a big gain, and
+  it's ~parity on eval-per-node. `ConstantWDL 0.6` + single-source test80-Jan-Apr were fine for this run (not the
+  bottleneck). The int8 dense tail is cheap (no sparse/asm needed — MT≥FN, no cost gap).
+- **The bigger lever is still §34** — the SF-grade data pipeline (breadth + syzygy-rescore + multi-source +
+  lambda-anneal + multi-stage). +22 from an arch change is small next to the pipeline's headroom.
+- **Bet (FN/MT wager, me FN+30/MT+5 vs user FN+80/MT+30):** FN = −9.8 → **both missed** (over-predicted the eval
+  gain). MT = +21.9 → **user wins** (+30 within CI; my +5 was exactly the lower bound — lowballed). **User takes the
+  bet** on the MT leg. The lesson we both under-weighted: an FN-wash net can still be a clear movetime win.
+- **Next:** ship `-640`; adopt "SPRT several late checkpoints (e.g. −560/−600/−640) directly vs prod, not just the
+  final" for future runs (cheap insurance against a genuine over-anneal); use the refactor binary for net-vs-net
+  SPRTs; then pursue §34.

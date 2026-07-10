@@ -69,6 +69,29 @@ no syzygy re-rescore.
 
 Hard condition on old data: syzygy-rescore + v6-filter + dedup, or it regresses.
 
+## Update 2026-07-10 — deltas + the STRATEGY lives in ENGINE_STRENGTH §34
+
+> The strategic synthesis (scale gap, two-track program, phased roadmap, honest ceiling) is
+> **ENGINE_STRENGTH.md §34**. This section adds the recipe-level deltas found since 2026-07-06.
+
+- **Multi-STAGE curriculum (4 stages), not single-pass.** SF from-scratch ≈ pretraining(broad,
+  low-quality mix) → pretraining(high-quality, mostly test-series) → fine-tune(low-quality +
+  relabeled) → [filter], with **different epoch counts + hyperparameters per stage** (~400 / 800 /
+  800 / 800 / 960+ epoch-equiv, est ⇒ ~3,800–4,800 total). We do ONE stage. The curriculum + data
+  ORDERING is itself a lever (wiki: broad/SF-gen first, Leela second; **solely-Lc0 is worse**).
+- **Full source list (SFNNv10+):** Leela test60, test77, test78, test79, test80-2022, -2023, and
+  **test80-2024 Jan–June** (not just Apr); PLUS non-Leela `dfrc_n5000` (SF self-play @5000 nodes,
+  DFRC openings), `tb5dtm.binpack` (TB distance-to-mate), UHO book (`UHOx2`, `nodes5000pv2_UHO`).
+- **BT4 relabeling:** much OLD data is re-labeled with **BT4** (a later, stronger Leela net) rather
+  than kept at its original Q — files tagged `relabel-BT4-tf13tune`. This is the teacher-quality
+  upgrade that lets SF run **eval-heavy** lambda.
+- **⚠ lambda ↔ relabel are COUPLED (refines lever #3):** SF's eval-heavy anneal (1.0→0.7) rides on
+  BT4-relabeled targets. Our `ConstantWDL 0.6` was calibrated to RAW test80-Q (§32 two-AI debate).
+  **Do NOT blind-copy 0.7 onto raw labels** — relabel/deeper-teacher FIRST, or run the anneal as a
+  true single-variable SPRT. See ENGINE_STRENGTH §34.3.
+- **Scale/compute:** we're at ~15% of SF's training volume on ~10% of its diversity; SF-scale volume
+  is only ~72–90 GPU-hours on the 4090 (~$25–32). Constraint = pipeline engineering, not compute.
+
 ## Implication for the in-flight king-bucket work
 
 The 640-sb KB run (2026-07-06) uses the **weak pipeline** (`ply>=16`, `ConstantWDL 0.6`, no

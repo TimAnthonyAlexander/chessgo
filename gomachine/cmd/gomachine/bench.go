@@ -239,7 +239,23 @@ func loadTablebaseDefault(flagPath string) *syzygy.Tablebase {
 const (
 	leanEnrichedH  = 512
 	leanEnrichedNB = 8
+	// Multilayer-tail widths for the enriched net (chessgo_ml_efs28: L1=16, L2=32).
+	// Only used when the prod net file is the MULTILAYER variant (auto-detected by
+	// size in loadDefaultKBNet); the lean net ignores them. Overridable via
+	// KB_NET_D2 / KB_NET_D3 if a future multilayer net changes its tail.
+	leanEnrichedD2 = 16
+	leanEnrichedD3 = 32
 )
+
+// envIntDefault reads an int env var, falling back to def when unset/unparseable.
+func envIntDefault(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return n
+		}
+	}
+	return def
+}
 
 // loadEnrichedDefault auto-discovers the lean single-layer+threats net (v9) for the
 // prod serve/hub paths and, if found, installs it as the process-wide enriched eval
@@ -265,11 +281,22 @@ func loadDefaultKBNet() *nnue.EnrichedNet {
 	if path == "" {
 		path = "data/nnue/kb-mirror.bin"
 	}
-	n, err := nnue.ImportBulletLeanNet(path, leanEnrichedH, leanEnrichedNB)
+	// Auto-detect lean (single-layer) vs multilayer tail by file size — so shipping a
+	// multilayer net is a plain file-swap over kb-mirror.bin, no code/flag change.
+	d2 := envIntDefault("KB_NET_D2", leanEnrichedD2)
+	d3 := envIntDefault("KB_NET_D3", leanEnrichedD3)
+	n, err := nnue.LoadKBNet(path, leanEnrichedH, d2, d3, leanEnrichedNB)
 	if err != nil {
-		return nil // no lean net on disk → caller stays on the v6 net
+		return nil // no net on disk → caller stays on the embedded v6 net
 	}
-	n.QuantizeFTInt8()      // int8-FT: the movetime config the prod net ships with
+	// int8 config MUST match the config the net's movetime SPRT was accepted under:
+	//   lean       → int8-FT threat columns (the --lean-int8ft ship config, §32).
+	//   multilayer → int8 tail L1 (QuantizeForInt8, the --enriched-int8 config).
+	if n.IsLean() {
+		n.QuantizeFTInt8()
+	} else {
+		n.QuantizeForInt8()
+	}
 	n.SetSplitRefresh(true) // bit-exact +2.3% NPS: split king-bucket refresh, rebuild only the moving-side half (§30, 2026-07-06)
 	n.SetDirectApply(true)  // bit-exact +2.5% NPS: skip the counts-array multiset diff (KB-net re-bench of finding A4, §30)
 	n.SetFinny(true)        // bit-exact +2.3% NPS over splitRefresh: refresh-cache on the king-bucket refresh path (re-measured 2026-07-07, 3 interleaved reps +1.5/+3.3/+2.3%; overturns the §30.2 wash — disjoint from directApply's path so additive)
@@ -293,8 +320,12 @@ func loadEnrichedDefault() {
 			return
 		}
 		nnue.SetEnriched(n)
-		fmt.Fprintf(os.Stderr, "kb eval: mirrored king-bucket net loaded (H=%d NB=%d, move-aware=%v)\n",
-			leanEnrichedH, leanEnrichedNB, n.MoveAware())
+		arch := "lean single-layer"
+		if !n.IsLean() {
+			arch = fmt.Sprintf("multilayer %d→%d", envIntDefault("KB_NET_D2", leanEnrichedD2), envIntDefault("KB_NET_D3", leanEnrichedD3))
+		}
+		fmt.Fprintf(os.Stderr, "kb eval: mirrored king-bucket net loaded (H=%d NB=%d, %s, move-aware=%v)\n",
+			leanEnrichedH, leanEnrichedNB, arch, n.MoveAware())
 	})
 }
 

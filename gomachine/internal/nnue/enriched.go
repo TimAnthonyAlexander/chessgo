@@ -649,6 +649,50 @@ func ImportBulletLeanNet(path string, h, nb int) (*EnrichedNet, error) {
 	return n, nil
 }
 
+// IsLean reports whether this net uses the single-layer lean tail (vs the
+// multilayer d2/d3 tail). Set by the importer; the prod loader keys its int8
+// config on it (lean → int8-FT, multilayer → int8 tail L1).
+func (n *EnrichedNet) IsLean() bool { return n.lean }
+
+// leanNetFloats / enrichedNetFloats return the f32 count a bullet LEAN / MULTILAYER
+// net file holds for the given dims — the size discriminator LoadKBNet uses. The
+// multilayer layout is strictly larger (extra tail tensors) at equal H/NB, so the
+// two are unambiguous by byte count. (Files carry a small trailer, so real sizes are
+// a few bytes ABOVE these; LoadKBNet uses >= thresholds, matching the importers.)
+func leanNetFloats(h, nb int) int {
+	in := PsqSize + ThreatBlock
+	return in*h + h + 2*h*nb + nb
+}
+
+func enrichedNetFloats(h, d2, d3, nb int) int {
+	in := PsqSize + ThreatBlock
+	return in*h + h + h*(nb*d2) + nb*d2 + d2*(nb*d3) + nb*d3 + d3*nb + nb
+}
+
+// LoadKBNet imports the prod king-bucket net at path, AUTO-DETECTING the LEAN
+// single-layer tail vs the MULTILAYER (d2/d3) tail by file size — so a lean→multilayer
+// file-swap needs no code/flag/env change. The multilayer layout is strictly larger,
+// so a file big enough for it IS multilayer, else lean; a file too small for either is
+// an error (rather than silently reading a lean file as multilayer garbage, or vice
+// versa). h/nb are fixed by the arch; d2/d3 are the multilayer tail widths.
+func LoadKBNet(path string, h, d2, d3, nb int) (*EnrichedNet, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	multiBytes := int64(enrichedNetFloats(h, d2, d3, nb)) * 4
+	leanBytes := int64(leanNetFloats(h, nb)) * 4
+	switch {
+	case info.Size() >= multiBytes:
+		return ImportBulletEnrichedNet(path, h, d2, d3, nb)
+	case info.Size() >= leanBytes:
+		return ImportBulletLeanNet(path, h, nb)
+	default:
+		return nil, fmt.Errorf("nnue: %s is %d bytes — too small for lean (%d) or multilayer (%d)",
+			path, info.Size(), leanBytes, multiBytes)
+	}
+}
+
 // --- Default (process-wide) enriched net, atomically swappable ---
 
 var defaultEnrichedNet atomic.Pointer[EnrichedNet]
