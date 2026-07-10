@@ -296,14 +296,22 @@ func loadDefaultKBNet() *nnue.EnrichedNet {
 		n.QuantizeFTInt8()
 	} else {
 		n.QuantizeForInt8() // int8 the multilayer TAIL (L1)
+		// SF18 full-threats config (this branch only, ThreatBlock=79856): the threat FT
+		// is trained int8-QAT (bullet faux_quantise on the l0 threat rows to the ftQA
+		// grid), so int8 the 79,856 threat columns too — an 82 MB int16 threat block is
+		// memory-bound (DRAM scatter, blows the ~1-2% NPS budget), whereas the int8 block
+		// is 40.9 MB + the dotU8I8 kernel. Validated CLAMP-CLEAN at sb8 by
+		// TestKBNetClampCount (>0.5% folded threat rows clamped → the net, not this line,
+		// is wrong → split-affine retrain). NOTE: on the PROD binary (ThreatBlock=9216,
+		// ml640, NOT int8-FT-QAT) this call is intentionally absent — there int16 threat
+		// FT is correct (int8 would clamp ~2718 weights, lossy).
+		n.QuantizeFTInt8()
 		// Enable the O(delta) move-aware incremental push — bit-exact and strictly
 		// better (enriched.go:648). ImportBulletEnrichedNet leaves it OFF, so the
 		// multilayer prod net eagerly recomputed the full base+threat feature set on
 		// every accumulator push. A real-search profile showed the FT accumulator at
 		// ~51% of the node (vs ~22% for lean) → ~3–4× fewer nodes at movetime → the
 		// multilayer net lost head-to-head to lean despite ~equal fixed-depth NPS.
-		// This is the eval-neutral fix the prod-ship wiring forgot (int8-FT on this
-		// non-QAT net would instead clamp ~2718 threat weights — lossy).
 		n.SetMoveAware(true)
 	}
 	n.SetSplitRefresh(true) // bit-exact +2.3% NPS: split king-bucket refresh, rebuild only the moving-side half (§30, 2026-07-06)
