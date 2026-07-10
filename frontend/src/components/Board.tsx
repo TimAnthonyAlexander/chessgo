@@ -694,6 +694,49 @@ export default function Board({
                             }
                             const a = center(s.from)
                             const b = center(s.to)
+                            // Knight (L) moves are drawn as cornered arrows, chess.com
+                            // style: the long 2-square leg first, then a 90° bend into
+                            // the short 1-square leg that carries the head to the target.
+                            const dsx = Math.round((b.x - a.x) / 10)
+                            const dsy = Math.round((b.y - a.y) / 10)
+                            const isKnight =
+                                (Math.abs(dsx) === 1 && Math.abs(dsy) === 2) ||
+                                (Math.abs(dsx) === 2 && Math.abs(dsy) === 1)
+                            if (isKnight) {
+                                const sx = Math.sign(dsx)
+                                const sy = Math.sign(dsy)
+                                const longHoriz = Math.abs(dsx) === 2
+                                // Where the two legs meet (turn along the long axis first).
+                                const corner = longHoriz
+                                    ? { x: b.x, y: a.y }
+                                    : { x: a.x, y: b.y }
+                                // leg1 = long axis (out of the source); leg2 = short axis (into target).
+                                const l1x = longHoriz ? sx : 0
+                                const l1y = longHoriz ? 0 : sy
+                                const l2x = longHoriz ? 0 : sx
+                                const l2y = longHoriz ? sy : 0
+                                // Emerge from the source center; stop short so the head tip
+                                // lands on the target center (mirrors the straight arrow).
+                                const x1 = a.x + l1x * 3
+                                const y1 = a.y + l1y * 3
+                                const x2 = b.x - l2x * 3
+                                const y2 = b.y - l2y * 3
+                                const pt = (px: number, py: number) =>
+                                    `${px.toFixed(2)},${py.toFixed(2)}`
+                                return (
+                                    <polyline
+                                        key={i}
+                                        points={`${pt(x1, y1)} ${pt(corner.x, corner.y)} ${pt(x2, y2)}`}
+                                        fill="none"
+                                        stroke={color}
+                                        strokeWidth={1.7}
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        markerEnd={`url(#arr-${s.brush})`}
+                                        opacity={0.85}
+                                    />
+                                )
+                            }
                             const dx = b.x - a.x
                             const dy = b.y - a.y
                             const len = Math.hypot(dx, dy) || 1
