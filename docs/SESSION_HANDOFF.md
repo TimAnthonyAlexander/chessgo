@@ -332,7 +332,7 @@ The lazy-accumulator gap is **doubly** wasteful in your code: Stockfish never co
 
 - **Staged movegen / Gigantua / copy-make rewrites** — net ~nil NPS on an already-pruned engine; Gigantua's gigamoves/sec is a *perft* artifact that doesn't survive a real search. Your skepticism was right.
 - **PEXT bitboards** — ~2–3% movegen only, needs Go asm, marginal. Last.
-- **Dual small/big net** — Stockfish added it (2024) then *removed* it (2025). Skip.
+- **Dual small/big net** — Stockfish **still runs it** (SF18/SFNNv10 *and* master/SFNNv13; big net has Full-Threat inputs, small net is HalfKAv2_hm-only). The earlier "removed in 2025" note was **WRONG** — from a *fork*, not real Stockfish. A live speed technique, not our near-term lever.
 - **`see_ge` early-exit** — SEE is 2.5%, already correctly shelved.
 
 ---
