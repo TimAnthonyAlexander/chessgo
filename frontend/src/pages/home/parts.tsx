@@ -8,7 +8,7 @@ import {
     DialogContent,
     Typography,
 } from '@mui/material'
-import { Cpu, Gauge, Swords, Target, Telescope, UserPlus, Users } from 'lucide-react'
+import { Cpu, Gauge, Swords, Target, Telescope, UserPlus } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { gameSocket, type LiveGameState } from '../../lib/socket'
 import { useGameSocket } from '../../lib/useGameSocket'
@@ -16,7 +16,6 @@ import { useAuth } from '../../lib/auth'
 import { getStats, type LobbyStats } from '../../api/client'
 import { CATEGORY_META, type Category } from '../../lib/timeControl'
 import { Panel, PanelHead } from '../../components/home/Panel'
-import HeroFlame from '../../components/home/HeroFlame'
 import ChallengeDialog from '../../components/ChallengeDialog'
 import type { Variant } from '../../lib/variants'
 import { DuckGlyph } from '../../components/DuckGlyph'
@@ -129,11 +128,9 @@ export type HomeState = ReturnType<typeof useHome>
  * arrangement) is passed as children. */
 export function HomeChrome({
     home,
-    hero = true,
     children,
 }: {
     home: HomeState
-    hero?: boolean
     children: ReactNode
 }) {
     return (
@@ -146,8 +143,6 @@ export function HomeChrome({
                     py: { xs: 2.5, md: 3.5 },
                 }}
             >
-                {hero && <Hero stats={home.stats} />}
-
                 {/* A game in progress is the most urgent thing on the page — for anyone. */}
                 {home.live && !home.live.ended && <ResumeBanner game={home.live} />}
 
@@ -178,34 +173,38 @@ export function HomeChrome({
     )
 }
 
-function Hero({ stats }: { stats: LobbyStats | null }) {
+/** The live lobby counters as two right-aligned one-liners (number in text
+ * colour, label dimmed) — sits below the leaderboard in the right column. */
+export function LobbyStatLines({ stats }: { stats: LobbyStats | null }) {
     return (
         <Box
             sx={{
                 display: 'flex',
-                flexDirection: { xs: 'column', md: 'row' },
-                alignItems: { md: 'flex-end' },
-                justifyContent: 'space-between',
-                gap: { xs: 2, md: 3 },
-                mb: { xs: 2.5, md: 3 },
+                flexDirection: 'column',
+                alignItems: 'flex-end',
+                gap: 0.25,
+                px: 0.5,
             }}
         >
-            <HeroFlame />
-
-            {/* Live counters */}
-            <Box sx={{ display: 'flex', gap: 1.25, flexShrink: 0 }}>
-                <StatPill
-                    icon={<Users size={15} />}
-                    value={stats?.playersOnline}
-                    label="players online"
-                />
-                <StatPill
-                    icon={<Swords size={15} />}
-                    value={stats?.activeGames}
-                    label="games in play"
-                />
-            </Box>
+            <StatLine value={stats?.playersOnline} label="players online" />
+            <StatLine value={stats?.activeGames} label="games in play" />
         </Box>
+    )
+}
+
+function StatLine({ value, label }: { value?: number; label: string }) {
+    return (
+        <Typography sx={{ fontSize: 13, lineHeight: 1.6 }}>
+            <Box
+                component="span"
+                sx={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text)' }}
+            >
+                {value != null ? value.toLocaleString() : '—'}
+            </Box>{' '}
+            <Box component="span" sx={{ color: 'var(--text-dim)' }}>
+                {label}
+            </Box>
+        </Typography>
     )
 }
 
@@ -241,6 +240,93 @@ export function PlayPanel({
                 ))}
             </Box>
         </Panel>
+    )
+}
+
+/** A slim, full-width row of the four Play actions — sits ABOVE the dashboard
+ * grid on desktop so it never lengthens any column (the three columns stay
+ * balanced). Same destinations as PlayPanel, laid out horizontally. */
+export function PlayBar({
+    onNavigate,
+    onChallenge,
+}: {
+    onNavigate: (path: string) => void
+    onChallenge: () => void
+}) {
+    const actions = [
+        { icon: <Cpu size={18} />, title: 'Computer', onClick: () => onNavigate('/bot') },
+        { icon: <Target size={18} />, title: 'Puzzles', onClick: () => onNavigate('/puzzles') },
+        { icon: <Telescope size={18} />, title: 'Analysis', onClick: () => onNavigate('/analysis') },
+        { icon: <UserPlus size={18} />, title: 'Challenge', onClick: onChallenge },
+    ]
+    return (
+        <Box
+            sx={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(4, 1fr)',
+                gap: 1.25,
+                mb: 2.5,
+            }}
+        >
+            {actions.map((a) => (
+                <BarCell key={a.title} icon={a.icon} title={a.title} onClick={a.onClick} />
+            ))}
+        </Box>
+    )
+}
+
+/** One horizontal cell of the PlayBar: icon + label side by side, slim height. */
+function BarCell({
+    icon,
+    title,
+    onClick,
+}: {
+    icon: ReactNode
+    title: string
+    onClick: () => void
+}) {
+    return (
+        <Box
+            onClick={onClick}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onClick()
+                }
+            }}
+            sx={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 1,
+                py: 1.5,
+                bgcolor: 'var(--surface-2)',
+                border: '1px solid var(--line-soft)',
+                borderRadius: '12px',
+                cursor: 'pointer',
+                color: 'var(--text-dim)',
+                transition: 'color 0.12s ease, border-color 0.12s ease, background 0.12s ease',
+                '&:hover': {
+                    color: 'var(--accent)',
+                    borderColor: 'var(--accent-line)',
+                    bgcolor: 'var(--surface)',
+                },
+            }}
+        >
+            {icon}
+            <Typography
+                sx={{
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: 'var(--text)',
+                    fontFamily: 'var(--font-display)',
+                }}
+            >
+                {title}
+            </Typography>
+        </Box>
     )
 }
 
@@ -829,35 +915,3 @@ function ActionCell({
     )
 }
 
-function StatPill({ icon, value, label }: { icon: ReactNode; value?: number; label: string }) {
-    return (
-        <Box
-            sx={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1,
-                px: 1.5,
-                py: 1,
-                borderRadius: '12px',
-                bgcolor: 'var(--surface)',
-                border: '1px solid var(--line-soft)',
-            }}
-        >
-            <Box sx={{ display: 'flex', color: 'var(--accent)' }}>{icon}</Box>
-            <Box sx={{ lineHeight: 1.1 }}>
-                <Typography
-                    component="div"
-                    sx={{
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: 16,
-                        fontWeight: 600,
-                        color: 'var(--text)',
-                    }}
-                >
-                    {value != null ? value.toLocaleString() : '—'}
-                </Typography>
-                <Typography sx={{ fontSize: 11, color: 'var(--muted)' }}>{label}</Typography>
-            </Box>
-        </Box>
-    )
-}

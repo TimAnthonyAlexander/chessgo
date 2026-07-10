@@ -16,6 +16,7 @@ import { authStore, useAuth } from '../lib/auth'
 import AuthDialog, { type AuthMode } from './AuthDialog'
 import ThemeDialog from './ThemeDialog'
 import Logo from './Logo'
+import NavStreak from './NavStreak'
 import Footer from './Footer'
 import MobileNavDrawer, { type MobileNavSection } from './MobileNavDrawer'
 import type { RatingCategory, User } from '../api/client'
@@ -165,6 +166,7 @@ export default function Layout() {
                 </Box>
 
                 <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                    <NavStreak />
                     <MobileNavDrawer
                         sections={sections}
                         user={user ? { name: user.name } : null}
