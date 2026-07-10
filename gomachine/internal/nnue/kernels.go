@@ -71,7 +71,7 @@ func subColI8Scalar(dst []int16, src []int8) {
 // applyDiff cost, per the CPU profile) into a single pass, holding each acc tile
 // across the column loop. Bit-exact to the sequential path — int16 add/sub wraps
 // and is associative/commutative, so the summed order is irrelevant.
-func applyThreatBatchScalar(acc []int16, w0t8 []int8, h int, subF, addF []uint16, off int) {
+func applyThreatBatchScalar(acc []int16, w0t8 []int8, h int, subF, addF []uint32, off int) {
 	for i := 0; i < h; i++ {
 		var d int16
 		for _, f := range addF {

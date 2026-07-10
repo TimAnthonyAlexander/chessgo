@@ -33,7 +33,7 @@ type EnrichedStack struct {
 
 	// move-aware push (enriched_delta.go) scratch: the small per-move sub/add
 	// feature lists for each perspective, reused across Pushes to avoid alloc.
-	dsubW, daddW, dsubB, daddB []uint16
+	dsubW, daddW, dsubB, daddB []uint32
 
 	// Lazy (deferred) materialization state, one entry per slot. When the net has
 	// lazyEnabled(), Push enumerates the changed-edge deltas EAGERLY (cheap, uses the
@@ -44,8 +44,8 @@ type EnrichedStack struct {
 	// clobber the shared scratch.
 	pendMove             []chess.Move
 	dirty                []bool
-	pSubW, pAddW         [][]uint16
-	pSubB, pAddB         [][]uint16
+	pSubW, pAddW         [][]uint32
+	pSubB, pAddB         [][]uint32
 
 	// In-place (copy-free) accumulator: a single pair of halves that Push mutates by
 	// the delta and Pop restores via the inverse delta. Used when net.inPlaceEnabled().
@@ -53,7 +53,7 @@ type EnrichedStack struct {
 
 	// batchApply scratch: the threat-only (f>=PsqSize) partitions of one applyDiff
 	// call's sub/add lists, reused per call to avoid alloc.
-	batchSub, batchAdd []uint16
+	batchSub, batchAdd []uint32
 
 	// finny is the per-searcher accumulator-refresh cache (Stockfish AccumulatorRefreshTable
 	// / Koivisto "Finny tables"), indexed [perspective][kingBucket,mirrorHalf]. Each entry
@@ -78,14 +78,14 @@ type EnrichedStack struct {
 // half == B0i + Σ ftAdd(features) always holds when valid.
 type finnyEntry struct {
 	half     []int16           // len H; == B0i + Σ ftAdd over features
-	features []uint16          // the perspective's active (base+threat) feature list
+	features []uint32          // the perspective's active (base+threat) feature list
 	bbs      [12]chess.Bitboard // piece bitboards (WhitePawn..BlackKing) when cached
 	valid    bool
 }
 
 type enrichedSlot struct {
 	w, b   []int16  // perspective accumulator halves (len H), into the shared backing
-	fw, fb []uint16 // active features (White-persp, Black-persp); own backing, UNSORTED
+	fw, fb []uint32 // active features (White-persp, Black-persp); own backing, UNSORTED
 }
 
 // NewStack allocates an EnrichedStack deep enough for maxDepth plies.
@@ -98,37 +98,37 @@ func (n *EnrichedNet) NewStack(maxDepth int) *EnrichedStack {
 		off := i * 2 * h
 		data[i].w = backing[off : off+h : off+h]
 		data[i].b = backing[off+h : off+2*h : off+2*h]
-		data[i].fw = make([]uint16, 0, maxEnrichedActive)
-		data[i].fb = make([]uint16, 0, maxEnrichedActive)
+		data[i].fw = make([]uint32, 0, maxEnrichedActive)
+		data[i].fb = make([]uint32, 0, maxEnrichedActive)
 	}
 	const dcap = 4 * maxEnrichedActive // generous: base deltas + affected-attacker edges
 	st := &EnrichedStack{
 		net: n, data: data, backing: backing, counts: make([]int16, n.InputDim), sc: n.newScratch(),
-		dsubW: make([]uint16, 0, dcap), daddW: make([]uint16, 0, dcap),
-		dsubB: make([]uint16, 0, dcap), daddB: make([]uint16, 0, dcap),
+		dsubW: make([]uint32, 0, dcap), daddW: make([]uint32, 0, dcap),
+		dsubB: make([]uint32, 0, dcap), daddB: make([]uint32, 0, dcap),
 		pendMove: make([]chess.Move, slots), dirty: make([]bool, slots),
 		pSubW: makeSliceBufs(slots, dcap), pAddW: makeSliceBufs(slots, dcap),
 		pSubB: makeSliceBufs(slots, dcap), pAddB: makeSliceBufs(slots, dcap),
 		accW: make([]int16, h), accB: make([]int16, h),
-		batchSub: make([]uint16, 0, dcap), batchAdd: make([]uint16, 0, dcap),
+		batchSub: make([]uint32, 0, dcap), batchAdd: make([]uint32, 0, dcap),
 	}
 	// Finny-table cache: one half + feature list per (perspective, kingBucket,mirrorHalf).
 	// Small (2 × 32 × (H int16 + ≤288 uint16)); allocate eagerly, invalid until first written.
 	for c := 0; c < 2; c++ {
 		for b := 0; b < NumKingRefreshKeys; b++ {
 			st.finny[c][b].half = make([]int16, h)
-			st.finny[c][b].features = make([]uint16, 0, maxEnrichedActive)
+			st.finny[c][b].features = make([]uint32, 0, maxEnrichedActive)
 		}
 	}
 	return st
 }
 
-// makeSliceBufs allocates n reusable uint16 buffers of the given capacity (the
-// per-slot deferred delta lists for the lazy accumulator path).
-func makeSliceBufs(n, capElems int) [][]uint16 {
-	bufs := make([][]uint16, n)
+// makeSliceBufs allocates n reusable uint32 feature buffers of the given capacity
+// (the per-slot deferred delta lists for the lazy accumulator path).
+func makeSliceBufs(n, capElems int) [][]uint32 {
+	bufs := make([][]uint32, n)
 	for i := range bufs {
-		bufs[i] = make([]uint16, 0, capElems)
+		bufs[i] = make([]uint32, 0, capElems)
 	}
 	return bufs
 }
@@ -193,7 +193,7 @@ func (st *EnrichedStack) ensure(k int) {
 // the count-array scratch: features dropped from parent are subtracted, features
 // gained in child are added, with multiplicity. O(len(parent)+len(child)); the
 // counts slice is left all-zero for the next call.
-func (st *EnrichedStack) applyDiff(acc []int16, parent, child []uint16) {
+func (st *EnrichedStack) applyDiff(acc []int16, parent, child []uint32) {
 	net := st.net
 	if net.batchApply && net.int8FT {
 		// Batched threat-column apply (profile-driven): base-768 columns (few per
@@ -246,7 +246,7 @@ func (st *EnrichedStack) applyDiff(acc []int16, parent, child []uint16) {
 		c[f]++
 	}
 	pf := net.prefetchCols
-	apply := func(list []uint16) {
+	apply := func(list []uint32) {
 		for i := 0; i < len(list); i++ {
 			f := list[i]
 			// Prefetch the next feature's weight column while this one applies —

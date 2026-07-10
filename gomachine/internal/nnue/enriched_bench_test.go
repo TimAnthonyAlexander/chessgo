@@ -77,7 +77,7 @@ func BenchmarkEnrichedFeaturesOnly(b *testing.B) {
 	b.ResetTimer()
 	var sink int
 	for i := 0; i < b.N; i++ {
-		var buf [maxEnrichedActive]uint16
+		var buf [maxEnrichedActive]uint32
 		f := appendEnrichedFeatures(buf[:0], ps[i%len(ps)], chess.White)
 		sink += len(f)
 	}

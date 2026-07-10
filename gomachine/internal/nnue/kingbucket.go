@@ -132,7 +132,7 @@ func kingMoveNeedsRefresh(pos *chess.Position, m chess.Move) bool {
 // Same as AppendFeatures but shifted into this perspective's king-bucket copy of the
 // 768 block and reflected when the king is on the e–h half. Used by the enriched
 // feature set only (v6/MultiNet keep the plain AppendFeatures).
-func appendBucketedBase(dst []uint16, pos *chess.Position, persp chess.Color) []uint16 {
+func appendBucketedBase(dst []uint32, pos *chess.Position, persp chess.Color) []uint32 {
 	ksq := uint16(pos.KingSquare(persp))
 	if persp == chess.Black {
 		ksq ^= 56
@@ -157,7 +157,7 @@ func appendBucketedBase(dst []uint16, pos *chess.Position, persp chess.Color) []
 				rsq ^= 56
 			}
 			rsq ^= mir
-			dst = append(dst, off+base+rsq)
+			dst = append(dst, uint32(off+base+rsq))
 		}
 	}
 	return dst

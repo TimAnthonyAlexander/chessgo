@@ -139,7 +139,7 @@ func subColI8SIMD(dst []int16, src []int8) {
 // Bit-exact to the scalar reference (int16 add/sub is associative/commutative under
 // wraparound). Same 16-byte int8 load / low-8 widen as addColI8SIMD (guarded by
 // i+16<=h, so a column read never runs off the end of w0t8); ≤15-tail is scalar.
-func applyThreatBatchSIMD(acc []int16, w0t8 []int8, h int, subF, addF []uint16, off int) {
+func applyThreatBatchSIMD(acc []int16, w0t8 []int8, h int, subF, addF []uint32, off int) {
 	i := 0
 	for ; i+16 <= h; i += 8 {
 		d := archsimd.LoadInt16x8(acc[i : i+8])

@@ -136,7 +136,7 @@ func subColI8SIMD(dst []int16, src []int8) {
 // subColI8/addColI8 into a single pass — the profile-driven applyDiff fast path.
 // Bit-exact to applyThreatBatchScalar (int16 add/sub is associative/commutative
 // under wraparound). i+32<=h guards each column read from running off w0t8.
-func applyThreatBatchSIMD(acc []int16, w0t8 []int8, h int, subF, addF []uint16, off int) {
+func applyThreatBatchSIMD(acc []int16, w0t8 []int8, h int, subF, addF []uint32, off int) {
 	i := 0
 	for ; i+32 <= h; i += 32 {
 		d := archsimd.LoadInt16x32Slice(acc[i : i+32])

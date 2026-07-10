@@ -17,7 +17,7 @@ import (
 // which occupied square" instead of making it re-derive attacks from raw piece
 // placement. Arch (trained by examples/chessgo_enriched.rs in bullet, QAT):
 //
-//	(768 psq + 9216 threats = 9984)  --FT--> H  x2
+//	(PsqSize psq + SFThreatDim threats)  --FT--> H  x2
 //	  --CReLU--> pairwise-mul   [H/2 per perspective, concat -> H]
 //	  --L1(D2)--> SCReLU --L2(D3)--> SCReLU --> 1        x NB output buckets
 //
@@ -176,9 +176,15 @@ type EnrichedNet struct {
 	finny bool
 }
 
-// ThreatBlock is the threat feature-block size: (attacker 0..11, victim 0..11,
-// victimSquare 0..63) = 12*12*64. MUST match examples/chessgo_enriched.rs.
-const ThreatBlock = 12 * 12 * 64 // 9216
+// ThreatBlock is the threat feature-block size. It is the SF18-style "Full Threat
+// Inputs" index space (threats_sf.go): a feature encodes an ORDERED (from→to)
+// attack edge WITHIN the attacker's real attack geometry — (attacker rel-piece,
+// victim type+color slot, edge-rank of to in from's oriented attack set) — so the
+// attacker's SQUARE is captured, not just the victim square. The edge-rank collapses
+// the 64×64 from×to space to the piece's reachable-square count, and victim-type
+// exclusions + same-type dedup are applied. Total = SFThreatDim (79856). MUST match
+// the Rust map_features (pending port — see docs/open_tasks/threats-richness-build.md).
+const ThreatBlock = SFThreatDim // 79856
 
 // maxEnrichedActive bounds active features per perspective (≤32 pieces + threat
 // edges). Generous; a too-small stack buffer would silently truncate.
@@ -332,52 +338,56 @@ func (n *EnrichedNet) quantizeLeanTail() int {
 }
 
 // appendEnrichedFeatures appends the active feature indices of pos from persp's
-// point of view: the base 768 (one per piece) followed by the threat features
-// (one per attacker -> occupied-square edge). MUST emit byte-identical indices to
-// the Rust map_features in examples/chessgo_enriched.rs:
+// point of view: the king-bucketed base (one per piece) followed by the SF18-style
+// threat features (one per attacker -> occupied-square edge that survives the
+// victim-exclusion / same-type-dedup filter, see threats_sf.go). The threat index is
+// computed by sfThreatIndex from the PERSPECTIVE-ORIENTED attacker and victim squares
+// (^56 for black, then ^mir), and offset by PsqSize into the shared feature list.
 //
-//	a   = relColor(attacker)*6 + type(attacker)
-//	v   = relColor(attacked)*6 + type(attacked)
-//	tsq = orient(attackedSq)                       // persp==White ? sq : sq^56
-//	idx = 768 + (a*12 + v)*64 + tsq
-//
-// relColor is 0 for persp's own pieces, 1 for the enemy's — exactly the base-768
-// convention. The threat geometry is computed on the real board (orientation-
-// independent); only the index encoding is reoriented per perspective.
-func appendEnrichedFeatures(dst []uint16, pos *chess.Position, persp chess.Color) []uint16 {
-	// base 768, king-bucketed + mirrored (bucket·768 + psqIndex, from persp's own king).
+// relColor (aRel/vRel) is 0 for persp's own pieces, 1 for the enemy's. The threat
+// GEOMETRY is computed on the real board (real-occupancy PseudoAttacks & occ); only
+// the endpoints are reoriented before indexing. Orienting BOTH endpoints by the same
+// transform keeps the real edge a valid edge in sfRelAttack (see the orientation note
+// in threats_sf.go), so sfThreatIndex's edge-rank lookup is valid for every piece.
+func appendEnrichedFeatures(dst []uint32, pos *chess.Position, persp chess.Color) []uint32 {
+	// base, king-bucketed + mirrored (bucket·768 + psqIndex, from persp's own king).
 	dst = appendBucketedBase(dst, pos, persp)
 
 	occ := pos.Occupied()
 	flip := persp == chess.Black
 	mir := perspMirror(pos, persp) // horizontal mirror mask (7/0) for this perspective
+	orient := func(s chess.Square) int {
+		r := uint16(s)
+		if flip {
+			r ^= 56
+		}
+		r ^= mir
+		return int(r)
+	}
 	for pc := chess.WhitePawn; pc <= chess.BlackKing; pc++ {
 		bb := pos.PieceBB(pc)
 		if bb == 0 {
 			continue
 		}
-		var aRel uint16
+		atkType := pc.Type()
+		aRel := 0
 		if pc.Color() != persp {
 			aRel = 1
 		}
-		a := aRel*6 + uint16(pc.Type())
 		for bb != 0 {
 			sq := bb.PopLSB()
+			rfrom := orient(sq)
 			targets := chess.PseudoAttacks(pc, sq, occ) & occ
 			for targets != 0 {
 				tsq := targets.PopLSB()
 				victim := pos.PieceOn(tsq)
-				var vRel uint16
+				vRel := 0
 				if victim.Color() != persp {
 					vRel = 1
 				}
-				v := vRel*6 + uint16(victim.Type())
-				rtsq := uint16(tsq)
-				if flip {
-					rtsq ^= 56
+				if idx, ok := sfThreatIndex(aRel, atkType, vRel, victim.Type(), rfrom, orient(tsq)); ok {
+					dst = append(dst, uint32(PsqSize)+uint32(idx))
 				}
-				rtsq ^= mir
-				dst = append(dst, uint16(PsqSize)+(a*12+v)*64+rtsq)
 			}
 		}
 	}
@@ -392,45 +402,50 @@ func appendEnrichedFeatures(dst []uint16, pos *chess.Position, persp chess.Color
 // base 768 stays two AppendFeatures calls (cheap piece-placement). Output is
 // byte-identical (per perspective) to appendEnrichedFeatures — the NNUE_ASSERT gate
 // (which rebuilds via appendEnrichedFeatures) verifies this.
-func appendEnrichedFeaturesBoth(dstW, dstB []uint16, pos *chess.Position) ([]uint16, []uint16) {
+func appendEnrichedFeaturesBoth(dstW, dstB []uint32, pos *chess.Position) ([]uint32, []uint32) {
 	dstW = appendBucketedBase(dstW, pos, chess.White)
 	dstB = appendBucketedBase(dstB, pos, chess.Black)
 
 	occ := pos.Occupied()
 	mirW := perspMirror(pos, chess.White) // horizontal mirror mask per perspective
 	mirB := perspMirror(pos, chess.Black)
+	orientW := func(s chess.Square) int { return int(uint16(s) ^ mirW) }
+	orientB := func(s chess.Square) int { return int((uint16(s) ^ 56) ^ mirB) }
 	for pc := chess.WhitePawn; pc <= chess.BlackKing; pc++ {
 		bb := pos.PieceBB(pc)
 		if bb == 0 {
 			continue
 		}
-		var aRelW, aRelB uint16
+		atkType := pc.Type()
+		aRelW, aRelB := 0, 0
 		if pc.Color() != chess.White {
 			aRelW = 1
 		}
 		if pc.Color() != chess.Black {
 			aRelB = 1
 		}
-		aW := aRelW*6 + uint16(pc.Type())
-		aB := aRelB*6 + uint16(pc.Type())
 		for bb != 0 {
 			sq := bb.PopLSB()
+			rfromW := orientW(sq)
+			rfromB := orientB(sq)
 			targets := chess.PseudoAttacks(pc, sq, occ) & occ
 			for targets != 0 {
 				tsq := targets.PopLSB()
 				victim := pos.PieceOn(tsq)
-				var vRelW, vRelB uint16
+				vicType := victim.Type()
+				vRelW, vRelB := 0, 0
 				if victim.Color() != chess.White {
 					vRelW = 1
 				}
 				if victim.Color() != chess.Black {
 					vRelB = 1
 				}
-				vW := vRelW*6 + uint16(victim.Type())
-				vB := vRelB*6 + uint16(victim.Type())
-				t := uint16(tsq)
-				dstW = append(dstW, uint16(PsqSize)+(aW*12+vW)*64+(t^mirW))
-				dstB = append(dstB, uint16(PsqSize)+(aB*12+vB)*64+((t^56)^mirB))
+				if idx, ok := sfThreatIndex(aRelW, atkType, vRelW, vicType, rfromW, orientW(tsq)); ok {
+					dstW = append(dstW, uint32(PsqSize)+uint32(idx))
+				}
+				if idx, ok := sfThreatIndex(aRelB, atkType, vRelB, vicType, rfromB, orientB(tsq)); ok {
+					dstB = append(dstB, uint32(PsqSize)+uint32(idx))
+				}
 			}
 		}
 	}
@@ -467,7 +482,7 @@ func (n *EnrichedNet) ftSub(acc []int16, f int) {
 // king-bucket refresh (rebuild only the moving side, delta the opponent).
 func (n *EnrichedNet) buildAccHalf(dst []int16, pos *chess.Position, persp chess.Color) {
 	copy(dst, n.B0i)
-	var buf [maxEnrichedActive]uint16
+	var buf [maxEnrichedActive]uint32
 	for _, f := range appendEnrichedFeatures(buf[:0], pos, persp) {
 		n.ftAdd(dst, int(f))
 	}

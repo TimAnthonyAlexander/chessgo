@@ -38,30 +38,35 @@ import "github.com/timanthonyalexander/gomachine/internal/chess"
 // appendAttackerEdges appends the threat feature indices for the piece on sq
 // acting as ATTACKER, from persp's frame, computed against occupancy occ. It emits
 // byte-identical indices to appendEnrichedFeatures' inner loop (enriched.go).
-func appendAttackerEdges(dst []uint16, pos *chess.Position, sq chess.Square, occ chess.Bitboard, persp chess.Color) []uint16 {
+func appendAttackerEdges(dst []uint32, pos *chess.Position, sq chess.Square, occ chess.Bitboard, persp chess.Color) []uint32 {
 	pc := pos.PieceOn(sq)
-	var aRel uint16
+	atkType := pc.Type()
+	aRel := 0
 	if pc.Color() != persp {
 		aRel = 1
 	}
-	a := aRel*6 + uint16(pc.Type())
 	flip := persp == chess.Black
 	mir := perspMirror(pos, persp) // constant across a non-refresh move (king-half unchanged)
+	orient := func(s chess.Square) int {
+		r := uint16(s)
+		if flip {
+			r ^= 56
+		}
+		r ^= mir
+		return int(r)
+	}
+	rfrom := orient(sq)
 	targets := chess.PseudoAttacks(pc, sq, occ) & occ
 	for targets != 0 {
 		tsq := targets.PopLSB()
 		victim := pos.PieceOn(tsq)
-		var vRel uint16
+		vRel := 0
 		if victim.Color() != persp {
 			vRel = 1
 		}
-		v := vRel*6 + uint16(victim.Type())
-		rtsq := uint16(tsq)
-		if flip {
-			rtsq ^= 56
+		if idx, ok := sfThreatIndex(aRel, atkType, vRel, victim.Type(), rfrom, orient(tsq)); ok {
+			dst = append(dst, uint32(PsqSize)+uint32(idx))
 		}
-		rtsq ^= mir
-		dst = append(dst, uint16(PsqSize)+(a*12+v)*64+rtsq)
 	}
 	return dst
 }
@@ -204,7 +209,7 @@ func (st *EnrichedStack) finnyRefreshHalf(dstHalf []int16, pos *chess.Position, 
 		st.finnyHitChanged++
 
 		// Slow path: board changed — fall back to feature-list diff.
-		var buf [maxEnrichedActive]uint16
+		var buf [maxEnrichedActive]uint32
 		cur := appendEnrichedFeatures(buf[:0], pos, persp)
 		copy(dstHalf, e.half)
 		st.applyDiff(dstHalf, e.features, cur)
@@ -228,7 +233,7 @@ func (st *EnrichedStack) finnyRefreshHalf(dstHalf []int16, pos *chess.Position, 
 // Features emits features in a fixed order for a given board, so equal sequences mean the
 // accumulator target is unchanged (the diff is a no-op) — a differing sequence flags the
 // "cache hit with a changed board" case.
-func sliceEqU16(a, b []uint16) bool {
+func sliceEqU16(a, b []uint32) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -246,7 +251,7 @@ func sliceEqU16(a, b []uint16) bool {
 // push time while the accumulator apply is deferred (lazy path). The returned slices
 // are backed by st's reusable scratch — copy them out (lazy) or apply them
 // immediately (eager) before the next call overwrites the scratch.
-func (st *EnrichedStack) computeDelta(pos *chess.Position, m chess.Move) (subW, addW, subB, addB []uint16) {
+func (st *EnrichedStack) computeDelta(pos *chess.Position, m chess.Move) (subW, addW, subB, addB []uint32) {
 	child := *pos
 	var u chess.Undo
 	child.DoMove(m, &u)
@@ -284,14 +289,14 @@ func (st *EnrichedStack) computeDelta(pos *chess.Position, m chess.Move) (subW, 
 		op := pos.PieceOn(s)
 		np := child.PieceOn(s)
 		if op != chess.NoPiece {
-			subW = append(subW, offW+FeatureIndex(chess.White, op, s^mirW))
-			subB = append(subB, offB+FeatureIndex(chess.Black, op, s^mirB))
+			subW = append(subW, uint32(offW+FeatureIndex(chess.White, op, s^mirW)))
+			subB = append(subB, uint32(offB+FeatureIndex(chess.Black, op, s^mirB)))
 			subW = appendAttackerEdges(subW, pos, s, oldOcc, chess.White)
 			subB = appendAttackerEdges(subB, pos, s, oldOcc, chess.Black)
 		}
 		if np != chess.NoPiece {
-			addW = append(addW, offW+FeatureIndex(chess.White, np, s^mirW))
-			addB = append(addB, offB+FeatureIndex(chess.Black, np, s^mirB))
+			addW = append(addW, uint32(offW+FeatureIndex(chess.White, np, s^mirW)))
+			addB = append(addB, uint32(offB+FeatureIndex(chess.Black, np, s^mirB)))
 			addW = appendAttackerEdges(addW, &child, s, newOcc, chess.White)
 			addB = appendAttackerEdges(addB, &child, s, newOcc, chess.Black)
 		}
@@ -314,7 +319,7 @@ func (st *EnrichedStack) computeDelta(pos *chess.Position, m chess.Move) (subW, 
 // accumulator, then apply the sub/add feature deltas. This is the deferrable half
 // (2 KB copy + scattered column adds) — skipped entirely for lazy subtrees that
 // never evaluate. Requires srcIdx already materialized.
-func (st *EnrichedStack) applyDelta(dstIdx, srcIdx int, subW, addW, subB, addB []uint16) {
+func (st *EnrichedStack) applyDelta(dstIdx, srcIdx int, subW, addW, subB, addB []uint32) {
 	src := &st.data[srcIdx]
 	dst := &st.data[dstIdx]
 	copy(dst.w, src.w)
@@ -341,27 +346,30 @@ func (st *EnrichedStack) applyDelta(dstIdx, srcIdx int, subW, addW, subB, addB [
 // newly-appeared piece) edges uniformly; targets on masked lines that did not change
 // appear in both the old and new sets with the same victim and cancel.
 func appendChangedEdges(
-	subW, addW, subB, addB []uint16,
+	subW, addW, subB, addB []uint32,
 	oldPos, child *chess.Position, s chess.Square,
 	oldOcc, newOcc, D chess.Bitboard,
-) ([]uint16, []uint16, []uint16, []uint16) {
+) ([]uint32, []uint32, []uint32, []uint32) {
 	pc := oldPos.PieceOn(s) // == child.PieceOn(s) since s ∉ D
 	pt := pc.Type()
 
-	var aRelW, aRelB uint16
+	aRelW, aRelB := 0, 0
 	if pc.Color() != chess.White {
 		aRelW = 1
 	}
 	if pc.Color() != chess.Black {
 		aRelB = 1
 	}
-	aW := aRelW*6 + uint16(pt)
-	aB := aRelB*6 + uint16(pt)
 
 	// Mirror masks — this runs only for non-king moves (computeDelta), so neither king
-	// moved and mirW/mirB are identical in oldPos and child.
+	// moved and mirW/mirB are identical in oldPos and child. Orient the (fixed) attacker
+	// square s per perspective, exactly as appendEnrichedFeatures does.
 	mirW := perspMirror(oldPos, chess.White)
 	mirB := perspMirror(oldPos, chess.Black)
+	orientW := func(x chess.Square) int { return int(uint16(x) ^ mirW) }
+	orientB := func(x chess.Square) int { return int((uint16(x) ^ 56) ^ mirB) }
+	rfromW := orientW(s)
+	rfromB := orientB(s)
 
 	var oldT, newT chess.Bitboard
 	if pt == chess.Bishop || pt == chess.Rook || pt == chess.Queen {
@@ -381,34 +389,38 @@ func appendChangedEdges(
 	for oldT != 0 {
 		t := oldT.PopLSB()
 		victim := oldPos.PieceOn(t)
-		var vRelW, vRelB uint16
+		vicType := victim.Type()
+		vRelW, vRelB := 0, 0
 		if victim.Color() != chess.White {
 			vRelW = 1
 		}
 		if victim.Color() != chess.Black {
 			vRelB = 1
 		}
-		vW := vRelW*6 + uint16(victim.Type())
-		vB := vRelB*6 + uint16(victim.Type())
-		tw := uint16(t)
-		subW = append(subW, uint16(PsqSize)+(aW*12+vW)*64+(tw^mirW))
-		subB = append(subB, uint16(PsqSize)+(aB*12+vB)*64+((tw^56)^mirB))
+		if idx, ok := sfThreatIndex(aRelW, pt, vRelW, vicType, rfromW, orientW(t)); ok {
+			subW = append(subW, uint32(PsqSize)+uint32(idx))
+		}
+		if idx, ok := sfThreatIndex(aRelB, pt, vRelB, vicType, rfromB, orientB(t)); ok {
+			subB = append(subB, uint32(PsqSize)+uint32(idx))
+		}
 	}
 	for newT != 0 {
 		t := newT.PopLSB()
 		victim := child.PieceOn(t)
-		var vRelW, vRelB uint16
+		vicType := victim.Type()
+		vRelW, vRelB := 0, 0
 		if victim.Color() != chess.White {
 			vRelW = 1
 		}
 		if victim.Color() != chess.Black {
 			vRelB = 1
 		}
-		vW := vRelW*6 + uint16(victim.Type())
-		vB := vRelB*6 + uint16(victim.Type())
-		tw := uint16(t)
-		addW = append(addW, uint16(PsqSize)+(aW*12+vW)*64+(tw^mirW))
-		addB = append(addB, uint16(PsqSize)+(aB*12+vB)*64+((tw^56)^mirB))
+		if idx, ok := sfThreatIndex(aRelW, pt, vRelW, vicType, rfromW, orientW(t)); ok {
+			addW = append(addW, uint32(PsqSize)+uint32(idx))
+		}
+		if idx, ok := sfThreatIndex(aRelB, pt, vRelB, vicType, rfromB, orientB(t)); ok {
+			addB = append(addB, uint32(PsqSize)+uint32(idx))
+		}
 	}
 	return subW, addW, subB, addB
 }
@@ -451,12 +463,12 @@ func (st *EnrichedStack) pushMoveAwareEnumerate(pos *chess.Position, m chess.Mov
 			continue
 		}
 		if op != chess.NoPiece {
-			subW = append(subW, offW+FeatureIndex(chess.White, op, s^mirW))
-			subB = append(subB, offB+FeatureIndex(chess.Black, op, s^mirB))
+			subW = append(subW, uint32(offW+FeatureIndex(chess.White, op, s^mirW)))
+			subB = append(subB, uint32(offB+FeatureIndex(chess.Black, op, s^mirB)))
 		}
 		if np != chess.NoPiece {
-			addW = append(addW, offW+FeatureIndex(chess.White, np, s^mirW))
-			addB = append(addB, offB+FeatureIndex(chess.Black, np, s^mirB))
+			addW = append(addW, uint32(offW+FeatureIndex(chess.White, np, s^mirW)))
+			addB = append(addB, uint32(offB+FeatureIndex(chess.Black, np, s^mirB)))
 		}
 		affected |= s.BB()
 		affected |= pos.AttackersTo(s, oldOcc)

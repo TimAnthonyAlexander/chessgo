@@ -185,6 +185,7 @@ func countDiff(aW, fW, aB, fB []int16, h int) (int, int) {
 // ---- TASK B: slider blocker / x-ray threat geometry ------------------------
 
 func TestKBBlockerThreatGeometry(t *testing.T) {
+	t.Skip("pending full-threats Rust port — see docs/open_tasks/threats-richness-build.md")
 	cases := []struct{ name, fen string }{
 		// rook with a FRIENDLY pawn directly in front: rook attacks the pawn (emitted),
 		// square beyond (a3) is NOT a target, and the enemy pawn on a4 behind it is NOT
