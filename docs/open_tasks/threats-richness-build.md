@@ -99,6 +99,54 @@ d/e boundary (mirror bit flips) — far cheaper than HalfKA's any-king-move refr
   into the full feature, so rare edges borrow gradient. Mirror bullet's base factoriser merge.
 - `kb_verify_test.go` / `kb_verify2_test.go`: update the Go↔Rust index pin in lockstep.
 
+### Trainer factoriser (bullet recipe — owner-specified 2026-07-10)
+
+Three virtual (shared) blocks, summed into each real edge during training, **coalesced
+→ real at export** (0 inference params). Rel-piece `a,v` = relColor·6+type (0..11):
+
+| Factor | Formula | Dim | Role |
+|---|---|---|---|
+| **V1 victim marginal** | `(a·12 + v)·64 + victimSq` | 9,216 | = our current lean feature → geometry net is a strict superset; rare edges fall back to what works. |
+| **V2 attacker marginal** | `(a·12 + v)·64 + attackerSq` | 9,216 | the NEW from-square info; the only shared prior on the from-axis → rescues the sparse tail (queen 1,456 edges/attacker). |
+| **V3 pair bias** | `a·12 + v` | 144 | absorbs material/threat-class mean so V1/V2 learn residuals. |
+
+Total virtual 18,576, folded at export. **Do NOT go richer** (ray-dir/delta-offset are
+implied by V2|V1 and compete with real weights) or **leaner** (V1-alone = no pooling on
+the from-axis = paying 79,856 features to learn geometry unregularized).
+
+**Gotchas (owner):**
+1. **Mirror inside the factor index** — V1/V2's victimSq/attackerSq MUST pass through the
+   same `s ^ orient ^ mir` as the real index, or shared weights split across mirror halves
+   (loses the §31 2× pooling).
+2. **Dedup mirrored in the factor** — same-type mutual pairs emit ONE feature; if real
+   dedups and virtual doesn't, the coarse weight gets 2× gradient. Assert
+   `len(realIdx) == len(virtualIdx)/nFactors` in the NNUE_ASSERT gate.
+3. **int8 threat FT at TRAIN time (QAT), not PTQ** — 79,856·512·2B ≈ 81.7 MB int16; ship
+   int8. Do `faux_quantise` on the threat FT rows IN the bullet recipe (avoids the §16.2
+   −150 Elo PTQ cliff). Our `QuantizeFTInt8` then becomes near-lossless on this net.
+4. **Fold + verify before SPRT** — `coalesce` virtual→real at export, run the byte-exact
+   Go-vs-Rust replica (`kb_verify` pattern) on the FOLDED net (a wrong fold is silent).
+
+### SF trunk finding (2026-07-10, from ~/sf18-arm/src/nnue/nnue_architecture.h)
+
+`TransformedFeatureDimensionsBig = 1024` in the SF18 checkout (bignet nn-c288c895ea92) —
+so the **3072→1024 L1 cut landed at v10, WITH threats**: threats carry ~3× the trunk
+width's knowledge. Implication: our **512 trunk may be too wide** for a real-geometry
+threats net; revisit trunk width (and the L2 16→32 shape, which we already run) after the
+320sb read. `L2Big=15(+1), L3Big=32`; master v13 doubled L2 to 31(+1).
+
+### The 320sb A/B run (owner-specified)
+
+- Arch: `(12,288 base + 79,856 threats) → 512×2 → pairwise → 16 → 32 → 1`, NB=8, mirror-KB.
+- Factoriser V1+V2+V3, folded at export. Data: test80 Jan–Apr, efs28, ConstantWDL 0.6
+  (hold every other variable — this is the ARCH A/B, not a pipeline run).
+- **Gate: movetime 100 ms vs `ml640.bin` DIRECTLY, ≥250 pairs** (§35.3 — no chaining through
+  −560 or the lean net). Expected: FN wash-to-positive, MT positive. If MT flat + FN
+  negative → tail starving / V2 dead → check the FOLD, don't add factors.
+- Movetime cost budget: **~1–2% NPS** (same active edges/cap/churn/applyDiff; only the index
+  arithmetic changes — 3 table loads vs 1 madd, on the enumeration path §30.4 proved
+  uop-bound at 5.5–5.9 IPC), NOT SF's 20-25% (theirs was 0→threats).
+
 ### Gates
 - `go test ./internal/nnue/` (incl. new LUT unit tests + kb_verify pin), `NNUE_ASSERT` clean
   (accumulator incremental == scratch), `perft` green, `go test -race` not required (TT only).
