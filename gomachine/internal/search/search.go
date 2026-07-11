@@ -1391,6 +1391,19 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 		impInt = 1
 	}
 
+	// TTRefinesEval (SF search.cpp:730-732): when the TT bound is consistent, the
+	// stored search score is a sharper position estimate than the static eval — use
+	// it as the `staticEval` that RFP / null-move / futility key off. Placed AFTER the
+	// improving computation (which keeps using the un-refined corrhist-corrected eval,
+	// matching SF's ss->staticEval vs eval split) and s.staticEvals[ply] is left as the
+	// corrected value, so future plies' improving is unaffected. Off-path byte-identical.
+	if s.params.TTRefinesEval && !inCheck && ttHit &&
+		((ttFlag == ttLower && ttScore > staticEval) ||
+			(ttFlag == ttUpper && ttScore < staticEval) ||
+			ttFlag == ttExact) {
+		staticEval = ttScore
+	}
+
 	// Razoring: at a very shallow non-PV node, if the static eval plus a depth-scaled
 	// margin still can't reach alpha, drop straight to quiescence; if qsearch confirms
 	// the score is below alpha, fail low immediately. Guarded off the mate band.

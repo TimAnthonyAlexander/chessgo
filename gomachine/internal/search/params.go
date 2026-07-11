@@ -109,6 +109,7 @@ type Params struct {
 	SEEReuseQS       bool // qsearch SEE-prune reuse: read the SEE sign already encoded in the ordering score (captureScore tiers SEE<0 as scoreLosingCapture) instead of recomputing pos.SEE(m) in the qsearch loop. Bit-exact / NODE-COUNT-IDENTICAL (every move reaching the prune routes through captureScore, which computed the SAME pos.SEE at the SAME position; the tier gap is ~1M ≫ mvvlva+capthist so the sign reads cleanly at a mid-gap threshold). Pure NPS lever — dedups the double SEE per capture. DEFAULT OFF — under SPRT.
 	TTCutoffNonPV   bool // SF-divergence fix (SF search.cpp:760): gate the early TT cutoff to non-PV nodes — keep probing at PV nodes for move/eval/singular data, only skip the early RETURN there. DEFAULT OFF — byte-identical. Under SPRT.
 	NMPNonPV        bool // SF-divergence fix (SF search.cpp:893): gate null-move pruning to non-PV nodes (SF only does NMP at cut nodes, never PV). DEFAULT OFF — byte-identical. Under SPRT.
+	TTRefinesEval   bool // SF-divergence fix (SF search.cpp:730-732): at a ttHit, when the stored bound is consistent (ttLower && ttScore>eval, ttUpper && ttScore<eval, or ttExact) use ttScore as the pruning `staticEval` that RFP/null-move/futility key off (NOT the corrhist-corrected value kept in s.staticEvals — improving still keys off the un-refined eval, matching SF). DEFAULT OFF — byte-identical. Under SPRT.
 
 	// LMR / history / RFP tunables — promoted from hardcoded consts so SPSA can
 	// re-tune them v12-native (docs/open_tasks/spsa-margins.md: "the untapped leverage
@@ -501,6 +502,7 @@ func DefaultParams() Params {
 		SEEReuseQS:       true, // qsearch double-SEE dedup: reuse the SEE sign from the ordering score. Node-identical (see field comment). Bit-exact +2.78% NPS on coalla KB net (§30.2) — shipped default-on.
 		TTCutoffNonPV:   false, // SF search.cpp:760 — gate early TT cutoff to non-PV; DEFAULT OFF (byte-identical)
 		NMPNonPV:        false, // SF search.cpp:893 — gate NMP to non-PV; DEFAULT OFF (byte-identical)
+		TTRefinesEval:   false, // SF search.cpp:730-732 — TT value sharpens pruning eval; DEFAULT OFF (byte-identical)
 
 		// Aggression style knob: 50 = neutral. At 50 the term is never evaluated, so
 		// the default engine is byte-identical to before this flag existed. Non-50 is

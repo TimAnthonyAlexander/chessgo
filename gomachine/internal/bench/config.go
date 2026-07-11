@@ -549,6 +549,13 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.NMPNonPV = b
+		case "ttrefineseval", "ttrefeval":
+			// SF fix (search.cpp:730-732): TT value sharpens the pruning static eval.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.TTRefinesEval = b
 		case "lmrcutnode", "lmrcut":
 			b, err := parseBool(val)
 			if err != nil {
@@ -1065,6 +1072,9 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.NMPNonPV != patch.NMPNonPV {
 		diffs = append(diffs, fmt.Sprintf("nmpnonpv: %s→%s", onoff(base.NMPNonPV), onoff(patch.NMPNonPV)))
+	}
+	if base.TTRefinesEval != patch.TTRefinesEval {
+		diffs = append(diffs, fmt.Sprintf("ttrefineseval: %s→%s", onoff(base.TTRefinesEval), onoff(patch.TTRefinesEval)))
 	}
 	if base.LMRCutnode != patch.LMRCutnode {
 		diffs = append(diffs, fmt.Sprintf("lmrcutnode: %s→%s", onoff(base.LMRCutnode), onoff(patch.LMRCutnode)))
