@@ -231,14 +231,14 @@ type Result struct {
 
 // Searcher holds reusable search state (TT, killers, history).
 type Searcher struct {
-	tt      *TT
-	params  Params
-	ec      eval.Config // evaluation config derived from params
+	tt     *TT
+	params Params
+	ec     eval.Config // evaluation config derived from params
 	// lmr is the late-move reduction table this searcher reads (log·log surface). It
 	// points at the shared package default (lmrTable) when the LMR params are default,
 	// or a per-searcher table built from Params.LMRBaseX10k/LMRDivX10k otherwise. Read-
 	// only after construction, so it is safe to share across Lazy SMP workers.
-	lmr     *[64][64]int
+	lmr *[64][64]int
 	// lmr1024 is the ×1024 fixed-point LMR table read only by the default-off
 	// Params.LMRFixedPoint path; nil/unused on the integer OFF path. Read-only after
 	// construction, so it is safe to share across Lazy SMP workers.
@@ -344,6 +344,17 @@ type Searcher struct {
 	// conservative LMR instead of LMR2, so over-reduced alternatives don't pollute
 	// the singular decision. Save/restore around the verify call so nesting is safe.
 	inSingularVerify bool
+
+	// capBuf / quietBuf are the staged move-picker's per-ply scratch buffers
+	// (Params.DeferredQuiets only). scoreCaptures fills capBuf[ply] with the
+	// scored captures/promotions; stage 3 fills quietBuf[ply] with the scored
+	// quiets. Per-ply indexing means recursion never clobbers a live buffer, and
+	// Searcher ownership means no per-node heap allocation (the alloc that made
+	// the deferred path slower with no ordering win). Lazily allocated on the
+	// first deferred node so the OFF path (the shipping default) never touches
+	// them — they stay two nil pointers and cost nothing.
+	capBuf   *[maxPly][256]capEntry
+	quietBuf *[maxPly][256]capEntry
 }
 
 // DbgNullMoves and DbgQNodes report how many null-move and quiescence nodes the
@@ -353,9 +364,9 @@ func (s *Searcher) DbgQNodes() uint64    { return s.dbgQNodes }
 
 // DbgSingular and DbgMultiCut report how many singular extensions and singular
 // multi-cuts the last search performed (test/diagnostic only).
-func (s *Searcher) DbgSingular() uint64 { return s.dbgSingular }
+func (s *Searcher) DbgSingular() uint64  { return s.dbgSingular }
 func (s *Searcher) DbgTTMFFires() uint64 { return s.dbgTTMFFires }
-func (s *Searcher) DbgMultiCut() uint64 { return s.dbgMultiCut }
+func (s *Searcher) DbgMultiCut() uint64  { return s.dbgMultiCut }
 
 // DbgDoubleExt reports how many double extensions the last search applied
 // (Params.DoubleExt; test/diagnostic only).
@@ -1611,6 +1622,12 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 
 	if s.params.DeferredQuiets {
 		// === Staged move picking (Stormphrax/SF pattern) ===
+		// Lazily allocate the per-ply scratch buffers on the first deferred node
+		// (keeps the OFF path at nil pointers). Searcher-owned ⇒ no per-node alloc.
+		if s.capBuf == nil {
+			s.capBuf = new([maxPly][256]capEntry)
+			s.quietBuf = new([maxPly][256]capEntry)
+		}
 		// Stage 1: TT move — search immediately, skip scoring.
 		// Reuses the TTMoveFirst scaffolding (ttFirstIdx, ttFirstSearched).
 		ttIdx := -1
@@ -1732,7 +1749,8 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 		}
 
 		// === Stage 2: Captures and promotions ===
-		caps := s.scoreCaptures(pos, &ml, ttMove, excludedMove, ply)
+		nCaps := s.scoreCaptures(pos, &ml, ttMove, excludedMove, ply)
+		caps := s.capBuf[ply][:nCaps]
 
 		// ProbCut (unchanged — scans the move list, needs no scores).
 		if s.params.ProbCut && !isPV && !inCheck && excludedMove == chess.NullMove &&
@@ -1919,191 +1937,214 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 			}
 		}
 
-		// === Stage 3: Quiets — scored lazily ===
-		for i := 0; i < ml.Len(); i++ {
-			m := ml.Get(i)
-			if m == ttMove || m == excludedMove {
-				continue
-			}
-			if isCapture(pos, m) || m.Type() == chess.Promotion {
-				continue
-			}
-			mover := pos.PieceOn(m.From())
-
-			histVal := s.history[mover][m.To()]
-			if s.params.ContHist && s.cont != nil {
-				histVal += s.contScore(ply, mover, m.To())
-			}
-			if s.params.ContHist2 && s.cont2 != nil {
-				histVal += s.contScore2(ply, mover, m.To())
-			}
-
-			lmpLim := lmpLimitDQ
-			if s.params.LMPHist {
-				lmpLim += histVal / 4096
-			}
-			if s.params.LMP && !isPV && !inCheck && searched > 0 &&
-				depth <= s.params.LMPMaxDepth && bestScore > -mateThreshold &&
-				searched >= lmpLim {
-				continue
-			}
-
-			futMargin := s.params.FutilityBase + s.params.FutilitySlope*depth
-			if s.params.FutHist {
-				futMargin += histVal / 128
-			}
-			if s.params.Futility && !isPV && !inCheck && searched > 0 &&
-				depth <= s.params.FutilityMaxDepth && bestScore > -mateThreshold &&
-				staticEval+futMargin <= alpha {
-				continue
-			}
-
-			if s.params.HistPrune && !isPV && !inCheck && searched > 0 &&
-				depth <= s.params.HistPruneMaxDepth && bestScore > -mateThreshold {
-				if histVal < s.params.HistPruneMargin*depth {
-					s.dbgHistPrune++
+		// === Stage 3: Quiets — history+killer ordered ===
+		// Collect the quiets NOW (after stage-2 captures have mutated
+		// s.history/s.cont — that timing is the point of deferral) into the
+		// per-ply buffer, scoring each with the SAME quiet score the
+		// non-deferred path uses (killer bonus 900k/800k for killers[ply][0/1],
+		// else butterfly history + any continuation history). selectCap then
+		// picks highest-first, so the search order over these quiets matches
+		// what the non-deferred path's selectMove would produce for the same
+		// quiets — killers regain their just-below-captures priority, and the
+		// pruning gates below (LMP/futility/histprune/SEEQuiet) now fire on the
+		// ORDERED list. Appends into the Searcher-owned array (cap 256 ≥ max
+		// legal moves) so no reallocation / heap escape.
+		//
+		// Block-scoped so `quiets` is not live at postLoopDeferred (the stage-2
+		// cutoff gotos jump past this point; a decl in scope at the label is a
+		// compile error).
+		{
+			quiets := s.quietBuf[ply][:0]
+			for i := 0; i < ml.Len(); i++ {
+				m := ml.Get(i)
+				if m == ttMove || m == excludedMove {
 					continue
 				}
-			}
-
-			if s.params.SEEQuiet && !isPV && !inCheck && searched > 0 &&
-				depth <= s.params.SEEQuietMaxDepth && bestScore > -mateThreshold {
-				if !pos.SEEGE(m, -s.params.SEEQuietMargin*depth) {
-					s.dbgSEEQuiet++
+				if isCapture(pos, m) || m.Type() == chess.Promotion {
 					continue
 				}
+				quiets = append(quiets, capEntry{i, s.moveScore(pos, m, chess.NullMove, ply), m})
 			}
+			for qi := 0; qi < len(quiets); qi++ {
+				selectCap(quiets, qi) // one selection step: highest-scored quiet to slot qi
+				m := quiets[qi].Move
+				mover := pos.PieceOn(m.From())
 
-			var u chess.Undo
-			if s.useNNUE {
-				s.accPush(pos, m)
-			}
-			pos.DoMove(m, &u)
-			s.pushKey(pos.Key())
-			s.contMove[ply] = contEntry{pc: mover, to: m.To(), ok: true}
-			givesCheck := pos.InCheck()
-
-			newDepth := depth - 1
-			childCutnode := cutnode
-
-			var sc int
-			reduction := 0
-			if s.params.LMR2 && !(s.params.CleanVerify && s.inSingularVerify) {
-				minSearched := 2
-				if !isPV {
-					minSearched = 1
+				histVal := s.history[mover][m.To()]
+				if s.params.ContHist && s.cont != nil {
+					histVal += s.contScore(ply, mover, m.To())
 				}
-				if depth >= 2 && !inCheck && !givesCheck && searched >= minSearched {
-					r := s.lmr[minInt(depth, 63)][minInt(searched, 63)]
-					r -= histVal / s.params.LMRHistDiv
-					if isPV {
-						r--
-					} else {
-						r++
+				if s.params.ContHist2 && s.cont2 != nil {
+					histVal += s.contScore2(ply, mover, m.To())
+				}
+
+				lmpLim := lmpLimitDQ
+				if s.params.LMPHist {
+					lmpLim += histVal / 4096
+				}
+				if s.params.LMP && !isPV && !inCheck && searched > 0 &&
+					depth <= s.params.LMPMaxDepth && bestScore > -mateThreshold &&
+					searched >= lmpLim {
+					continue
+				}
+
+				futMargin := s.params.FutilityBase + s.params.FutilitySlope*depth
+				if s.params.FutHist {
+					futMargin += histVal / 128
+				}
+				if s.params.Futility && !isPV && !inCheck && searched > 0 &&
+					depth <= s.params.FutilityMaxDepth && bestScore > -mateThreshold &&
+					staticEval+futMargin <= alpha {
+					continue
+				}
+
+				if s.params.HistPrune && !isPV && !inCheck && searched > 0 &&
+					depth <= s.params.HistPruneMaxDepth && bestScore > -mateThreshold {
+					if histVal < s.params.HistPruneMargin*depth {
+						s.dbgHistPrune++
+						continue
 					}
-					if !improving {
-						r++
+				}
+
+				if s.params.SEEQuiet && !isPV && !inCheck && searched > 0 &&
+					depth <= s.params.SEEQuietMaxDepth && bestScore > -mateThreshold {
+					if !pos.SEEGE(m, -s.params.SEEQuietMargin*depth) {
+						s.dbgSEEQuiet++
+						continue
 					}
-					if s.params.LMRCutnode && childCutnode {
-						r += s.params.LMRCutnodeRed
+				}
+
+				var u chess.Undo
+				if s.useNNUE {
+					s.accPush(pos, m)
+				}
+				pos.DoMove(m, &u)
+				s.pushKey(pos.Key())
+				s.contMove[ply] = contEntry{pc: mover, to: m.To(), ok: true}
+				givesCheck := pos.InCheck()
+
+				newDepth := depth - 1
+				childCutnode := cutnode
+
+				var sc int
+				reduction := 0
+				if s.params.LMR2 && !(s.params.CleanVerify && s.inSingularVerify) {
+					minSearched := 2
+					if !isPV {
+						minSearched = 1
 					}
-					if maxR := newDepth - 1; maxR >= 1 {
+					if depth >= 2 && !inCheck && !givesCheck && searched >= minSearched {
+						r := s.lmr[minInt(depth, 63)][minInt(searched, 63)]
+						r -= histVal / s.params.LMRHistDiv
+						if isPV {
+							r--
+						} else {
+							r++
+						}
+						if !improving {
+							r++
+						}
+						if s.params.LMRCutnode && childCutnode {
+							r += s.params.LMRCutnodeRed
+						}
+						if maxR := newDepth - 1; maxR >= 1 {
+							if r < 1 {
+								r = 1
+							}
+							if r > maxR {
+								r = maxR
+							}
+							reduction = r
+						}
+					}
+				} else if s.params.LMR && depth >= 3 && !inCheck && (!givesCheck || s.params.LMRCheckReduce) && searched >= s.params.LMRMinMoves {
+					if s.params.LMRFormula {
+						r := s.lmr[minInt(depth, 63)][minInt(searched, 63)]
+						r -= histVal / s.params.LMRHistDiv
+						if s.params.LMRCutnode && childCutnode {
+							r += s.params.LMRCutnodeRed
+						}
+						if s.params.LMRImproving && !improving {
+							r++
+						}
+						if s.params.LMRTtNoisy && ttMoveNoisy {
+							r += s.params.LMRTtNoisyRed
+						}
+						if s.params.LMRAlpha {
+							r += alphaRaises * s.params.LMRAlphaScale / 1024
+						}
+						if s.params.LMRCheckReduce && givesCheck {
+							r -= s.params.LMRCheckRed
+						}
 						if r < 1 {
 							r = 1
 						}
-						if r > maxR {
-							r = maxR
+						if r > depth-1 {
+							r = depth - 1
 						}
 						reduction = r
-					}
-				}
-			} else if s.params.LMR && depth >= 3 && !inCheck && (!givesCheck || s.params.LMRCheckReduce) && searched >= s.params.LMRMinMoves {
-				if s.params.LMRFormula {
-					r := s.lmr[minInt(depth, 63)][minInt(searched, 63)]
-					r -= histVal / s.params.LMRHistDiv
-					if s.params.LMRCutnode && childCutnode {
-						r += s.params.LMRCutnodeRed
-					}
-					if s.params.LMRImproving && !improving {
-						r++
-					}
-					if s.params.LMRTtNoisy && ttMoveNoisy {
-						r += s.params.LMRTtNoisyRed
-					}
-					if s.params.LMRAlpha {
-						r += alphaRaises * s.params.LMRAlphaScale / 1024
-					}
-					if s.params.LMRCheckReduce && givesCheck {
-						r -= s.params.LMRCheckRed
-					}
-					if r < 1 {
-						r = 1
-					}
-					if r > depth-1 {
-						r = depth - 1
-					}
-					reduction = r
-				} else {
-					reduction = 1
-					if searched >= 8 {
-						reduction = 2
-					}
-				}
-			}
-			scoutCut := true
-			if reduction == 0 {
-				scoutCut = !childCutnode
-			}
-			sc = -s.negamax(pos, newDepth-reduction, ply+1, -alpha-1, -alpha, scoutCut)
-			if sc > alpha && reduction > 0 {
-				rd := newDepth
-				if s.params.LMRDoDeeper {
-					if sc > bestScore+44+4*newDepth {
-						rd = newDepth + 1
-					} else if sc < bestScore+newDepth {
-						rd = newDepth - 1
-						if rd < 1 {
-							rd = 1
+					} else {
+						reduction = 1
+						if searched >= 8 {
+							reduction = 2
 						}
 					}
 				}
-				sc = -s.negamax(pos, rd, ply+1, -alpha-1, -alpha, !childCutnode)
-			}
-			if sc > alpha && sc < beta {
-				sc = -s.negamax(pos, newDepth, ply+1, -beta, -alpha, false)
-			}
-
-			s.popKey()
-			pos.UndoMove(m, &u)
-			if s.useNNUE {
-				s.accPop()
-			}
-			if s.stop {
-				return 0
-			}
-			searched++
-			triedQuiets[nQuiets] = m
-			nQuiets++
-
-			if sc > bestScore {
-				bestScore = sc
-				bestMove = m
-				if ply == 0 {
-					s.rootBest = m
-					s.rootScore = sc
+				scoutCut := true
+				if reduction == 0 {
+					scoutCut = !childCutnode
 				}
-				if sc > alpha {
-					alpha = sc
-					alphaRaises++
-					if alpha >= beta {
-						s.recordKiller(ply, m)
-						s.updateQuietStats(pos, m, triedQuiets[:nQuiets], depth)
-						s.updateContHist(pos, m, triedQuiets[:nQuiets], depth, ply)
-						s.updateContHist2(pos, m, triedQuiets[:nQuiets], depth, ply)
-						goto postLoopDeferred
+				sc = -s.negamax(pos, newDepth-reduction, ply+1, -alpha-1, -alpha, scoutCut)
+				if sc > alpha && reduction > 0 {
+					rd := newDepth
+					if s.params.LMRDoDeeper {
+						if sc > bestScore+44+4*newDepth {
+							rd = newDepth + 1
+						} else if sc < bestScore+newDepth {
+							rd = newDepth - 1
+							if rd < 1 {
+								rd = 1
+							}
+						}
+					}
+					sc = -s.negamax(pos, rd, ply+1, -alpha-1, -alpha, !childCutnode)
+				}
+				if sc > alpha && sc < beta {
+					sc = -s.negamax(pos, newDepth, ply+1, -beta, -alpha, false)
+				}
+
+				s.popKey()
+				pos.UndoMove(m, &u)
+				if s.useNNUE {
+					s.accPop()
+				}
+				if s.stop {
+					return 0
+				}
+				searched++
+				triedQuiets[nQuiets] = m
+				nQuiets++
+
+				if sc > bestScore {
+					bestScore = sc
+					bestMove = m
+					if ply == 0 {
+						s.rootBest = m
+						s.rootScore = sc
+					}
+					if sc > alpha {
+						alpha = sc
+						alphaRaises++
+						if alpha >= beta {
+							s.recordKiller(ply, m)
+							s.updateQuietStats(pos, m, triedQuiets[:nQuiets], depth)
+							s.updateContHist(pos, m, triedQuiets[:nQuiets], depth, ply)
+							s.updateContHist2(pos, m, triedQuiets[:nQuiets], depth, ply)
+							goto postLoopDeferred
+						}
 					}
 				}
-			}
+			} // end stage-3 block scope
 		}
 
 		// === Stage 4: Losing captures ===
@@ -2194,39 +2235,474 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 		var scores [256]int
 		s.scoreMoves(pos, &ml, ttMove, ply, &scores)
 
-	// ProbCut: before searching the node properly, try good captures at a reduced
-	// depth against a beta raised by a margin. If one already beats that raised beta,
-	// the node is almost certainly a fail-high, so prune. Non-PV, deep enough, off the
-	// mate band, never inside a singular verification. Scans captures linearly so it
-	// does not disturb the main loop's lazy (selectMove) ordering.
-	if s.params.ProbCut && !isPV && !inCheck && excludedMove == chess.NullMove &&
-		depth >= probcutMinDepth && beta < tbThreshold-probcutMargin {
-		probcutBeta := beta + probcutMargin
-		probcutDepth := depth - probcutReduction
-		if probcutDepth < 1 {
-			probcutDepth = 1
+		// ProbCut: before searching the node properly, try good captures at a reduced
+		// depth against a beta raised by a margin. If one already beats that raised beta,
+		// the node is almost certainly a fail-high, so prune. Non-PV, deep enough, off the
+		// mate band, never inside a singular verification. Scans captures linearly so it
+		// does not disturb the main loop's lazy (selectMove) ordering.
+		if s.params.ProbCut && !isPV && !inCheck && excludedMove == chess.NullMove &&
+			depth >= probcutMinDepth && beta < tbThreshold-probcutMargin {
+			probcutBeta := beta + probcutMargin
+			probcutDepth := depth - probcutReduction
+			if probcutDepth < 1 {
+				probcutDepth = 1
+			}
+			for i := 0; i < ml.Len(); i++ {
+				m := ml.Get(i)
+				if !isCapture(pos, m) && m.Type() != chess.Promotion {
+					continue
+				}
+				if s.params.SEE && !pos.SEEGE(m, 0) {
+					continue // only winning/equal captures are worth a probcut try
+				}
+				mover := pos.PieceOn(m.From())
+				var u chess.Undo
+				if s.useNNUE {
+					s.accPush(pos, m)
+				}
+				pos.DoMove(m, &u)
+				s.pushKey(pos.Key())
+				s.contMove[ply] = contEntry{pc: mover, to: m.To(), ok: true}
+				// Cheap qsearch filter first, then confirm with a reduced-depth search.
+				score := -s.quiescence(pos, ply+1, -probcutBeta, -probcutBeta+1)
+				if score >= probcutBeta {
+					score = -s.negamax(pos, probcutDepth, ply+1, -probcutBeta, -probcutBeta+1, !cutnode) // probcut child: opposite node type (Stormphrax search.cpp:954)
+				}
+				s.popKey()
+				pos.UndoMove(m, &u)
+				if s.useNNUE {
+					s.accPop()
+				}
+				if s.stop {
+					return 0
+				}
+				if score >= probcutBeta {
+					return probcutBeta // fail high — prune the node
+				}
+			}
 		}
+
+		// Late-move-pruning move-count limit. Improving lets more late quiets through
+		// (2−improving halves the budget when the position is not trending our way).
+		// LMPBase + LMPMultX10·depth²/10 (defaults 3 / 10 → 3+depth²).
+		lmpBase := s.params.LMPBase + (s.params.LMPMultX10*depth*depth)/10
+		lmpLimit := lmpBase
+		if s.params.Improving {
+			lmpLimit = lmpBase / (2 - impInt)
+		}
+
+		// Singular extension: if the TT move is, at a shallower search, much better than
+		// every alternative, it is the only good move — extend it a ply so the one move
+		// that matters isn't under-searched. We verify by searching all moves EXCEPT the
+		// TT move (s.excluded[ply]) to a reduced depth in a null window just below the
+		// TT score; if they all fail low the TT move is "singular". Conservative and
+		// explosion-safe: depth-gated, single ply only, requires a deep-enough TT entry
+		// with a lower/exact bound and a non-mate/non-TB score. extension is applied to
+		// the TT move's search inside the loop (newDepth). When the verification itself
+		// already beats beta with the TT move excluded, a second move is also good, so we
+		// multi-cut (fail high) immediately.
+		extension := 0
+		if s.params.Singular && !inCheck && ply > 0 && excludedMove == chess.NullMove &&
+			ttHit && ttMove != chess.NullMove && depth >= s.params.SingularMinDepth &&
+			ttDepth >= depth-3 && (ttFlag == ttLower || ttFlag == ttExact) &&
+			absInt(ttScore) < tbThreshold {
+			singularBeta := ttScore - s.params.SingularMargin*depth
+			rDepth := (depth - 1) / 2
+			s.excluded[ply] = ttMove
+			prevVerify := s.inSingularVerify
+			s.inSingularVerify = true // CleanVerify: verify subtree uses conservative LMR
+			// Singular verification preserves the parent's cutnode (Stormphrax
+			// search.cpp:1093 passes `cutnode` unchanged into the verification search).
+			singScore := s.negamax(pos, rDepth, ply, singularBeta-1, singularBeta, cutnode)
+			s.inSingularVerify = prevVerify
+			s.excluded[ply] = chess.NullMove
+			if s.stop {
+				return 0
+			}
+			if singScore < singularBeta {
+				// Double extension: the alternatives fail low by a wide margin, so the TT
+				// move is very clearly the only good move — extend it 2 plies instead of 1.
+				// Non-PV only (the !isPV gate + singularMinDepth are the search-explosion
+				// guards). When DoubleExt is off this is byte-identical: extension = 1.
+				if s.params.DoubleExt && !isPV && singScore < singularBeta-s.params.DoubleExtMargin {
+					extension = 2
+					s.dbgDoubleExt++
+				} else {
+					extension = 1
+				}
+				s.dbgSingular++
+			} else if s.params.NegExt {
+				// NegExt (Params.NegExt, DEFAULT OFF): the TT move is NOT singular. Mirror
+				// Stormphrax's softened multicut + negative extensions (search.cpp:1113-1119),
+				// which is exactly the machinery our own notes blame for the lmr2+singular
+				// −67 (the HARD `return singularBeta` early-return).
+				//   - !isPV && singScore >= beta  → SOFT multicut: don't hard-return
+				//     singularBeta; blend the verification score toward beta (ilerp, T=503/1024)
+				//     unless it is a mate/TB score, in which case return it raw.
+				//   - else if ttScore >= beta      → extension = -3 (TT entry itself fails high:
+				//     search the TT move SHALLOWER).
+				//   - else if cutnode              → extension = -2 (expected cut node: shallower).
+				// A negative extension feeds newDepth = depth + extension - 1 (can drop the
+				// move toward qsearch) and flips the child cutnode (see childCutnode below,
+				// Stormphrax's `cutnode |= extension < 0`).
+				if !isPV && singScore >= beta {
+					s.dbgMultiCut++
+					if absInt(singScore) < tbThreshold {
+						return ilerpToBeta(singScore, beta)
+					}
+					return singScore
+				} else if ttScore >= beta {
+					extension = -3
+				} else if cutnode {
+					extension = -2
+				}
+			} else if s.params.MultiCut && singularBeta >= beta {
+				s.dbgMultiCut++
+				return singularBeta // multi-cut: another move also beats beta
+			}
+		}
+
+		// LMR term inputs (Stormphrax): ttMoveNoisy = the TT move is a capture (a
+		// tactical node); alphaRaises = how many moves have already raised alpha at
+		// this node (recomputed as the loop advances). Both feed the additive LMR
+		// reduction terms below; cheap and byte-inert unless their flags are on.
+
 		for i := 0; i < ml.Len(); i++ {
+			selectMove(&ml, &scores, i)
 			m := ml.Get(i)
-			if !isCapture(pos, m) && m.Type() != chess.Promotion {
+			if ttFirstSearched && i == ttFirstIdx {
+				continue // already searched above
+			}
+			if m == excludedMove { // singular verification: skip the move under test
 				continue
 			}
-			if s.params.SEE && !pos.SEEGE(m, 0) {
-				continue // only winning/equal captures are worth a probcut try
+			rootNodesBefore := uint64(0)
+			if ply == 0 {
+				rootNodesBefore = s.nodes // attribute this root move's subtree for NodeTM
 			}
-			mover := pos.PieceOn(m.From())
+			capture := isCapture(pos, m) // before DoMove, while the victim is still on m.To()
+			quiet := !capture && m.Type() != chess.Promotion
+			mover := pos.PieceOn(m.From()) // captured before DoMove empties m.From()
+
+			// History-adjusted pruning margins (Stormphrax): a good-history quiet survives
+			// LMP longer and clears futility easier; a bad-history one is pruned sooner.
+			histVal := 0
+			if quiet && (s.params.LMPHist || s.params.FutHist) {
+				histVal = s.history[mover][m.To()]
+				if s.params.ContHist && s.cont != nil {
+					histVal += s.contScore(ply, mover, m.To())
+				}
+			}
+
+			// Late move pruning: at a non-PV node near the leaves, once enough quiet
+			// moves have been searched, skip the remaining late quiets (move ordering
+			// puts them last, so they are almost never the best move). Never when in
+			// check or when escaping a mate.
+			lmpLim := lmpLimit
+			if s.params.LMPHist {
+				lmpLim += histVal / 4096 // ±~2 moves of slack from history
+			}
+			if s.params.LMP && quiet && !isPV && !inCheck && searched > 0 &&
+				depth <= s.params.LMPMaxDepth && bestScore > -mateThreshold &&
+				searched >= lmpLim {
+				continue
+			}
+
+			// Frontier futility pruning: at a shallow non-PV node, skip a late quiet whose
+			// static eval plus a depth-scaled margin still can't reach alpha — it almost
+			// surely won't raise it. The fail-low counterpart to RFP. Quiet only (captures
+			// /promotions excluded), never the first move, never when getting mated.
+			futMargin := s.params.FutilityBase + s.params.FutilitySlope*depth
+			if s.params.FutHist {
+				futMargin += histVal / 128 // ±~64cp from history
+			}
+			if s.params.Futility && quiet && !isPV && !inCheck && searched > 0 &&
+				depth <= s.params.FutilityMaxDepth && bestScore > -mateThreshold &&
+				staticEval+futMargin <= alpha {
+				continue
+			}
+
+			// History pruning: at a shallow non-PV node, skip a late quiet whose history
+			// score is strongly negative — move ordering already ranked it last, and a very
+			// negative history means it almost never raises alpha. Mirrors the LMR history
+			// computation (butterfly + continuation history). The threshold grows more
+			// negative with depth, so deeper nodes prune only the very worst quiets.
+			if s.params.HistPrune && quiet && !isPV && !inCheck && searched > 0 &&
+				depth <= s.params.HistPruneMaxDepth && bestScore > -mateThreshold {
+				hist := s.history[mover][m.To()]
+				if s.params.ContHist && s.cont != nil {
+					hist += s.contScore(ply, mover, m.To())
+				}
+				if s.params.ContHist2 && s.cont2 != nil {
+					hist += s.contScore2(ply, mover, m.To())
+				}
+				if hist < s.params.HistPruneMargin*depth {
+					s.dbgHistPrune++
+					continue
+				}
+			}
+
+			// Quiet-move SEE pruning: at a shallow non-PV node, skip a quiet move whose
+			// Static Exchange Evaluation is strongly negative — the move puts a piece on a
+			// square where it loses material to the opponent's recapture (it "hangs").
+			// Move ordering already ranks such quiets low and at low depth they almost
+			// never raise alpha. Orthogonal to LMP (move count), Futility (static eval) and
+			// HistPrune (history magnitude) — this keys off whether the move hangs material.
+			if s.params.SEEQuiet && quiet && !isPV && !inCheck && searched > 0 &&
+				depth <= s.params.SEEQuietMaxDepth && bestScore > -mateThreshold {
+				if !pos.SEEGE(m, -s.params.SEEQuietMargin*depth) {
+					s.dbgSEEQuiet++
+					continue
+				}
+			}
+
+			// Capture-move SEE pruning: at a shallow non-PV node, skip a CAPTURE whose
+			// Static Exchange Evaluation is strongly negative — a clearly-losing capture
+			// that hangs material through the recapture sequence. Captures are already
+			// SEE-ordered (losing ones last) and SEE-pruned in qsearch, but in the main
+			// move loop a losing capture is still fully searched; this prunes the clearly-
+			// losing tail at low depth. The capture analog of SEEQuiet (which fires only on
+			// quiets) — restricted to genuine captures, never promotions (incl. capture-
+			// promotions), so a promotion is never pruned here.
+			if s.params.CaptSEE && capture && m.Type() != chess.Promotion && !isPV && !inCheck && searched > 0 &&
+				depth <= s.params.CaptSEEMaxDepth && bestScore > -mateThreshold {
+				if !pos.SEEGE(m, -s.params.CaptSEEMargin*depth) {
+					s.dbgCaptSEE++
+					continue
+				}
+			}
+
+			// Pre-move SEE for the LMR2 noisy-move reduction below: it must be read
+			// before DoMove empties m.From() and flips the side to move. Only computed
+			// when the LMR2 capture path will actually consult it, so non-LMR2 / non-
+			// capture nodes pay nothing.
+			seeWinning := false
+			if s.params.LMR2 && s.params.SEE && capture {
+				seeWinning = pos.SEEGE(m, 0)
+			}
+
 			var u chess.Undo
 			if s.useNNUE {
 				s.accPush(pos, m)
 			}
 			pos.DoMove(m, &u)
 			s.pushKey(pos.Key())
+			// Record the move played to descend into the child, so the child can key its
+			// continuation history off this (and its grandparent) move.
 			s.contMove[ply] = contEntry{pc: mover, to: m.To(), ok: true}
-			// Cheap qsearch filter first, then confirm with a reduced-depth search.
-			score := -s.quiescence(pos, ply+1, -probcutBeta, -probcutBeta+1)
-			if score >= probcutBeta {
-				score = -s.negamax(pos, probcutDepth, ply+1, -probcutBeta, -probcutBeta+1, !cutnode) // probcut child: opposite node type (Stormphrax search.cpp:954)
+			givesCheck := pos.InCheck()
+
+			// Singular extension applies to the TT move only (extension is 0 otherwise,
+			// so newDepth == depth-1 and the off-path is byte-identical). A NEGATIVE
+			// extension (NegExt) drops the TT move's depth (can fall toward qsearch).
+			newDepth := depth - 1
+			if extension != 0 && m == ttMove {
+				newDepth += extension
 			}
+
+			// Stormphrax's `cutnode |= extension < 0` (search.cpp:1131): a negatively-
+			// extended move — only ever the TT move here — is searched as an expected cut
+			// node. Kept as a PER-MOVE local (childCutnode), not a mutation of the shared
+			// `cutnode` parameter, so the flip never leaks to sibling moves or the next
+			// loop iteration. extension < 0 only occurs when NegExt is on, so childCutnode
+			// == cutnode on the off-path (and cutnode is behavior-neutral there anyway).
+			childCutnode := cutnode
+			if extension < 0 && m == ttMove {
+				childCutnode = true
+			}
+
+			var sc int
+			if searched == 0 {
+				// First searched move. At a PV node this is the PV child (full window,
+				// never a cut node → false, Stormphrax search.cpp:1250). At a non-PV
+				// (zero-window) node the same call is the first scout child, which is the
+				// opposite node type from the parent (!childCutnode, Stormphrax's non-LMR
+				// first-move zero-window search.cpp:1240).
+				firstCut := !childCutnode
+				if isPV {
+					firstCut = false
+				}
+				sc = -s.negamax(pos, newDepth, ply+1, -beta, -alpha, firstCut)
+			} else {
+				reduction := 0
+				// CleanVerify: while inside a singular verification subtree, fall back to
+				// the conservative LMR path so over-reduced alternatives don't pollute the
+				// singular decision. Inert unless LMR2 + CleanVerify are both on.
+				if s.params.LMR2 && !(s.params.CleanVerify && s.inSingularVerify) {
+					// Aggressive LMR: reduce earlier and in more cases (captures/promotions
+					// too), adjusted by PV / improving / ordering-trust / SEE. The
+					// zero-window re-search at full newDepth below catches over-reductions.
+					minSearched := 2
+					if !isPV {
+						minSearched = 1
+					}
+					if depth >= 2 && !inCheck && !givesCheck && searched >= minSearched {
+						r := s.lmr[minInt(depth, 63)][minInt(searched, 63)]
+						if quiet {
+							hist := s.history[mover][m.To()]
+							if s.params.ContHist && s.cont != nil {
+								hist += s.contScore(ply, mover, m.To())
+							}
+							if s.params.ContHist2 && s.cont2 != nil {
+								hist += s.contScore2(ply, mover, m.To())
+							}
+							r -= hist / s.params.LMRHistDiv
+						} else {
+							r-- // noisy move: reduce less than a quiet
+							if capture && seeWinning {
+								r-- // winning/equal capture (pre-move SEE): reduce even less
+							}
+						}
+						if isPV {
+							r-- // PV nodes reduce less
+						} else {
+							r++ // non-PV nodes reduce more
+						}
+						if !improving {
+							r++
+						}
+						if m == ttMove || m == s.killers[ply][0] || m == s.killers[ply][1] {
+							r-- // don't over-reduce ordering-trusted moves
+						}
+						if s.params.LMRCutnode && childCutnode {
+							r += s.params.LMRCutnodeRed // cut-node: reduce late moves harder
+						}
+						if maxR := newDepth - 1; maxR >= 1 {
+							if r < 1 {
+								r = 1
+							}
+							if r > maxR {
+								r = maxR
+							}
+							reduction = r
+						}
+					}
+				} else if s.params.LMR && depth >= 3 && quiet && !inCheck && (!givesCheck || s.params.LMRCheckReduce) && searched >= s.params.LMRMinMoves {
+					if s.params.LMRFormula {
+						if s.params.LMRFixedPoint {
+							// ×1024 fixed-point reduction (SF18/Stormphrax): accumulate the
+							// reduction in 1024ths of a ply off the fine-grained lmr1024 table,
+							// so lmrbase/lmrdiv perturbations move it smoothly (an SPSA lever the
+							// integer table can't give). Same terms as the integer path below,
+							// each scaled to 1024ths; the default-off Stormphrax sub-terms are
+							// intentionally omitted here (this is scaffolding — under SPRT).
+							r1024 := s.lmr1024[minInt(depth, 63)][minInt(searched, 63)]
+							hist := s.history[mover][m.To()]
+							if s.params.ContHist && s.cont != nil {
+								hist += s.contScore(ply, mover, m.To())
+							}
+							if s.params.ContHist2 && s.cont2 != nil {
+								hist += s.contScore2(ply, mover, m.To())
+							}
+							r1024 -= hist * 1024 / s.params.LMRHistDiv
+							if s.params.LMRCutnode && childCutnode {
+								r1024 += s.params.LMRCutnodeRed * 1024
+							}
+							// Whole-ply reduction, then the same [1, depth-1] clamp as OFF.
+							r := r1024 / 1024
+							// PV relief: reduce PV nodes one ply LESS (SF/Stormphrax apply this
+							// unconditionally). DEFAULT OFF → byte-identical; applied identically
+							// in both LMRFixedPoint branches, before the shared clamp.
+							if s.params.LMRPvRelief && isPV && r > 1 {
+								r--
+							}
+							if r < 1 {
+								r = 1
+							}
+							if r > depth-1 {
+								r = depth - 1
+							}
+							reduction = r
+						} else {
+							// Smooth log(d)·log(m) base in place of the flat 1/2; reduce
+							// less for good-history quiets, more for malus'd ones. Clamped
+							// to [1, depth-1] so a reduced move still searches ≥1 ply.
+							r := s.lmr[minInt(depth, 63)][minInt(searched, 63)]
+							hist := s.history[mover][m.To()]
+							if s.params.ContHist && s.cont != nil {
+								hist += s.contScore(ply, mover, m.To())
+							}
+							if s.params.ContHist2 && s.cont2 != nil {
+								hist += s.contScore2(ply, mover, m.To())
+							}
+							r -= hist / s.params.LMRHistDiv
+							// Cut-node: a node expected to fail high orders its best move first,
+							// so a late move here almost never raises alpha — reduce it harder
+							// (Stormphrax search.cpp:1173, r += cutnode). childCutnode is the
+							// current node's type.
+							if s.params.LMRCutnode && childCutnode {
+								r += s.params.LMRCutnodeRed
+							}
+							// Individual Stormphrax LMR terms (each independent, additive; the
+							// aggressive LMR2 *bundle* was rejected at movetime — these are not
+							// that). Only fire when their flag is on, so off is byte-identical.
+							if s.params.LMRImproving && !improving {
+								r++ // not improving ⇒ reduce late quiets a ply more
+							}
+							if s.params.LMRTtNoisy && ttMoveNoisy {
+								r += s.params.LMRTtNoisyRed // TT move is a capture ⇒ tactical node
+							}
+							if s.params.LMRAlpha {
+								r += alphaRaises * s.params.LMRAlphaScale / 1024
+							}
+							if s.params.LMRCheckReduce && givesCheck {
+								r -= s.params.LMRCheckRed // reduce a checking quiet LESS (don't skip it)
+							}
+							// PV relief: reduce PV nodes one ply LESS (SF/Stormphrax apply this
+							// unconditionally). DEFAULT OFF → byte-identical; applied identically
+							// in both LMRFixedPoint branches, before the shared clamp.
+							if s.params.LMRPvRelief && isPV && r > 1 {
+								r--
+							}
+							if r < 1 {
+								r = 1
+							}
+							if r > depth-1 {
+								r = depth - 1
+							}
+							reduction = r
+						}
+					} else {
+						reduction = 1
+						if searched >= 8 {
+							reduction = 2
+						}
+					}
+				}
+				// Zero-window scout. A REDUCED (LMR) child is searched as an expected cut
+				// node (true, matching Stormphrax's hardcoded `true` on the reduced search
+				// search.cpp:1186); an UNREDUCED scout is the opposite node type from the
+				// parent (!childCutnode, Stormphrax non-LMR zero-window search.cpp:1240).
+				scoutCut := true
+				if reduction == 0 {
+					scoutCut = !childCutnode
+				}
+				sc = -s.negamax(pos, newDepth-reduction, ply+1, -alpha-1, -alpha, scoutCut)
+				if sc > alpha && reduction > 0 {
+					// LMR re-search (zero window), opposite node type (Stormphrax
+					// search.cpp:1205). doDeeper/doShallower: adapt the re-search depth
+					// to how far the reduced scout beat alpha — a big overshoot searches
+					// deeper, a bare pass shallower (Stormphrax search.cpp:1190-1193).
+					rd := newDepth
+					if s.params.LMRDoDeeper {
+						if sc > bestScore+44+4*newDepth {
+							rd = newDepth + 1
+						} else if sc < bestScore+newDepth {
+							rd = newDepth - 1
+							if rd < 1 {
+								rd = 1
+							}
+						}
+					}
+					sc = -s.negamax(pos, rd, ply+1, -alpha-1, -alpha, !childCutnode)
+				}
+				if sc > alpha && sc < beta {
+					// PV full-window re-search: a PV child, never a cut node (false,
+					// Stormphrax search.cpp:1250).
+					sc = -s.negamax(pos, newDepth, ply+1, -beta, -alpha, false)
+				}
+			}
+
 			s.popKey()
 			pos.UndoMove(m, &u)
 			if s.useNNUE {
@@ -2235,490 +2711,55 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 			if s.stop {
 				return 0
 			}
-			if score >= probcutBeta {
-				return probcutBeta // fail high — prune the node
+			searched++
+			if quiet {
+				triedQuiets[nQuiets] = m
+				nQuiets++
+			} else if s.params.CaptHist && capture {
+				triedCaptures[nCaptures] = m
+				nCaptures++
 			}
-		}
-	}
 
-	// Late-move-pruning move-count limit. Improving lets more late quiets through
-	// (2−improving halves the budget when the position is not trending our way).
-	// LMPBase + LMPMultX10·depth²/10 (defaults 3 / 10 → 3+depth²).
-	lmpBase := s.params.LMPBase + (s.params.LMPMultX10*depth*depth)/10
-	lmpLimit := lmpBase
-	if s.params.Improving {
-		lmpLimit = lmpBase / (2 - impInt)
-	}
-
-	// Singular extension: if the TT move is, at a shallower search, much better than
-	// every alternative, it is the only good move — extend it a ply so the one move
-	// that matters isn't under-searched. We verify by searching all moves EXCEPT the
-	// TT move (s.excluded[ply]) to a reduced depth in a null window just below the
-	// TT score; if they all fail low the TT move is "singular". Conservative and
-	// explosion-safe: depth-gated, single ply only, requires a deep-enough TT entry
-	// with a lower/exact bound and a non-mate/non-TB score. extension is applied to
-	// the TT move's search inside the loop (newDepth). When the verification itself
-	// already beats beta with the TT move excluded, a second move is also good, so we
-	// multi-cut (fail high) immediately.
-	extension := 0
-	if s.params.Singular && !inCheck && ply > 0 && excludedMove == chess.NullMove &&
-		ttHit && ttMove != chess.NullMove && depth >= s.params.SingularMinDepth &&
-		ttDepth >= depth-3 && (ttFlag == ttLower || ttFlag == ttExact) &&
-		absInt(ttScore) < tbThreshold {
-		singularBeta := ttScore - s.params.SingularMargin*depth
-		rDepth := (depth - 1) / 2
-		s.excluded[ply] = ttMove
-		prevVerify := s.inSingularVerify
-		s.inSingularVerify = true // CleanVerify: verify subtree uses conservative LMR
-		// Singular verification preserves the parent's cutnode (Stormphrax
-		// search.cpp:1093 passes `cutnode` unchanged into the verification search).
-		singScore := s.negamax(pos, rDepth, ply, singularBeta-1, singularBeta, cutnode)
-		s.inSingularVerify = prevVerify
-		s.excluded[ply] = chess.NullMove
-		if s.stop {
-			return 0
-		}
-		if singScore < singularBeta {
-			// Double extension: the alternatives fail low by a wide margin, so the TT
-			// move is very clearly the only good move — extend it 2 plies instead of 1.
-			// Non-PV only (the !isPV gate + singularMinDepth are the search-explosion
-			// guards). When DoubleExt is off this is byte-identical: extension = 1.
-			if s.params.DoubleExt && !isPV && singScore < singularBeta-s.params.DoubleExtMargin {
-				extension = 2
-				s.dbgDoubleExt++
-			} else {
-				extension = 1
-			}
-			s.dbgSingular++
-		} else if s.params.NegExt {
-			// NegExt (Params.NegExt, DEFAULT OFF): the TT move is NOT singular. Mirror
-			// Stormphrax's softened multicut + negative extensions (search.cpp:1113-1119),
-			// which is exactly the machinery our own notes blame for the lmr2+singular
-			// −67 (the HARD `return singularBeta` early-return).
-			//   - !isPV && singScore >= beta  → SOFT multicut: don't hard-return
-			//     singularBeta; blend the verification score toward beta (ilerp, T=503/1024)
-			//     unless it is a mate/TB score, in which case return it raw.
-			//   - else if ttScore >= beta      → extension = -3 (TT entry itself fails high:
-			//     search the TT move SHALLOWER).
-			//   - else if cutnode              → extension = -2 (expected cut node: shallower).
-			// A negative extension feeds newDepth = depth + extension - 1 (can drop the
-			// move toward qsearch) and flips the child cutnode (see childCutnode below,
-			// Stormphrax's `cutnode |= extension < 0`).
-			if !isPV && singScore >= beta {
-				s.dbgMultiCut++
-				if absInt(singScore) < tbThreshold {
-					return ilerpToBeta(singScore, beta)
+			if sc > bestScore {
+				bestScore = sc
+				bestMove = m
+				if ply == 0 {
+					s.rootBest = m
+					s.rootScore = sc
+					s.rootBestNodes = s.nodes - rootNodesBefore
 				}
-				return singScore
-			} else if ttScore >= beta {
-				extension = -3
-			} else if cutnode {
-				extension = -2
-			}
-		} else if s.params.MultiCut && singularBeta >= beta {
-			s.dbgMultiCut++
-			return singularBeta // multi-cut: another move also beats beta
-		}
-	}
-
-	// LMR term inputs (Stormphrax): ttMoveNoisy = the TT move is a capture (a
-	// tactical node); alphaRaises = how many moves have already raised alpha at
-	// this node (recomputed as the loop advances). Both feed the additive LMR
-	// reduction terms below; cheap and byte-inert unless their flags are on.
-
-	for i := 0; i < ml.Len(); i++ {
-		selectMove(&ml, &scores, i)
-		m := ml.Get(i)
-		if ttFirstSearched && i == ttFirstIdx {
-			continue // already searched above
-		}
-		if m == excludedMove { // singular verification: skip the move under test
-			continue
-		}
-		rootNodesBefore := uint64(0)
-		if ply == 0 {
-			rootNodesBefore = s.nodes // attribute this root move's subtree for NodeTM
-		}
-		capture := isCapture(pos, m) // before DoMove, while the victim is still on m.To()
-		quiet := !capture && m.Type() != chess.Promotion
-		mover := pos.PieceOn(m.From()) // captured before DoMove empties m.From()
-
-		// History-adjusted pruning margins (Stormphrax): a good-history quiet survives
-		// LMP longer and clears futility easier; a bad-history one is pruned sooner.
-		histVal := 0
-		if quiet && (s.params.LMPHist || s.params.FutHist) {
-			histVal = s.history[mover][m.To()]
-			if s.params.ContHist && s.cont != nil {
-				histVal += s.contScore(ply, mover, m.To())
-			}
-		}
-
-		// Late move pruning: at a non-PV node near the leaves, once enough quiet
-		// moves have been searched, skip the remaining late quiets (move ordering
-		// puts them last, so they are almost never the best move). Never when in
-		// check or when escaping a mate.
-		lmpLim := lmpLimit
-		if s.params.LMPHist {
-			lmpLim += histVal / 4096 // ±~2 moves of slack from history
-		}
-		if s.params.LMP && quiet && !isPV && !inCheck && searched > 0 &&
-			depth <= s.params.LMPMaxDepth && bestScore > -mateThreshold &&
-			searched >= lmpLim {
-			continue
-		}
-
-		// Frontier futility pruning: at a shallow non-PV node, skip a late quiet whose
-		// static eval plus a depth-scaled margin still can't reach alpha — it almost
-		// surely won't raise it. The fail-low counterpart to RFP. Quiet only (captures
-		// /promotions excluded), never the first move, never when getting mated.
-		futMargin := s.params.FutilityBase + s.params.FutilitySlope*depth
-		if s.params.FutHist {
-			futMargin += histVal / 128 // ±~64cp from history
-		}
-		if s.params.Futility && quiet && !isPV && !inCheck && searched > 0 &&
-			depth <= s.params.FutilityMaxDepth && bestScore > -mateThreshold &&
-			staticEval+futMargin <= alpha {
-			continue
-		}
-
-		// History pruning: at a shallow non-PV node, skip a late quiet whose history
-		// score is strongly negative — move ordering already ranked it last, and a very
-		// negative history means it almost never raises alpha. Mirrors the LMR history
-		// computation (butterfly + continuation history). The threshold grows more
-		// negative with depth, so deeper nodes prune only the very worst quiets.
-		if s.params.HistPrune && quiet && !isPV && !inCheck && searched > 0 &&
-			depth <= s.params.HistPruneMaxDepth && bestScore > -mateThreshold {
-			hist := s.history[mover][m.To()]
-			if s.params.ContHist && s.cont != nil {
-				hist += s.contScore(ply, mover, m.To())
-			}
-			if s.params.ContHist2 && s.cont2 != nil {
-				hist += s.contScore2(ply, mover, m.To())
-			}
-			if hist < s.params.HistPruneMargin*depth {
-				s.dbgHistPrune++
-				continue
-			}
-		}
-
-		// Quiet-move SEE pruning: at a shallow non-PV node, skip a quiet move whose
-		// Static Exchange Evaluation is strongly negative — the move puts a piece on a
-		// square where it loses material to the opponent's recapture (it "hangs").
-		// Move ordering already ranks such quiets low and at low depth they almost
-		// never raise alpha. Orthogonal to LMP (move count), Futility (static eval) and
-		// HistPrune (history magnitude) — this keys off whether the move hangs material.
-		if s.params.SEEQuiet && quiet && !isPV && !inCheck && searched > 0 &&
-			depth <= s.params.SEEQuietMaxDepth && bestScore > -mateThreshold {
-			if !pos.SEEGE(m, -s.params.SEEQuietMargin*depth) {
-				s.dbgSEEQuiet++
-				continue
-			}
-		}
-
-		// Capture-move SEE pruning: at a shallow non-PV node, skip a CAPTURE whose
-		// Static Exchange Evaluation is strongly negative — a clearly-losing capture
-		// that hangs material through the recapture sequence. Captures are already
-		// SEE-ordered (losing ones last) and SEE-pruned in qsearch, but in the main
-		// move loop a losing capture is still fully searched; this prunes the clearly-
-		// losing tail at low depth. The capture analog of SEEQuiet (which fires only on
-		// quiets) — restricted to genuine captures, never promotions (incl. capture-
-		// promotions), so a promotion is never pruned here.
-		if s.params.CaptSEE && capture && m.Type() != chess.Promotion && !isPV && !inCheck && searched > 0 &&
-			depth <= s.params.CaptSEEMaxDepth && bestScore > -mateThreshold {
-			if !pos.SEEGE(m, -s.params.CaptSEEMargin*depth) {
-				s.dbgCaptSEE++
-				continue
-			}
-		}
-
-		// Pre-move SEE for the LMR2 noisy-move reduction below: it must be read
-		// before DoMove empties m.From() and flips the side to move. Only computed
-		// when the LMR2 capture path will actually consult it, so non-LMR2 / non-
-		// capture nodes pay nothing.
-		seeWinning := false
-		if s.params.LMR2 && s.params.SEE && capture {
-			seeWinning = pos.SEEGE(m, 0)
-		}
-
-		var u chess.Undo
-		if s.useNNUE {
-			s.accPush(pos, m)
-		}
-		pos.DoMove(m, &u)
-		s.pushKey(pos.Key())
-		// Record the move played to descend into the child, so the child can key its
-		// continuation history off this (and its grandparent) move.
-		s.contMove[ply] = contEntry{pc: mover, to: m.To(), ok: true}
-		givesCheck := pos.InCheck()
-
-		// Singular extension applies to the TT move only (extension is 0 otherwise,
-		// so newDepth == depth-1 and the off-path is byte-identical). A NEGATIVE
-		// extension (NegExt) drops the TT move's depth (can fall toward qsearch).
-		newDepth := depth - 1
-		if extension != 0 && m == ttMove {
-			newDepth += extension
-		}
-
-		// Stormphrax's `cutnode |= extension < 0` (search.cpp:1131): a negatively-
-		// extended move — only ever the TT move here — is searched as an expected cut
-		// node. Kept as a PER-MOVE local (childCutnode), not a mutation of the shared
-		// `cutnode` parameter, so the flip never leaks to sibling moves or the next
-		// loop iteration. extension < 0 only occurs when NegExt is on, so childCutnode
-		// == cutnode on the off-path (and cutnode is behavior-neutral there anyway).
-		childCutnode := cutnode
-		if extension < 0 && m == ttMove {
-			childCutnode = true
-		}
-
-		var sc int
-		if searched == 0 {
-			// First searched move. At a PV node this is the PV child (full window,
-			// never a cut node → false, Stormphrax search.cpp:1250). At a non-PV
-			// (zero-window) node the same call is the first scout child, which is the
-			// opposite node type from the parent (!childCutnode, Stormphrax's non-LMR
-			// first-move zero-window search.cpp:1240).
-			firstCut := !childCutnode
-			if isPV {
-				firstCut = false
-			}
-			sc = -s.negamax(pos, newDepth, ply+1, -beta, -alpha, firstCut)
-		} else {
-			reduction := 0
-			// CleanVerify: while inside a singular verification subtree, fall back to
-			// the conservative LMR path so over-reduced alternatives don't pollute the
-			// singular decision. Inert unless LMR2 + CleanVerify are both on.
-			if s.params.LMR2 && !(s.params.CleanVerify && s.inSingularVerify) {
-				// Aggressive LMR: reduce earlier and in more cases (captures/promotions
-				// too), adjusted by PV / improving / ordering-trust / SEE. The
-				// zero-window re-search at full newDepth below catches over-reductions.
-				minSearched := 2
-				if !isPV {
-					minSearched = 1
-				}
-				if depth >= 2 && !inCheck && !givesCheck && searched >= minSearched {
-					r := s.lmr[minInt(depth, 63)][minInt(searched, 63)]
-					if quiet {
-						hist := s.history[mover][m.To()]
-						if s.params.ContHist && s.cont != nil {
-							hist += s.contScore(ply, mover, m.To())
+				if sc > alpha {
+					alpha = sc
+					alphaRaises++ // feeds the LMRAlpha reduction term for later moves
+					if alpha >= beta {
+						if quiet {
+							s.recordKiller(ply, m)
+							s.updateQuietStats(pos, m, triedQuiets[:nQuiets], depth)
+							s.updateContHist(pos, m, triedQuiets[:nQuiets], depth, ply)
+							s.updateContHist2(pos, m, triedQuiets[:nQuiets], depth, ply)
+						} else if s.params.CaptHist && capture {
+							s.updateCaptureStats(pos, m, triedCaptures[:nCaptures], depth)
 						}
-						if s.params.ContHist2 && s.cont2 != nil {
-							hist += s.contScore2(ply, mover, m.To())
-						}
-						r -= hist / s.params.LMRHistDiv
-					} else {
-						r-- // noisy move: reduce less than a quiet
-						if capture && seeWinning {
-							r-- // winning/equal capture (pre-move SEE): reduce even less
-						}
-					}
-					if isPV {
-						r-- // PV nodes reduce less
-					} else {
-						r++ // non-PV nodes reduce more
-					}
-					if !improving {
-						r++
-					}
-					if m == ttMove || m == s.killers[ply][0] || m == s.killers[ply][1] {
-						r-- // don't over-reduce ordering-trusted moves
-					}
-					if s.params.LMRCutnode && childCutnode {
-						r += s.params.LMRCutnodeRed // cut-node: reduce late moves harder
-					}
-					if maxR := newDepth - 1; maxR >= 1 {
-						if r < 1 {
-							r = 1
-						}
-						if r > maxR {
-							r = maxR
-						}
-						reduction = r
-					}
-				}
-			} else if s.params.LMR && depth >= 3 && quiet && !inCheck && (!givesCheck || s.params.LMRCheckReduce) && searched >= s.params.LMRMinMoves {
-				if s.params.LMRFormula {
-					if s.params.LMRFixedPoint {
-						// ×1024 fixed-point reduction (SF18/Stormphrax): accumulate the
-						// reduction in 1024ths of a ply off the fine-grained lmr1024 table,
-						// so lmrbase/lmrdiv perturbations move it smoothly (an SPSA lever the
-						// integer table can't give). Same terms as the integer path below,
-						// each scaled to 1024ths; the default-off Stormphrax sub-terms are
-						// intentionally omitted here (this is scaffolding — under SPRT).
-						r1024 := s.lmr1024[minInt(depth, 63)][minInt(searched, 63)]
-						hist := s.history[mover][m.To()]
-						if s.params.ContHist && s.cont != nil {
-							hist += s.contScore(ply, mover, m.To())
-						}
-						if s.params.ContHist2 && s.cont2 != nil {
-							hist += s.contScore2(ply, mover, m.To())
-						}
-						r1024 -= hist * 1024 / s.params.LMRHistDiv
-						if s.params.LMRCutnode && childCutnode {
-							r1024 += s.params.LMRCutnodeRed * 1024
-						}
-						// Whole-ply reduction, then the same [1, depth-1] clamp as OFF.
-						r := r1024 / 1024
-						// PV relief: reduce PV nodes one ply LESS (SF/Stormphrax apply this
-						// unconditionally). DEFAULT OFF → byte-identical; applied identically
-						// in both LMRFixedPoint branches, before the shared clamp.
-						if s.params.LMRPvRelief && isPV && r > 1 {
-							r--
-						}
-						if r < 1 {
-							r = 1
-						}
-						if r > depth-1 {
-							r = depth - 1
-						}
-						reduction = r
-					} else {
-					// Smooth log(d)·log(m) base in place of the flat 1/2; reduce
-					// less for good-history quiets, more for malus'd ones. Clamped
-					// to [1, depth-1] so a reduced move still searches ≥1 ply.
-					r := s.lmr[minInt(depth, 63)][minInt(searched, 63)]
-					hist := s.history[mover][m.To()]
-					if s.params.ContHist && s.cont != nil {
-						hist += s.contScore(ply, mover, m.To())
-					}
-					if s.params.ContHist2 && s.cont2 != nil {
-						hist += s.contScore2(ply, mover, m.To())
-					}
-					r -= hist / s.params.LMRHistDiv
-					// Cut-node: a node expected to fail high orders its best move first,
-					// so a late move here almost never raises alpha — reduce it harder
-					// (Stormphrax search.cpp:1173, r += cutnode). childCutnode is the
-					// current node's type.
-					if s.params.LMRCutnode && childCutnode {
-						r += s.params.LMRCutnodeRed
-					}
-					// Individual Stormphrax LMR terms (each independent, additive; the
-					// aggressive LMR2 *bundle* was rejected at movetime — these are not
-					// that). Only fire when their flag is on, so off is byte-identical.
-					if s.params.LMRImproving && !improving {
-						r++ // not improving ⇒ reduce late quiets a ply more
-					}
-					if s.params.LMRTtNoisy && ttMoveNoisy {
-						r += s.params.LMRTtNoisyRed // TT move is a capture ⇒ tactical node
-					}
-					if s.params.LMRAlpha {
-						r += alphaRaises * s.params.LMRAlphaScale / 1024
-					}
-					if s.params.LMRCheckReduce && givesCheck {
-						r -= s.params.LMRCheckRed // reduce a checking quiet LESS (don't skip it)
-					}
-					// PV relief: reduce PV nodes one ply LESS (SF/Stormphrax apply this
-					// unconditionally). DEFAULT OFF → byte-identical; applied identically
-					// in both LMRFixedPoint branches, before the shared clamp.
-					if s.params.LMRPvRelief && isPV && r > 1 {
-						r--
-					}
-					if r < 1 {
-						r = 1
-					}
-					if r > depth-1 {
-						r = depth - 1
-					}
-					reduction = r
-					}
-				} else {
-					reduction = 1
-					if searched >= 8 {
-						reduction = 2
+						break
 					}
 				}
 			}
-			// Zero-window scout. A REDUCED (LMR) child is searched as an expected cut
-			// node (true, matching Stormphrax's hardcoded `true` on the reduced search
-			// search.cpp:1186); an UNREDUCED scout is the opposite node type from the
-			// parent (!childCutnode, Stormphrax non-LMR zero-window search.cpp:1240).
-			scoutCut := true
-			if reduction == 0 {
-				scoutCut = !childCutnode
-			}
-			sc = -s.negamax(pos, newDepth-reduction, ply+1, -alpha-1, -alpha, scoutCut)
-			if sc > alpha && reduction > 0 {
-				// LMR re-search (zero window), opposite node type (Stormphrax
-				// search.cpp:1205). doDeeper/doShallower: adapt the re-search depth
-				// to how far the reduced scout beat alpha — a big overshoot searches
-				// deeper, a bare pass shallower (Stormphrax search.cpp:1190-1193).
-				rd := newDepth
-				if s.params.LMRDoDeeper {
-					if sc > bestScore+44+4*newDepth {
-						rd = newDepth + 1
-					} else if sc < bestScore+newDepth {
-						rd = newDepth - 1
-						if rd < 1 {
-							rd = 1
-						}
-					}
-				}
-				sc = -s.negamax(pos, rd, ply+1, -alpha-1, -alpha, !childCutnode)
-			}
-			if sc > alpha && sc < beta {
-				// PV full-window re-search: a PV child, never a cut node (false,
-				// Stormphrax search.cpp:1250).
-				sc = -s.negamax(pos, newDepth, ply+1, -beta, -alpha, false)
-			}
 		}
 
-		s.popKey()
-		pos.UndoMove(m, &u)
-		if s.useNNUE {
-			s.accPop()
-		}
-		if s.stop {
-			return 0
-		}
-		searched++
-		if quiet {
-			triedQuiets[nQuiets] = m
-			nQuiets++
-		} else if s.params.CaptHist && capture {
-			triedCaptures[nCaptures] = m
-			nCaptures++
+		if bestScore <= origAlpha {
+			flag = ttUpper
+		} else if bestScore >= beta {
+			flag = ttLower
 		}
 
-		if sc > bestScore {
-			bestScore = sc
-			bestMove = m
-			if ply == 0 {
-				s.rootBest = m
-				s.rootScore = sc
-				s.rootBestNodes = s.nodes - rootNodesBefore
-			}
-			if sc > alpha {
-				alpha = sc
-				alphaRaises++ // feeds the LMRAlpha reduction term for later moves
-				if alpha >= beta {
-					if quiet {
-						s.recordKiller(ply, m)
-						s.updateQuietStats(pos, m, triedQuiets[:nQuiets], depth)
-						s.updateContHist(pos, m, triedQuiets[:nQuiets], depth, ply)
-						s.updateContHist2(pos, m, triedQuiets[:nQuiets], depth, ply)
-					} else if s.params.CaptHist && capture {
-						s.updateCaptureStats(pos, m, triedCaptures[:nCaptures], depth)
-					}
-					break
-				}
-			}
+		// A singular-verification node (excludedMove set) describes only the restricted
+		// move set, so it must neither teach correction history nor write the TT.
+		if excludedMove != chess.NullMove {
+			return bestScore
 		}
-	}
+	} // end else (DeferredQuiets=off, existing code path)
 
-	if bestScore <= origAlpha {
-		flag = ttUpper
-	} else if bestScore >= beta {
-		flag = ttLower
-	}
-
-	// A singular-verification node (excludedMove set) describes only the restricted
-	// move set, so it must neither teach correction history nor write the TT.
-	if excludedMove != chess.NullMove {
-		return bestScore
-	}
-} // end else (DeferredQuiets=off, existing code path)
-
-// Shared post-loop: corrhist update, TT store (both paths reach here).
+	// Shared post-loop: corrhist update, TT store (both paths reach here).
 	// Correction history update: teach the tables the static-eval-vs-search error at
 	// this node. Only when the signal is trustworthy: out of check (static defined),
 	// a non-noisy best move (not a capture/promotion), a non-mate/non-TB score, and

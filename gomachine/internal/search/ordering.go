@@ -163,16 +163,18 @@ func (s *Searcher) recordKiller(ply int, m chess.Move) {
 // capEntry is a capture/promotion move with its ordering score, used by
 // scoreCaptures for the capture stage of deferred quiet picking.
 type capEntry struct {
-	idx   int        // index into the move list
+	idx   int // index into the move list
 	score int
 	Move  chess.Move // the move itself (cached to avoid ml.Get lookups)
 }
 
-// scoreCaptures scores every capture and promotion in ml (excluding ttMove
-// and excludedMove), insertion-sorts them by score descending, and returns
-// the sorted slice. Only called when DeferredQuiets is on.
-func (s *Searcher) scoreCaptures(pos *chess.Position, ml *chess.MoveList, ttMove, excludedMove chess.Move, ply int) []capEntry {
-	var caps [256]capEntry
+// scoreCaptures scores every capture and promotion in ml (excluding ttMove and
+// excludedMove) into the Searcher-owned per-ply buffer s.capBuf[ply],
+// insertion-sorts them by score descending IN PLACE, and returns the count.
+// Only called when DeferredQuiets is on. The buffer is Searcher-owned (never a
+// per-node make → no heap escape): the caller reads s.capBuf[ply][:n].
+func (s *Searcher) scoreCaptures(pos *chess.Position, ml *chess.MoveList, ttMove, excludedMove chess.Move, ply int) int {
+	caps := &s.capBuf[ply]
 	n := 0
 	for i := 0; i < ml.Len(); i++ {
 		m := ml.Get(i)
@@ -186,16 +188,32 @@ func (s *Searcher) scoreCaptures(pos *chess.Position, ml *chess.MoveList, ttMove
 		n++
 	}
 	// insertion sort by score descending (n is typically ≤ 10)
-	out := make([]capEntry, n)
-	copy(out, caps[:n])
 	for i := 1; i < n; i++ {
-		e := out[i]
+		e := caps[i]
 		j := i
-		for j > 0 && out[j-1].score < e.score {
-			out[j] = out[j-1]
+		for j > 0 && caps[j-1].score < e.score {
+			caps[j] = caps[j-1]
 			j--
 		}
-		out[j] = e
+		caps[j] = e
 	}
-	return out
+	return n
+}
+
+// selectCap performs one selection-sort step over buf: it finds the
+// highest-scored entry in [i, len) and swaps it into slot i. This mirrors
+// selectMoveLegacy (strict `>`, so ties keep the lower index) so the staged
+// quiet stage picks in the SAME order the non-deferred path's selectMove would
+// for the same quiets — while still ordering lazily, so a beta-cutoff avoids
+// sorting the tail.
+func selectCap(buf []capEntry, i int) {
+	best := i
+	for j := i + 1; j < len(buf); j++ {
+		if buf[j].score > buf[best].score {
+			best = j
+		}
+	}
+	if best != i {
+		buf[i], buf[best] = buf[best], buf[i]
+	}
 }
