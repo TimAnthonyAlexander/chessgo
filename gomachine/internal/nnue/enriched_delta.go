@@ -71,6 +71,52 @@ func appendAttackerEdges(dst []uint32, pos *chess.Position, sq chess.Square, occ
 	return dst
 }
 
+// appendAttackerEdgesBoth is the both-perspective twin of appendAttackerEdges: it
+// computes the attack geometry (targets := PseudoAttacks(pc, sq, occ) & occ) ONCE —
+// that geometry depends only on piece/square/occupancy, NOT on perspective — and
+// emits BOTH perspectives' threat edges from that single target set, exactly like
+// appendEnrichedFeaturesBoth. dstW gets White-persp indices, dstB Black-persp; the
+// per-perspective parts (aRel/vRel + orient's ^56 flip and ^mir mirror) stay inside
+// the single geometry loop. Byte-identical (per perspective) to two appendAttacker-
+// Edges calls, halving the magic-bitboard PseudoAttacks work per changed square.
+func appendAttackerEdgesBoth(dstW, dstB []uint32, pos *chess.Position, sq chess.Square, occ chess.Bitboard) ([]uint32, []uint32) {
+	pc := pos.PieceOn(sq)
+	atkType := pc.Type()
+	aRelW, aRelB := 0, 0
+	if pc.Color() != chess.White {
+		aRelW = 1
+	}
+	if pc.Color() != chess.Black {
+		aRelB = 1
+	}
+	mirW := perspMirror(pos, chess.White)
+	mirB := perspMirror(pos, chess.Black)
+	orientW := func(s chess.Square) int { return int(uint16(s) ^ mirW) }
+	orientB := func(s chess.Square) int { return int((uint16(s) ^ 56) ^ mirB) }
+	rfromW := orientW(sq)
+	rfromB := orientB(sq)
+	targets := chess.PseudoAttacks(pc, sq, occ) & occ
+	for targets != 0 {
+		tsq := targets.PopLSB()
+		victim := pos.PieceOn(tsq)
+		vicType := victim.Type()
+		vRelW, vRelB := 0, 0
+		if victim.Color() != chess.White {
+			vRelW = 1
+		}
+		if victim.Color() != chess.Black {
+			vRelB = 1
+		}
+		if idx, ok := sfThreatIndex(aRelW, atkType, vRelW, vicType, rfromW, orientW(tsq)); ok {
+			dstW = append(dstW, uint32(PsqSize)+uint32(idx))
+		}
+		if idx, ok := sfThreatIndex(aRelB, atkType, vRelB, vicType, rfromB, orientB(tsq)); ok {
+			dstB = append(dstB, uint32(PsqSize)+uint32(idx))
+		}
+	}
+	return dstW, dstB
+}
+
 // pushMoveAware is the O(delta) Push used when the net has moveAware set. It leaves
 // dst.fw/dst.fb untouched (the move-aware path never reads them; the assert path
 // rebuilds from scratch). It dispatches on the net's changedEdges toggle (default
@@ -291,14 +337,12 @@ func (st *EnrichedStack) computeDelta(pos *chess.Position, m chess.Move) (subW, 
 		if op != chess.NoPiece {
 			subW = append(subW, uint32(offW+FeatureIndex(chess.White, op, s^mirW)))
 			subB = append(subB, uint32(offB+FeatureIndex(chess.Black, op, s^mirB)))
-			subW = appendAttackerEdges(subW, pos, s, oldOcc, chess.White)
-			subB = appendAttackerEdges(subB, pos, s, oldOcc, chess.Black)
+			subW, subB = appendAttackerEdgesBoth(subW, subB, pos, s, oldOcc)
 		}
 		if np != chess.NoPiece {
 			addW = append(addW, uint32(offW+FeatureIndex(chess.White, np, s^mirW)))
 			addB = append(addB, uint32(offB+FeatureIndex(chess.Black, np, s^mirB)))
-			addW = appendAttackerEdges(addW, &child, s, newOcc, chess.White)
-			addB = appendAttackerEdges(addB, &child, s, newOcc, chess.Black)
+			addW, addB = appendAttackerEdgesBoth(addW, addB, &child, s, newOcc)
 		}
 		affected |= pos.AttackersTo(s, oldOcc)
 		affected |= child.AttackersTo(s, newOcc)
