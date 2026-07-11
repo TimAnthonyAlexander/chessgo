@@ -32,11 +32,6 @@ import "github.com/timanthonyalexander/gomachine/internal/chess"
 var contOffsets = [4]int{1, 2, 4, 6}
 
 const (
-	// cont2Max bounds a single ContHist2 entry (also the gravity denominator). Set
-	// to the butterfly-history bound so the blended base stays on the same scale as
-	// an individual entry and the whole ordering hierarchy is preserved.
-	cont2Max = 8192
-
 	// Coupled-gravity base-blend weights (sum to 1024, applied then /1024): the
 	// decay pull is a weighted average of the move's main (butterfly) history and
 	// its four continuation entries. Heavier weight on the near offsets (1/2) than
@@ -101,20 +96,24 @@ func (s *Searcher) cont2Base(ply int, curPc chess.Piece, to chess.Square) int {
 }
 
 // cont2Gravity applies one coupled ("updateWithBase") gravity step: nudge toward
-// ±cont2Max by bonus with a pull proportional to the shared base (not the entry's
-// own value), then clamp to int16 range. Mirrors Stormphrax HistoryEntry::updateWithBase.
-func cont2Gravity(e *int16, bonus, base int) {
-	if bonus > maxHistory {
-		bonus = maxHistory
-	} else if bonus < -maxHistory {
-		bonus = -maxHistory
+// ±maxHist by bonus with a pull proportional to the shared base (not the entry's
+// own value), then clamp to int16 range. maxHist is Params.MaxHistory — the shared
+// butterfly-history bound; cont2 entries live on the same scale as the main history
+// table (so the coupled base blend stays consistent and the ordering hierarchy is
+// preserved), which is why the entry bound / gravity denominator is that same value.
+// Mirrors Stormphrax HistoryEntry::updateWithBase.
+func cont2Gravity(e *int16, bonus, base, maxHist int) {
+	if bonus > maxHist {
+		bonus = maxHist
+	} else if bonus < -maxHist {
+		bonus = -maxHist
 	}
 	v := int(*e)
-	v += bonus - base*absInt(bonus)/cont2Max
-	if v > cont2Max {
-		v = cont2Max
-	} else if v < -cont2Max {
-		v = -cont2Max
+	v += bonus - base*absInt(bonus)/maxHist
+	if v > maxHist {
+		v = maxHist
+	} else if v < -maxHist {
+		v = -maxHist
 	}
 	*e = int16(v)
 }
@@ -127,7 +126,7 @@ func (s *Searcher) cont2Update(ply int, curPc chess.Piece, to chess.Square, bonu
 	for i, off := range contOffsets {
 		if off <= ply {
 			if p := s.contMove[ply-off]; p.ok {
-				cont2Gravity(&s.cont2.tbl[i][p.pc][p.to][curPc][to], bonus, base)
+				cont2Gravity(&s.cont2.tbl[i][p.pc][p.to][curPc][to], bonus, base, s.params.MaxHistory)
 			}
 		}
 	}
