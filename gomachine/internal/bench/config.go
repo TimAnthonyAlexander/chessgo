@@ -535,6 +535,13 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.SEEReuseQS = b
+		case "ttcutoffnonpv", "ttcutnonpv":
+			// SF fix (search.cpp:760): gate the early TT cutoff to non-PV nodes.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.TTCutoffNonPV = b
 		case "lmrcutnode", "lmrcut":
 			b, err := parseBool(val)
 			if err != nil {
@@ -1045,6 +1052,9 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.Prefetch != patch.Prefetch {
 		diffs = append(diffs, fmt.Sprintf("prefetch: %s→%s", onoff(base.Prefetch), onoff(patch.Prefetch)))
+	}
+	if base.TTCutoffNonPV != patch.TTCutoffNonPV {
+		diffs = append(diffs, fmt.Sprintf("ttcutoffnonpv: %s→%s", onoff(base.TTCutoffNonPV), onoff(patch.TTCutoffNonPV)))
 	}
 	if base.LMRCutnode != patch.LMRCutnode {
 		diffs = append(diffs, fmt.Sprintf("lmrcutnode: %s→%s", onoff(base.LMRCutnode), onoff(patch.LMRCutnode)))

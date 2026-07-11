@@ -1268,7 +1268,11 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 		ttDepth = int(e.depth)
 		ttFlag = e.flag
 		ttScore = e.scoreFromTT(ply)
-		if ply > 0 && excludedMove == chess.NullMove && int(e.depth) >= depth {
+		// TTCutoffNonPV (SF search.cpp:760): gate the early TT cutoff RETURN to non-PV
+		// nodes (isPV == beta-alpha > 1). We still keep the probed move/eval/bound for
+		// ordering, TTRefinesEval and singular; only the early return is suppressed at PV.
+		if ply > 0 && excludedMove == chess.NullMove && int(e.depth) >= depth &&
+			(!s.params.TTCutoffNonPV || beta-alpha <= 1) {
 			sc := e.scoreFromTT(ply)
 			switch e.flag {
 			case ttExact:

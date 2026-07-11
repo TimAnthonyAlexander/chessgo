@@ -107,6 +107,7 @@ type Params struct {
 	Aggr             int  // aggression style knob 0..100 (default 50 = neutral). Scales a small king-attack/tropism term ONTO the static eval: 50→off (byte-identical), 100→fully attacking, 0→solid/defensive. Effect = eval.AggressionTerm(pos)·(Aggr-50)/50. Style lever, NOT a strength patch (a deliberate eval distortion — expected to cost a little Elo; SPRT measures how much per level).
 	Prefetch         bool // PREFETCHT0 the TT slot for the child key the moment it's known (in pushKey, right after DoMove). Bit-exact (a prefetch never changes results). DEFAULT OFF — measured a WASH (−5.3 ± 7.4 @ 394 pairs movetime, coalla): our 64MB TT fits entirely in the EPYC's 128MB L3, so probes hit L3 (~15c), not memory — nothing to hide, and the per-call PREFETCHT0 overhead faintly nets negative. Kept as inert scaffolding: flip on IFF the TT ever exceeds L3 (bigger `-tt`, or heavy multi-game prod eviction). amd64 PREFETCHT0; no-op elsewhere.
 	SEEReuseQS       bool // qsearch SEE-prune reuse: read the SEE sign already encoded in the ordering score (captureScore tiers SEE<0 as scoreLosingCapture) instead of recomputing pos.SEE(m) in the qsearch loop. Bit-exact / NODE-COUNT-IDENTICAL (every move reaching the prune routes through captureScore, which computed the SAME pos.SEE at the SAME position; the tier gap is ~1M ≫ mvvlva+capthist so the sign reads cleanly at a mid-gap threshold). Pure NPS lever — dedups the double SEE per capture. DEFAULT OFF — under SPRT.
+	TTCutoffNonPV   bool // SF-divergence fix (SF search.cpp:760): gate the early TT cutoff to non-PV nodes — keep probing at PV nodes for move/eval/singular data, only skip the early RETURN there. DEFAULT OFF — byte-identical. Under SPRT.
 
 	// LMR / history / RFP tunables — promoted from hardcoded consts so SPSA can
 	// re-tune them v12-native (docs/open_tasks/spsa-margins.md: "the untapped leverage
@@ -497,6 +498,7 @@ func DefaultParams() Params {
 		DeferredQuiets:   false, // staged move picking (TT→captures→quiets); under SPRT
 		Prefetch:         false, // TT prefetch: WASH on our 64MB-TT/128MB-L3 box (fits in L3, nothing to hide). Scaffolding — see field comment.
 		SEEReuseQS:       true, // qsearch double-SEE dedup: reuse the SEE sign from the ordering score. Node-identical (see field comment). Bit-exact +2.78% NPS on coalla KB net (§30.2) — shipped default-on.
+		TTCutoffNonPV:   false, // SF search.cpp:760 — gate early TT cutoff to non-PV; DEFAULT OFF (byte-identical)
 
 		// Aggression style knob: 50 = neutral. At 50 the term is never evaluated, so
 		// the default engine is byte-identical to before this flag existed. Non-50 is
