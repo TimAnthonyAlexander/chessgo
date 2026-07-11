@@ -296,16 +296,15 @@ func loadDefaultKBNet() *nnue.EnrichedNet {
 		n.QuantizeFTInt8()
 	} else {
 		n.QuantizeForInt8() // int8 the multilayer TAIL (L1)
-		// SF18 full-threats config (this branch only, ThreatBlock=79856): the threat FT
-		// is trained int8-QAT (bullet faux_quantise on the l0 threat rows to the ftQA
-		// grid), so int8 the 79,856 threat columns too — an 82 MB int16 threat block is
-		// memory-bound (DRAM scatter, blows the ~1-2% NPS budget), whereas the int8 block
-		// is 40.9 MB + the dotU8I8 kernel. Validated CLAMP-CLEAN at sb8 by
-		// TestKBNetClampCount (>0.5% folded threat rows clamped → the net, not this line,
-		// is wrong → split-affine retrain). NOTE: on the PROD binary (ThreatBlock=9216,
-		// ml640, NOT int8-FT-QAT) this call is intentionally absent — there int16 threat
-		// FT is correct (int8 would clamp ~2718 weights, lossy).
-		n.QuantizeFTInt8()
+		// SF18 full-threats config (ThreatBlock=79856): the threat FT deploys as INT16, NOT
+		// int8. The l0-weight int8-QAT was removed from the recipe (it froze from-scratch
+		// training — round(W*QA)/QA pins tiny init weights at 0), so the threat FT rows are
+		// NOT on the int8 grid. Measured on the mature sb640 net: int8 threat FT clamps
+		// 0.48% of rows and shifts eval by 65.97 cp RMS (max 310 cp) — TestKBNetClampCount
+		// FAILS. int16 threat FT is lossless and costs ~2.9% NPS (bench nps-ft; only ~70
+		// active columns scatter per push, so the 40 MB table size is a cache effect, not
+		// op count). That NPS is far cheaper than 66 cp of eval error. If a future net is
+		// trained with proper split-affine threat-row QAT, re-enable int8 here.
 		// Enable the O(delta) move-aware incremental push — bit-exact and strictly
 		// better (enriched.go:648). ImportBulletEnrichedNet leaves it OFF, so the
 		// multilayer prod net eagerly recomputed the full base+threat feature set on
@@ -369,6 +368,8 @@ func cmdBench(args []string) {
 		cmdBenchCalibrate(args[1:])
 	case "nps":
 		cmdBenchNPS(args[1:])
+	case "nps-ft":
+		cmdBenchNPSFT(args[1:])
 	case "-h", "--help", "help":
 		benchUsage()
 	default:
