@@ -421,6 +421,7 @@ type bestMoveRequest struct {
 		Aggr     *int   `json:"aggr"`     // aggression style 0..100 (nil/absent → 50 = neutral); applies to the rating path only
 		Book     *bool  `json:"book"`     // admin engine-vs-engine: consult the opening book on the rating path (nil/absent → off)
 		Fast     *bool  `json:"fast"`     // rating path only: use the fast weakened search (RootNearBest) — honors movetime, cheap at every rating (Guess-the-Elo generation)
+		Worst    *bool  `json:"worst"`    // "Unlosable" bot: play the WORST legal move (minimizes the mover's eval); ignores rating/level/book/tablebase
 	} `json:"limits"`
 }
 
@@ -435,8 +436,11 @@ func (s *Server) handleBestMove(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Full-strength analysis (no bot level/rating) can be served instantly from the
-	// opening book — this is the start position re-searched on every analysis.
-	if req.Limits.Rating == nil && req.Limits.Level == nil {
+	// opening book — this is the start position re-searched on every analysis. The
+	// "Unlosable" bot must NOT hit the book (that returns the BEST move, the opposite
+	// of what it wants), so skip the shortcut when worst is set.
+	worst := req.Limits.Worst != nil && *req.Limits.Worst
+	if req.Limits.Rating == nil && req.Limits.Level == nil && !worst {
 		if e, m, hit := s.bookHit(pos); hit {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"bestmove": m.String(),
@@ -461,6 +465,10 @@ func (s *Server) handleBestMove(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	var res engine.BestResult
 	switch {
+	case worst:
+		// "Unlosable" bot: deliberately play the worst legal move. Independent of
+		// rating/level/aggr/book — it ranks every move and picks the minimum.
+		res = eng.BestMoveWorst(pos, hist)
 	case req.Limits.Rating != nil && req.Limits.Fast != nil && *req.Limits.Fast:
 		// Fast weakened path (Guess-the-Elo generation): best at full depth + only
 		// near-best alternatives, so it honors movetime and stays cheap at every

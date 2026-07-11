@@ -53,7 +53,9 @@ class BotGameController extends Controller
     public function post(): JsonResponse
     {
         $this->validate([
-            'rating' => 'integer|min:700|max:2900',
+            // rating 0 = the "Unlosable" bot (Standard rules, engine plays the WORST
+            // move); real bot strengths are 700..2900. min:0 admits the sentinel.
+            'rating' => 'integer|min:0|max:2900',
             'human_color' => 'in:w,b',
             'fen' => 'string',
             'variant' => 'string|in:standard,chess960,duck,crazyhouse',

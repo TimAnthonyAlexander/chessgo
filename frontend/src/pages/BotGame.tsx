@@ -47,7 +47,17 @@ import { useDuckInteraction } from '../lib/useDuckInteraction'
 import { useCrazyhouseDrops } from '../lib/useCrazyhouseDrops'
 import PocketPanel from '../components/PocketPanel'
 import { useMoveNavKeys } from '../lib/useMoveNavKeys'
-import { type ColorChoice, loadBotSettings, saveBotSettings } from '../lib/botSettings'
+import {
+    type ColorChoice,
+    coordToRating,
+    loadBotSettings,
+    ratingLabel,
+    ratingToCoord,
+    RATING_SLIDER_MAX,
+    RATING_SLIDER_MIN,
+    saveBotSettings,
+    UNLOSABLE_RATING,
+} from '../lib/botSettings'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { useAuth } from '../lib/auth'
 import { usePrefs } from '../lib/settings'
@@ -517,7 +527,13 @@ export default function BotGame() {
                             customStart={!!startFen}
                             onRating={setRating}
                             onColor={setColorChoice}
-                            onVariant={setVariant}
+                            onVariant={(v) => {
+                                setVariant(v)
+                                // "Unlosable" (worst-move) is a Standard-only strength;
+                                // the Duck/Crazyhouse bots ignore rating 0, so leaving
+                                // Standard at that stop must snap to a real rating.
+                                if (v !== 'standard' && rating <= UNLOSABLE_RATING) setRating(1500)
+                            }}
                             onStart={newGame}
                         />
                         {error && <ErrorBanner sx={{ mt: 1.5 }}>{error}</ErrorBanner>}
@@ -689,7 +705,7 @@ function MovePanel({
                     {/* Zen mode hides the rating chrome (distraction-free play). */}
                     {!zen && (
                         <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
-                            Engine · ~{game.rating ?? rating} Elo
+                            Engine · {ratingLabel(game.rating ?? rating)}
                         </Typography>
                     )}
                 </Box>
@@ -944,17 +960,23 @@ function Setup({
                             color: 'var(--accent)',
                         }}
                     >
-                        ~{rating} Elo
+                        {ratingLabel(rating)}
                     </Typography>
                 </Box>
                 <Box sx={{ px: 0.5 }}>
+                    {/* The slider works in "coordinate" space so its lowest stop can be
+                        the Unlosable sentinel (stored as rating 0, one notch below the
+                        700 floor) without a dead 0..700 gap in the track. */}
                     <Slider
-                        value={rating}
-                        onChange={(_, v) => onRating(v as number)}
-                        min={700}
-                        max={2900}
+                        value={ratingToCoord(rating)}
+                        onChange={(_, v) => onRating(coordToRating(v as number))}
+                        // The Unlosable stop (below the 700 floor) is Standard-only;
+                        // other variants start the track at the real-rating floor.
+                        min={variant === 'standard' ? RATING_SLIDER_MIN : 700}
+                        max={RATING_SLIDER_MAX}
                         step={50}
                         valueLabelDisplay="auto"
+                        valueLabelFormat={(v) => ratingLabel(coordToRating(v))}
                         sx={sliderSx}
                     />
                 </Box>
@@ -1010,6 +1032,8 @@ function Label({ children }: { children: ReactNode }) {
 }
 
 function ratingHint(rating: number): string {
+    if (rating <= UNLOSABLE_RATING)
+        return 'Unlosable — the engine plays the worst move it can find. You cannot lose.'
     if (rating < 1000) return 'Beginner — frequent blunders, gentle.'
     if (rating < 1400) return 'Casual — a fair improver, the odd slip.'
     if (rating < 1800) return 'Club — punishes loose play.'
