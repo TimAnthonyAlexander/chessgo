@@ -854,6 +854,9 @@ func DiffParams(base, patch search.Params) string {
 	if base.LMRHistDiv != patch.LMRHistDiv {
 		diffs = append(diffs, fmt.Sprintf("lmrhistdiv: %d→%d", base.LMRHistDiv, patch.LMRHistDiv))
 	}
+	if base.LMRPvRelief != patch.LMRPvRelief {
+		diffs = append(diffs, fmt.Sprintf("lmrpvrelief: %s→%s", onoff(base.LMRPvRelief), onoff(patch.LMRPvRelief)))
+	}
 	if base.RFPMargin != patch.RFPMargin {
 		diffs = append(diffs, fmt.Sprintf("rfpmargin: %d→%d", base.RFPMargin, patch.RFPMargin))
 	}
