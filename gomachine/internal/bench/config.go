@@ -556,6 +556,13 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.TTRefinesEval = b
+		case "qscaptseemargin", "qsseemargin":
+			// SF fix (search.cpp:1665): qsearch losing-capture SEE margin. Default 0.
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("qscaptseemargin: %q is not an int", val)
+			}
+			base.QSCaptSEEMargin = n
 		case "lmrcutnode", "lmrcut":
 			b, err := parseBool(val)
 			if err != nil {
@@ -1075,6 +1082,9 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.TTRefinesEval != patch.TTRefinesEval {
 		diffs = append(diffs, fmt.Sprintf("ttrefineseval: %s→%s", onoff(base.TTRefinesEval), onoff(patch.TTRefinesEval)))
+	}
+	if base.QSCaptSEEMargin != patch.QSCaptSEEMargin {
+		diffs = append(diffs, fmt.Sprintf("qscaptseemargin: %d→%d", base.QSCaptSEEMargin, patch.QSCaptSEEMargin))
 	}
 	if base.LMRCutnode != patch.LMRCutnode {
 		diffs = append(diffs, fmt.Sprintf("lmrcutnode: %s→%s", onoff(base.LMRCutnode), onoff(patch.LMRCutnode)))

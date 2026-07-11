@@ -2890,7 +2890,13 @@ func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 		// scores[i]≤seeLosingScoreThreshold ⟺ SEE<0 — node-count-identical.
 		if !inCheck && s.params.SEE && isCapture(pos, m) && m.Type() != chess.Promotion {
 			losing := false
-			if s.params.SEEReuseQS {
+			if s.params.QSCaptSEEMargin != 0 {
+				// SF search.cpp:1665: keep captures losing up to QSCaptSEEMargin cp
+				// (`if (!see_ge(move, -80)) continue`). Only reachable when the margin is
+				// non-zero, so the default-0 path below stays byte-identical (a threshold
+				// can't be read from the reused ordering-score sign, so this calls SEEGE).
+				losing = !pos.SEEGE(m, -s.params.QSCaptSEEMargin)
+			} else if s.params.SEEReuseQS {
 				losing = scores[i] <= seeLosingScoreThreshold
 			} else {
 				losing = pos.SEE(m) < 0
