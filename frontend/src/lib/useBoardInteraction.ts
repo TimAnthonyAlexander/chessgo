@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { applyUciVisually, type BoardMap, parseFen, type Square } from './chess'
 import { playForMove } from './sounds'
 
@@ -132,22 +132,36 @@ export function useBoardInteraction(control: BoardControl): BoardInteraction {
         return b
     }, [override, fen, premoves])
 
-    // When it becomes our turn, try the HEAD of the chain against the real legal
-    // moves (match from→to, ignoring the promotion piece). If it's legal we play it
-    // and keep the rest queued (they'll resolve on our following turns). If it's
-    // illegal the WHOLE chain collapses — a premove is only reachable once every
-    // earlier one has already been played, so a failed head is a failed prior move.
+    // Fen of the position we last FIRED a premove into. After we submit our move,
+    // `fen`/`legalMoves`/`myTurn` don't update synchronously — they echo back from the
+    // game source a beat later — so for a moment we're still `myTurn:true` with the
+    // PRE-move legal-move list. Without this guard the effect re-runs the instant we
+    // shift the chain and validates the NEXT premove against those stale legal moves
+    // (where our piece hasn't moved yet): it never matches, and the whole chain wrongly
+    // collapses. Gating on `fen` fires at most one premove per distinct position; each
+    // played move changes the position (incl. the move counters), so the next premove
+    // only resolves once the board has genuinely advanced.
+    const lastFiredFen = useRef<string | null>(null)
+
+    // When it becomes our turn (at a position we haven't already fired into), try the
+    // HEAD of the chain against the real legal moves (match from→to, ignoring the
+    // promotion piece). If it's legal we play it and keep the rest queued (they resolve
+    // on our following turns). If it's illegal the WHOLE chain collapses — a premove is
+    // only reachable once every earlier one has been played, so a failed head is a
+    // failed prior move.
     useEffect(() => {
         if (!myTurn || premoves.length === 0) return
+        if (lastFiredFen.current === fen) return // already fired here; await a real advance
         const [head, ...rest] = premoves
         const match = legalMoves.find((m) => m.slice(0, 4) === head.uci.slice(0, 4))
         if (match) {
+            lastFiredFen.current = fen
             setPremoves(rest)
             executeMove(match)
         } else {
             setPremoves([])
         }
-    }, [myTurn, premoves, legalMoves, executeMove])
+    }, [myTurn, premoves, legalMoves, fen, executeMove])
 
     return {
         // Show the projected premove chain when one is queued (it already folds in
