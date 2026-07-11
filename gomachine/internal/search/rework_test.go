@@ -19,6 +19,34 @@ func TestSingularParamsPreserveDefault(t *testing.T) {
 	}
 }
 
+// TestPrunerParamsPreserveDefault confirms the shallow-pruner depth caps + shape
+// constants promoted to Params fields keep DefaultParams byte-identical (each
+// default equals the old hardcoded const / literal), so no playing behavior moves.
+func TestPrunerParamsPreserveDefault(t *testing.T) {
+	d := DefaultParams()
+	cases := []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"RFPMaxDepth", d.RFPMaxDepth, rfpMaxDepth},
+		{"FutilityMaxDepth", d.FutilityMaxDepth, futilityMaxDepth},
+		{"LMPMaxDepth", d.LMPMaxDepth, lmpMaxDepth},
+		{"HistPruneMaxDepth", d.HistPruneMaxDepth, histPruneMaxDepth},
+		{"HistPruneMargin", d.HistPruneMargin, histPruneMargin},
+		{"LMPBase", d.LMPBase, 3},
+		{"LMPMultX10", d.LMPMultX10, 10},
+		{"NMPDepthDiv", d.NMPDepthDiv, 4},
+		{"NMPEvalCap", d.NMPEvalCap, 3},
+		{"LMRMinMoves", d.LMRMinMoves, 4},
+	}
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("%s default %d != expected const %d", c.name, c.got, c.want)
+		}
+	}
+}
+
 // TestIIRPVOnlyWired confirms the reworked (PV-only) IIR is still wired: turning
 // it on changes the searched tree. (It now fires only on PV nodes, so the change
 // is smaller than the old all-nodes variant, but must be non-zero.)

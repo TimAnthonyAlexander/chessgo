@@ -44,6 +44,22 @@ var spsaFields = map[string]spsaField{
 	// small cp base (~7); AspVarScale the |prevScore|²·scale/2²⁰ numerator (~65).
 	"aspbasedelta": {func(p *search.Params, v int) { p.AspBaseDelta = v }, func(p search.Params) int { return p.AspBaseDelta }, 2},
 	"aspvarscale":  {func(p *search.Params, v int) { p.AspVarScale = v }, func(p search.Params) int { return p.AspVarScale }, 10},
+	// Shallow-pruner depth caps + shape constants (promoted from consts so the
+	// highest-Elo pruners are SPSA-reachable — docs/open_tasks/spsa-margins.md).
+	// Suggested spec bounds: rfpmaxdepth [4..12], futilitymaxdepth [2..10],
+	// lmpmaxdepth [4..12], histprunemaxdepth [2..10], histprunemargin [-3000..-200],
+	// lmpbase [1..6], lmpmultx10 [5..20], nmpdepthdiv [2..8], nmpevalcap [1..6],
+	// lmrminmoves [2..8].
+	"rfpmaxdepth":       {func(p *search.Params, v int) { p.RFPMaxDepth = v }, func(p search.Params) int { return p.RFPMaxDepth }, 1},
+	"futilitymaxdepth":  {func(p *search.Params, v int) { p.FutilityMaxDepth = v }, func(p search.Params) int { return p.FutilityMaxDepth }, 1},
+	"lmpmaxdepth":       {func(p *search.Params, v int) { p.LMPMaxDepth = v }, func(p search.Params) int { return p.LMPMaxDepth }, 1},
+	"histprunemaxdepth": {func(p *search.Params, v int) { p.HistPruneMaxDepth = v }, func(p search.Params) int { return p.HistPruneMaxDepth }, 1},
+	"histprunemargin":   {func(p *search.Params, v int) { p.HistPruneMargin = v }, func(p search.Params) int { return p.HistPruneMargin }, 200},
+	"lmpbase":           {func(p *search.Params, v int) { p.LMPBase = v }, func(p search.Params) int { return p.LMPBase }, 1},
+	"lmpmultx10":        {func(p *search.Params, v int) { p.LMPMultX10 = v }, func(p search.Params) int { return p.LMPMultX10 }, 2},
+	"nmpdepthdiv":       {func(p *search.Params, v int) { p.NMPDepthDiv = v }, func(p search.Params) int { return p.NMPDepthDiv }, 1},
+	"nmpevalcap":        {func(p *search.Params, v int) { p.NMPEvalCap = v }, func(p search.Params) int { return p.NMPEvalCap }, 1},
+	"lmrminmoves":       {func(p *search.Params, v int) { p.LMRMinMoves = v }, func(p search.Params) int { return p.LMRMinMoves }, 1},
 }
 
 // spsaAliases maps the short spec spellings (shared with bench.ParseParams) to the
@@ -69,6 +85,12 @@ var spsaAliases = map[string]string{
 	"histmmax":      "histmalusmax",
 	"aspbase":       "aspbasedelta",
 	"aspvar":        "aspvarscale",
+	"rfpmd":         "rfpmaxdepth",
+	"futmd":         "futilitymaxdepth",
+	"lmpmd":         "lmpmaxdepth",
+	"hpmd":          "histprunemaxdepth",
+	"hpm":           "histprunemargin",
+	"lmrmin":        "lmrminmoves",
 }
 
 func canonSPSAName(name string) (string, bool) {

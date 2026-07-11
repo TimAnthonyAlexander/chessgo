@@ -122,6 +122,28 @@ type Params struct {
 	HistMalusScale int // history malus scale, decoupled from the bonus (SF/Stormphrax tune malus separately). DEFAULT = the bonus values → byte-identical until tuned.
 	HistMalusMax   int // history malus cap, decoupled from the bonus (SF/Stormphrax tune malus separately). DEFAULT = the bonus values → byte-identical until tuned.
 
+	// Shallow-pruner depth caps + shape constants, promoted from hardcoded consts
+	// so SPSA can re-tune the highest-Elo pruners v12-native (docs/open_tasks/
+	// spsa-margins.md). Every default below equals the historical const, so
+	// DefaultParams is byte-identical (guarded by rework_test.go).
+	RFPMaxDepth       int // RFP applies only at depth <= this (default 8, old rfpMaxDepth)
+	FutilityMaxDepth  int // frontier futility applies only at depth <= this (default 6, old futilityMaxDepth)
+	LMPMaxDepth       int // late-move pruning applies only at depth <= this (default 8, old lmpMaxDepth)
+	HistPruneMaxDepth int // history pruning applies only at depth <= this (default 6, old histPruneMaxDepth)
+	HistPruneMargin   int // history-pruning threshold: prune a late quiet when hist < HistPruneMargin·depth (default -1000, old histPruneMargin)
+	// LMP move-count limit = LMPBase + LMPMultX10·depth²/10 (the depth² coefficient
+	// is ×10 so it's fractionally tunable). Defaults 3 / 10 reproduce 3+depth² exactly.
+	LMPBase    int
+	LMPMultX10 int
+	// Null-move reduction shape: R = NullMoveR + depth/NMPDepthDiv (+ an eval-scaled
+	// add capped at NMPEvalCap when NmpGate is on). Defaults 4 / 3 reproduce the old
+	// depth/4 divisor and the >3 cap byte-for-byte.
+	NMPDepthDiv int
+	NMPEvalCap  int
+	// LMR onset: reduce late moves only once this many have been searched at the node
+	// (default 4, old `searched >= 4`).
+	LMRMinMoves int
+
 	// TTBucketShift sets the transposition-table cluster width at table creation
 	// (log2 slots per bucket): 0 = direct-mapped (current/default, byte-identical),
 	// 2 = 4 slots per 64-byte cache line. Bucketing lets probe scan all slots
@@ -476,6 +498,18 @@ func DefaultParams() Params {
 		// sites are byte-identical to the shared-knob behavior until SPSA moves these.
 		HistMalusScale: 32,
 		HistMalusMax:   1536,
+		// Shallow-pruner depth caps + shapes — each default references the historical
+		// const (or its literal) so DefaultParams stays byte-identical. SPSA targets.
+		RFPMaxDepth:       rfpMaxDepth,       // 8
+		FutilityMaxDepth:  futilityMaxDepth,  // 6
+		LMPMaxDepth:       lmpMaxDepth,       // 8
+		HistPruneMaxDepth: histPruneMaxDepth, // 6
+		HistPruneMargin:   histPruneMargin,   // -1000
+		LMPBase:           3,                 // 3 + depth² move-count limit base
+		LMPMultX10:        10,                // ×10 coefficient on depth² (1.0×)
+		NMPDepthDiv:       4,                 // R += depth/4
+		NMPEvalCap:        3,                 // eval-scaled NMP add capped at 3
+		LMRMinMoves:       4,                 // reduce from the 4th searched move on
 		// TT bucketing: 0 = direct-mapped (byte-identical to the pre-bucketing
 		// table). Flip to 2 (4-slot clusters) via ttcluster=on to SPRT the bucketed
 		// TT — probe scans 4 slots in one cache line, store keeps the best victim.

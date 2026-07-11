@@ -1389,7 +1389,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 	if s.params.Improving {
 		rfpDepth = depth - impInt
 	}
-	rfpCap := rfpMaxDepth
+	rfpCap := s.params.RFPMaxDepth
 	rfpM := s.params.RFPMargin * rfpDepth
 	if s.params.RFPQuad {
 		rfpCap = 12
@@ -1423,11 +1423,11 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 		pos.DoNullMove(&u)
 		s.pushKey(pos.Key())
 		s.contMove[ply] = contEntry{} // null move: child has no continuation parent
-		r := s.params.NullMoveR + depth/4
+		r := s.params.NullMoveR + depth/s.params.NMPDepthDiv
 		if s.params.NmpGate {
 			add := (staticEval - beta) / s.params.NmpEvalDivisor
-			if add > 3 {
-				add = 3
+			if add > s.params.NMPEvalCap {
+				add = s.params.NMPEvalCap
 			}
 			if add < 0 {
 				add = 0
@@ -1767,10 +1767,12 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 			}
 		}
 
-		// LMP limit (shared by quiet stage).
-		lmpLimitDQ := 3 + depth*depth
+		// LMP limit (shared by quiet stage). LMPBase + LMPMultX10·depth²/10 (defaults
+		// 3 / 10 → 3+depth²; ×10 lets SPSA tune the depth² coefficient fractionally).
+		lmpBase := s.params.LMPBase + (s.params.LMPMultX10*depth*depth)/10
+		lmpLimitDQ := lmpBase
 		if s.params.Improving {
-			lmpLimitDQ = (3 + depth*depth) / (2 - impInt)
+			lmpLimitDQ = lmpBase / (2 - impInt)
 		}
 
 		// Search good captures (score ≥ scoreCapture = winning/equal).
@@ -1932,7 +1934,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 				lmpLim += histVal / 4096
 			}
 			if s.params.LMP && !isPV && !inCheck && searched > 0 &&
-				depth <= lmpMaxDepth && bestScore > -mateThreshold &&
+				depth <= s.params.LMPMaxDepth && bestScore > -mateThreshold &&
 				searched >= lmpLim {
 				continue
 			}
@@ -1942,14 +1944,14 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 				futMargin += histVal / 128
 			}
 			if s.params.Futility && !isPV && !inCheck && searched > 0 &&
-				depth <= futilityMaxDepth && bestScore > -mateThreshold &&
+				depth <= s.params.FutilityMaxDepth && bestScore > -mateThreshold &&
 				staticEval+futMargin <= alpha {
 				continue
 			}
 
 			if s.params.HistPrune && !isPV && !inCheck && searched > 0 &&
-				depth <= histPruneMaxDepth && bestScore > -mateThreshold {
-				if histVal < histPruneMargin*depth {
+				depth <= s.params.HistPruneMaxDepth && bestScore > -mateThreshold {
+				if histVal < s.params.HistPruneMargin*depth {
 					s.dbgHistPrune++
 					continue
 				}
@@ -2006,7 +2008,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 						reduction = r
 					}
 				}
-			} else if s.params.LMR && depth >= 3 && !inCheck && (!givesCheck || s.params.LMRCheckReduce) && searched >= 4 {
+			} else if s.params.LMR && depth >= 3 && !inCheck && (!givesCheck || s.params.LMRCheckReduce) && searched >= s.params.LMRMinMoves {
 				if s.params.LMRFormula {
 					r := s.lmr[minInt(depth, 63)][minInt(searched, 63)]
 					r -= histVal / s.params.LMRHistDiv
@@ -2232,9 +2234,11 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 
 	// Late-move-pruning move-count limit. Improving lets more late quiets through
 	// (2−improving halves the budget when the position is not trending our way).
-	lmpLimit := 3 + depth*depth
+	// LMPBase + LMPMultX10·depth²/10 (defaults 3 / 10 → 3+depth²).
+	lmpBase := s.params.LMPBase + (s.params.LMPMultX10*depth*depth)/10
+	lmpLimit := lmpBase
 	if s.params.Improving {
-		lmpLimit = (3 + depth*depth) / (2 - impInt)
+		lmpLimit = lmpBase / (2 - impInt)
 	}
 
 	// Singular extension: if the TT move is, at a shallower search, much better than
@@ -2349,7 +2353,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 			lmpLim += histVal / 4096 // ±~2 moves of slack from history
 		}
 		if s.params.LMP && quiet && !isPV && !inCheck && searched > 0 &&
-			depth <= lmpMaxDepth && bestScore > -mateThreshold &&
+			depth <= s.params.LMPMaxDepth && bestScore > -mateThreshold &&
 			searched >= lmpLim {
 			continue
 		}
@@ -2363,7 +2367,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 			futMargin += histVal / 128 // ±~64cp from history
 		}
 		if s.params.Futility && quiet && !isPV && !inCheck && searched > 0 &&
-			depth <= futilityMaxDepth && bestScore > -mateThreshold &&
+			depth <= s.params.FutilityMaxDepth && bestScore > -mateThreshold &&
 			staticEval+futMargin <= alpha {
 			continue
 		}
@@ -2374,7 +2378,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 		// computation (butterfly + continuation history). The threshold grows more
 		// negative with depth, so deeper nodes prune only the very worst quiets.
 		if s.params.HistPrune && quiet && !isPV && !inCheck && searched > 0 &&
-			depth <= histPruneMaxDepth && bestScore > -mateThreshold {
+			depth <= s.params.HistPruneMaxDepth && bestScore > -mateThreshold {
 			hist := s.history[mover][m.To()]
 			if s.params.ContHist && s.cont != nil {
 				hist += s.contScore(ply, mover, m.To())
@@ -2382,7 +2386,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 			if s.params.ContHist2 && s.cont2 != nil {
 				hist += s.contScore2(ply, mover, m.To())
 			}
-			if hist < histPruneMargin*depth {
+			if hist < s.params.HistPruneMargin*depth {
 				s.dbgHistPrune++
 				continue
 			}
@@ -2523,7 +2527,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 						reduction = r
 					}
 				}
-			} else if s.params.LMR && depth >= 3 && quiet && !inCheck && (!givesCheck || s.params.LMRCheckReduce) && searched >= 4 {
+			} else if s.params.LMR && depth >= 3 && quiet && !inCheck && (!givesCheck || s.params.LMRCheckReduce) && searched >= s.params.LMRMinMoves {
 				if s.params.LMRFormula {
 					if s.params.LMRFixedPoint {
 						// ×1024 fixed-point reduction (SF18/Stormphrax): accumulate the
