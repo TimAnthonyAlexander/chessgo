@@ -68,9 +68,9 @@ Run on **coalla** (12 cores, AVX-512), newest SIMD binary + current prod net.
 
 ## Results log
 
-| Date | Binary / net | movetime · threads · pairs | vs SF18 (3650) | vs Reckless (3646) | vs Stormphrax (3615) | **CCRL est.** | Notes |
+| Date | Binary / net | movetime · threads · games | vs SF18 (3650) | vs Reckless (3646) | vs Stormphrax (3615) | **CCRL est.** | Notes |
 |---|---|---|---|---|---|---|---|
-| _pending_ | full-threats `ft_final.bin` @ 36b8839 | 2000ms · 4T · 30 | … | … | … | … | first CCRL-conditions run |
+| 2026-07-11 | full-threats `ft_final.bin` @ 36b8839 | 2000ms · 4T · 30g | 28.3% · −140 ± 64 → **3510** | 31.7% · −117 ± 56 → **3529** | 25.0% · −154 ± 85 → ~3461 (10/15, partial) | **~3500–3520** | First CCRL-conditions run. SF+Reckless (both ~3650) final and in tight agreement; Stormphrax stopped early at 10/15. 0 wins / 36 draws / 24 losses vs the two 3650 anchors — very drawish, holds top engines but never out-wins them. Absolute is a band (2s proxy, top-4 anchors only); trust the tracked delta. |
 
 _(Append one row per measurement. Keep the protocol fixed; if you change it, bump to
 PROTOCOL v2 and note the break so old/new rows aren't compared directly.)_
