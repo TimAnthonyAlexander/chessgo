@@ -26,7 +26,15 @@ func Run() {
 }
 
 func runIO(in io.Reader, out io.Writer) {
-	eng := engine.New(ttSizeMB)
+	// threads / ttMB are configurable via `setoption Threads/Hash` so gomachine can
+	// be tested as-deployed (multi-core Lazy SMP) and match a GUI/gauntlet's hash —
+	// e.g. an Abitur CCRL run at 4 threads. Changing either rebuilds the engine; the
+	// NNUE net is a process global (nnue.SetEnriched), so it survives the rebuild.
+	// No tablebase is attached on the UCI path (SetTablebase is never called), so a
+	// UCI gomachine plays Syzygy-free — fair against opponents without EGTBs.
+	threads := 1
+	ttMB := ttSizeMB
+	eng := engine.NewWithThreads(ttMB, threads)
 	pos, _ := chess.ParseFEN(chess.StartFEN)
 	var history []uint64
 
@@ -43,11 +51,28 @@ func runIO(in io.Reader, out io.Writer) {
 			fmt.Fprintln(out, "id name gomachine")
 			fmt.Fprintln(out, "id author Tim Anthony Alexander")
 			fmt.Fprintln(out, "option name Level type spin default 10 min 0 max 10")
+			fmt.Fprintln(out, "option name Threads type spin default 1 min 1 max 256")
+			fmt.Fprintln(out, "option name Hash type spin default 64 min 1 max 1048576")
 			fmt.Fprintln(out, "uciok")
 		case "isready":
 			fmt.Fprintln(out, "readyok")
+		case "setoption":
+			if name, value, ok := parseSetoption(fields); ok {
+				switch strings.ToLower(name) {
+				case "threads":
+					if n, err := strconv.Atoi(value); err == nil && n >= 1 {
+						threads = n
+						eng = engine.NewWithThreads(ttMB, threads)
+					}
+				case "hash":
+					if n, err := strconv.Atoi(value); err == nil && n >= 1 {
+						ttMB = n
+						eng = engine.NewWithThreads(ttMB, threads)
+					}
+				}
+			}
 		case "ucinewgame":
-			eng = engine.New(ttSizeMB)
+			eng = engine.NewWithThreads(ttMB, threads)
 			pos, _ = chess.ParseFEN(chess.StartFEN)
 			history = nil
 		case "position":
@@ -60,6 +85,27 @@ func runIO(in io.Reader, out io.Writer) {
 			return
 		}
 	}
+}
+
+// parseSetoption parses "setoption name <Name...> value <Value...>" into the
+// option name and value. Handles multi-word names/values. Returns ok=false if the
+// line is malformed (missing name/value).
+func parseSetoption(fields []string) (name, value string, ok bool) {
+	nameIdx, valueIdx := -1, -1
+	for i, f := range fields {
+		switch strings.ToLower(f) {
+		case "name":
+			nameIdx = i
+		case "value":
+			valueIdx = i
+		}
+	}
+	if nameIdx < 0 || valueIdx <= nameIdx+1 || valueIdx+1 >= len(fields) {
+		return "", "", false
+	}
+	name = strings.Join(fields[nameIdx+1:valueIdx], " ")
+	value = strings.Join(fields[valueIdx+1:], " ")
+	return name, value, true
 }
 
 // parsePosition handles "position startpos [moves ...]" and
