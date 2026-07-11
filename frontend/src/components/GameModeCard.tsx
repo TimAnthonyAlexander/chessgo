@@ -1,6 +1,7 @@
 import { Box, Typography } from '@mui/material'
 import { Infinity as InfinityIcon } from 'lucide-react'
 import { type Variant, VARIANT_LABEL } from '../lib/variants'
+import { ratingLabel, UNLOSABLE_RATING } from '../lib/botSettings'
 
 /** Left-side game-mode card. Untimed, casual play vs the engine; the headline
  * reflects the chosen variant (Standard → "Casual", otherwise the variant name). */
@@ -11,7 +12,14 @@ export default function GameModeCard({
     rating: number
     variant?: Variant
 }) {
-    const title = variant === 'standard' ? 'Casual' : VARIANT_LABEL[variant]
+    // "Unlosable" is Standard rules with a sentinel rating, so it headlines by
+    // strength rather than variant; every other Standard game stays "Casual".
+    const title =
+        rating <= UNLOSABLE_RATING
+            ? 'Unlosable'
+            : variant === 'standard'
+              ? 'Casual'
+              : VARIANT_LABEL[variant]
     return (
         <Box
             sx={{
@@ -64,7 +72,7 @@ export default function GameModeCard({
                 </Typography>
                 <Typography sx={{ fontWeight: 600, fontSize: 16 }}>gomachine</Typography>
                 <Typography sx={{ color: 'var(--text-dim)', fontSize: 13.5 }}>
-                    Engine · ~{rating} Elo
+                    Engine · {ratingLabel(rating)}
                 </Typography>
             </Box>
         </Box>

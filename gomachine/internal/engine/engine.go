@@ -405,6 +405,35 @@ func (e *Engine) pickWeakened(roots []search.RootMove, cfg LevelConfig, rankDept
 		Nodes: e.searcher.Nodes(), PV: []chess.Move{chosen}}
 }
 
+// worstMoveDepth is the fixed depth at which BestMoveWorst ranks every legal move.
+// Deep enough to reliably tell which move loses the most (hangs a piece, walks into
+// mate-in-N), shallow enough that ranking all ~35 moves stays effectively instant.
+const worstMoveDepth = 6
+
+// BestMoveWorst returns the WORST legal move — the one that minimizes the mover's
+// own eval — for the "Unlosable" bot that deliberately plays the worst move it can
+// find. Every legal move is searched to worstMoveDepth (RootScores; scores are from
+// the mover's perspective, higher = better for the mover), and the minimum-scoring
+// one is chosen, so the bot throws material and even walks into mate. The opening
+// book and endgame tablebase are intentionally NOT consulted — they return the BEST
+// move. The move is always legal (RootScores enumerates legal moves only).
+func (e *Engine) BestMoveWorst(pos *chess.Position, history []uint64) BestResult {
+	roots := e.searcher.RootScores(pos, search.Limits{Depth: worstMoveDepth}, history)
+	if len(roots) == 0 {
+		return BestResult{Move: chess.NullMove}
+	}
+	worst := roots[0]
+	for _, rm := range roots[1:] {
+		if rm.Score < worst.Score {
+			worst = rm
+		}
+	}
+	return BestResult{
+		Move: worst.Move, Score: worst.Score, Depth: worstMoveDepth,
+		Nodes: e.searcher.Nodes(), PV: []chess.Move{worst.Move}, Level: -1,
+	}
+}
+
 // SearchDirect runs a full-strength search to an explicit depth and/or time
 // budget (depth<=0 means unbounded depth, relying on the time budget).
 func (e *Engine) SearchDirect(pos *chess.Position, depth int, movetime time.Duration, history []uint64) BestResult {

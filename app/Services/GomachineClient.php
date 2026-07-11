@@ -98,6 +98,25 @@ class GomachineClient
     }
 
     /**
+     * Compute the WORST legal move — the "Unlosable" bot deliberately plays the
+     * move that hurts it most (minimizes its own eval, so it hangs material and
+     * even walks into mate). The engine ranks every legal move at a fixed depth and
+     * returns the minimum-scoring one; rating/level are irrelevant, and the opening
+     * book / tablebase are skipped engine-side (they'd return the BEST move).
+     *
+     * @param string[] $history Prior-position FENs for repetition detection.
+     * @return array<string, mixed> {bestmove, san, eval, pv, depth, nodes}
+     */
+    public function worstMove(string $fen, array $history = []): array
+    {
+        return $this->post('/bestmove', [
+            'fen' => $fen,
+            'history' => array_values($history),
+            'limits' => ['worst' => true],
+        ]);
+    }
+
+    /**
      * Stockfish's move at a target UCI_Elo (for the admin engine-vs-engine view).
      *
      * The admin engine-vs-engine view can pin Stockfish to a fixed search depth

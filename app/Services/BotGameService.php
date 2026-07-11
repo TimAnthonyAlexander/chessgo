@@ -61,7 +61,10 @@ class BotGameService
     {
         $game = new BotGame();
         $game->variant = in_array($variant, ['standard', 'chess960', 'duck', 'crazyhouse'], true) ? $variant : 'standard';
-        $game->rating = max(self::RATING_MIN, min(self::RATING_MAX, $rating));
+        // rating<=0 is the "Unlosable" sentinel — kept verbatim (0), NOT clamped up to
+        // RATING_MIN, so playBot() routes it to the worst-move engine. Real ratings
+        // clamp to the human ladder [RATING_MIN, RATING_MAX].
+        $game->rating = $rating <= 0 ? 0 : max(self::RATING_MIN, min(self::RATING_MAX, $rating));
         $game->human_color = $humanColor === 'b' ? 'b' : 'w';
         $game->setMoves([]);
         $game->setHistory([]);
@@ -260,11 +263,16 @@ class BotGameService
         if ($game->status !== 'ongoing') {
             return;
         }
-        $best = $this->engine->bestMove(
-            $game->fen,
-            $this->engineRatingForHuman($game->rating),
-            $game->getHistory(),
-        );
+        // The "Unlosable" bot (sentinel rating 0, the /bot slider's lowest stop) is
+        // Standard rules with the engine playing the WORST move it can find; every
+        // real rating (>=RATING_MIN) plays its advertised strength.
+        $best = $game->rating <= 0
+            ? $this->engine->worstMove($game->fen, $game->getHistory())
+            : $this->engine->bestMove(
+                $game->fen,
+                $this->engineRatingForHuman($game->rating),
+                $game->getHistory(),
+            );
         $uci = $best['bestmove'] ?? null;
         if (!is_string($uci) || $uci === '') {
             return;
