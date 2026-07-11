@@ -1,6 +1,9 @@
 # King-bucket NNUE v2 — horizontal mirror (hm)
 
-**Status:** open. **Owner lever:** eval density. **Prereq:** none (v1 KB is shipped/live).
+**Status:** ✅ SHIPPED/DONE (2026-07-06/07) — this horizontal-mirror KB v2 landed and is the
+`ENGINE_STRENGTH §31` base net. **Superseded 2026-07-11** by the SF full-threats net
+`chessgo_threats_sf_640` now in prod (`data/nnue/kb-mirror.bin`). Kept for history.
+**Owner lever:** eval density. **Prereq:** none (v1 KB is shipped/live).
 
 ## What
 

@@ -6,9 +6,10 @@
 > product decisions, the architecture, and the research that informs both.
 >
 > **Status:** v1 in progress. **Last updated:** 2026-06-20.
-> Built & working: the Go engine (`gomachine`, perft-verified, **≈3260 "dirty" CCRL
-> Blitz** / ≈2882 on the SF-UCI_Elo scale after the SPRT-gated search, Lazy-SMP, Texel eval **and
-> NNUE v6 (512-wide) + SIMD, now the default eval** — see `docs/ENGINE_STRENGTH.md`), bot
+> Built & working: the Go engine (`gomachine`, perft-verified, **materially above 3400**
+> — v6's 100W–0L vs a ~3400 engine is the hard floor, upper bound unmeasured; ~150–200 Elo
+> below full-strength Stockfish at equal movetime — with the SPRT-gated search, Lazy-SMP, and a
+> **king-buckets + Stockfish full-threats NNUE as the default eval** — see `docs/ENGINE_STRENGTH.md`), bot
 > games + eval bar + takeback, the lobby, **live human-vs-human play**
 > (WebSocket hub, rating-proximity matchmaking, server clocks, reconnect/resume),
 > **bot backfill** (a fill-in bot when no human is found), **accounts**
@@ -29,7 +30,7 @@ Three components:
 
 1. **Backend** — a [BaseAPI](https://github.com/timanthonyalexander/base-api) (PHP 8.4) REST API that persists users, games, the matchmaking queue, and game history; orchestrates play; and **calls the Go engine** for all rules + AI.
 2. **Frontend** — a React single-page app to play chess (vs humans and vs AI), browse history, and manage an account.
-3. **`gomachine`** — a Go chess engine that **owns all chess rules** (legal move generation + game-end detection) **and the AI** (classical search + evaluation, no Stockfish/NNUE). Exposed as a CLI first, then an internal HTTP service.
+3. **`gomachine`** — a Go chess engine that **owns all chess rules** (legal move generation + game-end detection) **and the AI** (a modern alpha-beta search over an NNUE evaluation; a Texel-tuned HCE is the fallback). Exposed as a CLI first, then an internal HTTP service.
 
 ### Guiding principle — one engine, one source of truth
 
@@ -47,7 +48,7 @@ game lifecycle, persistence, clocks, ratings, and matchmaking.
 | Decision | Choice | Notes |
 |---|---|---|
 | **Engine ownership** | Go owns rules + AI; PHP calls it | DRY, one source of truth, fastest. |
-| **AI scope (v1)** | Strong classical engine | Bitboards/magic, negamax+αβ, ID, TT, ordering, quiescence, tapered PeSTO eval. Target ~1800+ Elo. No Stockfish/NNUE. |
+| **AI scope (v1)** | Strong classical engine | Bitboards/magic, negamax+αβ, ID, TT, ordering, quiescence, tapered PeSTO eval. Target ~1800+ Elo. No Stockfish/NNUE. *(v1 historical decision; NNUE has since replaced the classical eval as the default engine.)* |
 | **Real-time** | **WebSocket via a Go hub** | Dedicated realtime service (`gomachine hub`, §8); 30s ping heartbeat + client auto-reconnect (Cloudflare-ready). _Supersedes the earlier "polling first" call (SSE is unreliable behind Cloudflare)._ |
 | **Frontend stack** | React + Vite + TypeScript + MUI + Lucide Icons + Bun + React-Router | Consumes BaseAPI's generated `types.ts`. |
 | **Accounts** | Anonymous **casual** + accounts for **rated** (Lichess model) | Anonymous players (stable per-browser id) play casual/unrated; rated needs a registered account. Email/pw auth + **frontend signup/login (session cookies)** built; the ws-ticket carries the account identity + per-category ratings. |
@@ -893,10 +894,12 @@ chessgo/
       +22.2**, **frontier futility +21.3** (@ 40k nodes, all default-on; bundle owes a
       movetime re-anchor) — and a rejected cheap long tail (conthist/IIR/capthist/probcut/
       razor flat-or-negative; aggressive-LMR-on-singular −67 anti-synergy), which is why
-      the cheap-search-patch well is now mostly dry on this baseline. Current
-      strength **≈3260 "dirty" CCRL Blitz** (2026-06-29, two-NNUE-anchor agreement;
-      ENGINE_STRENGTH.md §15) — supersedes the SF-UCI_Elo **≈2882** reading (~390 below
-      on a FIDE-ish scale; 2882+390≈3270). Next: NNUE width → **1024** (cheap behind SIMD),
+      the cheap-search-patch well is now mostly dry on this baseline. The default eval
+      is now the **king-buckets + Stockfish full-threats NNUE**. Current
+      strength is **materially above 3400** (v6's 100W–0L vs a ~3400 engine is the hard floor,
+      upper bound unmeasured) and **~150–200 Elo below full-strength Stockfish at equal movetime**
+      — don't quote a point rating. Next: NNUE width → **1024** (NOT cheap — int16-tail-bound,
+      ~1.7× node cost) and the forward arch ladder in `docs/NNUE/SF_PARITY_ROADMAP.md`,
       reworked-selective versions of the rejected search patches, **SPSA**.
 - [x] **Match bot strength to its rating** — fill-in bot displayed rating is now
       anchored to the human's Elo (±120) and the engine level is derived from it

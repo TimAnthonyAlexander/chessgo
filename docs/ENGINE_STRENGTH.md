@@ -81,22 +81,20 @@ gomachine bench vs-stockfish --sf /opt/homebrew/bin/stockfish --sf-elo 2500 \
   --movetime 100 --games 60 --threads 4
 ```
 
-**Current reading — THERE IS NO VALID CURRENT MEASUREMENT; re-anchor pending (see §28).** The only
-CCRL-style anchor on file is **v6 (2026-07-01, §20)**, and the engine has shipped **hundreds of Elo
-since with no re-measure** (v9 threats, v12 Leela/test80 data, the +23.3 search stack, corrhist/
-singular/futility, nmpgate/qsfut, book recompile). So every number below is **STALE and
-UNDERSTATES today's binary** — do **not** quote 3400, 3700, ≈3500, ≈3260, or ≈3200 as current;
-that is quoting a v6-era figure for a much stronger engine. What holds: v6's floor (>3400, from a
-100–0 blowout, so an *underestimate* even for v6); the ~3700 loss is an **old** match the engine has
-gained past (**not** a current ceiling). **(The old "beats full-force SF at a ~2–4× time-odds
-ratio" tell is RETRACTED — §27.5: it was measured vs a cold-per-move frontend Stockfish, worth
-~235 Elo of handicap; vs a *warm* full-force SF, Gomachine scores ~12.5% at equal 100 ms TC and
-wins ~0 even at 3× odds. Do not cite it as evidence of strength.)** **Conclusion: strength is
-materially above the old ~3400 v6 mark** (from the v6 100–0 floor, not the retracted SF tell)**,
-upper bound unmeasured, untriangulated — re-anchor vs a
-ranked NNUE opponent (~3700+, the old ~3450–3600 target is now too weak), scoring ~50%, before
-quoting ANY point number.** The ≈3260/≈3200 reads below are superseded (≈3200 was a one-sided
-all-losses artifact); all reads below are kept **for the record only**, not as current strength.
+**Current reading (2026-07-11) — the clean picture:**
+- gomachine is **~150–200 (closer to 150) Elo below full-strength Stockfish at equal movetime.**
+- Warm gomachine already **beats cold Stockfish** (fresh process / empty hash every move) at the
+  same movetime.
+- v6's **100W–0L vs a ~3400 engine (2026-07-01, §20) is the hard floor → materially above 3400,
+  upper bound unmeasured.** Do **not** quote any point rating (3400/3700/≈3260/≈3200 etc.) as
+  current — only the ">3400 floor" and the "~150–200 below full-strength SF at equal movetime" lines
+  above.
+- **Prod net (2026-07-11) = the SF full-threats net** (`chessgo_threats_sf_640`, `data/nnue/kb-mirror.bin`),
+  **+10 Elo over efs28** (FN +11 / MT +9 @100 ms). It supersedes the efs28 net (§32) and the
+  multilayer ml640 net (§35 — its "+22 ship" was later found ≈lean and did not remain prod).
+
+All dated reads below (the ≈3260/≈3200 anchors, the v6-era bands) are kept **for the record only**,
+not as current strength.
 
 **★ Priority direction (2026-07-05 anchor):** the anchor indicates the engine is **~280 Elo
 EVAL-bound** — search is near-optimal (cheap Stormphrax flags washed at movetime; a full SPSA landed
@@ -372,21 +370,14 @@ the sign of the result.
 | **Output buckets (tested — WASH)** | **≈0 @ movetime** | done | v8 net: +90 @ fixed-nodes but ≈0 @ movetime & fixed-depth — a fixed-nodes mirage (§14.3–14.4). Infra (GNN3 + buckets) banked in code; v8 net **not promoted** |
 | SPSA (Elo-in-the-loop weight tuning) | modest | medium | the *correct* way to tune the few params with no static objective |
 
-Current strength: **no valid current measurement — the only anchor is v6 (2026-07-01, §20) and the
-engine has shipped hundreds of Elo since with no re-measure, so the 3400–3700 band is STALE and
-UNDERSTATES the current binary.** Do not quote 3400/3700/any point as current. v6's floor (>3400,
-from a 100–0 blowout = underestimate) and the **old** ~3700 loss (no longer a valid ceiling — engine
-has gained past it) are historical record only. **(The "beats full-force Stockfish at a ~2–4× blitz
-time-odds ratio" tell is RETRACTED — §27.5: it was measured against a cold-per-move frontend SF
-(~235 Elo handicap); vs a warm full-force SF, Gomachine scores ~12.5% at equal 100 ms TC and wins
-~0 even at 3× odds. It is no longer evidence of anything.)** **Re-anchor vs a ranked NNUE opponent
-(~3700+, the old ~3450–3600 target is now too weak), ~50% score, before quoting ANY point number.** The earlier **≈3260 "dirty"** read (2026-06-29, §15 — Starzix 5.0 **3276 ± 83** /
-Viridithas 17.0.0 **3245 ± 94** @ 100 ms) is itself superseded by that band. Full-strength
-Stockfish 17.1 (**~4080 CCRL Blitz**) sits at *most* ~680 CCRL above the floor *at CCRL time controls*
-(the ~380 lower end used the now-dead 3700 ceiling, so the real gap is smaller/unknown). ~~and at
-**short** movetimes the effective gap collapses to **~70 Elo / a ~2× time-odds ratio** (§27)~~
-**[RETRACTED — §27.5: that "~70 Elo at short TC" reading came from the cold-per-move frontend SF;
-vs a *warm* full-force SF the equal-100 ms gap is ~335 Elo, not ~70].**
+Current strength (2026-07-11): gomachine is **~150–200 (closer to 150) Elo below full-strength
+Stockfish at equal movetime**, and warm gomachine already **beats cold Stockfish** at the same
+movetime. v6's **100W–0L vs a ~3400 engine (2026-07-01, §20) is the hard floor → materially above
+3400, upper bound unmeasured.** Do **not** quote any point rating (3400/3700/≈3260/≈3200/≈2882 etc.)
+as current — only the ">3400 floor" and "~150–200 below full-strength SF at equal movetime" lines.
+The prod net is the **SF full-threats net** (`chessgo_threats_sf_640`, **+10 over efs28**). All the
+figures below (the ≈3260 "dirty" read, the SF-UCI_Elo ≈2882 band, the v6-era 3400–3700 band) are
+historical record only, not current strength.
 For reference the older SF-UCI_Elo anchor read **≈2882** (band 2847–2935 vs SF-2700/2800/2900,
 2026-06-22, §2.2); the
 **trustworthy relative** figure remains the self-play SPRT (**+212 ± 49 vs HCE @
@@ -2386,6 +2377,11 @@ multi-source, syzygy-rescored, lambda-annealed pipeline** (§34.4). That is the 
 hundreds of Elo we're missing actually live.
 
 ## 35. Step-B result: the 512 multilayer-tail net (`chessgo_ml_efs28`, 640-sb) — **+22 movetime, SHIPS** (2026-07-10)
+
+> **⚠️ SUPERSEDED 2026-07-11 → prod is now the SF full-threats net** (`chessgo_threats_sf_640`,
+> `data/nnue/kb-mirror.bin`, +10 over efs28). This supersedes BOTH the efs28 net (§32) and this
+> multilayer ml640 net: the "+22 ship" below was later found ≈lean and **did not remain prod**.
+> Kept here as history.
 
 The step-B multilayer net trained (640 sb on test80 Jan–Apr, efs28 inputs + pairwise-CReLU→L1(16)→L2(32)→out int8
 tail, QAT). Measured on coalla (SIMD, `main` binary, conc=1) vs the shipped prod-lean net (`data/nnue/kb-mirror.bin`).

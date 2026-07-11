@@ -42,7 +42,8 @@
 
 - **SFNNv10** (Nov 2025): `Full_Threats` inputs → **+33 Elo**. (We have threats since v9.)
 - **SFNNv13** (Feb 2026): doubled **L2 16 → 32** (threats shrank accumulator/L1) → **+8–13
-  Elo**. (Applies only to a MULTILAYER tail — our lean net is single-layer.)
+  Elo**. (Our current full-threats net **has** a multilayer pairwise 16→32 tail, so this
+  applies — updated 2026-07-11; the old "our lean net is single-layer" note is stale.)
 
 ## Our pipeline vs the recipe (`chessgo_lean_threats.rs` loader `filter`)
 
@@ -52,7 +53,7 @@ no syzygy re-rescore.
 
 | Lever | SF recipe | Us | Action |
 |---|---|---|---|
-| early-fen-skip | ply ≤ 28 | **`ply >= 16`** | **bump 16 → 28 (one line, #1 cheap win)** |
+| early-fen-skip | ply ≤ 28 | ~~`ply >= 16`~~ **`ply >= 28`** | **✅ DONE (efs28 shipped, +18.8 movetime, 2026-07-09)** |
 | capture/quiet filter | d6pv2 | played-move-quiet | close in spirit; keep |
 | lambda / WDL | anneal 1.0→0.85→0.75 | **`ConstantWDL 0.6`** | **switch to WDL schedule (map bullet WDL-value vs SF-lambda conventions carefully first)** |
 | random-fen-skip | 10 | none | add if bullet supports |
@@ -61,8 +62,10 @@ no syzygy re-rescore.
 
 ## Roadmap order (cheaper wins first)
 
-1. **Fix the pipeline on our CURRENT T80** — `early-fen-skipping=28` + lambda anneal +
-   filtering — retrain → **SPRT vs v12**. Cheapest, biggest EV, helps ANY arch.
+1. ~~**Fix the pipeline on our CURRENT T80** — `early-fen-skipping=28` + lambda anneal +
+   filtering — retrain → **SPRT vs v12**.~~ **✅ DONE (2026-07-09):** efs28 (ply≥28) +
+   640-sb shipped **+18.8 movetime**; WDL kept `ConstantWDL 0.6` (anneal deferred). Cheapest,
+   biggest EV, helped as predicted.
 2. Add **contemporaneous T80 months** → SPRT.
 3. **T78/T79** (v6-dd + syzygy-rescored ONLY) → SPRT.
 4. **T60/T77 last** — marginal.

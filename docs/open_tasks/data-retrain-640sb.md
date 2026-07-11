@@ -1,6 +1,8 @@
 # Data retrain — 640-sb, 512-wide, test80 (the next net)
 
-**Status:** open — READY TO LAUNCH, pending a rented GPU + the test80 binpack path.
+**Status:** ✅ DONE — this 640-sb run executed as `chessgo_efs28_wdl06_640` (efs28) and shipped
+2026-07-09; the SF full-threats net `chessgo_threats_sf_640` has since superseded it in prod
+(2026-07-11). Kept for the locked-recipe record.
 **Owner:** engine
 **Created:** 2026-07-05
 **Lever:** data is the proven live lever (v12 = v9 arch retrained on test80 → +24 movetime).
@@ -26,8 +28,10 @@ if missed, silently wastes the entire GPU run:
   curve has a benign center-minimum then rises; min-loss is −56 Elo vs the annealed final. Never
   early-stop on the loss plateau. (§29.4 / §12.1: the +220 anneal swing.)
 - **D5 — FT-weight QAT gap: DEFER (do NOT fix for this 512 run).** The int8-FT leak is real but on
-  the lean net int8-FT nets +11…+28 movetime anyway (memory-speed masks it). It only matters at
-  1024+. Leave the config as-is; note it for the width bet.
+  the lean net int8-FT nets +11…+28 movetime anyway (memory-speed masks it). Leave the config as-is.
+  ⚠️ **CORRECTED 2026-07-11:** the old "int8-FT only matters at 1024+" claim is **WRONG** — int8
+  threat FT is **lossy on the 79,856-feature full-threats net (~66 cp RMS)**, well below 1024 width,
+  so the current prod net ships **int16 threat FT**. Width was never the gating factor.
 
 ## The LOCKED recipe (every knob; base = v12's twice-SPRT-won config, only SB changes)
 

@@ -1,13 +1,20 @@
-# ★★ CURRENT PHASE — King-bucket mirrored net SHIPPED (2026-07-07)
+# ★★ CURRENT PHASE — SF full-threats net SHIPPED to prod (2026-07-11)
 
 > Supersedes all blocks below. A fresh instance continues from here.
-> Full numbers: `docs/ENGINE_STRENGTH.md §31`; profiling: `docs/PROFILING/`.
+> Forward plan: `docs/NNUE/SF_PARITY_ROADMAP.md`. Strength picture: `docs/ENGINE_STRENGTH.md` intro/§7.
 
 ## Where we are
-- **Shipped/prod: king-bucket mirrored enriched-threats net** — `kb-mirror.bin` (44 MB, H=512 NB=8,
-  move-aware, int8-FT), 16 mirrored buckets (8×2), 320-sb on test80. Loaded by default via
+- **Shipped/prod: the SF full-threats net** — `chessgo_threats_sf_640`, `data/nnue/kb-mirror.bin`
+  (~180 MB): single net, 512-FT, 16 king-buckets + 79,856 full-threats, tail 16→32, NB=8,
+  **int16 threat FT**, move-aware. Deployed 2026-07-11, **+10 Elo over efs28** (FN +11 / MT +9 @100 ms).
+  Supersedes the efs28 lean net and the multilayer ml640 net. Loaded by default via
   `KB_NET_PATH` / `data/nnue/kb-mirror.bin`. Binary built `GOEXPERIMENT=simd GOAMD64=v4 go1.26.4`.
-  **+10 fixed-nodes / +4.5 movetime over the old no-mirror KB net** (§31.3).
+- **Strength (2026-07-11):** materially **above 3400** (v6's 100W–0L vs a ~3400 engine is the hard
+  floor, upper bound unmeasured), **~150–200 (closer to 150) Elo below full-strength Stockfish at
+  equal movetime**; warm gomachine already beats cold Stockfish. Do NOT quote a point rating.
+- **Forward plan → `docs/NNUE/SF_PARITY_ROADMAP.md`.** 1024 is NOT cheap; king-buckets SHIPPED.
+- History (superseded): the earlier king-bucket mirrored **`kb-mirror` 320-sb net** (44 MB, +10 FN /
+  +4.5 MT over the no-mirror KB net, §31.3) was the prod default before efs28/full-threats.
 - **32-key Finny refresh cache (Stormphrax pattern):** `kRefreshTableSize = kBucketCount * 2 = 32`,
   separating a-d and e-h mirror halves so they don't collide in the cache. This was the load-bearing
   fix: the original 16-key Finny lost −5 at movetime because d/e crossings forced expensive
@@ -34,18 +41,18 @@ single-thread CPU profiles of SF18 (threats added, FT narrowed 3072→1024) and 
 (king-buckets + threats + pairwise multilayer) on both arches.
 
 ## The path forward
-1. **640-sb retrain on test80** — the current 320-sb mirror net is still epoch-poor at ~4 epochs.
-   v12 proved data cashes as movetime Elo (+24 for a better teacher; a longer train on the same
-   teacher is the same shape). The GPU server recipe is ready (bullet `chessgo_lean_threats.rs`
-   with the mirrored `768x16kbhm+threats` input type, `new_concat_multiple` loader for Jan–Apr
-   test80 months, `final_superbatch=640`).
+1. **640-sb retrain on test80 — DONE (shipped).** The 640-sb retrain landed as efs28 (§32, +19 MT)
+   and then the SF full-threats net now in prod (2026-07-11, +10 over efs28). The 320-sb mirror net
+   is retired. Recipe used: bullet `chessgo_lean_threats.rs`, mirrored `768x16kbhm+threats` input,
+   `new_concat_multiple` loader for Jan–Apr test80, `final_superbatch=640`.
 2. **Data > width > search.** The factoriser already densifies the king-agnostic base; the mirror
    densifies the king-specific buckets. Next is more epochs or better data (fresh test80 months,
    self-generated data). Widening to 1024 is the capacity lever once density is fixed.
 3. **MaterialCount<8> output bucketing** — Stormphrax has it, the GNN3 infra is already in our
    codebase from the v8 experiment (§14.3). Low-effort to try behind the mirrored net.
-4. **SPSA re-tune of search margins** — the old margins were tuned pre-v12/mirror; the engine
-   outgrew them. The last re-tune banked +38.7 movetime (§13.5). Re-run on the mirror baseline.
+4. **SPSA re-tune of search margins** — the +38.7 movetime re-tune (§13.5) shipped historically, but
+   a re-SPSA on the current net found **NO further gain** — the margins are now well-tuned for this
+   baseline. Not a live lever until the net/search changes materially again.
 5. **Re-anchor vs actual engines** — the CCRL band is stale (≥3400 floor, dead ~3700 ceiling,
    §28). Anchor against a ranked NNUE opponent at ~50% score before quoting any number.
 

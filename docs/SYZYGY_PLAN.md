@@ -2,9 +2,10 @@
 
 ## What this project is
 
-`gomachine` — a Go chess engine (**≈3260 "dirty" CCRL Blitz**: NNUE v6 + SIMD, default
-eval; two-NNUE-anchor agreement 2026-06-29, ENGINE_STRENGTH.md §15 — ≈2882 on the older
-SF-UCI_Elo scale). Engine core in
+`gomachine` — a Go chess engine (materially **above 3400** on the CCRL floor, upper bound
+unmeasured, and ~150–200 Elo below full-strength Stockfish at equal movetime; see
+ENGINE_STRENGTH.md intro/§7). The current default eval is the **SF full-threats NNUE net**
+(`data/nnue/kb-mirror.bin`, prod 2026-07-11). Engine core in
 `internal/{chess,eval,search,engine}`. Strength improvements go behind a
 `search.Params` flag (default off), then SPRT-gated via `gomachine bench sprt`.
 See `docs/ENGINE_STRENGTH.md` for the full picture.

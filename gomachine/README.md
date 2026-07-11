@@ -1,13 +1,19 @@
 # gomachine
 
-A classical chess engine in pure Go — the rules authority **and** the AI for the
-chessgo platform. No Stockfish, no neural nets. Bitboards + fancy magic sliders,
-negamax + alpha-beta with iterative deepening, a transposition table, quiescence
-search, move ordering, null-move pruning, and late move reductions over a tapered
-PeSTO evaluation. See [`../docs/SPEC.md`](../docs/SPEC.md) for the full design.
+A strong NNUE chess engine in Go — the rules authority **and** the AI for the
+chessgo platform. Bitboards + fancy magic sliders; a Lazy-SMP negamax + alpha-beta
+search with iterative deepening, aspiration windows, a lock-free transposition
+table, quiescence search, SEE-filtered captures, null-move pruning, late move
+reductions, reverse-futility / late-move pruning, singular extensions, and
+correction history; over an **NNUE evaluation** (default since v4) — the current
+net is a king-buckets + Stockfish-style full-threats net with an incremental
+int16 accumulator and archsimd AVX2/NEON kernels. A Texel-tuned hand-crafted eval
+is the fallback when no net is loaded. See [`../docs/SPEC.md`](../docs/SPEC.md)
+for the full design.
 
-Pure Go (`CGO_ENABLED=0`) so it cross-compiles to Linux and macOS from one
-toolchain.
+The default build links Fathom (Syzygy tablebases) via CGo. `CGO_ENABLED=0`
+compiles an inert-tablebase stub path that still cross-compiles to Linux and
+macOS from one toolchain.
 
 ## Build
 
@@ -31,7 +37,7 @@ gomachine selfplay -level 10 -movetime 100       # watch it play itself
 
 ## Difficulty
 
-Levels **0–10** (SPEC §6): level 10 is full strength with the longest think time;
+Levels **0–10** (SPEC §6): level 10 is full strength (NNUE + full search) with the longest think time;
 level 0 thinks briefly, adds eval noise, and occasionally blunders. Weakening is
 always by noise / sub-optimal selection — the engine is never rules-incorrect.
 

@@ -1,5 +1,13 @@
 # Enriched multilayer NNUE — context, status, learnings, and the task
 
+> **⚠ SUPERSEDED 2026-07-11 → `docs/NNUE/SF_PARITY_ROADMAP.md`.** The big-multilayer-tail
+> experiment this doc plans was abandoned (`ARCH_DIRECTION.md §6`: enriched-512 washed, −24±27
+> Abitur). The engine pivoted to the **lean → SF full-threats** path; prod (2026-07-11) is the
+> full-threats net `chessgo_threats_sf_640` (which keeps only a small pairwise 16→32 tail),
+> int16 threat FT. Dated strength anchors below (the ≈3260 "dirty" reads) are **historical**;
+> the honest current line is ">3400 floor, ~150–200 below full-strength SF at equal movetime"
+> (never a point rating). Read the rest for the QAT/movetime learnings only.
+
 > **Orientation doc for the next phase: getting an *enriched* multilayer NNUE working
 > well at movetime.** Reads top-to-bottom; deeper detail lives in `INT8_HANDOFF.md §8`
 > (the int8/QAT speed work), `NEXT_ARCH.md` (the architecture plan), `INT8_PORT_SPEC.md`
@@ -26,7 +34,7 @@
 >
 > Took the lean single-layer + threats net (64-sb) from **movetime −330 vs v6 → −8 ± 11 (statistical parity, CI straddles 0)**, eval **+115 fixed depth** (preserved). Two wins, then a wall:
 > - **Tail fusion (the big one, ~1.87× NPS + free +40 eval):** the lean tail ran the scalar `screluActivateI16` + a *degenerate* `gemvF32` (nOut=1 → scalar strided gather) = **44% of the node**. Replaced with v6's fused integer `screluDot` over a bucket-contiguous int16 tail (`TWi`, `quantizeLeanTail`, QB=1024). Fixed depth went **+75 → +115** (the integer rounding beats the old float tail — a free eval gain).
-> - **int8-FT (`QuantizeFTInt8`, bit-exact, 0 clamps):** halves threat-column memory traffic; the QAT trained the threat weights fully inside int8 range so it's lossless. Wired via `--lean-int8ft`.
+> - **int8-FT (`QuantizeFTInt8`, bit-exact, 0 clamps):** halves threat-column memory traffic; the QAT trained the threat weights fully inside int8 range so it's lossless. Wired via `--lean-int8ft`. **⚠ CORRECTION 2026-07-11: this "lossless int8 threat FT" claim does NOT hold on the mature full-threats net** — int8 threat FT is **LOSSY** there (~66 cp RMS, `TestKBNetClampCount` fails), and the l0-weight int8-QAT was **REMOVED** (it froze from-scratch training). **Prod deploys int16 threat FT.** The 0-clamp result above was on the small early lean net only.
 > - **REJECTED, measured (do NOT re-try on this baseline):** register-tiling the accumulator apply *regressed −15% NPS* (the 1 KB accumulator is L1-resident, so the "redundant" reloads were free and the per-chunk overhead dominated); enumeration-dedup (compute attacks once, both perspectives) was *NPS-neutral* (the profiler was right: attack-gen is not the bottleneck); in-place make/unmake is *worse* (re-diffing on Pop costs more than the 2 KB copy); **lazy/deferred accumulator** — **measured the wasted-push rate (pushes whose whole subtree never evals) = ~5% midgame / ~14% endgame**, so the ceiling is ~3.5% NPS even on the heavy threats net, eaten by bookkeeping. That's why v6 lazy was −70/−30: **not a bug — the search evals ~95% of nodes it makes.** (`NNUE_LAZY=1 bestmove` prints the rate; counters `nnue.LazyPush/LazyWasted`.)
 > - **The floor:** the per-move threat delta is ~22 accumulator columns (vs v6's ~4) and is *intrinsic to the threat encoding* — so pure speed is maxed for 64-sb/512-width. **The lever for a clear win is EVAL, not speed.**
 > - **NEXT (running):** a **320-sb retrain** of the *same 512-width* lean+threats net (same NPS, stronger eval; 64-vs-320 → 320-vs-320). Expectation: clearly beats v6 at movetime. Width-1024 is deferred (doubles per-node eval cost; no point while a same-width run is training).
@@ -65,8 +73,9 @@
 
 ## 1. Why we're doing this
 
-gomachine plays at **≈3260 "dirty" CCRL Blitz**. The open-source NNUE frontier
-(Stormphrax, Viridithas ~3700) is **~400 Elo up**, and that gap is **net architecture**,
+gomachine plays **materially above the >3400 v6 floor** (no valid current point rating — see
+`ENGINE_STRENGTH.md`; do not quote a number). The open-source NNUE frontier
+(Stormphrax, Viridithas ~3700) is the target, and that gap is **net architecture**,
 not Go-vs-C++ (~40 Elo). The shipped eval is **v6**: a single-layer `(768→512)×2→1`
 SCReLU net, int16 + SIMD, default-on. It has hit the ceiling of what a single hidden
 layer can express — the way forward is a **multilayer** net that the real enrichments

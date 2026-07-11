@@ -1,5 +1,14 @@
 # NNUE — next steps ladder (researched 2026-06-22)
 
+> **⚠ SUPERSEDED 2026-07-11 → `docs/NNUE/SF_PARITY_ROADMAP.md`.** This ladder was written
+> against v6 (plain 768, no buckets, no threats). Since then king-buckets **and** full
+> threats have **SHIPPED** (prod = the SF full-threats net), so this doc's framing is stale:
+> - **§1 "Width 512→1024 — biggest lever, FREE WIN, do first"** is wrong now — the forward
+>   roadmap puts **1024 LAST** and it is **NOT cheap** (single-SCReLU→1 tail is int16-bound,
+>   ~1.7× node cost).
+> - **§5 "King-bucketed inputs — do LAST"** is done: **16 king-buckets are SHIPPED** (prod).
+> Read this only for the historical width/bucket research; the live plan is the roadmap.
+
 > Prioritized, sourced plan for what to do **after v6 (512-wide)**. Compiled from a
 > multi-source deep-research pass (Stockfish nnue-pytorch docs, bullet docs, SF
 > commits/regression tests, Alexandria/Stormphrax/Viridithas, an arXiv data paper),
@@ -42,7 +51,12 @@ no-refresh absolute-color design. **Step 3 (data) is the gate** that decides how
 
 ---
 
-## 1. Width 512 → 1024 — the biggest single lever (FREE WIN, do first)
+## 1. Width 512 → 1024 — ~~the biggest single lever (FREE WIN, do first)~~ SUPERSEDED
+
+> **SUPERSEDED 2026-07-11 → `SF_PARITY_ROADMAP.md`:** 1024 is now the **LAST** roadmap
+> phase and is **NOT a free win** (int16-bound single-dot tail, ~1.7× node cost). Data +
+> 32 king-buckets + dual net + threat-PSQT skip come first. Historical analysis below.
+
 
 - **Why first:** SF/bullet docs — *"The number of outputs in the first layer is the most
   crucial parameter, and also has the highest impact on speed and size."* L1 width is
@@ -148,7 +162,13 @@ serve better with less data)."* Data is what decides how far you can widen/bucke
 
 ---
 
-## 5. King-bucketed inputs (HalfKAv2_hm / small custom scheme) — STRUCTURAL PROJECT, do LAST
+## 5. King-bucketed inputs (HalfKAv2_hm / small custom scheme) — ~~STRUCTURAL PROJECT, do LAST~~ SHIPPED
+
+> **SHIPPED 2026-07-11:** prod runs **16 king-buckets** (horizontal mirror + 32-key Finny
+> refresh cache, Stormphrax pattern) on the SF full-threats net. The "do LAST / abandons the
+> invariant" framing below is history — the refresh path exists, is verified, and is live.
+> Next bucket lever per `SF_PARITY_ROADMAP.md` is **32** buckets. Historical analysis below.
+
 
 - **The Elo:** the proven structural upgrade. **Alexandria v8.0.0** went 1 → **16 input
   (king) buckets** (`(768-1536x16)x2-1x8`, HL 2048→1536), gaining **+14.89 (balanced) to

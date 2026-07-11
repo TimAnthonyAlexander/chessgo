@@ -1,5 +1,12 @@
 # bullet trainer setup — how to (re)build the NNUE training rig
 
+> **⚠ CURRENT PROD (2026-07-11):** the live net is the **SF full-threats net**
+> (`chessgo_threats_sf_640`) at **`data/nnue/kb-mirror.bin`** (~180 MB): 512-FT, 16
+> king-buckets + 79,856 full-threats, pairwise 16→32 tail, NB=8, **int16 threat FT**,
+> 640 superbatches. The `(768→256)×2→1` v4 net (`data/nnue/net.nnue`) described below is
+> **many nets old** — kept here as the rig-bring-up history. The bullet rig itself
+> (paths, patches, import flow) is still current; the arch/config below is v4-era.
+
 > The shipped net was trained with **`bullet`** (jw1912/bullet) on the M3 Pro's
 > Metal GPU. bullet is a *third-party build tool*, not chessgo code — only our
 > **importer** (`internal/nnue/bulletimport.go`, the `nnue-import-bullet` CLI) and

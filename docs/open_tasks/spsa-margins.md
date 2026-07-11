@@ -1,9 +1,11 @@
 # SPSA margin tuning — HIGH PRIORITY (stale defaults = free Elo)
 
-**Status:** OPEN — HIGH PRIORITY. **Reversal (2026-07-05, later same day):** the earlier "deferred /
-scraps" call was WRONG. The v6-tuned margins from the throwaway run, applied to v12, **SHIPPED +38.7
-± 5.5 Elo movetime** (640 pairs, lb +33.2) — a *defaults change, zero new code*. A proper v12-native
-SPSA almost certainly finds MORE.
+**Status:** DONE / no further gain on the current net. The historical **+38.7 ± 5.5 Elo movetime**
+margin re-tune (v6-tuned margins applied to the pre-full-threats v12 net; 640 pairs, lb +33.2) is
+**real and shipped** — keep it. **CORRECTED 2026-07-11:** the forward claim "a proper native SPSA
+almost certainly finds MORE" **did not hold** — SPSA on the current SF full-threats net
+(`chessgo_threats_sf_640`) found **NO gain** (the margins are already optimal for this net). SPSA is
+no longer a live lever here; forward plan is `docs/NNUE/SF_PARITY_ROADMAP.md`.
 **Owner:** engine
 **Created:** 2026-07-05
 
@@ -16,8 +18,9 @@ the engine grew past its own hand-tuned constants and the optimum drifted. Even 
 re-tune recovered **+38.7 movetime on v12**. So:
 - **Shipped now:** `singulardepth 8→6, seequietmargin 150→103, captseemaxdepth 6→4, nullr 4→3`
   (DefaultParams flipped; SPRT above).
-- **Next:** a proper **v12-native** SPSA (binary with `df51c9d`) over these + an expanded registry —
-  it's tuning against the *right* eval and starts from the *current* defaults, so expect further gains.
+- **Next:** ~~a proper v12-native SPSA over these + an expanded registry, expecting further gains.~~
+  **Done (2026-07-11): the native SPSA on the current full-threats net found NO further gain** —
+  margins are optimal for this net. (History preserved; this bullet no longer describes open work.)
 - Caveat that still holds: we're also ~280 Elo EVAL-bound (`data-retrain-640sb.md` is the bigger
   lever). But search is NOT dry — stale defaults left real Elo on the table, and SPSA reclaims it cheaply.
 

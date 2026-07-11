@@ -3,17 +3,16 @@
 A **production-ready chess website** + a **strong NNUE Go chess engine** (`gomachine`):
 play chess **vs other humans** (live matchmaking with clocks) and **vs the AI**,
 with all chess rules + the AI implemented in a dedicated Go engine.
-The engine's **last actual CCRL-style measurement was v6 (2026-07-01): 100W–0L vs a ~3400
-engine** — a blowout, so an *underestimate* even then. Since then it has shipped **hundreds of
-Elo with NO re-anchor** (v9 threats, v12 Leela/test80 data, the +23.3 search stack, corrhist/
-singular/futility, …). (**The old "beats full-force Stockfish at ~2× time-odds / equal-TC parity"
-tell is RETRACTED** — ENGINE_STRENGTH §27.5: it was measured through the admin frontend
-Engine-vs-Engine view, which spawns a *cold Stockfish every move* worth ~235 Elo of handicap; the
-warm-SF equal-100ms score is **contested — §27.5 read ~12.5% / −335, a later two-machine efs28 run
-(§33, 2026-07-09) read ~33% / −120 to −140; reconciliation pending**. Either way the frontend tell is
-retired.) So **current strength is materially ABOVE the old ~3400 v6 mark** (from the v6 100–0 floor,
-not the retracted SF tell)**, upper bound unmeasured — re-anchor pending; do NOT quote 3400 (or 3700,
-or ~3900, or any point) as current strength.**
+**Strength (state cleanly, never a point rating):** materially **above 3400** — v6's 100W–0L vs a
+~3400 engine (2026-07-01) is the hard floor, and it has shipped hundreds of Elo since with no
+re-anchor (v9 threats, v12 Leela/test80 data, the +23.3 search stack, king-bucket mirror, SF
+full-threats, …) — and **~150–200 Elo (closer to 150) below full-strength Stockfish at equal
+movetime**; warm gomachine already **beats cold Stockfish** (fresh process / empty hash per move).
+The old "beats full-force SF at time-odds / equal-TC" tell is **retracted** (ENGINE_STRENGTH §27.5 —
+it drove SF as a cold process, ~235 Elo of handicap). **Do NOT quote 3400 / 3700 / ~3900 / ≈3500 or
+any point as current strength, and do not hedge with "contested / reads span X–Y"** — the honest line
+is the two bounds above. Prod (2026-07-11) runs the **SF full-threats net** (`chessgo_threats_sf_640`),
+**+10 Elo over the previous efs28 net**.
 See §Status. The engine is the centerpiece; the website is the front door to it.
 
 > Read `docs/SPEC.md` for the full design and `docs/COMMANDS.md` to run/deploy.
@@ -249,19 +248,21 @@ Then **NNUE replaced HCE as the default eval** (`docs/NNUE/PLAN.md`): a
 — **+212 Elo @ movetime** over HCE (v4), shipped default-on. Then **v6 (512-wide) +
 `archsimd` AVX2/NEON SIMD** (bit-exact kernels; 6.5×/4.16× eval): **+124 @ fixed
 nodes / +101 @ movetime** over v4, **live in prod** (lairner = amd64, Go 1.26.4
-`GOEXPERIMENT=simd GOAMD64=v3`; the v6 net + SIMD build ship together — v6 on a
+`GOEXPERIMENT=simd GOAMD64=v4`; the SIMD build ships with the net — a net on a
 scalar build is a movetime wash). Then a **search-feature wave** (`docs/ENGINE_STRENGTH.md
 §13`) shipped **corrhist + singular + futility** (+66.9/+22.2/+21.3 @ 40k nodes; owes a
 movetime re-anchor) and rejected the cheap long tail (conthist/IIR/capthist/probcut/razor
 flat-or-negative; lmr2-on-singular −67 anti-synergy) — the cheap-search-patch well is now
-mostly dry on this baseline. **Current strength: NO valid current measurement exists — the only
-CCRL-style anchor is v6 (2026-07-01), and the engine has shipped hundreds of Elo since with no
-re-measure, so any number on file is STALE and UNDERSTATES today's binary.** Do **not** quote
-3400, 3700, ≈3500, or any point as current — that is quoting a v6-era number for a much stronger
-engine (the exact stale-docs trap). What we can honestly say:
-- **Last real measurement:** v6, ENGINE_STRENGTH.md §20 — **100W–0L vs a ~3400 engine** (a blowout,
-  so an *underestimate* even for v6) and an **old** loss vs a ~3700 engine (stale — an engine we've
-  since gained past; **not** a current ceiling).
+mostly dry on this baseline. **Current strength (state cleanly, never a point rating):** gomachine is
+**materially above 3400** (v6's 100W–0L vs a ~3400 engine is the hard floor, upper bound unmeasured)
+and sits **~150–200 Elo (closer to 150) below full-strength Stockfish at equal movetime**. Warm
+gomachine already **beats cold Stockfish** (fresh process / empty hash every move) at the same
+movetime. The current net is **+10 Elo over the previous efs28 net** (FN +11 / MT +9 @100ms).
+**Do NOT quote 3400, 3700, ≈3500, or any point as current strength** (that's the stale-docs trap), and
+do not hedge with "contested / our reads span X–Y". What we can honestly say:
+- **Last real CCRL-style anchor:** v6, ENGINE_STRENGTH.md §20 — **100W–0L vs a ~3400 engine** (a blowout,
+  so an *underestimate* even for v6). The engine has shipped hundreds of Elo since with no re-anchor,
+  so today's binary is materially above that floor.
 - **Shipped since v6, unmeasured:** v9 threats, v12 Leela/test80 data (+24 movetime), the
   +23.3 search stack, corrhist/singular/futility, nmpgate/qsfut, recompiled book,
   **king-bucket horizontal mirror (§31)**, **32-key Finny refresh cache (Stormphrax pattern)**
@@ -274,26 +275,33 @@ engine (the exact stale-docs trap). What we can honestly say:
   (12.5%, ≈ −335 Elo); cold SF → W4 D35 L21 (35.8%)**. The frontend Engine-vs-Engine view is
   **retired as a strength signal**; use `bench vs-stockfish` (warm, default). This does not touch
   the v6 CCRL floor — it just deletes "beats full-force SF at blitz" as evidence.
-- **⚠️ §27.5 warm number is CONTESTED (§33, 2026-07-09):** a later two-machine warm run (lairner +
-  coalla, efs28 net, many games) put warm full-strength SF at **~33% / −120 to −140 Elo**, NOT the
-  12.5% / −335 above — a ~215 Elo gap the +19 net can't explain (likely SF thread/hash config
-  unpinned, or the 60-game W0 was low-sample). **Reconciliation pending** a pinned-`--opp-opts`
-  rerun. The −120/−140 is a solid *relative* diff, reproduced on two boxes — but do **NOT** map it
-  to a point Elo (≈3900): that anchors us to SF's long-TC/many-thread rating, not its 100ms strength.
-- **Conclusion:** strength is **materially above the old ~3400 v6 mark, upper bound unmeasured,
-  untriangulated.** **Re-anchor vs a ranked NNUE opponent (target now ~3700+, not the old
-  ~3450–3600), scoring ~50%, before publishing ANY point number.** This **supersedes** the earlier
-  ≈3260 "dirty" read (§15) and the one-sided **≈3200** artifact (scoring ≈0% — never quote it).
+- **Warm-SF gap:** at equal movetime gomachine is **~150–200 Elo (closer to 150) below full-strength
+  Stockfish**, and already **beats cold SF** (fresh process / empty hash per move). Report this as a
+  relative gap — do **NOT** map it to a point Elo for SF (that anchors us to SF's long-TC/many-thread
+  rating, not its 100ms strength).
+- **Conclusion:** strength is **materially above the ~3400 v6 floor, upper bound unmeasured**, and
+  **~150–200 Elo below full-strength SF at equal movetime**. Publish it that way — never a point
+  number. This **supersedes** the earlier ≈3260 "dirty" read (§15) and the one-sided **≈3200** artifact.
 
 **★ DATA RETRAIN SHIPPED (2026-07-09): efs28 + 640-sb → +19 movetime.** The mirror-KB arch retrained
 on the FIXED data pipeline (early-fen-skipping `ply≥16→28` = SF's master-net cutoff PR #4314, +
 superbatches `320→640`; WDL kept `ConstantWDL 0.6` after the Leela-grade-eval debate) beats the prod
 kb-mirror net by **+18.8 ± 13.8 Elo @ 100ms** (443 pairs, LLR +1.64, CI lb +5.0). Net
-`chessgo_efs28_wdl06_640` (md5 92294de3) is the new prod `data/nnue/kb-mirror.bin` (file-swap ship).
-See `ENGINE_STRENGTH.md §32`, `docs/open_tasks/retrain-efs28-wdlanneal.md`. **Next data lever:** the
-WDL anneal (deferred single-variable run), more epochs, or T78/T79 syzygy-rescored data. The prior
-KB v2 horizontal mirror (+10 fixed / +4.5 movetime, §31; Finny 32-key cache load-bearing) is now the
+`chessgo_efs28_wdl06_640` (md5 92294de3) shipped as prod `data/nnue/kb-mirror.bin` (file-swap ship) —
+**now itself superseded by the full-threats net below (2026-07-11).**
+See `ENGINE_STRENGTH.md §32`, `docs/open_tasks/retrain-efs28-wdlanneal.md`. The prior
+KB v2 horizontal mirror (+10 fixed / +4.5 movetime, §31; Finny 32-key cache load-bearing) was the
 retrained base.
+
+**★ FULL-THREATS NET SHIPPED (2026-07-11, lairner) → +10 over efs28, now prod default.** The current
+prod eval is the **Stockfish full-threats net `chessgo_threats_sf_640`** — it replaced efs28 as
+`data/nnue/kb-mirror.bin`, which is now the **~180 MB full-threats file** (was the 44 MB efs28). Arch:
+a **single** net — 512-wide FT, **16 king-buckets** (base 12,288) + **79,856 SF full-threats**, a
+pairwise tail **16→32**, NB=8, **int16 threat FT**, move-aware (NOT dual, NOT 1024-wide). It's a clean
+**+10 Elo** over efs28 (FN +11 / MT +9 @100ms) — modest **because it was coarse→rich, not off→rich**:
+the old coarse 9,216-input threat block already banked the load-bearing threat Elo. Forward arch plan
+(data → 32 king-buckets → dual net → threat-PSQT skip → 1024 width; **1024 is NOT cheap**; king-buckets
+are SHIPPED) lives in `docs/NNUE/SF_PARITY_ROADMAP.md`.
 
 **BUT search is NOT dry — the "dry well" call was retracted same day.** Re-tuning the SEE/singular/
 null-move margins **SHIPPED +38.7 ± 5.5 Elo movetime** (`singulardepth 8→6, seequietmargin 150→103,
@@ -304,9 +312,11 @@ captseemaxdepth 6→4, nullr 4→3`; 640 pairs, lb +33.2) — because the OLD de
 `docs/open_tasks/spsa-margins.md`) is high-priority and likely finds more. Lesson: our hand-tuned
 constants go stale as the engine evolves — periodically re-SPSA them.
 
-Backlog (lower priority, after eval): NNUE width → **1024** (NOT "cheap" — a single-SCReLU→1 tail is int16-bound, ~1.7× node cost with
-no int8-tail relief; the only prior 1024 was a 32-sb *stub*, never tested at maturity — see ARCH_DIRECTION
-§6 / ENGINE_STRENGTH §29.5; data-first (640-sb test80) is the safer next lever), hub-restart-durable resume, puzzle generation
+Backlog (lower priority, after eval): the forward NNUE arch ladder (data → 32 king-buckets → dual net →
+threat-PSQT skip → **1024 width**) lives in `docs/NNUE/SF_PARITY_ROADMAP.md`. Width → **1024** is NOT "cheap"
+— a single-SCReLU→1 tail is int16-bound, ~1.7× node cost with no int8-tail relief; the only prior 1024 was a
+32-sb *stub*, never tested at maturity (see ARCH_DIRECTION §6 / ENGINE_STRENGTH §29.5); data-first is the safer
+next lever. Also: hub-restart-durable resume, puzzle generation
 pipeline, reworked-selective versions of the rejected search patches (PV-only IIR,
 scaled capthist, conthist that doesn't double-count history), **SPSA**,
 precise level↔Elo *calibration*, a true cross-pool ranked queue. See `docs/SPEC.md` §11 roadmap.

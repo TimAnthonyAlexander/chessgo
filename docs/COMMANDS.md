@@ -326,14 +326,15 @@ pawns kingsafety bishoppair eval` (`eval` toggles all knowledge terms at once).
 ### Absolute Elo anchor & watching games
 
 ```sh
-# Anchor our strength. Two ways (gate patches on the SPRT, not either anchor):
+# Anchor our strength. Gate patches on the SPRT, not either anchor.
+# Current reading (2026-07-11): materially ABOVE 3400 (v6's 100W-0L vs a ~3400 engine is the
+#   hard floor, upper bound unmeasured), and ~150-200 (closer to 150) Elo below full-strength
+#   Stockfish at equal movetime. Do NOT quote a point rating. See ENGINE_STRENGTH.md intro/§7.
 # (a) CCRL Blitz anchor (PREFERRED) — play a full-strength, officially-CCRL-*ranked*
-#     NNUE engine and read off its rating. Latest (2026-06-29): ≈3260 "dirty" CCRL Blitz
-#     (Starzix 5.0 3276±83 / Viridithas 17 3245±94 @ 100ms; ENGINE_STRENGTH.md §15).
+#     NNUE engine and read off its rating.
 #       ./bin/gomachine bench vs-stockfish --sf ./starzix --full-strength --sf-elo 3622 \
 #         --opp-name "Starzix 5.0" --opp-opts "Hash=64" --movetime 100 --games 100
-# (b) SF-UCI_Elo anchor — NOISY, and ~390 below CCRL (a FIDE-ish scale). Latest (v6 SIMD,
-#     2026-06-22): ≈2882 — 2847/2870/2935 vs SF-2700/2800/2900, 10 games each @ 100ms.
+# (b) SF-UCI_Elo anchor — NOISY, and ~390 below CCRL (a FIDE-ish scale).
 ./bin/gomachine bench vs-stockfish --sf /opt/homebrew/bin/stockfish \
   --sf-elo 2500 --movetime 100 --games 60 --threads 4
 

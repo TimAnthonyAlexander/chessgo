@@ -218,6 +218,12 @@ Re-SPRT every step; flip defaults only on H1.
 
 ## 4. Status
 
+> **Current (2026-07-11):** this §4 log stops at v6. Prod now loads the **SF full-threats
+> net** (`chessgo_threats_sf_640`, `data/nnue/kb-mirror.bin`): 512-FT, 16 king-buckets +
+> 79,856 full-threats, pairwise 16→32 tail, NB=8, **int16 threat FT** (int8 threat FT is
+> lossy on the mature net), move-aware, 640 superbatches. Many nets have shipped since v6.
+> Forward plan: **`docs/NNUE/SF_PARITY_ROADMAP.md`**.
+
 - [x] **Phase 1 — float inference + flag** (2026-06-21). `internal/nnue`
   (`feature.go` indexing, `net.go` float forward + v1 serialization + atomic
   default net + cwd-relative auto-load). Flag wired: `search.Params.Nnue` →
@@ -369,12 +375,13 @@ Re-SPRT every step; flip defaults only on H1.
     `a7c4884`, `internal/chess/movegen_legal.go`, order-sensitively diff-tested vs
     the make/unmake oracle). Lazy/deferred accumulator (`NNUE_LAZY`, `484685c`) tested
     bit-identical but **flat — not shipped**. `ENGINE_STRENGTH.md §14.1–14.2`.
-  - [ ] **Next NNUE width step: 1024** — now cheap behind SIMD; **SPRT-gate it at
-    MOVETIME, not fixed-nodes** (the bucket experiment proved fixed-nodes inflates
-    eval changes — `ENGINE_STRENGTH.md §14.4`). Buckets can be layered on 1024 for
-    free (infra built) if a movetime SPRT ever shows they pay. Full researched plan
-    for everything after v6 (width / buckets / data / king-buckets vs the no-refresh
-    invariant): **`docs/NNUE/NEXT_STEPS.md`**.
+  - [ ] **Next NNUE width step: 1024** — ~~now cheap behind SIMD~~. **SUPERSEDED
+    2026-07-11 → `docs/NNUE/SF_PARITY_ROADMAP.md`:** 1024 is the **LAST** phase (Phase 5)
+    of the forward roadmap and is **NOT cheap / NOT a free win** (single-SCReLU→1 tail is
+    int16-bound, ~1.7× node cost, no int8-tail relief). The ladder now leads with data
+    (interleaved multi-source) → 32 king-buckets → dual net → threat-PSQT skip, *then*
+    1024. Still **SPRT-gate at MOVETIME, not fixed-nodes** (the bucket experiment proved
+    fixed-nodes inflates eval changes — `ENGINE_STRENGTH.md §14.4`).
 
 Full shipped write-up: `docs/ENGINE_STRENGTH.md §11`. **CCRL anchor (2026-06-29): ≈3260
 "dirty" CCRL Blitz** (two NNUE anchors — Starzix 5.0 3276±83 / Viridithas 17 3245±94 @

@@ -1,5 +1,15 @@
 # NNUE next architecture — closing the ~400-Elo gap to the open-source frontier
 
+> **⚠ SUPERSEDED 2026-07-11 → `docs/NNUE/SF_PARITY_ROADMAP.md`.** This doc's phased plan
+> (below) makes **Phase 1 multilayer + int8 "the keystone"** and treats king-buckets/threats
+> as *future* phases. Both premises are now dead:
+> - The **multilayer tail direction was ABANDONED** (enriched-512 measured a marginal movetime
+>   loss at ~2× node cost — see `ARCH_DIRECTION.md §6`). Prod ships a mostly-single-layer
+>   net with a small pairwise 16→32 tail, not the 512→16→32→1 keystone.
+> - **King-buckets (16) AND full threats are SHIPPED** (prod = the SF full-threats net), not
+>   Phase 3 futures.
+> Read below only as historical analysis of the gap; the live plan is `SF_PARITY_ROADMAP.md`.
+
 > **Status:** plan / analysis (2026-06-29). No code yet.
 > **Motivation:** the CCRL re-anchor (`ENGINE_STRENGTH.md §15`) put gomachine at
 > **≈3260 "dirty" CCRL Blitz** — and it got there by *losing* 6–12% to open-source

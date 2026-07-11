@@ -1,5 +1,13 @@
 # Handoff: int8 + SIMD for the multilayer NNUE (Phase 2)
 
+> **⚠ SUPERSEDED 2026-07-11 → `docs/NNUE/SF_PARITY_ROADMAP.md`.** "THE TASK" below (§3) — make
+> the **multilayer** MultiNet tail fast via int8+SIMD — is no longer the live task. That
+> **multilayer direction was ABANDONED** (`ARCH_DIRECTION.md §6`: enriched-512 measured a
+> marginal movetime loss at ~2× node cost). The engine pivoted to the **lean → full-threats**
+> path: prod now runs the SF full-threats net (16 king-buckets + 79,856 threats, small
+> pairwise 16→32 tail, **int16 threat FT** — int8 threat FT is lossy on the mature net).
+> Read below only for the historical int8-kernel execution context.
+
 > **For a fresh instance.** Everything below is current as of this session. The
 > multilayer NNUE architecture is **built, wired, and proven at fixed depth
 > (+102 Elo vs v6)** but **loses at movetime (−284) purely on speed**. Your task

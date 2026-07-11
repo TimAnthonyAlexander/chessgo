@@ -47,7 +47,8 @@ value from real game outcomes, not a hand-forced cp bonus that fights the search
 smallest-effort first:
 
 ### Option A — WDL/sharpness-weighted training target (preferred first try)
-Retrain the current arch (single-layer v6, or whatever is current) with the **loss
+Retrain the current arch (the multilayer SF full-threats king-bucket net `chessgo_threats_sf_640`,
+or whatever is current) with the **loss
 re-weighted toward decisive, sharp positions** instead of a symmetric MSE/WDL target:
 - Up-weight positions/games that ended decisively; down-weight dead draws.
 - Optionally add a small term that rewards agreement with the *attacking* continuation in

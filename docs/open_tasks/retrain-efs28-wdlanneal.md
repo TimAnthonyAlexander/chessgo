@@ -3,6 +3,8 @@
 **Status:** ✅ SHIPPED (2026-07-09) — **+18.8 ± 13.8 Elo @ movetime** (443 pairs, LLR +1.64, CI lb +5.0)
 vs prod kb-mirror; net `chessgo_efs28_wdl06_640` (md5 92294de3) file-swapped over `data/nnue/kb-mirror.bin`.
 See `ENGINE_STRENGTH.md §32`. WDL anneal remains the deferred follow-up.
+**Superseded 2026-07-11:** efs28 is no longer prod — the SF full-threats net `chessgo_threats_sf_640`
+replaced it (`data/nnue/kb-mirror.bin`, +10 vs efs28). This efs28 result stands as history.
 **Owner:** engine
 **Created:** 2026-07-08
 **Lever:** data-pipeline quality (not arch, not search — both dry, HANDOFF-2026-07-08). Same net

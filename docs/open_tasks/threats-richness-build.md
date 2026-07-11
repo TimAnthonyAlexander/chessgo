@@ -7,9 +7,12 @@ victim-square = 9,216) with SF18's **Full Threat Inputs** (79,856), which encode
 grew only *after* threats made the FT cheap) both say the lever is **input richness**,
 not tail/width. Our threats are ~9× coarser than SF's (9,216 vs 79,856).
 
-Status: **design locked, implementing.** Target first train: **320 superbatches**
-(annealed, dedicated — the 320-vs-640 question is genuinely open; no valid dedicated
-comparison exists). efs28 data pipeline (test80, ply-28). Gate: Abitur vs lean.
+Status: ✅ **TRAINED + DEPLOYED (2026-07-11).** Trained at **640 superbatches**
+(net_id `chessgo_threats_sf_640`, annealed, dedicated) on the efs28 data pipeline
+(test80, ply-28), and **shipped to prod** (`data/nnue/kb-mirror.bin`, ~180 MB full-threats
+file) — **+10 movetime vs efs28**. int16 threat FT (int8 threat FT is lossy on the mature
+net — see gotcha #3). Forward plan: `docs/NNUE/SF_PARITY_ROADMAP.md`. The build notes below
+are kept as the implementation record.
 
 ## Why this is cheap at movetime (the important part)
 
@@ -94,7 +97,7 @@ d/e boundary (mirror bit flips) — far cheaper than HalfKA's any-king-move refr
 
 ### Change surface (trainer, bullet checkout — NOT in this repo)
 - `examples/chessgo_*.rs` `map_features`: replicate the exact index scheme.
-- **Threat factoriser** (new): to train 79,856 sparse features on test80/320sb, add virtual
+- **Threat factoriser** (new): to train 79,856 sparse features on test80/640sb, add virtual
   sub-features (e.g. collapse edge→(attacker-type × victim-square) and/or victim-slot) that sum
   into the full feature, so rare edges borrow gradient. Mirror bullet's base factoriser merge.
 - `kb_verify_test.go` / `kb_verify2_test.go`: update the Go↔Rust index pin in lockstep.
@@ -121,9 +124,11 @@ the from-axis = paying 79,856 features to learn geometry unregularized).
 2. **Dedup mirrored in the factor** — same-type mutual pairs emit ONE feature; if real
    dedups and virtual doesn't, the coarse weight gets 2× gradient. Assert
    `len(realIdx) == len(virtualIdx)/nFactors` in the NNUE_ASSERT gate.
-3. **int8 threat FT at TRAIN time (QAT), not PTQ** — 79,856·512·2B ≈ 81.7 MB int16; ship
-   int8. Do `faux_quantise` on the threat FT rows IN the bullet recipe (avoids the §16.2
-   −150 Elo PTQ cliff). Our `QuantizeFTInt8` then becomes near-lossless on this net.
+3. **int8 threat FT — RULED OUT; ship int16 (deployed).** The l0/threat-FT int8-QAT was
+   **REMOVED**: `faux_quantise` on the threat FT rows **froze from-scratch training**, and PTQ
+   int8 is **lossy on the mature net** (~66 cp RMS). The "near-lossless / clamp-clean" claim is
+   WRONG for this net — int8 does NOT work here. Prod ships the **int16 threat FT** (79,856·512·2B
+   ≈ 81.7 MB), which is the deployed config.
 4. **Fold + verify before SPRT** — `coalesce` virtual→real at export, run the byte-exact
    Go-vs-Rust replica (`kb_verify` pattern) on the FOLDED net (a wrong fold is silent).
 
@@ -133,9 +138,9 @@ the from-axis = paying 79,856 features to learn geometry unregularized).
 so the **3072→1024 L1 cut landed at v10, WITH threats**: threats carry ~3× the trunk
 width's knowledge. Implication: our **512 trunk may be too wide** for a real-geometry
 threats net; revisit trunk width (and the L2 16→32 shape, which we already run) after the
-320sb read. `L2Big=15(+1), L3Big=32`; master v13 doubled L2 to 31(+1).
+640sb read. `L2Big=15(+1), L3Big=32`; master v13 doubled L2 to 31(+1).
 
-### The 320sb A/B run (owner-specified)
+### The 640sb A/B run (owner-specified) — DONE, shipped as `chessgo_threats_sf_640`
 
 - Arch: `(12,288 base + 79,856 threats) → 512×2 → pairwise → 16 → 32 → 1`, NB=8, mirror-KB.
 - Factoriser V1+V2+V3, folded at export. Data: test80 Jan–Apr, efs28, ConstantWDL 0.6
@@ -150,5 +155,5 @@ threats net; revisit trunk width (and the L2 16→32 shape, which we already run
 ### Gates
 - `go test ./internal/nnue/` (incl. new LUT unit tests + kb_verify pin), `NNUE_ASSERT` clean
   (accumulator incremental == scratch), `perft` green, `go test -race` not required (TT only).
-- Train 320sb annealed → import → **Abitur vs lean** (movetime, ~200+ games) + vs externals.
-  Ship only on a clear positive lower bound.
+- Train 640sb annealed → import → **Abitur vs lean** (movetime, ~200+ games) + vs externals.
+  Ship only on a clear positive lower bound. (Done: shipped 2026-07-11, +10 vs efs28.)

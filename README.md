@@ -1,10 +1,10 @@
 # chessgo
 
-A chess website and a chess engine, both in this repo. The website runs in production at [chessgo.timanthonyalexander.de](https://chessgo.timanthonyalexander.de). The engine, `gomachine`, is a standalone Go program that plays around ~3750 CCRL Blitz and speaks UCI.
+A chess website and a chess engine, both in this repo. The website runs in production at [chessgo.timanthonyalexander.de](https://chessgo.timanthonyalexander.de). The engine, `gomachine`, is a standalone Go program that is materially above 3400 strength (v6's 100W–0L vs a ~3400 engine is a hard floor) and speaks UCI.
 
 Every rule, the move generator, the evaluation, and the search are written from scratch in Go, with no external chess library. The website talks to the engine over HTTP and a WebSocket. The engine has no dependency on the website and runs on its own.
 
-**Under the hood:** a 768→512×2→1 SCReLU NNUE that is perspective-relative with an incremental int16 accumulator and archsimd AVX2/NEON kernels; a Lazy SMP negamax alpha-beta search with iterative deepening, aspiration windows, and principal variation search (PVS); a lock-free Hyatt-XOR transposition table with a static-eval cache; late move reductions (LMR), SEE-filtered captures, null-move pruning, reverse futility pruning (RFP), late move pruning (LMP), delta pruning, frontier futility, singular extensions with multicut, and correction history; history and killer move ordering; king-proximity and passed-pawn-race terms in the hand-crafted fallback eval; pin-aware, PGO-built magic bitboard move generation with Zobrist hashing, repetition detection, and an opening book; 5-piece Syzygy (Fathom) DTZ root probing plus WDL probing inside the search; and clock-aware time management.
+**Under the hood:** a perspective-relative NNUE — a 512-wide feature transformer with 16 king-buckets and 79,856 Stockfish-style full-threat inputs, a pairwise 16→32 tail, an incremental int16 accumulator (int16 threat FT), and archsimd AVX2/NEON kernels; a Lazy SMP negamax alpha-beta search with iterative deepening, aspiration windows, and principal variation search (PVS); a lock-free Hyatt-XOR transposition table with a static-eval cache; late move reductions (LMR), SEE-filtered captures, null-move pruning, reverse futility pruning (RFP), late move pruning (LMP), delta pruning, frontier futility, singular extensions with multicut, and correction history; history and killer move ordering; king-proximity and passed-pawn-race terms in the hand-crafted fallback eval; pin-aware, PGO-built magic bitboard move generation with Zobrist hashing, repetition detection, and an opening book; 5-piece Syzygy (Fathom) DTZ root probing plus WDL probing inside the search; and clock-aware time management.
 
 ## gomachine
 
@@ -12,14 +12,14 @@ One self-contained binary. The evaluation network and opening book are compiled 
 
 ### Strength
 
-**~3750 CCRL Blitz**, tested at full strength against a range of CCRL-rated engines.
+**Materially above 3400** — v6's 100W–0L vs a ~3400 engine is a hard floor, and the engine has shipped hundreds of Elo since with no re-anchor (upper bound unmeasured). At equal movetime it sits **~150–200 Elo below full-strength Stockfish** and already **beats a cold Stockfish** (fresh process / empty hash every move) at the same movetime. No point rating is quoted — a formal re-anchor is pending.
 
 Development uses self-play **SPRT** (sequential probability ratio test). A change plays the previous version until the test decides it is an improvement or rejects it. Nothing ships on a hunch. The full method, with every result and its confidence interval, is in [docs/ENGINE_STRENGTH.md](docs/ENGINE_STRENGTH.md).
 
 ### What's in it
 
 - **Move generation**: bitboards and magic bitboards, verified against known perft node counts.
-- **Evaluation**: a `(768→512)×2→1` SCReLU NNUE trained on Stockfish-labelled positions, with an int16 incremental accumulator and hand-written AVX2/NEON SIMD inference. It falls back to a Texel-tuned hand-crafted eval if no net is loaded.
+- **Evaluation**: a king-buckets NNUE (512-wide FT, 16 buckets + 79,856 Stockfish-style full-threat inputs, pairwise 16→32 tail) trained on Stockfish-labelled positions, with an int16 incremental accumulator and hand-written AVX2/NEON SIMD inference. It falls back to a Texel-tuned hand-crafted eval if no net is loaded.
 - **Search**: alpha-beta with SEE, null-move pruning, late move reductions, reverse futility and late-move pruning, aspiration windows, singular extensions, correction history, and futility pruning.
 - **Parallelism**: Lazy SMP over a lock-free transposition table, byte-identical to the serial search at one thread.
 - **Endgames**: 5-piece Syzygy tablebases, probed at the root and inside the search (optional, not bundled).
@@ -28,9 +28,9 @@ Strength was built in SPRT-gated layers: search patches (~+250 Elo), Lazy SMP (~
 
 The very top engines (~4000+ CCRL) are still ahead. The remaining levers, a wider network, more training data, and SPSA tuning, are in the strength doc.
 
-### Strength progression (0 → ~3750)
+### Strength progression
 
-How it got here, in order. **Δ Elo** is the self-play SPRT gain of each step over the version before it, on the ruler noted. Fixed-nodes inflates eval changes, movetime is the honest ruler, and the endgame terms were measured on an endgame book, so their whole-game effect is a fraction of the quoted number. Self-play gains don't sum linearly, so **Cum.** is a guesstimate rather than arithmetic. **≈ CCRL** is filled in only where there's a real external measurement (†) and interpolated elsewhere. The baseline sits ~2800 because the early "~2400 vs Stockfish" read was on Stockfish's UCI_Elo scale, which runs ~390 below CCRL. The ~3750 endpoint is itself an estimate that still owes a formal re-anchor.
+How it got here, in order. **Δ Elo** is the self-play SPRT gain of each step over the version before it, on the ruler noted. Fixed-nodes inflates eval changes, movetime is the honest ruler, and the endgame terms were measured on an endgame book, so their whole-game effect is a fraction of the quoted number. Self-play gains don't sum linearly, so **Cum.** is a guesstimate rather than arithmetic. **≈ CCRL** is filled in only where there's a real external measurement (†) and interpolated elsewhere. The baseline sits ~2800 because the early "~2400 vs Stockfish" read was on Stockfish's UCI_Elo scale, which runs ~390 below CCRL. The only hard external anchor is the v6 floor (>3400); everything after it has shipped hundreds of Elo with no re-anchor, so today's strength is materially above 3400 with the upper bound unmeasured.
 
 | # | Step | Δ Elo (ruler) | Cum. | ≈ CCRL |
 |---|------|---------------|:----:|:------:|
@@ -59,7 +59,7 @@ How it got here, in order. **Δ Elo** is the self-play SPRT gain of each step ov
 | — | **Anchor (2026-07-01): floor measured >3400** — 100W–0L vs a ~3400 engine | *measurement* | — | **>3400†** |
 | 22 | Opening book recompiled with the current net | +33 fixed nodes | +937 | |
 | 23 | Qsearch captures-only (byte-identical at fixed nodes; the Elo is pure NPS → depth) | +20 movetime | +957 | |
-| 24 | NMP static-eval gate + qsearch futility | ~+5 movetime | +962 | ~3750 |
+| 24 | NMP static-eval gate + qsearch futility | ~+5 movetime | +962 | >3400 (upper bound unmeasured) |
 
 Two through-lines run under the table. The **eval ladder** goes PeSTO HCE → Texel-tuned HCE (the HCE ceiling) → NNUE 256 (the single biggest leap, +212) → NNUE v6 512 + SIMD (+101). The **NPS thread** is why several eval wins only cash out at movetime: the incremental int16 accumulator is what made NNUE viable at all (a 6.9× eval-cost deficit cut to 1.6×), SIMD gave another 6.5×/4.16×, and PGO with pin-aware movegen added ~23% raw NPS. Each of those bought search depth rather than a smarter static score.
 

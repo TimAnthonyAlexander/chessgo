@@ -1,9 +1,13 @@
 # Rented-GPU training setup — turnkey checklist
 
 > **Dated 2026-07-03.** For training the enriched (threats) NNUE on a rented Linux/NVIDIA
-> GPU box with `bullet` (instead of the M3's Metal build). The target run is the
-> **multilayer int8 + int8-FT** net (the next experiment; see `ARCH_DIRECTION.md §4`).
-> Provider recommendation is being researched separately — slot it into step 1.
+> GPU box with `bullet` (instead of the M3's Metal build).
+>
+> **⚠ UPDATE 2026-07-11:** the "target run = **multilayer int8 + int8-FT** net" premise is
+> stale. The multilayer direction was **abandoned** (`ARCH_DIRECTION.md §6`); prod trains the
+> **SF full-threats** net at **640 superbatches** (not 320) with **int16 threat FT** (int8
+> threat FT is lossy on the mature net — see step 5). The box-provisioning mechanics
+> (rig rsync, dataset, provider) below are still accurate; the arch/SB/int8-FT specifics are not.
 
 ## Why a rented box
 - The M3 does a 320-sb run in ~5–7 h and monopolizes the laptop. A rented NVIDIA GPU is
@@ -45,20 +49,20 @@
    patch + chessgo examples). Verify the STE fix is present in `unary.rs`.
 4. **Get data:** rsync `~/nnue-training/pool.binpack` up, or re-download the SF binpack on
    the box and (if needed) rebuild `pool.binpack`. Confirm size (~38 GB) + path.
-5. **Config edit (int8-FT losslessness) — VERIFY before running.** For the int8 threat
-   columns (`QuantizeFTInt8`) to be lossless, the FT **threat** weights must satisfy
-   `|round(W·255)| ≤ 127`, i.e. `|W| ≤ ~0.498`. The current `chessgo_enriched.rs` does NOT
-   constrain this (config audit, 2026-07-03). **This is a weight-CLIP/constraint on the l0
-   threat weights, not a simple `faux_quantise` — needs a closer look at bullet's API
-   before applying.** If unsure, run the FIRST retrain WITHOUT int8-FT (primary int8-tail
-   path is already retrain-ready per the audit), measure, then add int8-FT once the clip is
-   confirmed. Do NOT guess-edit the config and silently train a clamped (lossy) net.
+5. ~~**Config edit (int8-FT losslessness) — VERIFY before running.**~~ **DEAD 2026-07-11.**
+   The plan to make int8 threat FT lossless via a weight-CLIP/constraint on the l0 threat
+   weights (`|W| ≤ ~0.498`) did **not** pan out: on the mature full-threats net **int8 threat
+   FT is LOSSY** (~66 cp RMS, `TestKBNetClampCount` fails), and the l0-weight int8-QAT was
+   **REMOVED** because it froze from-scratch training. **Prod ships int16 threat FT** — do not
+   add an int8-FT clip. (Historical note: the 0-clamp result only ever held on the small early
+   lean net.)
 6. **Build:** `cd ~/bullet && cargo build -r --features cuda` (the Metal build uses
    `--features metal`; confirm the CUDA feature name in `Cargo.toml`).
 7. **Smoke test:** `SB=4 cargo r -r --features cuda --example chessgo_enriched` — confirms
    the pipeline (loader finds the data, GPU trains, checkpoint saves) before the real run.
-8. **Full run:** `SB=320 cargo r -r --features cuda --example chessgo_enriched`
-   (v6 shipped at 320-sb; the anneal is worth ~+220 Elo — **never early-stop it**).
+8. **Full run:** `SB=640 cargo r -r --features cuda --example chessgo_enriched`
+   (prod full-threats net trains at **640-sb**, not the old 320; the anneal is worth ~+220
+   Elo — **never early-stop it**, and never resume-320→640, which double-anneals).
    Save format is float `raw.bin` at `checkpoints/chessgo_enriched-320/`.
 9. **Retrieve + measure:** rsync `checkpoints/chessgo_enriched-320/raw.bin` back to local
    (and to coalla). Then movetime SPRT on coalla vs **v6 AND the lean net**

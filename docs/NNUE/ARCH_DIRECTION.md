@@ -202,6 +202,12 @@ int8 net lands ~break-even at movetime. Well-measured marginal loss → **abando
 lean-v9 stays champion; pivot to **lean width→512→1024** (higher eval ceiling, better
 Elo/node, less complexity — the NEXT_STEPS ladder).
 
+> **UPDATE 2026-07-11:** the "pivot to lean width→512→1024 / NEXT_STEPS ladder" recommendation
+> above is **SUPERSEDED**. The engine instead added **full threats + 16 king-buckets** (prod =
+> the SF full-threats net), and the forward plan is now `docs/NNUE/SF_PARITY_ROADMAP.md` (data →
+> 32 king-buckets → dual net → threat-PSQT skip → 1024, with 1024 **last and not cheap**). The
+> ">3400 floor" strength row (§1) still stands.
+
 ### The FT-weight-QAT gap (bank this for a future BIGGER threat net)
 
 The int8-FT leak is diagnosed and *fixable*, just not worth it here. Root cause:
