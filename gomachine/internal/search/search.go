@@ -2678,12 +2678,12 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 					scoutCut = !childCutnode
 				}
 				sc = -s.negamax(pos, newDepth-reduction, ply+1, -alpha-1, -alpha, scoutCut)
+				rd := newDepth // doDeeper/doShallower-adjusted depth; stays newDepth if unreduced
 				if sc > alpha && reduction > 0 {
 					// LMR re-search (zero window), opposite node type (Stormphrax
 					// search.cpp:1205). doDeeper/doShallower: adapt the re-search depth
 					// to how far the reduced scout beat alpha — a big overshoot searches
 					// deeper, a bare pass shallower (Stormphrax search.cpp:1190-1193).
-					rd := newDepth
 					if s.params.LMRDoDeeper {
 						if sc > bestScore+44+4*newDepth {
 							rd = newDepth + 1
@@ -2698,8 +2698,15 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 				}
 				if sc > alpha && sc < beta {
 					// PV full-window re-search: a PV child, never a cut node (false,
-					// Stormphrax search.cpp:1250).
-					sc = -s.negamax(pos, newDepth, ply+1, -beta, -alpha, false)
+					// Stormphrax search.cpp:1250). LMRResearchFix carries the
+					// doDeeper/doShallower depth (rd) into this re-search too, matching SF's
+					// mutated newDepth (search.cpp:1253); default off reproduces the old
+					// unadjusted-newDepth behavior byte-for-byte.
+					pvReDepth := newDepth
+					if s.params.LMRResearchFix {
+						pvReDepth = rd
+					}
+					sc = -s.negamax(pos, pvReDepth, ply+1, -beta, -alpha, false)
 				}
 			}
 

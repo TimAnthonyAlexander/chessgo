@@ -619,6 +619,12 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.LMRDoDeeper = b
+		case "lmrresearchfix", "lmrrfix":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.LMRResearchFix = b
 		case "qsmaxmoves", "qsmax":
 			n, err := strconv.Atoi(val)
 			if err != nil {
@@ -1084,6 +1090,9 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.LMRDoDeeper != patch.LMRDoDeeper {
 		diffs = append(diffs, fmt.Sprintf("lmrdodeeper: %s→%s", onoff(base.LMRDoDeeper), onoff(patch.LMRDoDeeper)))
+	}
+	if base.LMRResearchFix != patch.LMRResearchFix {
+		diffs = append(diffs, fmt.Sprintf("lmrresearchfix: %s→%s", onoff(base.LMRResearchFix), onoff(patch.LMRResearchFix)))
 	}
 	if base.QSMaxMoves != patch.QSMaxMoves {
 		diffs = append(diffs, fmt.Sprintf("qsmaxmoves: %d→%d", base.QSMaxMoves, patch.QSMaxMoves))

@@ -48,6 +48,7 @@ type Params struct {
 	NodeTM           bool // node-based time management: scale the soft time limit by how concentrated the iteration's nodes were on the best root move (Stormphrax nodeTm, centered form). Movetime-only (inert at fixed nodes / flat movetime). DEFAULT OFF — under SPRT.
 	RFPQuad          bool // reverse-futility margin = 85·d + 7·d² − 75·improving, applied to d≤12 (Stormphrax) instead of our linear 75·d @ d≤8. DEFAULT OFF — under SPRT.
 	LMRDoDeeper      bool // after an LMR reduced scout beats alpha, adapt the re-search depth ±1 to how far it beat bestScore (Stormphrax doDeeper/doShallower). The safety net that makes aggressive reduction pay. DEFAULT OFF — under SPRT.
+	LMRResearchFix   bool // carry the LMRDoDeeper depth adjustment (rd) into the PV full-window re-search too, matching SF's mutated newDepth (search.cpp:1253). Currently the PV re-search reverts to the unadjusted newDepth — a port slip. DEFAULT OFF (byte-identical) — under SPRT.
 	QSMaxMoves       int  // qsearch move-count cap: out of check, stop after this many searched moves (Stormphrax=2). 0=off. DEFAULT OFF — under SPRT.
 	IIRCutnode       bool // broaden IIR: reduce depth by 1 at d≥4 PV-or-cutnode when TT move is missing OR shallow (ttDepth+3<depth), instead of PV+no-TT-move only. DEFAULT OFF — under SPRT.
 	LMPHist          bool // history-adjusted LMP: raise the move-count limit by history·k so good-history quiets survive. DEFAULT OFF — under SPRT.
@@ -252,6 +253,7 @@ func DefaultParams() Params {
 		NmpMarginBase: 213,
 		NodeTM:        false,
 		LMRDoDeeper:   true, // SHIPPED — the adaptive re-search safety net that makes cutnode-LMR pay
+		LMRResearchFix: false, // carry rd into the PV re-search (SF-faithful); DEFAULT OFF — under SPRT
 		QSMaxMoves:    0,    // qsearch move cap off by default (Stormphrax uses 2)
 		// Texel-tuned eval (tuned PSQT + knowledge terms), SPRT-accepted as a set
 		// vs the bare PeSTO base: +128 ± 35 Elo @ 40k nodes, +101 ± 29 Elo @
