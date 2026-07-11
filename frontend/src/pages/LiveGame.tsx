@@ -749,7 +749,7 @@ export default function LiveGame() {
                 interactive={boardInteractive}
                 onMove={isDuck ? duck.onMove : interaction.onMove}
                 premoveColor={g.ended || isDuck || !atLive || !prefs.premoves ? null : g.color}
-                premove={isDuck || !atLive ? null : interaction.premove}
+                premoves={isDuck || !atLive ? null : interaction.premoves}
                 onCancelPremove={interaction.cancelPremove}
                 duck={atLive ? shownDuck : null}
                 duckTargets={isDuck && atLive ? duck.duckTargets : null}

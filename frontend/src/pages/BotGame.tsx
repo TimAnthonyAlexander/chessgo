@@ -551,7 +551,7 @@ export default function BotGame() {
                 interactive={interactive}
                 onMove={isDuck ? duck.onMove : interaction.onMove}
                 premoveColor={ongoing && atLive && !isDuck && prefs.premoves ? humanColor : null}
-                premove={atLive && !isDuck ? interaction.premove : null}
+                premoves={atLive && !isDuck ? interaction.premoves : null}
                 onCancelPremove={interaction.cancelPremove}
                 duck={shownDuck}
                 duckTargets={isDuck && atLive ? duck.duckTargets : null}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { applyUciVisually, type BoardMap, parseFen, type Square } from './chess'
 import { playForMove } from './sounds'
 
@@ -29,15 +29,21 @@ export interface BoardControl {
 }
 
 export interface BoardInteraction {
-    /** Display-only board to show instead of `fen` for instant optimistic feedback (null = use fen). */
+    /**
+     * Display-only board to show instead of `fen` (null = use fen). Carries either
+     * the optimistic overlay for an in-flight move OR — while it isn't our turn and
+     * premoves are queued — the position with the whole premove chain applied, so
+     * the queued pieces actually sit on their destinations (Chess.com-style), not
+     * just highlighted. Pages already feed this through as `overrideBoard`.
+     */
     override: BoardMap | null
     /** The optimistic last move while our submitted move is in flight (null otherwise). */
     optimisticLast: Move | null
-    /** A move queued during the opponent's turn, awaiting your turn (null = none). */
-    premove: Move | null
+    /** The queued premove chain, in play order (empty = none). Each is highlighted. */
+    premoves: Move[]
     /** Feed raw move intents from the Board here (played now, or queued as a premove). */
     onMove: (uci: string) => void
-    /** Discard the queued premove (e.g. the user clicked an empty square). */
+    /** Discard the ENTIRE queued premove chain (e.g. the user clicked an empty square). */
     cancelPremove: () => void
 }
 
@@ -55,7 +61,11 @@ export function useBoardInteraction(control: BoardControl): BoardInteraction {
     const { fen, myTurn, legalMoves, submit, canPremove = false } = control
     const [override, setOverride] = useState<BoardMap | null>(null)
     const [optimisticLast, setOptimisticLast] = useState<Move | null>(null)
-    const [premove, setPremove] = useState<(Move & { uci: string }) | null>(null)
+    // The queued premove chain, in the order they'll be played. Chess.com-style: a
+    // move made while it isn't our turn is appended, and the board is shown with the
+    // whole chain applied (see premoveBoard) so the next premove picks the piece up
+    // from where the chain left it.
+    const [premoves, setPremoves] = useState<Array<Move & { uci: string }>>([])
 
     // The authoritative position advanced (our move landed, or the opponent
     // replied): drop the optimistic overlay. The premove deliberately SURVIVES the
@@ -88,35 +98,63 @@ export function useBoardInteraction(control: BoardControl): BoardInteraction {
         [fen, submit, clearOverlay],
     )
 
-    // A board move intent: play it now if it's our turn, else queue it as a premove
-    // (when enabled). Making a real move drops any premove that was queued.
+    // A board move intent: play it now if it's our turn, else append it to the
+    // premove chain (when enabled). Making a real move drops any queued chain.
     const onMove = useCallback(
         (uci: string) => {
             if (myTurn) {
-                setPremove(null)
+                setPremoves([])
                 executeMove(uci)
             } else if (canPremove) {
-                setPremove({ from: uci.slice(0, 2), to: uci.slice(2, 4), uci })
+                setPremoves((prev) => [
+                    ...prev,
+                    { from: uci.slice(0, 2), to: uci.slice(2, 4), uci },
+                ])
             }
         },
         [myTurn, canPremove, executeMove],
     )
 
-    const cancelPremove = useCallback(() => setPremove(null), [])
+    // Cancelling drops the WHOLE chain — matching how Chess.com clears every queued
+    // premove at once (a click on an empty square, a right-click, etc.).
+    const cancelPremove = useCallback(() => setPremoves([]), [])
 
-    // When it becomes our turn with a premove queued, play it if it's legal in the
-    // new position (match from→to, ignoring the promotion piece) — else discard it.
+    // The board with the entire premove chain applied, so the queued pieces sit on
+    // their destinations (and the next premove picks them up there). It folds onto
+    // the CURRENTLY DISPLAYED position — the optimistic overlay when our own move is
+    // still in flight (e.g. the bot page keeps showing our move through the engine's
+    // think window before `fen` advances), else the authoritative `fen`. Null when
+    // nothing is queued.
+    const premoveBoard = useMemo(() => {
+        if (premoves.length === 0) return null
+        let b = override ?? parseFen(fen)
+        for (const p of premoves) b = applyUciVisually(b, p.uci)
+        return b
+    }, [override, fen, premoves])
+
+    // When it becomes our turn, try the HEAD of the chain against the real legal
+    // moves (match from→to, ignoring the promotion piece). If it's legal we play it
+    // and keep the rest queued (they'll resolve on our following turns). If it's
+    // illegal the WHOLE chain collapses — a premove is only reachable once every
+    // earlier one has already been played, so a failed head is a failed prior move.
     useEffect(() => {
-        if (!myTurn || !premove) return
-        const match = legalMoves.find((m) => m.slice(0, 4) === premove.uci.slice(0, 4))
-        setPremove(null)
-        if (match) executeMove(match)
-    }, [myTurn, premove, legalMoves, executeMove])
+        if (!myTurn || premoves.length === 0) return
+        const [head, ...rest] = premoves
+        const match = legalMoves.find((m) => m.slice(0, 4) === head.uci.slice(0, 4))
+        if (match) {
+            setPremoves(rest)
+            executeMove(match)
+        } else {
+            setPremoves([])
+        }
+    }, [myTurn, premoves, legalMoves, executeMove])
 
     return {
-        override,
+        // Show the projected premove chain when one is queued (it already folds in
+        // the optimistic overlay as its base); otherwise the bare optimistic overlay.
+        override: premoveBoard ?? override,
         optimisticLast,
-        premove: premove ? { from: premove.from, to: premove.to } : null,
+        premoves: premoves.map((p) => ({ from: p.from, to: p.to })),
         onMove,
         cancelPremove,
     }
