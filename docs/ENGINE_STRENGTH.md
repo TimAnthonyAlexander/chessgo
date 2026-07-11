@@ -2436,3 +2436,63 @@ coalla `~/chessgo-nnue-backup`; training log local.
 - **Next:** ship `-640`; adopt "SPRT several late checkpoints (e.g. −560/−600/−640) directly vs prod, not just the
   final" for future runs (cheap insurance against a genuine over-anneal); use the refactor binary for net-vs-net
   SPRTs; then pursue §34.
+
+## 36. THE METHODOLOGY LESSON: self-play SPRT gates, Abitur decides — and the full-threats regression that proved it (2026-07-11)
+
+**Ground truth (owner-confirmed, identical method throughout):** the full-threats net
+`chessgo_threats_sf_640` scored **+10 Elo vs efs28 in self-play SPRT** but **draws/loses
+vs cold Stockfish** — the same cold SF that **efs28 beat ~90%**. Same search, same
+movetime, only the net changed. This is the canonical failure mode this doc has warned
+about since §1, now caught in the act.
+
+### 36.1 Why self-play SPRT could not see it
+Self-play SPRT measures strength **relative to your sparring partner** (the previous
+gomachine). Chess strength is **non-transitive**: `B beats A`, `A beats SF`, `SF beats B`
+is a fully self-consistent cycle. "+10 vs the last net" has **never** meant "stronger
+against everyone." A ~300-Elo swing vs a third party while only +10 vs A is far more
+non-transitivity than benign style-cycling — it signals a **systematic eval distortion**
+that both gomachines share (so self-play is blind) but a strong external engine punishes.
+
+### 36.2 What we RULED OUT by measurement (so the process is repeatable, not vibes)
+- **Not speed.** `bench nps-ft`, same tool/box/session, depth 16: coalla **461k
+  (full-threats) vs 469.6k (efs28), −1.75%**; M3 **213k vs 212k, +0.6%**. The
+  79,856-col threat FT is ~free (only ~70–112 cols touched per push; int16 costs
+  1.5–3% over int8). `docs/PROFILING/{amd,arm}/11Jul2026.md`. **NOTE:** the 9 Jul
+  baseline (537k/573k) was a `bench nps` LEAN-loader number — NOT comparable to the
+  enriched net; always re-measure the before-net with the SAME enriched tool.
+- **Not deployment quantization.** `TestEnrichedInt8Closeness` on the real net: int8
+  tail vs float **mean 8.7 cp / max 31 cp** (PASS); int16 threat-FT = zero clamp loss.
+  Deployed net ≈ trained float net.
+- **Not king-bucket/mirror/Finny** (bit-exact, pinned to the Rust trainer) **nor int16
+  overflow** (accumulator range [−3016, +2894], 9× headroom).
+
+### 36.3 Live suspects (see `docs/open_tasks/fullthreats-vs-sf-regression.md`)
+- **H1 (top): Go threat-feature inference ≠ the Rust trainer.** `threats_sf.go:175`
+  same-type-edge dedup + the mir=0 path are **never pinned** against the trainer (both
+  green cross-check FENs have zero same-type non-pawn edges). A wrong directed edge →
+  weights applied to the wrong feature → self-play-invisible bias, SF-punished,
+  **8.7× more load-bearing in full-threats** than efs28's coarse block. Decisive test:
+  Rust `cross_check_dump` vs the Go dump on a rook-standoff position.
+- **H2: threat overvaluation / eval noise** (full-threats needed 2× the nodes to reach
+  depth 16 on the test FEN → possibly shallower at movetime). Needs a suite.
+
+### 36.4 THE RULE (now in CLAUDE.md)
+1. **SPRT filters, Abitur decides.** Self-play SPRT stays the cheap first pass, but the
+   **ship gate for any NET / eval / margin change is `gomachine bench abitur`** — the
+   external multi-engine gauntlet (`docs/ABITUR.md`). A change that is +N in self-play
+   but flat-or-worse in Abitur does **not** ship.
+2. **Be smart with Abitur — don't read Elo off a 100L rail.** Every engine from 0 to
+   3400 Elo loses ~100/100 to a 3500 engine, so a full-strength-SF-at-equal-TC score of
+   0% estimates **nothing**. Use the **time-odds ladder** (ABITUR.md's core rationale):
+   give gomachine a movetime advantage to land both nets in a scoreable band
+   (~[15%,85%]), read the **before/after** there, then walk the odds down toward parity.
+   Triangulate across ≥2 opponents/strengths (Stockfish + Stormphrax/Reckless, and
+   several UCI_Elo/skill points), never a single anchor.
+3. **Always re-measure the before-net with the identical enriched tool** — cross-tool
+   comparisons (lean-loader vs enriched, cold vs warm SF) silently mislead.
+
+### 36.5 Harness state
+`bench abitur` now streams **live per-pair progress** (running W/D/L + pentanomial Elo
+estimate) so a long match is observable, not silent until it finishes; the driver
+line-buffers for live `tail -f`. An old-vs-new time-odds ladder vs SF18 (full-strength,
+UCI_Elo 2800, 2400) is the first application — results pending.

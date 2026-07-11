@@ -68,8 +68,9 @@ Quick version: `./mason serve --screen` (API), `gomachine serve` (engine),
 ```sh
 cd gomachine && go build -o bin/gomachine ./cmd/gomachine && go test ./...   # Go
 cd gomachine && ./bin/gomachine perft -depth 5                                # movegen sanity
-cd gomachine && ./bin/gomachine bench sprt --new "" --old "lmr=off"           # strength SPRT (self-play; docs/ENGINE_STRENGTH.md)
-cd gomachine && ./bin/gomachine bench vs-stockfish --sf-elo 2500              # absolute Elo anchor (noisy — a band, not a number)
+cd gomachine && ./bin/gomachine bench sprt --new "" --old "lmr=off"           # strength SPRT (self-play FILTER, not the ship gate; docs/ENGINE_STRENGTH.md)
+cd gomachine && ./bin/gomachine bench abitur --config abitur.json             # EXTERNAL gauntlet = the real ship gate (time-odds ladder; docs/ABITUR.md)
+cd gomachine && ./bin/gomachine bench vs-stockfish --sf-elo 2500              # single-opponent absolute Elo anchor (noisy — a band, not a number)
 cd gomachine && ./bin/gomachine tune --epd quiet-labeled.epd --out internal/eval/tuned_tables.go   # Texel eval tuner (shipped, +101 Elo)
 cd frontend && bun run typecheck && bun run build                            # frontend
 php mason migrate:generate && php mason migrate:apply -y                     # DB schema
@@ -102,10 +103,27 @@ php mason migrate:generate && php mason migrate:apply -y                     # D
 - **Engine owns rules.** PHP never re-implements chess — it calls the engine /
   the hub uses `internal/chess`. Keep the engine HTTP boundary **stateless**
   (FEN-in) so magic tables + TT stay warm.
-- **Engine strength = SPRT, not vibes** (see `docs/ENGINE_STRENGTH.md`). To change
-  playing strength: implement behind a `search.Params`/`eval.Config` flag
+- **SPRT gates, Abitur decides — self-play SPRT is necessary but NOT sufficient.**
+  Self-play SPRT only measures strength **relative to your sparring partner** (the
+  previous gomachine), and chess strength is **non-transitive**: a change can be
+  +N in self-play yet WEAKER vs external engines (`B beats A`, `A beats SF`, `SF
+  beats B` is a consistent cycle). This is not hypothetical — the full-threats net
+  was **+10 self-play but LOST ground vs cold Stockfish** that efs28 beat ~90%
+  (`docs/open_tasks/fullthreats-vs-sf-regression.md`, ENGINE_STRENGTH §36). **So:
+  SPRT to filter cheaply, then Abitur (`gomachine bench abitur`, the multi-engine
+  external gauntlet, `docs/ABITUR.md`) as the SHIP GATE — especially for any NET or
+  eval change.** And **be smart with Abitur**: do NOT just play full-strength
+  Stockfish at equal TC and read the Elo off a 100L rail — *every* engine from 0 to
+  3400 Elo loses ~100/100 to a 3500 engine, so that estimate means nothing. Use the
+  **time-odds ladder**: give gomachine a movetime advantage to land in a scoreable
+  band (both nets in ~[15%,85%]), read the before/after there, then walk the odds
+  down toward parity to feel out the true gap. Triangulate across ≥2 opponents /
+  strengths, never a single anchor.
+- **Search-flag changes still SPRT first** (see `docs/ENGINE_STRENGTH.md`).
+  Implement behind a `search.Params`/`eval.Config` flag
   (default off), then `gomachine bench sprt --new "flag=on" --old "flag=off"`; only
-  flip the default if it accepts H1. Search patches (SEE/delta/aspiration/RFP/LMP)
+  flip the default if it accepts H1 — **but confirm net/eval-level changes and
+  margin re-tunes with an Abitur pass before trusting them (above).** Search patches (SEE/delta/aspiration/RFP/LMP)
   + **Lazy SMP** are shipped (~+250/+97 Elo), plus a later wave —
   **corrhist/singular/futility** (+66.9/+22.2/+21.3 @ 40k nodes, `docs/ENGINE_STRENGTH.md
   §13`; the cheap long tail — conthist/IIR/capthist/probcut/razor + lmr2-on-singular —
@@ -302,6 +320,15 @@ pairwise tail **16→32**, NB=8, **int16 threat FT**, move-aware (NOT dual, NOT 
 the old coarse 9,216-input threat block already banked the load-bearing threat Elo. Forward arch plan
 (data → 32 king-buckets → dual net → threat-PSQT skip → 1024 width; **1024 is NOT cheap**; king-buckets
 are SHIPPED) lives in `docs/NNUE/SF_PARITY_ROADMAP.md`.
+
+> **⚠️ That +10 is SELF-PLAY ONLY, and it is under active dispute (2026-07-11).** Owner ground truth:
+> full-threats **draws/loses vs cold Stockfish that efs28 beat ~90%** — a real, self-play-invisible
+> regression vs external engines (the non-transitivity trap this net is the poster child for). Profiling
+> **ruled out speed** (NPS flat, `docs/PROFILING/{amd,arm}/11Jul2026.md`) **and deployment quantization**
+> (int8 tail vs float ≤31 cp); top live suspect is a **Go↔Rust threat-feature inference mismatch**
+> (`threats_sf.go:175`). Investigation + the Abitur time-odds ladder confirming it: `docs/open_tasks/
+> fullthreats-vs-sf-regression.md`, ENGINE_STRENGTH §36. **Do NOT quote the +10 as a strength gain until
+> Abitur clears it.**
 
 **BUT search is NOT dry — the "dry well" call was retracted same day.** Re-tuning the SEE/singular/
 null-move margins **SHIPPED +38.7 ± 5.5 Elo movetime** (`singulardepth 8→6, seequietmargin 150→103,
