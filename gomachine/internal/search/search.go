@@ -2825,15 +2825,60 @@ func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 		return s.evaluate(pos)
 	}
 
+	// FIX 1 — QSearchTT (SF search.cpp:1542-1728): give quiescence a TT probe. On a
+	// bound-consistent stored score at a non-PV node, take an early cutoff; otherwise
+	// seed move ordering (ttMove) and refine the stand-pat floor with the TT value.
+	// The stored form (ttLower/ttUpper/ttExact) + mate ply-adjust are handled by tt.go
+	// exactly as in the main search — this only reuses probe/store/scoreFromTT.
+	qtt := s.params.QSearchTT && s.params.UseTT
+	isPVq := beta-alpha > 1
+	ttMove := chess.NullMove
+	ttHit := false
+	var ttFlagQ ttFlag = ttNone
+	ttScoreQ := 0
+	if qtt {
+		if e, ok := s.tt.probe(pos.Key()); ok {
+			ttHit = true
+			ttMove = e.move
+			ttFlagQ = e.flag
+			ttScoreQ = e.scoreFromTT(ply)
+			// Non-PV early cutoff (SF search.cpp:1550-1553). Every stored entry is at
+			// depth ≥ the QS sentinel (0), so no depth guard is needed. A LOWER/EXACT
+			// bound ≥ beta or an UPPER/EXACT bound < beta is consistent to return.
+			if !isPVq &&
+				((ttScoreQ >= beta && (ttFlagQ == ttLower || ttFlagQ == ttExact)) ||
+					(ttScoreQ < beta && (ttFlagQ == ttUpper || ttFlagQ == ttExact))) {
+				return ttScoreQ
+			}
+		}
+	}
+
 	inCheck := pos.InCheck()
-	standPat := 0
+	standPat := 0           // un-refined static eval; the delta / qsfut futility base
+	bestScore := -mateScore // fail-soft floor (only consulted when qtt is on)
+	bestMove := chess.NullMove
+	qFailHigh := false
 	if !inCheck {
 		standPat = s.evaluate(pos)
-		if standPat >= beta {
+		bestScore = standPat
+		// ttValue refines the stand-pat FLOOR (bestScore) but NOT the futility base
+		// `standPat` — SF keeps futilityBase off the un-refined ss->staticEval and only
+		// refines bestValue (SF search.cpp:1575-1578). Non-mate + bound-consistent only.
+		if qtt && ttHit && absInt(ttScoreQ) < mateThreshold &&
+			((ttFlagQ == ttLower && ttScoreQ > bestScore) ||
+				(ttFlagQ == ttUpper && ttScoreQ < bestScore) ||
+				ttFlagQ == ttExact) {
+			bestScore = ttScoreQ
+		}
+		if bestScore >= beta {
+			if qtt {
+				s.tt.store(pos.Key(), chess.NullMove, bestScore, 0, ply, ttLower, ttEvalNone)
+				return bestScore
+			}
 			return beta
 		}
-		if standPat > alpha {
-			alpha = standPat
+		if bestScore > alpha {
+			alpha = bestScore
 		}
 	}
 
@@ -2852,6 +2897,10 @@ func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 	} else if s.params.QCaps {
 		pos.GenerateCaptures(&ml)
 		if ml.Len() == 0 {
+			if qtt {
+				s.tt.store(pos.Key(), chess.NullMove, bestScore, 0, ply, ttUpper, ttEvalNone)
+				return bestScore
+			}
 			return alpha
 		}
 	} else {
@@ -2860,12 +2909,21 @@ func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 		// A/B'd at movetime (its Elo is invisible at fixed nodes; see §26.3).
 		pos.GenerateLegal(&ml)
 		if ml.Len() == 0 {
+			if qtt {
+				s.tt.store(pos.Key(), chess.NullMove, bestScore, 0, ply, ttUpper, ttEvalNone)
+				return bestScore
+			}
 			return alpha
 		}
 	}
 
+	// Seed ordering with the TT move when qtt is on (byte-identical NullMove when off).
+	ttArg := chess.NullMove
+	if qtt {
+		ttArg = ttMove
+	}
 	var scores [256]int
-	s.scoreMoves(pos, &ml, chess.NullMove, ply, &scores)
+	s.scoreMoves(pos, &ml, ttArg, ply, &scores)
 
 	qSearched := 0
 	for i := 0; i < ml.Len(); i++ {
@@ -2963,11 +3021,27 @@ func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 		if s.stop {
 			return 0
 		}
-		if sc >= beta {
-			return beta
-		}
-		if sc > alpha {
-			alpha = sc
+		if qtt {
+			// Fail-soft (SF search.cpp): track bestScore/bestMove; on a fail-high break
+			// out and store a LOWER bound at the end (SF never early-returns from qs).
+			if sc > bestScore {
+				bestScore = sc
+				if sc > alpha {
+					bestMove = m
+					if sc >= beta {
+						qFailHigh = true
+						break
+					}
+					alpha = sc
+				}
+			}
+		} else {
+			if sc >= beta {
+				return beta
+			}
+			if sc > alpha {
+				alpha = sc
+			}
 		}
 		// Qsearch move-count cap (Stormphrax search.cpp:1579): out of check, the good
 		// captures are searched first, so after a few the rest almost never raise
@@ -2976,6 +3050,18 @@ func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 		if s.params.QSMaxMoves > 0 && !inCheck && qSearched >= s.params.QSMaxMoves {
 			break
 		}
+	}
+	if qtt {
+		// Store the qsearch result at the fixed QS depth (0): a fail-high is a LOWER
+		// bound, otherwise an UPPER bound (qsearch's move set is incomplete, so never
+		// EXACT — matches SF search.cpp:1720). eval field is ttEvalNone: the qsearch
+		// score is corrhist-corrected, so caching it as a raw eval would pollute TTEval.
+		flag := ttUpper
+		if qFailHigh {
+			flag = ttLower
+		}
+		s.tt.store(pos.Key(), bestMove, bestScore, 0, ply, flag, ttEvalNone)
+		return bestScore
 	}
 	return alpha
 }

@@ -111,6 +111,7 @@ type Params struct {
 	NMPNonPV        bool // SF-divergence fix (SF search.cpp:893): gate null-move pruning to non-PV nodes (SF only does NMP at cut nodes, never PV). DEFAULT OFF — byte-identical. Under SPRT.
 	TTRefinesEval   bool // SF-divergence fix (SF search.cpp:730-732): at a ttHit, when the stored bound is consistent (ttLower && ttScore>eval, ttUpper && ttScore<eval, or ttExact) use ttScore as the pruning `staticEval` that RFP/null-move/futility key off (NOT the corrhist-corrected value kept in s.staticEvals — improving still keys off the un-refined eval, matching SF). DEFAULT OFF — byte-identical. Under SPRT.
 	QSCaptSEEMargin int  // SF-divergence fix (SF search.cpp:1665): qsearch losing-capture SEE margin (cp). Out of check, prune a capture only when SEE < -QSCaptSEEMargin (SF keeps captures losing up to 80cp: `if (!see_ge(move, -80)) continue`). DEFAULT 0 = prune SEE<0 = current byte-identical; SPRT will test 80.
+	QSearchTT       bool // SF-divergence fix (SF search.cpp:1542-1728): give quiescence a TT probe + store. At qnode entry probe the TT, take a non-PV cutoff on a bound-consistent stored score, seed move ordering (ttMove) + refine the stand-pat floor with the TT value, and store the qsearch result (bestScore, bound, ttMove) at a fixed QS depth (0). When on, qsearch becomes fail-soft (returns bestScore) so the stored bounds are consistent; the mate ply-adjust + bound storage reuse tt.go's store/scoreFromTT unchanged. DEFAULT OFF — qsearch never touches the TT (byte-identical). Under SPRT.
 
 	// LMR / history / RFP tunables — promoted from hardcoded consts so SPSA can
 	// re-tune them v12-native (docs/open_tasks/spsa-margins.md: "the untapped leverage
@@ -505,6 +506,7 @@ func DefaultParams() Params {
 		NMPNonPV:        false, // SF search.cpp:893 — gate NMP to non-PV; DEFAULT OFF (byte-identical)
 		TTRefinesEval:   false, // SF search.cpp:730-732 — TT value sharpens pruning eval; DEFAULT OFF (byte-identical)
 		QSCaptSEEMargin: 0,     // SF search.cpp:1665 — qsearch losing-capture SEE margin; 0 = current byte-identical (SPRT tests 80)
+		QSearchTT:       false, // SF search.cpp:1542-1728 — quiescence TT probe+store; DEFAULT OFF (qsearch never touches the TT, byte-identical)
 
 		// Aggression style knob: 50 = neutral. At 50 the term is never evaluated, so
 		// the default engine is byte-identical to before this flag existed. Non-50 is

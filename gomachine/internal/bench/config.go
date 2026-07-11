@@ -563,6 +563,13 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("qscaptseemargin: %q is not an int", val)
 			}
 			base.QSCaptSEEMargin = n
+		case "qsearchtt", "qstt":
+			// SF fix (search.cpp:1542-1728): quiescence TT probe + store.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.QSearchTT = b
 		case "lmrcutnode", "lmrcut":
 			b, err := parseBool(val)
 			if err != nil {
@@ -1085,6 +1092,9 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.QSCaptSEEMargin != patch.QSCaptSEEMargin {
 		diffs = append(diffs, fmt.Sprintf("qscaptseemargin: %d→%d", base.QSCaptSEEMargin, patch.QSCaptSEEMargin))
+	}
+	if base.QSearchTT != patch.QSearchTT {
+		diffs = append(diffs, fmt.Sprintf("qsearchtt: %s→%s", onoff(base.QSearchTT), onoff(patch.QSearchTT)))
 	}
 	if base.LMRCutnode != patch.LMRCutnode {
 		diffs = append(diffs, fmt.Sprintf("lmrcutnode: %s→%s", onoff(base.LMRCutnode), onoff(patch.LMRCutnode)))
