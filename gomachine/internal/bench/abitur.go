@@ -55,6 +55,22 @@ type PairResult struct {
 	Elapsed  time.Duration
 }
 
+// MatchProgress is a running snapshot of one in-flight match, emitted as each
+// color-swapped pair completes so a long match streams a live tally + Elo estimate
+// instead of going silent until all N games finish.
+type MatchProgress struct {
+	A, B        string
+	PairsDone   int // color-swapped pairs completed so far
+	PairsTotal  int
+	WinsA       int // A's game-level W/D/L so far
+	Draws       int
+	WinsB       int
+	ScoreA      float64 // A's running score fraction
+	EloDiff     float64 // running pentanomial Elo (A−B); may be ±Inf near 0%/100%
+	Err95       float64
+	Elapsed     time.Duration
+}
+
 // AbiturConfig specifies a whole run.
 type AbiturConfig struct {
 	Participants []Participant
@@ -77,8 +93,10 @@ type StandingRow struct {
 }
 
 // RunAbitur plays every scheduled match and returns the per-pair results plus the
-// aggregated standings. onPair (optional) fires as each match finishes.
-func RunAbitur(ctx context.Context, cfg AbiturConfig, onPair func(PairResult)) ([]PairResult, []StandingRow, error) {
+// aggregated standings. onPair (optional) fires as each match finishes; onProgress
+// (optional) fires as each color-swapped pair completes within a match, for live
+// streaming of a long match.
+func RunAbitur(ctx context.Context, cfg AbiturConfig, onPair func(PairResult), onProgress func(MatchProgress)) ([]PairResult, []StandingRow, error) {
 	if cfg.Concurrency < 1 {
 		cfg.Concurrency = 1
 	}
@@ -93,7 +111,7 @@ func RunAbitur(ctx context.Context, cfg AbiturConfig, onPair func(PairResult)) (
 	results := make([]PairResult, 0, len(matches))
 	for _, m := range matches {
 		a, b := cfg.Participants[m[0]], cfg.Participants[m[1]]
-		pr, err := runUCIMatch(ctx, a, b, cfg.Games, cfg.Concurrency, cfg.Book)
+		pr, err := runUCIMatch(ctx, a, b, cfg.Games, cfg.Concurrency, cfg.Book, onProgress)
 		if err != nil {
 			return results, nil, fmt.Errorf("%s vs %s: %w", a.Name, b.Name, err)
 		}
@@ -126,7 +144,7 @@ func scheduleMatches(ps []Participant, gauntlet string) [][2]int {
 // runUCIMatch plays A vs B over color-swapped game pairs with a worker pool. Each
 // worker owns one persistent UCI process per side (started once, reused across
 // pairs). Results are accumulated as a Pentanomial (A's perspective) plus W/D/L.
-func runUCIMatch(ctx context.Context, a, b Participant, games, concurrency int, book []Opening) (PairResult, error) {
+func runUCIMatch(ctx context.Context, a, b Participant, games, concurrency int, book []Opening, onProgress func(MatchProgress)) (PairResult, error) {
 	pairs := (games + 1) / 2
 	if pairs < 1 {
 		pairs = 1
@@ -229,6 +247,17 @@ func runUCIMatch(ctx context.Context, a, b Participant, games, concurrency int, 
 		pr.WinsA += po.w
 		pr.Draws += po.d
 		pr.WinsB += po.l
+		if onProgress != nil {
+			done := i + 1
+			games := done * 2
+			elo, err95 := pr.Pairs.Elo()
+			onProgress(MatchProgress{
+				A: a.Name, B: b.Name, PairsDone: done, PairsTotal: pairs,
+				WinsA: pr.WinsA, Draws: pr.Draws, WinsB: pr.WinsB,
+				ScoreA:  (float64(pr.WinsA) + 0.5*float64(pr.Draws)) / float64(games),
+				EloDiff: elo, Err95: err95, Elapsed: time.Since(start),
+			})
+		}
 	}
 	cancel()
 	wg.Wait()

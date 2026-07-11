@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,6 +36,7 @@ func cmdBenchNPSFT(args []string) {
 	warmup := fs.Int("warmup", 2, "warmup iterations discarded")
 	ttMB := fs.Int("tt", 64, "TT size MB")
 	fenFlag := fs.String("fen", "r1bqk2r/pp2bppp/2n1pn2/2pp4/3P1B2/2PBPN2/PP3PPP/RN1QK2R w KQkq - 0 8", "position FEN")
+	cpuprofile := fs.String("cpuprofile", "", "if set, write a Go CPU profile of the measured iterations to this file. Forces int16 (prod) config ONLY, so the profile is a clean prod-config capture (analyze with: go tool pprof <file>)")
 	fs.Parse(args)
 
 	path, h, d2, d3, nb := "", 512, 16, 32, 8
@@ -95,6 +97,11 @@ func cmdBenchNPSFT(args []string) {
 		net  *nnue.EnrichedNet
 	}
 	cfgs := []cfg{{"int16-threatFT", net16}, {"int8-threatFT", net8}}
+	// A cpuprofile capture must be a single clean config (pprof profiles the whole
+	// process), so force int16 = the prod full-threats config only.
+	if *cpuprofile != "" {
+		cfgs = cfgs[:1]
+	}
 
 	run := func(c cfg) (uint64, float64) {
 		nnue.SetEnriched(c.net)
@@ -107,6 +114,20 @@ func cmdBenchNPSFT(args []string) {
 		for _, c := range cfgs {
 			run(c)
 		}
+	}
+
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "create cpuprofile:", err)
+			os.Exit(1)
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			fmt.Fprintln(os.Stderr, "start cpuprofile:", err)
+			os.Exit(1)
+		}
+		defer pprof.StopCPUProfile()
 	}
 
 	npsList := map[string][]float64{}

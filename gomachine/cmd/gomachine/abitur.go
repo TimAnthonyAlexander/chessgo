@@ -140,7 +140,7 @@ func cmdBenchAbitur(args []string) {
 	start := time.Now()
 	results, rows, err := bench.RunAbitur(ctx, cfg, func(pr bench.PairResult) {
 		printPair(pr)
-	})
+	}, printProgress)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "\nabitur:", err)
 		// Still print whatever standings we can from partial results.
@@ -148,6 +148,22 @@ func cmdBenchAbitur(args []string) {
 	fmt.Printf("\n=== Standings (after %s) ===\n", time.Since(start).Round(time.Second))
 	printStandings(rows)
 	_ = results
+}
+
+// printProgress streams a live tally as a match runs. Throttled to the 1st pair,
+// every 5th, and the last — enough to prove liveness and watch the estimate
+// converge in a tailed log, without spamming a line per pair.
+func printProgress(mp bench.MatchProgress) {
+	if mp.PairsDone != 1 && mp.PairsDone%5 != 0 && mp.PairsDone != mp.PairsTotal {
+		return
+	}
+	elo := fmt.Sprintf("%+.0f ± %.0f", mp.EloDiff, mp.Err95)
+	if math.IsInf(mp.EloDiff, 0) || math.IsNaN(mp.EloDiff) {
+		elo = "n/a"
+	}
+	fmt.Printf("  … %-16s vs %-16s  %2d/%d pairs  W%d D%d L%d  %5.1f%%  Elo %s  [%s]\n",
+		mp.A, mp.B, mp.PairsDone, mp.PairsTotal, mp.WinsA, mp.Draws, mp.WinsB,
+		100*mp.ScoreA, elo, mp.Elapsed.Round(time.Second))
 }
 
 func printPair(pr bench.PairResult) {
