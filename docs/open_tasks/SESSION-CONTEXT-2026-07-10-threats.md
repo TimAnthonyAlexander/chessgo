@@ -1,5 +1,83 @@
 # SESSION CONTEXT — Full-Threats build (2026-07-10) — READ ON RESUME
 
+## ⚡ LIVE STATE @ 13:24 UTC (2026-07-10) — TRAINING RUNNING, everything below is DONE
+
+- **NEW BOX** (old 154.64.230.67 is DEAD): `ssh vastbox` (added to ~/.ssh/config w/
+  ServerAliveInterval 15) = `ssh -i ~/.ssh/private/devgit -o IdentitiesOnly=yes -p 16974
+  root@69.176.92.111`. RTX 4090 (24GB), 1007GB RAM, 67GB disk, /dev/shm 50GB, 192 cores,
+  CUDA 12.8, rust+cargo installed.
+- **HF DONE:** test80-2024 Jan/Feb/Mar/Apr `.min-v2.v6.binpack.zst` (34GB) in `/root/data/`.
+  Downloaded in ~64s (~570MB/s — the old "29B/s" was a bogus 1000-byte redirect endpoint).
+- **DATA DONE:** decompressed to `/dev/shm/test80-2024-*.min-v2.v6.binpack` (42.6GB, 80% shm).
+  `.zst` kept on /root/data as the re-decompress source.
+- **BULLET+RUST DONE:** patched bullet was LOCAL (`~/nnue-training/bullet`, 27G incl old
+  checkpoints/) — tar'd source-only to box `/root/nnue-training/bullet`, built w/ CUDA:
+  `target/release/examples/chessgo_ml_threats_sf`.
+- **CROSS-CHECK GREEN:** `cargo test -r --features cuda --example chessgo_ml_threats_sf`
+  = **1500 positions Go==Rust byte-exact** (dump gen: `NNUE_DUMP=/tmp/go_threat_dump.txt
+  go test ./internal/nnue -run TestSFThreatDumpForRust`, copied to box `/tmp/`). Dim 79856,
+  73276 emitted edges. Fixed a resume-path bug in the recipe (`chessgo_threats_sf_320-`
+  → `_640-`, line 668) local + box.
+- **TRAINING LIVE:** `/root/train.sh` (setsid, log `/root/train.log`) = supervised
+  restart-safe loop: re-decompresses /dev/shm if the container wipes it, auto-resumes from
+  latest `checkpoints/chessgo_threats_sf_640-<N>`, retries on crash, stops at N=640. Running
+  SB=640 annealed, ~1.6M pos/sec, ~62s/superbatch → **~11h ETA**. net_id
+  `chessgo_threats_sf_640`, save_rate 8.
+- **NEXT:** when done, take FINAL annealed ckpt (never mid-run — memory nnue-ship-annealed-final),
+  fold-verify (kb_verify on FOLDED net), import to Go (InputDim 92144, ~135MB net — loader may
+  need size bump), measure via Abitur DIRECTLY vs ml640.bin (movetime 100ms ≥250 pairs on coalla).
+  tail: `ssh vastbox 'tail -f /root/train.log'`.
+
+## ⚡ UPDATE @ 14:28 UTC — CRITICAL FIX + 640 RELAUNCHED
+
+- **BUG FOUND & FIXED:** the recipe had an extra `l0.weights = l0.weights.faux_quantise(QA=255,true)`
+  ("gotcha #3") that efs28 never had. From-scratch FT init < 1/255 grid step → round-to-grid pins
+  the whole l0 at 0 → constant eval → loss floored at the mean-predictor **0.0546** (dead flat under
+  BOTH T=4 and T=640, byte-identical → weights weren't affecting loss). **Removed it** (line ~598).
+  efs28 quantises only the FT *activation* + L1 weights; int8 threat-FT cleanliness is verified
+  POST-HOC by the sb8 clamp gate, not by freezing training. After fix: sb1 loss **0.0373**, sb2
+  **0.0292** (healthy test80 band ~0.029), material eval signs correctly (was constant +7).
+- **NPS int16-vs-int8 threat FT (coalla SIMD):** ratio 1.0301 = int16 costs **2.92%** — but CONFOUNDED
+  (int8's noisy eval searched 1.73× more, cheaper, nodes → overstates int16 cost). Clean read needs a
+  **same-tree fixed-PV replay on the MATURE net at ship time** (`bench nps-ft` exists but is
+  search-tree-divergent). int16-deploy is NOT decided — zero-risk ≠ decided; choose at ship w/ evidence.
+- **DEPLOY PRECISION IS DECOUPLED FROM TRAINING:** recipe (no l0 QAT) trains full-precision threat
+  weights; Go casts to int16/int8 at LOAD. So the 640 run is independent of the int16/int8 choice —
+  don't block it. Decide at ship time from the mature net's RMS trajectory + a matched-tree NPS.
+- **bpsb=256 COLLAPSES** (loader shuffle-buffer starves → correlated data → mean). **Every smoke uses
+  bpsb=6104, cut SB.** Memory: [[nnue-smoke-bpsb6104]]. Added `BPSB` env to recipe (default 6104).
+- **Recipe now has env knobs:** SB, START_SB, BPSB, SAVE_RATE, NET_ID, OUT_DIR.
+- **640 RUNNING** (`/root/train.sh` supervisor, log `/root/train.log`, SB=640 bpsb=6104, ~11h).
+  **RMS harvest plan (free byproduct):** run `KB_NET_PATH=<ckpt/quantised.bin> go test ./internal/nnue
+  -run TestKBNetClampCount` at checkpoints **8/32/64/128/320/640** → the int8-RMS-vs-maturity trend.
+  Falling → int8 fine; flat ~25 → int16 (2.92%, likely less) or clip_pass_through_grad on threat rows.
+- **Go tooling added (branch, uncommitted):** `cmd/gomachine/bench_nps_ft.go` (int16-vs-int8 threat-FT
+  NPS A/B), `internal/nnue/smoke_evalsanity_test.go` (material "not-retarded" gate),
+  `internal/nnue/w0stats_test.go` (l0 weight-health diag — DELETE before commit). Cross-check dump unchanged.
+
+## ⚡ UPDATE @ 14:5x UTC — ROOT CAUSE: SHUFFLE-FRAGILITY, FIXED w/ LR WARMUP
+
+- **The l0-snap fix did NOT fully fix it.** After removing the l0 snap, the FIRST smoke descended
+  (0.0373) — but 4 subsequent runs (rmp32, two 640s, retest) COLLAPSED at 0.0546. I chased bpsb,
+  stale binaries, data corruption — ALL WRONG (exonerated by: source byte-diff, binary md5, and a
+  fresh-decompress `cmp` of /dev/shm = byte-identical).
+- **ROOT CAUSE = shuffle-fragility.** bullet's weight init is DETERMINISTIC (fixed seed 198273612)
+  but its **data-shuffle RNG is wall-clock-seeded** (`crates/bullet_lib/src/value/loader/rng.rs`:
+  `SystemTime::now()...as_micros()`). So the only run-to-run variable is the shuffle order, and from
+  the fixed init only ~29% of shuffles escape the mean-predictor basin (measured **2 escapes / 7
+  runs**; a 3-concurrent-smoke test read 1/3). Localised to the input: efs28 (robust) has identical
+  loader/LR/init/tail — only `ThreatInputsSf`+factoriser differ (shared C768/V1/V2/V3 virtuals fire
+  on nearly every piece/edge → dominate early gradients → coarse-mean trap).
+- **FIX = LR warmup** (bullet-native `lr::Warmup{inner:CosineDecayLR, warmup_batches}`, default 400,
+  `WARMUP` env). Verified: **3/3 concurrent smokes descended, near-identical trajectories**
+  (0.0330/0.0288/0.0293/0.0302 — shuffle-invariant, the signature of a correct fix). Warmup net
+  W0 healthy (meanAbs 0.10, maxAbs 2.26, 85%/80% cols active) + eval-sanity PASS (Q +542/−1143).
+- **640 RELAUNCHED @ ~14:5x WITH warmup** (`/root/train.sh`, SB=640 bpsb=6104 WARMUP=400, md5
+  3801c277, ~11h). Memory: [[nnue-smoke-bpsb6104]] (rewritten — bpsb was NOT the cause).
+- **STILL PENDING at ship (unchanged):** int16-vs-int8 threat-FT deploy precision — decide on the
+  MATURE net via a same-tree fixed-PV NPS + the RMS-vs-maturity trend harvested at 8/32/64/128/320/640.
+
+
 This is a recovery doc after a /compact. It captures live state, the two background
 jobs, and the ordered next steps. Companion design doc (READ IT):
 `docs/open_tasks/threats-richness-build.md` (SF spec, factoriser V1/V2/V3, gotchas,
