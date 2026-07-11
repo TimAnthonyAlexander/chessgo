@@ -711,6 +711,66 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("aggr: %d out of range 0..100", n)
 			}
 			base.Aggr = n
+		case "rfpmaxdepth", "rfpmd":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("rfpmaxdepth: %q is not an int", val)
+			}
+			base.RFPMaxDepth = n
+		case "futilitymaxdepth", "futmd":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("futilitymaxdepth: %q is not an int", val)
+			}
+			base.FutilityMaxDepth = n
+		case "lmpmaxdepth", "lmpmd":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("lmpmaxdepth: %q is not an int", val)
+			}
+			base.LMPMaxDepth = n
+		case "histprunemaxdepth", "hpmd":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("histprunemaxdepth: %q is not an int", val)
+			}
+			base.HistPruneMaxDepth = n
+		case "histprunemargin", "hpm":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("histprunemargin: %q is not an int", val)
+			}
+			base.HistPruneMargin = n
+		case "lmpbase":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("lmpbase: %q is not an int", val)
+			}
+			base.LMPBase = n
+		case "lmpmultx10":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("lmpmultx10: %q is not an int", val)
+			}
+			base.LMPMultX10 = n
+		case "nmpdepthdiv":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("nmpdepthdiv: %q is not an int", val)
+			}
+			base.NMPDepthDiv = n
+		case "nmpevalcap":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("nmpevalcap: %q is not an int", val)
+			}
+			base.NMPEvalCap = n
+		case "lmrminmoves", "lmrmin":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("lmrminmoves: %q is not an int", val)
+			}
+			base.LMRMinMoves = n
 		default:
 			return base, fmt.Errorf("unknown param %q", key)
 		}
@@ -1004,6 +1064,36 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.TTBucketShift != patch.TTBucketShift {
 		diffs = append(diffs, fmt.Sprintf("ttbucketshift: %d→%d", base.TTBucketShift, patch.TTBucketShift))
+	}
+	if base.RFPMaxDepth != patch.RFPMaxDepth {
+		diffs = append(diffs, fmt.Sprintf("rfpmaxdepth: %d→%d", base.RFPMaxDepth, patch.RFPMaxDepth))
+	}
+	if base.FutilityMaxDepth != patch.FutilityMaxDepth {
+		diffs = append(diffs, fmt.Sprintf("futilitymaxdepth: %d→%d", base.FutilityMaxDepth, patch.FutilityMaxDepth))
+	}
+	if base.LMPMaxDepth != patch.LMPMaxDepth {
+		diffs = append(diffs, fmt.Sprintf("lmpmaxdepth: %d→%d", base.LMPMaxDepth, patch.LMPMaxDepth))
+	}
+	if base.HistPruneMaxDepth != patch.HistPruneMaxDepth {
+		diffs = append(diffs, fmt.Sprintf("histprunemaxdepth: %d→%d", base.HistPruneMaxDepth, patch.HistPruneMaxDepth))
+	}
+	if base.HistPruneMargin != patch.HistPruneMargin {
+		diffs = append(diffs, fmt.Sprintf("histprunemargin: %d→%d", base.HistPruneMargin, patch.HistPruneMargin))
+	}
+	if base.LMPBase != patch.LMPBase {
+		diffs = append(diffs, fmt.Sprintf("lmpbase: %d→%d", base.LMPBase, patch.LMPBase))
+	}
+	if base.LMPMultX10 != patch.LMPMultX10 {
+		diffs = append(diffs, fmt.Sprintf("lmpmultx10: %d→%d", base.LMPMultX10, patch.LMPMultX10))
+	}
+	if base.NMPDepthDiv != patch.NMPDepthDiv {
+		diffs = append(diffs, fmt.Sprintf("nmpdepthdiv: %d→%d", base.NMPDepthDiv, patch.NMPDepthDiv))
+	}
+	if base.NMPEvalCap != patch.NMPEvalCap {
+		diffs = append(diffs, fmt.Sprintf("nmpevalcap: %d→%d", base.NMPEvalCap, patch.NMPEvalCap))
+	}
+	if base.LMRMinMoves != patch.LMRMinMoves {
+		diffs = append(diffs, fmt.Sprintf("lmrminmoves: %d→%d", base.LMRMinMoves, patch.LMRMinMoves))
 	}
 	if len(diffs) == 0 {
 		return "(identical — sanity/noise run)"
