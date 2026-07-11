@@ -34,11 +34,18 @@ const (
 	// with w = min(depth+1, corrMaxWeight). Deeper results move the entry more.
 	corrWeightDen = 256
 	corrMaxWeight = 16
-	// blend weights for the three tables (pawn weighted a touch heavier).
-	corrWPawn = 2
-	corrWNP   = 1 // each non-pawn table
-	corrWDen  = corrWPawn + corrWNP + corrWNP
 )
+
+// Blend weights for the three tables (pawn weighted a touch heavier) are now
+// Params.CorrWPawn / Params.CorrWNP (default 2/1, den=4 — byte-identical to the
+// old corrWPawn/corrWNP/corrWDen consts); the denominator is computed at runtime
+// as corrWDen(s) below.
+
+// corrWDen returns the runtime corrhist blend denominator: CorrWPawn + 2·CorrWNP
+// (the pawn table plus BOTH per-color non-pawn tables, each weighted CorrWNP).
+func (s *Searcher) corrWDen() int {
+	return s.params.CorrWPawn + 2*s.params.CorrWNP
+}
 
 // corrTables holds the correction-history tables. Kept in one struct so the whole
 // set clears with a single assignment. The pawn + per-color non-pawn tables are
@@ -99,12 +106,13 @@ func (s *Searcher) correction(pos *chess.Position) int {
 	p := s.corr.pawn[stm][pawnKey(pos)&corrMask]
 	w := s.corr.wnp[stm][nonPawnKey(pos, chess.White)&corrMask]
 	b := s.corr.bnp[stm][nonPawnKey(pos, chess.Black)&corrMask]
-	c := (int(p)*corrWPawn + int(w)*corrWNP + int(b)*corrWNP) / (corrScale * corrWDen)
+	den := s.corrWDen()
+	c := (int(p)*s.params.CorrWPawn + int(w)*s.params.CorrWNP + int(b)*s.params.CorrWNP) / (corrScale * den)
 	// Minor-piece key (extra, behind CorrHistMinor). Added on top with a non-pawn
 	// table's weight; gated so the off-path is byte-identical.
 	if s.params.CorrHistMinor {
 		m := s.corr.minor[stm][minorKey(pos)&corrMask]
-		c += int(m) * corrWNP / (corrScale * corrWDen)
+		c += int(m) * s.params.CorrWNP / (corrScale * den)
 	}
 	if c > corrMaxApply {
 		c = corrMaxApply
@@ -120,14 +128,15 @@ func (s *Searcher) correction(pos *chess.Position) int {
 // reliably maintained by ancestors); not in qsearch, whose ply slots may hold
 // stale move records. Caller has already checked CorrHistCont.
 func (s *Searcher) contCorrection(ply int) int {
+	den := s.corrWDen()
 	c := 0
 	if ply >= 2 && s.contMove[ply-2].ok {
 		e := s.corr.contn[s.contMove[ply-2].pc][s.contMove[ply-2].to]
-		c += int(e) / (corrScale * corrWDen * 2)
+		c += int(e) / (corrScale * den * 2)
 	}
 	if ply >= 4 && s.contMove[ply-4].ok {
 		e := s.corr.contn[s.contMove[ply-4].pc][s.contMove[ply-4].to]
-		c += int(e) / (corrScale * corrWDen * 2)
+		c += int(e) / (corrScale * den * 2)
 	}
 	lim := corrMaxApply / 2
 	if c > lim {

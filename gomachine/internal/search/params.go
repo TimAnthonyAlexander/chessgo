@@ -144,6 +144,25 @@ type Params struct {
 	// (default 4, old `searched >= 4`).
 	LMRMinMoves int
 
+	// MaxHistory raises/lowers the history-gravity clamp/self-age divisor (bonus is
+	// clamped to ±MaxHistory, and the gravity pull is bonus·|bonus|/MaxHistory).
+	// Default 8192 (the old maxHistory const) → byte-identical. Stormphrax uses
+	// 16384 — a live SPSA/SPRT target.
+	MaxHistory int
+	// CorrWPawn / CorrWNP are the pawn-vs-non-pawn corrhist blend weights (the
+	// denominator is computed at runtime as CorrWPawn + 2·CorrWNP). Defaults 2/1
+	// (den=4) reproduce the historical corrWPawn/corrWNP/corrWDen consts exactly.
+	// Stormphrax uses ~1:1 — a live SPSA/SPRT target.
+	CorrWPawn int
+	CorrWNP   int
+	// AspWidenGrow grows the aspiration re-search delta by AspWidenNum/AspWidenDen
+	// on each fail-low/fail-high (SF/Stormphrax ~1.5×) instead of the flat
+	// delta+=delta doubling. DEFAULT OFF — under SPRT; off-path is byte-identical
+	// (the growth block is skipped entirely).
+	AspWidenGrow bool
+	AspWidenNum  int // widening growth numerator (default 3)
+	AspWidenDen  int // widening growth denominator (default 2)
+
 	// TTBucketShift sets the transposition-table cluster width at table creation
 	// (log2 slots per bucket): 0 = direct-mapped (current/default, byte-identical),
 	// 2 = 4 slots per 64-byte cache line. Bucketing lets probe scan all slots
@@ -514,5 +533,19 @@ func DefaultParams() Params {
 		// table). Flip to 2 (4-slot clusters) via ttcluster=on to SPRT the bucketed
 		// TT — probe scans 4 slots in one cache line, store keeps the best victim.
 		TTBucketShift: 0,
+
+		// History gravity clamp/divisor: 8192 reproduces the old maxHistory const
+		// byte-for-byte. Stormphrax uses 16384 — SPSA/SPRT target.
+		MaxHistory: 8192,
+		// Corrhist blend weights: 2:1 (den=4) reproduces the old corrWPawn/corrWNP/
+		// corrWDen consts byte-for-byte. Stormphrax uses ~1:1 — SPSA/SPRT target.
+		CorrWPawn: 2,
+		CorrWNP:   1,
+		// Aspiration widening growth: OFF reproduces the flat delta+=delta doubling
+		// byte-for-byte. Num/Den seed the Stormphrax-ish ~1.5× growth for when it's
+		// switched on.
+		AspWidenGrow: false,
+		AspWidenNum:  3,
+		AspWidenDen:  2,
 	}
 }

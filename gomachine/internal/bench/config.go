@@ -771,6 +771,47 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("lmrminmoves: %q is not an int", val)
 			}
 			base.LMRMinMoves = n
+		case "maxhistory", "maxhist":
+			// history-gravity clamp/self-age divisor (default 8192; Stormphrax 16384).
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("maxhistory: %q is not an int", val)
+			}
+			base.MaxHistory = n
+		case "corrwpawn":
+			// corrhist pawn-table blend weight (default 2; den = corrwpawn + 2·corrwnp).
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("corrwpawn: %q is not an int", val)
+			}
+			base.CorrWPawn = n
+		case "corrwnp":
+			// corrhist non-pawn-table blend weight, each color (default 1).
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("corrwnp: %q is not an int", val)
+			}
+			base.CorrWNP = n
+		case "aspwidengrow":
+			// grow the aspiration re-search delta by aspwidennum/aspwidenden per fail
+			// (SF/Stormphrax ~1.5×) instead of the flat delta+=delta doubling.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.AspWidenGrow = b
+		case "aspwidennum":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("aspwidennum: %q is not an int", val)
+			}
+			base.AspWidenNum = n
+		case "aspwidenden":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("aspwidenden: %q is not an int", val)
+			}
+			base.AspWidenDen = n
 		default:
 			return base, fmt.Errorf("unknown param %q", key)
 		}
@@ -1094,6 +1135,24 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.LMRMinMoves != patch.LMRMinMoves {
 		diffs = append(diffs, fmt.Sprintf("lmrminmoves: %d→%d", base.LMRMinMoves, patch.LMRMinMoves))
+	}
+	if base.MaxHistory != patch.MaxHistory {
+		diffs = append(diffs, fmt.Sprintf("maxhistory: %d→%d", base.MaxHistory, patch.MaxHistory))
+	}
+	if base.CorrWPawn != patch.CorrWPawn {
+		diffs = append(diffs, fmt.Sprintf("corrwpawn: %d→%d", base.CorrWPawn, patch.CorrWPawn))
+	}
+	if base.CorrWNP != patch.CorrWNP {
+		diffs = append(diffs, fmt.Sprintf("corrwnp: %d→%d", base.CorrWNP, patch.CorrWNP))
+	}
+	if base.AspWidenGrow != patch.AspWidenGrow {
+		diffs = append(diffs, fmt.Sprintf("aspwidengrow: %s→%s", onoff(base.AspWidenGrow), onoff(patch.AspWidenGrow)))
+	}
+	if base.AspWidenNum != patch.AspWidenNum {
+		diffs = append(diffs, fmt.Sprintf("aspwidennum: %d→%d", base.AspWidenNum, patch.AspWidenNum))
+	}
+	if base.AspWidenDen != patch.AspWidenDen {
+		diffs = append(diffs, fmt.Sprintf("aspwidenden: %d→%d", base.AspWidenDen, patch.AspWidenDen))
 	}
 	if len(diffs) == 0 {
 		return "(identical — sanity/noise run)"

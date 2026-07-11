@@ -134,13 +134,14 @@ func (s *Searcher) statMalus(depth int) int {
 // ±maxHistory by bonus, with a pull proportional to the current magnitude, so the
 // table self-ages (old evidence decays as new arrives) and stays bounded.
 func (s *Searcher) updateHistory(pc chess.Piece, to chess.Square, bonus int) {
-	if bonus > maxHistory {
-		bonus = maxHistory
-	} else if bonus < -maxHistory {
-		bonus = -maxHistory
+	maxHist := s.params.MaxHistory
+	if bonus > maxHist {
+		bonus = maxHist
+	} else if bonus < -maxHist {
+		bonus = -maxHist
 	}
 	e := &s.history[pc][to]
-	*e += bonus - (*e)*absInt(bonus)/maxHistory
+	*e += bonus - (*e)*absInt(bonus)/maxHist
 }
 
 // updateQuietStats credits a quiet move that caused a beta cutoff. With HistMalus
@@ -177,14 +178,15 @@ func captureVictim(pos *chess.Position, m chess.Move) chess.PieceType {
 // keyed by (moved piece, to-square, victim type). pos must be the position the
 // capture is made FROM (so m.From()/m.To() resolve the mover and victim).
 func (s *Searcher) updateCaptureHistory(pos *chess.Position, m chess.Move, bonus int) {
-	if bonus > maxHistory {
-		bonus = maxHistory
-	} else if bonus < -maxHistory {
-		bonus = -maxHistory
+	maxHist := s.params.MaxHistory
+	if bonus > maxHist {
+		bonus = maxHist
+	} else if bonus < -maxHist {
+		bonus = -maxHist
 	}
 	pc := pos.PieceOn(m.From())
 	e := &s.captureHist[pc][m.To()][captureVictim(pos, m)]
-	*e += bonus - (*e)*absInt(bonus)/maxHistory
+	*e += bonus - (*e)*absInt(bonus)/maxHist
 }
 
 // updateCaptureStats credits a capture that caused a beta cutoff (+bonus) and
@@ -914,7 +916,14 @@ func (s *Searcher) searchRoot(pos *chess.Position, depth, prevScore int) {
 		default:
 			return // score inside the window
 		}
-		delta += delta
+		if s.params.AspWidenGrow {
+			delta = delta * s.params.AspWidenNum / s.params.AspWidenDen
+			if delta > aspMaxDelta {
+				delta = aspMaxDelta
+			}
+		} else {
+			delta += delta
+		}
 		if delta >= aspMaxDelta {
 			alpha, beta = -infinity, infinity
 		}

@@ -60,6 +60,15 @@ var spsaFields = map[string]spsaField{
 	"nmpdepthdiv":       {func(p *search.Params, v int) { p.NMPDepthDiv = v }, func(p search.Params) int { return p.NMPDepthDiv }, 1},
 	"nmpevalcap":        {func(p *search.Params, v int) { p.NMPEvalCap = v }, func(p search.Params) int { return p.NMPEvalCap }, 1},
 	"lmrminmoves":       {func(p *search.Params, v int) { p.LMRMinMoves = v }, func(p search.Params) int { return p.LMRMinMoves }, 1},
+	// History gravity clamp/divisor (Stormphrax uses 16384 vs our 8192) and the
+	// corrhist pawn/non-pawn blend weights (Stormphrax ~1:1 vs our 2:1).
+	"maxhistory": {func(p *search.Params, v int) { p.MaxHistory = v }, func(p search.Params) int { return p.MaxHistory }, 512},
+	"corrwpawn":  {func(p *search.Params, v int) { p.CorrWPawn = v }, func(p search.Params) int { return p.CorrWPawn }, 1},
+	"corrwnp":    {func(p *search.Params, v int) { p.CorrWNP = v }, func(p search.Params) int { return p.CorrWNP }, 1},
+	// Aspiration widening growth numerator/denominator (AspWidenGrow-gated bool is
+	// set via config, not SPSA).
+	"aspwidennum": {func(p *search.Params, v int) { p.AspWidenNum = v }, func(p search.Params) int { return p.AspWidenNum }, 1},
+	"aspwidenden": {func(p *search.Params, v int) { p.AspWidenDen = v }, func(p search.Params) int { return p.AspWidenDen }, 1},
 }
 
 // spsaAliases maps the short spec spellings (shared with bench.ParseParams) to the
@@ -91,6 +100,7 @@ var spsaAliases = map[string]string{
 	"hpmd":          "histprunemaxdepth",
 	"hpm":           "histprunemargin",
 	"lmrmin":        "lmrminmoves",
+	"maxhist":       "maxhistory",
 }
 
 func canonSPSAName(name string) (string, bool) {

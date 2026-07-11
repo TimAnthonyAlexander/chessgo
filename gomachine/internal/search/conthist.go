@@ -76,12 +76,14 @@ func (s *Searcher) contScore(ply int, curPc chess.Piece, to chess.Square) int {
 
 // contGravity applies one bounded gravity step to a continuation entry: nudge
 // toward ±contMax by bonus with a pull proportional to the current magnitude, so
-// the table self-ages and stays in int16 range. Mirrors updateHistory.
-func contGravity(e *int16, bonus int) {
-	if bonus > maxHistory {
-		bonus = maxHistory
-	} else if bonus < -maxHistory {
-		bonus = -maxHistory
+// the table self-ages and stays in int16 range. Mirrors updateHistory. maxHist is
+// only the BONUS CLAMP (Params.MaxHistory) — contMax (the self-age divisor/cap)
+// is a separate constant and is left untouched.
+func contGravity(e *int16, bonus, maxHist int) {
+	if bonus > maxHist {
+		bonus = maxHist
+	} else if bonus < -maxHist {
+		bonus = -maxHist
 	}
 	v := int(*e)
 	v += bonus - v*absInt(bonus)/contMax
@@ -98,12 +100,12 @@ func contGravity(e *int16, bonus int) {
 func (s *Searcher) contUpdate(ply int, curPc chess.Piece, to chess.Square, bonus int) {
 	if ply >= 1 {
 		if p := s.contMove[ply-1]; p.ok {
-			contGravity(&s.cont.one[p.pc][p.to][curPc][to], bonus)
+			contGravity(&s.cont.one[p.pc][p.to][curPc][to], bonus, s.params.MaxHistory)
 		}
 	}
 	if ply >= 2 {
 		if p := s.contMove[ply-2]; p.ok {
-			contGravity(&s.cont.two[p.pc][p.to][curPc][to], bonus)
+			contGravity(&s.cont.two[p.pc][p.to][curPc][to], bonus, s.params.MaxHistory)
 		}
 	}
 }
