@@ -542,6 +542,13 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.TTCutoffNonPV = b
+		case "nmpnonpv":
+			// SF fix (search.cpp:893): gate null-move pruning to non-PV nodes.
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.NMPNonPV = b
 		case "lmrcutnode", "lmrcut":
 			b, err := parseBool(val)
 			if err != nil {
@@ -1055,6 +1062,9 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.TTCutoffNonPV != patch.TTCutoffNonPV {
 		diffs = append(diffs, fmt.Sprintf("ttcutoffnonpv: %s→%s", onoff(base.TTCutoffNonPV), onoff(patch.TTCutoffNonPV)))
+	}
+	if base.NMPNonPV != patch.NMPNonPV {
+		diffs = append(diffs, fmt.Sprintf("nmpnonpv: %s→%s", onoff(base.NMPNonPV), onoff(patch.NMPNonPV)))
 	}
 	if base.LMRCutnode != patch.LMRCutnode {
 		diffs = append(diffs, fmt.Sprintf("lmrcutnode: %s→%s", onoff(base.LMRCutnode), onoff(patch.LMRCutnode)))

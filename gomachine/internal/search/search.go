@@ -1438,6 +1438,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 	}
 	if s.params.NullMove && !inCheck && depth >= 3 && ply > 0 && beta < mateThreshold &&
 		(!s.params.NmpGate || staticEval >= nmpThresh) &&
+		(!s.params.NMPNonPV || !isPV) && // SF search.cpp:893: NMP only at non-PV (cut) nodes
 		pos.NonPawnMaterial(pos.SideToMove()) {
 		s.dbgNullMoves++
 		var u chess.Undo
