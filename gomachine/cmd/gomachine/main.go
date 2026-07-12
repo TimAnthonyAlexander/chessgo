@@ -67,6 +67,8 @@ func main() {
 		cmdCompileBook(os.Args[2:])
 	case "compile-book-sf":
 		cmdCompileBookSF(os.Args[2:])
+	case "compile-book-sf-tree":
+		cmdCompileBookSFTree(os.Args[2:])
 	case "book-diff":
 		cmdBookDiff(os.Args[2:])
 	case "compile-openings":

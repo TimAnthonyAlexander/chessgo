@@ -1699,6 +1699,24 @@ cp data/book_new.bin data/book.bin && rm data/book_new.bin
 First landed `23bd81e`. Books are per-engine (not a process global like the net), so
 `--new-engine-book`/`--old-engine-book` need no `--concurrency 1`.
 
+### 25.4 Book A/B/C — recompile vs Stockfish-compiled (2026-07-12) — shipped C
+
+~100 Elo of net had shipped since the v9 book (§25) with no recompile, so we A/B/C'd
+three books over the SAME 5,4xx opening positions, all measured on the prod
+full-threats net at 100ms/move self-play (from the start position):
+
+- **A** = shipped v9 book (baseline).
+- **B** = `compile-book` on the current full-threats net → **+11.3 ± 9.0 vs A** (SPRT, 800 pairs, trend-accept: LLR +2.06, CI-lb +2.3).
+- **C** = `compile-book-sf` — Stockfish 18 @ depth 22, one best move per position → **≈+10 vs B** (SPRT stopped at 519 pairs, converged +10.0 ± 13.3, LLR +0.81).
+
+C shipped as `data/book.bin` (`64331c9`; tool `88b4a2a`). The book is a gomachine
+search-cache but only PV[0] is consulted at runtime (a hit short-circuits search), so
+`compile-book-sf` just bakes in SF's opening move per position. C-vs-A not measured
+directly (SPRT deltas are sub-additive). C is the SF-quality-opening lever and the exact
+non-transitivity case — **gate the prod DEPLOY on an Abitur external pass**, not just the
+SPRT. Next: `compile-book-sf-tree` (breadth-first SF MultiPV tree — depth + coverage in
+one artifact, keeps firing when the opponent leaves theory) vs flat C.
+
 ---
 
 ## 26. Clock-aware time management (shipped) + the no-retrain NPS/asm push (2026-07-03)
