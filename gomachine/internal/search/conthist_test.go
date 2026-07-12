@@ -103,6 +103,36 @@ func TestPCMRaisesParentHistories(t *testing.T) {
 	}
 }
 
+// PCM malus: pcmPenalizeParent must DRIVE the parent's continuation score NEGATIVE
+// (a fail-high means the quiet parent got refuted) and must NOT touch butterfly history
+// (SF's fail-high parent penalty is continuation-history only).
+func TestPCMMalusPenalizesParent(t *testing.T) {
+	p := DefaultParams()
+	p.Nnue = false
+	p.ContHist = true
+	p.ParentContHistMalus = true
+	s := NewWithParams(16, p)
+	s.contBegin()
+
+	s.contMove[0] = contEntry{pc: chess.WhitePawn, to: chess.Square(16), ok: true, quiet: true}
+	s.contMove[1] = contEntry{pc: chess.BlackPawn, to: chess.Square(40), ok: true, quiet: true}
+	parentPc, parentTo := chess.WhiteKnight, chess.Square(21)
+	s.contMove[2] = contEntry{pc: parentPc, to: parentTo, ok: true, quiet: true, moveCount: 0}
+
+	if before := s.contScore(2, parentPc, parentTo); before != 0 {
+		t.Fatalf("cold parent continuation score = %d, want 0", before)
+	}
+	for i := 0; i < 16; i++ {
+		s.pcmPenalizeParent(3, 8)
+	}
+	if after := s.contScore(2, parentPc, parentTo); after >= 0 {
+		t.Errorf("PCM malus did not drive the parent's continuation score negative (got %d)", after)
+	}
+	if s.history[parentPc][parentTo] != 0 {
+		t.Errorf("PCM malus touched butterfly history (%d); it must be continuation-history only", s.history[parentPc][parentTo])
+	}
+}
+
 // A null move sets an ok=false continuation entry, so the child keys off NOTHING:
 // contScore must be 0 even when the table holds data for the would-be parent.
 func TestContHistNullMoveNoContinuation(t *testing.T) {

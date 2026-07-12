@@ -77,6 +77,10 @@ var spsaFields = map[string]spsaField{
 	"pcmbaseoffset":  {func(p *search.Params, v int) { p.PCMBaseOffset = v }, func(p search.Params) int { return p.PCMBaseOffset }, 64},
 	"pcmevalmargin":  {func(p *search.Params, v int) { p.PCMEvalMargin = v }, func(p search.Params) int { return p.PCMEvalMargin }, 25},
 	"pcmmarginbonus": {func(p *search.Params, v int) { p.PCMMarginBonus = v }, func(p search.Params) int { return p.PCMMarginBonus }, 32},
+	// PCM malus (ParentContHistMalus-gated). Suggested bounds: pcmmalusscale [0..600],
+	// pcmmalusmaxmoves [1..6] (1 = first-move-only = SF's dominant site 2).
+	"pcmmalusscale":    {func(p *search.Params, v int) { p.PCMMalusScale = v }, func(p search.Params) int { return p.PCMMalusScale }, 32},
+	"pcmmalusmaxmoves": {func(p *search.Params, v int) { p.PCMMalusMaxMoves = v }, func(p search.Params) int { return p.PCMMalusMaxMoves }, 1},
 }
 
 // spsaAliases maps the short spec spellings (shared with bench.ParseParams) to the
@@ -113,6 +117,8 @@ var spsaAliases = map[string]string{
 	"pcmoffset":     "pcmbaseoffset",
 	"pcmmargin":     "pcmevalmargin",
 	"pcmmbonus":     "pcmmarginbonus",
+	"pcmmscale":     "pcmmalusscale",
+	"pcmmmax":       "pcmmalusmaxmoves",
 }
 
 func canonSPSAName(name string) (string, bool) {

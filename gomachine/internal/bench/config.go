@@ -403,6 +403,24 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("pcmmarginbonus: %q is not an int", val)
 			}
 			base.PCMMarginBonus = n
+		case "pcmmalus", "parentconthistmalus":
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.ParentContHistMalus = b
+		case "pcmmalusscale", "pcmmscale":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("pcmmalusscale: %q is not an int", val)
+			}
+			base.PCMMalusScale = n
+		case "pcmmalusmaxmoves", "pcmmmax":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("pcmmalusmaxmoves: %q is not an int", val)
+			}
+			base.PCMMalusMaxMoves = n
 		case "lmr2":
 			// aggressive LMR: reduce captures/promotions too, earlier onset, with
 			// PV/improving/ordering-trust/SEE adjustments (supersedes LMR when on).
@@ -1034,6 +1052,15 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.PCMMarginBonus != patch.PCMMarginBonus {
 		diffs = append(diffs, fmt.Sprintf("pcmmarginbonus: %d→%d", base.PCMMarginBonus, patch.PCMMarginBonus))
+	}
+	if base.ParentContHistMalus != patch.ParentContHistMalus {
+		diffs = append(diffs, fmt.Sprintf("pcmmalus: %s→%s", onoff(base.ParentContHistMalus), onoff(patch.ParentContHistMalus)))
+	}
+	if base.PCMMalusScale != patch.PCMMalusScale {
+		diffs = append(diffs, fmt.Sprintf("pcmmalusscale: %d→%d", base.PCMMalusScale, patch.PCMMalusScale))
+	}
+	if base.PCMMalusMaxMoves != patch.PCMMalusMaxMoves {
+		diffs = append(diffs, fmt.Sprintf("pcmmalusmaxmoves: %d→%d", base.PCMMalusMaxMoves, patch.PCMMalusMaxMoves))
 	}
 	if base.LMR2 != patch.LMR2 {
 		diffs = append(diffs, fmt.Sprintf("lmr2: %s→%s", onoff(base.LMR2), onoff(patch.LMR2)))

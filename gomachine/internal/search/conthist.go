@@ -38,12 +38,14 @@ type contHist struct {
 // search path, so a child node can key its continuation tables off its ancestors.
 // ok is false for the root sentinel and for a null move (no continuation).
 type contEntry struct {
-	pc    chess.Piece
-	to    chess.Square
-	ok    bool
-	quiet bool // move was a quiet (not capture/promotion); read only by the PCM fail-low bonus.
-	// Set at the real-move push site (the default unified loop). Staged/ProbCut push
-	// sites leave it false → PCM is simply inert on those default-off paths, never wrong.
+	pc        chess.Piece
+	to        chess.Square
+	ok        bool
+	quiet     bool  // move was a quiet (not capture/promotion); read by the PCM bonus/malus.
+	moveCount int16 // 0-based rank of this move among searched moves at its node (TT/best = 0);
+	// read only by the PCM MALUS gate (penalize a refuted parent only if it was an early move).
+	// Both fields are set at the real-move push site (the default unified loop). Staged/ProbCut
+	// push sites leave them zero → PCM is simply inert on those default-off paths, never wrong.
 }
 
 // contBegin (re)allocates and clears the continuation tables for a fresh search.
@@ -169,4 +171,29 @@ func (s *Searcher) pcmCreditParent(ply, depth, bestScore, staticEval int, inChec
 		s.contUpdate(ply-1, p.pc, p.to, scaled)
 	}
 	s.updateHistory(p.pc, p.to, scaled) // + butterfly (pc encodes color, == SF mainHistory[~us])
+}
+
+// pcmPenalizeParent penalizes the quiet parent move (contMove[ply-1]) when the CHILD
+// fails HIGH: the parent's move got refuted, so it was worse than its ordering rank
+// suggested. Stockfish 18 search.cpp:1859 (update_all_stats) / :774 (TT-cutoff path).
+// Two SF-specific details, both grounded in source:
+//   - CONTINUATION HISTORY ONLY — SF's fail-high parent penalty hits only
+//     update_continuation_histories, NOT main/pawn history (asymmetric with the bonus,
+//     which also credits butterfly). So no updateHistory call here.
+//   - Gated by the parent being an EARLY move (caller checks moveCount < PCMMalusMaxMoves):
+//     fail-highs are the norm at interior cut-nodes, so penalizing every parent is noise;
+//     restricting to top-ordered parent moves that still got refuted is the real signal.
+//
+// Stormphrax has NO analog (it penalizes fail-low SIBLINGS, not the parent) — this is
+// SF-specific taste, hence SPRT-gated and lower-prior.
+func (s *Searcher) pcmPenalizeParent(ply, depth int) {
+	if s.cont == nil { // conthist-only: nothing to penalize when ContHist is off
+		return
+	}
+	p := s.contMove[ply-1]
+	mag := s.statMalus(depth) * s.params.PCMMalusScale / 1024
+	if mag <= 0 {
+		return
+	}
+	s.contUpdate(ply-1, p.pc, p.to, -mag) // keys cont.one←contMove[ply-2], cont.two←contMove[ply-3]
 }

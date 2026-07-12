@@ -2506,8 +2506,11 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 			pos.DoMove(m, &u)
 			s.pushKey(pos.Key())
 			// Record the move played to descend into the child, so the child can key its
-			// continuation history off this (and its grandparent) move.
-			s.contMove[ply] = contEntry{pc: mover, to: m.To(), ok: true, quiet: quiet}
+			// continuation history off this (and its grandparent) move. moveCount is this
+			// move's 0-based rank among searched moves (searched is bumped after the child
+			// returns, at :2739), so the TT/best-ordered move is recorded with moveCount 0 —
+			// read only by the PCM malus's early-move gate.
+			s.contMove[ply] = contEntry{pc: mover, to: m.To(), ok: true, quiet: quiet, moveCount: int16(searched)}
 			givesCheck := pos.InCheck()
 
 			// Singular extension applies to the TT move only (extension is 0 otherwise,
@@ -2793,6 +2796,15 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 	if s.params.ParentContHistBonus && flag == ttUpper &&
 		ply >= 1 && s.contMove[ply-1].ok && s.contMove[ply-1].quiet {
 		s.pcmCreditParent(ply, depth, bestScore, staticEval, inCheck)
+	}
+
+	// PCM malus (SF search.cpp:1859): mirror of the bonus on a FAIL-HIGH (flag==ttLower —
+	// a move in the loop beat beta). Penalize the quiet parent move ONLY if it was an early
+	// move (its refutation is then a real signal, not the norm). Continuation-history only.
+	if s.params.ParentContHistMalus && flag == ttLower &&
+		ply >= 1 && s.contMove[ply-1].ok && s.contMove[ply-1].quiet &&
+		int(s.contMove[ply-1].moveCount) < s.params.PCMMalusMaxMoves {
+		s.pcmPenalizeParent(ply, depth)
 	}
 
 	// Shared post-loop: corrhist update, TT store (both paths reach here).

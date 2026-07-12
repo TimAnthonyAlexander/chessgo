@@ -77,6 +77,9 @@ type Params struct {
 	PCMBaseOffset       int  // PCM negative gate: subtracted from the depth weight, then weight is clamped ≥0 — so only DEEP/severe fail-lows credit the parent (SF's −215 offset + max(0,…); a positive floor credits every fail-low indiscriminately and washes). (default 512)
 	PCMEvalMargin       int  // PCM static-eval margin (cp): add PCMMarginBonus to weight when !inCheck && bestScore <= staticEval-margin (default 100; 0 disables the margin term)
 	PCMMarginBonus      int  // PCM: weight added when the fail-low is severe (bestScore below staticEval−PCMEvalMargin) — SF's +147 marginA (default 256)
+	ParentContHistMalus bool // PCM malus: on a fail-high (flag==ttLower), penalize the quiet parent move (contMove[ply-1]) in continuation history ONLY, gated to early parent moves — SF search.cpp:1859 (SF-specific; Stormphrax has no analog). DEFAULT OFF — off-path byte-identical. Under SPRT.
+	PCMMalusScale       int  // PCM malus magnitude: statMalus(depth)·PCMMalusScale/1024 (default 256)
+	PCMMalusMaxMoves    int  // PCM malus gate: penalize the parent only if its 0-based searched-rank < this (default 4 ≈ SF's moveCount<4; 1 = first-move-only, SF's dominant site 2)
 	LMR2                bool // aggressive LMR: reduce captures/promotions too, earlier onset, PV/improving/ordering-trust/SEE reduction adjustments (supersedes LMR when on)
 	Singular            bool // singular extensions: verify the TT move against all alternatives at reduced depth; extend it a ply if singular, multi-cut if a second move also beats beta
 	SingularMargin      int  // singular: verification window = ttScore - SingularMargin*depth (default 2; lower = fire singular more often)
@@ -375,6 +378,12 @@ func DefaultParams() Params {
 		PCMBaseOffset:       512,
 		PCMEvalMargin:       100,
 		PCMMarginBonus:      256,
+		// PCM malus (fail-high parent penalty, SF search.cpp:1859). DEFAULT OFF —
+		// continuation-history only, gated to early parent moves. SF-specific (no
+		// Stormphrax analog) so lower-prior; SPSA targets scale + the move-count gate.
+		ParentContHistMalus: false,
+		PCMMalusScale:       256,
+		PCMMalusMaxMoves:    4,
 		// Aggressive LMR (supersedes LMR when on): reduces captures/promotions too,
 		// earlier onset (non-PV from the 2nd move), with PV / improving /
 		// ordering-trust / SEE reduction adjustments; over-reductions are caught by
