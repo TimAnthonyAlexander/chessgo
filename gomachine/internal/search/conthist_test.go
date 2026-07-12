@@ -64,6 +64,45 @@ func TestContHistDirection(t *testing.T) {
 	}
 }
 
+// PCM: pcmCreditParent must raise the PARENT move's continuation score AND its
+// butterfly history (a fail-low means the quiet parent was good). Crediting the
+// parent at ply-1=2 keys cont.one by contMove[1] and cont.two by contMove[0], which
+// is exactly what contScore(2, parentPc, parentTo) reads back — so no off-by-one.
+func TestPCMRaisesParentHistories(t *testing.T) {
+	p := DefaultParams()
+	p.Nnue = false
+	p.ContHist = true
+	p.ParentContHistBonus = true
+	s := NewWithParams(16, p)
+	s.contBegin()
+
+	// A three-deep quiet ancestor chain; the parent move (credited) is at ply-1 = 2.
+	s.contMove[0] = contEntry{pc: chess.WhitePawn, to: chess.Square(16), ok: true, quiet: true}
+	s.contMove[1] = contEntry{pc: chess.BlackPawn, to: chess.Square(40), ok: true, quiet: true}
+	parentPc, parentTo := chess.WhiteKnight, chess.Square(21)
+	s.contMove[2] = contEntry{pc: parentPc, to: parentTo, ok: true, quiet: true}
+
+	if before := s.contScore(2, parentPc, parentTo); before != 0 {
+		t.Fatalf("cold parent continuation score = %d, want 0", before)
+	}
+	if s.history[parentPc][parentTo] != 0 {
+		t.Fatalf("cold parent butterfly = %d, want 0", s.history[parentPc][parentTo])
+	}
+
+	// Drive the fail-low credit several times (bestScore well below staticEval so the
+	// margin term also fires): ply=3, depth=8, not in check.
+	for i := 0; i < 16; i++ {
+		s.pcmCreditParent(3, 8, -100 /*bestScore*/, 200 /*staticEval*/, false /*inCheck*/)
+	}
+
+	if after := s.contScore(2, parentPc, parentTo); after <= 0 {
+		t.Errorf("PCM did not raise the parent's continuation score (got %d)", after)
+	}
+	if s.history[parentPc][parentTo] <= 0 {
+		t.Errorf("PCM did not raise the parent's butterfly history (got %d)", s.history[parentPc][parentTo])
+	}
+}
+
 // A null move sets an ok=false continuation entry, so the child keys off NOTHING:
 // contScore must be 0 even when the table holds data for the would-be parent.
 func TestContHistNullMoveNoContinuation(t *testing.T) {

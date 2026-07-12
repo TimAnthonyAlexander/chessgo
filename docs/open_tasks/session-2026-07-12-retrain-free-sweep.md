@@ -19,6 +19,8 @@ tree — and even those are NPS-noise-level on amd64. The genuine remaining Elo 
 ### Banked
 | Change | Evidence | Verdict | Commit |
 |---|---|---|---|
+| **NEON int8 tail-dot kernel** (`dotU8I8SIMD`, arm64-only) — vectorize the int8 L1 matmul; `dotU8I8Scalar` was the last hot scalar NNUE kernel on NEON (51% of the arm profile) | **+80.5% whole-engine NPS** on M3 SIMD (int16-threatFT prod config, ~227.5k→~410.7k medianNPS, node-identical, 3 reps); bit-exact to scalar (maddubs saturation reproduced), amd64 byte-identical (never compiles the file) | **SHIP arm64-default-ON** — the single biggest arm win to date; a pure NPS win (⇒ deeper search per move ⇒ real strength on arm). Found by the 2nd-night bug-hunt (arch-kernels agent). | `096103a` |
+| golden eval-output regression lock (38 FENs, all 8 buckets, incremental==scratch) | GREEN; no Go↔Rust eval discrepancy found while building it | KEEP (hygiene — locks composed bucket/scale/quant/activation parity) | `8073def` |
 | appendAttackerEdges — one geometry pass, both perspectives | byte-exact (`TestEnrichedMoveAwareBitExact`) + Go↔Rust threat crosscheck green; +0.8% arm / flat amd64 | KEEP (clean code, ~0 Elo) | `42d1a87` |
 | **NMPNonPV — gate null-move pruning to non-PV nodes** (SF search.cpp:893) | **+5.3 ± 4.7 movetime SPRT, 3388 pairs** (CI +0.6..+10.0, LLR +2.50, stable across 877→3388 pairs, never negative). **Abitur external confirm (1s, 2T):** head-to-head nmp-on vs nmp-off **+8 ± 36** (direction agrees with SPRT, NOT a non-transitivity loss); anchors healthy — gomachine beats SF-capped-3190 **63.7%** and loses SF-full **25% (−170)** (in line with the known ~150-200 Elo gap). | **SHIP (default-on)** — the one SF-divergence fix that FITS: NMP was wrongly firing at PV nodes, pruning would-be principal variations. A genuine defect, not a graft. | `9ea2589` |
 
@@ -55,6 +57,24 @@ tree — and even those are NPS-noise-level on amd64. The genuine remaining Elo 
 - Final-θ movetime SPRT: **−3.4 ± 9.2 (wash/slight-neg)**. ⇒ margins near-optimal on this
   net (the +38.7 re-tune earlier this project already banked the reclaimable margin Elo;
   the well doesn't refill in one net generation).
+
+## Night 2 (2026-07-12) — four grounded bug-hunt agents (SF18 `~/sf18-arm/src` + Stormphrax `~/Stormphrax/src` local)
+
+Method discipline the user set: a single SF technique that washes in isolation is **"not yet," not "dead"** —
+SF does it for a reason; our margins are often just stale/un-tuned for it. Evaluation LADDER for any
+SF-grounded candidate: flag → naive SPRT → **SPSA the interacting margins** → **test in combination** →
+**Abitur** (external, time-odds ladder) as arbiter. Don't cite a naive-isolation number as a verdict.
+
+| Angle | Result |
+|---|---|
+| **Arch kernels** | ★ **NEON int8 tail-dot → +80% arm NPS, SHIPPED** (`096103a`, see Banked). Rest of the accumulator well confirmed dry (amd64). |
+| **Eval golden test** | ★ **Shipped** (`8073def`). No Go↔Rust discrepancy — output parity locked. |
+| **Move ordering** | **CLEAN** — no defect in the active path (`search.go:2252–2785`); tiers/history-signs/gravity/cutoff-sites match SF18 + Stormphrax. One ladder candidate: **parent-move continuation-history credit** — BOTH SF (`search.cpp:775/1438/1862`) and Stormphrax (`1398–1424`) have it, we don't. Additive, not a bug; put it on the ladder (flag → SPSA conthist weights → combine w/ ContHist2 → Abitur), don't dismiss on the naive number. |
+| **Time management** | **Structural finding:** a full Stormphrax-grade adaptive time manager (`internal/search/timemanager.go`) exists but is **DEAD in live play** — the hub hands the engine a fixed rating-derived movetime (`hub/bot.go:179` `moveTimeCap=0` → `configForRating().MoveTime`) with `Limits.TimeLeft==0`, so the manager (which needs `TimeLeft>0`) never runs. Set only by the unused UCI adapter (`uci.go:209`). **Every gate is blind to it** (SPRT/vs-SF/Abitur all drive `go movetime`/`go nodes` ⇒ `soft==hard`). Two real bugs fall out: (1) search budget is never bounded by the remaining clock → a strong bot (~1.18s budget) can **flag in a bullet endgame** (SF caps `min(totalTime, maximum())`); (2) no single-legal-move short-circuit (`search.go:813`). Big live-play lever (plausibly double-digit Elo at real TC) but needs a **real-clock (`wtime/btime`) gauntlet** to measure — invisible to movetime SPRT. |
+
+**Open, ranked (Night 2):**
+1. **Time-management: wire the clock into a clocked hub entry point** so the existing manager runs, + fix the flag-risk bound + single-legal-move short-circuit. Needs a real-TC Abitur to measure. Highest live-play ceiling.
+2. **Parent-move conthist** on the ladder (flag → SPSA → combine → Abitur).
 
 ## Honest conclusion
 

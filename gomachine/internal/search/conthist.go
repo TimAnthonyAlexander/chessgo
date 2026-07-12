@@ -38,9 +38,12 @@ type contHist struct {
 // search path, so a child node can key its continuation tables off its ancestors.
 // ok is false for the root sentinel and for a null move (no continuation).
 type contEntry struct {
-	pc chess.Piece
-	to chess.Square
-	ok bool
+	pc    chess.Piece
+	to    chess.Square
+	ok    bool
+	quiet bool // move was a quiet (not capture/promotion); read only by the PCM fail-low bonus.
+	// Set at the real-move push site (the default unified loop). Staged/ProbCut push
+	// sites leave it false → PCM is simply inert on those default-off paths, never wrong.
 }
 
 // contBegin (re)allocates and clears the continuation tables for a fresh search.
@@ -126,4 +129,45 @@ func (s *Searcher) updateContHist(pos *chess.Position, best chess.Move, tried []
 			s.contUpdate(ply, pos.PieceOn(q.From()), q.To(), -malus)
 		}
 	}
+}
+
+// pcmCreditParent gives the quiet parent move (contMove[ply-1]) a positive
+// continuation + butterfly bonus on a PURE FAIL-LOW node: no move raised alpha, so
+// the parent move "caused the fail low" — it was a good move for the side that
+// played it. Stockfish 18 search.cpp:1423 (the !priorCapture fail-low branch) and
+// Stormphrax search.cpp:1398 (the parent-counter-move bonus), collapsed to our two
+// continuation tables + butterfly and to 3 SPSA knobs.
+//
+// Crediting the PARENT move keys cont.one by contMove[ply-2] and cont.two by
+// contMove[ply-3] — reproduced exactly by contUpdate(ply-1, parentPc, parentTo, …).
+// Caller has verified: ParentContHistBonus on, flag==ttUpper (pure fail-low),
+// ply>=1, contMove[ply-1].ok && .quiet.
+func (s *Searcher) pcmCreditParent(ply, depth, bestScore, staticEval int, inCheck bool) {
+	p := s.contMove[ply-1]
+	base := s.statBonus(depth) // depth²·HistBonusScale, capped — the normal history magnitude
+
+	weight := s.params.PCMBonusScale // base weight (/1024 units)
+	if d := depth * s.params.PCMDepthScale; d < 1024 {
+		weight += d // depth term, capped at 1024 (SF's min(56·depth,489) analog)
+	} else {
+		weight += 1024
+	}
+	// The one static-eval margin: we landed well below our own static eval, so the
+	// parent move really did cause the drop → weight it up. Reuses PCMBonusScale to
+	// stay at 3 knobs (PCMEvalMargin=0 disables it).
+	if !inCheck && s.params.PCMEvalMargin > 0 && bestScore <= staticEval-s.params.PCMEvalMargin {
+		weight += s.params.PCMBonusScale
+	}
+	if weight < 0 {
+		weight = 0
+	}
+
+	scaled := base * weight / 1024 // ~0.25·base … ~1.5·base with seed knobs — a positive credit
+	if scaled <= 0 {
+		return
+	}
+	if s.cont != nil { // both continuation tables (only when ContHist is on)
+		s.contUpdate(ply-1, p.pc, p.to, scaled)
+	}
+	s.updateHistory(p.pc, p.to, scaled) // + butterfly (pc encodes color, == SF mainHistory[~us])
 }

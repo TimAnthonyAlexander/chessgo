@@ -11,107 +11,111 @@ package search
 // pruning, aspiration windows, …). Only wired flags appear; toggling a flag the
 // search doesn't yet read would silently do nothing, so we don't expose those.
 type Params struct {
-	UseTT            bool // transposition-table probe/store + TT move ordering
-	NullMove         bool // null-move pruning (zugzwang-guarded)
-	NullMoveR        int  // null-move base reduction R (effective R = NullMoveR + depth/4)
-	LMR              bool // late move reductions
-	CheckExtension   bool // extend search by one ply when in check
-	SEE              bool // order captures by SEE; prune losing captures in quiescence
-	DeltaPrune       bool // delta pruning in quiescence (skip captures that can't raise alpha)
-	DeltaExemptChecks bool // qsearch delta pruning: never prune a check-giving capture or a recapture on the just-vacated square (SF search.cpp givesCheck / to!=prevSq exemptions). DEFAULT OFF — under SPRT.
-	Aspiration       bool // aspiration windows around the previous iteration's score
-	AspInitDelta     int  // aspiration: initial half-window (centipawns) around prevScore; widening logic unchanged. Default 25 (the old aspInitDelta const) → byte-identical. Lower = tighter opening window (Stormphrax-style)
-	AspVariance      bool // aspiration: size the initial window as base + |prevScore|²·scale (SF/Stormphrax) instead of flat AspInitDelta. DEFAULT OFF — under SPRT.
-	AspBaseDelta     int  // AspVariance: base half-window before the variance term (Stormphrax initialAspWindow=7)
-	AspVarScale      int  // AspVariance: numerator of the |prevScore|²·scale/2²⁰ variance term (Stormphrax aspSqScoreScale=65)
-	AspFailHighReduce bool // aspiration: on repeated fail-highs, reduce the re-search depth by the fail-high count (capped 3), à la SF failedHighCnt / Stormphrax aspReduction. DEFAULT OFF — under SPRT.
-	RFP              bool // reverse futility pruning (static null move) near leaves
-	LMP              bool // late move pruning (move-count pruning) of late quiets near leaves
-	HistMalus        bool // history gravity update + bonus cap + malus to non-cutoff quiets
-	Improving        bool // "improving" heuristic scales RFP margin + LMP move count
-	ImprovingRich    bool // richer improving: ply-4 fallback + default-true-when-unknown + (staticEval>=beta) upgrade (Stormphrax/SF). DEFAULT OFF — under SPRT.
-	LMRFormula       bool // log(d)·log(m) LMR table + PV/improving/history adjustments
-	LMRFixedPoint    bool // LMR reduction in ×1024 fixed-point (SF/Stormphrax) instead of integer plies — makes lmrbase/lmrdiv finely tunable. DEFAULT OFF — under SPRT.
-	LMRCutnode       bool // reduce late moves MORE at expected cut-nodes (Stormphrax r+=cutnode). Node-efficiency lever: at a cutnode late moves rarely raise alpha, so reduce them harder. DEFAULT OFF — under SPRT.
-	LMRCutnodeRed    int  // plies of extra LMR reduction at a cutnode (Stormphrax ≈+1.9; default 1).
-	LMRImproving     bool // additive LMR term on the shipped formula path: reduce late quiets +1 ply when the node is NOT improving (Stormphrax r += !improving·1242/1024). Independent term, not the rejected LMR2 bundle. DEFAULT OFF — under SPRT.
-	LMRTtNoisy       bool // additive LMR term: reduce late quiets harder when the TT move is a capture (a tactical node — a late quiet rarely beats a noisy TT move; Stormphrax r += ttMoveNoisy·1081/1024). DEFAULT OFF — under SPRT.
-	LMRTtNoisyRed    int  // plies of extra reduction when the TT move is noisy (default 1 ≈ Stormphrax 1081/1024).
-	LMRPvRelief      bool // reduce PV nodes one ply LESS in the default LMR path (SF/Stormphrax apply PV relief unconditionally). DEFAULT OFF — under SPRT.
-	LMRAlpha         bool // additive LMR term: reduce late moves more the more alpha-raises already occurred at this node (Stormphrax r += alphaRaises·597/1024) — many moves already good here ⇒ reduce the rest harder. DEFAULT OFF — under SPRT.
-	LMRAlphaScale    int  // LMRAlpha: 1024-scaled plies per alpha-raise (default 597 ≈ 0.58 ply; r += alphaRaises·LMRAlphaScale/1024).
-	LMRCheckReduce   bool // LMR a checking quiet (reduce it LESS) instead of skipping it entirely (Stormphrax reduces givesCheck by 852/1024). DEFAULT OFF — under SPRT.
-	LMRCheckRed      int  // plies to subtract from a checking quiet's LMR reduction (default 1).
-	RFPSoft          bool // reverse-futility soft fail-firm: return a beta-blended score (Stormphrax rfpFailFirmT 711/1024) instead of the hard staticEval-margin. DEFAULT OFF — under SPRT.
-	NmpMargin        bool // null-move β-margin gate: fire NMP only when staticEval ≥ beta + NmpMarginBase − depth·10 − improving·41 (Stormphrax nmpBetaMargin), instead of the flat staticEval ≥ beta. Requires NmpGate. DEFAULT OFF — under SPRT.
-	NmpMarginBase    int  // NmpMargin: base cp of the depth/improving-scaled margin (default 213 ≈ Stormphrax).
-	NodeTM           bool // node-based time management: scale the soft time limit by how concentrated the iteration's nodes were on the best root move (Stormphrax nodeTm, centered form). Movetime-only (inert at fixed nodes / flat movetime). DEFAULT OFF — under SPRT.
-	RFPQuad          bool // reverse-futility margin = 85·d + 7·d² − 75·improving, applied to d≤12 (Stormphrax) instead of our linear 75·d @ d≤8. DEFAULT OFF — under SPRT.
-	LMRDoDeeper      bool // after an LMR reduced scout beats alpha, adapt the re-search depth ±1 to how far it beat bestScore (Stormphrax doDeeper/doShallower). The safety net that makes aggressive reduction pay. DEFAULT OFF — under SPRT.
-	LMRResearchFix   bool // carry the LMRDoDeeper depth adjustment (rd) into the PV full-window re-search too, matching SF's mutated newDepth (search.cpp:1253). Currently the PV re-search reverts to the unadjusted newDepth — a port slip. DEFAULT OFF (byte-identical) — under SPRT.
-	QSMaxMoves       int  // qsearch move-count cap: out of check, stop after this many searched moves (Stormphrax=2). 0=off. DEFAULT OFF — under SPRT.
-	IIRCutnode       bool // broaden IIR: reduce depth by 1 at d≥4 PV-or-cutnode when TT move is missing OR shallow (ttDepth+3<depth), instead of PV+no-TT-move only. DEFAULT OFF — under SPRT.
-	LMPHist          bool // history-adjusted LMP: raise the move-count limit by history·k so good-history quiets survive. DEFAULT OFF — under SPRT.
-	FutHist          bool // history term in frontier-futility margin (skip fewer good-history quiets). DEFAULT OFF — under SPRT.
-	Mobility         bool // evaluation: piece mobility term
-	Pawns            bool // evaluation: pawn structure (isolated/doubled/passed)
-	KingSafety       bool // evaluation: king pawn-shield term
-	BishopPair       bool // evaluation: bishop-pair bonus
-	KingProx         bool // evaluation: EG-only king proximity to advanced passers (endgame term #1, under SPRT)
-	PawnRace         bool // evaluation: EG-only knight-aware unstoppable-passer / race detection (under SPRT)
-	ScaleFactor      bool // evaluation: EG drawishness scale factor (scales the eg term toward draw in drawish material)
-	TunedEval        bool // evaluation: use the Texel-tuned PSQT + tuned weights
-	UseBook          bool // consult the precomputed opening book before searching (engine must have a book set)
-	UseTablebase     bool // probe Syzygy endgame tablebases at the root (engine must have a tablebase set)
-	TBSearch         bool // probe Syzygy WDL at internal search nodes (extends the horizon to the ≤MaxPieces boundary; engine must have a tablebase set)
-	Nnue             bool // evaluation: route static eval through the NNUE net (internal/nnue); inert (falls back to HCE) if no net is loaded
-	NnueFloat        bool // evaluation: when NNUE is on, use the float from-scratch eval instead of the int incremental path (int-vs-float A/B only)
-	TTEval           bool // reuse the TT-stored static eval instead of recomputing it (skips the NNUE/HCE eval on TT hits that don't cut off); behavior-preserving speed-only (eval is deterministic), measured at movetime
-	CorrHist         bool // correction history: learn the per-pattern (pawn / per-color non-pawn) static-eval-vs-search-result bias and correct the static eval by it (improves every eval-gated decision: RFP, null-move, improving, qsearch stand-pat)
-	CorrHistMinor    bool // extra corrhist key on the minor-piece (N+B) skeleton; additive eval adjustment (requires CorrHist)
-	CorrHistCont     bool // extra corrhist key: continuation correction from the stm's own prior moves at ply-2/-4 (requires CorrHist)
-	ContHist         bool // continuation history: 1-ply (countermove) + 2-ply history keyed by the preceding move(s); feeds quiet ordering + the LMR reduction term (sharpens every reduction/late-move prune)
-	ContHist2        bool // Stormphrax-style continuation history (independent of ContHist): keys off 1/2/4/6-ply ancestors with a coupled updateWithBase gravity; feeds quiet ordering + LMR reduction + history-pruning margin
-	LMR2             bool // aggressive LMR: reduce captures/promotions too, earlier onset, PV/improving/ordering-trust/SEE reduction adjustments (supersedes LMR when on)
-	Singular         bool // singular extensions: verify the TT move against all alternatives at reduced depth; extend it a ply if singular, multi-cut if a second move also beats beta
-	SingularMargin   int  // singular: verification window = ttScore - SingularMargin*depth (default 2; lower = fire singular more often)
-	SingularMinDepth int  // singular: minimum remaining depth to attempt verification (default 8)
-	MultiCut         bool // singular: allow the verification's multi-cut early-return (return singularBeta when a second move also beats beta). DEFAULT TRUE; flip off to isolate fragile multi-cut from the rest of singular
-	DoubleExt        bool // double extensions: when the TT move is singular by a wide margin (singScore < singularBeta - DoubleExtMargin) at a non-PV node, extend it 2 plies instead of 1
-	DoubleExtMargin  int  // double extensions: how far below singularBeta the verification must fail for a double extension (default 16; higher = fire double-ext less often)
-	CleanVerify      bool // singular: run the verification subtree with conservative LMR (not LMR2), even when LMR2 is on globally — so over-reduced alternatives don't pollute the singular decision. Inert unless LMR2 is on
-	NegExt           bool // negative extensions + SOFT multicut (Stormphrax): when the TT move is NOT singular, search it shallower (extension −2 at a cutnode, −3 when the TT entry itself fails high), and replace the hard multi-cut early-return with a soft blend of the verification score toward beta (ilerp). Consumes the cutnode flag. DEFAULT OFF — under SPRT; off-path is byte-identical (needs Singular on to fire)
-	IIR              bool // internal iterative reduction: at a deep node with no TT move, search a ply shallower (cheaper, and seeds the TT with a move)
-	Futility         bool // frontier futility pruning: skip a late quiet whose static eval + depth margin can't reach alpha (the fail-low side; distinct from RFP)
-	FutilityBase     int  // Futility: constant cp base of the margin (Stormphrax base+slope form). Margin = FutilityBase + FutilitySlope·depth. Default 0 → reproduces the old pure margin·depth exactly.
-	FutilitySlope    int  // Futility: per-depth cp slope of the margin. Default 100 (the old futilityMargin), so FutilityBase(0)+FutilitySlope(100)·depth == 100·depth byte-for-byte.
-	HistPrune        bool // history pruning: at a shallow non-PV node, skip a late quiet whose history score is strongly negative (move ordering already ranked it low; new signal vs LMP move-count / Futility static-eval)
-	SEEQuiet         bool // quiet-move SEE pruning: at a shallow non-PV node, skip a quiet move whose SEE is strongly negative (it hangs material to the recapture) — orthogonal to LMP move-count / Futility static-eval / HistPrune history-magnitude
-	SEEQuietMaxDepth int  // SEEQuiet: max remaining depth the prune applies at (default 6)
-	SEEQuietMargin   int  // SEEQuiet: per-depth cp margin; prune when SEE < -SEEQuietMargin·depth (default 150)
-	CaptSEE          bool // capture-move SEE pruning: at a shallow non-PV node, skip a CAPTURE whose SEE is strongly negative (a clearly-losing capture that hangs material through the recapture sequence) — the capture analog of SEEQuiet, orthogonal to it (fires only on captures, never quiets/promotions). DEFAULT OFF — under SPRT
-	CaptSEEMaxDepth  int  // CaptSEE: max remaining depth the prune applies at (default 6)
-	CaptSEEMargin    int  // CaptSEE: per-depth cp margin; prune when SEE < -CaptSEEMargin·depth (default 25)
-	ProbCut          bool // probcut: if a capture's reduced-depth search beats a raised beta, the node is almost surely a fail-high — prune it
-	Razor            bool // razoring: at very shallow depth, if static eval + margin < alpha, drop to qsearch and prune if it confirms we're below alpha
-	CaptHist         bool // capture history: per (piece,to,victim) stats refine capture ordering WITHIN the SEE good/bad tier (orthogonal to quiet butterfly history)
-	NmpGate          bool // only attempt null-move pruning when staticEval >= beta, and add an eval-margin term to the reduction R. DEFAULT OFF — under SPRT.
-	NmpEvalDivisor   int  // NMP eval-scaled reduction: R += min((staticEval-beta)/NmpEvalDivisor, NmpEvalMax). Default 200.
-	QSFutility       bool // qsearch node-level futility (Stormphrax qsearchFp): out of check, once standPat + QSFutilityMargin <= alpha, skip any remaining capture that isn't a SEE-winning exchange (all such captures are futile — the node floor can't reach alpha and the move wins no material). ADDITIVE to per-move delta pruning (which subtracts the specific victim value); this is a node-level floor gated by SEE instead. DEFAULT OFF — under SPRT.
-	QSFutilityMargin int  // QSFutility: cp margin above stand-pat for the futility base (default 100).
-	DeltaMargin      int  // qsearch delta-pruning margin (cp) added to captured-piece value; was a hardcoded const, promoted for SPSA/SPRT tuning; default 200 = byte-identical. Sibling of SEEQuietMargin/QSFutilityMargin.
-	QCaps            bool // quiescence generates only noisy moves (GenerateCaptures) out of check, instead of all-legal-then-filter. DEFAULT ON. Byte-identical move set either way (movegen_captures_test.go) — a pure NPS lever, flagged only so its movetime Elo can be A/B'd (invisible at fixed nodes).
-	QSCastling       bool // search castling moves in quiescence. Castling is a QUIET move but its (king,rook-origin) encoding has an occupied destination, so it slips through the isCapture noisy filter — a latent quirk. DEFAULT ON preserves the historical behavior byte-for-byte; OFF drops castling from qsearch (a genuinely quiet move has no place in a tactical search). Under SPRT.
-	TTMoveFirst      bool // try the TT move immediately after movegen, before scoreMoves — if it causes a beta cutoff, skip scoring entirely. NOT byte-identical: searching the TT move before scoreMoves mutates history tables that scoreMoves reads, changing move-order scores → different tree. A search-behavior change (not a pure NPS win), gated behind a flag for future pairing with deferred quiet scoring. DEFAULT OFF.
-	DeferredQuiets   bool // staged move picking (Stormphrax/SF pattern): TT move first, then score + search captures, then score quiets lazily. NOT byte-identical — history is read after earlier subtrees have mutated it (the standard design). DEFAULT OFF — under SPRT.
-	Aggr             int  // aggression style knob 0..100 (default 50 = neutral). Scales a small king-attack/tropism term ONTO the static eval: 50→off (byte-identical), 100→fully attacking, 0→solid/defensive. Effect = eval.AggressionTerm(pos)·(Aggr-50)/50. Style lever, NOT a strength patch (a deliberate eval distortion — expected to cost a little Elo; SPRT measures how much per level).
-	Prefetch         bool // PREFETCHT0 the TT slot for the child key the moment it's known (in pushKey, right after DoMove). Bit-exact (a prefetch never changes results). DEFAULT OFF — measured a WASH (−5.3 ± 7.4 @ 394 pairs movetime, coalla): our 64MB TT fits entirely in the EPYC's 128MB L3, so probes hit L3 (~15c), not memory — nothing to hide, and the per-call PREFETCHT0 overhead faintly nets negative. Kept as inert scaffolding: flip on IFF the TT ever exceeds L3 (bigger `-tt`, or heavy multi-game prod eviction). amd64 PREFETCHT0; no-op elsewhere.
-	SEEReuseQS       bool // qsearch SEE-prune reuse: read the SEE sign already encoded in the ordering score (captureScore tiers SEE<0 as scoreLosingCapture) instead of recomputing pos.SEE(m) in the qsearch loop. Bit-exact / NODE-COUNT-IDENTICAL (every move reaching the prune routes through captureScore, which computed the SAME pos.SEE at the SAME position; the tier gap is ~1M ≫ mvvlva+capthist so the sign reads cleanly at a mid-gap threshold). Pure NPS lever — dedups the double SEE per capture. DEFAULT OFF — under SPRT.
-	TTCutoffNonPV   bool // SF-divergence fix (SF search.cpp:760): gate the early TT cutoff to non-PV nodes — keep probing at PV nodes for move/eval/singular data, only skip the early RETURN there. DEFAULT OFF — byte-identical. Under SPRT.
-	NMPNonPV        bool // SF-divergence fix (SF search.cpp:893): gate null-move pruning to non-PV nodes (SF only does NMP at cut nodes, never PV). DEFAULT OFF — byte-identical. Under SPRT.
-	TTRefinesEval   bool // SF-divergence fix (SF search.cpp:730-732): at a ttHit, when the stored bound is consistent (ttLower && ttScore>eval, ttUpper && ttScore<eval, or ttExact) use ttScore as the pruning `staticEval` that RFP/null-move/futility key off (NOT the corrhist-corrected value kept in s.staticEvals — improving still keys off the un-refined eval, matching SF). DEFAULT OFF — byte-identical. Under SPRT.
-	QSCaptSEEMargin int  // SF-divergence fix (SF search.cpp:1665): qsearch losing-capture SEE margin (cp). Out of check, prune a capture only when SEE < -QSCaptSEEMargin (SF keeps captures losing up to 80cp: `if (!see_ge(move, -80)) continue`). DEFAULT 0 = prune SEE<0 = current byte-identical; SPRT will test 80.
-	QSearchTT       bool // SF-divergence fix (SF search.cpp:1542-1728): give quiescence a TT probe + store. At qnode entry probe the TT, take a non-PV cutoff on a bound-consistent stored score, seed move ordering (ttMove) + refine the stand-pat floor with the TT value, and store the qsearch result (bestScore, bound, ttMove) at a fixed QS depth (0). When on, qsearch becomes fail-soft (returns bestScore) so the stored bounds are consistent; the mate ply-adjust + bound storage reuse tt.go's store/scoreFromTT unchanged. DEFAULT OFF — qsearch never touches the TT (byte-identical). Under SPRT.
+	UseTT               bool // transposition-table probe/store + TT move ordering
+	NullMove            bool // null-move pruning (zugzwang-guarded)
+	NullMoveR           int  // null-move base reduction R (effective R = NullMoveR + depth/4)
+	LMR                 bool // late move reductions
+	CheckExtension      bool // extend search by one ply when in check
+	SEE                 bool // order captures by SEE; prune losing captures in quiescence
+	DeltaPrune          bool // delta pruning in quiescence (skip captures that can't raise alpha)
+	DeltaExemptChecks   bool // qsearch delta pruning: never prune a check-giving capture or a recapture on the just-vacated square (SF search.cpp givesCheck / to!=prevSq exemptions). DEFAULT OFF — under SPRT.
+	Aspiration          bool // aspiration windows around the previous iteration's score
+	AspInitDelta        int  // aspiration: initial half-window (centipawns) around prevScore; widening logic unchanged. Default 25 (the old aspInitDelta const) → byte-identical. Lower = tighter opening window (Stormphrax-style)
+	AspVariance         bool // aspiration: size the initial window as base + |prevScore|²·scale (SF/Stormphrax) instead of flat AspInitDelta. DEFAULT OFF — under SPRT.
+	AspBaseDelta        int  // AspVariance: base half-window before the variance term (Stormphrax initialAspWindow=7)
+	AspVarScale         int  // AspVariance: numerator of the |prevScore|²·scale/2²⁰ variance term (Stormphrax aspSqScoreScale=65)
+	AspFailHighReduce   bool // aspiration: on repeated fail-highs, reduce the re-search depth by the fail-high count (capped 3), à la SF failedHighCnt / Stormphrax aspReduction. DEFAULT OFF — under SPRT.
+	RFP                 bool // reverse futility pruning (static null move) near leaves
+	LMP                 bool // late move pruning (move-count pruning) of late quiets near leaves
+	HistMalus           bool // history gravity update + bonus cap + malus to non-cutoff quiets
+	Improving           bool // "improving" heuristic scales RFP margin + LMP move count
+	ImprovingRich       bool // richer improving: ply-4 fallback + default-true-when-unknown + (staticEval>=beta) upgrade (Stormphrax/SF). DEFAULT OFF — under SPRT.
+	LMRFormula          bool // log(d)·log(m) LMR table + PV/improving/history adjustments
+	LMRFixedPoint       bool // LMR reduction in ×1024 fixed-point (SF/Stormphrax) instead of integer plies — makes lmrbase/lmrdiv finely tunable. DEFAULT OFF — under SPRT.
+	LMRCutnode          bool // reduce late moves MORE at expected cut-nodes (Stormphrax r+=cutnode). Node-efficiency lever: at a cutnode late moves rarely raise alpha, so reduce them harder. DEFAULT OFF — under SPRT.
+	LMRCutnodeRed       int  // plies of extra LMR reduction at a cutnode (Stormphrax ≈+1.9; default 1).
+	LMRImproving        bool // additive LMR term on the shipped formula path: reduce late quiets +1 ply when the node is NOT improving (Stormphrax r += !improving·1242/1024). Independent term, not the rejected LMR2 bundle. DEFAULT OFF — under SPRT.
+	LMRTtNoisy          bool // additive LMR term: reduce late quiets harder when the TT move is a capture (a tactical node — a late quiet rarely beats a noisy TT move; Stormphrax r += ttMoveNoisy·1081/1024). DEFAULT OFF — under SPRT.
+	LMRTtNoisyRed       int  // plies of extra reduction when the TT move is noisy (default 1 ≈ Stormphrax 1081/1024).
+	LMRPvRelief         bool // reduce PV nodes one ply LESS in the default LMR path (SF/Stormphrax apply PV relief unconditionally). DEFAULT OFF — under SPRT.
+	LMRAlpha            bool // additive LMR term: reduce late moves more the more alpha-raises already occurred at this node (Stormphrax r += alphaRaises·597/1024) — many moves already good here ⇒ reduce the rest harder. DEFAULT OFF — under SPRT.
+	LMRAlphaScale       int  // LMRAlpha: 1024-scaled plies per alpha-raise (default 597 ≈ 0.58 ply; r += alphaRaises·LMRAlphaScale/1024).
+	LMRCheckReduce      bool // LMR a checking quiet (reduce it LESS) instead of skipping it entirely (Stormphrax reduces givesCheck by 852/1024). DEFAULT OFF — under SPRT.
+	LMRCheckRed         int  // plies to subtract from a checking quiet's LMR reduction (default 1).
+	RFPSoft             bool // reverse-futility soft fail-firm: return a beta-blended score (Stormphrax rfpFailFirmT 711/1024) instead of the hard staticEval-margin. DEFAULT OFF — under SPRT.
+	NmpMargin           bool // null-move β-margin gate: fire NMP only when staticEval ≥ beta + NmpMarginBase − depth·10 − improving·41 (Stormphrax nmpBetaMargin), instead of the flat staticEval ≥ beta. Requires NmpGate. DEFAULT OFF — under SPRT.
+	NmpMarginBase       int  // NmpMargin: base cp of the depth/improving-scaled margin (default 213 ≈ Stormphrax).
+	NodeTM              bool // node-based time management: scale the soft time limit by how concentrated the iteration's nodes were on the best root move (Stormphrax nodeTm, centered form). Movetime-only (inert at fixed nodes / flat movetime). DEFAULT OFF — under SPRT.
+	RFPQuad             bool // reverse-futility margin = 85·d + 7·d² − 75·improving, applied to d≤12 (Stormphrax) instead of our linear 75·d @ d≤8. DEFAULT OFF — under SPRT.
+	LMRDoDeeper         bool // after an LMR reduced scout beats alpha, adapt the re-search depth ±1 to how far it beat bestScore (Stormphrax doDeeper/doShallower). The safety net that makes aggressive reduction pay. DEFAULT OFF — under SPRT.
+	LMRResearchFix      bool // carry the LMRDoDeeper depth adjustment (rd) into the PV full-window re-search too, matching SF's mutated newDepth (search.cpp:1253). Currently the PV re-search reverts to the unadjusted newDepth — a port slip. DEFAULT OFF (byte-identical) — under SPRT.
+	QSMaxMoves          int  // qsearch move-count cap: out of check, stop after this many searched moves (Stormphrax=2). 0=off. DEFAULT OFF — under SPRT.
+	IIRCutnode          bool // broaden IIR: reduce depth by 1 at d≥4 PV-or-cutnode when TT move is missing OR shallow (ttDepth+3<depth), instead of PV+no-TT-move only. DEFAULT OFF — under SPRT.
+	LMPHist             bool // history-adjusted LMP: raise the move-count limit by history·k so good-history quiets survive. DEFAULT OFF — under SPRT.
+	FutHist             bool // history term in frontier-futility margin (skip fewer good-history quiets). DEFAULT OFF — under SPRT.
+	Mobility            bool // evaluation: piece mobility term
+	Pawns               bool // evaluation: pawn structure (isolated/doubled/passed)
+	KingSafety          bool // evaluation: king pawn-shield term
+	BishopPair          bool // evaluation: bishop-pair bonus
+	KingProx            bool // evaluation: EG-only king proximity to advanced passers (endgame term #1, under SPRT)
+	PawnRace            bool // evaluation: EG-only knight-aware unstoppable-passer / race detection (under SPRT)
+	ScaleFactor         bool // evaluation: EG drawishness scale factor (scales the eg term toward draw in drawish material)
+	TunedEval           bool // evaluation: use the Texel-tuned PSQT + tuned weights
+	UseBook             bool // consult the precomputed opening book before searching (engine must have a book set)
+	UseTablebase        bool // probe Syzygy endgame tablebases at the root (engine must have a tablebase set)
+	TBSearch            bool // probe Syzygy WDL at internal search nodes (extends the horizon to the ≤MaxPieces boundary; engine must have a tablebase set)
+	Nnue                bool // evaluation: route static eval through the NNUE net (internal/nnue); inert (falls back to HCE) if no net is loaded
+	NnueFloat           bool // evaluation: when NNUE is on, use the float from-scratch eval instead of the int incremental path (int-vs-float A/B only)
+	TTEval              bool // reuse the TT-stored static eval instead of recomputing it (skips the NNUE/HCE eval on TT hits that don't cut off); behavior-preserving speed-only (eval is deterministic), measured at movetime
+	CorrHist            bool // correction history: learn the per-pattern (pawn / per-color non-pawn) static-eval-vs-search-result bias and correct the static eval by it (improves every eval-gated decision: RFP, null-move, improving, qsearch stand-pat)
+	CorrHistMinor       bool // extra corrhist key on the minor-piece (N+B) skeleton; additive eval adjustment (requires CorrHist)
+	CorrHistCont        bool // extra corrhist key: continuation correction from the stm's own prior moves at ply-2/-4 (requires CorrHist)
+	ContHist            bool // continuation history: 1-ply (countermove) + 2-ply history keyed by the preceding move(s); feeds quiet ordering + the LMR reduction term (sharpens every reduction/late-move prune)
+	ContHist2           bool // Stormphrax-style continuation history (independent of ContHist): keys off 1/2/4/6-ply ancestors with a coupled updateWithBase gravity; feeds quiet ordering + LMR reduction + history-pruning margin
+	ParentContHistBonus bool // PCM: on a pure fail-low (flag==ttUpper), credit the quiet parent move (contMove[ply-1]) a positive continuation+butterfly bonus (SF search.cpp:1423 / Stormphrax pcm). DEFAULT OFF — off-path byte-identical (nothing reads contEntry.quiet or fires the tail hook). Under SPRT.
+	PCMBonusScale       int  // PCM base weight in /1024 units (default 256)
+	PCMDepthScale       int  // PCM per-depth weight, capped at 1024 (default 64)
+	PCMEvalMargin       int  // PCM static-eval margin (cp): add PCMBonusScale to weight when !inCheck && bestScore <= staticEval-margin (default 100; 0 disables the margin term)
+	LMR2                bool // aggressive LMR: reduce captures/promotions too, earlier onset, PV/improving/ordering-trust/SEE reduction adjustments (supersedes LMR when on)
+	Singular            bool // singular extensions: verify the TT move against all alternatives at reduced depth; extend it a ply if singular, multi-cut if a second move also beats beta
+	SingularMargin      int  // singular: verification window = ttScore - SingularMargin*depth (default 2; lower = fire singular more often)
+	SingularMinDepth    int  // singular: minimum remaining depth to attempt verification (default 8)
+	MultiCut            bool // singular: allow the verification's multi-cut early-return (return singularBeta when a second move also beats beta). DEFAULT TRUE; flip off to isolate fragile multi-cut from the rest of singular
+	DoubleExt           bool // double extensions: when the TT move is singular by a wide margin (singScore < singularBeta - DoubleExtMargin) at a non-PV node, extend it 2 plies instead of 1
+	DoubleExtMargin     int  // double extensions: how far below singularBeta the verification must fail for a double extension (default 16; higher = fire double-ext less often)
+	CleanVerify         bool // singular: run the verification subtree with conservative LMR (not LMR2), even when LMR2 is on globally — so over-reduced alternatives don't pollute the singular decision. Inert unless LMR2 is on
+	NegExt              bool // negative extensions + SOFT multicut (Stormphrax): when the TT move is NOT singular, search it shallower (extension −2 at a cutnode, −3 when the TT entry itself fails high), and replace the hard multi-cut early-return with a soft blend of the verification score toward beta (ilerp). Consumes the cutnode flag. DEFAULT OFF — under SPRT; off-path is byte-identical (needs Singular on to fire)
+	IIR                 bool // internal iterative reduction: at a deep node with no TT move, search a ply shallower (cheaper, and seeds the TT with a move)
+	Futility            bool // frontier futility pruning: skip a late quiet whose static eval + depth margin can't reach alpha (the fail-low side; distinct from RFP)
+	FutilityBase        int  // Futility: constant cp base of the margin (Stormphrax base+slope form). Margin = FutilityBase + FutilitySlope·depth. Default 0 → reproduces the old pure margin·depth exactly.
+	FutilitySlope       int  // Futility: per-depth cp slope of the margin. Default 100 (the old futilityMargin), so FutilityBase(0)+FutilitySlope(100)·depth == 100·depth byte-for-byte.
+	HistPrune           bool // history pruning: at a shallow non-PV node, skip a late quiet whose history score is strongly negative (move ordering already ranked it low; new signal vs LMP move-count / Futility static-eval)
+	SEEQuiet            bool // quiet-move SEE pruning: at a shallow non-PV node, skip a quiet move whose SEE is strongly negative (it hangs material to the recapture) — orthogonal to LMP move-count / Futility static-eval / HistPrune history-magnitude
+	SEEQuietMaxDepth    int  // SEEQuiet: max remaining depth the prune applies at (default 6)
+	SEEQuietMargin      int  // SEEQuiet: per-depth cp margin; prune when SEE < -SEEQuietMargin·depth (default 150)
+	CaptSEE             bool // capture-move SEE pruning: at a shallow non-PV node, skip a CAPTURE whose SEE is strongly negative (a clearly-losing capture that hangs material through the recapture sequence) — the capture analog of SEEQuiet, orthogonal to it (fires only on captures, never quiets/promotions). DEFAULT OFF — under SPRT
+	CaptSEEMaxDepth     int  // CaptSEE: max remaining depth the prune applies at (default 6)
+	CaptSEEMargin       int  // CaptSEE: per-depth cp margin; prune when SEE < -CaptSEEMargin·depth (default 25)
+	ProbCut             bool // probcut: if a capture's reduced-depth search beats a raised beta, the node is almost surely a fail-high — prune it
+	Razor               bool // razoring: at very shallow depth, if static eval + margin < alpha, drop to qsearch and prune if it confirms we're below alpha
+	CaptHist            bool // capture history: per (piece,to,victim) stats refine capture ordering WITHIN the SEE good/bad tier (orthogonal to quiet butterfly history)
+	NmpGate             bool // only attempt null-move pruning when staticEval >= beta, and add an eval-margin term to the reduction R. DEFAULT OFF — under SPRT.
+	NmpEvalDivisor      int  // NMP eval-scaled reduction: R += min((staticEval-beta)/NmpEvalDivisor, NmpEvalMax). Default 200.
+	QSFutility          bool // qsearch node-level futility (Stormphrax qsearchFp): out of check, once standPat + QSFutilityMargin <= alpha, skip any remaining capture that isn't a SEE-winning exchange (all such captures are futile — the node floor can't reach alpha and the move wins no material). ADDITIVE to per-move delta pruning (which subtracts the specific victim value); this is a node-level floor gated by SEE instead. DEFAULT OFF — under SPRT.
+	QSFutilityMargin    int  // QSFutility: cp margin above stand-pat for the futility base (default 100).
+	DeltaMargin         int  // qsearch delta-pruning margin (cp) added to captured-piece value; was a hardcoded const, promoted for SPSA/SPRT tuning; default 200 = byte-identical. Sibling of SEEQuietMargin/QSFutilityMargin.
+	QCaps               bool // quiescence generates only noisy moves (GenerateCaptures) out of check, instead of all-legal-then-filter. DEFAULT ON. Byte-identical move set either way (movegen_captures_test.go) — a pure NPS lever, flagged only so its movetime Elo can be A/B'd (invisible at fixed nodes).
+	QSCastling          bool // search castling moves in quiescence. Castling is a QUIET move but its (king,rook-origin) encoding has an occupied destination, so it slips through the isCapture noisy filter — a latent quirk. DEFAULT ON preserves the historical behavior byte-for-byte; OFF drops castling from qsearch (a genuinely quiet move has no place in a tactical search). Under SPRT.
+	TTMoveFirst         bool // try the TT move immediately after movegen, before scoreMoves — if it causes a beta cutoff, skip scoring entirely. NOT byte-identical: searching the TT move before scoreMoves mutates history tables that scoreMoves reads, changing move-order scores → different tree. A search-behavior change (not a pure NPS win), gated behind a flag for future pairing with deferred quiet scoring. DEFAULT OFF.
+	DeferredQuiets      bool // staged move picking (Stormphrax/SF pattern): TT move first, then score + search captures, then score quiets lazily. NOT byte-identical — history is read after earlier subtrees have mutated it (the standard design). DEFAULT OFF — under SPRT.
+	Aggr                int  // aggression style knob 0..100 (default 50 = neutral). Scales a small king-attack/tropism term ONTO the static eval: 50→off (byte-identical), 100→fully attacking, 0→solid/defensive. Effect = eval.AggressionTerm(pos)·(Aggr-50)/50. Style lever, NOT a strength patch (a deliberate eval distortion — expected to cost a little Elo; SPRT measures how much per level).
+	Prefetch            bool // PREFETCHT0 the TT slot for the child key the moment it's known (in pushKey, right after DoMove). Bit-exact (a prefetch never changes results). DEFAULT OFF — measured a WASH (−5.3 ± 7.4 @ 394 pairs movetime, coalla): our 64MB TT fits entirely in the EPYC's 128MB L3, so probes hit L3 (~15c), not memory — nothing to hide, and the per-call PREFETCHT0 overhead faintly nets negative. Kept as inert scaffolding: flip on IFF the TT ever exceeds L3 (bigger `-tt`, or heavy multi-game prod eviction). amd64 PREFETCHT0; no-op elsewhere.
+	SEEReuseQS          bool // qsearch SEE-prune reuse: read the SEE sign already encoded in the ordering score (captureScore tiers SEE<0 as scoreLosingCapture) instead of recomputing pos.SEE(m) in the qsearch loop. Bit-exact / NODE-COUNT-IDENTICAL (every move reaching the prune routes through captureScore, which computed the SAME pos.SEE at the SAME position; the tier gap is ~1M ≫ mvvlva+capthist so the sign reads cleanly at a mid-gap threshold). Pure NPS lever — dedups the double SEE per capture. DEFAULT OFF — under SPRT.
+	TTCutoffNonPV       bool // SF-divergence fix (SF search.cpp:760): gate the early TT cutoff to non-PV nodes — keep probing at PV nodes for move/eval/singular data, only skip the early RETURN there. DEFAULT OFF — byte-identical. Under SPRT.
+	NMPNonPV            bool // SF-divergence fix (SF search.cpp:893): gate null-move pruning to non-PV nodes (SF only does NMP at cut nodes, never PV). DEFAULT OFF — byte-identical. Under SPRT.
+	TTRefinesEval       bool // SF-divergence fix (SF search.cpp:730-732): at a ttHit, when the stored bound is consistent (ttLower && ttScore>eval, ttUpper && ttScore<eval, or ttExact) use ttScore as the pruning `staticEval` that RFP/null-move/futility key off (NOT the corrhist-corrected value kept in s.staticEvals — improving still keys off the un-refined eval, matching SF). DEFAULT OFF — byte-identical. Under SPRT.
+	QSCaptSEEMargin     int  // SF-divergence fix (SF search.cpp:1665): qsearch losing-capture SEE margin (cp). Out of check, prune a capture only when SEE < -QSCaptSEEMargin (SF keeps captures losing up to 80cp: `if (!see_ge(move, -80)) continue`). DEFAULT 0 = prune SEE<0 = current byte-identical; SPRT will test 80.
+	QSearchTT           bool // SF-divergence fix (SF search.cpp:1542-1728): give quiescence a TT probe + store. At qnode entry probe the TT, take a non-PV cutoff on a bound-consistent stored score, seed move ordering (ttMove) + refine the stand-pat floor with the TT value, and store the qsearch result (bestScore, bound, ttMove) at a fixed QS depth (0). When on, qsearch becomes fail-soft (returns bestScore) so the stored bounds are consistent; the mate ply-adjust + bound storage reuse tt.go's store/scoreFromTT unchanged. DEFAULT OFF — qsearch never touches the TT (byte-identical). Under SPRT.
 
 	// LMR / history / RFP tunables — promoted from hardcoded consts so SPSA can
 	// re-tune them v12-native (docs/open_tasks/spsa-margins.md: "the untapped leverage
@@ -119,10 +123,10 @@ type Params struct {
 	// byte-identical. LMR base/divisor are the classic highest-Elo SPSA target; they
 	// build the per-searcher reduction table (log·log surface) and are stored ×10000
 	// (int) so the default reproduces 0.7844 / 2.4696 EXACTLY.
-	LMRBaseX10k int // LMR base term ×10000 (default 7844 = 0.7844); reduction ≈ base + ln(d)·ln(m)/div
-	LMRDivX10k  int // LMR divisor ×10000 (default 24696 = 2.4696)
-	LMRHistDiv  int // LMR history divisor: r -= hist/LMRHistDiv (default 4096); larger = history moves the reduction less
-	RFPMargin   int // reverse-futility margin per depth in cp (default 75); prune when staticEval - RFPMargin·depth >= beta
+	LMRBaseX10k    int // LMR base term ×10000 (default 7844 = 0.7844); reduction ≈ base + ln(d)·ln(m)/div
+	LMRDivX10k     int // LMR divisor ×10000 (default 24696 = 2.4696)
+	LMRHistDiv     int // LMR history divisor: r -= hist/LMRHistDiv (default 4096); larger = history moves the reduction less
+	RFPMargin      int // reverse-futility margin per depth in cp (default 75); prune when staticEval - RFPMargin·depth >= beta
 	HistBonusScale int // history bonus/malus scale: bonus = HistBonusScale·depth² capped at HistBonusMax (default 32)
 	HistBonusMax   int // history bonus/malus cap (default 1536)
 	HistMalusScale int // history malus scale, decoupled from the bonus (SF/Stormphrax tune malus separately). DEFAULT = the bonus values → byte-identical until tuned.
@@ -212,31 +216,31 @@ type Params struct {
 // futility pruning → razoring → continuation history → singular extensions.
 func DefaultParams() Params {
 	return Params{
-		UseTT:          true,
-		NullMove:       true,
-		NullMoveR:      3, // re-tuned 4→3 as part of the 2026-07-05 stale-defaults margin bundle (see SEEQuietMargin). The old nullr=4 was optimal in an EARLIER regime; the engine grew past it (v9→v12 + the full search stack drifted the optimum). Bundle SPRT: +38.7 ± 5.5 movetime on v12 (640 pairs, lb +33.2).
-		LMR:            true,
-		CheckExtension: true,
-		SEE:            true,
-		DeltaPrune:     true,
+		UseTT:             true,
+		NullMove:          true,
+		NullMoveR:         3, // re-tuned 4→3 as part of the 2026-07-05 stale-defaults margin bundle (see SEEQuietMargin). The old nullr=4 was optimal in an EARLIER regime; the engine grew past it (v9→v12 + the full search stack drifted the optimum). Bundle SPRT: +38.7 ± 5.5 movetime on v12 (640 pairs, lb +33.2).
+		LMR:               true,
+		CheckExtension:    true,
+		SEE:               true,
+		DeltaPrune:        true,
 		DeltaExemptChecks: false, // qsearch delta-prune exemptions (gives-check TODO / recapture wired); scaffold under SPRT
 
-		Aspiration:     true,
-		AspInitDelta:   aspInitDelta, // 25; keeps the aspiration setup byte-identical
-		AspVariance:    false, // variance-scaled initial window (base + |prevScore|²·scale); scaffold under SPRT
-		AspBaseDelta:   7,     // Stormphrax initialAspWindow
-		AspVarScale:    65,    // Stormphrax aspSqScoreScale
-		AspFailHighReduce: false, // reduce re-search depth by fail-high count; scaffold under SPRT
-		RFP:            true,
-		LMP:            true,
-		HistMalus:      true,
-		Improving:      true,
-		ImprovingRich:  false, // richer improving (ply-4 fallback + default-true + eval>=beta); scaffold under SPRT
+		Aspiration:        true,
+		AspInitDelta:      aspInitDelta, // 25; keeps the aspiration setup byte-identical
+		AspVariance:       false,        // variance-scaled initial window (base + |prevScore|²·scale); scaffold under SPRT
+		AspBaseDelta:      7,            // Stormphrax initialAspWindow
+		AspVarScale:       65,           // Stormphrax aspSqScoreScale
+		AspFailHighReduce: false,        // reduce re-search depth by fail-high count; scaffold under SPRT
+		RFP:               true,
+		LMP:               true,
+		HistMalus:         true,
+		Improving:         true,
+		ImprovingRich:     false, // richer improving (ply-4 fallback + default-true + eval>=beta); scaffold under SPRT
 
-		LMRFormula:     true,
-		LMRFixedPoint:  false, // ×1024 fixed-point LMR scaffold for SPSA of lmrbase/lmrdiv; under SPRT
-		LMRCutnode:     true,  // SHIPPED as part of the +19.7 movetime stack (coordinated: needs ContHist + LMRDoDeeper; alone it's −7)
-		LMRCutnodeRed:  1,    // extra plies of reduction at a cutnode (cutred=2 measured worse)
+		LMRFormula:    true,
+		LMRFixedPoint: false, // ×1024 fixed-point LMR scaffold for SPSA of lmrbase/lmrdiv; under SPRT
+		LMRCutnode:    true,  // SHIPPED as part of the +19.7 movetime stack (coordinated: needs ContHist + LMRDoDeeper; alone it's −7)
+		LMRCutnodeRed: 1,     // extra plies of reduction at a cutnode (cutred=2 measured worse)
 		// Individual Stormphrax LMR reduction terms, added on the shipped LMRFormula
 		// path (NOT the rejected aggressive LMR2 bundle — each is an independent
 		// additive term, byte-identical when off, individually SPRT-able). Under SPRT.
@@ -253,13 +257,13 @@ func DefaultParams() Params {
 		// +4.6/lb−6.3 — a low-sample spike, not a stable win). NOT shipped; needs the
 		// full pooled run to see if the lower bound settles >0. Sibling batch flags
 		// (aspinitdelta=7 −15.5, combo −1.7, nodetm +0.5) washed/lost at movetime. OFF.
-		RFPSoft:       false,
-		NmpMargin:     false,
-		NmpMarginBase: 213,
-		NodeTM:        false,
-		LMRDoDeeper:   true, // SHIPPED — the adaptive re-search safety net that makes cutnode-LMR pay
+		RFPSoft:        false,
+		NmpMargin:      false,
+		NmpMarginBase:  213,
+		NodeTM:         false,
+		LMRDoDeeper:    true,  // SHIPPED — the adaptive re-search safety net that makes cutnode-LMR pay
 		LMRResearchFix: false, // carry rd into the PV re-search (SF-faithful); DEFAULT OFF — under SPRT
-		QSMaxMoves:    0,    // qsearch move cap off by default (Stormphrax uses 2)
+		QSMaxMoves:     0,     // qsearch move cap off by default (Stormphrax uses 2)
 		// Texel-tuned eval (tuned PSQT + knowledge terms), SPRT-accepted as a set
 		// vs the bare PeSTO base: +128 ± 35 Elo @ 40k nodes, +101 ± 29 Elo @
 		// 100ms/move (2026-06-19, internal/eval/tuned_tables.go; tuner in
@@ -360,6 +364,14 @@ func DefaultParams() Params {
 		// entries (so the tables age together). Feeds quiet ordering, the LMR reduction
 		// term and the history-pruning margin. DEFAULT OFF — SPRT-gate separately.
 		ContHist2: false,
+		// Parent counter-move (PCM) fail-low bonus. DEFAULT OFF — the post-loop tail
+		// hook and the contEntry.quiet field are inert until this is on, so the default
+		// engine is byte-identical. Seed knobs are inert while off; SPSA targets the
+		// three (PCMBonusScale/PCMDepthScale/PCMEvalMargin) once/if the flag is accepted.
+		ParentContHistBonus: false,
+		PCMBonusScale:       256,
+		PCMDepthScale:       64,
+		PCMEvalMargin:       100,
 		// Aggressive LMR (supersedes LMR when on): reduces captures/promotions too,
 		// earlier onset (non-PV from the 2nd move), with PV / improving /
 		// ordering-trust / SEE reduction adjustments; over-reductions are caught by
@@ -464,7 +476,7 @@ func DefaultParams() Params {
 		// 25; the 25→0 gap is steep + unsampled, so leave any fine-tune to joint SPSA.
 		// maxDepth=6.
 		CaptSEE:         true,
-		CaptSEEMaxDepth: 4, // re-tuned 6→4 (2026-07-05 stale-defaults bundle, +38.7 movetime — see NullMoveR)
+		CaptSEEMaxDepth: 4,  // re-tuned 6→4 (2026-07-05 stale-defaults bundle, +38.7 movetime — see NullMoveR)
 		CaptSEEMargin:   23, // re-tuned 25→23 (2026-07-08 mirror-KB SPSA snapshot k≈353, adopted as new base — pending full validation before deploy)
 		// ProbCut: +22.1 @ 40k NODES on the corrhist baseline (1235 pairs, 2026-06-30,
 		// H1) — but part of the day's 5-patch stack that the MOVETIME re-anchor REJECTED
@@ -495,15 +507,15 @@ func DefaultParams() Params {
 		// Qsearch delta-pruning margin, promoted from the hardcoded deltaMargin const.
 		// 200 was an HCE-era constant (June 2026, +22.0 Elo with DeltaPrune) never
 		// re-measured on the NNUE eval — a live SPSA target now that it's a field.
-		DeltaMargin: 200,
-		QCaps:            true,  // captures-only qsearch (NPS); OFF is the pre-opt A/B baseline
-		QSCastling:       true,  // preserve historical behavior; OFF is under SPRT
-		TTMoveFirst:      false, // try TT move before scoring; NOT byte-identical — scaffolding for DeferredQuiets
-		DeferredQuiets:   false, // staged move picking (TT→captures→quiets); under SPRT
-		Prefetch:         false, // TT prefetch: WASH on our 64MB-TT/128MB-L3 box (fits in L3, nothing to hide). Scaffolding — see field comment.
-		SEEReuseQS:       true, // qsearch double-SEE dedup: reuse the SEE sign from the ordering score. Node-identical (see field comment). Bit-exact +2.78% NPS on coalla KB net (§30.2) — shipped default-on.
+		DeltaMargin:     200,
+		QCaps:           true,  // captures-only qsearch (NPS); OFF is the pre-opt A/B baseline
+		QSCastling:      true,  // preserve historical behavior; OFF is under SPRT
+		TTMoveFirst:     false, // try TT move before scoring; NOT byte-identical — scaffolding for DeferredQuiets
+		DeferredQuiets:  false, // staged move picking (TT→captures→quiets); under SPRT
+		Prefetch:        false, // TT prefetch: WASH on our 64MB-TT/128MB-L3 box (fits in L3, nothing to hide). Scaffolding — see field comment.
+		SEEReuseQS:      true,  // qsearch double-SEE dedup: reuse the SEE sign from the ordering score. Node-identical (see field comment). Bit-exact +2.78% NPS on coalla KB net (§30.2) — shipped default-on.
 		TTCutoffNonPV:   false, // SF search.cpp:760 — gate early TT cutoff to non-PV; DEFAULT OFF (byte-identical)
-		NMPNonPV:        true, // SHIPPED — gate NMP to non-PV (SF search.cpp:893); +5.3 Elo movetime SPRT over 3388 pairs (NMP was wrongly firing at PV nodes, pruning would-be PVs)
+		NMPNonPV:        true,  // SHIPPED — gate NMP to non-PV (SF search.cpp:893); +5.3 Elo movetime SPRT over 3388 pairs (NMP was wrongly firing at PV nodes, pruning would-be PVs)
 		TTRefinesEval:   false, // SF search.cpp:730-732 — TT value sharpens pruning eval; DEFAULT OFF (byte-identical)
 		QSCaptSEEMargin: 0,     // SF search.cpp:1665 — qsearch losing-capture SEE margin; 0 = current byte-identical (SPRT tests 80)
 		QSearchTT:       false, // SF search.cpp:1542-1728 — quiescence TT probe+store; DEFAULT OFF (qsearch never touches the TT, byte-identical)

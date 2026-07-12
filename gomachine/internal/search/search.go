@@ -2507,7 +2507,7 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 			s.pushKey(pos.Key())
 			// Record the move played to descend into the child, so the child can key its
 			// continuation history off this (and its grandparent) move.
-			s.contMove[ply] = contEntry{pc: mover, to: m.To(), ok: true}
+			s.contMove[ply] = contEntry{pc: mover, to: m.To(), ok: true, quiet: quiet}
 			givesCheck := pos.InCheck()
 
 			// Singular extension applies to the TT move only (extension is 0 otherwise,
@@ -2783,6 +2783,17 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 			return bestScore
 		}
 	} // end else (DeferredQuiets=off, existing code path)
+
+	// Parent counter-move (PCM) fail-low bonus: on a PURE fail-low (flag==ttUpper — no
+	// move raised alpha) with a quiet parent move, credit that parent move a positive
+	// continuation+butterfly bonus. It "caused the fail low" so it was good for the side
+	// that played it (SF search.cpp:1423 / Stormphrax search.cpp:1398). flag==ttUpper (not
+	// bestMove==nil) is the pure-fail-low signal because our search is fail-soft. Reached by
+	// both paths; excludedMove==NullMove is guaranteed (excluded nodes returned above).
+	if s.params.ParentContHistBonus && flag == ttUpper &&
+		ply >= 1 && s.contMove[ply-1].ok && s.contMove[ply-1].quiet {
+		s.pcmCreditParent(ply, depth, bestScore, staticEval, inCheck)
+	}
 
 	// Shared post-loop: corrhist update, TT store (both paths reach here).
 	// Correction history update: teach the tables the static-eval-vs-search error at

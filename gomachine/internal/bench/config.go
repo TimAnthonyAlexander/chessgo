@@ -371,6 +371,32 @@ func ParseParams(base search.Params, spec string) (search.Params, error) {
 				return base, fmt.Errorf("%s: %w", key, err)
 			}
 			base.ContHist2 = b
+		case "pcm", "parentconthist", "parentconthistbonus":
+			// PCM: on a pure fail-low, credit the quiet parent move a positive
+			// continuation+butterfly bonus (SF search.cpp:1423 / Stormphrax pcm).
+			b, err := parseBool(val)
+			if err != nil {
+				return base, fmt.Errorf("%s: %w", key, err)
+			}
+			base.ParentContHistBonus = b
+		case "pcmbonusscale", "pcmscale":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("pcmbonusscale: %q is not an int", val)
+			}
+			base.PCMBonusScale = n
+		case "pcmdepthscale", "pcmdepth":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("pcmdepthscale: %q is not an int", val)
+			}
+			base.PCMDepthScale = n
+		case "pcmevalmargin", "pcmmargin":
+			n, err := strconv.Atoi(val)
+			if err != nil {
+				return base, fmt.Errorf("pcmevalmargin: %q is not an int", val)
+			}
+			base.PCMEvalMargin = n
 		case "lmr2":
 			// aggressive LMR: reduce captures/promotions too, earlier onset, with
 			// PV/improving/ordering-trust/SEE adjustments (supersedes LMR when on).
@@ -987,6 +1013,18 @@ func DiffParams(base, patch search.Params) string {
 	}
 	if base.ContHist2 != patch.ContHist2 {
 		diffs = append(diffs, fmt.Sprintf("conthist2: %s→%s", onoff(base.ContHist2), onoff(patch.ContHist2)))
+	}
+	if base.ParentContHistBonus != patch.ParentContHistBonus {
+		diffs = append(diffs, fmt.Sprintf("pcm: %s→%s", onoff(base.ParentContHistBonus), onoff(patch.ParentContHistBonus)))
+	}
+	if base.PCMBonusScale != patch.PCMBonusScale {
+		diffs = append(diffs, fmt.Sprintf("pcmbonusscale: %d→%d", base.PCMBonusScale, patch.PCMBonusScale))
+	}
+	if base.PCMDepthScale != patch.PCMDepthScale {
+		diffs = append(diffs, fmt.Sprintf("pcmdepthscale: %d→%d", base.PCMDepthScale, patch.PCMDepthScale))
+	}
+	if base.PCMEvalMargin != patch.PCMEvalMargin {
+		diffs = append(diffs, fmt.Sprintf("pcmevalmargin: %d→%d", base.PCMEvalMargin, patch.PCMEvalMargin))
 	}
 	if base.LMR2 != patch.LMR2 {
 		diffs = append(diffs, fmt.Sprintf("lmr2: %s→%s", onoff(base.LMR2), onoff(patch.LMR2)))
