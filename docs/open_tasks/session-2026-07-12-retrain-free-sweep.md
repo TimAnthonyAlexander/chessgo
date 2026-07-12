@@ -20,7 +20,7 @@ tree — and even those are NPS-noise-level on amd64. The genuine remaining Elo 
 | Change | Evidence | Verdict | Commit |
 |---|---|---|---|
 | appendAttackerEdges — one geometry pass, both perspectives | byte-exact (`TestEnrichedMoveAwareBitExact`) + Go↔Rust threat crosscheck green; +0.8% arm / flat amd64 | KEEP (clean code, ~0 Elo) | `42d1a87` |
-| **NMPNonPV — gate null-move pruning to non-PV nodes** (SF search.cpp:893) | **+5.3 ± 4.7 movetime SPRT, 3388 pairs** (CI +0.6..+10.0, LLR +2.50, stable across 877→3388 pairs, never negative). Abitur external confirm: _pending_. | **SHIP (default-on)** — the one SF-divergence fix that FITS: NMP was wrongly firing at PV nodes, pruning would-be principal variations. A genuine defect, not a graft. | `9ea2589` |
+| **NMPNonPV — gate null-move pruning to non-PV nodes** (SF search.cpp:893) | **+5.3 ± 4.7 movetime SPRT, 3388 pairs** (CI +0.6..+10.0, LLR +2.50, stable across 877→3388 pairs, never negative). **Abitur external confirm (1s, 2T):** head-to-head nmp-on vs nmp-off **+8 ± 36** (direction agrees with SPRT, NOT a non-transitivity loss); anchors healthy — gomachine beats SF-capped-3190 **63.7%** and loses SF-full **25% (−170)** (in line with the known ~150-200 Elo gap). | **SHIP (default-on)** — the one SF-divergence fix that FITS: NMP was wrongly firing at PV nodes, pruning would-be principal variations. A genuine defect, not a graft. | `9ea2589` |
 
 ### Rejected — SF behavioral grafts (all lose to the tuned optimum)
 | Candidate | Movetime SPRT | Note |
