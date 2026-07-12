@@ -20,6 +20,7 @@ tree — and even those are NPS-noise-level on amd64. The genuine remaining Elo 
 | Change | Evidence | Verdict | Commit |
 |---|---|---|---|
 | appendAttackerEdges — one geometry pass, both perspectives | byte-exact (`TestEnrichedMoveAwareBitExact`) + Go↔Rust threat crosscheck green; +0.8% arm / flat amd64 | KEEP (clean code, ~0 Elo) | `42d1a87` |
+| **NMPNonPV — gate null-move pruning to non-PV nodes** (SF search.cpp:893) | **+5.3 ± 4.7 movetime SPRT, 3388 pairs** (CI +0.6..+10.0, LLR +2.50, stable across 877→3388 pairs, never negative). Abitur external confirm: _pending_. | **SHIP (default-on)** — the one SF-divergence fix that FITS: NMP was wrongly firing at PV nodes, pruning would-be principal variations. A genuine defect, not a graft. | `9ea2589` |
 
 ### Rejected — SF behavioral grafts (all lose to the tuned optimum)
 | Candidate | Movetime SPRT | Note |
@@ -31,7 +32,7 @@ tree — and even those are NPS-noise-level on amd64. The genuine remaining Elo 
 | LMRResearchFix (carry doDeeper/doShallower depth into PV re-search, SF:1253) | **+2.6 ± 19** | a REAL always-on port slip, but immaterial at 100 ms. `eeeab5f` (flag off) |
 | QSCaptSEEMargin=80 (qsearch keep captures losing ≤80cp, SF:1665) | **−1.0** wash | `4184b60` |
 | TTCutoffNonPV (gate TT cutoff to non-PV, SF:760) | **−2.9** wash | `17d2e5d` |
-| NMPNonPV (gate null-move to non-PV, SF:893) | _running (expect wash)_ | `fa9be89` |
+| _(NMPNonPV moved to Banked — it WON, +5.3)_ | — | `fa9be89`→`9ea2589` |
 
 ### Reverted
 | Change | Evidence | Commit / revert |
@@ -57,10 +58,17 @@ tree — and even those are NPS-noise-level on amd64. The genuine remaining Elo 
 
 ## Honest conclusion
 
-Retrain-free **search + eval-application** Elo is largely **exhausted** this session. The
-engine is already heavily optimized past the +250 (search stack) / +38.7 (margin re-tune)
-era; the cheap wells (grafts, NPS scraps, margin re-tune) are dry or noise-level, and both
-input+output eval parities are clean, so there's no hidden bug to reclaim.
+**One genuine ship: NMPNonPV (+5.3 Elo)** — we were running null-move pruning at PV nodes,
+pruning would-be principal variations (SF forbids this). A real defect, and the one
+SF-divergence fix that *fit* our engine rather than fighting its tuning. That's the concrete
+win + a real bug diagnosis.
+
+Beyond that, retrain-free **search + eval-application** Elo is largely **exhausted** this
+session. The engine is already heavily optimized past the +250 (search stack) / +38.7
+(margin re-tune) era; the remaining wells (behavioral grafts, NPS scraps, margin re-tune)
+are dry, lose to the tuned optimum, or are noise-level, and both input+output eval parities
+are clean, so there's no hidden eval bug to reclaim. The value here is mostly the
+**well-characterized negatives** (a whole class of speculative work ruled out) + the one +5.
 
 **The real remaining lever is the NET (retrain)** — `docs/NNUE/SF_PARITY_ROADMAP.md`:
 data pipeline (interleaved multi-source) → richer base (32 king-buckets) → dual net →
