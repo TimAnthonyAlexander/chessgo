@@ -31,17 +31,6 @@ type EnrichedStack struct {
 	sc      enrichedScratch
 	sp      int
 
-	// Child-board reuse (search fast path — enriched_delta.go childBoard). The search
-	// already makes each move on its own board immediately after the accumulator push,
-	// so re-doing pos.DoMove inside every computeDelta/refresh is a redundant per-eval
-	// Position copy + make-move. The search fast path (SetPre + PushMoved) snapshots the
-	// pre-move board into pre and hands the ALREADY-moved child in via suppliedChild;
-	// childBoard then returns that child directly instead of copying+DoMoving. Both are
-	// nil/zero on the self-contained Push(pos,m) compat path (tests, non-search callers),
-	// which keeps its original copy+DoMove behaviour — byte-identical either way.
-	pre           chess.Position
-	suppliedChild *chess.Position
-
 	// move-aware push (enriched_delta.go) scratch: the small per-move sub/add
 	// feature lists for each perspective, reused across Pushes to avoid alloc.
 	dsubW, daddW, dsubB, daddB []uint32
@@ -53,10 +42,10 @@ type EnrichedStack struct {
 	// apply entirely. pendMove == chess.NullMove marks a null push (child == parent).
 	// Unused when lazy is off. pSub*/pAdd* are per-slot so a deferred chain doesn't
 	// clobber the shared scratch.
-	pendMove     []chess.Move
-	dirty        []bool
-	pSubW, pAddW [][]uint32
-	pSubB, pAddB [][]uint32
+	pendMove             []chess.Move
+	dirty                []bool
+	pSubW, pAddW         [][]uint32
+	pSubB, pAddB         [][]uint32
 
 	// In-place (copy-free) accumulator: a single pair of halves that Push mutates by
 	// the delta and Pop restores via the inverse delta. Used when net.inPlaceEnabled().
@@ -88,8 +77,8 @@ type EnrichedStack struct {
 // appendEnrichedFeatures + diff); the feature list handles the non-trivial-diff case.
 // half == B0i + Σ ftAdd(features) always holds when valid.
 type finnyEntry struct {
-	half     []int16            // len H; == B0i + Σ ftAdd over features
-	features []uint32           // the perspective's active (base+threat) feature list
+	half     []int16           // len H; == B0i + Σ ftAdd over features
+	features []uint32          // the perspective's active (base+threat) feature list
 	bbs      [12]chess.Bitboard // piece bitboards (WhitePawn..BlackKing) when cached
 	valid    bool
 }
@@ -330,48 +319,14 @@ func (st *EnrichedStack) Push(pos *chess.Position, m chess.Move) {
 	copy(dst.w, src.w)
 	copy(dst.b, src.b)
 
-	var cbuf chess.Position
-	child := st.childBoard(pos, m, &cbuf)
+	child := *pos
+	var u chess.Undo
+	child.DoMove(m, &u)
 
-	dst.fw, dst.fb = appendEnrichedFeaturesBoth(dst.fw[:0], dst.fb[:0], child)
+	dst.fw, dst.fb = appendEnrichedFeaturesBoth(dst.fw[:0], dst.fb[:0], &child)
 	st.applyDiff(dst.w, src.fw, dst.fw)
 	st.applyDiff(dst.b, src.fb, dst.fb)
 	st.sp++
-}
-
-// SetPre snapshots the PRE-move board for the search fast path. Call it immediately
-// BEFORE the search's own pos.DoMove; then, after that DoMove has mutated pos into the
-// child, call PushMoved(pos, m). This lets the accumulator delta reuse the child board
-// the search already produced instead of re-copying + re-making the move inside
-// computeDelta — byte-identical, one fewer make-move per evaluated node.
-func (st *EnrichedStack) SetPre(pos *chess.Position) {
-	st.pre = *pos
-}
-
-// PushMoved is the search fast-path twin of Push: child is the ALREADY-moved board
-// (the search's live pos after pos.DoMove), and st.pre (set by SetPre) is the pre-move
-// board. It runs the identical Push logic against the pre-move snapshot, but every
-// internal "derive the child" step reuses child via suppliedChild rather than doing its
-// own DoMove. Result is byte-identical to Push(preMovePos, m).
-func (st *EnrichedStack) PushMoved(child *chess.Position, m chess.Move) {
-	st.suppliedChild = child
-	st.Push(&st.pre, m)
-	st.suppliedChild = nil
-}
-
-// childBoard returns the child board for move m applied to pre-move board pos. On the
-// search fast path (suppliedChild set by PushMoved) it returns that board directly — no
-// copy, no make-move, because the search already produced it. On the self-contained
-// Push(pos,m) path (suppliedChild nil: tests + non-search callers) it materializes the
-// child into buf via the original copy + DoMove, preserving byte-identical behaviour.
-func (st *EnrichedStack) childBoard(pos *chess.Position, m chess.Move, buf *chess.Position) *chess.Position {
-	if st.suppliedChild != nil {
-		return st.suppliedChild
-	}
-	*buf = *pos
-	var u chess.Undo
-	buf.DoMove(m, &u)
-	return buf
 }
 
 // PushNull duplicates the top slot — a null move changes no piece placement or

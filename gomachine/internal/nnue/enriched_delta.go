@@ -175,10 +175,11 @@ func (st *EnrichedStack) buildSlotFrom(dstIdx, srcIdx int, pos *chess.Position, 
 			st.buildSlotRefreshSplit(dstIdx, srcIdx, pos, m)
 			return
 		}
-		var cbuf chess.Position
-		child := st.childBoard(pos, m, &cbuf)
+		child := *pos
+		var u chess.Undo
+		child.DoMove(m, &u)
 		dst := &st.data[dstIdx]
-		st.net.buildAcc(dst.w, dst.b, child)
+		st.net.buildAcc(dst.w, dst.b, &child)
 		return
 	}
 	subW, addW, subB, addB := st.computeDelta(pos, m)
@@ -195,20 +196,21 @@ func (st *EnrichedStack) buildSlotFrom(dstIdx, srcIdx int, pos *chess.Position, 
 // them and full-rebuild that half. pos.SideToMove() is the side making m (whose king
 // moves), matching kingBucketOffset's per-perspective base-offset convention.
 func (st *EnrichedStack) buildSlotRefreshSplit(dstIdx, srcIdx int, pos *chess.Position, m chess.Move) {
-	var cbuf chess.Position
-	child := st.childBoard(pos, m, &cbuf)
+	child := *pos
+	var u chess.Undo
+	child.DoMove(m, &u)
 	src := &st.data[srcIdx]
 	dst := &st.data[dstIdx]
 	mover := pos.SideToMove()
 	subW, addW, subB, addB := st.computeDelta(pos, m)
 	if mover == chess.White {
-		st.refreshHalf(dst.w, child, chess.White) // moving side: rebuild (Finny or scratch)
-		copy(dst.b, src.b)                        // opponent: delta from parent
+		st.refreshHalf(dst.w, &child, chess.White) // moving side: rebuild (Finny or scratch)
+		copy(dst.b, src.b)                         // opponent: delta from parent
 		st.applyDiff(dst.b, subB, addB)
 		_ = subW
 		_ = addW
 	} else {
-		st.refreshHalf(dst.b, child, chess.Black)
+		st.refreshHalf(dst.b, &child, chess.Black)
 		copy(dst.w, src.w)
 		st.applyDiff(dst.w, subW, addW)
 		_ = subB
@@ -296,8 +298,9 @@ func sliceEqU16(a, b []uint32) bool {
 // are backed by st's reusable scratch — copy them out (lazy) or apply them
 // immediately (eager) before the next call overwrites the scratch.
 func (st *EnrichedStack) computeDelta(pos *chess.Position, m chess.Move) (subW, addW, subB, addB []uint32) {
-	var cbuf chess.Position
-	child := st.childBoard(pos, m, &cbuf)
+	child := *pos
+	var u chess.Undo
+	child.DoMove(m, &u)
 
 	oldOcc := pos.Occupied()
 	newOcc := child.Occupied()
@@ -339,7 +342,7 @@ func (st *EnrichedStack) computeDelta(pos *chess.Position, m chess.Move) (subW, 
 		if np != chess.NoPiece {
 			addW = append(addW, uint32(offW+FeatureIndex(chess.White, np, s^mirW)))
 			addB = append(addB, uint32(offB+FeatureIndex(chess.Black, np, s^mirB)))
-			addW, addB = appendAttackerEdgesBoth(addW, addB, child, s, newOcc)
+			addW, addB = appendAttackerEdgesBoth(addW, addB, &child, s, newOcc)
 		}
 		affected |= pos.AttackersTo(s, oldOcc)
 		affected |= child.AttackersTo(s, newOcc)
@@ -349,7 +352,7 @@ func (st *EnrichedStack) computeDelta(pos *chess.Position, m chess.Move) (subW, 
 	// squares are occupied by the SAME piece in both boards (∉ D), so PieceOn is safe.
 	for bb := affected &^ D; bb != 0; {
 		s := bb.PopLSB()
-		subW, addW, subB, addB = appendChangedEdges(subW, addW, subB, addB, pos, child, s, oldOcc, newOcc, D)
+		subW, addW, subB, addB = appendChangedEdges(subW, addW, subB, addB, pos, &child, s, oldOcc, newOcc, D)
 	}
 
 	st.dsubW, st.daddW, st.dsubB, st.daddB = subW, addW, subB, addB
@@ -476,8 +479,9 @@ func (st *EnrichedStack) pushMoveAwareEnumerate(pos *chess.Position, m chess.Mov
 	copy(dst.w, src.w)
 	copy(dst.b, src.b)
 
-	var cbuf chess.Position
-	child := st.childBoard(pos, m, &cbuf)
+	child := *pos
+	var u chess.Undo
+	child.DoMove(m, &u)
 
 	oldOcc := pos.Occupied()
 	newOcc := child.Occupied()
@@ -523,8 +527,8 @@ func (st *EnrichedStack) pushMoveAwareEnumerate(pos *chess.Position, m chess.Mov
 			subB = appendAttackerEdges(subB, pos, s, oldOcc, chess.Black)
 		}
 		if child.PieceOn(s) != chess.NoPiece {
-			addW = appendAttackerEdges(addW, child, s, newOcc, chess.White)
-			addB = appendAttackerEdges(addB, child, s, newOcc, chess.Black)
+			addW = appendAttackerEdges(addW, &child, s, newOcc, chess.White)
+			addB = appendAttackerEdges(addB, &child, s, newOcc, chess.Black)
 		}
 	}
 

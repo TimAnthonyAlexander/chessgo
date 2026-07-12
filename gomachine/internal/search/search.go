@@ -537,37 +537,6 @@ func (s *Searcher) accPush(pos *chess.Position, m chess.Move) {
 	s.accStack.Push(pos, m)
 }
 
-// accMakeMove makes move m on pos AND updates the NNUE accumulator, in one call. It
-// replaces the old `if s.useNNUE { s.accPush(pos, m) }; pos.DoMove(m, &u)` pair at every
-// search node.
-//
-// For the enriched (threats) net this eliminates a redundant per-eval Position copy +
-// make-move: the accumulator delta used to re-do pos.DoMove on its own copy just to see
-// the child board, immediately before the search made the same move. Here we snapshot
-// the pre-move board (SetPre), let the search's own pos.DoMove produce the child once,
-// then push the accumulator from that child (PushMoved) — byte-identical, one fewer
-// make-move per evaluated node. Non-enriched stacks keep the original order (push on the
-// pre-move board, then move); the non-NNUE path is a bare DoMove. In every case
-// pos.DoMove runs exactly once, so the search tree is unchanged.
-func (s *Searcher) accMakeMove(pos *chess.Position, m chess.Move, u *chess.Undo) {
-	if !s.useNNUE {
-		pos.DoMove(m, u)
-		return
-	}
-	if s.enrichedStack != nil {
-		s.enrichedStack.SetPre(pos) // snapshot pre-move board
-		pos.DoMove(m, u)            // single make-move (reused by the accumulator)
-		s.enrichedStack.PushMoved(pos, m)
-		return
-	}
-	if s.multiStack != nil {
-		s.multiStack.Push(pos, m)
-	} else {
-		s.accStack.Push(pos, m)
-	}
-	pos.DoMove(m, u)
-}
-
 func (s *Searcher) accPushNull() {
 	if s.enrichedStack != nil {
 		s.enrichedStack.PushNull()
@@ -1028,7 +997,10 @@ func (s *Searcher) RootScores(pos *chess.Position, limits Limits, gameHistory []
 	for i := 0; i < ml.Len(); i++ {
 		m := ml.Get(i)
 		var u chess.Undo
-		s.accMakeMove(pos, m, &u)
+		if s.useNNUE {
+			s.accPush(pos, m)
+		}
+		pos.DoMove(m, &u)
 		s.pushKey(pos.Key())
 		score := -s.negamax(pos, depth-1, 1, -infinity, infinity, false) // full-window root child → non-cut
 		s.popKey()
@@ -1101,7 +1073,10 @@ func (s *Searcher) RootNearBest(pos *chess.Position, limits Limits, margin int, 
 			continue
 		}
 		var u chess.Undo
-		s.accMakeMove(pos, m, &u)
+		if s.useNNUE {
+			s.accPush(pos, m)
+		}
+		pos.DoMove(m, &u)
 		s.pushKey(pos.Key())
 		// Null-window test: is our score for m above the threshold? Search the child
 		// around (threshold, threshold+1) from our perspective; re-search exact only
@@ -1176,7 +1151,10 @@ func (s *Searcher) MultiPV(pos *chess.Position, limits Limits, gameHistory []uin
 				return iter, false
 			}
 			var u chess.Undo
-			s.accMakeMove(pos, m, &u)
+			if s.useNNUE {
+				s.accPush(pos, m)
+			}
+			pos.DoMove(m, &u)
 			s.pushKey(pos.Key())
 			score := -s.negamax(pos, depth-1, 1, -infinity, infinity, false) // full-window root child → non-cut
 			pv := append([]chess.Move{m}, s.extractPV(pos, depth)...)
@@ -1598,7 +1576,10 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 		moverTT := pos.PieceOn(m.From())
 
 		var u chess.Undo
-		s.accMakeMove(pos, m, &u)
+		if s.useNNUE {
+			s.accPush(pos, m)
+		}
+		pos.DoMove(m, &u)
 		s.pushKey(pos.Key())
 		s.contMove[ply] = contEntry{pc: moverTT, to: m.To(), ok: true}
 
@@ -1724,7 +1705,10 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 			moverTT := pos.PieceOn(m.From())
 
 			var u chess.Undo
-			s.accMakeMove(pos, m, &u)
+			if s.useNNUE {
+				s.accPush(pos, m)
+			}
+			pos.DoMove(m, &u)
 			s.pushKey(pos.Key())
 			s.contMove[ply] = contEntry{pc: moverTT, to: m.To(), ok: true}
 
@@ -1804,7 +1788,10 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 				}
 				mover := pos.PieceOn(m.From())
 				var u chess.Undo
-				s.accMakeMove(pos, m, &u)
+				if s.useNNUE {
+					s.accPush(pos, m)
+				}
+				pos.DoMove(m, &u)
 				s.pushKey(pos.Key())
 				s.contMove[ply] = contEntry{pc: mover, to: m.To(), ok: true}
 				score := -s.quiescence(pos, ply+1, -probcutBeta, -probcutBeta+1)
@@ -1857,7 +1844,10 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 			}
 
 			var u chess.Undo
-			s.accMakeMove(pos, m, &u)
+			if s.useNNUE {
+				s.accPush(pos, m)
+			}
+			pos.DoMove(m, &u)
 			s.pushKey(pos.Key())
 			s.contMove[ply] = contEntry{pc: mover, to: m.To(), ok: true}
 			givesCheck := pos.InCheck()
@@ -2043,7 +2033,10 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 				}
 
 				var u chess.Undo
-				s.accMakeMove(pos, m, &u)
+				if s.useNNUE {
+					s.accPush(pos, m)
+				}
+				pos.DoMove(m, &u)
 				s.pushKey(pos.Key())
 				s.contMove[ply] = contEntry{pc: mover, to: m.To(), ok: true}
 				givesCheck := pos.InCheck()
@@ -2182,7 +2175,10 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 			mover := pos.PieceOn(m.From())
 
 			var u chess.Undo
-			s.accMakeMove(pos, m, &u)
+			if s.useNNUE {
+				s.accPush(pos, m)
+			}
+			pos.DoMove(m, &u)
 			s.pushKey(pos.Key())
 			s.contMove[ply] = contEntry{pc: mover, to: m.To(), ok: true}
 
@@ -2279,7 +2275,10 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 				}
 				mover := pos.PieceOn(m.From())
 				var u chess.Undo
-				s.accMakeMove(pos, m, &u)
+				if s.useNNUE {
+					s.accPush(pos, m)
+				}
+				pos.DoMove(m, &u)
 				s.pushKey(pos.Key())
 				s.contMove[ply] = contEntry{pc: mover, to: m.To(), ok: true}
 				// Cheap qsearch filter first, then confirm with a reduced-depth search.
@@ -2501,7 +2500,10 @@ func (s *Searcher) negamax(pos *chess.Position, depth, ply, alpha, beta int, cut
 			}
 
 			var u chess.Undo
-			s.accMakeMove(pos, m, &u)
+			if s.useNNUE {
+				s.accPush(pos, m)
+			}
+			pos.DoMove(m, &u)
 			s.pushKey(pos.Key())
 			// Record the move played to descend into the child, so the child can key its
 			// continuation history off this (and its grandparent) move.
@@ -2999,16 +3001,18 @@ func (s *Searcher) quiescence(pos *chess.Position, ply, alpha, beta int) int {
 			}
 		}
 		var u chess.Undo
+		if s.useNNUE {
+			s.accPush(pos, m)
+		}
 		// DeltaExemptChecks: record this qsearch move on the shared continuation-move
 		// path so the child qsearch node's recapture exemption sees the correct prevSq
 		// (negamax normally maintains this path, but plain qsearch does not). Flag-gated
 		// so the off-path is byte-identical; negamax overwrites contMove[ply] before it
-		// reads it, so this stale write never leaks into the main search. Runs BEFORE
-		// accMakeMove so it reads the pre-move board (accMakeMove makes the move).
+		// reads it, so this stale write never leaks into the main search.
 		if s.params.DeltaExemptChecks {
 			s.contMove[ply] = contEntry{pc: pos.PieceOn(m.From()), to: m.To(), ok: true}
 		}
-		s.accMakeMove(pos, m, &u)
+		pos.DoMove(m, &u)
 		sc := -s.quiescence(pos, ply+1, -beta, -alpha)
 		pos.UndoMove(m, &u)
 		if s.useNNUE {
