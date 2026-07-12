@@ -24,6 +24,25 @@ tree — and even those are NPS-noise-level on amd64. The genuine remaining Elo 
 | appendAttackerEdges — one geometry pass, both perspectives | byte-exact (`TestEnrichedMoveAwareBitExact`) + Go↔Rust threat crosscheck green; +0.8% arm / flat amd64 | KEEP (clean code, ~0 Elo) | `42d1a87` |
 | **NMPNonPV — gate null-move pruning to non-PV nodes** (SF search.cpp:893) | **+5.3 ± 4.7 movetime SPRT, 3388 pairs** (CI +0.6..+10.0, LLR +2.50, stable across 877→3388 pairs, never negative). **Abitur external confirm (1s, 2T):** head-to-head nmp-on vs nmp-off **+8 ± 36** (direction agrees with SPRT, NOT a non-transitivity loss); anchors healthy — gomachine beats SF-capped-3190 **63.7%** and loses SF-full **25% (−170)** (in line with the known ~150-200 Elo gap). | **SHIP (default-on)** — the one SF-divergence fix that FITS: NMP was wrongly firing at PV nodes, pruning would-be principal variations. A genuine defect, not a graft. | `9ea2589` |
 
+### Night 2 candidate — PCM (parent counter-move history): implemented, default-off, near-neutral
+The move-ordering bug-hunt found we lack SF/Stormphrax's **parent-move update** (credit/penalize the move
+that led INTO a node based on how the node resolved). Built it in full, both halves, cross-referenced against
+SF18 + Stormphrax source by subagents at every step. **Verdict: near-neutral for our engine — default-off, code kept.**
+
+| Piece | What | Movetime SPRT | Commit |
+|---|---|---|---|
+| PCM **bonus** v1 | on a pure fail-low (`flag==ttUpper`) credit the quiet parent (SF search.cpp:1423 / Stormphrax pcm). Signal is the BOUND not the move (we're fail-soft). | **−3.0 ± 9.5** (822 pairs) | `5072af7` |
+| PCM **bonus** v2 | v1 dropped SF's negative gate (bonusScale starts −215 → only deep/severe fail-lows credit); v2 restores it + 4 SPSA knobs. | SPSA (250-iter, 40k-node) left θ **pinned at seeds** (`133/497/98/246` ≈ `128/512/100/256`) → flat objective, near-neutral. | `e512299` |
+| PCM **malus** | mirror: on a fail-high (`flag==ttLower`) penalize the quiet parent, **continuation-history ONLY** (SF asymmetry), **gated to early parent moves** (`contEntry.moveCount`). SF-specific — **Stormphrax has NO analog** (it penalizes fail-low siblings, not the parent). | (tested combined) | `91ece8f` |
+| **bonus + malus combined** | both on (bonus at SPSA θ). The "only works together" test — SF co-tunes both. | **+2.4 ± 8.9** (924 pairs, LLR −0.01) — a wash, but **notably above bonus-solo −3.0**: the malus offsets the bonus's harm, so the combination is directionally SF-like, just sub-shippable magnitude. | — |
+
+**Disposition:** all three default-OFF (byte-identical shipped engine), code KEPT (clean, correct, SPSA-knobbed,
+directional tests green). SF has these for a reason, but that reason lives in SF's *whole* co-tuned search (its
+LMR/history/ordering tuned together with the parent-update); grafted onto our differently-tuned engine in
+isolation it doesn't transfer — classic non-transitivity, now with the mechanism understood. **Revisit as a
+GROUP** when re-SPSA'ing the whole history stack or after a net/search retune shifts our tuning; it's a one-flag
+experiment to re-open. Not a bug (both eval parities already clean); taste that doesn't move us yet.
+
 ### Rejected — SF behavioral grafts (all lose to the tuned optimum)
 | Candidate | Movetime SPRT | Note |
 |---|---|---|
