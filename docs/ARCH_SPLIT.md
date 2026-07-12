@@ -39,6 +39,7 @@ throughput-bound Zen4 AVX-512). So we **split** those: each arch gets the code t
 
 | Optimization | arm64 SIMD | amd64 SIMD | Status |
 |---|---|---|---|
+| **NEON int8 tail dot** (`dotU8I8SIMD`, `kernels_simd_arm64.go`) — vectorize the int8 L1 matmul (`evalFromHalvesInt8`), reproducing AVX2 VPMADDUBSW+VPMADDWD maddubs saturation bit-for-bit via widen-multiply-pairsum (NEON has no VNNI/UDOT in archsimd). Was the ONLY hot kernel still scalar on NEON — `dotU8I8Scalar` was **51% of the arm profile**. | **+80% whole-engine NPS** (~227.5k→~410.7k medianNPS int16-threatFT, node-identical, 3 reps, byte-exact) | untouched — amd64 never compiles `//go:build arm64`; keeps its VNNI `VPDPBUSD` path | **SHIPPED arm64-only** (2026-07-12), gated `useNeonDotU8I8` — the single biggest arm win to date |
 | **int16 batch-apply kernel** (`applyBatchI16`, `kernels_batch_i16_arm64.go`) — load acc tile once, apply all changed int16 threat columns, store once (vs per-column load/add/store) | **+2.9–3.0% NPS** (byte-exact, node-identical) | measured WORSE (compute-bound, ENGINE_STRENGTH §30.3) — keeps per-column | **SHIPPED arm64-only** (`bd31529`), gated `useI16Batch` |
 | computeDelta child-board reuse (drop redundant per-eval DoMove) | **FLAT** on SIMD-arm (−0.1%) — the +1.5% was a **scalar** artifact | flat/−2% | **DROPPED** — not worth the complexity on either arch (scalar-vs-SIMD lesson above) |
 | int8 batch-apply (`applyThreatBatchSIMD`, amd64) | (int8-FT only; prod net is int16-FT so inert) | measured WORSE on amd64 | amd64 kernel exists, gated off for prod |

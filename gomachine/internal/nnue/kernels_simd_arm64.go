@@ -57,6 +57,75 @@ func init() {
 	subColI8 = subColI8SIMD
 	applyThreatBatch = applyThreatBatchSIMD
 	kernelBackend = "simd/archsimd-neon-arm64(addCol,subCol,screluDot,dotF32,gemvF32,screluActivateF,pairwiseU8,addColI8,subColI8,applyThreatBatch)"
+
+	// SHIPPED arm64-only (2026-07-12): NEON vectorization of the int8 tail L1
+	// dot (dotU8I8). On NEON this seam was the ONLY hot kernel still left scalar
+	// (dotU8I8Scalar was 51% of the arm profile, docs/PROFILING/arm/11Jul2026.md
+	// — NEON has no VNNI so amd64's VPDPBUSD path has no arm counterpart). The
+	// kernel below reproduces the maddubs saturating semantics bit-for-bit, so it
+	// is byte-identical to the scalar reference on ALL inputs. Measured on the M3
+	// SIMD build (go1.27rc1): +80% whole-engine NPS on the prod int16-threatFT
+	// config (~227.5k→~410.7k medianNPS, node-identical, 3 reps) — ARCH_SPLIT.md.
+	// amd64 never compiles this file (//go:build arm64) → prod byte-identical.
+	if useNeonDotU8I8 {
+		dotU8I8 = dotU8I8SIMD
+		kernelBackend += "+neondotu8i8"
+	}
+}
+
+// useNeonDotU8I8 gates the NEON int8-dot kernel. SHIPPED arm64-default-ON
+// (+80% NPS, byte-identical). Set false only to A/B-bench against the scalar
+// reference on the M3 SIMD build.
+const useNeonDotU8I8 = true
+
+// dotU8I8SIMD computes Σ a[i]·w[i] (int32) for the enriched net's int8 L1 matmul
+// (enriched_int8.go evalFromHalvesInt8) on NEON, reproducing the AVX2/AVX-512
+// VPMADDUBSW+VPMADDWD maddubs semantics BIT-FOR-BIT so it is byte-identical to
+// dotU8I8Scalar for all inputs (TestDotU8I8MatchScalar / TestDotU8I8Consistency).
+//
+// Per 8-element tile (load 16 bytes, guarded by i+16<=n like addColI8SIMD; use
+// the low 8):
+//   - widen a (u8) and w (i8) to int16 (a∈[0,255] fits int16 positive);
+//   - MulWidenLo the low-4 and high-4 int16 pairs → two Int32x4 of products
+//     a[i]·w[i] (each |·|≤127·127, no overflow);
+//   - ConcatAddPairs(pLo,pHi) = ADDP → [p0+p1, p2+p3, p4+p5, p6+p7] int32 — the
+//     four maddubs words (each |·|≤32258, no int32 overflow);
+//   - SaturateToInt16 clamps each word to [-32768,32767] (VPMADDUBSW's int16
+//     saturation — inert on the [0,127] production domain, but this makes the
+//     (255,127) out-of-domain case match scalar exactly), then ExtendLo4ToInt32
+//     re-widens to int32 for a non-saturating VPMADDWD-style int32 accumulate.
+// A scalar tail (identical to dotU8I8Scalar) handles the ≤15-element remainder.
+//
+// NOTE: UNMEASURED. archsimd has no NEON dot-product (UDOT/SDOT/USDOT) intrinsic,
+// so this is the widen-multiply-pairsum-accumulate path, not a single-op dot.
+func dotU8I8SIMD(a []uint8, w []int8) int32 {
+	n := len(a)
+	accum := archsimd.BroadcastInt32x4(0)
+	i := 0
+	for ; i+16 <= n; i += 8 {
+		aI := archsimd.LoadUint8x16(a[i : i+16]).ExtendLo8ToUint16().ConvertToInt16() // Int16x8, low 8, ∈[0,255]
+		wI := archsimd.LoadInt8x16(w[i : i+16]).ExtendLo8ToInt16()                    // Int16x8, low 8, ∈[-128,127]
+		pLo := aI.MulWidenLo(wI)                     // Int32x4: products lanes 0..3
+		pHi := aI.HiToLo().MulWidenLo(wI.HiToLo())   // Int32x4: products lanes 4..7
+		words := pLo.ConcatAddPairs(pHi)             // Int32x4: 4 maddubs words (int32)
+		sat := words.SaturateToInt16().ExtendLo4ToInt32() // clamp to int16 range, back to int32
+		accum = accum.Add(sat)
+	}
+	out := accum.GetElem(0) + accum.GetElem(1) + accum.GetElem(2) + accum.GetElem(3)
+	// scalar tail — identical arithmetic to dotU8I8Scalar (maddubs pairs + odd).
+	for ; i+2 <= n; i += 2 {
+		p := int32(a[i])*int32(w[i]) + int32(a[i+1])*int32(w[i+1])
+		if p > 32767 {
+			p = 32767
+		} else if p < -32768 {
+			p = -32768
+		}
+		out += p
+	}
+	if i < n {
+		out += int32(a[i]) * int32(w[i])
+	}
+	return out
 }
 
 // gemvF32SIMD is the output-stationary tail GEMV: out[o] = Σ_i in[i]·w[i*stride+off+o].
