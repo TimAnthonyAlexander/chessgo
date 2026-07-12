@@ -144,18 +144,26 @@ interface Shape {
     to: Square
     brush: Brush
 }
+// Canonical color order. The default color takes the no-modifier slot; the other
+// three fill shift / ctrl / shift+ctrl in this order, so ALL four colors stay
+// reachable no matter which one is chosen as the default (never a duplicate,
+// never an unreachable color).
+const ARROW_COLORS: ArrowColor[] = ['green', 'red', 'blue', 'yellow']
 function brushFor(
     e: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean },
     base: ArrowColor,
 ): Brush {
     const ctrl = e.ctrlKey || e.metaKey
-    if (e.shiftKey && ctrl) return 'yellow'
-    if (e.shiftKey) return 'red'
-    if (ctrl) return 'green'
-    // No modifier → the user's default-arrow-color preference. The built-in default
-    // ('green') maps to the site accent so the plain arrow feels native and stays
-    // legible on dark board themes; an explicitly-chosen color is honored as-is.
-    return base === 'green' ? 'accent' : base
+    // Slot 0 = no modifier (the default); 1 = shift, 2 = ctrl, 3 = shift+ctrl.
+    const slot = e.shiftKey ? (ctrl ? 3 : 1) : ctrl ? 2 : 0
+    if (slot === 0) {
+        // No modifier → the user's default. The built-in default ('green') maps to
+        // the site accent so the plain arrow feels native and stays legible on dark
+        // board themes; an explicitly-chosen color is honored as-is.
+        return base === 'green' ? 'accent' : base
+    }
+    // The remaining three colors, in canonical order, fill the modifier slots.
+    return ARROW_COLORS.filter((c) => c !== base)[slot - 1]
 }
 
 interface DragState {
