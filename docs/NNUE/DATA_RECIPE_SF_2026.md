@@ -95,6 +95,29 @@ Hard condition on old data: syzygy-rescore + v6-filter + dedup, or it regresses.
 - **Scale/compute:** we're at ~15% of SF's training volume on ~10% of its diversity; SF-scale volume
   is only ~72–90 GPU-hours on the 4090 (~$25–32). Constraint = pipeline engineering, not compute.
 
+## Update 2026-07-12 — the rescore is PRE-DONE and downloadable (corrections, verified)
+
+Two grounded research passes (linrock HF trees + SF PR #4782 + the lc0 `rescorer` / linrock
+`lc0-data-converter` sources) corrected and de-risked the "old data must be rescored" gate:
+
+- **⭐ The rescored data is DOWNLOADABLE, already processed — we NEVER self-rescore.** linrock
+  publishes `test79/test78/test77/test60` on HF **already syzygy-rescored + v6-dd**. The filename
+  `tb7p` token (e.g. `16tb7p`, `2tb7p`) **is** the 7-piece-TB-rescored marker; `v6-dd` = v6 filter +
+  dedup. So the "syzygy rescore | infra-heavy — defer" row above is **moot for these files** — step 3
+  (T78/T79) is a **cheap download**, not blocked. Ready set + exact URLs: `docs/NNUE/pipeline/
+  run1.manifest` + the research notes. See [[nnue-interleaved-pipeline]].
+- **Correction — NOT "16 TB / 7-piece always".** linrock actually rescored with **6-piece + ~600 GB
+  of selected 7-piece (~750 GB total)**, not the full 16 TB. The lc0 rescorer works with *whatever* TB
+  you give it (even our 5-piece), just with less coverage.
+- **Correction — rescore and the depth6-multipv2 filter are TWO separate passes**, not one: rescore =
+  TB-corrected WDL relabel + deblunder (runs on **raw lc0 v6 chunks, before binpack conversion**); the
+  capture filter + `csv_filter_v6_dd.py` (v6 filter + dedup) are downstream steps. The doc above bundled
+  them under one word.
+- **Self-rescoring is the wrong fit for us** (multi-TB raw-chunk downloads + a CPU/IO job on a rented
+  GPU box, to reproduce data that's already published). Always **download the pre-rescored binpacks**.
+- ⇒ **The high-value next run is now unblocked**: test80-2024 Jan–Jun (dominant) + test79 apr/may
+  (rescored, ~20%), **interleaved** (`INTERLEAVE=1`) — `docs/NNUE/pipeline/EXPERIMENTS.md` Run 1.
+
 ## Implication for the in-flight king-bucket work
 
 The 640-sb KB run (2026-07-06) uses the **weak pipeline** (`ply>=16`, `ConstantWDL 0.6`, no

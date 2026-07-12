@@ -1,0 +1,21 @@
+# Run 1 — heterogeneous rescored interleave (the high-value single run).
+# Format: "<hf-repo> <filename.zst>" per line ('#' comments allowed).
+# All files are ALREADY syzygy-rescored + v6[-dd] (the `tb7p` token = 7-piece-TB rescored;
+# `v6-dd` = v6 filter + dedup) — verified against linrock's HF trees + SF PR #4782. No local
+# rescore. URL = https://huggingface.co/datasets/<repo>/resolve/main/<file>.
+#
+# Mix: test80-2024 Jan-Jun (~52 GB, the dominant ~80% — proven-best teacher) + test79-2022
+# apr+may (~13 GB, ~20% diversity additive). test78/77/60 held for run 2 (would over-weight
+# 2022 data). ~65 GB .zst total (~150 GB decompressed — decompress to disk, symlink /dev/shm).
+
+# --- test80-2024 Jan-Jun (contemporaneous, dominant) ---
+test80-2024 test80-2024-01-jan-2tb7p.min-v2.v6.binpack.zst
+test80-2024 test80-2024-02-feb-2tb7p.min-v2.v6.binpack.zst
+test80-2024 test80-2024-03-mar-2tb7p.min-v2.v6.binpack.zst
+test80-2024 test80-2024-04-apr-2tb7p.min-v2.v6.binpack.zst
+test80-2024 test80-2024-05-may-2tb7p.min-v2.v6.binpack.zst
+test80-2024 test80-2024-06-jun-2tb7p.min-v2.v6.binpack.zst
+
+# --- test79-2022 apr+may (rescored+v6-dd, the ~20% diversity additive) ---
+test79 test79-2022-04-apr-16tb7p.v6-dd.min.binpack.zst
+test79 test79-2022-05-may-16tb7p.v6-dd.min.binpack.zst
