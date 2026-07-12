@@ -80,6 +80,15 @@ the marginals, not the fine edges. See `[[nnue-smoke-bpsb6104]]`.
 
 ### Phase 1 — Data pipeline: a dedicated interleaved multi-source loader  **[DO FIRST]**
 
+> **STATUS 2026-07-12 — the pipeline INFRA is built + compiles + tests green.** The interleaved
+> loader (`bullet .../loader/sfbinpack.rs::new_interleaved_multiple` — round-robins sources ∝ file
+> size before the shared shuffle buffer), the env-configurable trainer (`BINPACKS`/`INTERLEAVE`/
+> `WDL_ANNEAL`, defaults = shipped baseline), and the re-executable `fetch-data.sh`/`train.sh` +
+> recipe live in **`docs/NNUE/pipeline/`**. `cargo check` + the Go↔Rust index cross-check pass.
+> **Remaining to execute:** provision the GPU box, `fetch-data.sh` (test80-2024 Jan–Jun), run the
+> interleaved train, SPRT vs prod. T78/T79 still need v6-dd + syzygy-rescore prep before inclusion.
+
+
 The foundation SF has and we don't, our named biggest lever (`ENGINE_STRENGTH §34`,
 `[[data-pipeline-biggest-lever]]`), and — uniquely — it **re-judges the rich threats we
 just built for almost free**: Reason 2 says the fine geometry is data-starved, so more
