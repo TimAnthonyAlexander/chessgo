@@ -63,6 +63,31 @@ Gate on the movetime lower bound; then an Abitur anchor (SF18/Stormphrax/Reckles
 
 ---
 
+### Run 1 pre-check — 4sb heterogeneity "feel" (2026-07-12, findings)
+
+Before committing a full run, we ran a cheap **4sb A/B** (both nets ~equally undertrained, so the
+head-to-head isolates the *data mix*, not maturity): **homo** = test80-2024 Jan–Apr, `INTERLEAVE=0`
+vs **hetero** = + test79-2022 apr (~20%), `INTERLEAVE=1`. Trained on M3 Metal (~4h each), SPRT'd
+head-to-head on coalla at 25k nodes/move.
+
+**Result: hetero −21.6 ± 18.0 vs homo over 400 pairs** (inconclusive on the SPRT bounds, but the whole
+95% CI is negative). i.e. **at 4sb, pure test80 beats test80+test79 by ~20 Elo** — the older 2022 data
+*dilutes the early-training signal* rather than helping.
+
+**Interpretation (the caveat is load-bearing):**
+- This is a **4sb feel, NOT a 640sb verdict.** Early training is dominated by the *coarse* signal, where
+  clean contemporaneous test80 is cleanest. The *diversity* payoff — if any — lands on the **data-starved
+  fine geometry late in training**, which 4sb literally cannot show. So this says "test79 doesn't help
+  *early*", not "test79 won't help at maturity."
+- It nonetheless **lines up with** the rescore-agent's conservative take (test80-only first) and the
+  keep-test80-dominant design. It's a real caution flag against dumping in old data.
+
+**Takeaway for the real run:** lean **test80-only (or a *smaller* test79 fraction than 20%)** as the
+safer bet — the diversity gamble isn't paying visibly at low training. A full 640sb run is still the only
+thing that settles whether the late-training fine-geometry benefit materialises. (Also measured: the M3 is
+~15–20× slower than a 4090 for this heavy threats-net — ~4h/32sb — so full-run A/Bs belong on the GPU box,
+not Metal.)
+
 ## A knob to fold in later, NOT its own run — WDL anneal
 
 `LinearWDL{0.5→0.7}` (result-weight up over training: eval-heavy early, result-heavy late — standard
