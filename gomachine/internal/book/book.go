@@ -58,6 +58,10 @@ type Book struct {
 // Len reports how many positions the book holds.
 func (b *Book) Len() int { return len(b.entries) }
 
+// Entries returns the book's entries (sorted ascending by key). Read-only snapshot
+// for offline tooling like book merges; the engine uses Lookup, never this.
+func (b *Book) Entries() []Entry { return b.entries }
+
 // Lookup returns the entry for an exact Zobrist key, or ok=false.
 func (b *Book) Lookup(key uint64) (Entry, bool) {
 	es := b.entries

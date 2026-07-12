@@ -90,9 +90,51 @@ func cmdCompileBookSFTree(args []string) {
 		return pos.Key(), pos.FEN(), true
 	}
 
+	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
+		fmt.Fprintln(os.Stderr, "compile-book-sf-tree:", err)
+		os.Exit(1)
+	}
+
+	// Atomic checkpoint: snapshot entries under the lock, write to a temp file, then
+	// rename over *out (atomic on the same fs). A crash/reboot during the multi-hour
+	// run loses at most one interval of work, and *out is never a half-written file.
+	writeCheckpoint := func(tag string) {
+		mu.Lock()
+		snap := make([]book.Entry, len(entries))
+		copy(snap, entries)
+		mu.Unlock()
+		tmp := *out + ".tmp"
+		if err := book.Write(tmp, snap); err != nil {
+			fmt.Fprintln(os.Stderr, "\ncheckpoint write:", err)
+			return
+		}
+		if err := os.Rename(tmp, *out); err != nil {
+			fmt.Fprintln(os.Stderr, "\ncheckpoint rename:", err)
+			return
+		}
+		fmt.Printf("\n  [%s] checkpoint: saved %d positions → %s\n", tag, len(snap), *out)
+	}
+
 	t0 := time.Now()
 	fmt.Printf("compile-book-sf-tree: SF depth %d, MultiPV %d, cp-window %d, max-ply %d, cap %d, %d workers\n",
 		*depth, *multipv, *cpWindow, *maxPly, *maxPos, *workers)
+
+	ckStop := make(chan struct{})
+	var ckWG sync.WaitGroup
+	ckWG.Add(1)
+	go func() {
+		defer ckWG.Done()
+		tk := time.NewTicker(5 * time.Minute)
+		defer tk.Stop()
+		for {
+			select {
+			case <-tk.C:
+				writeCheckpoint("ckpt")
+			case <-ckStop:
+				return
+			}
+		}
+	}()
 
 	for w := 0; w < *workers; w++ {
 		go func() {
@@ -157,15 +199,13 @@ func cmdCompileBookSFTree(args []string) {
 	}
 
 	pending.Wait()
+	close(ckStop)
+	ckWG.Wait()
 	fmt.Println()
 	if failed > 0 {
 		fmt.Printf("compile-book-sf-tree: %d nodes had no usable move (skipped)\n", failed)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
-		fmt.Fprintln(os.Stderr, "compile-book-sf-tree:", err)
-		os.Exit(1)
-	}
 	if err := book.Write(*out, entries); err != nil {
 		fmt.Fprintln(os.Stderr, "compile-book-sf-tree:", err)
 		os.Exit(1)

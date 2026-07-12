@@ -69,6 +69,10 @@ func main() {
 		cmdCompileBookSF(os.Args[2:])
 	case "compile-book-sf-tree":
 		cmdCompileBookSFTree(os.Args[2:])
+	case "dump-openings":
+		cmdDumpOpenings(os.Args[2:])
+	case "merge-books":
+		cmdMergeBooks(os.Args[2:])
 	case "book-diff":
 		cmdBookDiff(os.Args[2:])
 	case "compile-openings":
