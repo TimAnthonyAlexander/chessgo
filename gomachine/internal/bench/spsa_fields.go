@@ -69,6 +69,14 @@ var spsaFields = map[string]spsaField{
 	// set via config, not SPSA).
 	"aspwidennum": {func(p *search.Params, v int) { p.AspWidenNum = v }, func(p search.Params) int { return p.AspWidenNum }, 1},
 	"aspwidenden": {func(p *search.Params, v int) { p.AspWidenDen = v }, func(p search.Params) int { return p.AspWidenDen }, 1},
+	// PCM parent counter-move fail-low bonus (ParentContHistBonus-gated). The gate:
+	// weight = depth·pcmdepthscale − pcmbaseoffset (+pcmmarginbonus if severe), clamped
+	// (0,1024]. Suggested bounds: pcmdepthscale [0..300], pcmbaseoffset [0..1500],
+	// pcmevalmargin [0..300], pcmmarginbonus [0..600].
+	"pcmdepthscale":  {func(p *search.Params, v int) { p.PCMDepthScale = v }, func(p search.Params) int { return p.PCMDepthScale }, 16},
+	"pcmbaseoffset":  {func(p *search.Params, v int) { p.PCMBaseOffset = v }, func(p search.Params) int { return p.PCMBaseOffset }, 64},
+	"pcmevalmargin":  {func(p *search.Params, v int) { p.PCMEvalMargin = v }, func(p search.Params) int { return p.PCMEvalMargin }, 25},
+	"pcmmarginbonus": {func(p *search.Params, v int) { p.PCMMarginBonus = v }, func(p search.Params) int { return p.PCMMarginBonus }, 32},
 }
 
 // spsaAliases maps the short spec spellings (shared with bench.ParseParams) to the
@@ -101,6 +109,10 @@ var spsaAliases = map[string]string{
 	"hpm":           "histprunemargin",
 	"lmrmin":        "lmrminmoves",
 	"maxhist":       "maxhistory",
+	"pcmdepth":      "pcmdepthscale",
+	"pcmoffset":     "pcmbaseoffset",
+	"pcmmargin":     "pcmevalmargin",
+	"pcmmbonus":     "pcmmarginbonus",
 }
 
 func canonSPSAName(name string) (string, bool) {

@@ -144,25 +144,24 @@ func (s *Searcher) updateContHist(pos *chess.Position, best chess.Move, tried []
 // ply>=1, contMove[ply-1].ok && .quiet.
 func (s *Searcher) pcmCreditParent(ply, depth, bestScore, staticEval int, inCheck bool) {
 	p := s.contMove[ply-1]
-	base := s.statBonus(depth) // depth²·HistBonusScale, capped — the normal history magnitude
 
-	weight := s.params.PCMBonusScale // base weight (/1024 units)
-	if d := depth * s.params.PCMDepthScale; d < 1024 {
-		weight += d // depth term, capped at 1024 (SF's min(56·depth,489) analog)
-	} else {
-		weight += 1024
-	}
-	// The one static-eval margin: we landed well below our own static eval, so the
-	// parent move really did cause the drop → weight it up. Reuses PCMBonusScale to
-	// stay at 3 knobs (PCMEvalMargin=0 disables it).
+	// SF gates parent credit behind a NEGATIVE base offset (bonusScale starts at −215,
+	// then max(0,…)): only DEEP or SEVERE fail-lows credit the parent; shallow/mild ones
+	// get nothing. A positive floor (crediting every fail-low) over-pollutes history and
+	// washes — that was the v1 slip. weight = depth·PCMDepthScale − PCMBaseOffset (+ a
+	// severity bonus), clamped to (0,1024].
+	weight := depth*s.params.PCMDepthScale - s.params.PCMBaseOffset
 	if !inCheck && s.params.PCMEvalMargin > 0 && bestScore <= staticEval-s.params.PCMEvalMargin {
-		weight += s.params.PCMBonusScale
+		weight += s.params.PCMMarginBonus // severe fail-low relative to our own static eval
 	}
-	if weight < 0 {
-		weight = 0
+	if weight <= 0 {
+		return // shallow/mild fail-low → no credit (SF's bonusScale clamped to 0)
+	}
+	if weight > 1024 {
+		weight = 1024 // bounded credit (≤ one full cutoff bonus)
 	}
 
-	scaled := base * weight / 1024 // ~0.25·base … ~1.5·base with seed knobs — a positive credit
+	scaled := s.statBonus(depth) * weight / 1024 // 0 … one cutoff-sized bonus, gated by depth+severity
 	if scaled <= 0 {
 		return
 	}

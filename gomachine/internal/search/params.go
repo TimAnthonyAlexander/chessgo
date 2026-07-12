@@ -73,9 +73,10 @@ type Params struct {
 	ContHist            bool // continuation history: 1-ply (countermove) + 2-ply history keyed by the preceding move(s); feeds quiet ordering + the LMR reduction term (sharpens every reduction/late-move prune)
 	ContHist2           bool // Stormphrax-style continuation history (independent of ContHist): keys off 1/2/4/6-ply ancestors with a coupled updateWithBase gravity; feeds quiet ordering + LMR reduction + history-pruning margin
 	ParentContHistBonus bool // PCM: on a pure fail-low (flag==ttUpper), credit the quiet parent move (contMove[ply-1]) a positive continuation+butterfly bonus (SF search.cpp:1423 / Stormphrax pcm). DEFAULT OFF — off-path byte-identical (nothing reads contEntry.quiet or fires the tail hook). Under SPRT.
-	PCMBonusScale       int  // PCM base weight in /1024 units (default 256)
-	PCMDepthScale       int  // PCM per-depth weight, capped at 1024 (default 64)
-	PCMEvalMargin       int  // PCM static-eval margin (cp): add PCMBonusScale to weight when !inCheck && bestScore <= staticEval-margin (default 100; 0 disables the margin term)
+	PCMDepthScale       int  // PCM per-depth weight: weight = depth·PCMDepthScale − PCMBaseOffset (default 128)
+	PCMBaseOffset       int  // PCM negative gate: subtracted from the depth weight, then weight is clamped ≥0 — so only DEEP/severe fail-lows credit the parent (SF's −215 offset + max(0,…); a positive floor credits every fail-low indiscriminately and washes). (default 512)
+	PCMEvalMargin       int  // PCM static-eval margin (cp): add PCMMarginBonus to weight when !inCheck && bestScore <= staticEval-margin (default 100; 0 disables the margin term)
+	PCMMarginBonus      int  // PCM: weight added when the fail-low is severe (bestScore below staticEval−PCMEvalMargin) — SF's +147 marginA (default 256)
 	LMR2                bool // aggressive LMR: reduce captures/promotions too, earlier onset, PV/improving/ordering-trust/SEE reduction adjustments (supersedes LMR when on)
 	Singular            bool // singular extensions: verify the TT move against all alternatives at reduced depth; extend it a ply if singular, multi-cut if a second move also beats beta
 	SingularMargin      int  // singular: verification window = ttScore - SingularMargin*depth (default 2; lower = fire singular more often)
@@ -366,12 +367,14 @@ func DefaultParams() Params {
 		ContHist2: false,
 		// Parent counter-move (PCM) fail-low bonus. DEFAULT OFF — the post-loop tail
 		// hook and the contEntry.quiet field are inert until this is on, so the default
-		// engine is byte-identical. Seed knobs are inert while off; SPSA targets the
-		// three (PCMBonusScale/PCMDepthScale/PCMEvalMargin) once/if the flag is accepted.
+		// engine is byte-identical. Seeds gate credit behind PCMBaseOffset (SF's −215
+		// offset + max(0,…)): at the seeds, depth 4 credits nothing, depth 8 ≈ half a
+		// cutoff bonus, depth 12+ a full one. SPSA targets the four knobs once/if accepted.
 		ParentContHistBonus: false,
-		PCMBonusScale:       256,
-		PCMDepthScale:       64,
+		PCMDepthScale:       128,
+		PCMBaseOffset:       512,
 		PCMEvalMargin:       100,
+		PCMMarginBonus:      256,
 		// Aggressive LMR (supersedes LMR when on): reduces captures/promotions too,
 		// earlier onset (non-PV from the 2nd move), with PV / improving /
 		// ordering-trust / SEE reduction adjustments; over-reductions are caught by
