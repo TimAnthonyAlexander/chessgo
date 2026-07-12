@@ -1,0 +1,8 @@
+# 32sb heterogeneity-feel experiment sources (local Mac exploration).
+# A (homogeneous) = the 4 test80 lines; B (heterogeneous) = all 6.
+test80-2024 test80-2024-01-jan-2tb7p.min-v2.v6.binpack.zst
+test80-2024 test80-2024-02-feb-2tb7p.min-v2.v6.binpack.zst
+test80-2024 test80-2024-03-mar-2tb7p.min-v2.v6.binpack.zst
+test80-2024 test80-2024-04-apr-2tb7p.min-v2.v6.binpack.zst
+test79 test79-2022-04-apr-16tb7p.v6-dd.min.binpack.zst
+test79 test79-2022-05-may-16tb7p.v6-dd.min.binpack.zst
