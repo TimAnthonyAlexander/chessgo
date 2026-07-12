@@ -230,6 +230,16 @@ func (st *EnrichedStack) applyDiff(acc []int16, parent, child []uint32) {
 		// changed-edge lists are near-disjoint (they usually are — a moved piece's old
 		// and new attacks target different squares), so cancellation was rare and the
 		// scattered 20 KB counts-array traffic was mostly pure overhead.
+		if useI16Batch && !net.int8FT {
+			// arm64 NEON only: when the threat FT is int16 (prod full-threats config,
+			// int8FT==false), every column lives in W0i, so the whole sub(parent)+add(child)
+			// batch goes through the int16 batch kernel — each accumulator tile loaded/stored
+			// ONCE for the whole batch instead of once PER column. Bit-identical (int16 add/sub
+			// associative). useI16Batch is const false off arm64-SIMD, so amd64/scalar keep the
+			// per-column path below byte-for-byte (batching was a measured LOSS on amd64).
+			applyBatchI16(acc, net.W0i, net.H, parent, child)
+			return
+		}
 		for _, f := range parent {
 			net.ftSub(acc, int(f))
 		}
