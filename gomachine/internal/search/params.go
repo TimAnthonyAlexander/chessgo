@@ -503,7 +503,7 @@ func DefaultParams() Params {
 		Prefetch:         false, // TT prefetch: WASH on our 64MB-TT/128MB-L3 box (fits in L3, nothing to hide). Scaffolding — see field comment.
 		SEEReuseQS:       true, // qsearch double-SEE dedup: reuse the SEE sign from the ordering score. Node-identical (see field comment). Bit-exact +2.78% NPS on coalla KB net (§30.2) — shipped default-on.
 		TTCutoffNonPV:   false, // SF search.cpp:760 — gate early TT cutoff to non-PV; DEFAULT OFF (byte-identical)
-		NMPNonPV:        false, // SF search.cpp:893 — gate NMP to non-PV; DEFAULT OFF (byte-identical)
+		NMPNonPV:        true, // SHIPPED — gate NMP to non-PV (SF search.cpp:893); +5.3 Elo movetime SPRT over 3388 pairs (NMP was wrongly firing at PV nodes, pruning would-be PVs)
 		TTRefinesEval:   false, // SF search.cpp:730-732 — TT value sharpens pruning eval; DEFAULT OFF (byte-identical)
 		QSCaptSEEMargin: 0,     // SF search.cpp:1665 — qsearch losing-capture SEE margin; 0 = current byte-identical (SPRT tests 80)
 		QSearchTT:       false, // SF search.cpp:1542-1728 — quiescence TT probe+store; DEFAULT OFF (qsearch never touches the TT, byte-identical)
