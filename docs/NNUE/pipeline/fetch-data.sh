@@ -20,8 +20,15 @@ DEST="${DEST:-/root/data}"
 SHM="${SHM:-/dev/shm}"
 REPO="https://huggingface.co/datasets/linrock/test80-2024/resolve/main"
 
-command -v aria2c >/dev/null || { echo "need aria2c (apt-get install -y aria2)"; exit 1; }
-command -v zstd   >/dev/null || { echo "need zstd (apt-get install -y zstd)"; exit 1; }
+command -v zstd >/dev/null || { echo "need zstd (apt-get install -y zstd / brew install zstd)"; exit 1; }
+# Downloader: prefer aria2c (parallel, fast) on the GPU box; fall back to curl (macOS ships it).
+dl() { # dl <url> <out-path>
+  if command -v aria2c >/dev/null; then
+    aria2c -x16 -s16 --auto-file-renaming=false -o "$(basename "$2")" -d "$(dirname "$2")" "$1"
+  else
+    curl -L --fail --retry 3 -o "$2" "$1"
+  fi
+}
 mkdir -p "$DEST"
 
 paths=()
@@ -35,7 +42,7 @@ for m in $MONTHS; do
   else
     if [ ! -f "$zst" ]; then
       echo "[dl]   $base.zst"
-      aria2c -x16 -s16 --auto-file-renaming=false -o "$base.zst" -d "$DEST" "$REPO/$base.zst"
+      dl "$REPO/$base.zst" "$zst"
     fi
     echo "[verify]     $base.zst"
     zstd --long=31 -t "$zst"
