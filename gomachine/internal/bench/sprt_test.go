@@ -39,7 +39,7 @@ func TestLLRSign(t *testing.T) {
 		t.Fatalf("symmetric sample LLR = %v, want < 0", llr)
 	}
 
-	// A patch-favored result (more WW/WD than LL/LDg) is evidence for H1 → LLR > 0.
+	// A patch-favored result (more WW/WD than LL/LD) is evidence for H1 → LLR > 0.
 	favored := Pentanomial{5, 20, 80, 60, 35}
 	if llr := favored.LLR(0, 5); llr <= 0 {
 		t.Fatalf("favored sample LLR = %v, want > 0", llr)

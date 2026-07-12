@@ -16,7 +16,7 @@ import "math"
 // normalized to {0, .25, .5, .75, 1}. The five buckets, in order:
 //
 //	LL  (0)   loss+loss
-//	LDg (.25) one loss, one draw
+//	LD  (.25) one loss, one draw
 //	DD  (.5)  draw+draw, or win+loss  (the "central" bucket)
 //	WD  (.75) one win, one draw
 //	WW  (1)   win+win

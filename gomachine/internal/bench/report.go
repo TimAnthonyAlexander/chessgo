@@ -130,7 +130,7 @@ func (r *Reporter) box(p Progress) []string {
 		r.c(cGray, "D"), r.c(cBold, fmt.Sprint(p.Draws)))
 
 	penta := fmt.Sprintf("%s  %s",
-		r.c(cGray, "pentanomial [LL LDg DD WD WW]:"),
+		r.c(cGray, "pentanomial [LL LD DD WD WW]:"),
 		r.c(cDim, fmt.Sprintf("%v", [5]int(p.Penta))))
 
 	status := r.c(cYellow, "running…")
