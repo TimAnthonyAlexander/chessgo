@@ -43,6 +43,9 @@ struct Tune {
     // ---- Margin bundle 2 (SF_MARGINS.md #4/#5) — default OFF, SPRT independently ----
     bool nmpCutGate = false;    // NMP gate: cutNode && staticEval >= beta - 18*depth + 350
     bool lmrDepthPrune = false; // quiet futility + SEE-quiet pruning keyed on lmrDepth, not raw depth
+    // ---- PARITY_GOMACHINE.md D.2/D.3 — Wave B, default OFF, SPRT independently ----
+    bool contHist = false; // D.2: continuation history (parent/grandparent-keyed quiet magnitude)
+    bool doDeeper = false; // D.3: adaptive do-deeper/do-shallower LMR re-search depth
     // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
     // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
     // callers in uci.cpp for the option table incl. min/max).
@@ -77,6 +80,8 @@ struct Tune {
         if (on("NMPCUTGATE")) nmpCutGate = true;
         if (on("LMRDEPTHPRUNE")) lmrDepthPrune = true;
         if (on("PVGUARD")) pvGuard = true;
+        if (on("CONTHIST")) contHist = true;
+        if (on("DODEEPER")) doDeeper = true;
         if (on("GMCONST")) {
             // PARITY_GOMACHINE.md §D.1 — applied AFTER any UCI/env default so it wins
             // regardless of prior `setoption` calls.
@@ -178,6 +183,9 @@ void update_corrhist(const Position& pos, int staticEval, int bestValue, int dep
 // Search stack per ply
 struct Stack {
     Move  currentMove;
+    Piece currentPiece; // moving piece of currentMove (D.2 ContHist parent key);
+                         // captured BEFORE do_move, meaningless when currentMove
+                         // is MOVE_NONE/MOVE_NULL (callers guard on currentMove).
     Move  killers[2];
     int   staticEval;
     int   ply;
@@ -192,6 +200,17 @@ int  history[COLOR_NB][64][64];
 Move counterMoves[PIECE_NB][64];
 Move rootBestMove = MOVE_NONE;
 int  rootBestScore = 0;
+
+// ---- Continuation history (PARITY_GOMACHINE.md D.2) ----
+// Parent-move-keyed quiet-magnitude tables: [movingPiece][to] of the move played
+// at ply-1 (resp. ply-2) -> [movingPiece][to] of the current quiet candidate.
+// Indexed directly by Piece (0..15; W/B occupy 1-6/9-14, 0/7/8/15 unused) rather
+// than a packed [12] range, to avoid a remap function at every read/write site —
+// costs ~2 MB per table instead of ~1.1 MB, functionally identical. Read/written
+// only when tune.contHist is on; zeroed in clear(), never persisted across
+// searches (mirrors the butterfly `history` table's lifecycle).
+int16_t contHist1[PIECE_NB][SQUARE_NB][PIECE_NB][SQUARE_NB]; // parent (1-ply)
+int16_t contHist2[PIECE_NB][SQUARE_NB][PIECE_NB][SQUARE_NB]; // grandparent (2-ply)
 
 // LMR reduction table
 int Reductions[64][64];
@@ -213,6 +232,26 @@ constexpr int COUNTER_SCORE  = 1 << 20;
 constexpr int BAD_CAP_SCORE  = -(1 << 22);
 
 const int PieceVal[7] = {0, 100, 320, 330, 500, 900, 20000};
+
+// cont_score: blended 1-ply + 2-ply continuation-history score for a quiet move
+// (curPc -> to) at the node ss. Guards on the parent/grandparent move being a
+// real, non-null move (matches gomachine conthist.go's contEntry.ok gate) — a
+// missing/null ancestor simply contributes 0, never an out-of-range read.
+// Caller has verified tune.contHist is on.
+int cont_score(const Stack* ss, Piece curPc, Square to) {
+    int score = 0;
+    if (ss->ply >= 1) {
+        const Stack* p = ss - 1;
+        if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL)
+            score += contHist1[p->currentPiece][to_sq(p->currentMove)][curPc][to];
+    }
+    if (ss->ply >= 2) {
+        const Stack* p = ss - 2;
+        if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL)
+            score += contHist2[p->currentPiece][to_sq(p->currentMove)][curPc][to];
+    }
+    return score;
+}
 
 void score_moves(const Position& pos, ExtMove* begin, ExtMove* end, Move ttMove,
                  const Stack* ss, Move counter) {
@@ -236,7 +275,10 @@ void score_moves(const Position& pos, ExtMove* begin, ExtMove* end, Move ttMove,
         } else if (mv == counter) {
             m->score = COUNTER_SCORE;
         } else {
-            m->score = history[us][from_sq(mv)][to_sq(mv)];
+            int h = history[us][from_sq(mv)][to_sq(mv)];
+            if (tune.contHist)
+                h += cont_score(ss, pos.moved_piece(mv), to_sq(mv));
+            m->score = h;
         }
     }
 }
@@ -254,6 +296,35 @@ void update_history(Color us, Move m, int bonus) {
     int& h = history[us][from_sq(m)][to_sq(m)];
     bonus = std::max(-400, std::min(400, bonus));
     h += 32 * bonus - h * std::abs(bonus) / 512;
+}
+
+// update_cont_entry: same gravity formula/scale as update_history above (bonus
+// clamp ±400, 32*bonus nudge, h*|bonus|/512 self-age) so ContHist magnitudes
+// stay comparable to the butterfly table. Entries are int16_t; the formula's own
+// gravity already self-bounds well inside int16 range (~±16384 steady-state), so
+// the ±32000 clamp below is a defensive backstop, not something normal play hits.
+void update_cont_entry(int16_t& h, int bonus) {
+    bonus = std::max(-400, std::min(400, bonus));
+    int v = int(h) + 32 * bonus - int(h) * std::abs(bonus) / 512;
+    v = std::max(-32000, std::min(32000, v));
+    h = int16_t(v);
+}
+
+// update_cont_hist: credit/penalize one quiet move (pc -> to) in both
+// continuation tables, keyed by the parent/grandparent move at node ss. Mirrors
+// cont_score's guard (real, non-null ancestor) and gomachine's contUpdate.
+// Caller has verified tune.contHist is on.
+void update_cont_hist(const Stack* ss, Piece pc, Square to, int bonus) {
+    if (ss->ply >= 1) {
+        const Stack* p = ss - 1;
+        if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL)
+            update_cont_entry(contHist1[p->currentPiece][to_sq(p->currentMove)][pc][to], bonus);
+    }
+    if (ss->ply >= 2) {
+        const Stack* p = ss - 2;
+        if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL)
+            update_cont_entry(contHist2[p->currentPiece][to_sq(p->currentMove)][pc][to], bonus);
+    }
 }
 
 int qsearch(Position& pos, Stack* ss, int alpha, int beta);
@@ -489,6 +560,9 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
         bool givesCheck = pos.gives_check(m);
         bool isQuiet = !isCapture && type_of_move(m) != PROMOTION;
         int extension = 0;
+        // Captured BEFORE do_move empties from_sq(m) — needed both for ss->currentPiece
+        // (children key their ContHist off this) and the LMR ContHist read below.
+        Piece mover = pos.moved_piece(m);
 
         // SF_MARGINS.md #4: a cheap post-LMR-reduction depth proxy, computed here
         // (before the pruning block) so the quiet-futility and SEE-quiet checks below
@@ -548,6 +622,7 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
 
         int newDepth = depth - 1 + extension;
         ss->currentMove = m;
+        ss->currentPiece = mover;
 
         pos.do_move(m, st);
 
@@ -561,7 +636,10 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
             if (!improving) r++;
             if (cutNode) r += 1;
             if (givesCheck) r--;
-            r -= history[us][from_sq(m)][to_sq(m)] / 8000;
+            int hist = history[us][from_sq(m)][to_sq(m)];
+            if (tune.contHist)
+                hist += cont_score(ss, mover, to_sq(m));
+            r -= hist / 8000;
             int d = std::max(1, std::min(newDepth - r, newDepth));
             score = -negamax<false>(pos, ss + 1, -alpha - 1, -alpha, d, true);
             doFullSearch = score > alpha && d < newDepth;
@@ -569,8 +647,18 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
             doFullSearch = !PvNode || moveCount > 1;
         }
 
-        if (doFullSearch)
-            score = -negamax<false>(pos, ss + 1, -alpha - 1, -alpha, newDepth, !cutNode);
+        if (doFullSearch) {
+            // D.3: adapt the post-LMR re-search depth to how far the reduced
+            // scout beat the node's tracked bestValue — a big overshoot re-
+            // searches a ply deeper, a bare pass a ply shallower (gomachine
+            // search.go:2702-2718). Flat `newDepth` re-search when off.
+            int rd = newDepth;
+            if (tune.doDeeper) {
+                if (score > bestValue + 44 + 4 * newDepth) rd = newDepth + 1;
+                else if (score < bestValue + newDepth) rd = std::max(1, newDepth - 1);
+            }
+            score = -negamax<false>(pos, ss + 1, -alpha - 1, -alpha, rd, !cutNode);
+        }
 
         if (PvNode && (moveCount == 1 || score > alpha))
             score = -negamax<true>(pos, ss + 1, -beta, -alpha, newDepth, false);
@@ -618,6 +706,14 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
             for (int i = 0; i < quietCount; ++i)
                 if (quietsSearched[i] != bestMove)
                     update_history(us, quietsSearched[i], -bonus);
+            if (tune.contHist) {
+                // pos is back at the pre-move-loop position here (every iteration
+                // above paired do_move with undo_move), so moved_piece() is valid.
+                update_cont_hist(ss, pos.moved_piece(bestMove), to_sq(bestMove), bonus);
+                for (int i = 0; i < quietCount; ++i)
+                    if (quietsSearched[i] != bestMove)
+                        update_cont_hist(ss, pos.moved_piece(quietsSearched[i]), to_sq(quietsSearched[i]), -bonus);
+            }
             if ((ss - 1)->currentMove)
                 counterMoves[pos.piece_on(to_sq((ss - 1)->currentMove))][to_sq((ss - 1)->currentMove)] = bestMove;
         }
@@ -698,6 +794,8 @@ void clear() {
     std::memset(counterMoves, 0, sizeof(counterMoves));
     std::memset(corrHist, 0, sizeof(corrHist));
     std::memset(corrHistNP, 0, sizeof(corrHistNP));
+    std::memset(contHist1, 0, sizeof(contHist1));
+    std::memset(contHist2, 0, sizeof(contHist2));
     TT.clear();
 }
 
