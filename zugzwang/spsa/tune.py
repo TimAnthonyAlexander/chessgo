@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+"""
+SPSA tuning driver for Zugzwang's 8 search-margin UCI options, via fastchess
+self-play (paired theta+ / theta- games each iteration).
+
+Standard (Spall) SPSA, maximizing engine-1's (theta+'s) win rate against
+engine-2 (theta-). See docs comment blocks below for the exact update rule.
+
+Resumable: writes spsa/state.json after every iteration ({k, theta, rng_state});
+--resume continues from it, so a killed run loses at most one in-flight batch.
+Logs one line per iteration to ~/spsa_zug.log (tail -f friendly, same convention
+as the SPRT harness's ~/sprt_<name>.log).
+
+Usage:
+    python3 spsa/tune.py --iters 20000 --batch 8
+    python3 spsa/tune.py --iters 20000 --batch 8 --resume
+"""
+import argparse
+import json
+import os
+import random
+import re
+import subprocess
+import sys
+import time
+
+# ---------------------------------------------------------------------------
+# Paths (coalla defaults; override via env for local/other-host testing).
+# ---------------------------------------------------------------------------
+ZDIR = os.environ.get("ZUGZWANG_DIR", "/home/tim/chessgo/zugzwang")
+ENGINE = os.environ.get("ZUGZWANG_ENGINE", "./zugzwang")
+FASTCHESS = os.environ.get(
+    "FASTCHESS_BIN", os.path.expanduser("~/fastchess/fastchess-linux-x86-64/fastchess")
+)
+BOOK = os.path.join(ZDIR, "book.epd")
+STATE_FILE = os.path.join(ZDIR, "spsa", "state.json")
+LOG_FILE = os.environ.get("SPSA_LOG", os.path.expanduser("~/spsa_zug.log"))
+
+# ---------------------------------------------------------------------------
+# Param config: (uci name, start = current default, min, max, c_end).
+# c_end is the end-of-run perturbation size, ~(max-min)/20 rounded; these are
+# the values handed off by the task, tuned by feel to the margin's practical
+# scale (e.g. SingularMargin's effective step is /16, so its c_end is small).
+# ---------------------------------------------------------------------------
+PARAMS = [
+    # name              start min  max  c_end
+    ("RfpMargin",         80,  40, 130,   5),
+    ("RazorMargin",      200, 100, 350,  12),
+    ("FutBase",          120,  40, 220,   9),
+    ("FutSlope",          90,  40, 150,   6),
+    ("SeeQuietCoeff",     25,  10,  45,   2),
+    ("CaptSeeCoeff",      90,  40, 180,   7),
+    ("NmpEvalDiv",       200,  80, 400,  16),
+    ("SingularMargin",    32,  16,  80,   3),
+]
+NAMES = [p[0] for p in PARAMS]
+START = {p[0]: float(p[1]) for p in PARAMS}
+LO = {p[0]: p[2] for p in PARAMS}
+HI = {p[0]: p[3] for p in PARAMS}
+CEND = {p[0]: p[4] for p in PARAMS}
+
+# ---------------------------------------------------------------------------
+# SPSA hyperparameters (Spall's standard choices).
+# ---------------------------------------------------------------------------
+ALPHA = 0.602
+GAMMA = 0.101
+
+
+def clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+
+def rng_state_to_json(state):
+    """random.getstate() -> (version, 625-int internal tuple, gauss_next);
+    JSON has no tuple type, so unpack to plain lists/scalars explicitly
+    (round-tripped by rng_state_from_json)."""
+    version, internal_state, gauss_next = state
+    return {"version": version, "internal_state": list(internal_state), "gauss_next": gauss_next}
+
+
+def rng_state_from_json(obj):
+    return (obj["version"], tuple(obj["internal_state"]), obj["gauss_next"])
+
+
+def load_state():
+    if not os.path.exists(STATE_FILE):
+        return None
+    with open(STATE_FILE) as f:
+        return json.load(f)
+
+
+def save_state(k, theta, rng):
+    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    data = {"k": k, "theta": theta, "rng_state": rng_state_to_json(rng.getstate())}
+    tmp = STATE_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, STATE_FILE)  # atomic — a kill mid-write never corrupts state.json
+
+
+# ---------------------------------------------------------------------------
+# fastchess: play a paired batch, theta+ as engine 1 ("plus"), theta- as
+# engine 2 ("minus"). Same book/movetime/concurrency as our SPRT harness
+# (sprt.sh) — st=0.1 (100ms/move), timemargin=1000, Hash=64, book.epd random.
+# ---------------------------------------------------------------------------
+RESULT_RE = re.compile(
+    r"Games:\s*(\d+),\s*Wins:\s*(\d+),\s*Losses:\s*(\d+),\s*Draws:\s*(\d+),\s*Points:\s*([\d.]+)"
+)
+
+
+def engine_args(name, theta):
+    args = ["-engine", f"cmd={ENGINE}", f"name={name}", f"dir={ZDIR}"]
+    for n in NAMES:
+        args.append(f"option.{n}={int(theta[n])}")
+    return args
+
+
+def run_batch(theta_plus, theta_minus, batch):
+    rounds = max(1, (batch + 1) // 2)  # -games 2 * rounds >= batch
+    cmd = [FASTCHESS]
+    cmd += engine_args("plus", theta_plus)
+    cmd += engine_args("minus", theta_minus)
+    cmd += ["-each", "st=0.1", "timemargin=1000", "option.Hash=64"]
+    cmd += ["-openings", f"file={BOOK}", "format=epd", "order=random"]
+    cmd += ["-rounds", str(rounds), "-games", "2", "-repeat", "-concurrency", "6"]
+
+    proc = subprocess.run(cmd, cwd=ZDIR, capture_output=True, text=True)
+    output = proc.stdout + "\n" + proc.stderr
+    m = RESULT_RE.search(output)
+    if not m:
+        raise RuntimeError(
+            f"could not parse fastchess result (rc={proc.returncode}):\n" + output[-3000:]
+        )
+    games = int(m.group(1))
+    points_plus = float(m.group(5))
+    if games <= 0:
+        raise RuntimeError("fastchess reported 0 games:\n" + output[-3000:])
+    # score in [-1, 1]: (points_plus - points_minus) / games, points_minus = games - points_plus
+    score = (2.0 * points_plus - games) / games
+    return score, games
+
+
+# ---------------------------------------------------------------------------
+# SPSA loop
+# ---------------------------------------------------------------------------
+def main():
+    ap = argparse.ArgumentParser(description="SPSA tuner for Zugzwang search margins")
+    ap.add_argument("--iters", type=int, required=True, help="total planned iterations (fixes the a/c decay schedule; pass the SAME value across --resume runs)")
+    ap.add_argument("--batch", type=int, default=8, help="games per iteration (theta+ vs theta-)")
+    ap.add_argument("--resume", action="store_true", help="resume from spsa/state.json")
+    args = ap.parse_args()
+
+    total_iters = args.iters
+    if total_iters < 1:
+        sys.exit("--iters must be >= 1")
+
+    if os.path.exists(STATE_FILE) and not args.resume:
+        sys.exit(
+            f"error: {STATE_FILE} already exists — pass --resume to continue it, "
+            f"or remove it to start a fresh run"
+        )
+
+    # A = 0.1 * total_iters (Spall's standard choice: ~10% of the run length).
+    A = 0.1 * total_iters
+    # Per-param gain a_i, chosen so the FIRST step (k=1) has magnitude c_end_i —
+    # i.e. a_k(i) = a_i / (A+k)^alpha, and at k=1: a_1(i) = a_i / (A+1)^alpha.
+    # Setting a_i = c_end_i * (A+1)^alpha makes a_1(i) == c_end_i exactly, a
+    # "sensible first step ~ c_end magnitude" per the task's guidance, then
+    # decaying as k grows like the standard SPSA gain schedule.
+    a = {n: CEND[n] * (A + 1) ** ALPHA for n in NAMES}
+
+    rng = random.Random()
+    theta = dict(START)
+    start_k = 1
+
+    if args.resume:
+        st = load_state()
+        if st is None:
+            print(f"[spsa] --resume given but {STATE_FILE} not found; starting fresh", file=sys.stderr)
+        else:
+            start_k = st["k"] + 1
+            theta = {n: float(st["theta"][n]) for n in NAMES}
+            rng.setstate(rng_state_from_json(st["rng_state"]))
+            print(f"[spsa] resumed from k={st['k']} -> starting at k={start_k}", file=sys.stderr)
+
+    if start_k > total_iters:
+        print(f"[spsa] already complete: k={start_k - 1} >= --iters {total_iters}", file=sys.stderr)
+        return
+
+    with open(LOG_FILE, "a") as logf:
+        header = f"=== spsa run start {time.strftime('%Y-%m-%d %H:%M:%S')} | iters={total_iters} batch={args.batch} start_k={start_k} ==="
+        print(header)
+        logf.write(header + "\n")
+        logf.flush()
+
+        for k in range(start_k, total_iters + 1):
+            a_k = {n: a[n] / (A + k) ** ALPHA for n in NAMES}
+            c_k = {n: CEND[n] / (k ** GAMMA) for n in NAMES}
+            delta = {n: rng.choice([-1, 1]) for n in NAMES}
+
+            theta_plus = {}
+            theta_minus = {}
+            for n in NAMES:
+                tp = round_clamp(theta[n] + c_k[n] * delta[n], LO[n], HI[n])
+                tm = round_clamp(theta[n] - c_k[n] * delta[n], LO[n], HI[n])
+                theta_plus[n] = tp
+                theta_minus[n] = tm
+
+            t0 = time.time()
+            score, games = run_batch(theta_plus, theta_minus, args.batch)
+            dt = time.time() - t0
+
+            # Update: maximize theta+'s win rate. If theta+_i = theta_i + c_k*delta_i
+            # and it scored better (score>0), nudge theta_i toward theta+_i, i.e. in
+            # the direction of delta_i — theta_i += a_k*score*delta_i does exactly
+            # that (and the symmetric case for delta_i=-1 nudges the other way).
+            for n in NAMES:
+                theta[n] = clamp(theta[n] + a_k[n] * score * delta[n], LO[n], HI[n])
+
+            save_state(k, theta, rng)
+
+            theta_str = " ".join(f"{n}={round(theta[n])}" for n in NAMES)
+            a_factor = ((A + 1) / (A + k)) ** ALPHA  # shared decay multiplier on every a_i
+            c_factor = 1.0 / (k ** GAMMA)            # shared decay multiplier on every c_end_i
+            line = (
+                f"iter {k}/{total_iters} | score {score:+.3f} | games={games} dt={dt:.1f}s "
+                f"| theta: {theta_str} | aF={a_factor:.4f} cF={c_factor:.4f}"
+            )
+            print(line)
+            logf.write(line + "\n")
+            logf.flush()
+
+    print(f"[spsa] done: k={total_iters}, final theta written to {STATE_FILE}")
+
+
+def round_clamp(v, lo, hi):
+    return int(clamp(round(v), lo, hi))
+
+
+if __name__ == "__main__":
+    main()

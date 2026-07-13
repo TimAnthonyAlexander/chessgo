@@ -10,6 +10,7 @@
 #include <iostream>
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 using namespace BB;
 
@@ -34,6 +35,17 @@ struct Tune {
     // ---- Margin bundle 2 (SF_MARGINS.md #4/#5) — default OFF, SPRT independently ----
     bool nmpCutGate = false;    // NMP gate: cutNode && staticEval >= beta - 18*depth + 350
     bool lmrDepthPrune = false; // quiet futility + SEE-quiet pruning keyed on lmrDepth, not raw depth
+    // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
+    // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
+    // callers in uci.cpp for the option table incl. min/max).
+    int rfpMargin     = 80;   // reverse futility: eval - rfpMargin*(depth-improving) >= beta
+    int razorMargin   = 200;  // razoring: eval + razorMargin*depth <= alpha
+    int futBase       = 120;  // quiet futility base: eval + futBase + futSlope*depth <= alpha
+    int futSlope      = 90;   // quiet futility per-depth slope
+    int seeQuietCoeff = 25;   // SEE-quiet pruning: -seeQuietCoeff*depth*depth
+    int captSeeCoeff  = 90;   // capture SEE pruning: -captSeeCoeff*depth
+    int nmpEvalDiv    = 200;  // null-move R eval term: min((eval-beta)/nmpEvalDiv, 3)
+    int singularMargin = 32;  // singular beta: ttValue - singularMargin*depth/16 (32 -> 2*depth, exact)
     void load() {
         auto off = [](const char* n){ const char* e = getenv(n); return e && e[0]=='0'; };
         auto on  = [](const char* n){ const char* e = getenv(n); return e && e[0]=='1'; };
@@ -382,7 +394,7 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
         // Reverse futility pruning
         bool quietTT = ttMove != MOVE_NONE && !ttCapture;   // ttCapture computed above at the TT probe
         if (depth <= 8 && !(tune.rfpSoft && quietTT)
-            && eval - 80 * (depth - improving) >= beta && eval < VALUE_MATE_IN_MAX_PLY)
+            && eval - tune.rfpMargin * (depth - improving) >= beta && eval < VALUE_MATE_IN_MAX_PLY)
             return tune.rfpSoft ? (2 * beta + eval) / 3 : eval;
 
         // Null move pruning
@@ -395,7 +407,7 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
             : (eval >= beta);
         if (tune.nullMove && depth >= 3 && nmpGate && (ss - 1)->currentMove != MOVE_NULL
             && pos.non_pawn_material(pos.side_to_move())) {
-            int R = 3 + depth / 4 + std::min((eval - beta) / 200, 3);
+            int R = 3 + depth / 4 + std::min((eval - beta) / tune.nmpEvalDiv, 3);
             StateInfo st;
             ss->currentMove = MOVE_NULL;
             pos.do_null_move(st);
@@ -409,7 +421,7 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
         }
 
         // Razoring
-        if (tune.razor && depth <= 3 && eval + 200 * depth <= alpha) {
+        if (tune.razor && depth <= 3 && eval + tune.razorMargin * depth <= alpha) {
             int v = qsearch(pos, ss, alpha, alpha + 1);
             if (v <= alpha) return v;
         }
@@ -463,18 +475,18 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
                 if (tune.lmp && moveCount >= lmpLimit && !givesCheck) continue;
                 // Futility pruning
                 bool futilityPrune = tune.lmrDepthPrune
-                    ? (lmrDepth < 13 && eval + 120 + 90 * lmrDepth <= alpha)
-                    : (depth <= 6 && eval + 120 + 90 * depth <= alpha);
+                    ? (lmrDepth < 13 && eval + tune.futBase + tune.futSlope * lmrDepth <= alpha)
+                    : (depth <= 6 && eval + tune.futBase + tune.futSlope * depth <= alpha);
                 if (tune.futility && !ss->inCheck && !givesCheck && futilityPrune)
                     continue;
                 // SEE pruning of quiets
                 bool seeQuietPrune = tune.lmrDepthPrune
-                    ? !pos.see_ge(m, -25 * lmrDepth * lmrDepth)
-                    : (depth <= 8 && !pos.see_ge(m, -25 * depth * depth));
+                    ? !pos.see_ge(m, -tune.seeQuietCoeff * lmrDepth * lmrDepth)
+                    : (depth <= 8 && !pos.see_ge(m, -tune.seeQuietCoeff * depth * depth));
                 if (tune.quietSee && seeQuietPrune) continue;
             } else {
                 // SEE pruning of captures
-                if (depth <= 6 && !givesCheck && !pos.see_ge(m, -90 * depth)) continue;
+                if (depth <= 6 && !givesCheck && !pos.see_ge(m, -tune.captSeeCoeff * depth)) continue;
             }
         }
 
@@ -482,7 +494,7 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
         if (!rootNode && depth >= 8 && m == ttMove && !excluded
             && tte->depth >= depth - 3 && (tte->bound() & BOUND_LOWER)
             && std::abs(ttValue) < VALUE_MATE_IN_MAX_PLY) {
-            int singularBeta = ttValue - 2 * depth;
+            int singularBeta = ttValue - tune.singularMargin * depth / 16; // default 32 -> exactly 2*depth
             ss->excludedMove = m;
             int s = negamax<false>(pos, ss, singularBeta - 1, singularBeta, (depth - 1) / 2, cutNode);
             ss->excludedMove = MOVE_NONE;
@@ -610,6 +622,25 @@ void print_pv(Position& pos, Stack* ss, int depth, int score, int64_t nodes) {
 }
 
 } // namespace
+
+// SPSA/UCI hook: map a UCI spin option name to the matching Tune field, clamped
+// to the range advertised on `uci` (uci.cpp). Returns false if name is unknown
+// (uci.cpp treats that as "not a tune option"). Lives outside the anonymous
+// namespace (declared in search.h) but reaches `tune` since anonymous-namespace
+// symbols are visible throughout this translation unit.
+bool set_tune_option(const std::string& name, int value) {
+    auto clamp = [](int v, int lo, int hi) { return std::max(lo, std::min(hi, v)); };
+    if      (name == "RfpMargin")      tune.rfpMargin      = clamp(value, 40, 130);
+    else if (name == "RazorMargin")    tune.razorMargin    = clamp(value, 100, 350);
+    else if (name == "FutBase")        tune.futBase        = clamp(value, 40, 220);
+    else if (name == "FutSlope")       tune.futSlope       = clamp(value, 40, 150);
+    else if (name == "SeeQuietCoeff")  tune.seeQuietCoeff  = clamp(value, 10, 45);
+    else if (name == "CaptSeeCoeff")   tune.captSeeCoeff   = clamp(value, 40, 180);
+    else if (name == "NmpEvalDiv")     tune.nmpEvalDiv     = clamp(value, 80, 400);
+    else if (name == "SingularMargin") tune.singularMargin = clamp(value, 16, 80);
+    else return false;
+    return true;
+}
 
 void init() {
     for (int d = 1; d < 64; ++d)

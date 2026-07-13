@@ -147,6 +147,16 @@ int main() {
             std::cout << "id author " << ENGINE_AUTHOR << "\n";
             std::cout << "option name Hash type spin default 128 min 1 max 4096\n";
             std::cout << "option name Threads type spin default 1 min 1 max 1\n";
+            // SPSA-tunable search margins (search.cpp Tune struct; Search::set_tune_option
+            // applies these on setoption). Defaults reproduce the pre-tunable literals exactly.
+            std::cout << "option name RfpMargin type spin default 80 min 40 max 130\n";
+            std::cout << "option name RazorMargin type spin default 200 min 100 max 350\n";
+            std::cout << "option name FutBase type spin default 120 min 40 max 220\n";
+            std::cout << "option name FutSlope type spin default 90 min 40 max 150\n";
+            std::cout << "option name SeeQuietCoeff type spin default 25 min 10 max 45\n";
+            std::cout << "option name CaptSeeCoeff type spin default 90 min 40 max 180\n";
+            std::cout << "option name NmpEvalDiv type spin default 200 min 80 max 400\n";
+            std::cout << "option name SingularMargin type spin default 32 min 16 max 80\n";
             std::cout << "uciok" << std::endl;
         } else if (cmd == "isready") {
             std::cout << "readyok" << std::endl;
@@ -159,6 +169,8 @@ int main() {
             if (name == "Hash") {
                 ttSizeMB = std::stoi(value);
                 TT.resize(ttSizeMB);
+            } else {
+                Search::set_tune_option(name, std::stoi(value));
             }
         } else if (cmd == "ucinewgame") {
             stop_search();

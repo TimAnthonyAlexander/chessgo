@@ -3,6 +3,7 @@
 #include "move.h"
 #include <atomic>
 #include <cstdint>
+#include <string>
 
 namespace Search {
 
@@ -23,5 +24,9 @@ void init();
 void clear();                 // clear history/killers/TT for a new game
 void start(Position& pos, const Limits& limits);
 int64_t now_ms();
+
+// UCI setoption hook for the 8 SPSA-tunable search margins (search.cpp's
+// Tune struct). Returns false if `name` doesn't match a tune option.
+bool set_tune_option(const std::string& name, int value);
 
 } // namespace Search

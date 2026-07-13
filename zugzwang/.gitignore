@@ -12,3 +12,8 @@ net.nnue
 # match / test outputs
 *.log
 *.pgn
+
+# SPSA runtime checkpoint (spsa/tune.py) — resumable state, not source
+spsa/state.json
+spsa/state.json.tmp
+spsa/__pycache__/
