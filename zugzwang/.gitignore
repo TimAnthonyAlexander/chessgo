@@ -1,0 +1,14 @@
+# build artifacts
+zugzwang
+hce
+perft_test
+*.o
+
+# the NNUE net is provided out-of-band: a symlink to gomachine's gitignored 180 MB
+# prod net (../gomachine/data/nnue/kb-mirror.bin). Recreate with:
+#   ln -sf ../gomachine/data/nnue/kb-mirror.bin net.nnue
+net.nnue
+
+# match / test outputs
+*.log
+*.pgn
