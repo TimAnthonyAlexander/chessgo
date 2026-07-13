@@ -9,7 +9,7 @@ the short-term plan.
 ## What Zugzwang is
 
 `~/chessgo/zugzwang` — a C++ NNUE **sister engine** to gomachine. It is the pre-existing
-`~/chesshce` C++ bitboard engine (SF-derived: PVS negamax, magic bitboards, TT, LMR/NMP/
+`~/chesshce` C++ bitboard engine (PVS negamax, magic bitboards, TT, LMR/NMP/
 RFP/SEE/singular, UCI) with a **bit-exact C++ port of gomachine's prod full-threats NNUE**
 bolted in. Both engines share the **same net** and produce **bit-identical eval**. Purpose:
 measure the Go-vs-C++ "tax" and have a second engine in the repo. The website is untouched.

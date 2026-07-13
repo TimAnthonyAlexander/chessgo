@@ -21,13 +21,13 @@ work is out of scope** (there is no clock). SMP/lockless is out of scope (single
 
 Two important framings that came out of the comparison:
 
-- **Most of gomachine's celebrated search stack is NOT a gap** — Zugzwang inherited it from
-  its Stockfish lineage (RFP, NMP + eval-scaled R, razoring, IIR, singular+multicut, LMP,
+- **Most of gomachine's celebrated search stack is NOT a gap** — Zugzwang already has it
+  (RFP, NMP + eval-scaled R, razoring, IIR, singular+multicut, LMP,
   futility, SEE pruning, aspiration, log·log LMR, check ext, delta pruning, killers,
   countermoves, history gravity, improving, TT-eval reuse). See the parity list at the end.
   The real search gaps are **four features + one constants transplant**.
 - **The "+20% pin-aware movegen" win is NOT a gap either** — that number was measured
-  replacing a make/unmake legality filter, which Zugzwang never had (it uses lazy SF-style
+  replacing a make/unmake legality filter, which Zugzwang never had (it uses lazy incremental
   `legal()`). Don't chase it.
 
 **Elo caveat:** many gomachine numbers below are **fixed-node** SPRTs, not movetime, and
@@ -92,7 +92,7 @@ corrhist.go,conthist.go}`.
 
 ### #2 — Tuned constant transplant (PARTIAL — different values). Trivial, do first.
 Eval is bit-identical, so gomachine's net-tuned constants should largely transplant onto
-Zugzwang's SF-generic ones. A/B + re-SPRT each (Zugzwang's tree shape differs, so not all will
+Zugzwang's generic untuned ones. A/B + re-SPRT each (Zugzwang's tree shape differs, so not all will
 carry). Concrete diffs (gomachine → Zugzwang current):
 
 | Constant | gomachine | Zugzwang | Note |
@@ -266,7 +266,7 @@ the match. Only worth it if enabled for **both** engines (else unfair asymmetry)
 
 ## NOT gaps — parity, do not waste effort
 
-- **Pin-aware legal movegen** — Zugzwang uses lazy SF-style incremental `legal()` (`position.cpp:381`),
+- **Pin-aware legal movegen** — Zugzwang uses lazy incremental `legal()` (`position.cpp:381`),
   never a make/unmake filter. The gomachine "+20% NPS" was vs a make/unmake filter Zugzwang never had.
 - **Qsearch captures-only** (gomachine +20 Elo) — Zugzwang `generate<CAPTURES>` (`search.cpp:166`).
 - **TT depth-preferred + generation aging** — Zugzwang 4-entry clusters, argmin(depth − age)
@@ -275,7 +275,7 @@ the match. Only worth it if enabled for **both** engines (else unfair asymmetry)
 - **BetweenBB/LineBB, magic init, leaper tables** — parity (`bitboard.cpp:168`).
 - **NMP eval-scaled R, NMP-nonPV-only, RFP, razoring, IIR, singular+multicut, LMP, futility,
   SEE pruning, aspiration, log·log LMR + cutnode term, check ext, delta pruning, killers,
-  countermoves, history gravity, improving, TT-eval reuse** — all inherited from Stockfish; only
+  countermoves, history gravity, improving, TT-eval reuse** — all already present in Zugzwang; only
   the *constants* differ (see #2).
 
 ## Default-OFF in gomachine — do NOT port (reverted / unproven)

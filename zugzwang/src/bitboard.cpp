@@ -68,7 +68,7 @@ static void init_magics(bool bishop, U64* table, Magic magics[]) {
     const int rookDeltas[4][2]   = {{1,0},{-1,0},{0,1},{0,-1}};
     const int (*deltas)[2] = bishop ? bishopDeltas : rookDeltas;
 
-    // Per-square seeds for reproducible magic search (Stockfish-style)
+    // Per-square seeds for reproducible magic search
     U64 seeds[8] = {728, 10316, 55013, 32803, 12281, 15100, 16645, 255};
 
     U64 occupancy[4096], reference[4096];
