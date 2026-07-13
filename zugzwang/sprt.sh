@@ -23,5 +23,5 @@ exec "$FC" \
   -each st=0.1 timemargin=1000 option.Hash=64 \
   -openings file="$ZDIR/book.epd" format=epd order=random \
   -sprt elo0=0 elo1=5 alpha=0.05 beta=0.05 \
-  -rounds 800 -games 2 -repeat -concurrency 6 -ratinginterval 20 \
+  -rounds 800 -games 2 -repeat -concurrency 6 -ratinginterval 4 \
   > "$LOG" 2>&1
