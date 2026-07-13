@@ -36,6 +36,7 @@ struct Tune {
     bool corrHist = true;
     bool negExt = true;
     bool rfpSoft = true;
+    bool iir = true;  // internal iterative reduction — env IIR=0 to disable (PARITY_GOMACHINE.md C.2)
     // ---- PARITY_GOMACHINE.md D.0/D.1 — default OFF, SPRT independently ----
     bool pvGuard = false;  // D.0: add !PvNode to the LMP/futility/SEE-quiet/capture-SEE block
     bool gmConst = false;  // D.1: transplant gomachine's tuned search constants (see load())
@@ -46,6 +47,9 @@ struct Tune {
     // ---- PARITY_GOMACHINE.md D.2/D.3 — Wave B, default OFF, SPRT independently ----
     bool contHist = false; // D.2: continuation history (parent/grandparent-keyed quiet magnitude)
     bool doDeeper = false; // D.3: adaptive do-deeper/do-shallower LMR re-search depth
+    // ---- PARITY_GOMACHINE.md D.5/D.7 — Wave C, default OFF, SPRT independently ----
+    bool seeQuietLinear = false; // D.5: linear SEE-quiet shape -75*depth, depth<=6 (vs quadratic default)
+    bool gmCheckExt = false;     // D.7: gomachine's per-node uncapped in-check depth++ (replaces per-move check ext)
     // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
     // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
     // callers in uci.cpp for the option table incl. min/max).
@@ -76,12 +80,15 @@ struct Tune {
         if (off("CORRHIST")) corrHist = false;
         if (off("NEGEXT")) negExt = false;
         if (off("RFPSOFT")) rfpSoft = false;
+        if (off("IIR")) iir = false;
         if (const char* e = getenv("QSFUT_MARGIN")) { int v = atoi(e); if (v > 0) qsFutMargin = v; }
         if (on("NMPCUTGATE")) nmpCutGate = true;
         if (on("LMRDEPTHPRUNE")) lmrDepthPrune = true;
         if (on("PVGUARD")) pvGuard = true;
         if (on("CONTHIST")) contHist = true;
         if (on("DODEEPER")) doDeeper = true;
+        if (on("SEEQUIETLINEAR")) seeQuietLinear = true;
+        if (on("GMCHECKEXT")) gmCheckExt = true;
         if (on("GMCONST")) {
             // PARITY_GOMACHINE.md §D.1 — applied AFTER any UCI/env default so it wins
             // regardless of prior `setoption` calls.
@@ -474,6 +481,16 @@ template <bool PvNode>
 int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNode) {
     bool rootNode = PvNode && ss->ply == 0;
 
+    // D.7 (GMCHECKEXT): gomachine's per-node check extension fires here, at node
+    // entry, BEFORE the depth<=0 qsearch dispatch and before the TT probe
+    // (search.go:1244-1250: `if (pos.InCheck()) depth++` immediately after entering
+    // the node) — uncapped, and it always stacks with singular since it mutates the
+    // incoming `depth` itself rather than the per-move `extension` local below.
+    // Strictly gated behind tune.gmCheckExt so the off (default) path doesn't even
+    // pay for the extra pos.in_check() call — zero cost, byte-identical when off.
+    if (tune.gmCheckExt && pos.in_check())
+        depth++;
+
     if (depth <= 0) return qsearch(pos, ss, alpha, beta);
 
     if ((++nodeCount & 1023) == 0) check_time();
@@ -569,7 +586,8 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
     }
 
     // Internal iterative reduction: if no TT move at high depth, reduce
-    if (depth >= 4 && !ttMove && !rootNode)
+    // (C.2: gomachine measured its own IIR dead-flat individually — env IIR=0 to disable)
+    if (tune.iir && depth >= 4 && !ttMove && !rootNode)
         depth--;
 
     // ---- Move loop ----
@@ -638,9 +656,16 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
                 if (tune.futility && !ss->inCheck && !givesCheck && futilityPrune)
                     continue;
                 // SEE pruning of quiets
-                bool seeQuietPrune = tune.lmrDepthPrune
-                    ? !pos.see_ge(m, -tune.seeQuietCoeff * lmrDepth * lmrDepth)
-                    : (depth <= 8 && !pos.see_ge(m, -tune.seeQuietCoeff * depth * depth));
+                // D.5 (SEEQUIETLINEAR): gomachine's tuned shape is linear (-75*depth,
+                // depth<=6) rather than zugzwang's default quadratic (-seeQuietCoeff*
+                // depth^2, depth<=8). Checked first so it wins over lmrDepthPrune's
+                // shape too when both flags happen to be set (independent SPRT flags,
+                // no shipped combination intended).
+                bool seeQuietPrune = tune.seeQuietLinear
+                    ? (depth <= 6 && !pos.see_ge(m, -75 * depth))
+                    : tune.lmrDepthPrune
+                        ? !pos.see_ge(m, -tune.seeQuietCoeff * lmrDepth * lmrDepth)
+                        : (depth <= 8 && !pos.see_ge(m, -tune.seeQuietCoeff * depth * depth));
                 if (tune.quietSee && seeQuietPrune) continue;
             } else {
                 // SEE pruning of captures
@@ -666,8 +691,10 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
             }
         }
 
-        // Check extension
-        if (givesCheck && extension == 0 && depth < 12) extension = 1;
+        // Check extension — mutually exclusive with D.7's node-entry gmCheckExt
+        // mechanism above (that one already extended `depth` for the whole node;
+        // firing this per-move version too would double-extend a single check).
+        if (!tune.gmCheckExt && givesCheck && extension == 0 && depth < 12) extension = 1;
 
         int newDepth = depth - 1 + extension;
         ss->currentMove = m;
