@@ -31,8 +31,12 @@ struct Tune {
     bool negExt = true;
     bool rfpSoft = true;
     int qsFutMargin = 300;
+    // ---- Margin bundle 2 (SF_MARGINS.md #4/#5) — default OFF, SPRT independently ----
+    bool nmpCutGate = false;    // NMP gate: cutNode && staticEval >= beta - 18*depth + 350
+    bool lmrDepthPrune = false; // quiet futility + SEE-quiet pruning keyed on lmrDepth, not raw depth
     void load() {
         auto off = [](const char* n){ const char* e = getenv(n); return e && e[0]=='0'; };
+        auto on  = [](const char* n){ const char* e = getenv(n); return e && e[0]=='1'; };
         if (off("LMP")) lmp = false;
         if (off("QSEE")) quietSee = false;
         if (off("FUT")) futility = false;
@@ -43,6 +47,8 @@ struct Tune {
         if (off("NEGEXT")) negExt = false;
         if (off("RFPSOFT")) rfpSoft = false;
         if (const char* e = getenv("QSFUT_MARGIN")) { int v = atoi(e); if (v > 0) qsFutMargin = v; }
+        if (on("NMPCUTGATE")) nmpCutGate = true;
+        if (on("LMRDEPTHPRUNE")) lmrDepthPrune = true;
     }
 } tune;
 
@@ -380,7 +386,14 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
             return tune.rfpSoft ? (2 * beta + eval) / 3 : eval;
 
         // Null move pruning
-        if (tune.nullMove && depth >= 3 && eval >= beta && (ss - 1)->currentMove != MOVE_NULL
+        // SF_MARGINS.md #5: modern SF only null-moves at expected cut-nodes, with a
+        // relaxed eval margin (beta - 18*depth + 350) rather than requiring eval>=beta
+        // outright. Gated behind tune.nmpCutGate (default off) — R computation below
+        // is unchanged either way.
+        bool nmpGate = tune.nmpCutGate
+            ? (cutNode && ss->staticEval >= beta - 18 * depth + 350)
+            : (eval >= beta);
+        if (tune.nullMove && depth >= 3 && nmpGate && (ss - 1)->currentMove != MOVE_NULL
             && pos.non_pawn_material(pos.side_to_move())) {
             int R = 3 + depth / 4 + std::min((eval - beta) / 200, 3);
             StateInfo st;
@@ -433,17 +446,32 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
         bool isQuiet = !isCapture && type_of_move(m) != PROMOTION;
         int extension = 0;
 
+        // SF_MARGINS.md #4: a cheap post-LMR-reduction depth proxy, computed here
+        // (before the pruning block) so the quiet-futility and SEE-quiet checks below
+        // can key off it instead of raw depth — lets them prune later/more precisely,
+        // matching SF's depth<13 window. Gated behind tune.lmrDepthPrune (default off).
+        int lmrDepth = depth;
+        if (tune.lmrDepthPrune) {
+            int red = Reductions[std::min(depth, 63)][std::min(moveCount, 63)];
+            lmrDepth = std::max(depth - red, 0);
+        }
+
         // Late move pruning + futility for quiets at low depth
         if (!rootNode && bestValue > -VALUE_MATE_IN_MAX_PLY && pos.non_pawn_material(us)) {
             if (isQuiet) {
                 int lmpLimit = (3 + depth * depth) / (2 - improving);
                 if (tune.lmp && moveCount >= lmpLimit && !givesCheck) continue;
                 // Futility pruning
-                if (tune.futility && depth <= 6 && !ss->inCheck && !givesCheck
-                    && eval + 120 + 90 * depth <= alpha)
+                bool futilityPrune = tune.lmrDepthPrune
+                    ? (lmrDepth < 13 && eval + 120 + 90 * lmrDepth <= alpha)
+                    : (depth <= 6 && eval + 120 + 90 * depth <= alpha);
+                if (tune.futility && !ss->inCheck && !givesCheck && futilityPrune)
                     continue;
                 // SEE pruning of quiets
-                if (tune.quietSee && depth <= 8 && !pos.see_ge(m, -25 * depth * depth)) continue;
+                bool seeQuietPrune = tune.lmrDepthPrune
+                    ? !pos.see_ge(m, -25 * lmrDepth * lmrDepth)
+                    : (depth <= 8 && !pos.see_ge(m, -25 * depth * depth));
+                if (tune.quietSee && seeQuietPrune) continue;
             } else {
                 // SEE pruning of captures
                 if (depth <= 6 && !givesCheck && !pos.see_ge(m, -90 * depth)) continue;
