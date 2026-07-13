@@ -1,6 +1,8 @@
 #include "search.h"
 #include "movegen.h"
 #include "eval.h"
+#include "nnue.h"
+#include "nnue_accumulator.h"
 #include "tt.h"
 #include "bitboard.h"
 #include <chrono>
@@ -521,6 +523,13 @@ void start(Position& pos, const Limits& lim) {
     set_time_limits(pos);
     TT.new_search();
 
+    // Attach the incremental NNUE accumulator for the duration of the search. One stack
+    // (heap-backed, persists across calls), rebuilt from the root each search; the
+    // Position drives push/pop through do_move/undo_move. HCE mode leaves it detached.
+    static NNUE::AccStack accStack;
+    bool useAcc = NNUE::loaded();
+    if (useAcc) { accStack.reset(pos); pos.set_nnue_acc(&accStack); }
+
     Stack stack[MAX_PLY + 10];
     std::memset(stack, 0, sizeof(stack));
     Stack* ss = stack + 4;
@@ -565,6 +574,8 @@ void start(Position& pos, const Limits& lim) {
         if (!limits.infinite && timeLimitSoft && elapsed() >= timeLimitSoft) break;
         if (limits.nodes && nodeCount >= limits.nodes) break;
     }
+
+    if (useAcc) pos.set_nnue_acc(nullptr); // detach: eval reverts to from-scratch off-search
 
     Move best = lastBest != MOVE_NONE ? lastBest : rootBestMove;
     if (best == MOVE_NONE) {

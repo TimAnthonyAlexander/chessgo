@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+namespace NNUE { class AccStack; }
+
 struct StateInfo {
     // Copied/updated on make_move
     U64      key;
@@ -47,6 +49,12 @@ public:
     U64 checkers() const { return st->checkers; }
     U64 blockers_for_king(Color c) const { return st->blockersForKing[c]; }
     bool in_check() const { return st->checkers != 0; }
+
+    // Incremental NNUE accumulator: attached by the search for its duration (null
+    // otherwise, so perft / UCI move-application / tests take the from-scratch eval
+    // path). When set, do_move/undo_move/do_null_move/undo_null_move drive it in lockstep.
+    NNUE::AccStack* nnue_acc() const { return nnueAcc; }
+    void set_nnue_acc(NNUE::AccStack* a) { nnueAcc = a; }
 
     // Attacks
     U64 attackers_to(Square s, U64 occ) const;
@@ -95,6 +103,7 @@ private:
     Color sideToMove;
     StateInfo* st;
     StateInfo rootState;
+    NNUE::AccStack* nnueAcc = nullptr;
 };
 
 // Utility

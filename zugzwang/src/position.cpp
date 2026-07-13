@@ -1,5 +1,6 @@
 #include "position.h"
 #include "zobrist.h"
+#include "nnue_accumulator.h"
 #include <sstream>
 #include <cctype>
 #include <cstring>
@@ -294,9 +295,13 @@ void Position::do_move(Move m, StateInfo& newSt) {
     set_check_info();
 
     game_key_history[history_count++] = k;
+
+    // Child board fully formed — fold the move into the incremental accumulator.
+    if (nnueAcc) nnueAcc->push(*this);
 }
 
 void Position::undo_move(Move m) {
+    if (nnueAcc) nnueAcc->pop();
     sideToMove = ~sideToMove;
     Color us = sideToMove;
     Square from = from_sq(m), to = to_sq(m);
@@ -343,9 +348,13 @@ void Position::do_null_move(StateInfo& newSt) {
     sideToMove = ~sideToMove;
     set_check_info();
     game_key_history[history_count++] = k;
+
+    // Null move: no piece placement change, so the (color-absolute) halves are unchanged.
+    if (nnueAcc) nnueAcc->pushNull();
 }
 
 void Position::undo_null_move() {
+    if (nnueAcc) nnueAcc->pop();
     history_count--;
     st = st->previous;
     sideToMove = ~sideToMove;

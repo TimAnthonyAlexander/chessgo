@@ -5,8 +5,15 @@ TARGET    = zugzwang
 
 SRC = src/uci.cpp src/search.cpp src/eval.cpp src/position.cpp \
       src/bitboard.cpp src/zobrist.cpp src/movegen.cpp src/tt.cpp \
-      src/nnue_net.cpp src/nnue_features.cpp src/nnue_eval.cpp
+      src/nnue_net.cpp src/nnue_features.cpp src/nnue_eval.cpp \
+      src/nnue_accumulator.cpp
 OBJ = $(SRC:.cpp=.o)
+
+# ASSERT=1 compiles the incremental-accumulator bit-exactness check: every in-search
+# eval rebuilds the halves from scratch and aborts on any int16 drift. Slow — gate only.
+ifeq ($(ASSERT),1)
+  CXXFLAGS += -DNNUE_ASSERT
+endif
 
 # Native optimization (arch-detected: Apple Silicon uses -mcpu, x86 uses -march)
 ifeq ($(shell uname -m),x86_64)

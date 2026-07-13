@@ -1,6 +1,7 @@
 #include "eval.h"
 #include "bitboard.h"
 #include "nnue.h"
+#include "nnue_accumulator.h"
 
 using namespace BB;
 
@@ -328,5 +329,9 @@ static int hce_evaluate(const Position& pos) {
 // NNUE dispatch: route the static eval through the loaded net when present,
 // else fall back to the hand-crafted eval. Both return stm-relative centipawns.
 int Eval::evaluate(const Position& pos) {
-    return NNUE::loaded() ? NNUE::evaluate(pos) : hce_evaluate(pos);
+    if (!NNUE::loaded()) return hce_evaluate(pos);
+    // In-search: read the incremental accumulator the search maintains on the position.
+    // Outside search (no stack attached): the from-scratch net eval.
+    if (NNUE::AccStack* a = pos.nnue_acc()) return a->eval(pos);
+    return NNUE::evaluate(pos);
 }

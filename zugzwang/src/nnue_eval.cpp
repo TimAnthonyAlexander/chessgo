@@ -1,4 +1,5 @@
 #include "nnue.h"
+#include "nnue_internal.h"
 #include "nnue_arch.h"
 #include "nnue_net.h"
 #include "nnue_features.h"
@@ -125,22 +126,14 @@ static void build_acc_half(int16_t* acc, const Features& f) {
 
 } // namespace
 
-// evaluate: from-scratch forward, side-to-move-relative centipawns. Ports
-// enriched.go `Eval` (orientation + bucket) + enriched_int8.go
-// `evalFromHalvesInt8` (pairwise-u8 -> int8 L1 -> float L2 -> float output).
-int evaluate(const Position& pos) {
-    if (!g_net.ok) return 0;
-
-    // --- Feature transformer: build both absolute-color halves from scratch ---
-    Features fw, fb;
-    active_features(pos, WHITE, fw);
-    active_features(pos, BLACK, fb);
-
-    int16_t accW[H];
-    int16_t accB[H];
-    build_acc_half(accW, fw);
-    build_acc_half(accB, fb);
-
+// eval_from_halves: the multilayer forward pass over two prebuilt FT accumulator
+// halves (accW = White-perspective, accB = Black-perspective), oriented to the side to
+// move. Shared by the from-scratch evaluate() below and the incremental AccStack (see
+// nnue_internal.h) — since it is a pure function of (accW, accB, pos), incremental
+// bit-exactness reduces to "incremental halves == from-scratch halves" (int16). Ports
+// enriched.go `Eval` (orientation + bucket) + enriched_int8.go `evalFromHalvesInt8`
+// (pairwise-u8 -> int8 L1 -> float L2 -> float output).
+int eval_from_halves(const int16_t* accW, const int16_t* accB, const Position& pos) {
     // stm/opp orientation (enriched.go:525-528): stm is the side-to-move half.
     const int16_t* stm = accW;
     const int16_t* opp = accB;
@@ -182,6 +175,26 @@ int evaluate(const Position& pos) {
     float y = g_net.OB[bk] + y1[0];
     float scaled = y * CpScale;  // float32 multiply, then widen for the round
     return static_cast<int>(std::round(static_cast<double>(scaled)));
+}
+
+// evaluate: the from-scratch static eval (side-to-move-relative centipawns). Builds
+// both absolute-color halves from the current board and runs the shared forward. This
+// is the golden-tested path (test/golden_check.sh) and the assert oracle for the
+// incremental accumulator. Used for every eval OUTSIDE search; inside search the
+// AccStack maintains the halves incrementally and calls eval_from_halves directly.
+int evaluate(const Position& pos) {
+    if (!g_net.ok) return 0;
+
+    Features fw, fb;
+    active_features(pos, WHITE, fw);
+    active_features(pos, BLACK, fb);
+
+    int16_t accW[H];
+    int16_t accB[H];
+    build_acc_half(accW, fw);
+    build_acc_half(accB, fb);
+
+    return eval_from_halves(accW, accB, pos);
 }
 
 } // namespace NNUE
