@@ -10,7 +10,7 @@ cleanup(){ printf '\033[?25h\n'; exit 0; }
 trap cleanup INT TERM
 printf '\033[?25l'                   # hide cursor
 while :; do
-  el=$(grep -a 'Elo:'    "$LOG" 2>/dev/null | tail -1 | sed 's/^Elo: //; s/, nElo: /   nElo /')
+  el=$(grep -a 'Elo:'    "$LOG" 2>/dev/null | tail -1 | sed 's/^Elo: //; s/, *nElo:.*//')
   ll=$(grep -a 'LLR:'    "$LOG" 2>/dev/null | tail -1)
   ga=$(grep -a 'Games:'  "$LOG" 2>/dev/null | tail -1 | sed 's/^Games: //')
   pt=$(grep -a 'Ptnml'   "$LOG" 2>/dev/null | tail -1 | sed 's/^Ptnml(0-2): //')
