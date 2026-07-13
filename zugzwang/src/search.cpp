@@ -28,6 +28,9 @@ int rootDepthGlobal = 0;
 struct Tune {
     bool lmp = true, quietSee = true, futility = true, razor = true, nullMove = true, lmr = true;
     bool corrHist = true;
+    bool negExt = true;
+    bool rfpSoft = true;
+    int qsFutMargin = 300;
     void load() {
         auto off = [](const char* n){ const char* e = getenv(n); return e && e[0]=='0'; };
         if (off("LMP")) lmp = false;
@@ -37,6 +40,9 @@ struct Tune {
         if (off("NULL")) nullMove = false;
         if (off("LMR")) lmr = false;
         if (off("CORRHIST")) corrHist = false;
+        if (off("NEGEXT")) negExt = false;
+        if (off("RFPSOFT")) rfpSoft = false;
+        if (const char* e = getenv("QSFUT_MARGIN")) { int v = atoi(e); if (v > 0) qsFutMargin = v; }
     }
 } tune;
 
@@ -245,7 +251,7 @@ int qsearch(Position& pos, Stack* ss, int alpha, int beta) {
             return bestValue;
         }
         if (bestValue > alpha) alpha = bestValue;
-        futilityBase = bestValue + 130;
+        futilityBase = bestValue + tune.qsFutMargin;
     }
 
     // Generate moves: captures/promotions (or all evasions when in check)
@@ -368,8 +374,10 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
     // ---- Pruning (non-PV, not in check) ----
     if (!PvNode && !ss->inCheck && !excluded) {
         // Reverse futility pruning
-        if (depth <= 8 && eval - 80 * (depth - improving) >= beta && eval < VALUE_MATE_IN_MAX_PLY)
-            return eval;
+        bool quietTT = ttMove != MOVE_NONE && !ttCapture;   // ttCapture computed above at the TT probe
+        if (depth <= 8 && !(tune.rfpSoft && quietTT)
+            && eval - 80 * (depth - improving) >= beta && eval < VALUE_MATE_IN_MAX_PLY)
+            return tune.rfpSoft ? (2 * beta + eval) / 3 : eval;
 
         // Null move pruning
         if (tune.nullMove && depth >= 3 && eval >= beta && (ss - 1)->currentMove != MOVE_NULL
@@ -452,6 +460,12 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
             ss->excludedMove = MOVE_NONE;
             if (s < singularBeta) extension = 1;
             else if (singularBeta >= beta) return singularBeta; // multi-cut
+            else if (tune.negExt) {
+                // ttMove is provably NOT singular — SF's negative extension de-prioritizes a
+                // move the TT overrates. Reuses the verification search already run (no new search).
+                if (ttValue >= beta) extension = -2;
+                else if (cutNode)    extension = -1;
+            }
         }
 
         // Check extension
