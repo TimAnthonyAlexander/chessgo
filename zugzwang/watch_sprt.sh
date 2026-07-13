@@ -10,10 +10,10 @@ cleanup(){ printf '\033[?25h\n'; exit 0; }
 trap cleanup INT TERM
 printf '\033[?25l'                   # hide cursor
 while :; do
-  el=$(grep -a 'Elo:'    "$LOG" 2>/dev/null | tail -1)
+  el=$(grep -a 'Elo:'    "$LOG" 2>/dev/null | tail -1 | sed 's/^Elo: //; s/, nElo: /   nElo /')
   ll=$(grep -a 'LLR:'    "$LOG" 2>/dev/null | tail -1)
-  ga=$(grep -a 'Games:'  "$LOG" 2>/dev/null | tail -1)
-  pt=$(grep -a 'Ptnml'   "$LOG" 2>/dev/null | tail -1)
+  ga=$(grep -a 'Games:'  "$LOG" 2>/dev/null | tail -1 | sed 's/^Games: //')
+  pt=$(grep -a 'Ptnml'   "$LOG" 2>/dev/null | tail -1 | sed 's/^Ptnml(0-2): //')
   sp=$(grep -a 'SPRT:'   "$LOG" 2>/dev/null | tail -1)
   fin=$(grep -ac 'Finished game' "$LOG" 2>/dev/null || echo 0)
   run=RUNNING; pgrep -f fastchess-linux >/dev/null 2>&1 || run=DONE
