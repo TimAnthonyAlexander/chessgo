@@ -325,10 +325,11 @@ are SHIPPED) lives in `docs/NNUE/SF_PARITY_ROADMAP.md`.
 > full-threats **draws/loses vs cold Stockfish that efs28 beat ~90%** — a real, self-play-invisible
 > regression vs external engines (the non-transitivity trap this net is the poster child for). Profiling
 > **ruled out speed** (NPS flat, `docs/PROFILING/{amd,arm}/11Jul2026.md`) **and deployment quantization**
-> (int8 tail vs float ≤31 cp); top live suspect is a **Go↔Rust threat-feature inference mismatch**
-> (`threats_sf.go:175`). Investigation + the Abitur time-odds ladder confirming it: `docs/open_tasks/
-> fullthreats-vs-sf-regression.md`, ENGINE_STRENGTH §36. **Do NOT quote the +10 as a strength gain until
-> Abitur clears it.**
+> (int8 tail vs float ≤31 cp), AND the once-suspected **Go↔Rust threat-feature inference mismatch**
+> (`threats_sf.go:175`) is **RULED OUT — the Go threats are proven bit-exact vs the Rust trainer (×2)**;
+> the remaining live causes are H2/H3 (eval-noise reshaping the tree / self-play being the wrong gate),
+> NOT a threat bug. See `docs/open_tasks/fullthreats-vs-sf-regression.md`, ENGINE_STRENGTH §36. **Do NOT
+> quote the +10 as a strength gain until Abitur clears it.**
 
 **BUT search is NOT dry — the "dry well" call was retracted same day.** Re-tuning the SEE/singular/
 null-move margins **SHIPPED +38.7 ± 5.5 Elo movetime** (`singulardepth 8→6, seequietmargin 150→103,

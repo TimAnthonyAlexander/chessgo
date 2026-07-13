@@ -1,6 +1,8 @@
 # Why full-threats gained +10 in self-play but got WORSE vs Stockfish
 
-**Status:** open investigation (2026-07-11). Ground-truth observation, owner-confirmed,
+**Status:** open (2026-07-11). **UPDATE 2026-07-13: H1 (Go↔Rust threat mismatch) REFUTED — Go
+threats proven bit-exact vs the Rust trainer, verified ×2. Not a threat bug; look to H2/H3.**
+Ground-truth observation, owner-confirmed,
 same measurement method throughout (no methodology change between the two nets):
 
 - **efs28** (enriched, coarse **9,216**-input threat block): **~90% vs cold Stockfish**
@@ -21,6 +23,7 @@ This is a genuine **eval-quality regression**, and the self-play gate did not se
 | Gross eval breakage | **Ruled out** | `TestSmokeEvalSanity` PASS — material signed correctly, evals in sane cp ranges. |
 | King-bucket / mirror / Finny cache | **Ruled out** | Bit-exact incremental==from-scratch across all boundary types; bucket table pinned identical to the Rust trainer (subagent audit). |
 | int16 threat-FT overflow/saturation | **Ruled out** | Real-net accumulator range **[−3016, +2894]** — 9× int16 headroom; SIMD==scalar. |
+| Go↔Rust threat-feature inference mismatch (was H1, top suspect) | **Ruled out (2026-07-13)** | Go threat features proven **bit-exact vs the Rust trainer, verified ×2** — cross-check dump green incl. the same-type-edge / mir=0 paths. |
 
 ## The core principle (why +10 self-play ≠ stronger)
 
@@ -37,9 +40,12 @@ eval distortion introduced by the threat enrichment** that (i) exploits efs28's
 *correlated* blind spots (same engine family — shared base/KB weights and training
 data) and (ii) is objectively unsound against a perfect defender.
 
-## Ranked live hypotheses (not yet refuted)
+## Ranked hypotheses (H1 REFUTED 2026-07-13 — see below; H2/H3 remain open)
 
-### H1 — Go threat-feature inference ≠ the Rust trainer's (a real bug). **TOP SUSPECT**
+### H1 — Go threat-feature inference vs the Rust trainer. **REFUTED (bit-exact ×2)**
+**Resolved 2026-07-13:** the Go threat features are **bit-exact vs the Rust trainer**, verified twice
+(cross-check dump green across the same-type-edge and mir=0 paths described below). This is **not** the
+cause of the vs-SF result. Retained for the record:
 `internal/nnue/threats_sf.go:175` — the same-type-edge dedup survivor rule
 (`at==vt && … && from<to → drop`) and the **mir=0 (queenside-king) path** are **not
 pinned against the Rust trainer**. The two green cross-check FENs contain **zero
@@ -85,8 +91,8 @@ result is the first real external signal, and it says the gate has been misleadi
 1. **Localize net vs deployment (deployment already ruled out — confirm):** play
    efs28, full-threats, and the **float** full-threats net vs cold SF in one harness.
    Float also losing ⇒ it's the net/features (H1/H2).
-2. **H1 decisive:** Rust `cross_check_dump` vs the Go dump on same-type edges — a
-   yes/no on a real bug. Highest value.
+2. ~~**H1 decisive:** Rust `cross_check_dump` vs the Go dump on same-type edges.~~ **DONE (2026-07-13)
+   — green: threats bit-exact vs the trainer ×2, no bug. H1 refuted.**
 3. **H2 decisive:** depth-at-movetime + EBF suite, full-threats vs efs28.
 4. **Eval-vs-SF probe:** on threat-heavy/tactical positions compare full-threats cp,
    efs28 cp, SF cp; systematic full-threats deviation (esp. overvaluing the

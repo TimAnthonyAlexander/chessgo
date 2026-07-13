@@ -2484,14 +2484,13 @@ that both gomachines share (so self-play is blind) but a strong external engine 
 - **Not king-bucket/mirror/Finny** (bit-exact, pinned to the Rust trainer) **nor int16
   overflow** (accumulator range [−3016, +2894], 9× headroom).
 
-### 36.3 Live suspects (see `docs/open_tasks/fullthreats-vs-sf-regression.md`)
-- **H1 (top): Go threat-feature inference ≠ the Rust trainer.** `threats_sf.go:175`
-  same-type-edge dedup + the mir=0 path are **never pinned** against the trainer (both
-  green cross-check FENs have zero same-type non-pawn edges). A wrong directed edge →
-  weights applied to the wrong feature → self-play-invisible bias, SF-punished,
-  **8.7× more load-bearing in full-threats** than efs28's coarse block. Decisive test:
-  Rust `cross_check_dump` vs the Go dump on a rook-standoff position.
-- **H2: threat overvaluation / eval noise** (full-threats needed 2× the nodes to reach
+### 36.3 Live suspects (H1 REFUTED 2026-07-13 — see `docs/open_tasks/fullthreats-vs-sf-regression.md`)
+- **H1 — Go threat-feature inference ≠ the Rust trainer. REFUTED (bit-exact ×2).** The
+  `threats_sf.go:175` same-type-edge dedup + mir=0 path were the top suspect; the decisive test
+  (Rust `cross_check_dump` vs the Go dump, incl. a rook-standoff position) came back **green —
+  Go threats are bit-exact vs the trainer, verified twice.** Not the cause; the vs-SF regression
+  is H2/H3, not a threat bug.
+- **H2 (now top): threat overvaluation / eval noise** (full-threats needed 2× the nodes to reach
   depth 16 on the test FEN → possibly shallower at movetime). Needs a suite.
 
 ### 36.4 THE RULE (now in CLAUDE.md)
