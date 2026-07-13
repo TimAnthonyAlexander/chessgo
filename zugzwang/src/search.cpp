@@ -628,6 +628,13 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
 
         int score;
         bool doFullSearch;
+        // Set only when the LMR branch actually reduced (d < newDepth) AND the
+        // reduced scout beat alpha — i.e. this doFullSearch is genuinely the
+        // post-LMR re-search (gomachine search.go:2703, `reduction > 0`). When
+        // doFullSearch instead comes from the plain non-LMR scout (else branch
+        // below — every capture/promotion, low-depth move, or early move count),
+        // `score` has not been assigned yet, so doDeeper must NOT read it.
+        bool wasLMRReduced = false;
 
         // Late Move Reductions
         if (tune.lmr && depth >= 3 && moveCount > tune.lmrMinMoves + (rootNode ? 1 : 0) && isQuiet) {
@@ -643,6 +650,7 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
             int d = std::max(1, std::min(newDepth - r, newDepth));
             score = -negamax<false>(pos, ss + 1, -alpha - 1, -alpha, d, true);
             doFullSearch = score > alpha && d < newDepth;
+            wasLMRReduced = doFullSearch;
         } else {
             doFullSearch = !PvNode || moveCount > 1;
         }
@@ -651,9 +659,12 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
             // D.3: adapt the post-LMR re-search depth to how far the reduced
             // scout beat the node's tracked bestValue — a big overshoot re-
             // searches a ply deeper, a bare pass a ply shallower (gomachine
-            // search.go:2702-2718). Flat `newDepth` re-search when off.
+            // search.go:2702-2718). Flat `newDepth` re-search when off, and
+            // also when this doFullSearch didn't come from an actual LMR
+            // reduction (wasLMRReduced guards against reading `score` before
+            // it's assigned — see comment above).
             int rd = newDepth;
-            if (tune.doDeeper) {
+            if (tune.doDeeper && wasLMRReduced) {
                 if (score > bestValue + 44 + 4 * newDepth) rd = newDepth + 1;
                 else if (score < bestValue + newDepth) rd = std::max(1, newDepth - 1);
             }
