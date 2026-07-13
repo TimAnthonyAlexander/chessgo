@@ -89,14 +89,25 @@ nohup ~/fastchess/fastchess-linux-x86-64/fastchess \
 # watch:  tail -f ~/zug_tax.log
 ```
 
-**Result so far (318 games, movetime 100 ms, AVX-512):**
-- **Zugzwang +14.2 ± 24.7 Elo** vs gomachine (114 W / 101 L / 103 D, 52.0%). CI ≈ [−11, +39] → **statistically even, hair toward Zugzwang.** (Early +58 on 24 games was small-sample noise.)
-- NEON/M3 spot-checks: gomachine higher raw NPS, Zugzwang reaches deeper depth (d16 vs d13) — not directly comparable; the match is the real signal.
+**⚠️ RETRACTED result (318 games): "Zugzwang +14 ± 25, statistically even, language-tax ≈ 0."**
+That was measured against a **crippled gomachine** — the **Jul-10 `bin/gomachine`**, which ran
+the multilayer net **from-scratch every eval** (`move-aware=false`, ~55k nps, ~**9× too slow** at
+movetime). Do NOT cite the +14 or "language tax ≈ 0."
 
-**Headline:** at equal 100 ms with the same net, **C++ from-scratch ≈ Go incremental+SIMD.** The
-Go-vs-C++ *language* tax is ~zero. The NNUE eval is the strength; chesshce's search is competitive
-with gomachine's. (Also: the NEON-vs-AVX512 strength gap the user first saw = gomachine's int8 tail
-being scalar on NEON / VNNI on AVX512 — a missing kernel, not a language issue.)
+**Clean result (2026-07-13, 400 games, movetime 100 ms, coalla AVX-512, SAME net `ft_final`,
+both single-threaded, both bookless, gomachine = current `main` 70dddbf move-aware):**
+- **Zugzwang −93.4 ± 24 Elo** vs current gomachine (73 W / 178 L / 149 D, 36.9%, LOS 0%).
+- **Decomposition (all measured):** the +14→−93 swing is the **gomachine binary**: current gomachine
+  beats the Jul-10 binary **+117 ± 34 Elo** (200 games) head-to-head on the same net (`gm_vs_gm.log`). Plus net
+  ml_efs28→full-threats ≈ +10 (§35), minus zug's inc-acc ≈ +16 → −93. ✓
+- **Ruled out as the cause of −93:** SMP (both 1 thread, ~90% CPU), the SF book (gomachine's uci
+  path is bookless — it searches, doesn't probe `book.bin`), the net (ml_efs28 ≈ full-threats).
+
+**Headline (corrected):** it is **NOT** an NPS/eval-speed story. Zugzwang searches *faster and
+deeper* than gomachine (≈1.46M nps / d22 vs ≈514k / d16 at 3 s) yet loses by ~93 Elo — the gap is
+**search QUALITY** (reckless over-pruning / untuned margins vs gomachine's tuned search). The
+incremental accumulator (#2, DONE, +37% NPS) helps but can't close a search-quality gap; the real
+work is the `OPTIMIZATIONS.md` search backlog (#2 margins, #3 corrhist, #4 histprune).
 
 ## Recent misstep (recorded)
 

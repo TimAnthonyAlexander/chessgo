@@ -6,18 +6,32 @@
 
 ## Why this list exists (read first)
 
-Zugzwang shares gomachine's **exact NNUE net** — eval output is bit-identical. In the
-tax match (fixed **100 ms/move**, **no clock / no time management**, **single-threaded**,
-same net, both bookless) the two are **statistically even** (Zugzwang +14 ± 24 Elo, 318
-games, CI ≈ [−11, +39] → a lean, not an established edge).
+Zugzwang shares gomachine's **exact NNUE net** — eval output is bit-identical. On truly
+equal footing (same net `ft_final`, fixed **100 ms/move**, both **single-threaded**, both
+**bookless**, gomachine `main` properly configured) **Zugzwang is −93 ± 24 Elo behind
+current gomachine** (400 games, 36.9%, LOS 0%; coalla 2026-07-13).
 
-Because eval is identical, the match measures exactly two things:
+> ⚠️ **The old "+14 ≈ even / language-tax ≈ 0" (318 games) is RETRACTED — it was against a
+> crippled gomachine.** That baseline used the **Jul-10 `bin/gomachine`**, which ran the
+> multilayer net **from-scratch every eval** (`move-aware=false`, ~55k nps) — **~9× too slow**
+> at movetime. Head-to-head, same net, current gomachine beats the Jul-10 binary by **+113 Elo**
+> (+117 ± 34, 200 games) — nearly the entire swing. It was **not** net/search-tuning Elo; it was the **move-aware
+> incremental-eval** infra fix (the multilayer net was "not viable" without it). Ruled out as
+> causes of the −93: SMP (both 1 thread, ~90% CPU), the SF book (uci path is bookless — it
+> searches, doesn't probe), and the net (§35: coalla `kb-mirror`=ml_efs28 ≈ full-threats).
 
-1. **Search efficiency** (strength per node) — move ordering, pruning, extensions, history.
-2. **NPS within 100 ms** — how many nodes fit in the budget → depth reached.
+The measurement is now clean, and it is **not an NPS/eval-speed story**: Zugzwang searches
+*faster and deeper* than gomachine (≈1.46M nps / d22 vs ≈514k / d16 at 3 s) yet loses. The
+gap is **search QUALITY** — Zugzwang reaches high nominal depth via **reckless over-pruning**
+(its margins are far more aggressive than gomachine's, #2) and plays worse per ply. So the
+match measures:
 
-So every item below is either a *strength-per-node* win or an *NPS* win. **Time-management
-work is out of scope** (there is no clock). SMP/lockless is out of scope (single-threaded).
+1. **Search quality / strength per node** — move ordering, pruning MARGINS, extensions, history. **← the −93 lives here.**
+2. NPS within 100 ms — Zugzwang is already *ahead* here (C++ + the incremental accumulator, #5 DONE); more NPS won't fix the deficit.
+
+So the ranked items below that matter are the **search-quality** ones (#2 margin transplant,
+#3 corrhist, #4 histprune, #8 LMRDoDeeper+ContHist). **Time-management** work is out of scope
+(no clock). **SMP/lockless** is out of scope (single-threaded).
 
 Two important framings that came out of the comparison:
 
