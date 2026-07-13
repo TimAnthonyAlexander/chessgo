@@ -29,6 +29,7 @@ struct Tune {
     bool lmp = true, quietSee = true, futility = true, razor = true, nullMove = true, lmr = true;
     bool histPrune = true;
     int  histPruneMargin = 1000; // threshold = -histPruneMargin * depth
+    bool corrHist = true;
     void load() {
         auto off = [](const char* n){ const char* e = getenv(n); return e && e[0]=='0'; };
         if (off("LMP")) lmp = false;
@@ -39,8 +40,88 @@ struct Tune {
         if (off("LMR")) lmr = false;
         if (off("HISTPRUNE")) histPrune = false;
         if (const char* e = getenv("HISTPRUNE_MARGIN")) { int v = atoi(e); if (v > 0) histPruneMargin = v; }
+        if (off("CORRHIST")) corrHist = false;
     }
 } tune;
+
+// ---- Correction History (CorrHist) ----
+// Learns the running bias between the (raw) static eval and the eventual search
+// result, keyed by pawn-structure and per-color non-pawn-material patterns
+// (Position::pawn_key() / non_pawn_key(), maintained incrementally in
+// Position::do_move — see position.h/.cpp). The corrected eval is what search
+// pruning (RFP/NMP/razoring/futility) and the `improving` heuristic read;
+// Eval::evaluate() itself is never touched, so the `eval` UCI command and the
+// golden-eval fixture stay byte-identical. Formula mirrors Stockfish 18
+// (src/search.cpp: correction_value / to_corrected_static_eval /
+// update_correction_history, src/history.h: StatsEntry::operator<<), scoped
+// down to the two table kinds the task asks for (pawn + per-color non-pawn) —
+// SF's extra minor-piece and continuation tables are not implemented here.
+constexpr int CORR_SIZE  = 16384;       // entries per table (power of two -> mask)
+constexpr int CORR_MASK  = CORR_SIZE - 1;
+constexpr int CORR_LIMIT = 1024;        // per-entry clamp (SF's CORRECTION_HISTORY_LIMIT)
+// SF's blend weights (search.cpp correction_value: 10347/8821/11665/11665/7841
+// for pawn/minor/wnp/bnp/cont); we keep the two we implement, applied then
+// divided by CORR_APPLY_SHIFT (SF: cv / 131072) to land back in centipawns.
+constexpr int CORR_W_PAWN       = 10347;
+constexpr int CORR_W_NONPAWN    = 11665;
+constexpr int CORR_APPLY_SHIFT  = 131072;
+// SF's per-table update weight for the non-pawn tables relative to the pawn
+// table (update_correction_history: `bonus * nonPawnWeight / 128`, weight 178;
+// the pawn table itself gets the raw `bonus`).
+constexpr int CORR_NONPAWN_UPDATE_NUM = 178;
+constexpr int CORR_NONPAWN_UPDATE_DEN = 128;
+
+int corrHist[COLOR_NB][CORR_SIZE];             // [stm][pawnKey & mask]
+int corrHistNP[COLOR_NB][COLOR_NB][CORR_SIZE]; // [stm][pieceColor][nonPawnKey(pieceColor) & mask]
+
+// SF's history-gravity update (history.h StatsEntry::operator<<): nudge the
+// entry toward `bonus`, decaying proportionally so it never leaves ±CORR_LIMIT.
+void corrhist_update_entry(int& e, int bonus) {
+    bonus = std::max(-CORR_LIMIT, std::min(CORR_LIMIT, bonus));
+    e += bonus - e * std::abs(bonus) / CORR_LIMIT;
+}
+
+// Weighted, blended correction (centipawns, side-to-move-relative) — SF's
+// correction_value(), pawn + white-nonpawn + black-nonpawn terms only.
+int correction(const Position& pos) {
+    Color stm = pos.side_to_move();
+    int pcv   = corrHist[stm][pos.pawn_key() & CORR_MASK];
+    int wnpcv = corrHistNP[stm][WHITE][pos.non_pawn_key(WHITE) & CORR_MASK];
+    int bnpcv = corrHistNP[stm][BLACK][pos.non_pawn_key(BLACK) & CORR_MASK];
+    long long cv = (long long)CORR_W_PAWN * pcv + (long long)CORR_W_NONPAWN * (wnpcv + bnpcv);
+    return int(cv / CORR_APPLY_SHIFT);
+}
+
+// Applies the learned correction to a raw static eval and clamps well clear of
+// mate scores (SF's to_corrected_static_eval). With CorrHist off, returns
+// rawEval untouched — CORRHIST=0 must reproduce the pre-CorrHist search exactly.
+int corrected_eval(const Position& pos, int rawEval) {
+    if (!tune.corrHist) return rawEval;
+    int v = rawEval + correction(pos);
+    if (v >= VALUE_MATE_IN_MAX_PLY) v = VALUE_MATE_IN_MAX_PLY - 1;
+    else if (v <= -VALUE_MATE_IN_MAX_PLY) v = -VALUE_MATE_IN_MAX_PLY + 1;
+    return v;
+}
+
+// Post-move-loop update (negamax only, never qsearch — SF's
+// update_correction_history call site, search.cpp ~1470-1480). `staticEval`
+// must be the CORRECTED eval (ss->staticEval), matching SF: by the time SF
+// reaches this call ss->staticEval already holds to_corrected_static_eval's
+// result, and gomachine's corrhist.go updates toward the same corrected value.
+// Guard is SF's exact guard: skip on capture bestMoves, and only trust the
+// residual when its sign agrees with whether a move raised alpha at all.
+void update_corrhist(const Position& pos, int staticEval, int bestValue, int depth, Move bestMove) {
+    if (!tune.corrHist) return;
+    if (bestMove != MOVE_NONE && pos.is_capture(bestMove)) return;
+    if ((bestValue > staticEval) != (bestMove != MOVE_NONE)) return;
+    int bonus = (bestValue - staticEval) * depth / (bestMove != MOVE_NONE ? 10 : 8);
+    bonus = std::max(-CORR_LIMIT / 4, std::min(CORR_LIMIT / 4, bonus));
+    Color stm = pos.side_to_move();
+    corrhist_update_entry(corrHist[stm][pos.pawn_key() & CORR_MASK], bonus);
+    int npBonus = bonus * CORR_NONPAWN_UPDATE_NUM / CORR_NONPAWN_UPDATE_DEN;
+    corrhist_update_entry(corrHistNP[stm][WHITE][pos.non_pawn_key(WHITE) & CORR_MASK], npBonus);
+    corrhist_update_entry(corrHistNP[stm][BLACK][pos.non_pawn_key(BLACK) & CORR_MASK], npBonus);
+}
 
 // Search stack per ply
 struct Stack {
@@ -149,17 +230,22 @@ int qsearch(Position& pos, Stack* ss, int alpha, int beta) {
             return ttValue;
     }
 
+    // rawEval is the uncorrected eval we persist to TT (tte->eval is always raw —
+    // see negamax for the same invariant — so a later hit can re-apply a possibly
+    // updated correction rather than replaying a stale corrected value).
+    int rawEval = VALUE_NONE;
     if (inCheck) {
         bestValue = futilityBase = -VALUE_INFINITE;
     } else {
-        int staticEval = (ttHit && tte->eval != VALUE_NONE) ? tte->eval : Eval::evaluate(pos);
+        rawEval = (ttHit && tte->eval != VALUE_NONE) ? tte->eval : Eval::evaluate(pos);
+        int staticEval = ss->staticEval = corrected_eval(pos, rawEval);
         bestValue = staticEval;
         if (ttHit && (tte->bound() & (ttValue > staticEval ? BOUND_LOWER : BOUND_UPPER)))
             bestValue = ttValue;
         if (bestValue >= beta) {
             if (!ttHit)
                 TT.store(tte, pos.key(), TT.value_to_tt(bestValue, ss->ply), false,
-                         BOUND_LOWER, 0, MOVE_NONE, staticEval);
+                         BOUND_LOWER, 0, MOVE_NONE, rawEval);
             return bestValue;
         }
         if (bestValue > alpha) alpha = bestValue;
@@ -219,7 +305,7 @@ int qsearch(Position& pos, Stack* ss, int alpha, int beta) {
 
     Bound b = bestValue >= beta ? BOUND_LOWER : BOUND_UPPER;
     TT.store(tte, pos.key(), TT.value_to_tt(bestValue, ss->ply), false, b, 0, bestMove,
-             inCheck ? VALUE_NONE : ss->staticEval);
+             inCheck ? VALUE_NONE : rawEval);
     return bestValue;
 }
 
@@ -262,16 +348,21 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
             return ttValue;
     }
 
-    // Static eval
+    // Static eval (corrected — §CorrHist). rawEval is the uncorrected value,
+    // persisted to TT below so a later hit can re-apply a possibly-updated
+    // correction fresh (mirrors SF's unadjustedStaticEval / ttData.eval split);
+    // ss->staticEval (read by `improving` and every pruning site here on) is
+    // the corrected value, matching SF's ss->staticEval post to_corrected_static_eval.
     int eval;
+    int rawEval;
     if (ss->inCheck) {
+        rawEval = VALUE_NONE;
         eval = ss->staticEval = VALUE_NONE;
-    } else if (ttHit) {
-        eval = ss->staticEval = (tte->eval != VALUE_NONE) ? tte->eval : Eval::evaluate(pos);
-        if (ttValue != VALUE_NONE && (tte->bound() & (ttValue > eval ? BOUND_LOWER : BOUND_UPPER)))
-            eval = ttValue;
     } else {
-        eval = ss->staticEval = Eval::evaluate(pos);
+        rawEval = (ttHit && tte->eval != VALUE_NONE) ? tte->eval : Eval::evaluate(pos);
+        eval = ss->staticEval = corrected_eval(pos, rawEval);
+        if (ttHit && ttValue != VALUE_NONE && (tte->bound() & (ttValue > eval ? BOUND_LOWER : BOUND_UPPER)))
+            eval = ttValue;
     }
 
     bool improving = !ss->inCheck && ss->ply >= 2
@@ -456,7 +547,13 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
         Bound b = bestValue >= beta ? BOUND_LOWER
                 : (PvNode && bestMove) ? BOUND_EXACT : BOUND_UPPER;
         TT.store(tte, pos.key(), TT.value_to_tt(bestValue, ss->ply), PvNode, b, depth,
-                 bestMove, ss->inCheck ? VALUE_NONE : ss->staticEval);
+                 bestMove, ss->inCheck ? VALUE_NONE : rawEval);
+
+        // Correction history update (§CorrHist, negamax only — never qsearch).
+        // Excluded (singular-verification) nodes must not teach it either, hence
+        // this living inside the same `!excluded` guard as the TT store.
+        if (!ss->inCheck)
+            update_corrhist(pos, ss->staticEval, bestValue, depth, bestMove);
     }
 
     return bestValue;
@@ -491,6 +588,8 @@ void init() {
 void clear() {
     std::memset(history, 0, sizeof(history));
     std::memset(counterMoves, 0, sizeof(counterMoves));
+    std::memset(corrHist, 0, sizeof(corrHist));
+    std::memset(corrHistNP, 0, sizeof(corrHistNP));
     TT.clear();
 }
 

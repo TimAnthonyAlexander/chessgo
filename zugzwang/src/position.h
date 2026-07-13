@@ -10,6 +10,11 @@ namespace NNUE { class AccStack; }
 struct StateInfo {
     // Copied/updated on make_move
     U64      key;
+    // Correction-history sub-keys (§CorrHist): pure piece-placement XORs of
+    // Zobrist::psq, maintained in lockstep with `key` in do_move but NEVER
+    // folded into `key` itself — perft/TT must be byte-unaffected by these.
+    U64      pawnKey;               // XOR of Zobrist::psq[pc][sq] over pawns only
+    U64      nonPawnKey[COLOR_NB];  // per-color XOR over that color's non-pawn pieces (incl. king)
     int      castlingRights;
     Square   epSquare;
     int      rule50;
@@ -46,6 +51,8 @@ public:
     Square ep_square() const { return st->epSquare; }
     int rule50_count() const { return st->rule50; }
     U64 key() const { return st->key; }
+    U64 pawn_key() const { return st->pawnKey; }
+    U64 non_pawn_key(Color c) const { return st->nonPawnKey[c]; }
     U64 checkers() const { return st->checkers; }
     U64 blockers_for_king(Color c) const { return st->blockersForKing[c]; }
     bool in_check() const { return st->checkers != 0; }

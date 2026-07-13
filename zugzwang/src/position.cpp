@@ -126,6 +126,18 @@ void Position::set(const std::string& fen) {
     st->rule50 = halfmove;
     st->pliesFromNull = 0;
     st->key = compute_key();
+
+    // From-scratch init of the correction-history sub-keys (§CorrHist). Only
+    // done here; do_move() mirrors every psq XOR incrementally from this point on.
+    st->pawnKey = 0;
+    st->nonPawnKey[WHITE] = st->nonPawnKey[BLACK] = 0;
+    for (Square s = A1; s <= H8; s = Square(s + 1)) {
+        Piece pc = board[s];
+        if (pc == NO_PIECE) continue;
+        if (type_of(pc) == PAWN) st->pawnKey ^= Zobrist::psq[pc][s];
+        else st->nonPawnKey[color_of(pc)] ^= Zobrist::psq[pc][s];
+    }
+
     set_check_info();
     game_key_history[history_count++] = st->key;
 }
@@ -216,6 +228,11 @@ void Position::do_move(Move m, StateInfo& newSt) {
     newSt.pliesFromNull = st->pliesFromNull + 1;
     newSt.previous = st;
     newSt.capturedPiece = NO_PIECE;
+    // Carry forward the correction-history sub-keys; do_move mirrors every
+    // psq XOR below into the pawn/non-pawn half it belongs to.
+    newSt.pawnKey = st->pawnKey;
+    newSt.nonPawnKey[WHITE] = st->nonPawnKey[WHITE];
+    newSt.nonPawnKey[BLACK] = st->nonPawnKey[BLACK];
 
     Color us = sideToMove, them = ~us;
     Square from = from_sq(m), to = to_sq(m);
@@ -236,8 +253,10 @@ void Position::do_move(Move m, StateInfo& newSt) {
                                  : (to > from ? BLACK_OO : BLACK_OOO);
         Square rfrom = RookFrom[flag], rto = RookTo[flag];
         k ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
+        newSt.nonPawnKey[us] ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to]; // king (always non-pawn)
         Piece rook = make_piece(us, ROOK);
         k ^= Zobrist::psq[rook][rfrom] ^ Zobrist::psq[rook][rto];
+        newSt.nonPawnKey[us] ^= Zobrist::psq[rook][rfrom] ^ Zobrist::psq[rook][rto];
         move_piece(from, to);
         move_piece(rfrom, rto);
         captured = NO_PIECE;
@@ -248,21 +267,29 @@ void Position::do_move(Move m, StateInfo& newSt) {
                 capsq = Square(to - (us == WHITE ? NORTH : SOUTH));
             remove_piece(capsq);
             k ^= Zobrist::psq[captured][capsq];
+            if (type_of(captured) == PAWN) newSt.pawnKey ^= Zobrist::psq[captured][capsq];
+            else newSt.nonPawnKey[them] ^= Zobrist::psq[captured][capsq];
             newSt.rule50 = 0;
         }
         k ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
+        if (type_of(pc) == PAWN) newSt.pawnKey ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
+        else newSt.nonPawnKey[us] ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
         move_piece(from, to);
     }
 
     newSt.capturedPiece = captured;
 
-    // Promotion
+    // Promotion: the generic branch above already moved the PAWN (pc) from→to
+    // on the pawn key; here we swap "pawn at to" for "promoPiece at to",
+    // moving that half of the key from pawnKey into nonPawnKey[us].
     if (mt == PROMOTION) {
         PieceType promo = promotion_type(m);
         Piece promoPiece = make_piece(us, promo);
         remove_piece(to);
         put_piece(promoPiece, to);
         k ^= Zobrist::psq[pc][to] ^ Zobrist::psq[promoPiece][to];
+        newSt.pawnKey ^= Zobrist::psq[pc][to];
+        newSt.nonPawnKey[us] ^= Zobrist::psq[promoPiece][to];
     }
 
     // Pawn special: reset rule50, set ep
