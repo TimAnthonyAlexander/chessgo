@@ -110,8 +110,13 @@ func NewTT(sizeMB int, bucketShift uint) *TT {
 		bucketShift-- // pathologically tiny table: shrink the cluster to fit
 	}
 	numBuckets := size >> bucketShift
+	slots := make([]ttSlot, size)
+	// Back the large, randomly-accessed table with transparent huge pages where the
+	// OS is in THP=madvise mode (our amd64 boxes) — cuts TLB misses on probe/store.
+	// Advisory and byte-identical: changes only page backing, never table contents.
+	adviseHugePages(unsafe.Pointer(&slots[0]), uintptr(size)*unsafe.Sizeof(ttSlot{}))
 	return &TT{
-		slots:       make([]ttSlot, size),
+		slots:       slots,
 		bucketMask:  uint64(numBuckets - 1),
 		bucketShift: bucketShift,
 	}
