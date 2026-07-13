@@ -8,8 +8,12 @@ SRC = src/uci.cpp src/search.cpp src/eval.cpp src/position.cpp \
       src/nnue_net.cpp src/nnue_features.cpp src/nnue_eval.cpp
 OBJ = $(SRC:.cpp=.o)
 
-# Native optimization (Apple Silicon)
-CXXFLAGS += -mcpu=native
+# Native optimization (arch-detected: Apple Silicon uses -mcpu, x86 uses -march)
+ifeq ($(shell uname -m),x86_64)
+  CXXFLAGS += -march=native
+else
+  CXXFLAGS += -mcpu=native
+endif
 
 all: $(TARGET)
 
