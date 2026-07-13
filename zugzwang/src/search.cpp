@@ -204,13 +204,19 @@ int  rootBestScore = 0;
 // ---- Continuation history (PARITY_GOMACHINE.md D.2) ----
 // Parent-move-keyed quiet-magnitude tables: [movingPiece][to] of the move played
 // at ply-1 (resp. ply-2) -> [movingPiece][to] of the current quiet candidate.
-// Indexed directly by Piece (0..15; W/B occupy 1-6/9-14, 0/7/8/15 unused) rather
-// than a packed [12] range, to avoid a remap function at every read/write site —
-// costs ~2 MB per table instead of ~1.1 MB, functionally identical. Read/written
-// only when tune.contHist is on; zeroed in clear(), never persisted across
-// searches (mirrors the butterfly `history` table's lifecycle).
-int16_t contHist1[PIECE_NB][SQUARE_NB][PIECE_NB][SQUARE_NB]; // parent (1-ply)
-int16_t contHist2[PIECE_NB][SQUARE_NB][PIECE_NB][SQUARE_NB]; // grandparent (2-ply)
+// Packed to a dense [12] piece range (W_PAWN..W_KING -> 0..5, B_PAWN..B_KING ->
+// 6..11 via piece_dense() below) rather than raw Piece (0..15, with unused gaps
+// at 0/7/8/15) — halves each table to ~1.1 MB. Profiling (coalla, contended box:
+// `perf stat -e instructions` showed hoisting alone cut dynamic instruction count
+// ~6% but barely moved wall-clock NPS) indicates contHist reads are memory-
+// latency-bound, not ALU-bound, so shrinking the footprint (better L2/L3
+// residency) is the lever that actually matters — worth the extra piece_dense()
+// call at each site. Read/written only when tune.contHist is on; zeroed in
+// clear(), never persisted across searches (mirrors `history`'s lifecycle).
+constexpr int piece_dense(Piece p) { return (int(p) >> 3) * 6 + (int(p) & 7) - 1; }
+constexpr int CONT_PIECE_NB = 12;
+int16_t contHist1[CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB]; // parent (1-ply)
+int16_t contHist2[CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB]; // grandparent (2-ply)
 
 // LMR reduction table
 int Reductions[64][64];
@@ -233,28 +239,47 @@ constexpr int BAD_CAP_SCORE  = -(1 << 22);
 
 const int PieceVal[7] = {0, 100, 320, 330, 500, 900, 20000};
 
-// cont_score: blended 1-ply + 2-ply continuation-history score for a quiet move
-// (curPc -> to) at the node ss. Guards on the parent/grandparent move being a
-// real, non-null move (matches gomachine conthist.go's contEntry.ok gate) — a
-// missing/null ancestor simply contributes 0, never an out-of-range read.
-// Caller has verified tune.contHist is on.
-int cont_score(const Stack* ss, Piece curPc, Square to) {
-    int score = 0;
+// cont_hist_planes: resolve the two continuation-history "planes" (the
+// [PIECE_NB][SQUARE_NB] slab keyed by the parent/grandparent move) ONCE per
+// node, rather than re-deriving the parent key and re-validating the
+// ancestor move on every candidate move. ch1/ch2 are set to nullptr when the
+// corresponding ancestor doesn't exist or was null/none (matches the old
+// cont_score guard exactly — a missing ancestor contributes 0). Every read
+// site below then collapses to a flat 1-D offset `plane[pc * SQUARE_NB +
+// to]` with no bounds/validity recheck and no 4-D index math.
+// Caller has verified tune.contHist is on; ch1/ch2 are pointers into the
+// live (writable) tables so the same pointers serve both cont-score reads
+// and update_cont_hist writes at a node.
+inline void cont_hist_planes(const Stack* ss, int16_t*& ch1, int16_t*& ch2) {
+    ch1 = ch2 = nullptr;
     if (ss->ply >= 1) {
         const Stack* p = ss - 1;
         if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL)
-            score += contHist1[p->currentPiece][to_sq(p->currentMove)][curPc][to];
+            ch1 = &contHist1[piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
     }
     if (ss->ply >= 2) {
         const Stack* p = ss - 2;
         if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL)
-            score += contHist2[p->currentPiece][to_sq(p->currentMove)][curPc][to];
+            ch2 = &contHist2[piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
     }
-    return score;
 }
 
-void score_moves(const Position& pos, ExtMove* begin, ExtMove* end, Move ttMove,
-                 const Stack* ss, Move counter) {
+// score_moves_impl: templated on WithContHist so the compiler emits two
+// fully separate instantiations rather than one function with a runtime
+// branch/extra params threaded through it — <false> compiles to exactly the
+// pre-D.2 single-pass loop (the `if constexpr (WithContHist)` block is
+// elided entirely, not just skipped at runtime), so the CONTHIST-off path
+// (the shipped default) carries zero risk of the contHist plumbing
+// perturbing codegen/register allocation. <true> does the contHist read
+// inline in the SAME pass instead of a second scan over the movelist — an
+// earlier version used a post-pass re-checking ttMove/killers/counter for
+// every move a second time, which `perf stat -e instructions` showed cost
+// MORE than the packed-table read it was protecting (net regression on the
+// CONTHIST=1 path); this version pays the piece_dense()+table-read cost
+// exactly once per quiet move and nothing else extra.
+template <bool WithContHist>
+void score_moves_impl(const Position& pos, ExtMove* begin, ExtMove* end, Move ttMove,
+                       const Stack* ss, Move counter, const int16_t* ch1, const int16_t* ch2) {
     Color us = pos.side_to_move();
     for (ExtMove* m = begin; m != end; ++m) {
         Move mv = m->move;
@@ -276,11 +301,24 @@ void score_moves(const Position& pos, ExtMove* begin, ExtMove* end, Move ttMove,
             m->score = COUNTER_SCORE;
         } else {
             int h = history[us][from_sq(mv)][to_sq(mv)];
-            if (tune.contHist)
-                h += cont_score(ss, pos.moved_piece(mv), to_sq(mv));
+            if constexpr (WithContHist) {
+                int off = piece_dense(pos.moved_piece(mv)) * SQUARE_NB + to_sq(mv);
+                if (ch1) h += ch1[off];
+                if (ch2) h += ch2[off];
+            }
             m->score = h;
         }
     }
+}
+
+inline void score_moves(const Position& pos, ExtMove* begin, ExtMove* end, Move ttMove,
+                        const Stack* ss, Move counter) {
+    score_moves_impl<false>(pos, begin, end, ttMove, ss, counter, nullptr, nullptr);
+}
+
+inline void score_moves_cont(const Position& pos, ExtMove* begin, ExtMove* end, Move ttMove,
+                             const Stack* ss, Move counter, const int16_t* ch1, const int16_t* ch2) {
+    score_moves_impl<true>(pos, begin, end, ttMove, ss, counter, ch1, ch2);
 }
 
 // Selection sort: move best remaining to front, return it
@@ -311,20 +349,13 @@ void update_cont_entry(int16_t& h, int bonus) {
 }
 
 // update_cont_hist: credit/penalize one quiet move (pc -> to) in both
-// continuation tables, keyed by the parent/grandparent move at node ss. Mirrors
-// cont_score's guard (real, non-null ancestor) and gomachine's contUpdate.
-// Caller has verified tune.contHist is on.
-void update_cont_hist(const Stack* ss, Piece pc, Square to, int bonus) {
-    if (ss->ply >= 1) {
-        const Stack* p = ss - 1;
-        if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL)
-            update_cont_entry(contHist1[p->currentPiece][to_sq(p->currentMove)][pc][to], bonus);
-    }
-    if (ss->ply >= 2) {
-        const Stack* p = ss - 2;
-        if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL)
-            update_cont_entry(contHist2[p->currentPiece][to_sq(p->currentMove)][pc][to], bonus);
-    }
+// continuation tables via the plane pointers already hoisted for this node by
+// cont_hist_planes (ch1/ch2 nullptr <=> no real ancestor at that ply, same
+// guard cont_hist_planes applies). Caller has verified tune.contHist is on.
+void update_cont_hist(int16_t* ch1, int16_t* ch2, Piece pc, Square to, int bonus) {
+    int off = piece_dense(pc) * SQUARE_NB + to;
+    if (ch1) update_cont_entry(ch1[off], bonus);
+    if (ch2) update_cont_entry(ch2[off], bonus);
 }
 
 int qsearch(Position& pos, Stack* ss, int alpha, int beta);
@@ -381,7 +412,14 @@ int qsearch(Position& pos, Stack* ss, int alpha, int beta) {
     else         generate<CAPTURES>(pos, list);
 
     Move counter = MOVE_NONE;
-    score_moves(pos, list.begin(), list.end(), ttMove, ss, counter);
+    if (tune.contHist) {
+        int16_t* qsCh1 = nullptr;
+        int16_t* qsCh2 = nullptr;
+        cont_hist_planes(ss, qsCh1, qsCh2);
+        score_moves_cont(pos, list.begin(), list.end(), ttMove, ss, counter, qsCh1, qsCh2);
+    } else {
+        score_moves(pos, list.begin(), list.end(), ttMove, ss, counter);
+    }
 
     ExtMove* cur = list.begin();
     Move bestMove = MOVE_NONE;
@@ -539,7 +577,18 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
     generate<ALL>(pos, list);
     Color us = pos.side_to_move();
     Move counter = (ss - 1)->currentMove ? counterMoves[pos.piece_on(to_sq((ss - 1)->currentMove))][to_sq((ss - 1)->currentMove)] : MOVE_NONE;
-    score_moves(pos, list.begin(), list.end(), ttMove, ss, counter);
+    // Continuation-history plane pointers are constant for every move at this
+    // node (they key off the ply-1/ply-2 ancestor, not the candidate move), so
+    // hoist them ONCE here rather than re-deriving + re-validating them per
+    // candidate in score_moves, per LMR reduction read, and per cutoff update.
+    int16_t* ch1 = nullptr;
+    int16_t* ch2 = nullptr;
+    if (tune.contHist) {
+        cont_hist_planes(ss, ch1, ch2);
+        score_moves_cont(pos, list.begin(), list.end(), ttMove, ss, counter, ch1, ch2);
+    } else {
+        score_moves(pos, list.begin(), list.end(), ttMove, ss, counter);
+    }
 
     ExtMove* cur = list.begin();
     int bestValue = -VALUE_INFINITE;
@@ -644,8 +693,11 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
             if (cutNode) r += 1;
             if (givesCheck) r--;
             int hist = history[us][from_sq(m)][to_sq(m)];
-            if (tune.contHist)
-                hist += cont_score(ss, mover, to_sq(m));
+            if (tune.contHist) {
+                int off = piece_dense(mover) * SQUARE_NB + to_sq(m);
+                if (ch1) hist += ch1[off];
+                if (ch2) hist += ch2[off];
+            }
             r -= hist / 8000;
             int d = std::max(1, std::min(newDepth - r, newDepth));
             score = -negamax<false>(pos, ss + 1, -alpha - 1, -alpha, d, true);
@@ -720,10 +772,12 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
             if (tune.contHist) {
                 // pos is back at the pre-move-loop position here (every iteration
                 // above paired do_move with undo_move), so moved_piece() is valid.
-                update_cont_hist(ss, pos.moved_piece(bestMove), to_sq(bestMove), bonus);
+                // ch1/ch2 were hoisted once for this node above the move loop —
+                // reuse them here instead of re-deriving the parent key.
+                update_cont_hist(ch1, ch2, pos.moved_piece(bestMove), to_sq(bestMove), bonus);
                 for (int i = 0; i < quietCount; ++i)
                     if (quietsSearched[i] != bestMove)
-                        update_cont_hist(ss, pos.moved_piece(quietsSearched[i]), to_sq(quietsSearched[i]), -bonus);
+                        update_cont_hist(ch1, ch2, pos.moved_piece(quietsSearched[i]), to_sq(quietsSearched[i]), -bonus);
             }
             if ((ss - 1)->currentMove)
                 counterMoves[pos.piece_on(to_sq((ss - 1)->currentMove))][to_sq((ss - 1)->currentMove)] = bestMove;
