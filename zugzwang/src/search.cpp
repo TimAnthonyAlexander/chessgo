@@ -27,6 +27,8 @@ int rootDepthGlobal = 0;
 // Tunable pruning toggles (env-configurable for calibration)
 struct Tune {
     bool lmp = true, quietSee = true, futility = true, razor = true, nullMove = true, lmr = true;
+    bool histPrune = true;
+    int  histPruneMargin = 1000; // threshold = -histPruneMargin * depth
     void load() {
         auto off = [](const char* n){ const char* e = getenv(n); return e && e[0]=='0'; };
         if (off("LMP")) lmp = false;
@@ -35,6 +37,8 @@ struct Tune {
         if (off("RAZ")) razor = false;
         if (off("NULL")) nullMove = false;
         if (off("LMR")) lmr = false;
+        if (off("HISTPRUNE")) histPrune = false;
+        if (const char* e = getenv("HISTPRUNE_MARGIN")) { int v = atoi(e); if (v > 0) histPruneMargin = v; }
     }
 } tune;
 
@@ -339,6 +343,11 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
             if (isQuiet) {
                 int lmpLimit = (3 + depth * depth) / (2 - improving);
                 if (tune.lmp && moveCount >= lmpLimit && !givesCheck) continue;
+                // History pruning: skip a late quiet whose butterfly history is deeply
+                // negative, at shallow depth. Orthogonal to LMP (move-count) and quiet-SEE.
+                if (tune.histPrune && depth <= 6 && moveCount >= 3 && !givesCheck
+                    && history[us][from_sq(m)][to_sq(m)] < -tune.histPruneMargin * depth)
+                    continue;
                 // Futility pruning
                 if (tune.futility && depth <= 6 && !ss->inCheck && !givesCheck
                     && eval + 120 + 90 * depth <= alpha)
