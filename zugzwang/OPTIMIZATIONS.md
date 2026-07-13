@@ -48,6 +48,12 @@ Two important framings that came out of the comparison:
 none were measured on the C++ side. Treat them as *priority signal*, not promises;
 re-measure on the `~/zug_tax.log` 400-game match after each landed item.
 
+**Campaign log (2026-07-13, autonomous, movetime 100ms self-play SPRT, candidate vs accepted base):**
+- ✅ **CorrHist (#3): +57 ± 15 Elo, SHIPPED** (LLR 2.96 @ 890 games). First win; includes a real qsearch TT-eval bugfix (qsearch was storing garbage eval to TT).
+- ✗ **HistPrune (#4): wash (+1.9 ± 17), DROPPED.** Diagnosis-confirmed: Zugzwang loses to gomachine by searching *deeper but over-pruning* — so *adding* pruning is the wrong lever. The winners are **eval quality** (CorrHist) + **de-aggression** (margins).
+- 🚧 **SF-18 margin bundle 1 (#2): SPRT now** — negative singular extension + RFP soften/quiet-ttMove-gate + qsearch futility 130→300.
+- Method: each feature SPRT'd isolated vs the last accepted base; washes are `git revert`ed off main so main = only-accepted. The −93 gap vs current gomachine gets **re-taxed after the feature waves**, not inferred from the self-play deltas (non-transitivity).
+
 ---
 
 ## Master priority list (deduplicated, ranked by Elo × ease)
@@ -55,9 +61,9 @@ re-measure on the `~/zug_tax.log` 400-game match after each landed item.
 | # | Item | Domain | Expected | Effort | Status |
 |---|------|--------|----------|--------|--------|
 | 1 | **SF-cache opening book port** | Infra | **+160 Elo vs external** (see note) | Moderate | TODO |
-| 2 | **Tuned margin/constant transplant + re-SPRT** | Search | +38.7-class (movetime, bundled) | Trivial | TODO |
-| 3 | **Correction history (CorrHist)** | Search | +66.9 @ 40k nodes | Moderate | TODO |
-| 4 | **History pruning (HistPrune)** | Search | +86.8 @ 40k nodes | Trivial | TODO |
+| 2 | **Tuned margin/constant transplant + re-SPRT** | Search | +38.7-class (movetime, bundled) | Trivial | **🚧 SPRT now** (SF-18 bundle 1: neg-singext + RFP-soften/gate + qsfut 130→300) |
+| 3 | **Correction history (CorrHist)** | Search | +66.9 @ 40k nodes | Moderate | **✅ SHIPPED +57 ± 15 movetime** (SPRT-accepted 2026-07-13; bundled a real qsearch TT-eval bugfix) |
+| 4 | **History pruning (HistPrune)** | Search | +86.8 @ 40k nodes | Trivial | **✗ WASH** (+1.9 ± 17 movetime → dropped; more pruning is the wrong medicine for an over-pruner) |
 | 5 | **Incremental int16 accumulator** | NNUE speed | **+21–30% NPS arm64** (bit-exact) | Moderate–hard | **✅ DONE** (multiset-diff; coalla+tax pending) |
 | 6 | **Move-aware threat delta** | NNUE speed | ~+14% more NPS | Hard | TODO (unblocked; infra ready) |
 | 7 | **TT: kill modulo division** | Infra | cheapest real NPS win | Trivial | TODO |
