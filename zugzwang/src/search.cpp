@@ -25,12 +25,20 @@ int64_t timeLimitSoft = 0, timeLimitHard = 0;
 int64_t nodeCount = 0;
 int rootDepthGlobal = 0;
 
+// LMR reduction table depends on tune.lmrBase/lmrDiv (D.1), so it's rebuilt
+// whenever tune changes — forward-declared here so Tune::load() can call it;
+// defined after `Reductions[64][64]` is in scope (search.cpp init()).
+void build_reductions();
+
 // Tunable pruning toggles (env-configurable for calibration)
 struct Tune {
     bool lmp = true, quietSee = true, futility = true, razor = true, nullMove = true, lmr = true;
     bool corrHist = true;
     bool negExt = true;
     bool rfpSoft = true;
+    // ---- PARITY_GOMACHINE.md D.0/D.1 — default OFF, SPRT independently ----
+    bool pvGuard = false;  // D.0: add !PvNode to the LMP/futility/SEE-quiet/capture-SEE block
+    bool gmConst = false;  // D.1: transplant gomachine's tuned search constants (see load())
     int qsFutMargin = 300;
     // ---- Margin bundle 2 (SF_MARGINS.md #4/#5) — default OFF, SPRT independently ----
     bool nmpCutGate = false;    // NMP gate: cutNode && staticEval >= beta - 18*depth + 350
@@ -46,6 +54,13 @@ struct Tune {
     int captSeeCoeff  = 90;   // capture SEE pruning: -captSeeCoeff*depth
     int nmpEvalDiv    = 200;  // null-move R eval term: min((eval-beta)/nmpEvalDiv, 3)
     int singularMargin = 32;  // singular beta: ttValue - singularMargin*depth/16 (32 -> 2*depth, exact)
+    // ---- D.1 gomachine-constant-transplant fields (env GMCONST, default off; not UCI-exposed) ----
+    int captSeeMaxDepth  = 6;      // capture SEE pruning: only at depth <= this
+    int singularMinDepth = 8;      // singular extension: only at depth >= this
+    int aspInitDelta     = 18;     // aspiration window initial half-width
+    int lmrMinMoves      = 1;      // LMR onset: reduce once moveCount > this (+1 at root)
+    double lmrBase       = 0.85;   // LMR table: base + log(d)*log(m)/div
+    double lmrDiv        = 2.6;
     void load() {
         auto off = [](const char* n){ const char* e = getenv(n); return e && e[0]=='0'; };
         auto on  = [](const char* n){ const char* e = getenv(n); return e && e[0]=='1'; };
@@ -61,6 +76,23 @@ struct Tune {
         if (const char* e = getenv("QSFUT_MARGIN")) { int v = atoi(e); if (v > 0) qsFutMargin = v; }
         if (on("NMPCUTGATE")) nmpCutGate = true;
         if (on("LMRDEPTHPRUNE")) lmrDepthPrune = true;
+        if (on("PVGUARD")) pvGuard = true;
+        if (on("GMCONST")) {
+            // PARITY_GOMACHINE.md §D.1 — applied AFTER any UCI/env default so it wins
+            // regardless of prior `setoption` calls.
+            gmConst = true;
+            rfpMargin        = 75;
+            futBase          = 0;
+            futSlope         = 100;
+            captSeeCoeff     = 23;
+            captSeeMaxDepth  = 4;
+            singularMinDepth = 5;
+            aspInitDelta     = 25;
+            lmrMinMoves      = 4;
+            lmrBase          = 0.7844;
+            lmrDiv           = 2.4696;
+        }
+        build_reductions();
     }
 } tune;
 
@@ -469,7 +501,10 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
         }
 
         // Late move pruning + futility for quiets at low depth
-        if (!rootNode && bestValue > -VALUE_MATE_IN_MAX_PLY && pos.non_pawn_material(us)) {
+        // D.0 (PARITY_GOMACHINE.md): every other pruning site above is !PvNode-gated;
+        // this block wasn't, so it could prune quiets/captures inside our own PV.
+        // Gated behind tune.pvGuard (env PVGUARD, default off) until SPRT'd.
+        if (!rootNode && !(tune.pvGuard && PvNode) && bestValue > -VALUE_MATE_IN_MAX_PLY && pos.non_pawn_material(us)) {
             if (isQuiet) {
                 int lmpLimit = (3 + depth * depth) / (2 - improving);
                 if (tune.lmp && moveCount >= lmpLimit && !givesCheck) continue;
@@ -486,12 +521,12 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
                 if (tune.quietSee && seeQuietPrune) continue;
             } else {
                 // SEE pruning of captures
-                if (depth <= 6 && !givesCheck && !pos.see_ge(m, -tune.captSeeCoeff * depth)) continue;
+                if (depth <= tune.captSeeMaxDepth && !givesCheck && !pos.see_ge(m, -tune.captSeeCoeff * depth)) continue;
             }
         }
 
         // Singular extension
-        if (!rootNode && depth >= 8 && m == ttMove && !excluded
+        if (!rootNode && depth >= tune.singularMinDepth && m == ttMove && !excluded
             && tte->depth >= depth - 3 && (tte->bound() & BOUND_LOWER)
             && std::abs(ttValue) < VALUE_MATE_IN_MAX_PLY) {
             int singularBeta = ttValue - tune.singularMargin * depth / 16; // default 32 -> exactly 2*depth
@@ -520,7 +555,7 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
         bool doFullSearch;
 
         // Late Move Reductions
-        if (tune.lmr && depth >= 3 && moveCount > 1 + (rootNode ? 1 : 0) && isQuiet) {
+        if (tune.lmr && depth >= 3 && moveCount > tune.lmrMinMoves + (rootNode ? 1 : 0) && isQuiet) {
             int r = Reductions[std::min(depth, 63)][std::min(moveCount, 63)];
             if (!PvNode) r++;
             if (!improving) r++;
@@ -621,6 +656,18 @@ void print_pv(Position& pos, Stack* ss, int depth, int score, int64_t nodes) {
     std::cout << std::endl;
 }
 
+// LMR table (D.1: base/divisor swap to gomachine's tuned constants behind GMCONST).
+// Rebuilt by Tune::load() every time tune.lmrBase/lmrDiv can change, plus once at
+// startup via init() with the compiled-in defaults. Defined here (still inside the
+// anonymous namespace) so it satisfies the forward declaration used by Tune::load()
+// above — a definition outside the anonymous namespace would be a distinct symbol.
+void build_reductions() {
+    for (int d = 1; d < 64; ++d)
+        for (int m = 1; m < 64; ++m)
+            Reductions[d][m] = int(tune.lmrBase + std::log(d) * std::log(m) / tune.lmrDiv);
+    Reductions[0][0] = Reductions[0][1] = Reductions[1][0] = 0;
+}
+
 } // namespace
 
 // SPSA/UCI hook: map a UCI spin option name to the matching Tune field, clamped
@@ -643,10 +690,7 @@ bool set_tune_option(const std::string& name, int value) {
 }
 
 void init() {
-    for (int d = 1; d < 64; ++d)
-        for (int m = 1; m < 64; ++m)
-            Reductions[d][m] = int(0.85 + std::log(d) * std::log(m) / 2.6);
-    Reductions[0][0] = Reductions[0][1] = Reductions[1][0] = 0;
+    build_reductions();
 }
 
 void clear() {
@@ -720,7 +764,7 @@ void start(Position& pos, const Limits& lim) {
         if (depth <= 4) {
             score = negamax<true>(pos, ss, -VALUE_INFINITE, VALUE_INFINITE, depth, false);
         } else {
-            int delta = 18;
+            int delta = tune.aspInitDelta;
             int alpha = std::max(prevScore - delta, -VALUE_INFINITE);
             int beta  = std::min(prevScore + delta, VALUE_INFINITE);
             while (true) {
