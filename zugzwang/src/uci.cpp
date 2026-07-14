@@ -12,6 +12,7 @@
 #include <thread>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 static const char* START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 static const char* ENGINE_NAME = "hce 1.0";
@@ -20,6 +21,7 @@ static const char* ENGINE_AUTHOR = "Claude (HCE)";
 static Position pos;
 static std::thread searchThread;
 static int ttSizeMB = 128;
+static int engineThreads = 1; // UCI "Threads" option — Lazy SMP worker count (1 = single-thread)
 static Book::Book book;
 static bool ownBook = false;
 
@@ -121,7 +123,13 @@ static void go_cmd(std::istringstream& is) {
     }
     if (try_book_move(pos)) return; // book hit: skip the search entirely
     Search::request_stop(false);
-    searchThread = std::thread([limits]() { Search::start(pos, limits); });
+    // Lazy SMP: start_smp runs engineThreads Contexts sharing the global TT +
+    // one stop flag. engineThreads==1 delegates to the byte-identical single-
+    // thread path. The driver runs on this searchThread and joins its own
+    // helper threads before returning, so stop_search()'s join still cleanly
+    // waits for the entire (multi-threaded) search to finish.
+    int nThreads = engineThreads;
+    searchThread = std::thread([limits, nThreads]() { Search::start_smp(pos, limits, nThreads); });
 }
 
 static uint64_t perft_count(Position& p, int depth) {
@@ -193,7 +201,7 @@ int uci_main() {
             std::cout << "id name " << ENGINE_NAME << "\n";
             std::cout << "id author " << ENGINE_AUTHOR << "\n";
             std::cout << "option name Hash type spin default 128 min 1 max 4096\n";
-            std::cout << "option name Threads type spin default 1 min 1 max 1\n";
+            std::cout << "option name Threads type spin default 1 min 1 max 256\n";
             // SPSA-tunable search margins (search.cpp Tune struct; Search::set_tune_option
             // applies these on setoption). Defaults reproduce the pre-tunable literals exactly.
             std::cout << "option name RfpMargin type spin default 75 min 40 max 130\n";
@@ -217,6 +225,8 @@ int uci_main() {
             if (name == "Hash") {
                 ttSizeMB = std::stoi(value);
                 TT.resize(ttSizeMB);
+            } else if (name == "Threads") {
+                engineThreads = std::max(1, std::min(256, std::stoi(value)));
             } else if (name == "OwnBook") {
                 ownBook = (value == "true");
             } else {

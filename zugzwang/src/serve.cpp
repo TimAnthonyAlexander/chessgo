@@ -132,6 +132,12 @@ int serve_main(int argc, char** argv) {
     // TT (total -tt split evenly, floor 8MB) — this is what actually serves
     // /bestmove, /candidates, /analyze-game concurrently (search.h's
     // Context/ContextLease doc comments have the full story).
+    //
+    // TODO: SMP on serve path. Each request currently searches on ONE leased
+    // Context (single-thread-per-request). Lazy SMP (Search::start_smp) lives on
+    // the UCI path only; wiring it here would mean a per-request SMP group of
+    // Contexts sharing one TT rather than the current independent-TT pool, and a
+    // policy for dividing cores across concurrent requests. Left as future work.
     size_t ttPerContextMB = std::max<size_t>(8, static_cast<size_t>(ttSizeMB) / static_cast<size_t>(searchPoolSize));
     Search::init_pool(searchPoolSize, ttPerContextMB);
 

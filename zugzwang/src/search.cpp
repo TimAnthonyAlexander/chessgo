@@ -13,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <condition_variable>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -1121,11 +1122,63 @@ Pool& pool() {
     return p;
 }
 
+// ---- Lazy SMP shared state ----
+//
+// smpStop is the ONE shared cancellation flag every SMP worker Context binds
+// its `stop` to. It is deliberately SEPARATE from defaultStop (the single-thread
+// UCI path's flag) so Threads=1 (which runs on default_context / defaultStop) is
+// completely untouched. request_stop() sets both, so the UCI "stop"/"quit"
+// commands cancel whichever path is live.
+std::atomic<bool> smpStop{false};
+
+// Persistent SMP worker Contexts, all bound to the GLOBAL TT (::TT) and to
+// smpStop, so they cooperate through one shared transposition table (classic
+// Lazy SMP). Created lazily up to the requested thread count and reused across
+// searches. Grown only from the driver thread BEFORE any worker thread is
+// spawned, so the vector itself is never mutated concurrently.
+std::vector<std::unique_ptr<Context>> smpContexts;
+
+Context& smp_context(int i) {
+    while ((int)smpContexts.size() <= i) {
+        auto c = std::make_unique<Context>(::TT, smpStop);
+        build_reductions(*c);
+        smpContexts.push_back(std::move(c));
+    }
+    return *smpContexts[i];
+}
+
+// Final UCI report for an SMP search: exactly one "info" line (from the chosen
+// worker's completed iteration) and exactly one "bestmove" line. During the SMP
+// search every worker runs silent (limits.silent=true), so this is the only
+// UCI output — guaranteeing the single bestmove line UCI requires.
+void print_smp_result(const Result& r, int64_t startTime) {
+    int64_t ms = now_ms() - startTime;
+    int64_t nps = ms > 0 ? r.nodes * 1000 / ms : 0;
+    std::cout << "info depth " << r.depth << " score ";
+    if (is_mate_score(r.score)) {
+        int mateIn = (r.score > 0 ? (VALUE_MATE - r.score + 1) : -(VALUE_MATE + r.score)) / 2;
+        std::cout << "mate " << mateIn;
+    } else {
+        std::cout << "cp " << r.score;
+    }
+    std::cout << " nodes " << r.nodes << " nps " << nps << " time " << ms
+              << " hashfull " << TT.hashfull() << " pv";
+    for (Move m : r.pv) std::cout << " " << move_to_uci(m);
+    std::cout << std::endl;
+    std::cout << "bestmove " << move_to_uci(r.bestMove) << std::endl;
+}
+
 } // namespace
 
 Context& default_context() { return default_ctx_ref(); }
 
-void request_stop(bool value) { default_ctx_ref().stop = value; }
+void request_stop(bool value) {
+    // Cancel whichever path is live. Threads=1 runs on default_context/defaultStop
+    // exactly as before; the extra smpStop write is a no-op there (no SMP worker
+    // is reading it). Threads>1 workers all bind to smpStop.
+    default_ctx_ref().stop = value;
+    smpStop = value;
+}
 
 bool set_tune_option(const std::string& name, int value) {
     return set_tune_option_impl(default_ctx_ref(), name, value);
@@ -1187,7 +1240,7 @@ int64_t now_ms() {
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-Result start(Context& C, Position& pos, const Limits& lim) {
+Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
     C.limits = lim;
     C.tune.load();
     build_reductions(C); // Tune::load() no longer rebuilds this itself (it has
@@ -1195,10 +1248,14 @@ Result start(Context& C, Position& pos, const Limits& lim) {
                           // every start() call still gets a fresh table exactly
                           // as before.
     if (C.limits.startTime == 0) C.limits.startTime = now_ms();
-    C.stop = false;
+    // resetShared=false (Lazy SMP workers only): the driver already cleared the
+    // shared stop flag and bumped the shared TT generation ONCE; skip both here
+    // so N workers don't race on TT.generation (a non-atomic RMW) or clobber a
+    // sibling's timeout. resetShared=true (every other caller) is unchanged.
+    if (resetShared) C.stop = false;
     C.nodeCount = 0;
     set_time_limits(C, pos);
-    C.tt.new_search();
+    if (resetShared) C.tt.new_search();
 
     // Attach the incremental NNUE accumulator for the duration of the search.
     // C.accStack persists across calls (avoids reallocation) but is now owned
@@ -1286,6 +1343,88 @@ Result start(Context& C, Position& pos, const Limits& lim) {
 
 void start(Position& pos, const Limits& lim) {
     start(default_ctx_ref(), pos, lim);
+}
+
+// ---- Lazy SMP driver ----
+Result start_smp(Position& rootPos, const Limits& limits, int threads) {
+    // Threads<=1: the exact pre-SMP single-thread path. default_context() is
+    // bound to the global TT + defaultStop, resetShared defaults to true, and
+    // limits.silent is untouched — so the tree, the bestmove, and every
+    // info/bestmove stdout line are byte-identical to the engine before SMP.
+    if (threads <= 1)
+        return start(default_ctx_ref(), rootPos, limits);
+
+    // Create all worker Contexts up front, on THIS (driver) thread, so the
+    // smpContexts vector is never grown while worker threads run.
+    for (int i = 0; i < threads; ++i) smp_context(i);
+
+    // Shared side-effects, done exactly ONCE (workers pass resetShared=false):
+    // clear the shared stop flag and bump the shared TT generation. After this
+    // point TT.generation is only READ by probe/store — no write race.
+    smpStop = false;
+    TT.new_search();
+
+    // Per-worker Limits: run every worker silent (the driver prints the single
+    // final info/bestmove), and split any explicit node budget across workers so
+    // the AGGREGATE node count ~= limits.nodes (workers share no live node
+    // counter; time is shared implicitly since all derive the same hard deadline
+    // from the shared limits.startTime). Movetime/time/depth are unchanged.
+    Limits shared = limits;
+    shared.silent = true;
+    if (shared.nodes > 0)
+        shared.nodes = std::max<int64_t>(1, shared.nodes / threads);
+
+    // Independent Position per worker. A by-value Position copy is a self-
+    // contained search root: search only ever pushes NEW StateInfos (on each
+    // worker's own do_move stack) above the shared, read-only lower StateInfo
+    // chain, and rootPos stays alive and unmutated for the whole search (the
+    // UCI layer joins the search thread before touching `pos` again). Each
+    // worker's start() rebinds the copy to its own Context's accumulator stack.
+    std::vector<Position> positions(threads, rootPos);
+    std::vector<Result>   results(threads);
+    std::vector<std::thread> workers;
+    workers.reserve(threads - 1);
+
+    // Helpers: workers 1..threads-1. They warm the shared TT and vote on the
+    // result. resetShared=false: they must not touch the shared stop/generation.
+    for (int i = 1; i < threads; ++i)
+        workers.emplace_back([i, &results, &positions, shared]() {
+            results[i] = start(smp_context(i), positions[i], shared, /*resetShared=*/false);
+        });
+
+    // Main search runs on the driver thread (worker 0).
+    results[0] = start(smp_context(0), positions[0], shared, /*resetShared=*/false);
+
+    // Main finished (soft-time / stop): force every still-running helper to stop
+    // at its next node-count check, then join them all.
+    smpStop = true;
+    for (auto& t : workers) t.join();
+
+    // Best-thread selection (SF-style, simplified): pick the worker that reached
+    // the greatest depth; tie -> greatest score. Each Result is internally
+    // consistent (its pv[0] == its bestMove), so the chosen PV is valid. Skip
+    // workers that produced no move (only possible at a mated/stalemate root,
+    // where every worker agrees anyway).
+    int best = 0;
+    for (int i = 1; i < threads; ++i) {
+        if (results[i].bestMove == MOVE_NONE) continue;
+        if (results[best].bestMove == MOVE_NONE
+            || results[i].depth > results[best].depth
+            || (results[i].depth == results[best].depth
+                && results[i].score > results[best].score))
+            best = i;
+    }
+    Result chosen = results[best];
+
+    // Report the true aggregate node count across all workers.
+    int64_t total = 0;
+    for (const Result& r : results) total += r.nodes;
+    chosen.nodes = total;
+
+    if (!limits.silent)
+        print_smp_result(chosen, limits.startTime ? limits.startTime : now_ms());
+
+    return chosen;
 }
 
 } // namespace Search

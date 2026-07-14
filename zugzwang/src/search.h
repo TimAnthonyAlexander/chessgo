@@ -66,7 +66,27 @@ Context& default_context();
 // fields directly). Safe to call concurrently from different threads as long
 // as each call uses a DIFFERENT Context (see the pool API below for how the
 // HTTP serve layer gets one).
-Result start(Context& ctx, Position& pos, const Limits& limits);
+//
+// resetShared: when true (default — every existing caller), start() clears
+// ctx.stop and calls ctx.tt.new_search() at entry, exactly as before. Lazy-SMP
+// (start_smp) passes false: multiple contexts SHARE one TT + one stop flag, so
+// the driver does those two shared side-effects ONCE up front and each worker
+// must NOT repeat them (a per-worker tt.new_search() would be N concurrent
+// non-atomic RMWs on TT.generation; a per-worker stop=false could race a
+// sibling's timeout). All other per-Context resets (nodeCount, tables, acc
+// stack) still run per call. resetShared=true is byte-identical to before.
+Result start(Context& ctx, Position& pos, const Limits& limits, bool resetShared = true);
+
+// ---- Lazy SMP (multi-threaded search) ----
+//
+// Runs the search on `threads` Contexts concurrently: the calling thread plus
+// (threads-1) helper std::threads, ALL sharing the one global TT (tt.h) and one
+// shared atomic stop flag — the classic Lazy-SMP cooperation channel. threads<=1
+// delegates to the exact single-thread path (start(default_context(), ...)), so
+// Threads=1 is byte-identical (same tree, same bestmove, same stdout) to the
+// pre-SMP engine. threads>1 picks the result from the worker that reached the
+// greatest depth (tie -> greatest score) and prints exactly one bestmove line.
+Result start_smp(Position& pos, const Limits& limits, int threads);
 
 // Back-compat overload: always searches with default_context(). This is what
 // the UCI loop (uci.cpp) and `bench` use — single-threaded, exactly as
