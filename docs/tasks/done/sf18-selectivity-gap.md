@@ -3,9 +3,11 @@
 ## OUTCOME (2026-07-14 campaign — DONE, branch `feat/sf-selectivity`)
 
 Worked the ranked techniques below in 5 movetime-SPRT waves on coalla. **Honest
-cumulative: +16.8 Elo @ movetime / +25 @ fixed-nodes vs pre-campaign main
-(353024b)** — a direct endpoint SPRT (the per-wave sum was +61, sub-additive
-because the waves overlap on the depth/selectivity axis).
+cumulative (settled endpoint SPRTs): +16.8 Elo @ movetime (746 games, LB +3.9) /
++20.0 @ fixed-nodes (1600 games, LB +11.1) vs pre-campaign main (353024b)** — the
+per-wave sum was +61, sub-additive because the waves overlap on the depth/
+selectivity axis. (FN read +30 early and converged to +20 — early SPRT reads run
+high; trust the settled number.)
 
 **Shipped (default-on):**
 - Wave 1 (264a964): cheap TT-only ProbCut (#2a) · depth−=2 after alpha-raise (#11)
@@ -30,10 +32,11 @@ a future fixed-nodes re-eval.
 margin); #9 aspiration-relative reduction (poor fit for zug's integer `r`);
 remaining #3 LMR terms (need ttPv wiring, now present).
 
-**KEY FINDING → next work:** the FN(+25) > MT(+17) gap is **tree cost** (the
-extensions inflate the tree → less depth realised at movetime), NOT bad-roads
-over-pruning (fixed-nodes *rose*) and NOT NPS (~1-4%). Same shape as ContHist's
-FN→MT gap. Recovery = **SPSA re-tune the extension/reduction margins to keep the
+**KEY FINDING → next work:** FN(+20) ≥ MT(+16.8) — the selectivity is genuinely
+smart (fixed-nodes *rose*, so NOT bad-roads over-pruning; NPS only ~1-4% off).
+The modest ~+3 FN>MT gap is **tree cost** (extensions inflate the tree → slightly
+less depth realised at movetime), same shape as ContHist's FN→MT gap but smaller.
+Recovery lever = **SPSA re-tune the extension/reduction margins to keep the
 per-node quality while shrinking the tree** — see `open/spsa-margin-polish.md`.
 
 Method that worked: every technique behind a default-valued `Tune` flag with an

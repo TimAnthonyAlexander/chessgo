@@ -10,13 +10,14 @@ interaction. Expose the ones not yet UCI-tunable.
 
 **Why — sharpened target.** The stack (ttPv + double singular extension +
 hindsight + cutoffCnt, branch `feat/sf-selectivity`, tip after d788f19) measures
-**+16.8 Elo @ movetime but +25 @ fixed-nodes vs pre-campaign main** (SPRTs
-2026-07-14). The ~+8 Elo gap is NOT bad-roads over-pruning (fixed-nodes *rose*,
-so selectivity is genuinely smart) and NOT raw NPS (~1-4% only) — it's **tree
-cost**: the extensions inflate the tree so movetime realises less depth (d17 vs
-d19 at 3s, equal NPS). Same shape as [[conthist-fn-to-mt]] (+19.6 FN / +8 MT).
-So the retune's job is **keep the +25 per-node quality while shrinking the tree
-the extensions build**, converting the trapped ~+8 into movetime Elo. The old
+**+16.8 Elo @ movetime (LB +3.9) but +20.0 @ fixed-nodes (LB +11.1) vs
+pre-campaign main** (settled SPRTs 2026-07-14). The ~+3 Elo gap is NOT bad-roads
+over-pruning (fixed-nodes *rose*, so selectivity is genuinely smart) and NOT raw
+NPS (~1-4% only) — it's **tree cost**: the extensions inflate the tree so movetime
+realises slightly less depth (d17 vs d19 at 3s, equal NPS). Same shape as
+[[conthist-fn-to-mt]] (+19.6 FN / +8 MT) but smaller. So the retune's job is
+**keep the per-node quality while shrinking the tree the extensions build**,
+converting the trapped ~+3 (and any margin slack) into movetime Elo. The old
 cp-margins were also bulk-transplanted from gomachine and never re-tuned for
 zug's (now further-changed) tree.
 
