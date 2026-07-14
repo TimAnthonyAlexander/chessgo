@@ -90,6 +90,16 @@ D.0), gomachine's tuned structural constants (D.1), qsearch futility (`qsFutMarg
 and **continuation history** (D.2, parent/grandparent-keyed). Margin bundle 2
 (`nmpCutGate`, `lmrDepthPrune`) is default-off, SPRT independently.
 
+**SF-selectivity stack (2026-07-14 campaign, +16.8 Elo movetime vs pre-campaign;
+`docs/tasks/done/sf18-selectivity-gap.md`):** cheap TT-only ProbCut, depth−=2
+after an alpha-raising PV move, `cutoffCnt`→LMR bump, **hindsight** priorReduction
+depth adjust, **ttPv** (former-PV bit in `TTEntry.genBound`, gates RFP + de-reduces
+LMR), and a conservative **double singular extension** (the biggest single win,
+unlocked by ttPv). Env kill-switches (`PROBCUT/DEPTHDROP/CUTOFFCNT/HINDSIGHT/TTPV/
+DBLEXT=0`). Default-OFF opt-ins kept: `TTCAPR`/`MCLINR` (LMR drag), `EVALHIST`/
+`THREATORDER` (ordering — saturated), `TRIPLEEXT` (untested). CCRL-scale result in
+`docs/CCRL.md`. Next lever: SPSA re-tune (`docs/tasks/open/spsa-margin-polish.md`).
+
 **8 SPSA-tunable margins** (UCI `setoption`, clamped): `RfpMargin`,
 `RazorMargin`, `FutBase`, `FutSlope`, `SeeQuietCoeff`, `CaptSeeCoeff`,
 `NmpEvalDiv`, `SingularMargin`. Re-SPSA periodically — hand-set constants go
