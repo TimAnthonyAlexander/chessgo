@@ -138,6 +138,64 @@ func (z *zugzwangClient) BestMove(ctx context.Context, fen string, fenHistory []
 	}, nil
 }
 
+// crazyhouseBestMoveResponse is zugzwang's /crazyhouse/bestmove response
+// shape (zugzwang/src/serve_handlers.cpp crazyhouse_best_move — mirrors
+// gomachine's own internal/server/crazyhouse.go handleCrazyhouseBestMove):
+// bestmove is null (with reason set) when there's no legal move.
+type crazyhouseBestMoveResponse struct {
+	BestMove *string `json:"bestmove"`
+	Reason   string  `json:"reason"`
+	Error    string  `json:"error"`
+}
+
+// CrazyhouseBestMove asks zugzwang's self-contained Crazyhouse engine
+// (its own pockets/drops/eval — NOT the shared standard-chess NNUE search,
+// see zugzwang/src/crazyhouse.h) for a move at a target rating. fen is the
+// CANONICAL Crazyhouse FEN (carries the [pocket], self-describing — no
+// separate history/extras needed, unlike Duck).
+//
+// A nil error with an empty move string means "zugzwang answered, there's
+// genuinely no legal move" (position already terminal) — not a transport
+// failure, mirroring zugzwangClient.BestMove's doc — so the caller must not
+// retry or fall back to the emergency in-process path for that case.
+func (z *zugzwangClient) CrazyhouseBestMove(ctx context.Context, fen string, rating int) (string, error) {
+	body, err := json.Marshal(map[string]any{
+		"fen":    fen,
+		"limits": map[string]any{"rating": rating},
+	})
+	if err != nil {
+		return "", fmt.Errorf("zugzwang: marshal crazyhouse request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, z.baseURL+"/crazyhouse/bestmove", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("zugzwang: build crazyhouse request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := z.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("zugzwang: crazyhouse request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var out crazyhouseBestMoveResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("zugzwang: decode crazyhouse response: %w", err)
+	}
+	if resp.StatusCode >= 300 {
+		msg := out.Error
+		if msg == "" {
+			msg = fmt.Sprintf("status %d", resp.StatusCode)
+		}
+		return "", fmt.Errorf("zugzwang: crazyhouse: %s", msg)
+	}
+	if out.BestMove == nil || *out.BestMove == "" {
+		return "", nil // genuinely no legal move
+	}
+	return *out.BestMove, nil
+}
+
 // Healthy reports whether zugzwang answers GET /healthz within a short
 // timeout. Best-effort, safe to call from any goroutine (a fresh request,
 // no shared state).

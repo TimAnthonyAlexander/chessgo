@@ -151,6 +151,77 @@ func TestComputeBotMove_EmergencyFallbackDisabled(t *testing.T) {
 	}
 }
 
+// End-to-end: a Crazyhouse bot-fill game's self-search move now comes from
+// zugzwang's /crazyhouse/bestmove (scheduleBotMove -> scheduleSelfSearchBotMove
+// -> selfSearchMove -> zugzwang.CrazyhouseBestMove), not gomachine's in-process
+// crazyhouse.BestMove — the move must still be legal on the game's state.
+func TestScheduleSelfSearchBotMove_Crazyhouse_ViaZugzwang_Live(t *testing.T) {
+	skipUnlessZugzwangUp(t)
+
+	h := New(testSecret)
+	h.SetZugzwangClient(testZugzwangURL(), 4*time.Second, true)
+
+	g := newTestCrazyhouseBotGame(t)
+	h.games[g.id] = g
+	h.scheduleBotMove(g)
+
+	select {
+	case r := <-h.botMoves:
+		if r.gameID != g.id {
+			t.Fatalf("botMoves result for wrong game: %q", r.gameID)
+		}
+		if _, _, ok := g.state.Apply(r.uci); !ok {
+			t.Fatalf("zugzwang-sourced crazyhouse move %q is illegal on the game position", r.uci)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("no crazyhouse bot move arrived via zugzwang within 15s")
+	}
+}
+
+// When zugzwang is unreachable, a Crazyhouse self-search bot move still
+// arrives via the emergency in-process fallback (variant.SelfSearchMove) —
+// the same safety net standard-chess bot-fill already has.
+func TestSelfSearchMove_Crazyhouse_EmergencyFallbackFires(t *testing.T) {
+	h := New(testSecret)
+	h.SetZugzwangClient("http://127.0.0.1:1", 300*time.Millisecond, true)
+
+	g := newTestCrazyhouseBotGame(t)
+	h.games[g.id] = g
+	h.scheduleBotMove(g)
+
+	select {
+	case r := <-h.botMoves:
+		if _, _, ok := g.state.Apply(r.uci); !ok {
+			t.Fatalf("emergency in-process crazyhouse move %q is illegal on the game position", r.uci)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("emergency in-process fallback never produced a crazyhouse move")
+	}
+}
+
+// newTestCrazyhouseBotGame builds a minimal Crazyhouse human-vs-bot game
+// (White bot, Black human) from the opening, mirroring newTestBotGame below
+// but on the crazyhouse variant/pool.
+func newTestCrazyhouseBotGame(t *testing.T) *game {
+	t.Helper()
+	st, err := variant.New(variantCrazyhouse, chess.StartFEN)
+	if err != nil {
+		t.Fatalf("variant.New(crazyhouse): %v", err)
+	}
+	return &game{
+		id:        newID(),
+		state:     st,
+		tc:        timeControl{Base: 300_000, Inc: 0},
+		white:     &player{id: newBotIdentity(1500), isBot: true, rating: 1500},
+		black:     &player{id: auth.Identity{UserID: "human-test"}, isBot: false},
+		startFen:  chess.StartFEN,
+		variant:   variantCrazyhouse,
+		clockMs:   [2]int64{300_000, 300_000},
+		turnStart: time.Now(),
+		online:    [2]bool{true, true},
+	}
+}
+
 // newTestBotGame builds a minimal standard-chess human-vs-bot game (White
 // bot, Black human) from the opening, suitable for exercising
 // scheduleBotMove/computeBotMove directly without going through matchmaking

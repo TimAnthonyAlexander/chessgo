@@ -472,6 +472,54 @@ void Position::undo_move(Move m) {
     st = st->previous;
 }
 
+void Position::do_drop(Piece pc, Square s, StateInfo& newSt) {
+    U64 k = st->key ^ Zobrist::side;
+
+    newSt.castlingRights = st->castlingRights; // a drop never touches a king/rook square
+    newSt.epSquare = SQ_NONE;                  // a drop is never a double pawn push
+    newSt.rule50 = st->rule50 + 1;
+    newSt.pliesFromNull = st->pliesFromNull + 1;
+    newSt.previous = st;
+    newSt.capturedPiece = NO_PIECE; // a drop never captures (target is always empty)
+    newSt.pawnKey = st->pawnKey;
+    newSt.nonPawnKey[WHITE] = st->nonPawnKey[WHITE];
+    newSt.nonPawnKey[BLACK] = st->nonPawnKey[BLACK];
+
+    Color us = sideToMove;
+    if (st->epSquare != SQ_NONE)
+        k ^= Zobrist::enpassant[file_of(st->epSquare)];
+    if (us == BLACK) fullmove++; // mirrors do_move's display-only fullmove bump
+
+    st = &newSt; // switch to new state before mutating
+
+    put_piece(pc, s);
+    k ^= Zobrist::psq[pc][s];
+    if (type_of(pc) == PAWN) newSt.pawnKey ^= Zobrist::psq[pc][s];
+    else newSt.nonPawnKey[us] ^= Zobrist::psq[pc][s];
+
+    sideToMove = ~us;
+    newSt.key = k;
+    set_check_info();
+
+    game_key_history[history_count++] = k;
+
+    // No NNUE accumulator hook: Crazyhouse never attaches nnue_acc (its own
+    // pocket-aware hand eval, not the shared board-only net — see
+    // src/crazyhouse.cpp) — but guard anyway for safety/symmetry with do_move.
+    if (nnueAcc) nnueAcc->push(*this);
+}
+
+void Position::undo_drop(Square s) {
+    if (nnueAcc) nnueAcc->pop();
+    sideToMove = ~sideToMove;
+    Color us = sideToMove;
+    if (us == BLACK) fullmove--; // symmetric with do_drop's increment
+
+    history_count--;
+    remove_piece(s);
+    st = st->previous;
+}
+
 void Position::do_null_move(StateInfo& newSt) {
     std::memcpy(&newSt, st, sizeof(StateInfo));
     newSt.previous = st;

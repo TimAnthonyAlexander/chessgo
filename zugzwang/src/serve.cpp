@@ -59,12 +59,10 @@ httplib::Server::Handler wrap(RouteFn fn) {
     };
 }
 
-// Routes intentionally NOT implemented this wave (WIRING_RECON.md Wave 1
-// scope): the Duck/Crazyhouse variant engines are Wave 3 (Stockfish moved
-// off this list — zugzwang now spawns its own SF subprocess, see
-// SFUCI::query / Handlers::sf_best_move). 501, not 404, so a caller can tell
-// "route exists on the contract, deliberately unbuilt here" apart from a
-// plain typo'd path.
+// Routes intentionally NOT implemented yet (WIRING_RECON.md Wave 3 scope):
+// Duck Chess (Crazyhouse shipped — see the /crazyhouse/* routes below).
+// 501, not 404, so a caller can tell "route exists on the contract,
+// deliberately unbuilt here" apart from a plain typo'd path.
 void register_not_implemented(httplib::Server& svr, const char* path, const char* why) {
     auto handler = [why](const httplib::Request&, httplib::Response& res) {
         res.status = 501;
@@ -191,9 +189,13 @@ int serve_main(int argc, char** argv) {
     register_not_implemented(svr, "/duck/move", "Duck Chess is Wave 3 (not yet implemented in zugzwang)");
     register_not_implemented(svr, "/duck/bestmove", "Duck Chess is Wave 3 (not yet implemented in zugzwang)");
     register_not_implemented(svr, "/duck/analyze-game", "Duck Chess is Wave 3 (not yet implemented in zugzwang)");
-    register_not_implemented(svr, "/crazyhouse/legal-moves", "Crazyhouse is Wave 3 (not yet implemented in zugzwang)");
-    register_not_implemented(svr, "/crazyhouse/move", "Crazyhouse is Wave 3 (not yet implemented in zugzwang)");
-    register_not_implemented(svr, "/crazyhouse/bestmove", "Crazyhouse is Wave 3 (not yet implemented in zugzwang)");
+
+    // Crazyhouse: a self-contained variant module (src/crazyhouse.{h,cpp}) —
+    // its own rules/pockets/drops/eval/search, no Search::Context pool
+    // involvement (WIRING_RECON.md Wave 3).
+    svr.Post("/crazyhouse/legal-moves", wrap(Handlers::crazyhouse_legal_moves));
+    svr.Post("/crazyhouse/move", wrap(Handlers::crazyhouse_move));
+    svr.Post("/crazyhouse/bestmove", wrap(Handlers::crazyhouse_best_move));
 
     std::cerr << "zugzwang serve: listening on " << host << ":" << port
               << " (TT " << ttSizeMB << "MB, search-pool " << searchPoolSize

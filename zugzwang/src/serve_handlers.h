@@ -35,4 +35,14 @@ json analyze_game(const json& body);
 // with itself.
 json sf_best_move(const json& body);
 
+// Crazyhouse: a self-contained variant (src/crazyhouse.h) with its own rules
+// + bot search; it never touches the standard Search::Context pool (no NNUE,
+// its own shallow negamax), so these never lease a pool context either. Every
+// request is stateless: the Crazyhouse FEN is self-describing (it carries the
+// [pocket]) — mirrors gomachine's internal/server/crazyhouse.go handlers
+// field-for-field.
+json crazyhouse_legal_moves(const json& body);
+json crazyhouse_move(const json& body);
+json crazyhouse_best_move(const json& body);
+
 } // namespace Handlers

@@ -56,6 +56,10 @@ public:
     Square castling_rook_square(int right) const { return castlingRookFrom[castling_right_index(right)]; }
     Square ep_square() const { return st->epSquare; }
     int rule50_count() const { return st->rule50; }
+    // Display-only FEN fullmove counter (see the `fullmove` field doc below) —
+    // Crazyhouse's move-cap draw safety valve reads this (mirrors gomachine's
+    // drawMoveCap check on chess.Position.FullmoveNumber).
+    int fullmove_number() const { return fullmove; }
     U64 key() const { return st->key; }
     U64 pawn_key() const { return st->pawnKey; }
     U64 non_pawn_key(Color c) const { return st->nonPawnKey[c]; }
@@ -79,6 +83,21 @@ public:
     void undo_move(Move m);
     void do_null_move(StateInfo& newSt);
     void undo_null_move();
+
+    // Crazyhouse: place a pocketed piece `pc` on the EMPTY square `s`, passing
+    // the turn — the one primitive the variant needs on top of standard chess
+    // (mirrors gomachine's Position.DoDrop, internal/chess/makemove.go). Unlike
+    // DoDrop's value-copy precedent, zugzwang's Position is do_move/undo_move
+    // stack-mutated in place (StateInfo chain via `st`), so a drop gets the
+    // same push/pop shape as do_move/undo_move — caller owns `newSt`'s storage
+    // (same contract as do_move) and must undo_drop(s) in LIFO order. Pockets/
+    // promoted-bitboard bookkeeping is the CALLER's job (internal/crazyhouse's
+    // C++ port, src/crazyhouse.{h,cpp}) — this only touches the board, key,
+    // castling/ep/rule50 state and checkers, exactly like do_move does for a
+    // quiet move, so the rest of Position (SEE, is_draw, san, fen, …) stays
+    // valid on a position that includes a dropped piece.
+    void do_drop(Piece pc, Square s, StateInfo& newSt);
+    void undo_drop(Square s);
 
     bool legal(Move m) const;
     bool pseudo_legal(Move m) const;

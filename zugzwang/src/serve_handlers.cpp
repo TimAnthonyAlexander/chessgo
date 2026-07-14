@@ -1,4 +1,5 @@
 #include "serve_handlers.h"
+#include "crazyhouse.h"
 #include "rules.h"
 #include "rating.h"
 #include "search.h"
@@ -509,6 +510,110 @@ json sf_best_move(const json& body) {
         {"san", Rules::san(pos, m)},
         {"eval", evalObj},
     };
+}
+
+// ==================== Crazyhouse ====================
+// Self-contained variant (src/crazyhouse.{h,cpp}) — its own rules, pockets,
+// drops and pocket-aware hand eval/search; never touches Search::Context (no
+// NNUE — see crazyhouse.h's file doc for why). Mirrors gomachine's
+// internal/server/crazyhouse.go handlers field-for-field.
+
+namespace {
+
+std::string zh_status_name(ZHStatus st) {
+    // A Crazyhouse win is always a checkmate (its only decisive result) — NOT
+    // a king capture (that's Duck) — so it must not reuse "white_win"/
+    // "black_win" (the client labels those "king captured"). Mirrors
+    // gomachine's crazyhouseStatusName.
+    switch (st) {
+        case ZHStatus::WhiteWin:
+        case ZHStatus::BlackWin:
+            return "checkmate";
+        case ZHStatus::Draw:
+            return "draw";
+        default:
+            return "ongoing";
+    }
+}
+
+// Merges position/status fields into a response object — stamps newFen
+// (canonical, incl. [pocket]), pocket, sideToMove, status and result. Mirrors
+// gomachine's crazyhouseResult.
+json zh_result_json(json base, ZHPosition& z) {
+    ZHStatus st = zh_status(z);
+    base["newFen"] = zh_fen(z);
+    base["pocket"] = zh_pocket_string(z);
+    base["sideToMove"] = z.pos.side_to_move() == WHITE ? "w" : "b";
+    base["status"] = zh_status_name(st);
+    std::string res = zh_status_result(st);
+    base["result"] = res.empty() ? json(nullptr) : json(res);
+    return base;
+}
+
+} // namespace
+
+json crazyhouse_legal_moves(const json& body) {
+    std::string fen = body.value("fen", "");
+    ZHPosition z;
+    std::string err;
+    if (!zh_parse(fen, z, err)) throw ApiError{400, err};
+
+    std::vector<ZHMove> moves;
+    zh_legal_moves(z, moves);
+    std::vector<std::string> out;
+    out.reserve(moves.size());
+    for (const ZHMove& m : moves) out.push_back(m.uci());
+    return json{{"moves", out}};
+}
+
+json crazyhouse_move(const json& body) {
+    std::string fen = body.value("fen", "");
+    std::string moveStr = body.value("move", "");
+    ZHPosition z;
+    std::string err;
+    if (!zh_parse(fen, z, err)) throw ApiError{400, err};
+
+    ZHMove m;
+    if (!zh_parse_and_validate(z, moveStr, m)) {
+        return json{{"legal", false}, {"error", "illegal move: " + moveStr}};
+    }
+    std::string sanStr = zh_san(z, m); // computed BEFORE mutating z
+    zh_apply(z, m);
+    return zh_result_json(json{{"legal", true}, {"san", sanStr}}, z);
+}
+
+json crazyhouse_best_move(const json& body) {
+    std::string fen = body.value("fen", "");
+    ZHPosition z;
+    std::string err;
+    if (!zh_parse(fen, z, err)) throw ApiError{400, err};
+
+    json limits = body.value("limits", json::object());
+    ZHLimits lim;
+    lim.level = -1;
+    if (jhas(limits, "rating")) lim.rating = limits["rating"].get<int>();
+    if (jhas(limits, "level")) lim.level = limits["level"].get<int>();
+    lim.depth = limits.value("depth", 0);
+    lim.nodes = static_cast<uint64_t>(limits.value("nodes", static_cast<int64_t>(0)));
+    lim.movetimeMs = limits.value("movetime", 0);
+
+    ZHResult res = zh_best_move(z, lim);
+    if (!res.hasMove) {
+        return zh_result_json(
+            json{{"bestmove", nullptr}, {"san", nullptr}, {"eval", nullptr}, {"reason", "no legal moves"}}, z);
+    }
+
+    ZHMove m;
+    if (!zh_parse_and_validate(z, res.move, m)) {
+        // Defensive: the search must only ever return a legal move.
+        throw ApiError{500, "search produced an illegal move"};
+    }
+    std::string sanStr = zh_san(z, m); // computed BEFORE mutating z
+    zh_apply(z, m);
+
+    json evalObj = (res.mate != 0) ? json{{"type", "mate"}, {"value", res.mate}}
+                                    : json{{"type", "cp"}, {"value", res.score}};
+    return zh_result_json(json{{"bestmove", res.move}, {"san", sanStr}, {"eval", evalObj}}, z);
 }
 
 } // namespace Handlers

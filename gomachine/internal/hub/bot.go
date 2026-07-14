@@ -231,7 +231,7 @@ func (h *Hub) scheduleSelfSearchBotMove(g *game) {
 
 	go func() {
 		start := time.Now()
-		uci, ok := variant.SelfSearchMove(variantID, fen, extras, rating)
+		uci, ok := h.selfSearchMove(variantID, fen, extras, rating)
 		if !ok {
 			return
 		}
@@ -247,6 +247,41 @@ func (h *Hub) scheduleSelfSearchBotMove(g *game) {
 			// Run goroutine wedged/gone; drop rather than leak.
 		}
 	}()
+}
+
+// selfSearchMove computes a bot move for a Tier-2 (self-search) variant,
+// called off the Run goroutine by scheduleSelfSearchBotMove's goroutine.
+// Crazyhouse routinely asks zugzwang's self-contained /crazyhouse/bestmove
+// (its own pockets/drops/pocket-aware eval — zugzwang/src/crazyhouse.h),
+// mirroring the standard-chess zugzwangBestMove retry + emergency-fallback
+// pattern (computeBotMove's doc) so a live Crazyhouse game never freezes if
+// zugzwang is down. Duck has no zugzwang implementation yet, so it always
+// computes in-process via variant.SelfSearchMove, unchanged.
+//
+// ok=false means "no legal move" (mirrors variant.SelfSearchMove's own
+// contract) OR "zugzwang unreachable and the emergency fallback is
+// disabled" — either way the caller just skips posting a botMoveResult.
+func (h *Hub) selfSearchMove(variantID, fen string, extras map[string]string, rating int) (string, bool) {
+	if variantID == variant.Crazyhouse && h.zugzwang != nil {
+		const retries = 1
+		var lastErr error
+		for attempt := 0; attempt <= retries; attempt++ {
+			ctx, cancel := context.WithTimeout(context.Background(), h.zugzwang.Timeout())
+			uci, err := h.zugzwang.CrazyhouseBestMove(ctx, fen, rating)
+			cancel()
+			if err == nil {
+				return uci, uci != "" // "" + nil error = genuinely no legal move
+			}
+			lastErr = err
+		}
+		if !h.emergencyInProc {
+			fmt.Fprintf(os.Stderr, "hub: zugzwang crazyhouse unreachable (%v) — emergency in-process fallback disabled, dropping bot move\n", lastErr)
+			return "", false
+		}
+		fmt.Fprintf(os.Stderr, "hub: zugzwang crazyhouse unreachable — emergency in-process move (%v)\n", lastErr)
+		// fall through to the in-process path below
+	}
+	return variant.SelfSearchMove(variantID, fen, extras, rating)
 }
 
 // computeBotMove runs OFF the Run goroutine: get a move — routinely from

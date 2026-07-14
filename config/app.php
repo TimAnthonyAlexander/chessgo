@@ -101,11 +101,15 @@ return [
     | zugzwang serves the SAME stateless HTTP API as gomachine for standard
     | chess (verified byte-compatible for /move, /legal-moves, /bestmove,
     | /perft, /status, /candidates, /analyze-game, /sf-bestmove —
-    | WIRING_RECON.md §A). It spawns its own Stockfish subprocess for
-    | /sf-bestmove (zugzwang/src/sf_uci.cpp). It still 501s the Duck/Crazyhouse
-    | variant routes (Wave 3, not yet implemented) — EngineSelector guards
-    | those straight to gomachine. Default port 6476 (gomachine owns 6466),
-    | overridable via ZUGZWANG_URL.
+    | WIRING_RECON.md §A). For /sf-bestmove it spawns its own Stockfish
+    | subprocess (zugzwang/src/sf_uci.cpp) — Stockfish involvement stops
+    | there; it is NOT used for Crazyhouse. Crazyhouse
+    | (/crazyhouse/{legal-moves,move,bestmove}) is served by a completely
+    | separate, self-contained module with its own pockets/drops/pocket-aware
+    | hand eval and its own search (zugzwang/src/crazyhouse.h) — no NNUE, no
+    | Stockfish. zugzwang still 501s the Duck variant routes (not yet
+    | implemented) — EngineSelector guards those straight to gomachine.
+    | Default port 6476 (gomachine owns 6466), overridable via ZUGZWANG_URL.
     |
     */
     'zugzwang' => [
@@ -125,9 +129,10 @@ return [
     | Flip ENGINE_PRIMARY=gomachine (or this default) to revert the WHOLE site
     | to gomachine with zero code change — a straight swap, not a fallback.
     | Stockfish (stockfishMove()) always goes to zugzwang regardless of this
-    | setting (it spawns its own Stockfish subprocess); the Duck/Crazyhouse
-    | variant routes always go straight to gomachine (Wave 3, not yet
-    | implemented in zugzwang) — see EngineSelector.
+    | setting (it spawns its own Stockfish subprocess); Crazyhouse also
+    | follows this primary/fallback switch (zugzwang by default); the Duck
+    | variant routes always go straight to gomachine (not yet implemented in
+    | zugzwang) — see EngineSelector.
     |
     */
     'engine' => [
