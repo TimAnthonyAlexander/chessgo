@@ -35,7 +35,12 @@ int TranspositionTable::value_from_tt(int v, int ply) {
 
 TTEntry* TranspositionTable::probe(U64 key, bool& found) const {
     Cluster& c = table[index(key)];
-    uint16_t key16 = uint16_t(key >> 48);
+    // key16 MUST come from the LOW bits: the mul-high index() above is driven by
+    // the HIGH bits of key, so a high-bit key16 (key>>48) would be correlated with
+    // the cluster index — every key in a cluster would share it and collision
+    // detection would collapse (Stockfish keys its verify on the low bits for the
+    // same reason). uint16_t(key) is independent of index(key).
+    uint16_t key16 = uint16_t(key);
     for (int i = 0; i < ClusterSize; ++i) {
         if (c.entry[i].key16 == key16 && c.entry[i].genBound) {
             found = true;
@@ -55,7 +60,7 @@ TTEntry* TranspositionTable::probe(U64 key, bool& found) const {
 
 void TranspositionTable::store(TTEntry* tte, U64 key, int value, bool pv, Bound b,
                                int depth, Move m, int eval) {
-    uint16_t key16 = uint16_t(key >> 48);
+    uint16_t key16 = uint16_t(key);  // low bits — independent of the mul-high index()
     // Preserve existing move if none supplied and same position
     if (m || tte->key16 != key16)
         tte->move = m;
