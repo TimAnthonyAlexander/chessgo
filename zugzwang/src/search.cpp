@@ -504,6 +504,7 @@ int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta) {
         if (!inCheck && isCapture && !pos.see_ge(m, -50)) continue;
 
         pos.do_move(m, st);
+        C.tt.prefetch(pos.key());
         int score = -qsearch(C, pos, ss + 1, -beta, -alpha);
         pos.undo_move(m);
 
@@ -752,6 +753,7 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         ss->currentPiece = mover;
 
         pos.do_move(m, st);
+        C.tt.prefetch(pos.key());
 
         int score;
         bool doFullSearch;

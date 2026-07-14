@@ -26,6 +26,7 @@ public:
 
     TTEntry* probe(U64 key, bool& found) const;
     void store(TTEntry* tte, U64 key, int value, bool pv, Bound b, int depth, Move m, int eval);
+    void prefetch(U64 key) const { __builtin_prefetch(&table[index(key)]); }
 
     int hashfull() const;
 
@@ -35,10 +36,16 @@ public:
 
 private:
     static constexpr int ClusterSize = 4;
-    struct Cluster { TTEntry entry[ClusterSize]; };
+    struct alignas(64) Cluster { TTEntry entry[ClusterSize]; };
     Cluster* table = nullptr;
     size_t clusterCount = 0;
     uint8_t generation = 0;
+
+    // Multiply-high mapping (Stockfish-style): avoids a 64-bit division on the
+    // hottest path and works for any clusterCount (no power-of-two rounding).
+    size_t index(U64 key) const {
+        return (size_t)(((unsigned __int128)key * (unsigned __int128)clusterCount) >> 64);
+    }
 };
 
 extern TranspositionTable TT;

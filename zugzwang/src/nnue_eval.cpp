@@ -73,7 +73,7 @@ static inline uint8_t pairwise_u8(int16_t lo, int16_t hi) {
 // adjacent (u8,i8) pair form the int16 sum a[i]*w[i]+a[i+1]*w[i+1], SATURATE it to
 // int16 [-32768,32767], then accumulate into int32 (no further saturation). An odd
 // trailing element contributes a single product (|255*127| < 2^15, cannot saturate).
-static inline int32_t dot_u8i8(const uint8_t* a, const int8_t* w, int n) {
+static inline int32_t dot_u8i8_scalar(const uint8_t* a, const int8_t* w, int n) {
     int32_t acc = 0;
     int i = 0;
     for (; i + 2 <= n; i += 2) {
@@ -87,6 +87,69 @@ static inline int32_t dot_u8i8(const uint8_t* a, const int8_t* w, int n) {
         acc += static_cast<int32_t>(a[i]) * static_cast<int32_t>(w[i]);
     return acc;
 }
+
+// dot_u8i8: SIMD dispatch that is PROVABLY bit-exact with dot_u8i8_scalar above,
+// not just "close enough" — the scalar int16 saturation is a modeled HW quirk of
+// VPMADDUBSW+VPMADDWD, but it can be proven to NEVER actually fire on real data:
+//
+//   * a[] (the pairwise_u8 activation) is documented above to satisfy
+//     a[i] = (a*b + 256) >> 9 with a,b in [0,255], whose max is
+//     (255*255+256)>>9 = 127. So a[i] in [0,127], NOT the full u8 range.
+//   * w[] is int8 clamped to +/-127 (L1QB quantization), so w[i] in [-127,127].
+//   * Each product a[i]*w[i] in [-127*127, 127*127] = [-16129, 16129].
+//   * Each adjacent PAIR-SUM (what the scalar loop saturates) is therefore in
+//     [-32258, 32258], which is strictly INSIDE int16 range [-32768, 32767].
+//     The saturation branch in dot_u8i8_scalar can never trigger on real
+//     accumulator/weight data — only on adversarial inputs outside the
+//     documented ranges (which never occur: see pairwise_u8 and the net's
+//     int8 weight clamp).
+//   * Because saturation never fires, the scalar result reduces to the plain
+//     Sigma a[i]*w[i] over i in [0,n) — exactly what a widening dot-product
+//     instruction (VPDPBUSD / vdotq) computes with NO intermediate int16 step.
+//   * int32 cannot overflow either: n<=512 terms x max 16129 ~= 8.26M,
+//     far under 2^31.
+//
+// So on the real a[]/w[] domain, dot_u8i8_scalar and a direct widening-dot SIMD
+// implementation compute the IDENTICAL int32 value, term for term, associative
+// or not (there's only one order: ascending i, matching the widening instructions).
+#if defined(__AVX512VNNI__)
+#include <immintrin.h>
+static inline int32_t dot_u8i8(const uint8_t* a, const int8_t* w, int n) {
+    __m512i vacc = _mm512_setzero_si512();
+    int i = 0;
+    for (; i + 64 <= n; i += 64) {
+        __m512i va = _mm512_loadu_si512(reinterpret_cast<const void*>(a + i));
+        __m512i vw = _mm512_loadu_si512(reinterpret_cast<const void*>(w + i));
+        vacc = _mm512_dpbusd_epi32(vacc, va, vw);
+    }
+    int32_t acc = _mm512_reduce_add_epi32(vacc);
+    if (i < n)
+        acc += dot_u8i8_scalar(a + i, w + i, n - i);
+    return acc;
+}
+#elif defined(__ARM_FEATURE_DOTPROD)
+#include <arm_neon.h>
+static inline int32_t dot_u8i8(const uint8_t* a, const int8_t* w, int n) {
+    // a[i] in [0,127] fits int8 without change of bit pattern or value, so
+    // reinterpreting the u8 buffer as int8 and using the SIGNED dot (vdotq_s32,
+    // s8 x s8 -> s32) computes the same products as the true u8 x i8 multiply.
+    int32x4_t vacc = vdupq_n_s32(0);
+    int i = 0;
+    for (; i + 16 <= n; i += 16) {
+        int8x16_t va = vreinterpretq_s8_u8(vld1q_u8(a + i));
+        int8x16_t vw = vld1q_s8(w + i);
+        vacc = vdotq_s32(vacc, va, vw);
+    }
+    int32_t acc = vaddvq_s32(vacc);
+    if (i < n)
+        acc += dot_u8i8_scalar(a + i, w + i, n - i);
+    return acc;
+}
+#else
+static inline int32_t dot_u8i8(const uint8_t* a, const int8_t* w, int n) {
+    return dot_u8i8_scalar(a, w, n);
+}
+#endif
 
 // gemvF32Scalar (kernels.go:135-146): output-stationary GEMV over INPUT-MAJOR
 // weights. out[o] = Σ_i in[i] · w[i*stride + off + o]. The input-outer loop is

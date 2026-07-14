@@ -11,7 +11,7 @@ void TranspositionTable::resize(size_t mb) {
     size_t bytes = mb * 1024 * 1024;
     clusterCount = bytes / sizeof(Cluster);
     if (clusterCount == 0) clusterCount = 1;
-    table = (Cluster*)malloc(clusterCount * sizeof(Cluster));
+    table = (Cluster*)aligned_alloc(64, clusterCount * sizeof(Cluster));
     clear();
 }
 
@@ -34,7 +34,7 @@ int TranspositionTable::value_from_tt(int v, int ply) {
 }
 
 TTEntry* TranspositionTable::probe(U64 key, bool& found) const {
-    Cluster& c = table[key % clusterCount];
+    Cluster& c = table[index(key)];
     uint16_t key16 = uint16_t(key >> 48);
     for (int i = 0; i < ClusterSize; ++i) {
         if (c.entry[i].key16 == key16 && c.entry[i].genBound) {
