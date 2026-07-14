@@ -87,9 +87,10 @@ struct Context {
         bool probCut   = true;  // #2a: cheap TT-only ProbCut before the move loop
         bool depthDrop = true;  // #11: depth-=2 after an alpha-raising non-decisive PV move
         bool cutoffCnt = true;  // #6:  grandchild fail-high-rate -> extra LMR reduction
-        // #4 double/triple singular extension — Wave 5, now that ttPv exists for SF's
-        // adaptive doubleMargin/tripleMargin. Default ON; env DBLEXT=0 disables.
+        // #4 double/triple singular extension — Wave 5/6, now that ttPv exists. Default
+        // ON; env DBLEXT=0 / TRIPLEEXT=0 disable.
         bool dblExt    = true;
+        bool tripleExt = false; // Wave 6: 3rd ply for extremely-singular moves — UNTESTED (mixed gate: +1 depth some pos, -2 endgame); opt-in env TRIPLEEXT=1
         // ---- SF selectivity Wave 2 — hindsight ACCEPTED (~+10 Elo); ttCapR/mcLinR
         // DROPPED as an SPRT drag (combined batch washed ~-5, hindsight-alone +10).
         // ttCapR/mcLinR kept as opt-in env for later salvage (mcLinR likely needs a
@@ -152,6 +153,7 @@ struct Context {
             if (off("DEPTHDROP")) depthDrop = false;
             if (off("CUTOFFCNT")) cutoffCnt = false;
             if (off("DBLEXT")) dblExt = false;
+            if (on("TRIPLEEXT")) tripleExt = true;
             if (off("HINDSIGHT")) hindsight = false;
             if (on("TTCAPR")) ttCapR = true;
             if (on("MCLINR")) mcLinR = true;
@@ -856,7 +858,13 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                 // (negative for non-captures → double-extend routinely) explode zug's
                 // tree ~2 plies without SF's corrVal/cutoffCnt damping, so this uses a
                 // conservative POSITIVE margin and no triple tier. env DBLEXT=0.
-                if (C.tune.dblExt && !PvNode && s < singularBeta - 64) extension = 2;
+                if (C.tune.dblExt && !PvNode && s < singularBeta - 64) {
+                    extension = 2;
+                    // Wave 6: a 3rd ply only when the move fails verification by a very
+                    // wide margin — rare, so it can't explode the tree the way SF's raw
+                    // tripleMargin did.
+                    if (C.tune.tripleExt && s < singularBeta - 200) extension = 3;
+                }
             }
             else if (singularBeta >= beta) return singularBeta; // multi-cut
             else if (C.tune.negExt) {
