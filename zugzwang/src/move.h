@@ -33,6 +33,21 @@ constexpr Move make(Square from, Square to, PieceType pt = KNIGHT) {
     return Move(from | (to << 6) | (((pt - KNIGHT) & 3) << 12) | T);
 }
 
+// Chess960 (Fischer Random): a castling move is encoded as (king origin, king
+// DESTINATION — g/c-file, standard even in FRC); the rook's origin square is
+// NOT part of the encoding (it's per-position data, Position::castling_rook_
+// square) since it can be any file. This means `to == from` is possible (the
+// king was already on its destination file) and `to > from` is NOT a reliable
+// kingside/queenside test, unlike standard chess. So castling repurposes the
+// otherwise-unused (for CASTLING) promotion-code bits 12-13 as a 1-bit side
+// flag: KNIGHT (code 0) = kingside, BISHOP (code 1) = queenside. Both call
+// sites that build a CASTLING move must pass CASTLE_KINGSIDE/CASTLE_QUEENSIDE
+// as the `pt` argument; every consumer must read the side via
+// castle_is_kingside(m), never via a from/to square comparison.
+constexpr PieceType CASTLE_KINGSIDE = KNIGHT;
+constexpr PieceType CASTLE_QUEENSIDE = BISHOP;
+constexpr bool castle_is_kingside(Move m) { return promotion_type(m) == CASTLE_KINGSIDE; }
+
 inline std::string move_to_uci(Move m) {
     if (m == MOVE_NONE) return "(none)";
     if (m == MOVE_NULL) return "0000";

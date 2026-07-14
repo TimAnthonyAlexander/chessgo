@@ -60,6 +60,22 @@ Square parse_square(const std::string& s) {
 Move parse_uci_move(const Position& pos, const std::string& s) {
     MoveList ml;
     generate_legal(pos, ml);
+    // Pass 1: king-captures-rook form for castling (e.g. "e1h1") — the
+    // canonical Chess960/Lichess UCI convention, unambiguous even in the rare
+    // case where a plain king step shares its king-two-square string with a
+    // castle. Mirrors gomachine's ParseUCIMove (both castling UCI conventions
+    // accepted; king-captures-rook checked first).
+    Color us = pos.side_to_move();
+    for (const ExtMove& m : ml) {
+        if (type_of_move(m.move) != CASTLING) continue;
+        bool kingside = castle_is_kingside(m.move);
+        int flag = (us == WHITE) ? (kingside ? WHITE_OO : WHITE_OOO)
+                                 : (kingside ? BLACK_OO : BLACK_OOO);
+        Square rfrom = pos.castling_rook_square(flag);
+        if (SQ_NAMES[from_sq(m.move)] + SQ_NAMES[rfrom] == s) return m.move;
+    }
+    // Pass 2: canonical move_to_uci form (king-two-square castles + all other
+    // moves) — this is what zugzwang (and gomachine) actually EMIT.
     for (const ExtMove& m : ml)
         if (move_to_uci(m.move) == s) return m.move;
     return MOVE_NONE;
@@ -95,10 +111,10 @@ std::string san(Position& pos, Move m) {
     MoveType mt = type_of_move(m);
 
     if (mt == CASTLING) {
-        // to_sq = king destination (G1/C1/G8/C8 — see movegen.cpp generate_castling);
-        // kingside iff the king moves toward the h-file, exactly like gomachine's
-        // king-captures-rook convention (both compare File(to) > File(from)).
-        s = (file_of(to_sq(m)) > file_of(from_sq(m))) ? "O-O" : "O-O-O";
+        // Side comes from castle_is_kingside(m), not a from/to square compare:
+        // in Chess960 the king can already be on its destination file
+        // (to_sq(m) == from_sq(m)), which a file comparison can't disambiguate.
+        s = castle_is_kingside(m) ? "O-O" : "O-O-O";
     } else {
         Piece moving = pos.piece_on(from_sq(m));
         PieceType pt = type_of(moving);

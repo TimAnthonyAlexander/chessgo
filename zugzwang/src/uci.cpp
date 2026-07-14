@@ -29,10 +29,22 @@ static void stop_search() {
     join_search();
 }
 
-// Apply a UCI move string to the position by matching against legal moves
+// Apply a UCI move string to the position by matching against legal moves.
+// Accepts both castling UCI conventions (king-two-square, the canonical
+// move_to_uci output, and king-captures-rook e.g. "e1h1", the Chess960/
+// Lichess convention) — mirrors Rules::parse_uci_move.
 static Move parse_move(Position& p, const std::string& str) {
     MoveList list;
     generate<ALL>(p, list);
+    Color us = p.side_to_move();
+    for (const ExtMove& m : list) {
+        if (!p.legal(m.move) || type_of_move(m.move) != CASTLING) continue;
+        bool kingside = castle_is_kingside(m.move);
+        int flag = (us == WHITE) ? (kingside ? WHITE_OO : WHITE_OOO)
+                                 : (kingside ? BLACK_OO : BLACK_OOO);
+        Square rfrom = p.castling_rook_square(flag);
+        if (SQ_NAMES[from_sq(m.move)] + SQ_NAMES[rfrom] == str) return m.move;
+    }
     for (const ExtMove& m : list)
         if (move_to_uci(m.move) == str && p.legal(m.move))
             return m.move;

@@ -97,20 +97,26 @@ static void brute_gen(const Position& pos, MoveList& out) {
             while (att) { Square to = BB::pop_lsb(att); out.add(make_move(from, to)); }
         }
     }
-    // castling (brute): king from start, both sides, squares empty
+    // castling (brute, Chess960-generalized): king from its current square,
+    // rook from Position's stored origin (standard chess: always a/h-file).
+    // Independent re-derivation of the "squares between must be empty" span
+    // from BB::span_bb, deliberately re-walked here (not calling
+    // generate_castling) so this stays a genuine differential oracle.
     Square ksq = pos.king_square(us);
     if (!pos.in_check()) {
-        if (us == WHITE) {
-            if ((pos.castling_rights() & WHITE_OO) && pos.empty(F1) && pos.empty(G1))
-                out.add(make<CASTLING>(ksq, G1));
-            if ((pos.castling_rights() & WHITE_OOO) && pos.empty(B1) && pos.empty(C1) && pos.empty(D1))
-                out.add(make<CASTLING>(ksq, C1));
-        } else {
-            if ((pos.castling_rights() & BLACK_OO) && pos.empty(F8) && pos.empty(G8))
-                out.add(make<CASTLING>(ksq, G8));
-            if ((pos.castling_rights() & BLACK_OOO) && pos.empty(B8) && pos.empty(C8) && pos.empty(D8))
-                out.add(make<CASTLING>(ksq, C8));
-        }
+        int rank = (us == WHITE) ? 0 : 7;
+        auto tryCastle = [&](int flag, bool kingside) {
+            if (!(pos.castling_rights() & flag)) return;
+            Square rfrom = pos.castling_rook_square(flag);
+            Square kto = make_square(kingside ? 6 : 2, rank);
+            Square rto = make_square(kingside ? 5 : 3, rank);
+            U64 mustEmpty = (BB::span_bb(ksq, kto) | BB::span_bb(rfrom, rto))
+                           & ~(BB::square_bb(ksq) | BB::square_bb(rfrom));
+            if (occ & mustEmpty) return;
+            out.add(make<CASTLING>(ksq, kto, kingside ? CASTLE_KINGSIDE : CASTLE_QUEENSIDE));
+        };
+        if (us == WHITE) { tryCastle(WHITE_OO, true); tryCastle(WHITE_OOO, false); }
+        else             { tryCastle(BLACK_OO, true); tryCastle(BLACK_OOO, false); }
     }
 }
 
@@ -231,6 +237,51 @@ int main(int argc, char** argv) {
         pos.set(fen);
         perft_divide(pos, depth);
         return 0;
+    }
+
+    // Authoritative Chess960 (Fischer Random) perft positions — Andrew
+    // Grant's Ethereal FRC suite (Chess Programming Wiki, "Chess960 Perft
+    // Results"), the same 6 positions gomachine's chess/frc_test.go uses as
+    // its oracle. Castling fields are Shredder-FEN (file letters). Run via
+    // `./perft_test frc [depth]`.
+    struct FrcTest { const char* name; const char* fen; uint64_t nodes[5]; };
+    FrcTest frcTests[] = {
+        {"frc1", "bqnb1rkr/pp3ppp/3ppn2/2p5/5P2/P2P4/NPP1P1PP/BQ1BNRKR w HFhf - 2 9",
+            {21, 528, 12189, 326672, 8146062}},
+        {"frc2", "2nnrbkr/p1qppppp/8/1ppb4/6PP/3PP3/PPP2P2/BQNNRBKR w HEhe - 1 9",
+            {21, 807, 18002, 667366, 16253601}},
+        {"frc3", "b1q1rrkb/pppppppp/3nn3/8/P7/1PPP4/4PPPP/BQNNRKRB w GE - 1 9",
+            {20, 479, 10471, 273318, 6417013}},
+        {"frc4", "qbbnnrkr/2pp2pp/p7/1p2pp2/8/P3PP2/1PPP1KPP/QBBNNR1R w hf - 0 9",
+            {22, 593, 13440, 382958, 9183776}},
+        {"frc5", "qnbnr1kr/ppp1b1pp/4p3/3p1p2/8/2NPP3/PPP1BPPP/QNB1R1KR w HEhe - 1 9",
+            {29, 899, 26578, 824055, 24851983}},
+        {"frc6", "1nbbnrkr/p1p1ppp1/3p4/1p3P1p/3Pq2P/8/PPP1P1P1/QNBBNRKR w HFhf - 0 9",
+            {28, 1120, 31058, 1171749, 34030312}},
+    };
+
+    if (argc >= 2 && std::string(argv[1]) == "frc") {
+        int depth = argc >= 3 ? atoi(argv[2]) : 4;
+        if (depth < 1 || depth > 5) depth = 4;
+        bool frcPass = true;
+        for (auto& t : frcTests) {
+            Position pos;
+            pos.set(t.fen);
+            auto start = std::chrono::high_resolution_clock::now();
+            uint64_t got = perft(pos, depth);
+            auto end = std::chrono::high_resolution_clock::now();
+            double ms = std::chrono::duration<double, std::milli>(end - start).count();
+            uint64_t want = t.nodes[depth - 1];
+            bool ok = got == want;
+            frcPass &= ok;
+            std::cout << (ok ? "PASS" : "FAIL")
+                      << " " << t.name << " depth " << depth
+                      << " got " << got << " expected " << want
+                      << "  (" << (ms > 0 ? (uint64_t)(got / (ms / 1000.0) / 1e6) : 0) << " Mnps)  "
+                      << t.fen << "\n";
+        }
+        std::cout << (frcPass ? "\nALL FRC PERFT TESTS PASSED\n" : "\nSOME FRC TESTS FAILED\n");
+        return frcPass ? 0 : 1;
     }
 
     Test tests[] = {

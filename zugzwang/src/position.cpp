@@ -8,28 +8,20 @@
 using namespace BB;
 
 namespace {
-    // Castling: which rights are removed when a square is touched
-    int CastlingRightsMask[SQUARE_NB];
-    Square RookFrom[16], RookTo[16]; // indexed by castling flag
+    // Castling ROOK DESTINATION squares are always standard (f/d-file) even in
+    // Chess960 — only the rook's ORIGIN varies by game, which is why that half
+    // moved into Position::castlingRookFrom (per-position, FEN-parsed) instead
+    // of staying in this static table. Indexed by castling flag (WHITE_OO etc.).
+    Square RookTo[16];
     bool castlingInit = false;
 
     void init_castling_tables() {
         if (castlingInit) return;
         castlingInit = true;
-        // Bits to REMOVE from castling rights when the given square is touched.
-        // Default 0 (touching an ordinary square removes nothing).
-        for (int i = 0; i < SQUARE_NB; ++i) CastlingRightsMask[i] = 0;
-        CastlingRightsMask[E1] = WHITE_OO | WHITE_OOO;
-        CastlingRightsMask[H1] = WHITE_OO;
-        CastlingRightsMask[A1] = WHITE_OOO;
-        CastlingRightsMask[E8] = BLACK_OO | BLACK_OOO;
-        CastlingRightsMask[H8] = BLACK_OO;
-        CastlingRightsMask[A8] = BLACK_OOO;
-
-        RookFrom[WHITE_OO] = H1;  RookTo[WHITE_OO] = F1;
-        RookFrom[WHITE_OOO] = A1; RookTo[WHITE_OOO] = D1;
-        RookFrom[BLACK_OO] = H8;  RookTo[BLACK_OO] = F8;
-        RookFrom[BLACK_OOO] = A8; RookTo[BLACK_OOO] = D8;
+        RookTo[WHITE_OO] = F1;
+        RookTo[WHITE_OOO] = D1;
+        RookTo[BLACK_OO] = F8;
+        RookTo[BLACK_OOO] = D8;
     }
 }
 
@@ -56,6 +48,113 @@ void Position::move_piece(Square from, Square to) {
     byColorBB[color_of(pc)] ^= fromTo;
     board[from] = NO_PIECE;
     board[to] = pc;
+}
+
+int Position::castling_right_index(int right) {
+    switch (right) {
+        case WHITE_OO:  return 0;
+        case WHITE_OOO: return 1;
+        case BLACK_OO:  return 2;
+        default:        return 3; // BLACK_OOO
+    }
+}
+
+Square Position::outer_rook(Color c, bool kingside) const {
+    if (!pieces(c, KING)) return SQ_NONE;
+    int rank = (c == WHITE) ? 0 : 7;
+    int kingFile = file_of(king_square(c));
+    Piece rookP = make_piece(c, ROOK);
+    if (kingside) {
+        for (int f = 7; f > kingFile; --f) {
+            Square s = make_square(f, rank);
+            if (board[s] == rookP) return s;
+        }
+    } else {
+        for (int f = 0; f < kingFile; ++f) {
+            Square s = make_square(f, rank);
+            if (board[s] == rookP) return s;
+        }
+    }
+    return SQ_NONE;
+}
+
+// Parses the FEN castling field into st->castlingRights + castlingRookFrom,
+// then rebuilds castlingRightsMask. Accepts "-" (no rights), standard/X-FEN
+// (K/Q/k/q — rook = outermost on that side of the king), and Shredder-FEN
+// (A-H/a-h — the rook's file; kingside/queenside inferred from the file
+// relative to the king). Must run AFTER the board is populated (king/rook
+// squares must already be on the board). Mirrors gomachine's
+// Position.parseCastling exactly, including NOT verifying a rook actually
+// sits on a Shredder-letter square (matches the oracle's contract; malformed
+// input is caught downstream by Rules::position_legal, not here).
+void Position::parse_castling(const std::string& field) {
+    st->castlingRights = NO_CASTLING;
+    for (int i = 0; i < 4; ++i) castlingRookFrom[i] = SQ_NONE;
+
+    if (field != "-") {
+        bool haveWK = pieces(WHITE, KING) != 0, haveBK = pieces(BLACK, KING) != 0;
+        int wkFile = haveWK ? file_of(king_square(WHITE)) : -1;
+        int bkFile = haveBK ? file_of(king_square(BLACK)) : -1;
+
+        for (char ch : field) {
+            int right = NO_CASTLING;
+            Square rookSq = SQ_NONE;
+            if (ch == 'K' && haveWK)       { right = WHITE_OO;  rookSq = outer_rook(WHITE, true); }
+            else if (ch == 'Q' && haveWK)  { right = WHITE_OOO; rookSq = outer_rook(WHITE, false); }
+            else if (ch == 'k' && haveBK)  { right = BLACK_OO;  rookSq = outer_rook(BLACK, true); }
+            else if (ch == 'q' && haveBK)  { right = BLACK_OOO; rookSq = outer_rook(BLACK, false); }
+            else if (ch >= 'A' && ch <= 'H' && haveWK) {
+                int f = ch - 'A';
+                rookSq = make_square(f, 0);
+                right = (f > wkFile) ? WHITE_OO : WHITE_OOO;
+            } else if (ch >= 'a' && ch <= 'h' && haveBK) {
+                int f = ch - 'a';
+                rookSq = make_square(f, 7);
+                right = (f > bkFile) ? BLACK_OO : BLACK_OOO;
+            } else {
+                continue; // unrecognized char / missing king: skip silently
+            }
+            if (rookSq == SQ_NONE) continue; // K/Q/k/q with no matching rook found
+            st->castlingRights |= right;
+            castlingRookFrom[castling_right_index(right)] = rookSq;
+        }
+    }
+    refresh_castling_mask();
+}
+
+// refresh_castling_mask rebuilds castlingRightsMask from the current king
+// squares and the stored rook origins: moving from/to a king square clears
+// that color's two rights; moving from/to a castling rook's origin clears
+// that one right. Mirrors gomachine's Position.refreshCastleMask.
+void Position::refresh_castling_mask() {
+    for (int i = 0; i < SQUARE_NB; ++i) castlingRightsMask[i] = 0;
+    if (pieces(WHITE, KING) && (st->castlingRights & (WHITE_OO | WHITE_OOO)))
+        castlingRightsMask[king_square(WHITE)] |= (WHITE_OO | WHITE_OOO);
+    if (pieces(BLACK, KING) && (st->castlingRights & (BLACK_OO | BLACK_OOO)))
+        castlingRightsMask[king_square(BLACK)] |= (BLACK_OO | BLACK_OOO);
+    if (st->castlingRights & WHITE_OO)  castlingRightsMask[castlingRookFrom[0]] |= WHITE_OO;
+    if (st->castlingRights & WHITE_OOO) castlingRightsMask[castlingRookFrom[1]] |= WHITE_OOO;
+    if (st->castlingRights & BLACK_OO)  castlingRightsMask[castlingRookFrom[2]] |= BLACK_OO;
+    if (st->castlingRights & BLACK_OOO) castlingRightsMask[castlingRookFrom[3]] |= BLACK_OOO;
+}
+
+// X-FEN castling-field serialization: a right whose rook is the outermost on
+// its side prints as K/Q/k/q (so standard positions round-trip to "KQkq");
+// an inner rook prints as a Shredder file letter.
+std::string Position::castling_field() const {
+    std::string s;
+    auto emit = [&](int right, Color c, bool kingside, char std) {
+        if (!(st->castlingRights & right)) return;
+        Square rookSq = castlingRookFrom[castling_right_index(right)];
+        if (rookSq == outer_rook(c, kingside)) { s += std; return; }
+        char f = char('A' + file_of(rookSq));
+        s += (c == WHITE) ? f : char(std::tolower(f));
+    };
+    emit(WHITE_OO, WHITE, true, 'K');
+    emit(WHITE_OOO, WHITE, false, 'Q');
+    emit(BLACK_OO, BLACK, true, 'k');
+    emit(BLACK_OOO, BLACK, false, 'q');
+    return s;
 }
 
 U64 Position::compute_key() const {
@@ -105,15 +204,7 @@ void Position::set(const std::string& fen) {
 
     sideToMove = (stm == "w") ? WHITE : BLACK;
 
-    st->castlingRights = NO_CASTLING;
-    for (char c : castle) {
-        switch (c) {
-            case 'K': st->castlingRights |= WHITE_OO; break;
-            case 'Q': st->castlingRights |= WHITE_OOO; break;
-            case 'k': st->castlingRights |= BLACK_OO; break;
-            case 'q': st->castlingRights |= BLACK_OOO; break;
-        }
-    }
+    parse_castling(castle);
 
     if (ep != "-" && ep.size() == 2) {
         int f = ep[0] - 'a', r = ep[1] - '1';
@@ -158,11 +249,7 @@ std::string Position::fen() const {
         if (r) ss << '/';
     }
     ss << (sideToMove == WHITE ? " w " : " b ");
-    std::string c;
-    if (st->castlingRights & WHITE_OO) c += 'K';
-    if (st->castlingRights & WHITE_OOO) c += 'Q';
-    if (st->castlingRights & BLACK_OO) c += 'k';
-    if (st->castlingRights & BLACK_OOO) c += 'q';
+    std::string c = castling_field();
     ss << (c.empty() ? "-" : c) << ' ';
     ss << (st->epSquare == SQ_NONE ? "-" : SQ_NAMES[st->epSquare]);
     ss << ' ' << st->rule50 << ' ' << fullmove;
@@ -250,17 +337,31 @@ void Position::do_move(Move m, StateInfo& newSt) {
     st = &newSt; // switch to new state before mutating
 
     if (mt == CASTLING) {
-        // King move + rook move
-        int flag = (us == WHITE) ? (to > from ? WHITE_OO : WHITE_OOO)
-                                 : (to > from ? BLACK_OO : BLACK_OOO);
-        Square rfrom = RookFrom[flag], rto = RookTo[flag];
+        // King move + rook move. `to` is the king's DESTINATION (g/c-file,
+        // fixed even in FRC) — see move.h's CASTLING encoding doc. Side
+        // (kingside/queenside) comes from castle_is_kingside(m), NOT a
+        // to>from square compare: in Chess960 the king can already be on its
+        // destination file (to==from), which would break that comparison.
+        bool kingside = castle_is_kingside(m);
+        int flag = (us == WHITE) ? (kingside ? WHITE_OO : WHITE_OOO)
+                                 : (kingside ? BLACK_OO : BLACK_OOO);
+        Square rfrom = castling_rook_square(flag), rto = RookTo[flag];
         k ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
         newSt.nonPawnKey[us] ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to]; // king (always non-pawn)
         Piece rook = make_piece(us, ROOK);
         k ^= Zobrist::psq[rook][rfrom] ^ Zobrist::psq[rook][rto];
         newSt.nonPawnKey[us] ^= Zobrist::psq[rook][rfrom] ^ Zobrist::psq[rook][rto];
-        move_piece(from, to);
-        move_piece(rfrom, rto);
+        // Remove both movers FIRST, then place both — the only order that's
+        // safe under every FRC origin/destination overlap (king doesn't
+        // move, rook lands on the king's home square, rook already on its
+        // destination, king lands on the rook's home square, …). A naive
+        // move_piece(from,to) + move_piece(rfrom,rto) corrupts the
+        // bitboards whenever any of those four squares coincide (including
+        // the from==to no-op case, which XORs a piece's own bit to 0).
+        remove_piece(from);
+        remove_piece(rfrom);
+        put_piece(pc, to);
+        put_piece(rook, rto);
         captured = NO_PIECE;
     } else {
         if (captured != NO_PIECE) {
@@ -309,8 +410,8 @@ void Position::do_move(Move m, StateInfo& newSt) {
 
     // Castling rights update
     if (st->castlingRights &&
-        (CastlingRightsMask[from] || CastlingRightsMask[to])) {
-        int removed = CastlingRightsMask[from] | CastlingRightsMask[to];
+        (castlingRightsMask[from] || castlingRightsMask[to])) {
+        int removed = castlingRightsMask[from] | castlingRightsMask[to];
         int before = st->castlingRights;
         newSt.castlingRights &= ~removed;
         if (before != newSt.castlingRights) {
@@ -345,11 +446,19 @@ void Position::undo_move(Move m) {
     }
 
     if (mt == CASTLING) {
-        int flag = (us == WHITE) ? (to > from ? WHITE_OO : WHITE_OOO)
-                                 : (to > from ? BLACK_OO : BLACK_OOO);
-        Square rfrom = RookFrom[flag], rto = RookTo[flag];
-        move_piece(to, from);
-        move_piece(rto, rfrom);
+        bool kingside = castle_is_kingside(m);
+        int flag = (us == WHITE) ? (kingside ? WHITE_OO : WHITE_OOO)
+                                 : (kingside ? BLACK_OO : BLACK_OOO);
+        Square rfrom = castling_rook_square(flag), rto = RookTo[flag];
+        // Same remove-both-then-add-both pattern as do_move, run in reverse:
+        // pull both pieces off their destinations before restoring either to
+        // its origin (safe under every FRC origin/destination overlap).
+        Piece king = board[to];
+        Piece rook = board[rto];
+        remove_piece(to);
+        remove_piece(rto);
+        put_piece(king, from);
+        put_piece(rook, rfrom);
     } else {
         move_piece(to, from);
         if (st->capturedPiece != NO_PIECE) {
@@ -395,10 +504,16 @@ bool Position::pseudo_legal(Move m) const {
     Square from = from_sq(m), to = to_sq(m);
     Piece pc = board[from];
     if (pc == NO_PIECE || color_of(pc) != us) return false;
-    if (pieces(us) & square_bb(to)) return false;
     MoveType mt = type_of_move(m);
+    // CASTLING's `to` is the castling ROOK's origin square in some encodings
+    // and, here, the king's OWN destination square — which in Chess960 can be
+    // occupied by our own king (already there) or, transiently, be read as
+    // "our own piece" before the special-move bypass. Check the move-type
+    // bypass BEFORE the own-piece-at-`to` filter so it can never reject a
+    // castle for that reason.
     if (mt == CASTLING || mt == EN_PASSANT || mt == PROMOTION)
         return true; // trust generator for special moves; verified by legal()
+    if (pieces(us) & square_bb(to)) return false;
     if (type_of(pc) == PAWN) {
         // handled via generator normally; be conservative
         U64 att = pawn_attacks(us, from);
@@ -504,8 +619,9 @@ bool Position::gives_check(Move m) const {
             Square capsq = Square(to - (us == WHITE ? NORTH : SOUTH));
             o = (o ^ square_bb(from) ^ square_bb(capsq)) | square_bb(to);
         } else {
-            int flag = (us == WHITE) ? (to > from ? WHITE_OO : WHITE_OOO)
-                                     : (to > from ? BLACK_OO : BLACK_OOO);
+            bool kingside = castle_is_kingside(m);
+            int flag = (us == WHITE) ? (kingside ? WHITE_OO : WHITE_OOO)
+                                     : (kingside ? BLACK_OO : BLACK_OOO);
             Square rto = RookTo[flag];
             // rook gives the check in castling
             if (rook_attacks(rto, (o ^ square_bb(from)) | square_bb(to)) & square_bb(oppKing))

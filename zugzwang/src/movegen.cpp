@@ -94,27 +94,46 @@ ExtMove* generate_piece_moves(const Position& pos, ExtMove* moveList, U64 target
     return moveList;
 }
 
+// generate_castling emits pseudo-legal castling moves for the side to move,
+// generalized for Chess960: it reads the king's current square and the
+// castling rook's ORIGIN from Position (rather than assuming fixed E1/H1-
+// style squares), and derives the standard king/rook DESTINATION squares
+// (g/c-file king, f/d-file rook) from color + side alone. Mirrors gomachine's
+// Position.genCastling / genCastleSide.
+//
+// Legality here is "squares between must be empty" only (matches the old
+// standard-chess-only version's contract) — the king-path-not-attacked check
+// happens in Position::legal(), same as before. Chess960 wrinkle: the
+// "between" span is king-span UNION rook-span, MINUS the two movers' own
+// origin squares, because in Chess960 the king may pass over the rook's
+// origin (or vice versa) — those squares are about to be vacated by the
+// castle itself, not genuinely occupied for the purposes of this move.
 ExtMove* generate_castling(const Position& pos, ExtMove* moveList) {
     Color us = pos.side_to_move();
     if (pos.in_check()) return moveList;
     Square ksq = pos.king_square(us);
     U64 occ = pos.pieces();
+    int rank = (us == WHITE) ? 0 : 7;
 
-    auto tryCastle = [&](int flag, Square kto, Square rfrom, U64 emptyMask) {
+    auto tryCastle = [&](int flag, bool kingside) {
         if (!(pos.castling_rights() & flag)) return;
-        if (occ & emptyMask) return; // squares between must be empty
-        (void)rfrom;
-        (moveList++)->move = make<CASTLING>(ksq, kto);
+        Square rfrom = pos.castling_rook_square(flag);
+        Square kto = make_square(kingside ? 6 : 2, rank); // g1/g8 or c1/c8
+        Square rto = make_square(kingside ? 5 : 3, rank); // f1/f8 or d1/d8
+
+        U64 mustEmpty = (span_bb(ksq, kto) | span_bb(rfrom, rto))
+                       & ~(square_bb(ksq) | square_bb(rfrom));
+        if (occ & mustEmpty) return; // squares between must be empty
+
+        (moveList++)->move = make<CASTLING>(ksq, kto, kingside ? CASTLE_KINGSIDE : CASTLE_QUEENSIDE);
     };
 
     if (us == WHITE) {
-        // King side: f1,g1 empty
-        tryCastle(WHITE_OO, G1, H1, square_bb(F1) | square_bb(G1));
-        // Queen side: b1,c1,d1 empty
-        tryCastle(WHITE_OOO, C1, A1, square_bb(B1) | square_bb(C1) | square_bb(D1));
+        tryCastle(WHITE_OO, true);
+        tryCastle(WHITE_OOO, false);
     } else {
-        tryCastle(BLACK_OO, G8, H8, square_bb(F8) | square_bb(G8));
-        tryCastle(BLACK_OOO, C8, A8, square_bb(B8) | square_bb(C8) | square_bb(D8));
+        tryCastle(BLACK_OO, true);
+        tryCastle(BLACK_OOO, false);
     }
     return moveList;
 }

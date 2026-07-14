@@ -89,6 +89,13 @@ inline U64 line_bb(Square a, Square b) { return LineBB[a][b]; }
 inline U64 between_bb(Square a, Square b) { return BetweenBB[a][b]; }
 inline int distance(Square a, Square b) { return SquareDistance[a][b]; }
 
+// span_bb: squares from a to b INCLUSIVE of both ends (a and b must be
+// aligned — same rank/file/diagonal; Chess960 castling only ever spans a
+// single back rank). between_bb(a,b) is strictly-between-plus-b, and is 0
+// when a==b (BetweenBB is only populated for squares that attack each
+// other), so this is also correct — and side-effect-free — when a==b.
+inline U64 span_bb(Square a, Square b) { return square_bb(a) | between_bb(a, b); }
+
 // aligned: are three squares on a line?
 inline bool aligned(Square a, Square b, Square c) {
     return LineBB[a][b] & square_bb(c);
