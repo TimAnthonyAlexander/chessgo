@@ -53,12 +53,12 @@ struct Tune {
     // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
     // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
     // callers in uci.cpp for the option table incl. min/max).
-    int rfpMargin     = 80;   // reverse futility: eval - rfpMargin*(depth-improving) >= beta
+    int rfpMargin     = 75;   // reverse futility: eval - rfpMargin*(depth-improving) >= beta
     int razorMargin   = 200;  // razoring: eval + razorMargin*depth <= alpha
-    int futBase       = 120;  // quiet futility base: eval + futBase + futSlope*depth <= alpha
-    int futSlope      = 90;   // quiet futility per-depth slope
+    int futBase       = 0;    // quiet futility base: eval + futBase + futSlope*depth <= alpha
+    int futSlope      = 100;  // quiet futility per-depth slope
     int seeQuietCoeff = 25;   // SEE-quiet pruning: -seeQuietCoeff*depth*depth
-    int captSeeCoeff  = 90;   // capture SEE pruning: -captSeeCoeff*depth
+    int captSeeCoeff  = 23;   // capture SEE pruning: -captSeeCoeff*depth
     int nmpEvalDiv    = 200;  // null-move R eval term: min((eval-beta)/nmpEvalDiv, 3)
     int singularMargin = 32;  // singular beta: ttValue - singularMargin*depth/16 (32 -> 2*depth, exact)
     // ---- D.1 gomachine-constant-transplant fields (env GMCONST, default off; not UCI-exposed) ----
@@ -91,12 +91,12 @@ struct Tune {
         if (on("GMCHECKEXT")) gmCheckExt = true;
         if (on("GMCONST")) {
             // PARITY_GOMACHINE.md §D.1 — applied AFTER any UCI/env default so it wins
-            // regardless of prior `setoption` calls.
+            // regardless of prior `setoption` calls. Structural-only (not UCI-exposed):
+            // the 4 UCI-exposed margins this used to clobber (rfpMargin/futBase/futSlope/
+            // captSeeCoeff) now default to these same gomachine values directly in the
+            // field initializers above, so the accepted base is unchanged but SPSA can
+            // still `setoption` them without GMCONST overwriting the value on load().
             gmConst = true;
-            rfpMargin        = 75;
-            futBase          = 0;
-            futSlope         = 100;
-            captSeeCoeff     = 23;
             captSeeMaxDepth  = 4;
             singularMinDepth = 5;
             aspInitDelta     = 25;
