@@ -91,10 +91,13 @@ struct Context {
         // context (later waves) for SF's adaptive doubleMargin; the fixed margin-24 stub
         // below over-fires and costs a ply. Opt-in via env DBLEXT=1 for isolated testing.
         bool dblExt    = false;
-        // ---- SF selectivity Wave 2 — default ON; env FLAG=0 disables ----
-        bool hindsight = true;  // #8:  priorReduction hindsight depth adjust
-        bool ttCapR    = true;  // #3a: +1 LMR reduction when ttMove is a capture
-        bool mcLinR    = true;  // #3b: linear moveCount de-reduction (SF -moveCount*73/1024)
+        // ---- SF selectivity Wave 2 — hindsight ACCEPTED (~+10 Elo); ttCapR/mcLinR
+        // DROPPED as an SPRT drag (combined batch washed ~-5, hindsight-alone +10).
+        // ttCapR/mcLinR kept as opt-in env for later salvage (mcLinR likely needs a
+        // larger divisor than SF's /1024 for zug's small integer r scale).
+        bool hindsight = true;  // #8:  priorReduction hindsight depth adjust (ON)
+        bool ttCapR    = false; // #3a: +1 LMR reduction when ttMove is a capture (env TTCAPR=1)
+        bool mcLinR    = false; // #3b: linear moveCount de-reduction (env MCLINR=1)
         // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
         // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
         // callers in uci.cpp for the option table incl. min/max).
@@ -144,8 +147,8 @@ struct Context {
             if (off("CUTOFFCNT")) cutoffCnt = false;
             if (on("DBLEXT")) dblExt = true;
             if (off("HINDSIGHT")) hindsight = false;
-            if (off("TTCAPR")) ttCapR = false;
-            if (off("MCLINR")) mcLinR = false;
+            if (on("TTCAPR")) ttCapR = true;
+            if (on("MCLINR")) mcLinR = true;
             if (on("GMCONST")) {
                 // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
                 // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
