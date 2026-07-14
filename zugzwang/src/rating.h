@@ -8,6 +8,7 @@
 // has no RootScores-equivalent search entry point to call directly.
 #include "position.h"
 #include "move.h"
+#include "search.h"
 #include <cstdint>
 #include <vector>
 
@@ -53,14 +54,16 @@ struct WeakResult {
 // + clean-search-or-weakened-ranking branch (mirrors BestMoveConfig). `pos`
 // is mutated and restored (do_move/undo_move) during ranking, left unchanged
 // on return. `history` = prior-position Zobrist keys (current position's key
-// is added internally).
-WeakResult best_move_for_rating(Position& pos, int rating, int limitDepth,
+// is added internally). `ctx` is the caller's leased Search::Context — every
+// sub-search this runs uses it, so concurrent /bestmove calls (each with
+// their own leased Context) never share search state.
+WeakResult best_move_for_rating(Search::Context& ctx, Position& pos, int rating, int limitDepth,
                                  int limitMoveTimeMs, int64_t limitNodes,
                                  const std::vector<uint64_t>& history);
 
 // "Unlosable" bot: the WORST (min-scoring) legal move at a fixed shallow
 // depth, ignoring rating entirely. Mirrors engine.BestMoveWorst
 // (worstMoveDepth=6).
-WeakResult best_move_worst(Position& pos, const std::vector<uint64_t>& history);
+WeakResult best_move_worst(Search::Context& ctx, Position& pos, const std::vector<uint64_t>& history);
 
 } // namespace Rating

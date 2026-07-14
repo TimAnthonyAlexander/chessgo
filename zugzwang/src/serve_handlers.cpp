@@ -12,11 +12,6 @@
 
 namespace Handlers {
 
-std::mutex& search_mutex() {
-    static std::mutex m;
-    return m;
-}
-
 namespace {
 
 constexpr const char* START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
@@ -113,7 +108,7 @@ struct CandidateLine {
 // budget evenly across the legal moves (gomachine instead shares one
 // iterative-deepening pass with a global time budget across all moves at
 // once — a real but reasonable engineering deviation for Wave 1; see report).
-std::vector<CandidateLine> multi_pv(Position& pos, int depth, int movetimeMs) {
+std::vector<CandidateLine> multi_pv(Search::Context& ctx, Position& pos, int depth, int movetimeMs) {
     MoveList ml;
     Rules::generate_legal(pos, ml);
 
@@ -141,11 +136,11 @@ std::vector<CandidateLine> multi_pv(Position& pos, int depth, int movetimeMs) {
             lim.silent = true;
             if (depth > 0) lim.depth = depth - 1;
             else lim.movetime = perMoveTimeMs;
-            Search::start(pos, lim);
-            line.score = -Search::lastResult.score;
-            line.depth = Search::lastResult.depth + 1;
+            Search::Result r = Search::start(ctx, pos, lim);
+            line.score = -r.score;
+            line.depth = r.depth + 1;
             line.pv.push_back(m);
-            for (Move pm : Search::lastResult.pv) line.pv.push_back(pm);
+            for (Move pm : r.pv) line.pv.push_back(pm);
         }
 
         pos.undo_move(m);
@@ -260,7 +255,8 @@ json perft(const json& body) {
 // ==================== search-backed handlers ====================
 
 json best_move(const json& body) {
-    std::lock_guard<std::mutex> lock(search_mutex());
+    Search::ContextLease lease;
+    Search::Context& ctx = lease.ctx();
 
     std::string fen = body.value("fen", "");
     Position pos;
@@ -284,11 +280,11 @@ json best_move(const json& body) {
         Rating::WeakResult wr;
         int level;
         if (worst) {
-            wr = Rating::best_move_worst(pos, hist);
+            wr = Rating::best_move_worst(ctx, pos, hist);
             level = -1; // matches gomachine's BestMoveWorst (Level: -1)
         } else if (hasRating) {
             int rating = limits["rating"].get<int>();
-            wr = Rating::best_move_for_rating(pos, rating, depth, movetimeMs, nodes, hist);
+            wr = Rating::best_move_for_rating(ctx, pos, rating, depth, movetimeMs, nodes, hist);
             // matches gomachine's ACTUAL BestMoveConfig (used by the rating
             // path): it never sets BestResult.Level, so it serializes as the
             // Go zero value 0 — NOT -1. (WIRING_RECON's summary table says
@@ -307,7 +303,7 @@ json best_move(const json& body) {
             // fallback for the legacy field.
             int approxRating = Rating::RatingMin +
                                 (Rating::RatingMax - Rating::RatingMin) * lvl / 10;
-            wr = Rating::best_move_for_rating(pos, approxRating, depth, movetimeMs, nodes, hist);
+            wr = Rating::best_move_for_rating(ctx, pos, approxRating, depth, movetimeMs, nodes, hist);
             level = lvl;
         }
 
@@ -340,8 +336,7 @@ json best_move(const json& body) {
     } else {
         lim.movetime = 1000;
     }
-    Search::start(pos, lim);
-    const Search::Result& r = Search::lastResult;
+    Search::Result r = Search::start(ctx, pos, lim);
     if (r.bestMove == MOVE_NONE) {
         return json{{"bestmove", nullptr}, {"reason", "no legal moves"}};
     }
@@ -361,7 +356,8 @@ json best_move(const json& body) {
 }
 
 json candidates(const json& body) {
-    std::lock_guard<std::mutex> lock(search_mutex());
+    Search::ContextLease lease;
+    Search::Context& ctx = lease.ctx();
 
     std::string fen = body.value("fen", "");
     Position pos;
@@ -376,7 +372,7 @@ json candidates(const json& body) {
     std::vector<uint64_t> hist = Rules::history_keys(json_str_vec(body.value("history", json::array())));
     Rules::seed_history(pos, hist);
 
-    auto cands = multi_pv(pos, depth, movetimeMs);
+    auto cands = multi_pv(ctx, pos, depth, movetimeMs);
     if (multipv > 0 && static_cast<size_t>(multipv) < cands.size()) cands.resize(multipv);
 
     json moves = json::array();
@@ -394,7 +390,8 @@ json candidates(const json& body) {
 }
 
 json analyze_game(const json& body) {
-    std::lock_guard<std::mutex> lock(search_mutex());
+    Search::ContextLease lease;
+    Search::Context& ctx = lease.ctx();
 
     constexpr int kDefaultMoveTime = 100, kMinMoveTime = 100, kMaxMoveTime = 3000, kMaxMoves = 600;
 
@@ -426,8 +423,9 @@ json analyze_game(const json& body) {
     // (deliberately — analyze.go:163-171: game review wants the OBJECTIVE
     // best move/eval, not a practical anti-repetition playing decision).
     // Sequential, not gomachine's block-stealing worker-pool fan-out — same
-    // JSON shape, just single-threaded (Wave 1; zugzwang has one shared
-    // search state, see search_mutex()'s doc comment).
+    // JSON shape, just single-threaded PER REQUEST (this request's own leased
+    // Context is used serially across the game's positions); concurrent
+    // /analyze-game calls each get their own Context via the lease above.
     json positions = json::array();
     for (const std::string& f : fens) {
         Position p;
@@ -456,8 +454,7 @@ json analyze_game(const json& body) {
         Search::Limits lim;
         lim.silent = true;
         lim.movetime = movetimeMs;
-        Search::start(p, lim);
-        const Search::Result& r = Search::lastResult;
+        Search::Result r = Search::start(ctx, p, lim);
 
         entry["eval"] = eval_json(r.score);
         entry["bestmove"] = move_to_uci(r.bestMove);
@@ -475,9 +472,9 @@ json analyze_game(const json& body) {
 
 // ==================== Stockfish proxy ====================
 
-// Deliberately does NOT take search_mutex(): the Stockfish subprocess does
-// its own search entirely out-of-process, touching none of zugzwang's shared
-// Search:: globals, so this can run concurrently with the search-backed
+// Deliberately does NOT lease a Search::Context: the Stockfish subprocess
+// does its own search entirely out-of-process, touching none of zugzwang's
+// Search:: state, so this can run concurrently with the search-backed
 // handlers above and with itself.
 json sf_best_move(const json& body) {
     std::string fen = body.value("fen", "");

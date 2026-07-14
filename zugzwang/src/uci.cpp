@@ -25,7 +25,7 @@ static void join_search() {
 }
 
 static void stop_search() {
-    Search::Stop = true;
+    Search::request_stop(true);
     join_search();
 }
 
@@ -80,7 +80,7 @@ static void go_cmd(std::istringstream& is) {
         else if (token == "movetime") is >> limits.movetime;
         else if (token == "infinite") limits.infinite = true;
     }
-    Search::Stop = false;
+    Search::request_stop(false);
     searchThread = std::thread([limits]() { Search::start(pos, limits); });
 }
 
@@ -115,7 +115,7 @@ static void bench() {
         TT.clear();
         Search::Limits lim; lim.depth = 12; lim.startTime = Search::now_ms();
         // Redirect: just run and count via a synchronous search
-        Search::Stop = false;
+        Search::request_stop(false);
         Search::start(pos, lim);
     }
     int64_t ms = Search::now_ms() - start;

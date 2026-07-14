@@ -17,10 +17,12 @@
 #include "tt.h"
 #include "zobrist.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <functional>
 #include <iostream>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -90,13 +92,23 @@ int serve_main(int argc, char** argv) {
     // checklist) — the two can run side by side on one host. -addr overrides.
     std::string addr = "127.0.0.1:6476";
     int ttSizeMB = 128;
+    // -search-pool N: how many searches can run genuinely concurrently (each
+    // with its own Search::Context — TT, history/corrhist tables, NNUE
+    // accumulator; see search.h). Default mirrors gomachine's per-request
+    // engine pool sizing: min(hardware_concurrency, 6). -tt's total is split
+    // evenly across the pool (floor 8MB/context) rather than each context
+    // getting the full -tt size, so `-tt 128` doesn't balloon into
+    // `128 * poolSize` MB resident.
+    int searchPoolSize = static_cast<int>(std::min(6u, std::max(1u, std::thread::hardware_concurrency())));
     std::string sfPath; // -sf-path override for SFUCI::resolve_path() (empty = env/PATH/fallbacks)
     for (int i = 2; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "-addr" && i + 1 < argc) addr = argv[++i];
         else if (a == "-tt" && i + 1 < argc) ttSizeMB = std::stoi(argv[++i]);
+        else if (a == "-search-pool" && i + 1 < argc) searchPoolSize = std::stoi(argv[++i]);
         else if (a == "-sf-path" && i + 1 < argc) sfPath = argv[++i];
     }
+    if (searchPoolSize < 1) searchPoolSize = 1;
     SFUCI::set_path_override(sfPath);
 
     std::string host;
@@ -115,7 +127,18 @@ int serve_main(int argc, char** argv) {
     } else {
         std::cerr << "NNUE: net.nnue absent — using HCE\n";
     }
+    // default_context()'s TT (used only by the legacy 2-arg Search::start(),
+    // which nothing in `serve` mode calls — every search-backed handler leases
+    // a pool Context instead) — resized mainly so it's never left as an
+    // unresized (unusable) table if anything ever falls back to it.
     TT.resize(static_cast<size_t>(ttSizeMB));
+
+    // The concurrency pool: N independent Search::Contexts, each with its own
+    // TT (total -tt split evenly, floor 8MB) — this is what actually serves
+    // /bestmove, /candidates, /analyze-game concurrently (search.h's
+    // Context/ContextLease doc comments have the full story).
+    size_t ttPerContextMB = std::max<size_t>(8, static_cast<size_t>(ttSizeMB) / static_cast<size_t>(searchPoolSize));
+    Search::init_pool(searchPoolSize, ttPerContextMB);
 
     if (std::string sfFound = SFUCI::resolve_path(); !sfFound.empty()) {
         std::cerr << "stockfish: found at " << sfFound << "\n";
@@ -133,6 +156,23 @@ int serve_main(int argc, char** argv) {
     }
 
     httplib::Server svr;
+
+    // httplib's own worker-thread pool is shared across EVERY route (there is
+    // no per-route pool). A search handler that's blocked inside
+    // Search::ContextLease waiting for a free pool Context still occupies one
+    // of these worker threads for the whole wait — so if this pool were left
+    // at httplib's default (~hardware_concurrency, i.e. comparable to
+    // searchPoolSize), a burst of concurrent search requests could saturate
+    // every httplib worker thread (some searching, the rest just blocked
+    // waiting their turn on the pool) and starve /move, /legal-moves,
+    // /status, /perft, /healthz, and even new connections entirely — exactly
+    // the "rules-only handlers must stay fully concurrent, never gated on the
+    // pool" requirement this file's routes below promise. Size it generously
+    // (independent of searchPoolSize) so there are always plenty of threads
+    // free for rules-only work no matter how many search requests are queued
+    // up waiting on the (much smaller) search-context pool.
+    constexpr size_t kHttpThreads = 128;
+    svr.new_task_queue = [] { return new httplib::ThreadPool(kHttpThreads); };
 
     svr.Get("/healthz", [](const httplib::Request&, httplib::Response& res) {
         res.set_content(json{{"status", "ok"}}.dump(), "application/json");
@@ -156,7 +196,8 @@ int serve_main(int argc, char** argv) {
     register_not_implemented(svr, "/crazyhouse/bestmove", "Crazyhouse is Wave 3 (not yet implemented in zugzwang)");
 
     std::cerr << "zugzwang serve: listening on " << host << ":" << port
-              << " (TT " << ttSizeMB << "MB)\n";
+              << " (TT " << ttSizeMB << "MB, search-pool " << searchPoolSize
+              << "x" << ttPerContextMB << "MB)\n";
     if (!svr.listen(host, port)) {
         std::cerr << "serve: failed to bind " << host << ":" << port << "\n";
         return 1;

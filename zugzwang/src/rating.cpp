@@ -36,7 +36,7 @@ std::mt19937_64& rng() {
 // scores) though not its exact mechanism — see kMaxRankDepth above. `pos`'s
 // game history must already be seeded (Rules::seed_history) by the caller;
 // each candidate's do_move/undo_move is symmetric so history is left intact.
-std::vector<RootMove> root_scores(Position& pos, int depth, int64_t& nodesOut) {
+std::vector<RootMove> root_scores(Search::Context& ctx, Position& pos, int depth, int64_t& nodesOut) {
     MoveList ml;
     Rules::generate_legal(pos, ml);
     std::vector<RootMove> out;
@@ -52,9 +52,9 @@ std::vector<RootMove> root_scores(Position& pos, int depth, int64_t& nodesOut) {
             Search::Limits lim;
             lim.depth = depth - 1;
             lim.silent = true;
-            Search::start(pos, lim);
-            childScore = Search::lastResult.score;
-            nodesOut += Search::lastResult.nodes;
+            Search::Result r = Search::start(ctx, pos, lim);
+            childScore = r.score;
+            nodesOut += r.nodes;
         }
         pos.undo_move(m);
         out.push_back({m, -childScore});
@@ -126,7 +126,7 @@ LevelConfig config_for_rating(int rating) {
     return LevelConfig{depth, moveTimeMs, noiseCp, blunder};
 }
 
-WeakResult best_move_for_rating(Position& pos, int rating, int limitDepth,
+WeakResult best_move_for_rating(Search::Context& ctx, Position& pos, int rating, int limitDepth,
                                  int limitMoveTimeMs, int64_t limitNodes,
                                  const std::vector<uint64_t>& history) {
     LevelConfig cfg = config_for_rating(rating);
@@ -156,8 +156,7 @@ WeakResult best_move_for_rating(Position& pos, int rating, int limitDepth,
         lim.movetime = moveTimeMs;
         lim.nodes = nodes;
         lim.silent = true;
-        Search::start(pos, lim);
-        const Search::Result& r = Search::lastResult;
+        Search::Result r = Search::start(ctx, pos, lim);
         return WeakResult{r.bestMove, r.score, r.depth, r.nodes, r.pv};
     }
 
@@ -166,14 +165,14 @@ WeakResult best_move_for_rating(Position& pos, int rating, int limitDepth,
     if (rankDepth > kMaxRankDepth) rankDepth = kMaxRankDepth;
 
     int64_t nodesUsed = 0;
-    auto roots = root_scores(pos, rankDepth, nodesUsed);
+    auto roots = root_scores(ctx, pos, rankDepth, nodesUsed);
     return pick_weakened(roots, cfg, rankDepth, nodesUsed);
 }
 
-WeakResult best_move_worst(Position& pos, const std::vector<uint64_t>& history) {
+WeakResult best_move_worst(Search::Context& ctx, Position& pos, const std::vector<uint64_t>& history) {
     Rules::seed_history(pos, history);
     int64_t nodesUsed = 0;
-    auto roots = root_scores(pos, kWorstMoveDepth, nodesUsed);
+    auto roots = root_scores(ctx, pos, kWorstMoveDepth, nodesUsed);
     if (roots.empty()) return WeakResult{};
     RootMove worst = roots[0];
     for (const RootMove& rm : roots)

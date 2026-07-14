@@ -10,191 +10,179 @@
 #include <iostream>
 #include <algorithm>
 #include <cmath>
+#include <memory>
+#include <mutex>
+#include <condition_variable>
 #include <string>
+#include <vector>
 
 using namespace BB;
 
 namespace Search {
 
-std::atomic<bool> Stop{false};
-Result lastResult;
-
+// Small constants sizing Context's tables — internal linkage is fine here
+// (they're only ever used as constant-expression array bounds / values, never
+// as a TYPE embedded in Context, so there's no linkage mismatch with
+// Context's own external-ish, header-forward-declared identity below).
 namespace {
-
-Limits limits;
-int64_t timeLimitSoft = 0, timeLimitHard = 0;
-int64_t nodeCount = 0;
-int rootDepthGlobal = 0;
-
-// LMR reduction table depends on tune.lmrBase/lmrDiv (D.1), so it's rebuilt
-// whenever tune changes — forward-declared here so Tune::load() can call it;
-// defined after `Reductions[64][64]` is in scope (search.cpp init()).
-void build_reductions();
-
-// Tunable pruning toggles (env-configurable for calibration)
-struct Tune {
-    bool lmp = true, quietSee = true, futility = true, razor = true, nullMove = true, lmr = true;
-    bool corrHist = true;
-    bool negExt = true;
-    bool rfpSoft = true;
-    bool iir = true;  // internal iterative reduction — env IIR=0 to disable (PARITY_GOMACHINE.md C.2)
-    // ---- PARITY_GOMACHINE.md D.0/D.1 — ACCEPTED, baked into defaults 2026-07-14 ----
-    // (previously env-gated PVGUARD=1/GMCONST=1; now on by default — the env
-    // flags below are harmless no-ops that re-assert the same values.)
-    bool pvGuard = true;  // D.0: add !PvNode to the LMP/futility/SEE-quiet/capture-SEE block
-    bool gmConst = true;  // D.1: gomachine's tuned structural search constants (see load())
-    int qsFutMargin = 300;
-    // ---- Margin bundle 2 (SF_MARGINS.md #4/#5) — default OFF, SPRT independently ----
-    bool nmpCutGate = false;    // NMP gate: cutNode && staticEval >= beta - 18*depth + 350
-    bool lmrDepthPrune = false; // quiet futility + SEE-quiet pruning keyed on lmrDepth, not raw depth
-    // ---- PARITY_GOMACHINE.md D.2/D.3 — Wave B, ACCEPTED, baked into defaults 2026-07-14 ----
-    bool contHist = true; // D.2: continuation history (parent/grandparent-keyed quiet magnitude)
-    bool doDeeper = true; // D.3: adaptive do-deeper/do-shallower LMR re-search depth
-    // ---- PARITY_GOMACHINE.md D.5/D.7 — Wave C, default OFF, SPRT independently ----
-    bool seeQuietLinear = false; // D.5: linear SEE-quiet shape -75*depth, depth<=6 (vs quadratic default)
-    bool gmCheckExt = false;     // D.7: gomachine's per-node uncapped in-check depth++ (replaces per-move check ext)
-    // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
-    // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
-    // callers in uci.cpp for the option table incl. min/max).
-    int rfpMargin     = 75;   // reverse futility: eval - rfpMargin*(depth-improving) >= beta
-    int razorMargin   = 200;  // razoring: eval + razorMargin*depth <= alpha
-    int futBase       = 0;    // quiet futility base: eval + futBase + futSlope*depth <= alpha
-    int futSlope      = 100;  // quiet futility per-depth slope
-    int seeQuietCoeff = 25;   // SEE-quiet pruning: -seeQuietCoeff*depth*depth
-    int captSeeCoeff  = 23;   // capture SEE pruning: -captSeeCoeff*depth
-    int nmpEvalDiv    = 200;  // null-move R eval term: min((eval-beta)/nmpEvalDiv, 3)
-    int singularMargin = 32;  // singular beta: ttValue - singularMargin*depth/16 (32 -> 2*depth, exact)
-    // ---- D.1 gomachine structural constants — ACCEPTED, baked into defaults 2026-07-14 ----
-    // (previously only applied via env GMCONST=1; not UCI-exposed)
-    int captSeeMaxDepth  = 4;      // capture SEE pruning: only at depth <= this
-    int singularMinDepth = 5;      // singular extension: only at depth >= this
-    int aspInitDelta     = 25;     // aspiration window initial half-width
-    int lmrMinMoves      = 4;      // LMR onset: reduce once moveCount > this (+1 at root)
-    double lmrBase       = 0.7844; // LMR table: base + log(d)*log(m)/div
-    double lmrDiv        = 2.4696;
-    void load() {
-        auto off = [](const char* n){ const char* e = getenv(n); return e && e[0]=='0'; };
-        auto on  = [](const char* n){ const char* e = getenv(n); return e && e[0]=='1'; };
-        if (off("LMP")) lmp = false;
-        if (off("QSEE")) quietSee = false;
-        if (off("FUT")) futility = false;
-        if (off("RAZ")) razor = false;
-        if (off("NULL")) nullMove = false;
-        if (off("LMR")) lmr = false;
-        if (off("CORRHIST")) corrHist = false;
-        if (off("NEGEXT")) negExt = false;
-        if (off("RFPSOFT")) rfpSoft = false;
-        if (off("IIR")) iir = false;
-        if (const char* e = getenv("QSFUT_MARGIN")) { int v = atoi(e); if (v > 0) qsFutMargin = v; }
-        if (on("NMPCUTGATE")) nmpCutGate = true;
-        if (on("LMRDEPTHPRUNE")) lmrDepthPrune = true;
-        if (on("PVGUARD")) pvGuard = true;
-        if (on("CONTHIST")) contHist = true;
-        if (on("DODEEPER")) doDeeper = true;
-        if (on("SEEQUIETLINEAR")) seeQuietLinear = true;
-        if (on("GMCHECKEXT")) gmCheckExt = true;
-        if (on("GMCONST")) {
-            // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
-            // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
-            // no-op re-assertion of the same values; kept so GMCONST=1 stays valid
-            // and explicit for anyone still setting it. Structural-only (not
-            // UCI-exposed): the 4 UCI-exposed margins this used to clobber
-            // (rfpMargin/futBase/futSlope/captSeeCoeff) default to these same
-            // gomachine values directly in the field initializers above, so SPSA
-            // can still `setoption` them without GMCONST overwriting the value on
-            // load().
-            gmConst = true;
-            captSeeMaxDepth  = 4;
-            singularMinDepth = 5;
-            aspInitDelta     = 25;
-            lmrMinMoves      = 4;
-            lmrBase          = 0.7844;
-            lmrDiv           = 2.4696;
-        }
-        build_reductions();
-    }
-} tune;
-
-// ---- Correction History (CorrHist) ----
+// ---- Correction History (CorrHist) sizing ----
 // Learns the running bias between the (raw) static eval and the eventual search
 // result, keyed by pawn-structure and per-color non-pawn-material patterns
 // (Position::pawn_key() / non_pawn_key(), maintained incrementally in
-// Position::do_move — see position.h/.cpp). The corrected eval is what search
-// pruning (RFP/NMP/razoring/futility) and the `improving` heuristic read;
-// Eval::evaluate() itself is never touched, so the `eval` UCI command and the
-// golden-eval fixture stay byte-identical. Formula mirrors Stockfish 18
+// Position::do_move — see position.h/.cpp). Formula mirrors Stockfish 18
 // (src/search.cpp: correction_value / to_corrected_static_eval /
 // update_correction_history, src/history.h: StatsEntry::operator<<), scoped
-// down to the two table kinds the task asks for (pawn + per-color non-pawn) —
-// SF's extra minor-piece and continuation tables are not implemented here.
+// down to the two table kinds the task asks for (pawn + per-color non-pawn).
 constexpr int CORR_SIZE  = 16384;       // entries per table (power of two -> mask)
 constexpr int CORR_MASK  = CORR_SIZE - 1;
 constexpr int CORR_LIMIT = 1024;        // per-entry clamp (SF's CORRECTION_HISTORY_LIMIT)
-// SF's blend weights (search.cpp correction_value: 10347/8821/11665/11665/7841
-// for pawn/minor/wnp/bnp/cont); we keep the two we implement, applied then
-// divided by CORR_APPLY_SHIFT (SF: cv / 131072) to land back in centipawns.
 constexpr int CORR_W_PAWN       = 10347;
 constexpr int CORR_W_NONPAWN    = 11665;
 constexpr int CORR_APPLY_SHIFT  = 131072;
-// SF's per-table update weight for the non-pawn tables relative to the pawn
-// table (update_correction_history: `bonus * nonPawnWeight / 128`, weight 178;
-// the pawn table itself gets the raw `bonus`).
 constexpr int CORR_NONPAWN_UPDATE_NUM = 178;
 constexpr int CORR_NONPAWN_UPDATE_DEN = 128;
 
-int corrHist[COLOR_NB][CORR_SIZE];             // [stm][pawnKey & mask]
-int corrHistNP[COLOR_NB][COLOR_NB][CORR_SIZE]; // [stm][pieceColor][nonPawnKey(pieceColor) & mask]
+// ---- Continuation history (PARITY_GOMACHINE.md D.2) sizing ----
+// Packed to a dense [12] piece range (W_PAWN..W_KING -> 0..5, B_PAWN..B_KING ->
+// 6..11) rather than raw Piece (0..15, with unused gaps) — halves each table.
+constexpr int piece_dense(Piece p) { return (int(p) >> 3) * 6 + (int(p) & 7) - 1; }
+constexpr int CONT_PIECE_NB = 12;
+} // namespace
 
-// SF's history-gravity update (history.h StatsEntry::operator<<): nudge the
-// entry toward `bonus`, decaying proportionally so it never leaves ±CORR_LIMIT.
-void corrhist_update_entry(int& e, int bonus) {
-    bonus = std::max(-CORR_LIMIT, std::min(CORR_LIMIT, bonus));
-    e += bonus - e * std::abs(bonus) / CORR_LIMIT;
-}
+// ---- Context: everything a search mutates ----
+// One of these is a fully independent "engine instance" — its own TT, its own
+// history/killer/countermove/corrhist/continuation-history tables, its own
+// LMR table (tune-dependent), its own node counter + stop flag, and its own
+// incremental NNUE accumulator stack. Two threads running negamax/qsearch
+// against two DIFFERENT Contexts touch no common mutable memory (the NNUE net
+// WEIGHTS in nnue_net.cpp are the only thing shared, and those are read-only
+// after NNUE::load()). This is the full (private-to-this-TU) definition of
+// the type search.h forward-declares as an opaque handle.
+struct Context {
+    // Tunable pruning toggles (env-configurable for calibration). Nested
+    // inside Context (rather than a free-standing type) purely to avoid any
+    // external/internal-linkage friction with Context itself.
+    struct Tune {
+        bool lmp = true, quietSee = true, futility = true, razor = true, nullMove = true, lmr = true;
+        bool corrHist = true;
+        bool negExt = true;
+        bool rfpSoft = true;
+        bool iir = true;  // internal iterative reduction — env IIR=0 to disable (PARITY_GOMACHINE.md C.2)
+        // ---- PARITY_GOMACHINE.md D.0/D.1 — ACCEPTED, baked into defaults 2026-07-14 ----
+        // (previously env-gated PVGUARD=1/GMCONST=1; now on by default — the env
+        // flags below are harmless no-ops that re-assert the same values.)
+        bool pvGuard = true;  // D.0: add !PvNode to the LMP/futility/SEE-quiet/capture-SEE block
+        bool gmConst = true;  // D.1: gomachine's tuned structural search constants (see load())
+        int qsFutMargin = 300;
+        // ---- Margin bundle 2 (SF_MARGINS.md #4/#5) — default OFF, SPRT independently ----
+        bool nmpCutGate = false;    // NMP gate: cutNode && staticEval >= beta - 18*depth + 350
+        bool lmrDepthPrune = false; // quiet futility + SEE-quiet pruning keyed on lmrDepth, not raw depth
+        // ---- PARITY_GOMACHINE.md D.2/D.3 — Wave B, ACCEPTED, baked into defaults 2026-07-14 ----
+        bool contHist = true; // D.2: continuation history (parent/grandparent-keyed quiet magnitude)
+        bool doDeeper = true; // D.3: adaptive do-deeper/do-shallower LMR re-search depth
+        // ---- PARITY_GOMACHINE.md D.5/D.7 — Wave C, default OFF, SPRT independently ----
+        bool seeQuietLinear = false; // D.5: linear SEE-quiet shape -75*depth, depth<=6 (vs quadratic default)
+        bool gmCheckExt = false;     // D.7: gomachine's per-node uncapped in-check depth++ (replaces per-move check ext)
+        // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
+        // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
+        // callers in uci.cpp for the option table incl. min/max).
+        int rfpMargin     = 75;   // reverse futility: eval - rfpMargin*(depth-improving) >= beta
+        int razorMargin   = 200;  // razoring: eval + razorMargin*depth <= alpha
+        int futBase       = 0;    // quiet futility base: eval + futBase + futSlope*depth <= alpha
+        int futSlope      = 100;  // quiet futility per-depth slope
+        int seeQuietCoeff = 25;   // SEE-quiet pruning: -seeQuietCoeff*depth*depth
+        int captSeeCoeff  = 23;   // capture SEE pruning: -captSeeCoeff*depth
+        int nmpEvalDiv    = 200;  // null-move R eval term: min((eval-beta)/nmpEvalDiv, 3)
+        int singularMargin = 32;  // singular beta: ttValue - singularMargin*depth/16 (32 -> 2*depth, exact)
+        // ---- D.1 gomachine structural constants — ACCEPTED, baked into defaults 2026-07-14 ----
+        // (previously only applied via env GMCONST=1; not UCI-exposed)
+        int captSeeMaxDepth  = 4;      // capture SEE pruning: only at depth <= this
+        int singularMinDepth = 5;      // singular extension: only at depth >= this
+        int aspInitDelta     = 25;     // aspiration window initial half-width
+        int lmrMinMoves      = 4;      // LMR onset: reduce once moveCount > this (+1 at root)
+        double lmrBase       = 0.7844; // LMR table: base + log(d)*log(m)/div
+        double lmrDiv        = 2.4696;
+        // load() applies env overrides but does NOT rebuild the LMR table
+        // itself (that needs the owning Context's Reductions array, which
+        // Tune has no access to) — every load() call site must follow up
+        // with build_reductions(ctx); see start().
+        void load() {
+            auto off = [](const char* n){ const char* e = getenv(n); return e && e[0]=='0'; };
+            auto on  = [](const char* n){ const char* e = getenv(n); return e && e[0]=='1'; };
+            if (off("LMP")) lmp = false;
+            if (off("QSEE")) quietSee = false;
+            if (off("FUT")) futility = false;
+            if (off("RAZ")) razor = false;
+            if (off("NULL")) nullMove = false;
+            if (off("LMR")) lmr = false;
+            if (off("CORRHIST")) corrHist = false;
+            if (off("NEGEXT")) negExt = false;
+            if (off("RFPSOFT")) rfpSoft = false;
+            if (off("IIR")) iir = false;
+            if (const char* e = getenv("QSFUT_MARGIN")) { int v = atoi(e); if (v > 0) qsFutMargin = v; }
+            if (on("NMPCUTGATE")) nmpCutGate = true;
+            if (on("LMRDEPTHPRUNE")) lmrDepthPrune = true;
+            if (on("PVGUARD")) pvGuard = true;
+            if (on("CONTHIST")) contHist = true;
+            if (on("DODEEPER")) doDeeper = true;
+            if (on("SEEQUIETLINEAR")) seeQuietLinear = true;
+            if (on("GMCHECKEXT")) gmCheckExt = true;
+            if (on("GMCONST")) {
+                // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
+                // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
+                // no-op re-assertion of the same values; kept so GMCONST=1 stays valid
+                // and explicit for anyone still setting it. Structural-only (not
+                // UCI-exposed): the 4 UCI-exposed margins this used to clobber
+                // (rfpMargin/futBase/futSlope/captSeeCoeff) default to these same
+                // gomachine values directly in the field initializers above, so SPSA
+                // can still `setoption` them without GMCONST overwriting the value on
+                // load().
+                gmConst = true;
+                captSeeMaxDepth  = 4;
+                singularMinDepth = 5;
+                aspInitDelta     = 25;
+                lmrMinMoves      = 4;
+                lmrBase          = 0.7844;
+                lmrDiv           = 2.4696;
+            }
+        }
+    };
 
-// Weighted, blended correction (centipawns, side-to-move-relative) — SF's
-// correction_value(), pawn + white-nonpawn + black-nonpawn terms only.
-int correction(const Position& pos) {
-    Color stm = pos.side_to_move();
-    int pcv   = corrHist[stm][pos.pawn_key() & CORR_MASK];
-    int wnpcv = corrHistNP[stm][WHITE][pos.non_pawn_key(WHITE) & CORR_MASK];
-    int bnpcv = corrHistNP[stm][BLACK][pos.non_pawn_key(BLACK) & CORR_MASK];
-    long long cv = (long long)CORR_W_PAWN * pcv + (long long)CORR_W_NONPAWN * (wnpcv + bnpcv);
-    return int(cv / CORR_APPLY_SHIFT);
-}
+    TranspositionTable& tt;   // default_context() binds this to the pre-existing
+                               // global `TT` (tt.h); pool contexts own theirs.
+    std::atomic<bool>&  stop; // default_context() binds this to the UCI stop
+                               // signal (request_stop()); pool contexts own theirs.
 
-// Applies the learned correction to a raw static eval and clamps well clear of
-// mate scores (SF's to_corrected_static_eval). With CorrHist off, returns
-// rawEval untouched — CORRHIST=0 must reproduce the pre-CorrHist search exactly.
-int corrected_eval(const Position& pos, int rawEval) {
-    if (!tune.corrHist) return rawEval;
-    int v = rawEval + correction(pos);
-    if (v >= VALUE_MATE_IN_MAX_PLY) v = VALUE_MATE_IN_MAX_PLY - 1;
-    else if (v <= -VALUE_MATE_IN_MAX_PLY) v = -VALUE_MATE_IN_MAX_PLY + 1;
-    return v;
-}
+    Tune tune;
+    int  history[COLOR_NB][64][64] = {};
+    Move counterMoves[PIECE_NB][64] = {};
+    int  corrHist[COLOR_NB][CORR_SIZE] = {};
+    int  corrHistNP[COLOR_NB][COLOR_NB][CORR_SIZE] = {};
+    int16_t contHist1[CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // parent (1-ply)
+    int16_t contHist2[CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // grandparent (2-ply)
+    int  Reductions[64][64] = {};
 
-// Post-move-loop update (negamax only, never qsearch — SF's
-// update_correction_history call site, search.cpp ~1470-1480). `staticEval`
-// must be the CORRECTED eval (ss->staticEval), matching SF: by the time SF
-// reaches this call ss->staticEval already holds to_corrected_static_eval's
-// result, and gomachine's corrhist.go updates toward the same corrected value.
-// Guard is SF's exact guard: skip on capture bestMoves, and only trust the
-// residual when its sign agrees with whether a move raised alpha at all.
-void update_corrhist(const Position& pos, int staticEval, int bestValue, int depth, Move bestMove) {
-    if (!tune.corrHist) return;
-    if (bestMove != MOVE_NONE && pos.is_capture(bestMove)) return;
-    if ((bestValue > staticEval) != (bestMove != MOVE_NONE)) return;
-    int bonus = (bestValue - staticEval) * depth / (bestMove != MOVE_NONE ? 10 : 8);
-    bonus = std::max(-CORR_LIMIT / 4, std::min(CORR_LIMIT / 4, bonus));
-    Color stm = pos.side_to_move();
-    corrhist_update_entry(corrHist[stm][pos.pawn_key() & CORR_MASK], bonus);
-    int npBonus = bonus * CORR_NONPAWN_UPDATE_NUM / CORR_NONPAWN_UPDATE_DEN;
-    corrhist_update_entry(corrHistNP[stm][WHITE][pos.non_pawn_key(WHITE) & CORR_MASK], npBonus);
-    corrhist_update_entry(corrHistNP[stm][BLACK][pos.non_pawn_key(BLACK) & CORR_MASK], npBonus);
-}
+    Limits  limits;
+    int64_t timeLimitSoft = 0, timeLimitHard = 0;
+    int64_t nodeCount = 0;
+    int     rootDepthGlobal = 0;
+    Move    rootBestMove = MOVE_NONE;
+    int     rootBestScore = 0;
 
-// Search stack per ply
+    NNUE::AccStack accStack; // per-search incremental accumulator (was a
+                              // function-local `static` — one shared instance
+                              // for ALL searches — before this change; fine
+                              // single-threaded but a straight-up data race
+                              // once two searches could run concurrently).
+
+    Context(TranspositionTable& ttRef, std::atomic<bool>& stopRef) : tt(ttRef), stop(stopRef) {}
+};
+
+namespace {
+
+// Search stack per ply — already local to one search's call tree (allocated
+// on start()'s stack frame, threaded through via the `ss` pointer), so this
+// needs no isolation of its own.
 struct Stack {
     Move  currentMove;
     Piece currentPiece; // moving piece of currentMove (D.2 ContHist parent key);
@@ -209,38 +197,93 @@ struct Stack {
     Move  excludedMove;
 };
 
-// History and counters
-int  history[COLOR_NB][64][64];
-Move counterMoves[PIECE_NB][64];
-Move rootBestMove = MOVE_NONE;
-int  rootBestScore = 0;
+void build_reductions(Context& C) {
+    for (int d = 1; d < 64; ++d)
+        for (int m = 1; m < 64; ++m)
+            C.Reductions[d][m] = int(C.tune.lmrBase + std::log(d) * std::log(m) / C.tune.lmrDiv);
+    C.Reductions[0][0] = C.Reductions[0][1] = C.Reductions[1][0] = 0;
+}
 
-// ---- Continuation history (PARITY_GOMACHINE.md D.2) ----
-// Parent-move-keyed quiet-magnitude tables: [movingPiece][to] of the move played
-// at ply-1 (resp. ply-2) -> [movingPiece][to] of the current quiet candidate.
-// Packed to a dense [12] piece range (W_PAWN..W_KING -> 0..5, B_PAWN..B_KING ->
-// 6..11 via piece_dense() below) rather than raw Piece (0..15, with unused gaps
-// at 0/7/8/15) — halves each table to ~1.1 MB. Profiling (coalla, contended box:
-// `perf stat -e instructions` showed hoisting alone cut dynamic instruction count
-// ~6% but barely moved wall-clock NPS) indicates contHist reads are memory-
-// latency-bound, not ALU-bound, so shrinking the footprint (better L2/L3
-// residency) is the lever that actually matters — worth the extra piece_dense()
-// call at each site. Read/written only when tune.contHist is on; zeroed in
-// clear(), never persisted across searches (mirrors `history`'s lifecycle).
-constexpr int piece_dense(Piece p) { return (int(p) >> 3) * 6 + (int(p) & 7) - 1; }
-constexpr int CONT_PIECE_NB = 12;
-int16_t contHist1[CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB]; // parent (1-ply)
-int16_t contHist2[CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB]; // grandparent (2-ply)
+void reset_tables(Context& C) {
+    std::memset(C.history, 0, sizeof(C.history));
+    std::memset(C.counterMoves, 0, sizeof(C.counterMoves));
+    std::memset(C.corrHist, 0, sizeof(C.corrHist));
+    std::memset(C.corrHistNP, 0, sizeof(C.corrHistNP));
+    std::memset(C.contHist1, 0, sizeof(C.contHist1));
+    std::memset(C.contHist2, 0, sizeof(C.contHist2));
+    C.tt.clear();
+}
 
-// LMR reduction table
-int Reductions[64][64];
+bool set_tune_option_impl(Context& C, const std::string& name, int value) {
+    auto clamp = [](int v, int lo, int hi) { return std::max(lo, std::min(hi, v)); };
+    auto& tune = C.tune;
+    if      (name == "RfpMargin")      tune.rfpMargin      = clamp(value, 40, 130);
+    else if (name == "RazorMargin")    tune.razorMargin    = clamp(value, 100, 350);
+    else if (name == "FutBase")        tune.futBase        = clamp(value, 40, 220);
+    else if (name == "FutSlope")       tune.futSlope       = clamp(value, 40, 150);
+    else if (name == "SeeQuietCoeff")  tune.seeQuietCoeff  = clamp(value, 10, 45);
+    else if (name == "CaptSeeCoeff")   tune.captSeeCoeff   = clamp(value, 40, 180);
+    else if (name == "NmpEvalDiv")     tune.nmpEvalDiv     = clamp(value, 80, 400);
+    else if (name == "SingularMargin") tune.singularMargin = clamp(value, 16, 80);
+    else return false;
+    return true;
+}
 
-int64_t elapsed() { return now_ms() - limits.startTime; }
+// SF's history-gravity update (history.h StatsEntry::operator<<): nudge the
+// entry toward `bonus`, decaying proportionally so it never leaves ±CORR_LIMIT.
+void corrhist_update_entry(int& e, int bonus) {
+    bonus = std::max(-CORR_LIMIT, std::min(CORR_LIMIT, bonus));
+    e += bonus - e * std::abs(bonus) / CORR_LIMIT;
+}
 
-void check_time() {
-    if (limits.infinite) return;
-    if (limits.nodes && nodeCount >= limits.nodes) Stop = true;
-    if (timeLimitHard && elapsed() >= timeLimitHard) Stop = true;
+// Weighted, blended correction (centipawns, side-to-move-relative) — SF's
+// correction_value(), pawn + white-nonpawn + black-nonpawn terms only.
+int correction(const Context& C, const Position& pos) {
+    Color stm = pos.side_to_move();
+    int pcv   = C.corrHist[stm][pos.pawn_key() & CORR_MASK];
+    int wnpcv = C.corrHistNP[stm][WHITE][pos.non_pawn_key(WHITE) & CORR_MASK];
+    int bnpcv = C.corrHistNP[stm][BLACK][pos.non_pawn_key(BLACK) & CORR_MASK];
+    long long cv = (long long)CORR_W_PAWN * pcv + (long long)CORR_W_NONPAWN * (wnpcv + bnpcv);
+    return int(cv / CORR_APPLY_SHIFT);
+}
+
+// Applies the learned correction to a raw static eval and clamps well clear of
+// mate scores (SF's to_corrected_static_eval). With CorrHist off, returns
+// rawEval untouched — CORRHIST=0 must reproduce the pre-CorrHist search exactly.
+int corrected_eval(const Context& C, const Position& pos, int rawEval) {
+    if (!C.tune.corrHist) return rawEval;
+    int v = rawEval + correction(C, pos);
+    if (v >= VALUE_MATE_IN_MAX_PLY) v = VALUE_MATE_IN_MAX_PLY - 1;
+    else if (v <= -VALUE_MATE_IN_MAX_PLY) v = -VALUE_MATE_IN_MAX_PLY + 1;
+    return v;
+}
+
+// Post-move-loop update (negamax only, never qsearch — SF's
+// update_correction_history call site, search.cpp ~1470-1480). `staticEval`
+// must be the CORRECTED eval (ss->staticEval), matching SF: by the time SF
+// reaches this call ss->staticEval already holds to_corrected_static_eval's
+// result, and gomachine's corrhist.go updates toward the same corrected value.
+// Guard is SF's exact guard: skip on capture bestMoves, and only trust the
+// residual when its sign agrees with whether a move raised alpha at all.
+void update_corrhist(Context& C, const Position& pos, int staticEval, int bestValue, int depth, Move bestMove) {
+    if (!C.tune.corrHist) return;
+    if (bestMove != MOVE_NONE && pos.is_capture(bestMove)) return;
+    if ((bestValue > staticEval) != (bestMove != MOVE_NONE)) return;
+    int bonus = (bestValue - staticEval) * depth / (bestMove != MOVE_NONE ? 10 : 8);
+    bonus = std::max(-CORR_LIMIT / 4, std::min(CORR_LIMIT / 4, bonus));
+    Color stm = pos.side_to_move();
+    corrhist_update_entry(C.corrHist[stm][pos.pawn_key() & CORR_MASK], bonus);
+    int npBonus = bonus * CORR_NONPAWN_UPDATE_NUM / CORR_NONPAWN_UPDATE_DEN;
+    corrhist_update_entry(C.corrHistNP[stm][WHITE][pos.non_pawn_key(WHITE) & CORR_MASK], npBonus);
+    corrhist_update_entry(C.corrHistNP[stm][BLACK][pos.non_pawn_key(BLACK) & CORR_MASK], npBonus);
+}
+
+int64_t elapsed(const Context& C) { return now_ms() - C.limits.startTime; }
+
+void check_time(Context& C) {
+    if (C.limits.infinite) return;
+    if (C.limits.nodes && C.nodeCount >= C.limits.nodes) C.stop = true;
+    if (C.timeLimitHard && elapsed(C) >= C.timeLimitHard) C.stop = true;
 }
 
 // ---- Move ordering ----
@@ -264,17 +307,17 @@ const int PieceVal[7] = {0, 100, 320, 330, 500, 900, 20000};
 // Caller has verified tune.contHist is on; ch1/ch2 are pointers into the
 // live (writable) tables so the same pointers serve both cont-score reads
 // and update_cont_hist writes at a node.
-inline void cont_hist_planes(const Stack* ss, int16_t*& ch1, int16_t*& ch2) {
+inline void cont_hist_planes(Context& C, const Stack* ss, int16_t*& ch1, int16_t*& ch2) {
     ch1 = ch2 = nullptr;
     if (ss->ply >= 1) {
         const Stack* p = ss - 1;
         if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL)
-            ch1 = &contHist1[piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
+            ch1 = &C.contHist1[piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
     }
     if (ss->ply >= 2) {
         const Stack* p = ss - 2;
         if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL)
-            ch2 = &contHist2[piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
+            ch2 = &C.contHist2[piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
     }
 }
 
@@ -292,7 +335,7 @@ inline void cont_hist_planes(const Stack* ss, int16_t*& ch1, int16_t*& ch2) {
 // CONTHIST=1 path); this version pays the piece_dense()+table-read cost
 // exactly once per quiet move and nothing else extra.
 template <bool WithContHist>
-void score_moves_impl(const Position& pos, ExtMove* begin, ExtMove* end, Move ttMove,
+void score_moves_impl(Context& C, const Position& pos, ExtMove* begin, ExtMove* end, Move ttMove,
                        const Stack* ss, Move counter, const int16_t* ch1, const int16_t* ch2) {
     Color us = pos.side_to_move();
     for (ExtMove* m = begin; m != end; ++m) {
@@ -314,7 +357,7 @@ void score_moves_impl(const Position& pos, ExtMove* begin, ExtMove* end, Move tt
         } else if (mv == counter) {
             m->score = COUNTER_SCORE;
         } else {
-            int h = history[us][from_sq(mv)][to_sq(mv)];
+            int h = C.history[us][from_sq(mv)][to_sq(mv)];
             if constexpr (WithContHist) {
                 int off = piece_dense(pos.moved_piece(mv)) * SQUARE_NB + to_sq(mv);
                 if (ch1) h += ch1[off];
@@ -325,14 +368,14 @@ void score_moves_impl(const Position& pos, ExtMove* begin, ExtMove* end, Move tt
     }
 }
 
-inline void score_moves(const Position& pos, ExtMove* begin, ExtMove* end, Move ttMove,
+inline void score_moves(Context& C, const Position& pos, ExtMove* begin, ExtMove* end, Move ttMove,
                         const Stack* ss, Move counter) {
-    score_moves_impl<false>(pos, begin, end, ttMove, ss, counter, nullptr, nullptr);
+    score_moves_impl<false>(C, pos, begin, end, ttMove, ss, counter, nullptr, nullptr);
 }
 
-inline void score_moves_cont(const Position& pos, ExtMove* begin, ExtMove* end, Move ttMove,
+inline void score_moves_cont(Context& C, const Position& pos, ExtMove* begin, ExtMove* end, Move ttMove,
                              const Stack* ss, Move counter, const int16_t* ch1, const int16_t* ch2) {
-    score_moves_impl<true>(pos, begin, end, ttMove, ss, counter, ch1, ch2);
+    score_moves_impl<true>(C, pos, begin, end, ttMove, ss, counter, ch1, ch2);
 }
 
 // Selection sort: move best remaining to front, return it
@@ -344,8 +387,8 @@ Move pick_next(ExtMove*& current, ExtMove* end) {
     return (current++)->move;
 }
 
-void update_history(Color us, Move m, int bonus) {
-    int& h = history[us][from_sq(m)][to_sq(m)];
+void update_history(Context& C, Color us, Move m, int bonus) {
+    int& h = C.history[us][from_sq(m)][to_sq(m)];
     bonus = std::max(-400, std::min(400, bonus));
     h += 32 * bonus - h * std::abs(bonus) / 512;
 }
@@ -366,17 +409,18 @@ void update_cont_entry(int16_t& h, int bonus) {
 // continuation tables via the plane pointers already hoisted for this node by
 // cont_hist_planes (ch1/ch2 nullptr <=> no real ancestor at that ply, same
 // guard cont_hist_planes applies). Caller has verified tune.contHist is on.
+// (No Context param needed — ch1/ch2 are already Context-resolved pointers.)
 void update_cont_hist(int16_t* ch1, int16_t* ch2, Piece pc, Square to, int bonus) {
     int off = piece_dense(pc) * SQUARE_NB + to;
     if (ch1) update_cont_entry(ch1[off], bonus);
     if (ch2) update_cont_entry(ch2[off], bonus);
 }
 
-int qsearch(Position& pos, Stack* ss, int alpha, int beta);
+int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta);
 
-int qsearch(Position& pos, Stack* ss, int alpha, int beta) {
-    if ((++nodeCount & 1023) == 0) check_time();
-    if (Stop) return 0;
+int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta) {
+    if ((++C.nodeCount & 1023) == 0) check_time(C);
+    if (C.stop) return 0;
 
     if (pos.is_draw(ss->ply)) return VALUE_DRAW;
     if (ss->ply >= MAX_PLY) return Eval::evaluate(pos);
@@ -386,8 +430,8 @@ int qsearch(Position& pos, Stack* ss, int alpha, int beta) {
 
     // TT probe
     bool ttHit;
-    TTEntry* tte = TT.probe(pos.key(), ttHit);
-    int ttValue = ttHit ? TT.value_from_tt(tte->value, ss->ply) : VALUE_NONE;
+    TTEntry* tte = C.tt.probe(pos.key(), ttHit);
+    int ttValue = ttHit ? C.tt.value_from_tt(tte->value, ss->ply) : VALUE_NONE;
     Move ttMove = ttHit ? tte->move : MOVE_NONE;
 
     if (ttHit && tte->depth >= 0) {
@@ -406,18 +450,18 @@ int qsearch(Position& pos, Stack* ss, int alpha, int beta) {
         bestValue = futilityBase = -VALUE_INFINITE;
     } else {
         rawEval = (ttHit && tte->eval != VALUE_NONE) ? tte->eval : Eval::evaluate(pos);
-        int staticEval = ss->staticEval = corrected_eval(pos, rawEval);
+        int staticEval = ss->staticEval = corrected_eval(C, pos, rawEval);
         bestValue = staticEval;
         if (ttHit && (tte->bound() & (ttValue > staticEval ? BOUND_LOWER : BOUND_UPPER)))
             bestValue = ttValue;
         if (bestValue >= beta) {
             if (!ttHit)
-                TT.store(tte, pos.key(), TT.value_to_tt(bestValue, ss->ply), false,
-                         BOUND_LOWER, 0, MOVE_NONE, rawEval);
+                C.tt.store(tte, pos.key(), C.tt.value_to_tt(bestValue, ss->ply), false,
+                           BOUND_LOWER, 0, MOVE_NONE, rawEval);
             return bestValue;
         }
         if (bestValue > alpha) alpha = bestValue;
-        futilityBase = bestValue + tune.qsFutMargin;
+        futilityBase = bestValue + C.tune.qsFutMargin;
     }
 
     // Generate moves: captures/promotions (or all evasions when in check)
@@ -426,13 +470,13 @@ int qsearch(Position& pos, Stack* ss, int alpha, int beta) {
     else         generate<CAPTURES>(pos, list);
 
     Move counter = MOVE_NONE;
-    if (tune.contHist) {
+    if (C.tune.contHist) {
         int16_t* qsCh1 = nullptr;
         int16_t* qsCh2 = nullptr;
-        cont_hist_planes(ss, qsCh1, qsCh2);
-        score_moves_cont(pos, list.begin(), list.end(), ttMove, ss, counter, qsCh1, qsCh2);
+        cont_hist_planes(C, ss, qsCh1, qsCh2);
+        score_moves_cont(C, pos, list.begin(), list.end(), ttMove, ss, counter, qsCh1, qsCh2);
     } else {
-        score_moves(pos, list.begin(), list.end(), ttMove, ss, counter);
+        score_moves(C, pos, list.begin(), list.end(), ttMove, ss, counter);
     }
 
     ExtMove* cur = list.begin();
@@ -460,10 +504,10 @@ int qsearch(Position& pos, Stack* ss, int alpha, int beta) {
         if (!inCheck && isCapture && !pos.see_ge(m, -50)) continue;
 
         pos.do_move(m, st);
-        int score = -qsearch(pos, ss + 1, -beta, -alpha);
+        int score = -qsearch(C, pos, ss + 1, -beta, -alpha);
         pos.undo_move(m);
 
-        if (Stop) return 0;
+        if (C.stop) return 0;
 
         if (score > bestValue) {
             bestValue = score;
@@ -479,13 +523,13 @@ int qsearch(Position& pos, Stack* ss, int alpha, int beta) {
         return mated_in(ss->ply); // checkmate
 
     Bound b = bestValue >= beta ? BOUND_LOWER : BOUND_UPPER;
-    TT.store(tte, pos.key(), TT.value_to_tt(bestValue, ss->ply), false, b, 0, bestMove,
-             inCheck ? VALUE_NONE : rawEval);
+    C.tt.store(tte, pos.key(), C.tt.value_to_tt(bestValue, ss->ply), false, b, 0, bestMove,
+               inCheck ? VALUE_NONE : rawEval);
     return bestValue;
 }
 
 template <bool PvNode>
-int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNode) {
+int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNode) {
     bool rootNode = PvNode && ss->ply == 0;
 
     // D.7 (GMCHECKEXT): gomachine's per-node check extension fires here, at node
@@ -495,13 +539,13 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
     // incoming `depth` itself rather than the per-move `extension` local below.
     // Strictly gated behind tune.gmCheckExt so the off (default) path doesn't even
     // pay for the extra pos.in_check() call — zero cost, byte-identical when off.
-    if (tune.gmCheckExt && pos.in_check())
+    if (C.tune.gmCheckExt && pos.in_check())
         depth++;
 
-    if (depth <= 0) return qsearch(pos, ss, alpha, beta);
+    if (depth <= 0) return qsearch(C, pos, ss, alpha, beta);
 
-    if ((++nodeCount & 1023) == 0) check_time();
-    if (Stop) return 0;
+    if ((++C.nodeCount & 1023) == 0) check_time(C);
+    if (C.stop) return 0;
 
     ss->pvLen = 0;
     ss->inCheck = pos.in_check();
@@ -520,9 +564,9 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
 
     // TT probe
     bool ttHit;
-    TTEntry* tte = TT.probe(pos.key(), ttHit);
-    int ttValue = ttHit ? TT.value_from_tt(tte->value, ss->ply) : VALUE_NONE;
-    Move ttMove = rootNode ? rootBestMove : (ttHit ? tte->move : MOVE_NONE);
+    TTEntry* tte = C.tt.probe(pos.key(), ttHit);
+    int ttValue = ttHit ? C.tt.value_from_tt(tte->value, ss->ply) : VALUE_NONE;
+    Move ttMove = rootNode ? C.rootBestMove : (ttHit ? tte->move : MOVE_NONE);
     bool ttCapture = ttMove && pos.is_capture(ttMove);
 
     if (!PvNode && ttHit && !excluded && tte->depth >= depth && ttValue != VALUE_NONE) {
@@ -545,7 +589,7 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
         eval = ss->staticEval = VALUE_NONE;
     } else {
         rawEval = (ttHit && tte->eval != VALUE_NONE) ? tte->eval : Eval::evaluate(pos);
-        eval = ss->staticEval = corrected_eval(pos, rawEval);
+        eval = ss->staticEval = corrected_eval(C, pos, rawEval);
         if (ttHit && ttValue != VALUE_NONE && (tte->bound() & (ttValue > eval ? BOUND_LOWER : BOUND_UPPER)))
             eval = ttValue;
     }
@@ -558,27 +602,27 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
     if (!PvNode && !ss->inCheck && !excluded) {
         // Reverse futility pruning
         bool quietTT = ttMove != MOVE_NONE && !ttCapture;   // ttCapture computed above at the TT probe
-        if (depth <= 8 && !(tune.rfpSoft && quietTT)
-            && eval - tune.rfpMargin * (depth - improving) >= beta && eval < VALUE_MATE_IN_MAX_PLY)
-            return tune.rfpSoft ? (2 * beta + eval) / 3 : eval;
+        if (depth <= 8 && !(C.tune.rfpSoft && quietTT)
+            && eval - C.tune.rfpMargin * (depth - improving) >= beta && eval < VALUE_MATE_IN_MAX_PLY)
+            return C.tune.rfpSoft ? (2 * beta + eval) / 3 : eval;
 
         // Null move pruning
         // SF_MARGINS.md #5: modern SF only null-moves at expected cut-nodes, with a
         // relaxed eval margin (beta - 18*depth + 350) rather than requiring eval>=beta
         // outright. Gated behind tune.nmpCutGate (default off) — R computation below
         // is unchanged either way.
-        bool nmpGate = tune.nmpCutGate
+        bool nmpGate = C.tune.nmpCutGate
             ? (cutNode && ss->staticEval >= beta - 18 * depth + 350)
             : (eval >= beta);
-        if (tune.nullMove && depth >= 3 && nmpGate && (ss - 1)->currentMove != MOVE_NULL
+        if (C.tune.nullMove && depth >= 3 && nmpGate && (ss - 1)->currentMove != MOVE_NULL
             && pos.non_pawn_material(pos.side_to_move())) {
-            int R = 3 + depth / 4 + std::min((eval - beta) / tune.nmpEvalDiv, 3);
+            int R = 3 + depth / 4 + std::min((eval - beta) / C.tune.nmpEvalDiv, 3);
             StateInfo st;
             ss->currentMove = MOVE_NULL;
             pos.do_null_move(st);
-            int nullScore = -negamax<false>(pos, ss + 1, -beta, -beta + 1, depth - R, !cutNode);
+            int nullScore = -negamax<false>(C, pos, ss + 1, -beta, -beta + 1, depth - R, !cutNode);
             pos.undo_null_move();
-            if (Stop) return 0;
+            if (C.stop) return 0;
             if (nullScore >= beta) {
                 if (nullScore >= VALUE_MATE_IN_MAX_PLY) nullScore = beta;
                 return nullScore;
@@ -586,33 +630,33 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
         }
 
         // Razoring
-        if (tune.razor && depth <= 3 && eval + tune.razorMargin * depth <= alpha) {
-            int v = qsearch(pos, ss, alpha, alpha + 1);
+        if (C.tune.razor && depth <= 3 && eval + C.tune.razorMargin * depth <= alpha) {
+            int v = qsearch(C, pos, ss, alpha, alpha + 1);
             if (v <= alpha) return v;
         }
     }
 
     // Internal iterative reduction: if no TT move at high depth, reduce
     // (C.2: gomachine measured its own IIR dead-flat individually — env IIR=0 to disable)
-    if (tune.iir && depth >= 4 && !ttMove && !rootNode)
+    if (C.tune.iir && depth >= 4 && !ttMove && !rootNode)
         depth--;
 
     // ---- Move loop ----
     MoveList list;
     generate<ALL>(pos, list);
     Color us = pos.side_to_move();
-    Move counter = (ss - 1)->currentMove ? counterMoves[pos.piece_on(to_sq((ss - 1)->currentMove))][to_sq((ss - 1)->currentMove)] : MOVE_NONE;
+    Move counter = (ss - 1)->currentMove ? C.counterMoves[pos.piece_on(to_sq((ss - 1)->currentMove))][to_sq((ss - 1)->currentMove)] : MOVE_NONE;
     // Continuation-history plane pointers are constant for every move at this
     // node (they key off the ply-1/ply-2 ancestor, not the candidate move), so
     // hoist them ONCE here rather than re-deriving + re-validating them per
     // candidate in score_moves, per LMR reduction read, and per cutoff update.
     int16_t* ch1 = nullptr;
     int16_t* ch2 = nullptr;
-    if (tune.contHist) {
-        cont_hist_planes(ss, ch1, ch2);
-        score_moves_cont(pos, list.begin(), list.end(), ttMove, ss, counter, ch1, ch2);
+    if (C.tune.contHist) {
+        cont_hist_planes(C, ss, ch1, ch2);
+        score_moves_cont(C, pos, list.begin(), list.end(), ttMove, ss, counter, ch1, ch2);
     } else {
-        score_moves(pos, list.begin(), list.end(), ttMove, ss, counter);
+        score_moves(C, pos, list.begin(), list.end(), ttMove, ss, counter);
     }
 
     ExtMove* cur = list.begin();
@@ -643,8 +687,8 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
         // can key off it instead of raw depth — lets them prune later/more precisely,
         // matching SF's depth<13 window. Gated behind tune.lmrDepthPrune (default off).
         int lmrDepth = depth;
-        if (tune.lmrDepthPrune) {
-            int red = Reductions[std::min(depth, 63)][std::min(moveCount, 63)];
+        if (C.tune.lmrDepthPrune) {
+            int red = C.Reductions[std::min(depth, 63)][std::min(moveCount, 63)];
             lmrDepth = std::max(depth - red, 0);
         }
 
@@ -652,15 +696,15 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
         // D.0 (PARITY_GOMACHINE.md): every other pruning site above is !PvNode-gated;
         // this block wasn't, so it could prune quiets/captures inside our own PV.
         // Gated behind tune.pvGuard (env PVGUARD, default off) until SPRT'd.
-        if (!rootNode && !(tune.pvGuard && PvNode) && bestValue > -VALUE_MATE_IN_MAX_PLY && pos.non_pawn_material(us)) {
+        if (!rootNode && !(C.tune.pvGuard && PvNode) && bestValue > -VALUE_MATE_IN_MAX_PLY && pos.non_pawn_material(us)) {
             if (isQuiet) {
                 int lmpLimit = (3 + depth * depth) / (2 - improving);
-                if (tune.lmp && moveCount >= lmpLimit && !givesCheck) continue;
+                if (C.tune.lmp && moveCount >= lmpLimit && !givesCheck) continue;
                 // Futility pruning
-                bool futilityPrune = tune.lmrDepthPrune
-                    ? (lmrDepth < 13 && eval + tune.futBase + tune.futSlope * lmrDepth <= alpha)
-                    : (depth <= 6 && eval + tune.futBase + tune.futSlope * depth <= alpha);
-                if (tune.futility && !ss->inCheck && !givesCheck && futilityPrune)
+                bool futilityPrune = C.tune.lmrDepthPrune
+                    ? (lmrDepth < 13 && eval + C.tune.futBase + C.tune.futSlope * lmrDepth <= alpha)
+                    : (depth <= 6 && eval + C.tune.futBase + C.tune.futSlope * depth <= alpha);
+                if (C.tune.futility && !ss->inCheck && !givesCheck && futilityPrune)
                     continue;
                 // SEE pruning of quiets
                 // D.5 (SEEQUIETLINEAR): gomachine's tuned shape is linear (-75*depth,
@@ -668,29 +712,29 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
                 // depth^2, depth<=8). Checked first so it wins over lmrDepthPrune's
                 // shape too when both flags happen to be set (independent SPRT flags,
                 // no shipped combination intended).
-                bool seeQuietPrune = tune.seeQuietLinear
+                bool seeQuietPrune = C.tune.seeQuietLinear
                     ? (depth <= 6 && !pos.see_ge(m, -75 * depth))
-                    : tune.lmrDepthPrune
-                        ? !pos.see_ge(m, -tune.seeQuietCoeff * lmrDepth * lmrDepth)
-                        : (depth <= 8 && !pos.see_ge(m, -tune.seeQuietCoeff * depth * depth));
-                if (tune.quietSee && seeQuietPrune) continue;
+                    : C.tune.lmrDepthPrune
+                        ? !pos.see_ge(m, -C.tune.seeQuietCoeff * lmrDepth * lmrDepth)
+                        : (depth <= 8 && !pos.see_ge(m, -C.tune.seeQuietCoeff * depth * depth));
+                if (C.tune.quietSee && seeQuietPrune) continue;
             } else {
                 // SEE pruning of captures
-                if (depth <= tune.captSeeMaxDepth && !givesCheck && !pos.see_ge(m, -tune.captSeeCoeff * depth)) continue;
+                if (depth <= C.tune.captSeeMaxDepth && !givesCheck && !pos.see_ge(m, -C.tune.captSeeCoeff * depth)) continue;
             }
         }
 
         // Singular extension
-        if (!rootNode && depth >= tune.singularMinDepth && m == ttMove && !excluded
+        if (!rootNode && depth >= C.tune.singularMinDepth && m == ttMove && !excluded
             && tte->depth >= depth - 3 && (tte->bound() & BOUND_LOWER)
             && std::abs(ttValue) < VALUE_MATE_IN_MAX_PLY) {
-            int singularBeta = ttValue - tune.singularMargin * depth / 16; // default 32 -> exactly 2*depth
+            int singularBeta = ttValue - C.tune.singularMargin * depth / 16; // default 32 -> exactly 2*depth
             ss->excludedMove = m;
-            int s = negamax<false>(pos, ss, singularBeta - 1, singularBeta, (depth - 1) / 2, cutNode);
+            int s = negamax<false>(C, pos, ss, singularBeta - 1, singularBeta, (depth - 1) / 2, cutNode);
             ss->excludedMove = MOVE_NONE;
             if (s < singularBeta) extension = 1;
             else if (singularBeta >= beta) return singularBeta; // multi-cut
-            else if (tune.negExt) {
+            else if (C.tune.negExt) {
                 // ttMove is provably NOT singular — SF's negative extension de-prioritizes a
                 // move the TT overrates. Reuses the verification search already run (no new search).
                 if (ttValue >= beta) extension = -2;
@@ -701,7 +745,7 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
         // Check extension — mutually exclusive with D.7's node-entry gmCheckExt
         // mechanism above (that one already extended `depth` for the whole node;
         // firing this per-move version too would double-extend a single check).
-        if (!tune.gmCheckExt && givesCheck && extension == 0 && depth < 12) extension = 1;
+        if (!C.tune.gmCheckExt && givesCheck && extension == 0 && depth < 12) extension = 1;
 
         int newDepth = depth - 1 + extension;
         ss->currentMove = m;
@@ -720,21 +764,21 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
         bool wasLMRReduced = false;
 
         // Late Move Reductions
-        if (tune.lmr && depth >= 3 && moveCount > tune.lmrMinMoves + (rootNode ? 1 : 0) && isQuiet) {
-            int r = Reductions[std::min(depth, 63)][std::min(moveCount, 63)];
+        if (C.tune.lmr && depth >= 3 && moveCount > C.tune.lmrMinMoves + (rootNode ? 1 : 0) && isQuiet) {
+            int r = C.Reductions[std::min(depth, 63)][std::min(moveCount, 63)];
             if (!PvNode) r++;
             if (!improving) r++;
             if (cutNode) r += 1;
             if (givesCheck) r--;
-            int hist = history[us][from_sq(m)][to_sq(m)];
-            if (tune.contHist) {
+            int hist = C.history[us][from_sq(m)][to_sq(m)];
+            if (C.tune.contHist) {
                 int off = piece_dense(mover) * SQUARE_NB + to_sq(m);
                 if (ch1) hist += ch1[off];
                 if (ch2) hist += ch2[off];
             }
             r -= hist / 8000;
             int d = std::max(1, std::min(newDepth - r, newDepth));
-            score = -negamax<false>(pos, ss + 1, -alpha - 1, -alpha, d, true);
+            score = -negamax<false>(C, pos, ss + 1, -alpha - 1, -alpha, d, true);
             doFullSearch = score > alpha && d < newDepth;
             wasLMRReduced = doFullSearch;
         } else {
@@ -750,23 +794,23 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
             // reduction (wasLMRReduced guards against reading `score` before
             // it's assigned — see comment above).
             int rd = newDepth;
-            if (tune.doDeeper && wasLMRReduced) {
+            if (C.tune.doDeeper && wasLMRReduced) {
                 if (score > bestValue + 44 + 4 * newDepth) rd = newDepth + 1;
                 else if (score < bestValue + newDepth) rd = std::max(1, newDepth - 1);
             }
-            score = -negamax<false>(pos, ss + 1, -alpha - 1, -alpha, rd, !cutNode);
+            score = -negamax<false>(C, pos, ss + 1, -alpha - 1, -alpha, rd, !cutNode);
         }
 
         if (PvNode && (moveCount == 1 || score > alpha))
-            score = -negamax<true>(pos, ss + 1, -beta, -alpha, newDepth, false);
+            score = -negamax<true>(C, pos, ss + 1, -beta, -alpha, newDepth, false);
 
         pos.undo_move(m);
 
-        if (Stop) return 0;
+        if (C.stop) return 0;
 
         if (rootNode && (moveCount == 1 || score > alpha)) {
-            rootBestMove = m;
-            rootBestScore = score;
+            C.rootBestMove = m;
+            C.rootBestScore = score;
         }
 
         if (score > bestValue) {
@@ -799,11 +843,11 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
                 ss->killers[0] = bestMove;
             }
             int bonus = depth * depth;
-            update_history(us, bestMove, bonus);
+            update_history(C, us, bestMove, bonus);
             for (int i = 0; i < quietCount; ++i)
                 if (quietsSearched[i] != bestMove)
-                    update_history(us, quietsSearched[i], -bonus);
-            if (tune.contHist) {
+                    update_history(C, us, quietsSearched[i], -bonus);
+            if (C.tune.contHist) {
                 // pos is back at the pre-move-loop position here (every iteration
                 // above paired do_move with undo_move), so moved_piece() is valid.
                 // ch1/ch2 were hoisted once for this node above the move loop —
@@ -814,28 +858,29 @@ int negamax(Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNo
                         update_cont_hist(ch1, ch2, pos.moved_piece(quietsSearched[i]), to_sq(quietsSearched[i]), -bonus);
             }
             if ((ss - 1)->currentMove)
-                counterMoves[pos.piece_on(to_sq((ss - 1)->currentMove))][to_sq((ss - 1)->currentMove)] = bestMove;
+                C.counterMoves[pos.piece_on(to_sq((ss - 1)->currentMove))][to_sq((ss - 1)->currentMove)] = bestMove;
         }
     }
 
     if (!excluded) {
         Bound b = bestValue >= beta ? BOUND_LOWER
                 : (PvNode && bestMove) ? BOUND_EXACT : BOUND_UPPER;
-        TT.store(tte, pos.key(), TT.value_to_tt(bestValue, ss->ply), PvNode, b, depth,
-                 bestMove, ss->inCheck ? VALUE_NONE : rawEval);
+        C.tt.store(tte, pos.key(), C.tt.value_to_tt(bestValue, ss->ply), PvNode, b, depth,
+                   bestMove, ss->inCheck ? VALUE_NONE : rawEval);
 
         // Correction history update (§CorrHist, negamax only — never qsearch).
         // Excluded (singular-verification) nodes must not teach it either, hence
         // this living inside the same `!excluded` guard as the TT store.
         if (!ss->inCheck)
-            update_corrhist(pos, ss->staticEval, bestValue, depth, bestMove);
+            update_corrhist(C, pos, ss->staticEval, bestValue, depth, bestMove);
     }
 
     return bestValue;
 }
 
-void print_pv(Position& pos, Stack* ss, int depth, int score, int64_t nodes) {
-    int64_t ms = elapsed();
+void print_pv(Context& C, Position& pos, Stack* ss, int depth, int score, int64_t nodes) {
+    (void)pos;
+    int64_t ms = elapsed(C);
     int64_t nps = ms > 0 ? nodes * 1000 / ms : 0;
     std::cout << "info depth " << depth << " score ";
     if (is_mate_score(score)) {
@@ -845,128 +890,186 @@ void print_pv(Position& pos, Stack* ss, int depth, int score, int64_t nodes) {
         std::cout << "cp " << score;
     }
     std::cout << " nodes " << nodes << " nps " << nps
-              << " time " << ms << " hashfull " << TT.hashfull() << " pv";
+              << " time " << ms << " hashfull " << C.tt.hashfull() << " pv";
     for (int i = 0; i < ss->pvLen; ++i)
         std::cout << " " << move_to_uci(ss->pv[i]);
     std::cout << std::endl;
 }
 
-// LMR table (D.1: base/divisor swap to gomachine's tuned constants behind GMCONST).
-// Rebuilt by Tune::load() every time tune.lmrBase/lmrDiv can change, plus once at
-// startup via init() with the compiled-in defaults. Defined here (still inside the
-// anonymous namespace) so it satisfies the forward declaration used by Tune::load()
-// above — a definition outside the anonymous namespace would be a distinct symbol.
-void build_reductions() {
-    for (int d = 1; d < 64; ++d)
-        for (int m = 1; m < 64; ++m)
-            Reductions[d][m] = int(tune.lmrBase + std::log(d) * std::log(m) / tune.lmrDiv);
-    Reductions[0][0] = Reductions[0][1] = Reductions[1][0] = 0;
+void set_time_limits(Context& C, const Position& pos) {
+    C.timeLimitSoft = C.timeLimitHard = 0;
+    if (C.limits.movetime) {
+        // std::max(1, ...): `movetime - 5` hits exactly 0 whenever movetime==5
+        // (a real, common value — e.g. multi_pv()'s per-move time budget floors
+        // at 5ms whenever a position has enough legal moves). 0 is the "no
+        // limit" sentinel every check_time()/start() caller below tests via
+        // `if (C.timeLimitHard && ...)`, so an unclamped `movetime - 5` would
+        // silently DISABLE the time cutoff right when the caller asked for the
+        // shortest possible search — the iterative-deepening loop then runs
+        // unbounded (up to MAX_PLY), hanging that search (and, in the pool,
+        // permanently starving one Context) instead of returning in ~5ms.
+        C.timeLimitSoft = C.timeLimitHard = std::max(1, C.limits.movetime - 5);
+        return;
+    }
+    Color us = pos.side_to_move();
+    int t = C.limits.time[us];
+    int inc = C.limits.inc[us];
+    if (t <= 0 && inc <= 0) return; // depth/nodes/infinite mode
+    int mtg = C.limits.movestogo ? C.limits.movestogo : 30;
+    // Reserve a healthy overhead for GUI communication + OS scheduling jitter.
+    int overhead = 40;
+    int usable = std::max(1, t - overhead);
+    // Use most of the increment plus a slice of remaining time.
+    int budget = std::max(1, usable / mtg + inc * 3 / 4);
+    C.timeLimitSoft = std::min(budget, usable);
+    // Hard cap: never risk the clock — stay well under remaining time.
+    C.timeLimitHard = std::min(usable / 2, budget * 3);
+    if (C.timeLimitHard < 1) C.timeLimitHard = 1;
+    if (C.timeLimitSoft > C.timeLimitHard) C.timeLimitSoft = C.timeLimitHard;
+    if (C.timeLimitSoft < 1) C.timeLimitSoft = 1;
+}
+
+// ---- default_context(): the single Context used by the UCI CLI path ----
+// Bound to the pre-existing global TT (tt.h/tt.cpp, unchanged) and a
+// dedicated stop flag (request_stop()) — so `TT.resize()`/`TT.clear()` calls
+// from uci.cpp still resize/clear exactly the table the UCI search reads,
+// and the "stop"/"quit" commands still interrupt the running search exactly
+// as before. Nothing about the UCI path's behavior changes.
+std::atomic<bool> defaultStop{false};
+std::unique_ptr<Context> defaultCtxPtr;
+
+Context& default_ctx_ref() {
+    if (!defaultCtxPtr) defaultCtxPtr = std::make_unique<Context>(::TT, defaultStop);
+    return *defaultCtxPtr;
+}
+
+// ---- Concurrent search-context pool (HTTP serve mode) ----
+struct Pool {
+    std::mutex m;
+    std::condition_variable cv;
+    std::vector<std::unique_ptr<TranspositionTable>> tables;
+    std::vector<std::unique_ptr<std::atomic<bool>>> stops;
+    std::vector<std::unique_ptr<Context>> contexts;
+    std::vector<Context*> free_;
+};
+
+Pool& pool() {
+    static Pool p;
+    return p;
 }
 
 } // namespace
 
-// SPSA/UCI hook: map a UCI spin option name to the matching Tune field, clamped
-// to the range advertised on `uci` (uci.cpp). Returns false if name is unknown
-// (uci.cpp treats that as "not a tune option"). Lives outside the anonymous
-// namespace (declared in search.h) but reaches `tune` since anonymous-namespace
-// symbols are visible throughout this translation unit.
+Context& default_context() { return default_ctx_ref(); }
+
+void request_stop(bool value) { default_ctx_ref().stop = value; }
+
 bool set_tune_option(const std::string& name, int value) {
-    auto clamp = [](int v, int lo, int hi) { return std::max(lo, std::min(hi, v)); };
-    if      (name == "RfpMargin")      tune.rfpMargin      = clamp(value, 40, 130);
-    else if (name == "RazorMargin")    tune.razorMargin    = clamp(value, 100, 350);
-    else if (name == "FutBase")        tune.futBase        = clamp(value, 40, 220);
-    else if (name == "FutSlope")       tune.futSlope       = clamp(value, 40, 150);
-    else if (name == "SeeQuietCoeff")  tune.seeQuietCoeff  = clamp(value, 10, 45);
-    else if (name == "CaptSeeCoeff")   tune.captSeeCoeff   = clamp(value, 40, 180);
-    else if (name == "NmpEvalDiv")     tune.nmpEvalDiv     = clamp(value, 80, 400);
-    else if (name == "SingularMargin") tune.singularMargin = clamp(value, 16, 80);
-    else return false;
-    return true;
+    return set_tune_option_impl(default_ctx_ref(), name, value);
 }
 
 void init() {
-    build_reductions();
+    build_reductions(default_ctx_ref());
 }
 
 void clear() {
-    std::memset(history, 0, sizeof(history));
-    std::memset(counterMoves, 0, sizeof(counterMoves));
-    std::memset(corrHist, 0, sizeof(corrHist));
-    std::memset(corrHistNP, 0, sizeof(corrHistNP));
-    std::memset(contHist1, 0, sizeof(contHist1));
-    std::memset(contHist2, 0, sizeof(contHist2));
-    TT.clear();
+    reset_tables(default_ctx_ref());
 }
+
+void init_pool(int size, size_t ttMbEach) {
+    Pool& p = pool();
+    std::lock_guard<std::mutex> lock(p.m);
+    if (!p.contexts.empty()) return; // already initialized — idempotent
+    if (size < 1) size = 1;
+    for (int i = 0; i < size; ++i) {
+        p.tables.push_back(std::make_unique<TranspositionTable>());
+        p.tables.back()->resize(ttMbEach);
+        p.stops.push_back(std::make_unique<std::atomic<bool>>(false));
+        auto ctx = std::make_unique<Context>(*p.tables.back(), *p.stops.back());
+        build_reductions(*ctx);
+        p.free_.push_back(ctx.get());
+        p.contexts.push_back(std::move(ctx));
+    }
+}
+
+int pool_size() {
+    Pool& p = pool();
+    std::lock_guard<std::mutex> lock(p.m);
+    return static_cast<int>(p.contexts.size());
+}
+
+Context& acquire_context() {
+    Pool& p = pool();
+    std::unique_lock<std::mutex> lock(p.m);
+    p.cv.wait(lock, [&] { return !p.free_.empty(); });
+    Context* c = p.free_.back();
+    p.free_.pop_back();
+    return *c;
+}
+
+void release_context(Context& ctx) {
+    Pool& p = pool();
+    {
+        std::lock_guard<std::mutex> lock(p.m);
+        p.free_.push_back(&ctx);
+    }
+    p.cv.notify_one();
+}
+
+ContextLease::ContextLease() : ctx_(&acquire_context()) {}
+ContextLease::~ContextLease() { release_context(*ctx_); }
 
 int64_t now_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-static void set_time_limits(const Position& pos) {
-    timeLimitSoft = timeLimitHard = 0;
-    if (limits.movetime) {
-        timeLimitSoft = timeLimitHard = limits.movetime - 5;
-        return;
-    }
-    Color us = pos.side_to_move();
-    int t = limits.time[us];
-    int inc = limits.inc[us];
-    if (t <= 0 && inc <= 0) return; // depth/nodes/infinite mode
-    int mtg = limits.movestogo ? limits.movestogo : 30;
-    // Reserve a healthy overhead for GUI communication + OS scheduling jitter.
-    int overhead = 40;
-    int usable = std::max(1, t - overhead);
-    // Use most of the increment plus a slice of remaining time.
-    int budget = std::max(1, usable / mtg + inc * 3 / 4);
-    timeLimitSoft = std::min(budget, usable);
-    // Hard cap: never risk the clock — stay well under remaining time.
-    timeLimitHard = std::min(usable / 2, budget * 3);
-    if (timeLimitHard < 1) timeLimitHard = 1;
-    if (timeLimitSoft > timeLimitHard) timeLimitSoft = timeLimitHard;
-    if (timeLimitSoft < 1) timeLimitSoft = 1;
-}
+Result start(Context& C, Position& pos, const Limits& lim) {
+    C.limits = lim;
+    C.tune.load();
+    build_reductions(C); // Tune::load() no longer rebuilds this itself (it has
+                          // no access to the owning Context's Reductions table);
+                          // every start() call still gets a fresh table exactly
+                          // as before.
+    if (C.limits.startTime == 0) C.limits.startTime = now_ms();
+    C.stop = false;
+    C.nodeCount = 0;
+    set_time_limits(C, pos);
+    C.tt.new_search();
 
-void start(Position& pos, const Limits& lim) {
-    limits = lim;
-    tune.load();
-    if (limits.startTime == 0) limits.startTime = now_ms();
-    Stop = false;
-    nodeCount = 0;
-    set_time_limits(pos);
-    TT.new_search();
-
-    // Attach the incremental NNUE accumulator for the duration of the search. One stack
-    // (heap-backed, persists across calls), rebuilt from the root each search; the
-    // Position drives push/pop through do_move/undo_move. HCE mode leaves it detached.
-    static NNUE::AccStack accStack;
+    // Attach the incremental NNUE accumulator for the duration of the search.
+    // C.accStack persists across calls (avoids reallocation) but is now owned
+    // by this Context alone — no longer a function-local `static` shared by
+    // every concurrent search (that was safe single-threaded, but a data race
+    // once two searches could run at once; see Context's doc comment).
     bool useAcc = NNUE::loaded();
-    if (useAcc) { accStack.reset(pos); pos.set_nnue_acc(&accStack); }
+    if (useAcc) { C.accStack.reset(pos); pos.set_nnue_acc(&C.accStack); }
 
     Stack stack[MAX_PLY + 10];
     std::memset(stack, 0, sizeof(stack));
     Stack* ss = stack + 4;
     for (int i = 0; i < MAX_PLY + 10; ++i) stack[i].ply = i - 4;
 
-    rootBestMove = MOVE_NONE;
-    int maxDepth = limits.depth ? limits.depth : MAX_PLY - 1;
+    C.rootBestMove = MOVE_NONE;
+    int maxDepth = C.limits.depth ? C.limits.depth : MAX_PLY - 1;
 
+    Result lastResult;
     int prevScore = 0;
     Move lastBest = MOVE_NONE;
     for (int depth = 1; depth <= maxDepth; ++depth) {
-        rootDepthGlobal = depth;
+        C.rootDepthGlobal = depth;
 
         // Aspiration windows
         int score;
         if (depth <= 4) {
-            score = negamax<true>(pos, ss, -VALUE_INFINITE, VALUE_INFINITE, depth, false);
+            score = negamax<true>(C, pos, ss, -VALUE_INFINITE, VALUE_INFINITE, depth, false);
         } else {
-            int delta = tune.aspInitDelta;
+            int delta = C.tune.aspInitDelta;
             int alpha = std::max(prevScore - delta, -VALUE_INFINITE);
             int beta  = std::min(prevScore + delta, VALUE_INFINITE);
             while (true) {
-                score = negamax<true>(pos, ss, alpha, beta, depth, false);
-                if (Stop) break;
+                score = negamax<true>(C, pos, ss, alpha, beta, depth, false);
+                if (C.stop) break;
                 if (score <= alpha) {
                     beta = (alpha + beta) / 2;
                     alpha = std::max(score - delta, -VALUE_INFINITE);
@@ -977,41 +1080,49 @@ void start(Position& pos, const Limits& lim) {
             }
         }
 
-        if (Stop && depth > 1) break;
+        if (C.stop && depth > 1) break;
 
         prevScore = score;
-        lastBest = rootBestMove;
-        if (!limits.silent) print_pv(pos, ss, depth, score, nodeCount);
+        lastBest = C.rootBestMove;
+        if (!C.limits.silent) print_pv(C, pos, ss, depth, score, C.nodeCount);
 
-        // Snapshot the completed iteration for the HTTP serve layer (serve.cpp
-        // reads this instead of parsing the UCI stdout lines).
-        lastResult.bestMove = rootBestMove;
+        // Snapshot the completed iteration — returned to the caller once the
+        // whole search loop finishes (was a global `lastResult` before this
+        // change; now purely local to this call, so two concurrent start()
+        // calls never share it).
+        lastResult.bestMove = C.rootBestMove;
         lastResult.score = score;
         lastResult.depth = depth;
-        lastResult.nodes = nodeCount;
+        lastResult.nodes = C.nodeCount;
         lastResult.pv.assign(ss->pv, ss->pv + ss->pvLen);
 
         // Soft time check between iterations
-        if (!limits.infinite && timeLimitSoft && elapsed() >= timeLimitSoft) break;
-        if (limits.nodes && nodeCount >= limits.nodes) break;
+        if (!C.limits.infinite && C.timeLimitSoft && elapsed(C) >= C.timeLimitSoft) break;
+        if (C.limits.nodes && C.nodeCount >= C.limits.nodes) break;
     }
 
     if (useAcc) pos.set_nnue_acc(nullptr); // detach: eval reverts to from-scratch off-search
 
-    Move best = lastBest != MOVE_NONE ? lastBest : rootBestMove;
+    Move best = lastBest != MOVE_NONE ? lastBest : C.rootBestMove;
     if (best == MOVE_NONE) {
         // Fallback: pick any legal move (no iteration ever completed — e.g. an
         // absurdly small movetime). lastResult wasn't populated above; do it here
-        // so callers (serve.cpp) always see a consistent result.
+        // so callers always see a consistent result.
         MoveList list; generate<ALL>(pos, list);
         for (auto& m : list) if (pos.legal(m)) { best = m; break; }
         lastResult.bestMove = best;
         lastResult.score = 0;
         lastResult.depth = 0;
-        lastResult.nodes = nodeCount;
+        lastResult.nodes = C.nodeCount;
         lastResult.pv.assign(1, best);
     }
-    if (!limits.silent) std::cout << "bestmove " << move_to_uci(best) << std::endl;
+    if (!C.limits.silent) std::cout << "bestmove " << move_to_uci(best) << std::endl;
+
+    return lastResult;
+}
+
+void start(Position& pos, const Limits& lim) {
+    start(default_ctx_ref(), pos, lim);
 }
 
 } // namespace Search
