@@ -9,6 +9,7 @@
 #include "vendor/httplib.h"
 
 #include "bitboard.h"
+#include "book.h"
 #include "eval.h"
 #include "nnue.h"
 #include "position.h"
@@ -112,6 +113,14 @@ int serve_main(int argc, char** argv) {
         std::cerr << "NNUE: loaded net.nnue\n";
     } else {
         std::cerr << "NNUE: net.nnue absent — using HCE\n";
+    }
+    // Opening book (same GMBK file/path convention as the UCI path's
+    // book.bin): absent/unusable is non-fatal — /bestmove just falls through
+    // to search, exactly like a missing net falls through to HCE above.
+    if (Book::shared().load("book.bin")) {
+        std::cerr << "Book: loaded book.bin\n";
+    } else {
+        std::cerr << "Book: book.bin absent/unusable — full-strength /bestmove will search instead\n";
     }
     // default_context()'s TT (used only by the legacy 2-arg Search::start(),
     // which nothing in `serve` mode calls — every search-backed handler leases

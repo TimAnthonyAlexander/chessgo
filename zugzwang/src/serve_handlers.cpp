@@ -1,4 +1,5 @@
 #include "serve_handlers.h"
+#include "book.h"
 #include "crazyhouse.h"
 #include "duck.h"
 #include "rules.h"
@@ -44,6 +45,15 @@ std::vector<std::string> uci_pv(const std::vector<Move>& pv) {
     out.reserve(pv.size());
     for (Move m : pv) out.push_back(move_to_uci(m));
     return out;
+}
+
+// {"type","value"} eval object from a book entry — mirrors gomachine's
+// bookEval (server.go), which is deliberately simpler than eval_json above:
+// a book record stores mate/score directly rather than one VALUE_MATE-
+// relative int, so there's no mate-distance arithmetic to do here.
+json book_eval_json(const Book::BookEntry& e) {
+    if (e.mate != 0) return json{{"type", "mate"}, {"value", e.mate}};
+    return json{{"type", "cp"}, {"value", e.score}};
 }
 
 // gomachine's ClaimableDraws is a Go nil slice when empty (never `make`'d),
@@ -327,6 +337,31 @@ json best_move(const json& body) {
         };
     }
 
+    // Opening book: serve a precomputed result instantly for full-strength
+    // analysis (no rating/level/worst — mirrors gomachine's bookHit at the
+    // exact same call site, server.go handleBestMove, and zugzwang's own UCI
+    // try_book_move). Movegen-validated: a stale/wrong record can never yield
+    // an illegal move here.
+    if (Book::shared().loaded()) {
+        if (const Book::BookEntry* e = Book::shared().lookup(Book::book_key(pos));
+            e && !e->pv.empty()) {
+            Move bm = Rules::parse_uci_move(pos, e->pv[0]);
+            if (bm != MOVE_NONE) {
+                return json{
+                    {"bestmove", move_to_uci(bm)},
+                    {"san", Rules::san(pos, bm)},
+                    {"eval", book_eval_json(*e)},
+                    {"pv", e->pv},
+                    {"depth", e->depth},
+                    {"nodes", 0},
+                    {"nps", 0},
+                    {"level", -1}, // matches gomachine's book-hit Level (-1)
+                    {"opening", nullptr}, // STUB: no opening-name table ported (Wave 1)
+                };
+            }
+        }
+    }
+
     // No rating/level/worst: full-strength search bounded by depth/movetime,
     // or gomachine's 1s default when neither is given (server.go:516-519).
     Rules::seed_history(pos, hist);
@@ -357,6 +392,11 @@ json best_move(const json& body) {
     };
 }
 
+// Deliberately does NOT probe the book: gomachine's own handleCandidates
+// (server.go) never calls bookHit either — the analysis-board eval bar wants
+// a real per-move search score for EVERY legal move (including the book
+// move), not a book shortcut for just one of them. Parity means matching
+// that omission, not adding a probe gomachine itself doesn't have here.
 json candidates(const json& body) {
     Search::ContextLease lease;
     Search::Context& ctx = lease.ctx();

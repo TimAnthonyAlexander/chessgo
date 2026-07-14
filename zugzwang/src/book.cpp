@@ -191,4 +191,9 @@ const BookEntry* Book::lookup(uint64_t key) const {
     return nullptr;
 }
 
+Book& shared() {
+    static Book instance;
+    return instance;
+}
+
 } // namespace Book

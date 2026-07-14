@@ -43,4 +43,16 @@ private:
     bool loaded_ = false;
 };
 
+// Process-wide singleton for `serve` mode: serve.cpp loads it once at startup
+// (mirrors NNUE::load's pattern) and serve_handlers.cpp's search-backed
+// handlers probe it before searching, from a different translation unit than
+// the loader. uci.cpp keeps its OWN separate `Book::Book` instance rather than
+// this one — the UCI `OwnBook` option is a live-game policy toggle (avoid
+// repeating known theory move-for-move), which doesn't apply to serve's
+// always-on full-strength analysis (gomachine's `bookHit`/handleBestMove
+// consult the book unconditionally whenever no rating/level/worst weakening
+// is requested — see server.go), so the two paths intentionally don't share
+// state.
+Book& shared();
+
 } // namespace Book
