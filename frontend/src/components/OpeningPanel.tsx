@@ -49,6 +49,14 @@ function useCandidates(tree: Tree, currentId: number, engineOn: boolean) {
         }
     }, [tree, currentId])
 
+    // `history` is a FRESH array on every tree annotation (each /analyze ladder step
+    // calls setTree → new tree object → new array), even though its CONTENT only
+    // changes when the VIEWED position changes. Keying the fetch effect on the array
+    // reference therefore aborts + refetches /candidates on every /analyze update —
+    // the "all but the last fail" bug. Key on the stable string content instead so
+    // /candidates is fetched ONCE per position.
+    const historyKey = history.join(' ')
+
     useEffect(() => {
         if (!engineOn || over || !fen) {
             setData(null)
@@ -73,7 +81,10 @@ function useCandidates(tree: Tree, currentId: number, engineOn: boolean) {
             alive = false
             ac.abort()
         }
-    }, [engineOn, over, fen, history])
+        // `history` is consumed inside but the effect is keyed on the stable
+        // `historyKey` proxy (same content ⇒ same key ⇒ no spurious refetch/abort).
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [engineOn, over, fen, historyKey])
 
     // We return the last loaded data AND the fen it was computed for: the panel
     // keeps showing that (frozen, with its own side-to-move) until the new call
