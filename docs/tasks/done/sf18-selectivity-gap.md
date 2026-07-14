@@ -9,6 +9,25 @@ per-wave sum was +61, sub-additive because the waves overlap on the depth/
 selectivity axis. (FN read +30 early and converged to +20 — early SPRT reads run
 high; trust the settled number.)
 
+### Per-technique ledger (Elo, gains / losses / skips)
+
+| Technique | # | Verdict | Elo (movetime SPRT) |
+|---|---|---|---|
+| ProbCut (cheap TT-only) | #2a | **SHIPPED** | Wave-1 bundle **+12** (3 techniques tested together, not individually bisected) |
+| depth −= 2 after alpha-raise | #11 | **SHIPPED** | ↑ (in Wave-1 bundle) |
+| cutoffCnt → LMR bump | #6 | **SHIPPED** | ↑ (in Wave-1 bundle) |
+| hindsight priorReduction | #8 | **SHIPPED** | **+10** (alone; the Wave-2 combined batch first washed −5) |
+| ttCapR (LMR +1 on ttCapture) | #3a | **DROPPED** (drag) | pair **−13** vs hindsight-alone; env-kept `TTCAPR=1` |
+| mcLinR (moveCount de-reduce) | #3b | **DROPPED** (drag) | (same pair; SF `/1024` divisor over-de-reduces zug's int `r`); env-kept `MCLINR=1` |
+| ttPv | #5 | **SHIPPED** | **+11** (unlocked #4) |
+| double singular extension | #4 | **SHIPPED** | **+28** (biggest; crude margin-24 and SF-raw margins both exploded ~2 plies first — shipped = conservative non-PV `s<sβ−64`) |
+| triple extension | — | **DEFERRED** (untested) | mixed gate (+1 depth some, −2 endgame); env `TRIPLEEXT=1` |
+| threat-aware quiet ordering | #10 | **DROPPED** (saturated) | MT wash **+1.87**; FN wash **+3.80** → env-kept `THREATORDER=1` |
+| eval-diff quiet-history | #12 | **DROPPED** (saturated) | (bundled in the +1.87 MT wash); env-kept `EVALHIST=1` |
+| ttMoveHistory | #7 | **SKIPPED** | deferred (feeds #4's margin; do with SPSA) |
+| aspiration-relative reduction | #9 | **SKIPPED** | poor fit for zug's integer `r` |
+| PV-fix (reset `ss->pvLen`) | — | **SHIPPED** (search-neutral) | 0 Elo; illegal-PV warnings 2847 → 0 |
+
 **Shipped (default-on):**
 - Wave 1 (264a964): cheap TT-only ProbCut (#2a) · depth−=2 after alpha-raise (#11)
   · cutoffCnt→LMR bump (#6). +12 vs main.
