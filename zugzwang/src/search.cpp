@@ -91,6 +91,10 @@ struct Context {
         // context (later waves) for SF's adaptive doubleMargin; the fixed margin-24 stub
         // below over-fires and costs a ply. Opt-in via env DBLEXT=1 for isolated testing.
         bool dblExt    = false;
+        // ---- SF selectivity Wave 2 — default ON; env FLAG=0 disables ----
+        bool hindsight = true;  // #8:  priorReduction hindsight depth adjust
+        bool ttCapR    = true;  // #3a: +1 LMR reduction when ttMove is a capture
+        bool mcLinR    = true;  // #3b: linear moveCount de-reduction (SF -moveCount*73/1024)
         // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
         // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
         // callers in uci.cpp for the option table incl. min/max).
@@ -139,6 +143,9 @@ struct Context {
             if (off("DEPTHDROP")) depthDrop = false;
             if (off("CUTOFFCNT")) cutoffCnt = false;
             if (on("DBLEXT")) dblExt = true;
+            if (off("HINDSIGHT")) hindsight = false;
+            if (off("TTCAPR")) ttCapR = false;
+            if (off("MCLINR")) mcLinR = false;
             if (on("GMCONST")) {
                 // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
                 // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
@@ -208,6 +215,7 @@ struct Stack {
     bool  inCheck;
     Move  excludedMove;
     int   cutoffCnt; // #6: count of beta-cutoffs seen at this node; read one ply up in LMR
+    int   reduction; // #8: how much the move leading OUT of this node was LMR-reduced (SF ss->reduction)
 };
 
 void build_reductions(Context& C) {
@@ -613,6 +621,21 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                      && (ss - 2)->staticEval != VALUE_NONE
                      && ss->staticEval > (ss - 2)->staticEval;
 
+    // #8 hindsight (SF search.cpp:754-757): a heavily-reduced parent move may have
+    // under-searched this node — extend if the position isn't worsening for us,
+    // reduce further if the stacked static-eval swing says the reduction was fine.
+    // Reads (ss-1)->reduction = how much the move that led here was LMR-reduced.
+    if (C.tune.hindsight && !rootNode && !ss->inCheck
+        && ss->staticEval != VALUE_NONE && (ss - 1)->staticEval != VALUE_NONE) {
+        int priorReduction = (ss - 1)->reduction;
+        bool opponentWorsening = ss->staticEval > -(ss - 1)->staticEval;
+        if (priorReduction >= 3 && !opponentWorsening)
+            depth++;
+        else if (priorReduction >= 2 && depth >= 2
+                 && ss->staticEval + (ss - 1)->staticEval > 173)
+            depth--;
+    }
+
     // ---- Pruning (non-PV, not in check) ----
     if (!PvNode && !ss->inCheck && !excluded) {
         // Reverse futility pruning
@@ -801,6 +824,8 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             if (!PvNode) r++;
             if (!improving) r++;
             if (cutNode) r += 1;
+            if (C.tune.ttCapR && ttCapture) r++;                 // #3a (SF): ttMove-is-capture reduction
+            if (C.tune.mcLinR) r -= moveCount * 73 / 1024;       // #3b (SF): linear moveCount de-reduction
             if (givesCheck) r--;
             // #6 (SF): a child that fails high a lot means siblings here are unlikely
             // to matter — reduce them harder.
@@ -813,7 +838,9 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             }
             r -= hist / 8000;
             int d = std::max(1, std::min(newDepth - r, newDepth));
+            ss->reduction = newDepth - d;
             score = -negamax<false>(C, pos, ss + 1, -alpha - 1, -alpha, d, true);
+            ss->reduction = 0;
             doFullSearch = score > alpha && d < newDepth;
             wasLMRReduced = doFullSearch;
         } else {
