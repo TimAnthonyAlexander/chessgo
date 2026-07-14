@@ -251,12 +251,11 @@ func (h *Hub) scheduleSelfSearchBotMove(g *game) {
 
 // selfSearchMove computes a bot move for a Tier-2 (self-search) variant,
 // called off the Run goroutine by scheduleSelfSearchBotMove's goroutine.
-// Crazyhouse routinely asks zugzwang's self-contained /crazyhouse/bestmove
-// (its own pockets/drops/pocket-aware eval — zugzwang/src/crazyhouse.h),
-// mirroring the standard-chess zugzwangBestMove retry + emergency-fallback
-// pattern (computeBotMove's doc) so a live Crazyhouse game never freezes if
-// zugzwang is down. Duck has no zugzwang implementation yet, so it always
-// computes in-process via variant.SelfSearchMove, unchanged.
+// Both Crazyhouse and Duck routinely ask zugzwang's self-contained engines
+// (Crazyhouse: pockets/drops/pocket-aware eval, zugzwang/src/crazyhouse.h;
+// Duck: its own board/hand-eval/search, zugzwang/src/duck.h), mirroring the
+// standard-chess zugzwangBestMove retry + emergency-fallback pattern
+// (computeBotMove's doc) so a live game never freezes if zugzwang is down.
 //
 // ok=false means "no legal move" (mirrors variant.SelfSearchMove's own
 // contract) OR "zugzwang unreachable and the emergency fallback is
@@ -279,6 +278,26 @@ func (h *Hub) selfSearchMove(variantID, fen string, extras map[string]string, ra
 			return "", false
 		}
 		fmt.Fprintf(os.Stderr, "hub: zugzwang crazyhouse unreachable — emergency in-process move (%v)\n", lastErr)
+		// fall through to the in-process path below
+	}
+	if variantID == variant.Duck && h.zugzwang != nil {
+		duck := extras["duck"]
+		const retries = 1
+		var lastErr error
+		for attempt := 0; attempt <= retries; attempt++ {
+			ctx, cancel := context.WithTimeout(context.Background(), h.zugzwang.Timeout())
+			uci, err := h.zugzwang.DuckBestMove(ctx, fen, duck, rating)
+			cancel()
+			if err == nil {
+				return uci, uci != "" // "" + nil error = genuinely no legal move
+			}
+			lastErr = err
+		}
+		if !h.emergencyInProc {
+			fmt.Fprintf(os.Stderr, "hub: zugzwang duck unreachable (%v) — emergency in-process fallback disabled, dropping bot move\n", lastErr)
+			return "", false
+		}
+		fmt.Fprintf(os.Stderr, "hub: zugzwang duck unreachable — emergency in-process move (%v)\n", lastErr)
 		// fall through to the in-process path below
 	}
 	return variant.SelfSearchMove(variantID, fen, extras, rating)

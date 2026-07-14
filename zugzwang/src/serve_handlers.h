@@ -45,4 +45,19 @@ json crazyhouse_legal_moves(const json& body);
 json crazyhouse_move(const json& body);
 json crazyhouse_best_move(const json& body);
 
+// Duck Chess: a self-contained variant (src/duck.h) with its own rules + hand
+// eval + shallow bot search; it never touches the standard Search::Context
+// pool (no NNUE, no Position) so these never lease a pool context either.
+// Every request is stateless: the piece board comes from `fen`, the duck's
+// square from a separate `duck` field (mirrors gomachine's
+// internal/server/duck.go handlers field-for-field).
+json duck_legal_moves(const json& body);
+json duck_move(const json& body);
+// Named duck_bestmove (not duck_best_move) to avoid colliding with the
+// module's own ::duck_best_move(DuckState,DuckLimits) — unqualified lookup
+// inside namespace Handlers would otherwise resolve to this handler's own
+// name first and never see the outer free function.
+json duck_bestmove(const json& body);
+json duck_analyze_game(const json& body);
+
 } // namespace Handlers

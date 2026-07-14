@@ -59,18 +59,6 @@ httplib::Server::Handler wrap(RouteFn fn) {
     };
 }
 
-// Routes intentionally NOT implemented yet (WIRING_RECON.md Wave 3 scope):
-// Duck Chess (Crazyhouse shipped — see the /crazyhouse/* routes below).
-// 501, not 404, so a caller can tell "route exists on the contract,
-// deliberately unbuilt here" apart from a plain typo'd path.
-void register_not_implemented(httplib::Server& svr, const char* path, const char* why) {
-    auto handler = [why](const httplib::Request&, httplib::Response& res) {
-        res.status = 501;
-        res.set_content(json{{"error", std::string(why)}}.dump(), "application/json");
-    };
-    svr.Post(path, handler);
-}
-
 bool split_host_port(const std::string& addr, std::string& host, int& port) {
     size_t colon = addr.rfind(':');
     if (colon == std::string::npos) return false;
@@ -185,10 +173,13 @@ int serve_main(int argc, char** argv) {
     svr.Post("/analyze-game", wrap(Handlers::analyze_game));
     svr.Post("/sf-bestmove", wrap(Handlers::sf_best_move));
 
-    register_not_implemented(svr, "/duck/legal-moves", "Duck Chess is Wave 3 (not yet implemented in zugzwang)");
-    register_not_implemented(svr, "/duck/move", "Duck Chess is Wave 3 (not yet implemented in zugzwang)");
-    register_not_implemented(svr, "/duck/bestmove", "Duck Chess is Wave 3 (not yet implemented in zugzwang)");
-    register_not_implemented(svr, "/duck/analyze-game", "Duck Chess is Wave 3 (not yet implemented in zugzwang)");
+    // Duck Chess: a self-contained variant module (src/duck.{h,cpp}) — its
+    // own rules/hand-eval/search, no Search::Context pool involvement
+    // (WIRING_RECON.md Wave 3; mirrors gomachine's internal/duckchess).
+    svr.Post("/duck/legal-moves", wrap(Handlers::duck_legal_moves));
+    svr.Post("/duck/move", wrap(Handlers::duck_move));
+    svr.Post("/duck/bestmove", wrap(Handlers::duck_bestmove));
+    svr.Post("/duck/analyze-game", wrap(Handlers::duck_analyze_game));
 
     // Crazyhouse: a self-contained variant module (src/crazyhouse.{h,cpp}) —
     // its own rules/pockets/drops/eval/search, no Search::Context pool

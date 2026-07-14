@@ -7,24 +7,31 @@ use Override;
 
 /**
  * Decorator over the two engine clients. Standard-chess + Stockfish +
- * Crazyhouse calls go to zugzwang ONLY — `App::config('engine.primary')`
- * selects which client is "primary" (zugzwang by default), and every one of
- * those methods calls just that one client. There is no automatic fallback
- * to gomachine on failure: a zugzwang `RuntimeException` (unreachable / HTTP
- * >=400) propagates straight to the caller. gomachine has zero engine-call
- * paths left through this class except Duck (below) —
- * `ENGINE_PRIMARY=gomachine` (or `engine.primary` in config) still exists as
- * an escape hatch to point the whole site back at gomachine with zero code
- * change, but it is a straight swap, not a fallback.
+ * Duck + Crazyhouse calls go to zugzwang ONLY —
+ * `App::config('engine.primary')` selects which client is "primary"
+ * (zugzwang by default), and every one of those methods calls just that one
+ * client. There is no automatic fallback to gomachine on failure: a
+ * zugzwang `RuntimeException` (unreachable / HTTP >=400) propagates straight
+ * to the caller. `ENGINE_PRIMARY=gomachine` (or `engine.primary` in config)
+ * still exists as an escape hatch to point the whole site back at gomachine
+ * with zero code change, but it is a straight swap, not a fallback.
  *
- * Duck Chess calls go straight to the gomachine client: zugzwang only
- * implements the standard-chess HTTP surface plus Crazyhouse (below) and
- * still explicitly 501s every `/duck/*` route (`zugzwang/src/serve.cpp`).
+ * Duck Chess calls go through `primaryOnly` like standard chess — zugzwang
+ * ships its own self-contained Duck Chess engine (board/duck-square state +
+ * a hand eval + a shallow rating-weakened search, NOT the shared NNUE;
+ * `zugzwang/src/duck.h`) behind `/duck/{legal-moves,move,bestmove,
+ * analyze-game}`.
  *
  * Crazyhouse calls go through `primaryOnly` like standard chess — zugzwang
  * ships its own self-contained Crazyhouse engine (pockets/drops + a
  * pocket-aware hand eval, NOT the shared NNUE; `zugzwang/src/crazyhouse.h`)
  * behind `/crazyhouse/{legal-moves,move,bestmove}`.
+ *
+ * gomachine has zero engine-call paths left through this class — every
+ * variant + standard chess + Stockfish now goes to zugzwang (`primaryOnly`
+ * or `zugzwangOnly`); `gomachineOnly` is retained only as machinery
+ * (unused today) so a future variant lacking a zugzwang port can drop back
+ * to it without re-adding the plumbing.
  *
  * Extends {@see GomachineClient} purely so it satisfies every existing
  * `GomachineClient $engine` constructor type-hint across the app (Liskov
@@ -56,9 +63,11 @@ class EngineSelector extends GomachineClient
     }
 
     /**
-     * Skip the primary entirely — used for Duck traffic zugzwang can't serve
-     * yet (see class docblock; Crazyhouse moved to `primaryOnly` once
-     * zugzwang shipped its own Crazyhouse engine).
+     * Skip the primary entirely and go straight to gomachine — unused today
+     * (every variant now has a zugzwang port and goes through
+     * `primaryOnly`; Duck and Crazyhouse both moved off this once zugzwang
+     * shipped self-contained engines for them). Retained as machinery for a
+     * future variant that lacks a zugzwang port.
      *
      * @param callable(GomachineClient): array<string, mixed> $call
      * @return array<string, mixed>
@@ -140,7 +149,7 @@ class EngineSelector extends GomachineClient
     #[Override]
     public function duckAnalyzeGame(array $moves, int $movetimeMs = 250): array
     {
-        return $this->gomachineOnly(static fn (GomachineClient $c): array => $c->duckAnalyzeGame($moves, $movetimeMs));
+        return $this->primaryOnly(static fn (GomachineClient $c): array => $c->duckAnalyzeGame($moves, $movetimeMs));
     }
 
     #[Override]
@@ -152,13 +161,13 @@ class EngineSelector extends GomachineClient
     #[Override]
     public function duckLegalMoves(string $fen, string $duck): array
     {
-        return $this->gomachineOnly(static fn (GomachineClient $c): array => $c->duckLegalMoves($fen, $duck));
+        return $this->primaryOnly(static fn (GomachineClient $c): array => $c->duckLegalMoves($fen, $duck));
     }
 
     #[Override]
     public function duckMove(string $fen, string $duck, string $move): array
     {
-        return $this->gomachineOnly(static fn (GomachineClient $c): array => $c->duckMove($fen, $duck, $move));
+        return $this->primaryOnly(static fn (GomachineClient $c): array => $c->duckMove($fen, $duck, $move));
     }
 
     #[Override]
@@ -170,7 +179,7 @@ class EngineSelector extends GomachineClient
         int $depth = 0,
         int $nodes = 0,
     ): array {
-        return $this->gomachineOnly(
+        return $this->primaryOnly(
             static fn (GomachineClient $c): array => $c->duckBestMove($fen, $duck, $rating, $movetimeMs, $depth, $nodes),
         );
     }

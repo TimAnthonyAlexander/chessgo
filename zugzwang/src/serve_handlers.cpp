@@ -1,5 +1,6 @@
 #include "serve_handlers.h"
 #include "crazyhouse.h"
+#include "duck.h"
 #include "rules.h"
 #include "rating.h"
 #include "search.h"
@@ -614,6 +615,193 @@ json crazyhouse_best_move(const json& body) {
     json evalObj = (res.mate != 0) ? json{{"type", "mate"}, {"value", res.mate}}
                                     : json{{"type", "cp"}, {"value", res.score}};
     return zh_result_json(json{{"bestmove", res.move}, {"san", sanStr}, {"eval", evalObj}}, z);
+}
+
+// ==================== Duck Chess ====================
+// Self-contained variant (src/duck.{h,cpp}) — its own rules, hand eval, and
+// shallow bot search; never touches Search::Context (no NNUE, no Position —
+// see duck.h's file doc for why). Mirrors gomachine's internal/server/duck.go
+// and duck_analyze.go handlers field-for-field.
+
+namespace {
+
+// Merges position/status fields into a response object — stamps newFen,
+// duck, sideToMove, status and result, the shape shared by /duck/move and
+// /duck/bestmove. Mirrors gomachine's duckResult.
+json duck_result_json(json base, const DuckState& st, DuckStatus status) {
+    base["newFen"] = st.fen();
+    base["duck"] = st.duckString();
+    base["sideToMove"] = st.side == WHITE ? "w" : "b";
+    base["status"] = duck_status_name(status);
+    std::string res = duck_status_result(status);
+    base["result"] = res.empty() ? json(nullptr) : json(res);
+    return base;
+}
+
+DuckState duck_parse_or_throw(const std::string& fen, const std::string& duckStr) {
+    DuckState st;
+    std::string err;
+    if (!duck_parse(fen, duckStr, st, err)) throw ApiError{400, err};
+    return st;
+}
+
+DuckLimits duck_limits_from_json(const json& limits) {
+    DuckLimits lim = duck_default_limits();
+    if (jhas(limits, "rating")) lim.rating = limits["rating"].get<int>();
+    if (jhas(limits, "level")) lim.level = limits["level"].get<int>();
+    lim.depth = limits.value("depth", 0);
+    lim.nodes = static_cast<uint64_t>(limits.value("nodes", static_cast<int64_t>(0)));
+    lim.movetimeMs = limits.value("movetime", 0);
+    return lim;
+}
+
+constexpr int kDuckAnalyzeDefaultMoveTime = 250;
+constexpr int kDuckAnalyzeMaxMoveTime = 3000;
+constexpr int kDuckAnalyzeMaxMoves = 600;
+
+} // namespace
+
+// handleDuckLegalMoves equivalent: legal PIECE moves (UCI) for the side to
+// move. No self-check filter; king-captures ARE included; duck target
+// squares are the client's to compute.
+json duck_legal_moves(const json& body) {
+    std::string fen = body.value("fen", "");
+    std::string duckStr = body.value("duck", "");
+    DuckState st = duck_parse_or_throw(fen, duckStr);
+
+    std::vector<DuckPieceMove> pms = duck_legal_piece_moves(st);
+    std::vector<std::string> moves;
+    moves.reserve(pms.size());
+    for (const DuckPieceMove& m : pms) moves.push_back(m.uci());
+    return json{{"moves", moves}};
+}
+
+// handleDuckMove equivalent: validates and applies a composite move,
+// returning the resulting position and its terminal status.
+json duck_move(const json& body) {
+    std::string fen = body.value("fen", "");
+    std::string duckStr = body.value("duck", "");
+    std::string moveStr = body.value("move", "");
+    DuckState st = duck_parse_or_throw(fen, duckStr);
+
+    DuckState ns;
+    DuckPieceMove pm;
+    DuckStatus status;
+    std::string err;
+    if (!duck_apply_composite(st, moveStr, ns, pm, status, err)) {
+        return json{{"legal", false}, {"error", err}};
+    }
+    std::string sanStr = duck_san(st, pm, ns.duck); // rendered from the PRE-move state
+    return duck_result_json(json{{"legal", true}, {"san", sanStr}}, ns, status);
+}
+
+// handleDuckBestMove equivalent: searches for and APPLIES the bot's best
+// composite move, returning it plus the resulting position/status.
+json duck_bestmove(const json& body) {
+    std::string fen = body.value("fen", "");
+    std::string duckStr = body.value("duck", "");
+    DuckState st = duck_parse_or_throw(fen, duckStr);
+
+    DuckLimits lim = duck_limits_from_json(body.value("limits", json::object()));
+
+    DuckResult res = duck_best_move(st, lim);
+    if (!res.hasMove) {
+        return duck_result_json(
+            json{{"bestmove", nullptr}, {"san", nullptr}, {"eval", nullptr}, {"reason", "no legal moves"}}, st,
+            duck_status(st));
+    }
+
+    std::string sanStr = duck_san(st, res.move, res.duck);
+    DuckState ns;
+    DuckPieceMove appliedMove;
+    DuckStatus status;
+    std::string err;
+    if (!duck_apply_composite(st, duck_result_move_string(res), ns, appliedMove, status, err)) {
+        // Defensive: the search must only ever return a legal move.
+        throw ApiError{500, "search produced an illegal move"};
+    }
+
+    json evalObj = (res.mate != 0) ? json{{"type", "mate"}, {"value", res.mate}}
+                                    : json{{"type", "cp"}, {"value", res.score}};
+    return duck_result_json(
+        json{{"bestmove", duck_result_move_string(res)}, {"san", sanStr}, {"eval", evalObj}}, ns, status);
+}
+
+// handleDuckAnalyzeGame equivalent: replays the composite `moves` from the
+// standard start (no duck) and evaluates every resulting position at full
+// strength, bounded by `movetime` ms per position. Sequential (not
+// gomachine's goroutine fan-out) — same JSON shape, single-threaded per
+// request; duck search is already shallow (depth <=4) so this stays fast
+// enough for the website's post-game review use.
+//
+// Response: { positions: [ {ply, fen, duck, sideToMove, eval|null,
+// bestmove|null, bestSan|null, terminal, checkmate, stalemate} ], count }
+json duck_analyze_game(const json& body) {
+    std::vector<std::string> moves = json_str_vec(body.value("moves", json::array()));
+    if (moves.size() > static_cast<size_t>(kDuckAnalyzeMaxMoves)) throw ApiError{400, "too many moves"};
+
+    int movetimeMs = body.value("movetime", 0);
+    if (movetimeMs <= 0) movetimeMs = kDuckAnalyzeDefaultMoveTime;
+    if (movetimeMs > kDuckAnalyzeMaxMoveTime) movetimeMs = kDuckAnalyzeMaxMoveTime;
+
+    // Replay sequentially, snapshotting one DuckState per position
+    // (moves.size()+1): index i is the position after i moves (index 0 is
+    // the start).
+    DuckState st = duck_parse_or_throw(DUCK_START_FEN, "");
+    std::vector<DuckState> states;
+    states.reserve(moves.size() + 1);
+    states.push_back(st);
+    for (const std::string& mv : moves) {
+        DuckState ns;
+        DuckPieceMove pm;
+        DuckStatus status;
+        std::string err;
+        if (!duck_apply_composite(st, mv, ns, pm, status, err)) {
+            throw ApiError{400, "illegal move in sequence: " + mv + ": " + err};
+        }
+        st = ns;
+        states.push_back(st);
+    }
+
+    json positions = json::array();
+    for (size_t i = 0; i < states.size(); i++) {
+        const DuckState& stp = states[i];
+        DuckStatus status = duck_status(stp);
+        bool terminal = status != DuckStatus::Ongoing;
+        json out = {
+            {"ply", i},
+            {"fen", stp.fen()},
+            {"duck", stp.duckString()},
+            {"sideToMove", stp.side == WHITE ? "w" : "b"},
+            {"eval", nullptr},
+            {"bestmove", nullptr},
+            {"bestSan", nullptr},
+            {"terminal", terminal},
+            {"checkmate", false},
+            {"stalemate", false},
+        };
+        if (terminal) {
+            // A king missing from the board => it was captured => a decisive
+            // win ("checkmate"); otherwise the terminal is non-decisive (no
+            // legal move or the draw cap) => "stalemate".
+            if (duck_king_captured(stp)) out["checkmate"] = true;
+            else out["stalemate"] = true;
+        } else {
+            DuckLimits lim = duck_default_limits(); // Level -1 => NO rating/level => full strength
+            lim.movetimeMs = movetimeMs;
+            DuckResult res = duck_best_move(stp, lim);
+            if (res.hasMove) {
+                json evalObj = (res.mate != 0) ? json{{"type", "mate"}, {"value", res.mate}}
+                                                : json{{"type", "cp"}, {"value", res.score}};
+                out["eval"] = evalObj;
+                out["bestmove"] = duck_result_move_string(res);
+                out["bestSan"] = duck_san(stp, res.move, res.duck);
+            }
+        }
+        positions.push_back(out);
+    }
+
+    return json{{"positions", positions}, {"count", positions.size()}};
 }
 
 } // namespace Handlers

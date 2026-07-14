@@ -196,6 +196,73 @@ func (z *zugzwangClient) CrazyhouseBestMove(ctx context.Context, fen string, rat
 	return *out.BestMove, nil
 }
 
+// duckBestMoveResponse is zugzwang's /duck/bestmove response shape
+// (zugzwang/src/serve_handlers.cpp duck_bestmove — mirrors gomachine's own
+// internal/server/duck.go handleDuckBestMove): bestmove is null (with reason
+// set) when there's no legal move. Unlike CrazyhouseBestMove, the composite
+// move is NOT self-describing in the FEN — the caller needs the resulting
+// `duck` square back too (game.applyMove/variant.duckState.Apply parses the
+// composite "<pieceUCI>:<duckSquare>" move string itself, so returning just
+// the move string is sufficient; `duck` here is read only for a defensive
+// sanity check, see below).
+type duckBestMoveResponse struct {
+	BestMove *string `json:"bestmove"`
+	Duck     string  `json:"duck"`
+	Reason   string  `json:"reason"`
+	Error    string  `json:"error"`
+}
+
+// DuckBestMove asks zugzwang's self-contained Duck Chess engine (its own
+// board/hand-eval/search — NOT the shared standard-chess NNUE search, see
+// zugzwang/src/duck.h) for a move at a target rating. `fen` is the standard
+// board FEN (Duck's duck square rides separately — it is NOT part of the
+// FEN, unlike Crazyhouse's self-describing pocket), `duck` is the duck's
+// current square ("" if not yet placed, mirrors duckState.Extras()["duck"]).
+//
+// A nil error with an empty move string means "zugzwang answered, there's
+// genuinely no legal move" (position already terminal, e.g. a king already
+// captured) — not a transport failure, mirroring CrazyhouseBestMove's doc —
+// so the caller must not retry or fall back to the emergency in-process path
+// for that case.
+func (z *zugzwangClient) DuckBestMove(ctx context.Context, fen, duck string, rating int) (string, error) {
+	body, err := json.Marshal(map[string]any{
+		"fen":    fen,
+		"duck":   duck,
+		"limits": map[string]any{"rating": rating},
+	})
+	if err != nil {
+		return "", fmt.Errorf("zugzwang: marshal duck request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, z.baseURL+"/duck/bestmove", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("zugzwang: build duck request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := z.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("zugzwang: duck request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var out duckBestMoveResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("zugzwang: decode duck response: %w", err)
+	}
+	if resp.StatusCode >= 300 {
+		msg := out.Error
+		if msg == "" {
+			msg = fmt.Sprintf("status %d", resp.StatusCode)
+		}
+		return "", fmt.Errorf("zugzwang: duck: %s", msg)
+	}
+	if out.BestMove == nil || *out.BestMove == "" {
+		return "", nil // genuinely no legal move
+	}
+	return *out.BestMove, nil
+}
+
 // Healthy reports whether zugzwang answers GET /healthz within a short
 // timeout. Best-effort, safe to call from any goroutine (a fresh request,
 // no shared state).
