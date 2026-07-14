@@ -25,9 +25,9 @@ use App\Services\ZugzwangClient;
  *
  * zugzwang shares gomachine's exact `/bestmove`+`/move` request/response shape
  * (byte-compatible, WIRING_RECON.md §A), so the "zugzwang" branch below is
- * identical to "gomachine" except for which client it calls. zugzwang has NO
- * Stockfish integration of its own (its `/sf-bestmove` 501s) — the "stockfish"
- * side is ALWAYS driven through the gomachine client, same as before.
+ * identical to "gomachine" except for which client it calls. zugzwang now
+ * spawns its own Stockfish subprocess (`/sf-bestmove`, `zugzwang/src/sf_uci.cpp`)
+ * — the "stockfish" side is driven through the zugzwang client.
  *
  * `aggr` (0..100, default 50 = neutral) is gomachine/zugzwang's aggression style;
  * it applies to those sides ONLY (Stockfish never receives it). `book`
@@ -89,12 +89,12 @@ class EngineMatchController extends Controller
         $movetime = max(20, min(5000, $this->movetime));
 
         if ($this->side === 'stockfish') {
-            // Stockfish is driven exclusively through the gomachine client — zugzwang
-            // has no Stockfish integration and 501s /sf-bestmove. It never receives
-            // the aggression/nodes/book knobs; depth wins over movetime when set.
+            // Stockfish is driven exclusively through the zugzwang client, which
+            // spawns its own Stockfish subprocess per call. It never receives the
+            // aggression/nodes/book knobs; depth wins over movetime when set.
             $mt = $depth > 0 ? 0 : $movetime;
-            $best = $this->gomachine->stockfishMove($this->fen, $this->elo, $mt, $depth);
-            $engine = $this->gomachine;
+            $best = $this->zugzwang->stockfishMove($this->fen, $this->elo, $mt, $depth);
+            $engine = $this->zugzwang;
         } else {
             // gomachine and zugzwang share the identical bestMove()/move() request
             // shape — only which client is called differs.

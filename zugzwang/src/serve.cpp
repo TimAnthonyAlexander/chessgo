@@ -13,6 +13,7 @@
 #include "nnue.h"
 #include "position.h"
 #include "search.h"
+#include "sf_uci.h"
 #include "tt.h"
 #include "zobrist.h"
 
@@ -57,10 +58,11 @@ httplib::Server::Handler wrap(RouteFn fn) {
 }
 
 // Routes intentionally NOT implemented this wave (WIRING_RECON.md Wave 1
-// scope): Stockfish stays owned by gomachine (zugzwang doesn't spawn an SF
-// process), and the Duck/Crazyhouse variant engines are Wave 3. 501, not 404,
-// so a caller can tell "route exists on the contract, deliberately unbuilt
-// here" apart from a plain typo'd path.
+// scope): the Duck/Crazyhouse variant engines are Wave 3 (Stockfish moved
+// off this list — zugzwang now spawns its own SF subprocess, see
+// SFUCI::query / Handlers::sf_best_move). 501, not 404, so a caller can tell
+// "route exists on the contract, deliberately unbuilt here" apart from a
+// plain typo'd path.
 void register_not_implemented(httplib::Server& svr, const char* path, const char* why) {
     auto handler = [why](const httplib::Request&, httplib::Response& res) {
         res.status = 501;
@@ -88,11 +90,14 @@ int serve_main(int argc, char** argv) {
     // checklist) — the two can run side by side on one host. -addr overrides.
     std::string addr = "127.0.0.1:6476";
     int ttSizeMB = 128;
+    std::string sfPath; // -sf-path override for SFUCI::resolve_path() (empty = env/PATH/fallbacks)
     for (int i = 2; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "-addr" && i + 1 < argc) addr = argv[++i];
         else if (a == "-tt" && i + 1 < argc) ttSizeMB = std::stoi(argv[++i]);
+        else if (a == "-sf-path" && i + 1 < argc) sfPath = argv[++i];
     }
+    SFUCI::set_path_override(sfPath);
 
     std::string host;
     int port;
@@ -111,6 +116,13 @@ int serve_main(int argc, char** argv) {
         std::cerr << "NNUE: net.nnue absent — using HCE\n";
     }
     TT.resize(static_cast<size_t>(ttSizeMB));
+
+    if (std::string sfFound = SFUCI::resolve_path(); !sfFound.empty()) {
+        std::cerr << "stockfish: found at " << sfFound << "\n";
+    } else {
+        std::cerr << "stockfish: not found (set -sf-path / SF_PATH / STOCKFISH_PATH, "
+                      "or install to PATH) — /sf-bestmove will 503\n";
+    }
 
     // Force Position's one-time lazy static init (castling tables) to happen
     // here, single-threaded, before httplib's worker threads can race it on
@@ -133,10 +145,8 @@ int serve_main(int argc, char** argv) {
     svr.Post("/bestmove", wrap(Handlers::best_move));
     svr.Post("/candidates", wrap(Handlers::candidates));
     svr.Post("/analyze-game", wrap(Handlers::analyze_game));
+    svr.Post("/sf-bestmove", wrap(Handlers::sf_best_move));
 
-    register_not_implemented(svr, "/sf-bestmove",
-        "stockfish is owned by gomachine (zugzwang does not spawn a Stockfish process) — "
-        "route Stockfish traffic to gomachine's /sf-bestmove");
     register_not_implemented(svr, "/duck/legal-moves", "Duck Chess is Wave 3 (not yet implemented in zugzwang)");
     register_not_implemented(svr, "/duck/move", "Duck Chess is Wave 3 (not yet implemented in zugzwang)");
     register_not_implemented(svr, "/duck/bestmove", "Duck Chess is Wave 3 (not yet implemented in zugzwang)");

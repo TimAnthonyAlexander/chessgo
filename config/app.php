@@ -100,10 +100,12 @@ return [
     |
     | zugzwang serves the SAME stateless HTTP API as gomachine for standard
     | chess (verified byte-compatible for /move, /legal-moves, /bestmove,
-    | /perft, /status, /candidates, /analyze-game — WIRING_RECON.md §A). It
-    | 501s /sf-bestmove and the Duck/Crazyhouse variant routes (Wave 3, not yet
-    | implemented) — EngineSelector guards those straight to gomachine. Default
-    | port 6476 (gomachine owns 6466), overridable via ZUGZWANG_URL.
+    | /perft, /status, /candidates, /analyze-game, /sf-bestmove —
+    | WIRING_RECON.md §A). It spawns its own Stockfish subprocess for
+    | /sf-bestmove (zugzwang/src/sf_uci.cpp). It still 501s the Duck/Crazyhouse
+    | variant routes (Wave 3, not yet implemented) — EngineSelector guards
+    | those straight to gomachine. Default port 6476 (gomachine owns 6466),
+    | overridable via ZUGZWANG_URL.
     |
     */
     'zugzwang' => [
@@ -116,15 +118,16 @@ return [
     | engine (primary/fallback policy — App\Services\EngineSelector)
     |--------------------------------------------------------------------------
     |
-    | Which engine client EngineSelector tries FIRST for standard-chess calls
-    | (move/bestmove/analyze/candidates/analyze-game/legal-moves). It always
-    | falls back to gomachine on a RuntimeException (connection failure or
-    | HTTP >=400) from the primary, so the site degrades to gomachine
-    | automatically if the primary is down. Flip ENGINE_PRIMARY=gomachine (or
-    | this default) to revert the WHOLE site to gomachine with zero code
-    | change. Stockfish and the Duck/Crazyhouse variant routes always go
-    | straight to gomachine regardless of this setting (zugzwang can't do
-    | either yet) — see EngineSelector.
+    | Which engine client EngineSelector uses for standard-chess calls
+    | (move/bestmove/analyze/candidates/analyze-game/legal-moves) — zugzwang by
+    | default. There is NO automatic fallback: a RuntimeException from the
+    | primary (connection failure or HTTP >=400) propagates to the caller.
+    | Flip ENGINE_PRIMARY=gomachine (or this default) to revert the WHOLE site
+    | to gomachine with zero code change — a straight swap, not a fallback.
+    | Stockfish (stockfishMove()) always goes to zugzwang regardless of this
+    | setting (it spawns its own Stockfish subprocess); the Duck/Crazyhouse
+    | variant routes always go straight to gomachine (Wave 3, not yet
+    | implemented in zugzwang) — see EngineSelector.
     |
     */
     'engine' => [

@@ -32,4 +32,11 @@ json analyze_game(const json& body);
 // Rating::). Defined in serve_handlers.cpp.
 std::mutex& search_mutex();
 
+// Stockfish proxy: spawns a fresh `stockfish` subprocess per call (sf_uci.h)
+// and drives it over UCI. It touches NO shared Search:: state (the SF process
+// does its own search out-of-process), so it never takes search_mutex() and
+// can run fully concurrently with /bestmove, /candidates, /analyze-game, and
+// with itself.
+json sf_best_move(const json& body);
+
 } // namespace Handlers

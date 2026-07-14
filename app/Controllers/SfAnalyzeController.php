@@ -5,7 +5,7 @@ namespace App\Controllers;
 use BaseApi\Controllers\Controller;
 use BaseApi\Http\JsonResponse;
 use App\Models\User;
-use App\Services\GomachineClient;
+use App\Services\ZugzwangClient;
 use App\Services\AnticheatService;
 
 /**
@@ -24,6 +24,10 @@ use App\Services\AnticheatService;
  * `movetime` (optional, clamped 50..2000ms; default 300) trades depth for
  * latency. If Stockfish isn't installed the engine replies non-2xx and the
  * request errors — the client simply omits the arrow.
+ *
+ * Routed through {@see \App\Services\ZugzwangClient} (`/sf-bestmove`) —
+ * zugzwang spawns its own Stockfish subprocess per call
+ * (`zugzwang/src/sf_uci.cpp`); gomachine is never touched here.
  */
 class SfAnalyzeController extends Controller
 {
@@ -32,7 +36,7 @@ class SfAnalyzeController extends Controller
     public int $movetime = 0;
 
     public function __construct(
-        private readonly GomachineClient $engine,
+        private readonly ZugzwangClient $engine,
         private readonly AnticheatService $anticheat,
     ) {
     }

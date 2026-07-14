@@ -4,6 +4,7 @@
 #include "search.h"
 #include "eval.h"
 #include "movegen.h"
+#include "sf_uci.h"
 #include <algorithm>
 #include <cctype>
 #include <map>
@@ -470,6 +471,47 @@ json analyze_game(const json& body) {
     }
 
     return json{{"positions", positions}, {"count", positions.size()}};
+}
+
+// ==================== Stockfish proxy ====================
+
+// Deliberately does NOT take search_mutex(): the Stockfish subprocess does
+// its own search entirely out-of-process, touching none of zugzwang's shared
+// Search:: globals, so this can run concurrently with the search-backed
+// handlers above and with itself.
+json sf_best_move(const json& body) {
+    std::string fen = body.value("fen", "");
+    int elo = body.value("elo", 0);
+    int movetimeMs = body.value("movetime", 0);
+    int depth = body.value("depth", 0);
+
+    Position pos;
+    parse_legal_or_throw(fen, pos);
+
+    std::string path = SFUCI::resolve_path();
+    if (path.empty()) {
+        throw ApiError{503, "stockfish not found (set SF_PATH or STOCKFISH_PATH, or add it to PATH)"};
+    }
+
+    SFUCI::BestMoveResult res = SFUCI::query(path, fen, elo, movetimeMs, depth);
+    if (res.bestmove.empty()) {
+        return json{{"bestmove", nullptr}, {"reason", "no legal move"}};
+    }
+
+    Move m = Rules::parse_uci_move(pos, res.bestmove);
+    if (m == MOVE_NONE) {
+        return json{{"bestmove", nullptr}, {"reason", "no legal move"}};
+    }
+
+    json evalObj = res.hasScore
+        ? json{{"type", res.isMate ? "mate" : "cp"}, {"value", res.value}}
+        : json{{"type", "cp"}, {"value", 0}};
+
+    return json{
+        {"bestmove", res.bestmove},
+        {"san", Rules::san(pos, m)},
+        {"eval", evalObj},
+    };
 }
 
 } // namespace Handlers
