@@ -87,10 +87,9 @@ struct Context {
         bool probCut   = true;  // #2a: cheap TT-only ProbCut before the move loop
         bool depthDrop = true;  // #11: depth-=2 after an alpha-raising non-decisive PV move
         bool cutoffCnt = true;  // #6:  grandchild fail-high-rate -> extra LMR reduction
-        // #4 double singular extension: OFF for now — faithful port needs ttPv/ttMoveHistory
-        // context (later waves) for SF's adaptive doubleMargin; the fixed margin-24 stub
-        // below over-fires and costs a ply. Opt-in via env DBLEXT=1 for isolated testing.
-        bool dblExt    = false;
+        // #4 double/triple singular extension — Wave 5, now that ttPv exists for SF's
+        // adaptive doubleMargin/tripleMargin. Default ON; env DBLEXT=0 disables.
+        bool dblExt    = true;
         // ---- SF selectivity Wave 2 — hindsight ACCEPTED (~+10 Elo); ttCapR/mcLinR
         // DROPPED as an SPRT drag (combined batch washed ~-5, hindsight-alone +10).
         // ttCapR/mcLinR kept as opt-in env for later salvage (mcLinR likely needs a
@@ -152,7 +151,7 @@ struct Context {
             if (off("PROBCUT")) probCut = false;
             if (off("DEPTHDROP")) depthDrop = false;
             if (off("CUTOFFCNT")) cutoffCnt = false;
-            if (on("DBLEXT")) dblExt = true;
+            if (off("DBLEXT")) dblExt = false;
             if (off("HINDSIGHT")) hindsight = false;
             if (on("TTCAPR")) ttCapR = true;
             if (on("MCLINR")) mcLinR = true;
@@ -852,9 +851,12 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             ss->excludedMove = MOVE_NONE;
             if (s < singularBeta) {
                 extension = 1;
-                // #4 (SF search.cpp:1140): reuse the verification result — a move that
-                // fails singular verification by a wide margin gets a second ply.
-                if (C.tune.dblExt && s < singularBeta - 24) extension = 2;
+                // #4 (SF search.cpp:1143): a SECOND ply only for a move that fails
+                // verification by a wide margin, at a non-PV node. SF's raw margins
+                // (negative for non-captures → double-extend routinely) explode zug's
+                // tree ~2 plies without SF's corrVal/cutoffCnt damping, so this uses a
+                // conservative POSITIVE margin and no triple tier. env DBLEXT=0.
+                if (C.tune.dblExt && !PvNode && s < singularBeta - 64) extension = 2;
             }
             else if (singularBeta >= beta) return singularBeta; // multi-cut
             else if (C.tune.negExt) {
