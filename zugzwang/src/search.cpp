@@ -83,6 +83,14 @@ struct Context {
         // ---- PARITY_GOMACHINE.md D.5/D.7 — Wave C, default OFF, SPRT independently ----
         bool seeQuietLinear = false; // D.5: linear SEE-quiet shape -75*depth, depth<=6 (vs quadratic default)
         bool gmCheckExt = false;     // D.7: gomachine's per-node uncapped in-check depth++ (replaces per-move check ext)
+        // ---- SF selectivity Wave 1 (docs/tasks/open/sf18-selectivity-gap.md) — default ON; env FLAG=0 disables ----
+        bool probCut   = true;  // #2a: cheap TT-only ProbCut before the move loop
+        bool depthDrop = true;  // #11: depth-=2 after an alpha-raising non-decisive PV move
+        bool cutoffCnt = true;  // #6:  grandchild fail-high-rate -> extra LMR reduction
+        // #4 double singular extension: OFF for now — faithful port needs ttPv/ttMoveHistory
+        // context (later waves) for SF's adaptive doubleMargin; the fixed margin-24 stub
+        // below over-fires and costs a ply. Opt-in via env DBLEXT=1 for isolated testing.
+        bool dblExt    = false;
         // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
         // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
         // callers in uci.cpp for the option table incl. min/max).
@@ -127,6 +135,10 @@ struct Context {
             if (on("DODEEPER")) doDeeper = true;
             if (on("SEEQUIETLINEAR")) seeQuietLinear = true;
             if (on("GMCHECKEXT")) gmCheckExt = true;
+            if (off("PROBCUT")) probCut = false;
+            if (off("DEPTHDROP")) depthDrop = false;
+            if (off("CUTOFFCNT")) cutoffCnt = false;
+            if (on("DBLEXT")) dblExt = true;
             if (on("GMCONST")) {
                 // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
                 // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
@@ -195,6 +207,7 @@ struct Stack {
     int   pvLen;
     bool  inCheck;
     Move  excludedMove;
+    int   cutoffCnt; // #6: count of beta-cutoffs seen at this node; read one ply up in LMR
 };
 
 void build_reductions(Context& C) {
@@ -561,6 +574,7 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
     }
 
     (ss + 1)->killers[0] = (ss + 1)->killers[1] = MOVE_NONE;
+    if (C.tune.cutoffCnt) (ss + 2)->cutoffCnt = 0; // #6: reset grandchild's counter (SF search.cpp:699)
     Move excluded = ss->excludedMove;
 
     // TT probe
@@ -641,6 +655,17 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
     // (C.2: gomachine measured its own IIR dead-flat individually — env IIR=0 to disable)
     if (C.tune.iir && depth >= 4 && !ttMove && !rootNode)
         depth--;
+
+    // #2a ProbCut, cheap TT-only variant (SF search.cpp:985-989): a stored LOWER
+    // bound already far above beta at near-equal depth is enough to fail high here
+    // without a move loop. Fires where the exact-depth TT cutoff above (which needs
+    // tte->depth >= depth) can't, because it accepts a shallower entry (depth-4).
+    if (C.tune.probCut && !PvNode && !ss->inCheck && !excluded && depth >= 3
+        && ttHit && ttValue != VALUE_NONE && (tte->bound() & BOUND_LOWER)
+        && tte->depth >= depth - 4 && ttValue >= beta + 418
+        && std::abs(beta) < VALUE_MATE_IN_MAX_PLY
+        && std::abs(ttValue) < VALUE_MATE_IN_MAX_PLY)
+        return beta + 418;
 
     // ---- Move loop ----
     MoveList list;
@@ -733,7 +758,12 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             ss->excludedMove = m;
             int s = negamax<false>(C, pos, ss, singularBeta - 1, singularBeta, (depth - 1) / 2, cutNode);
             ss->excludedMove = MOVE_NONE;
-            if (s < singularBeta) extension = 1;
+            if (s < singularBeta) {
+                extension = 1;
+                // #4 (SF search.cpp:1140): reuse the verification result — a move that
+                // fails singular verification by a wide margin gets a second ply.
+                if (C.tune.dblExt && s < singularBeta - 24) extension = 2;
+            }
             else if (singularBeta >= beta) return singularBeta; // multi-cut
             else if (C.tune.negExt) {
                 // ttMove is provably NOT singular — SF's negative extension de-prioritizes a
@@ -772,6 +802,9 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             if (!improving) r++;
             if (cutNode) r += 1;
             if (givesCheck) r--;
+            // #6 (SF): a child that fails high a lot means siblings here are unlikely
+            // to matter — reduce them harder.
+            if (C.tune.cutoffCnt && (ss + 1)->cutoffCnt > 3) r++;
             int hist = C.history[us][from_sq(m)][to_sq(m)];
             if (C.tune.contHist) {
                 int off = piece_dense(mover) * SQUARE_NB + to_sq(m);
@@ -825,8 +858,20 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                     for (int i = 0; i < (ss + 1)->pvLen; ++i)
                         ss->pv[i + 1] = (ss + 1)->pv[i];
                 }
-                if (PvNode && score < beta) alpha = score;
-                else break; // fail high
+                if (PvNode && score < beta) {
+                    alpha = score;
+                    // #11 (SF search.cpp:1380): once a good non-decisive move is in,
+                    // shrink remaining depth for later moves (they increasingly just
+                    // fail low against the tighter window).
+                    if (C.tune.depthDrop && depth > 2 && depth < 14
+                        && std::abs(score) < VALUE_MATE_IN_MAX_PLY)
+                        depth -= 2;
+                }
+                else {
+                    // #6: track this node's beta-cutoff count for the LMR bump above.
+                    if (C.tune.cutoffCnt) ss->cutoffCnt += ((extension < 2) || PvNode);
+                    break; // fail high
+                }
             }
         }
 
