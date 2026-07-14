@@ -261,6 +261,38 @@ func (g *game) clearOffers() {
 	g.takebackPending = false
 }
 
+// fenHistory reconstructs the FEN of every prior position — start position
+// through the position immediately before the current one — by replaying
+// g.moves from g.startFen. It's the wire-shaped counterpart of g.state's
+// internal Zobrist history (standardState.history): zugzwang's HTTP
+// /bestmove (an external process, no shared position type) takes prior
+// positions as FEN strings, not raw hash keys (WIRING_RECON.md §A). Only
+// meaningful for the variants computeBotMove is ever used for
+// (standard/960) — Duck/Crazyhouse use their own self-contained search
+// (scheduleSelfSearchBotMove) and never call this. Runs on the Run
+// goroutine (reads g.startFen/g.moves) but touches no shared state itself
+// (variant.New builds a fresh, local replay state), so its result is safe
+// to hand into a botSnapshot for a worker goroutine.
+func (g *game) fenHistory() []string {
+	if len(g.moves) == 0 {
+		return nil
+	}
+	st, err := variant.New(g.variant, g.startFen)
+	if err != nil {
+		return nil
+	}
+	fens := make([]string, 0, len(g.moves))
+	for _, mv := range g.moves {
+		fens = append(fens, st.FEN())
+		next, _, ok := st.Apply(mv)
+		if !ok {
+			break
+		}
+		st = next
+	}
+	return fens
+}
+
 // rebuildTo truncates the game to its first `plies` moves, reconstructing the
 // position and repetition history from startFen by replaying them. Used to apply
 // an agreed takeback. Clocks are intentionally left as-is (takeback is consensual);

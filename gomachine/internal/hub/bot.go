@@ -1,7 +1,10 @@
 package hub
 
 import (
+	"context"
+	"fmt"
 	mrand "math/rand/v2"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -28,7 +31,8 @@ type botSnapshot struct {
 	gameID         string
 	ply            int
 	fen            string
-	history        []uint64
+	history        []uint64      // prior-position Zobrist keys (emergency in-process fallback only)
+	fenHistory     []string      // prior-position FENs, same positions as `history` (zugzwang HTTP; game.fenHistory())
 	rating         int           // target Elo (rating-first ladder)
 	displayRating  int           // shown Elo (human/CCRL scale) — drives pacing, not search
 	moveTimeCap    time.Duration // >0 overrides the ladder budget (fillers: cheap, cosmetic)
@@ -156,8 +160,8 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variantID string
 	h.activeGames.Add(1)
 
 	h.sendMatched(g, human, humanColor)
-	h.scheduleBotMove(g)   // if the bot plays White, it moves first
-	h.maybeOpeningChat(g)  // ...and it might open with a friendly "hi"
+	h.scheduleBotMove(g)  // if the bot plays White, it moves first
+	h.maybeOpeningChat(g) // ...and it might open with a friendly "hi"
 }
 
 // scheduleBotMove starts async move computation when it is a bot's turn. Works
@@ -187,10 +191,11 @@ func (h *Hub) scheduleBotMove(g *game) {
 		return // the relevant pool isn't enabled
 	}
 	go h.computeBotMove(botSnapshot{
-		gameID:  g.id,
-		ply:     len(g.moves),
-		fen:     g.state.FEN(),
-		history: append([]uint64(nil), g.state.History()...),
+		gameID:     g.id,
+		ply:        len(g.moves),
+		fen:        g.state.FEN(),
+		history:    append([]uint64(nil), g.state.History()...),
+		fenHistory: g.fenHistory(),
 		// Weaken to actual human strength (human scale), then lift onto the engine's
 		// native CCRL ladder so the search produces the same play as before the rescale.
 		rating:         engine.EngineRatingForHuman(humanizedEngineRating(bot.rating)),
@@ -244,10 +249,16 @@ func (h *Hub) scheduleSelfSearchBotMove(g *game) {
 	}()
 }
 
-// computeBotMove runs OFF the Run goroutine: search for a move (on a leased
-// engine from `engines`), pace it to feel human (the delay is real time, so it
-// comes off the bot's clock), then hand it back via botMoves for application on
-// the Run goroutine.
+// computeBotMove runs OFF the Run goroutine: get a move — routinely from
+// zugzwang over HTTP, with gomachine's in-process engine as an
+// emergency-only last resort (see the Hub.zugzwang field doc) — pace it to
+// feel human (the delay is real time, so it comes off the bot's clock), then
+// hand it back via botMoves for application on the Run goroutine. `engines`
+// is BOTH a concurrency permit bounding in-flight zugzwang requests AND,
+// while held, a warm in-process engine ready for the emergency fallback. It
+// is released as soon as the move is decided — BEFORE the human-pacing
+// sleep below — so a slow/long-thinking bot doesn't tie up a pool slot other
+// bot moves need; only the compute step itself holds the permit.
 func (h *Hub) computeBotMove(s botSnapshot, engines chan *engineHandle) {
 	pos, err := chess.ParseFEN(s.fen)
 	if err != nil {
@@ -255,11 +266,23 @@ func (h *Hub) computeBotMove(s botSnapshot, engines chan *engineHandle) {
 	}
 	start := time.Now()
 	eng := <-engines
+
 	var res engine.BestResult
-	if s.searchDepthCap > 0 {
-		res = eng.BestMoveForRatingCapped(pos, s.rating, s.moveTimeCap, s.searchDepthCap, s.history)
+	if h.zugzwang == nil {
+		// No zugzwang backend configured (dev/test) — compute in-process
+		// directly, exactly like before this backend existed.
+		res = localBestMove(eng, pos, s)
 	} else {
-		res = eng.BestMoveForRatingTimed(pos, s.rating, s.moveTimeCap, s.history)
+		res, err = h.zugzwangBestMove(s)
+		if err != nil {
+			if !h.emergencyInProc {
+				engines <- eng
+				fmt.Fprintf(os.Stderr, "hub: zugzwang unreachable (%v) — emergency in-process fallback disabled, dropping bot move for game %s\n", err, s.gameID)
+				return
+			}
+			fmt.Fprintf(os.Stderr, "hub: zugzwang unreachable — emergency in-process move for game %s (%v)\n", s.gameID, err)
+			res = localBestMove(eng, pos, s)
+		}
 	}
 	engines <- eng
 	if res.Move == chess.NullMove {
@@ -276,6 +299,38 @@ func (h *Hub) computeBotMove(s botSnapshot, engines chan *engineHandle) {
 	case <-time.After(2 * time.Second):
 		// Run goroutine wedged/gone; drop rather than leak.
 	}
+}
+
+// localBestMove computes a bot move with gomachine's in-process engine —
+// EITHER because no zugzwang backend is configured (dev/test) OR as the
+// emergency last resort when zugzwang didn't answer. Identical to the logic
+// that ran unconditionally here before zugzwang existed.
+func localBestMove(eng *engineHandle, pos *chess.Position, s botSnapshot) engine.BestResult {
+	if s.searchDepthCap > 0 {
+		return eng.BestMoveForRatingCapped(pos, s.rating, s.moveTimeCap, s.searchDepthCap, s.history)
+	}
+	return eng.BestMoveForRatingTimed(pos, s.rating, s.moveTimeCap, s.history)
+}
+
+// zugzwangBestMove asks zugzwang for a move, retrying once on failure (each
+// attempt gets its own fresh deadline, h.zugzwang.Timeout() — the same
+// per-attempt timeout SetZugzwangClient was configured with, so there's one
+// timeout knob, not a second hardcoded one that could disagree with it). A
+// nil error with a zero Move means "no legal move" (not a failure — see
+// zugzwangClient.BestMove's doc) and is returned as-is without retrying.
+func (h *Hub) zugzwangBestMove(s botSnapshot) (engine.BestResult, error) {
+	const retries = 1
+	var lastErr error
+	for attempt := 0; attempt <= retries; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), h.zugzwang.Timeout())
+		res, err := h.zugzwang.BestMove(ctx, s.fen, s.fenHistory, s.rating, s.moveTimeCap, s.searchDepthCap)
+		cancel()
+		if err == nil {
+			return res, nil
+		}
+		lastErr = err
+	}
+	return engine.BestResult{}, lastErr
 }
 
 // applyBotMove plays a computed bot move on the Run goroutine, guarding against a

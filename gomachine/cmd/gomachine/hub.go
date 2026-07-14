@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -46,6 +47,9 @@ func cmdHub(args []string) {
 	watchWorkers := fs.Int("watch-filler-workers", 2, "dedicated engine workers for self-play filler games (small, so they can't starve human bot-fill)")
 	watchFenTheme := fs.String("watch-fen-theme", "pin", "puzzle theme whose positions seed self-play fillers from realistic midgames (empty = any theme; fetched from BaseAPI)")
 	tbPath := fs.String("tb-path", "", "Syzygy tablebase dir; empty auto-discovers (SYZYGY_PATH env, then data/syzygy)")
+	zugzwangURL := fs.String("zugzwang-url", envOr("ZUGZWANG_URL", "http://127.0.0.1:6476"), "zugzwang engine base URL — the routine bot-move + watch-filler compute backend (env ZUGZWANG_URL)")
+	zugzwangTimeoutFlag := fs.Duration("zugzwang-timeout", 5*time.Second, "per-attempt HTTP timeout for a zugzwang /bestmove call (one retry on failure)")
+	emergencyInProc := fs.Bool("emergency-inproc", true, "fall back to gomachine's in-process engine if zugzwang is unreachable after retrying (logged loudly each time); zugzwang is the routine backend — this is a last-resort safety net so a live game never freezes. Disable to hard-fail (drop the move) instead of silently degrading to in-process search")
 	pprofAddr := fs.String("pprof", "", "if set (e.g. 127.0.0.1:6481), serve net/http/pprof on this address for profiling the Run goroutine")
 	_ = fs.Parse(args)
 
@@ -58,6 +62,20 @@ func cmdHub(args []string) {
 	}
 
 	h := hub.New(secret)
+	// zugzwang is the ROUTINE bot-move + watch-filler compute backend (an
+	// external HTTP process); gomachine's own in-process engine pools below
+	// become emergency-only (SetZugzwangClient's doc + Hub.zugzwang field
+	// doc). Wire this up before EnableBotFill/EnableSpectatorFillers so both
+	// pools are built as the (now emergency-only) fallback from the start.
+	h.SetZugzwangClient(*zugzwangURL, *zugzwangTimeoutFlag, *emergencyInProc)
+	healthCtx, healthCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	zugzwangUp := h.ZugzwangHealthy(healthCtx)
+	healthCancel()
+	if zugzwangUp {
+		fmt.Printf("zugzwang engine reachable at %s (emergency-inproc=%v)\n", *zugzwangURL, *emergencyInProc)
+	} else {
+		fmt.Fprintf(os.Stderr, "warning: zugzwang engine NOT reachable at %s yet — bot moves will rely on the emergency in-process fallback (emergency-inproc=%v) until it comes up\n", *zugzwangURL, *emergencyInProc)
+	}
 	// (main() already installed the prod eval net before dispatch, so every
 	// bot/filler engine built below uses it.)
 	// Auto-discover a Syzygy tablebase and attach it BEFORE the engine pools are

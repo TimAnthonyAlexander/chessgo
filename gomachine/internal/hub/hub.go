@@ -46,9 +46,23 @@ type Hub struct {
 	botFill  bool
 	botLevel int
 	botDelay time.Duration
-	engines  chan *engineHandle // search workers (nil until EnableBotFill)
+	engines  chan *engineHandle // concurrency permits (nil until EnableBotFill); also the EMERGENCY in-process search pool — see zugzwang below
 	botMoves chan botMoveResult // bot moves ready to apply (on the Run goroutine)
 	tb       *syzygy.Tablebase  // optional Syzygy tablebase, attached to every pooled engine (nil = disabled)
+
+	// Zugzwang HTTP backend: the ROUTINE bot-move + watch-filler compute path
+	// since 2026-07-14 (SetZugzwangClient) — search runs in zugzwang, an
+	// external process, over its stateless /bestmove endpoint, not in
+	// gomachine's in-process engine. `engines`/`fillerEngines` above are kept
+	// around as (a) a concurrency permit for in-flight zugzwang requests and
+	// (b) a warm EMERGENCY fallback: if zugzwang doesn't answer after one
+	// retry and emergencyInProc is true, computeBotMove falls back to the
+	// permit's own in-process *engine.Engine so a live game never freezes —
+	// logged loudly each time it fires. If zugzwang is nil (not configured;
+	// e.g. tests), the hub computes in-process directly with no HTTP attempt
+	// and no fallback logging, exactly like before this backend existed.
+	zugzwang        *zugzwangClient
+	emergencyInProc bool
 
 	// Fill-in bot chat: a backfill bot opponent chats like a person (opening
 	// hello + occasional short replies). The text is produced by botChatFn (wired
@@ -65,7 +79,7 @@ type Hub struct {
 	// finish naturally; we just stop replenishing once nobody is watching.
 	fillerOn          bool
 	fillerTarget      int                // desired total live games shown (real first, padded)
-	fillerEngines     chan *engineHandle // dedicated filler search pool (nil until enabled)
+	fillerEngines     chan *engineHandle // dedicated filler concurrency permits / emergency search pool (nil until enabled)
 	fillerFens        []string           // realistic midgame seed positions (Run goroutine only)
 	fillerFensCh      chan []string      // delivers a fetched FEN pool to the Run goroutine
 	lastWatchActivity atomic.Int64       // unix-nano of the most recent watch poll/connect
@@ -187,6 +201,30 @@ func New(secret string) *Hub {
 // will probe at the root. Call BEFORE EnableBotFill / EnableSpectatorFillers so
 // the pools are built with it attached. nil disables it.
 func (h *Hub) SetTablebase(tb *syzygy.Tablebase) { h.tb = tb }
+
+// SetZugzwangClient wires the hub's bot-move + watch-filler compute path to
+// zugzwang's stateless HTTP /bestmove endpoint at baseURL — the routine
+// backend; gomachine's in-process engine pools become emergency-only (see the
+// zugzwang field doc on Hub). `timeout` bounds each HTTP attempt (one retry
+// happens on failure, so a stalled call costs at most ~2×timeout before the
+// emergency fallback or a dropped move). `emergencyInProc` gates whether a
+// request that fails after retrying may fall back to the in-process engine
+// pool; when false, a bot move is simply dropped (loudly logged) if zugzwang
+// stays unreachable — the caller can re-derive it next time scheduleBotMove
+// fires. Call before Run; not calling this at all leaves the hub computing
+// bot moves in-process directly (no HTTP attempt), e.g. in tests.
+func (h *Hub) SetZugzwangClient(baseURL string, timeout time.Duration, emergencyInProc bool) {
+	h.zugzwang = newZugzwangClient(baseURL, timeout)
+	h.emergencyInProc = emergencyInProc
+}
+
+// ZugzwangHealthy reports whether the configured zugzwang backend answers
+// GET /healthz within ctx's deadline. false if no backend is configured.
+// Safe to call from any goroutine (a fresh HTTP request, no shared state) —
+// intended for a one-shot startup log, not a hot path.
+func (h *Hub) ZugzwangHealthy(ctx context.Context) bool {
+	return h.zugzwang != nil && h.zugzwang.Healthy(ctx)
+}
 
 // OnFinish registers a callback invoked (on the hub goroutine) when a game ends.
 func (h *Hub) OnFinish(fn func(FinishedGame)) { h.onFinish = fn }
