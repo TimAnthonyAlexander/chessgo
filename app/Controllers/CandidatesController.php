@@ -4,7 +4,7 @@ namespace App\Controllers;
 
 use BaseApi\Controllers\Controller;
 use BaseApi\Http\JsonResponse;
-use App\Services\GomachineClient;
+use App\Services\EngineSelector;
 
 /**
  * Opening explorer for the analysis board (SPEC §6). The engine owns ALL of the
@@ -30,7 +30,7 @@ class CandidatesController extends Controller
 
     public int $depth = 0;
 
-    public function __construct(private readonly GomachineClient $engine)
+    public function __construct(private readonly EngineSelector $engine)
     {
     }
 

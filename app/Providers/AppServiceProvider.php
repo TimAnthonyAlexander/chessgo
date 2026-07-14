@@ -9,6 +9,8 @@ use BaseApi\Container\ContainerInterface;
 use App\Auth\SimpleUserProvider;
 use App\Services\EmailService;
 use App\Services\GomachineClient;
+use App\Services\ZugzwangClient;
+use App\Services\EngineSelector;
 use App\Services\BotGameService;
 use App\Services\GuessGameService;
 use App\Services\GameAnalysisService;
@@ -35,8 +37,17 @@ class AppServiceProvider extends ServiceProvider
         // Register the email service as singleton
         $container->singleton(EmailService::class);
 
-        // gomachine engine client + bot game logic (SPEC §6, §7)
+        // gomachine + zugzwang engine clients (SPEC §6, §7; WIRING_RECON.md §B).
+        // GomachineClient/ZugzwangClient are each bound to one URL — the two
+        // chokepoints. EngineSelector composes both (zugzwang-primary,
+        // gomachine-fallback by default, App::config('engine.primary')) and is
+        // what most consumers get instead of a raw client, so the whole site
+        // is reversible to gomachine-only via ENGINE_PRIMARY with zero code
+        // change. EngineMatchController (admin engine-vs-engine) keeps direct
+        // access to both concrete clients for explicit per-side selection.
         $container->singleton(GomachineClient::class);
+        $container->singleton(ZugzwangClient::class);
+        $container->singleton(EngineSelector::class);
         $container->singleton(BotGameService::class);
         $container->singleton(GuessGameService::class);
         $container->singleton(GameAnalysisService::class);

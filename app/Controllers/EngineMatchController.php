@@ -5,25 +5,38 @@ namespace App\Controllers;
 use BaseApi\Controllers\Controller;
 use BaseApi\Http\JsonResponse;
 use App\Services\GomachineClient;
+use App\Services\ZugzwangClient;
 
 /**
- * Admin-only "engine vs engine" driver. Plays ONE ply — gomachine at a target
- * Elo rating, or Stockfish at a UCI_Elo — applies it, and returns the new state.
- * The frontend alternates sides and loops with a delay so an admin can watch the
- * two engines compete. Stateless (FEN-in), like the rest of the engine API.
+ * Admin-only "engine vs engine" driver. Plays ONE ply — gomachine or zugzwang at
+ * a target Elo rating, or Stockfish at a UCI_Elo — applies it, and returns the new
+ * state. The frontend alternates sides and loops with a delay so an admin can watch
+ * the engines compete. Stateless (FEN-in), like the rest of the engine API.
  *
  *   POST /admin/engine-vs/move
- *     { fen, side: "gomachine"|"stockfish", rating?, elo?, movetime?, nodes?,
- *       depth?, aggr?, book? }
+ *     { fen, side: "gomachine"|"zugzwang"|"stockfish", rating?, elo?, movetime?,
+ *       nodes?, depth?, aggr?, book? }
  *   → { bestmove, san, fen, status, result?, sideToMove, claimableDraws, by }
  *
- * `aggr` (0..100, default 50 = neutral) is gomachine's aggression style; it applies
- * to the gomachine side ONLY (Stockfish never receives it). `book` (gomachine only)
- * consults the opening book on the rating path.
+ * This controller deliberately bypasses {@see \App\Services\EngineSelector} and
+ * holds BOTH concrete clients directly — the whole point of this view is
+ * EXPLICIT per-side engine choice (no auto-fallback muddying which engine
+ * actually played a move); `by` in the response always reflects `side` truthfully.
  *
- * The search budget is pinned to EXACTLY ONE dimension per side: gomachine accepts
- * movetime / nodes / depth (depth→nodes→movetime precedence); Stockfish accepts
- * movetime / depth (depth wins). The frontend sends only the active one.
+ * zugzwang shares gomachine's exact `/bestmove`+`/move` request/response shape
+ * (byte-compatible, WIRING_RECON.md §A), so the "zugzwang" branch below is
+ * identical to "gomachine" except for which client it calls. zugzwang has NO
+ * Stockfish integration of its own (its `/sf-bestmove` 501s) — the "stockfish"
+ * side is ALWAYS driven through the gomachine client, same as before.
+ *
+ * `aggr` (0..100, default 50 = neutral) is gomachine/zugzwang's aggression style;
+ * it applies to those sides ONLY (Stockfish never receives it). `book`
+ * (gomachine/zugzwang only) consults the opening book on the rating path.
+ *
+ * The search budget is pinned to EXACTLY ONE dimension per side: gomachine/
+ * zugzwang accept movetime / nodes / depth (depth→nodes→movetime precedence);
+ * Stockfish accepts movetime / depth (depth wins). The frontend sends only the
+ * active one.
  *
  * Repetition history is intentionally omitted (the view is ephemeral); the
  * frontend ends games on checkmate/stalemate/fifty-move + a hard ply cap.
@@ -48,8 +61,10 @@ class EngineMatchController extends Controller
 
     public bool $book = false;
 
-    public function __construct(private readonly GomachineClient $engine)
-    {
+    public function __construct(
+        private readonly GomachineClient $gomachine,
+        private readonly ZugzwangClient $zugzwang,
+    ) {
     }
 
     public function post(): JsonResponse
@@ -61,29 +76,34 @@ class EngineMatchController extends Controller
 
         $this->validate([
             'fen' => 'required|string',
-            'side' => 'in:gomachine,stockfish',
+            'side' => 'in:gomachine,zugzwang,stockfish',
             'aggr' => 'integer|min:0|max:100',
             'nodes' => 'integer|min:0',
             'depth' => 'integer|min:0',
         ]);
 
-        $depth = max(0, min(60, $this->depth));  // fixed-depth budget (both engines)
-        $nodes = max(0, $this->nodes);           // fixed-nodes budget (gomachine only)
+        $depth = max(0, min(60, $this->depth));  // fixed-depth budget (all engines)
+        $nodes = max(0, $this->nodes);           // fixed-nodes budget (gomachine/zugzwang only)
         // Movetime only binds when neither depth nor nodes is the active limit; clamp
         // it to a sane watch range then.
         $movetime = max(20, min(5000, $this->movetime));
 
         if ($this->side === 'stockfish') {
-            // Stockfish never receives the aggression/nodes/book knobs. Depth wins over
-            // movetime when set.
+            // Stockfish is driven exclusively through the gomachine client — zugzwang
+            // has no Stockfish integration and 501s /sf-bestmove. It never receives
+            // the aggression/nodes/book knobs; depth wins over movetime when set.
             $mt = $depth > 0 ? 0 : $movetime;
-            $best = $this->engine->stockfishMove($this->fen, $this->elo, $mt, $depth);
+            $best = $this->gomachine->stockfishMove($this->fen, $this->elo, $mt, $depth);
+            $engine = $this->gomachine;
         } else {
+            // gomachine and zugzwang share the identical bestMove()/move() request
+            // shape — only which client is called differs.
+            $engine = $this->side === 'zugzwang' ? $this->zugzwang : $this->gomachine;
             $aggr = max(0, min(100, $this->aggr)); // clamp; 50 = neutral (engine is byte-identical)
             // Send only the active budget dimension (the engine applies
             // depth→nodes→movetime precedence, but keep it unambiguous).
             $mt = ($depth > 0 || $nodes > 0) ? 0 : $movetime;
-            $best = $this->engine->bestMove(
+            $best = $engine->bestMove(
                 $this->fen,
                 $this->rating,
                 [],
@@ -100,7 +120,9 @@ class EngineMatchController extends Controller
             return JsonResponse::ok(['bestmove' => null, 'reason' => 'no move (game over?)']);
         }
 
-        $applied = $this->engine->move($this->fen, $uci);
+        // Apply via the SAME client that computed the move (it just answered, so
+        // it's definitely reachable) — never mixes engines within one ply.
+        $applied = $engine->move($this->fen, $uci);
         if (empty($applied['legal'])) {
             return JsonResponse::ok(['bestmove' => null, 'reason' => 'engine returned an illegal move']);
         }

@@ -40,7 +40,7 @@ class GuessGameService
     private const ENGINE_CCRL_MAX = 3500;
     private const ENGINE_MIN = 700;
 
-    public function __construct(private readonly GomachineClient $engine)
+    public function __construct(private readonly EngineSelector $engine)
     {
     }
 

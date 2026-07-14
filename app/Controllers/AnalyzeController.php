@@ -5,7 +5,7 @@ namespace App\Controllers;
 use BaseApi\Controllers\Controller;
 use BaseApi\Http\JsonResponse;
 use App\Models\User;
-use App\Services\GomachineClient;
+use App\Services\EngineSelector;
 use App\Services\AnticheatService;
 
 /**
@@ -39,7 +39,7 @@ class AnalyzeController extends Controller
     public int $depth = 0;
 
     public function __construct(
-        private readonly GomachineClient $engine,
+        private readonly EngineSelector $engine,
         private readonly AnticheatService $anticheat,
     ) {
     }

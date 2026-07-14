@@ -4,7 +4,7 @@ namespace App\Controllers;
 
 use BaseApi\Controllers\Controller;
 use BaseApi\Http\JsonResponse;
-use App\Services\GomachineClient;
+use App\Services\EngineSelector;
 use RuntimeException;
 
 /**
@@ -26,7 +26,7 @@ class DuckLegalMovesController extends Controller
 
     public string $duck = '';
 
-    public function __construct(private readonly GomachineClient $engine)
+    public function __construct(private readonly EngineSelector $engine)
     {
     }
 

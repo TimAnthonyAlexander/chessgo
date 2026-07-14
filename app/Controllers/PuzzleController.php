@@ -9,7 +9,7 @@ use App\Models\Puzzle;
 use App\Models\PuzzleAttempt;
 use App\Models\User;
 use App\Services\Glicko2Service;
-use App\Services\GomachineClient;
+use App\Services\EngineSelector;
 use App\Services\StreakService;
 
 /**
@@ -49,7 +49,7 @@ class PuzzleController extends Controller
     private const PUZZLE_RD = 60.0;
 
     public function __construct(
-        private readonly GomachineClient $engine,
+        private readonly EngineSelector $engine,
         private readonly Glicko2Service $glicko,
         private readonly StreakService $streak,
     ) {}

@@ -33,7 +33,7 @@ class GameAnalysisService
 
     private const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
-    public function __construct(private readonly GomachineClient $engine)
+    public function __construct(private readonly EngineSelector $engine)
     {
     }
 

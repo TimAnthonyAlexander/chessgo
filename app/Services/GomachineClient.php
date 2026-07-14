@@ -6,10 +6,15 @@ use BaseApi\App;
 use RuntimeException;
 
 /**
- * Thin HTTP client for the internal gomachine engine service (SPEC §7). The
- * engine is stateless and owns all chess rules + the AI; this client just
- * forwards FEN-in requests. Base URL comes from ENGINE_URL (default
+ * Thin HTTP client for the internal engine service (SPEC §7). The engine is
+ * stateless and owns all chess rules + the AI; this client just forwards
+ * FEN-in requests. Base URL comes from ENGINE_URL (default
  * http://127.0.0.1:6466).
+ *
+ * zugzwang serves the identical HTTP API (WIRING_RECON.md §A), so
+ * {@see \App\Services\ZugzwangClient} is just this class bound to a different
+ * base URL via the optional constructor overrides below — no duplicated
+ * method logic needed.
  */
 class GomachineClient
 {
@@ -17,11 +22,18 @@ class GomachineClient
 
     private readonly int $timeoutMs;
 
-    public function __construct()
+    /**
+     * @param string|null $baseUrlOverride  Explicit base URL (used by
+     *   {@see \App\Services\ZugzwangClient}); null resolves ENGINE_URL /
+     *   gomachine.engine_url as before.
+     * @param int|null $timeoutOverrideMs   Explicit timeout; null resolves
+     *   ENGINE_TIMEOUT_MS / gomachine.engine_timeout_ms as before.
+     */
+    public function __construct(?string $baseUrlOverride = null, ?int $timeoutOverrideMs = null)
     {
-        $this->baseUrl = rtrim((string) (App::config('gomachine.engine_url') ?? 'http://127.0.0.1:6466'), '/');
+        $this->baseUrl = rtrim($baseUrlOverride ?? (string) (App::config('gomachine.engine_url') ?? 'http://127.0.0.1:6466'), '/');
         // Engine think time can reach ~2s at level 10; allow headroom.
-        $this->timeoutMs = (int) (App::config('gomachine.engine_timeout_ms') ?? 8000);
+        $this->timeoutMs = $timeoutOverrideMs ?? (int) (App::config('gomachine.engine_timeout_ms') ?? 8000);
     }
 
     /**

@@ -95,6 +95,46 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | zugzwang (C++ NNUE engine, HTTP-compatible with gomachine)
+    |--------------------------------------------------------------------------
+    |
+    | zugzwang serves the SAME stateless HTTP API as gomachine for standard
+    | chess (verified byte-compatible for /move, /legal-moves, /bestmove,
+    | /perft, /status, /candidates, /analyze-game — WIRING_RECON.md §A). It
+    | 501s /sf-bestmove and the Duck/Crazyhouse variant routes (Wave 3, not yet
+    | implemented) — EngineSelector guards those straight to gomachine. Default
+    | port 6476 (gomachine owns 6466), overridable via ZUGZWANG_URL.
+    |
+    */
+    'zugzwang' => [
+        'url'        => $_ENV['ZUGZWANG_URL'] ?? 'http://127.0.0.1:6476',
+        'timeout_ms' => (int)($_ENV['ZUGZWANG_TIMEOUT_MS'] ?? $_ENV['ENGINE_TIMEOUT_MS'] ?? 8000),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | engine (primary/fallback policy — App\Services\EngineSelector)
+    |--------------------------------------------------------------------------
+    |
+    | Which engine client EngineSelector tries FIRST for standard-chess calls
+    | (move/bestmove/analyze/candidates/analyze-game/legal-moves). It always
+    | falls back to gomachine on a RuntimeException (connection failure or
+    | HTTP >=400) from the primary, so the site degrades to gomachine
+    | automatically if the primary is down. Flip ENGINE_PRIMARY=gomachine (or
+    | this default) to revert the WHOLE site to gomachine with zero code
+    | change. Stockfish and the Duck/Crazyhouse variant routes always go
+    | straight to gomachine regardless of this setting (zugzwang can't do
+    | either yet) — see EngineSelector.
+    |
+    */
+    'engine' => [
+        'primary' => strtolower((string) ($_ENV['ENGINE_PRIMARY'] ?? 'zugzwang')) === 'gomachine'
+            ? 'gomachine'
+            : 'zugzwang',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | OpenAI
     |--------------------------------------------------------------------------
     |

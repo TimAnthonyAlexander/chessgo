@@ -6,10 +6,11 @@ use App\Models\BotGame;
 
 /**
  * Game logic for human-vs-AI play. PHP owns persistence and orchestration; the
- * gomachine engine owns rules + AI (SPEC §3, §7.2). A human move is validated
- * and applied by the engine, then — if it becomes the bot's turn — the bot's
- * reply is computed and applied in the same request (synchronous; fine for
- * untimed v1 play).
+ * engine owns rules + AI (SPEC §3, §7.2) — zugzwang-primary with automatic
+ * gomachine fallback via {@see EngineSelector} (WIRING_RECON.md §B). A human
+ * move is validated and applied by the engine, then — if it becomes the bot's
+ * turn — the bot's reply is computed and applied in the same request
+ * (synchronous; fine for untimed v1 play).
  */
 class BotGameService
 {
@@ -40,7 +41,7 @@ class BotGameService
                 / (self::HUMAN_FULL_STRENGTH - self::RATING_MIN));
     }
 
-    public function __construct(private readonly GomachineClient $engine)
+    public function __construct(private readonly EngineSelector $engine)
     {
     }
 

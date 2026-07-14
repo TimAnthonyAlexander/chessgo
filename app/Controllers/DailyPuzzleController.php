@@ -7,7 +7,7 @@ use BaseApi\Controllers\Controller;
 use BaseApi\Http\JsonResponse;
 use App\Models\Puzzle;
 use App\Services\CacheHelper;
-use App\Services\GomachineClient;
+use App\Services\EngineSelector;
 
 /**
  * "Puzzle of the day" — one deterministic puzzle, the SAME for everyone for the
@@ -42,7 +42,7 @@ class DailyPuzzleController extends Controller
     private const CACHE_TTL = 90000; // 25h
 
     public function __construct(
-        private readonly GomachineClient $engine,
+        private readonly EngineSelector $engine,
     ) {}
 
     public function get(): JsonResponse
