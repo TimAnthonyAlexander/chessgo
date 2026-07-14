@@ -9,6 +9,11 @@ perft_test
 #   ln -sf ../gomachine/data/nnue/kb-mirror.bin net.nnue
 net.nnue
 
+# the opening book is provided out-of-band: a symlink to gomachine's gitignored
+# 594 KB precomputed book (../gomachine/data/book.bin). Recreate with:
+#   ln -sf ../gomachine/data/book.bin book.bin
+book.bin
+
 # match / test outputs
 *.log
 *.pgn

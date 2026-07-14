@@ -6,6 +6,7 @@
 #include "tt.h"
 #include "bitboard.h"
 #include "zobrist.h"
+#include "book.h"
 #include <iostream>
 #include <sstream>
 #include <thread>
@@ -19,6 +20,8 @@ static const char* ENGINE_AUTHOR = "Claude (HCE)";
 static Position pos;
 static std::thread searchThread;
 static int ttSizeMB = 128;
+static Book::Book book;
+static bool ownBook = false;
 
 static void join_search() {
     if (searchThread.joinable()) searchThread.join();
@@ -76,6 +79,30 @@ static void position_cmd(std::istringstream& is) {
         }
 }
 
+// If OwnBook is on, the book is loaded, and the current position has a hit
+// whose pv[0] is a LEGAL move, print the book's line as if it were a search
+// result and return true (caller skips the real search entirely). Re-validates
+// legality against movegen — never trusts the book blindly, since a book move
+// could in principle be stale relative to this position (e.g. a key collision,
+// though the 64-bit exact-match key makes that vanishingly unlikely).
+static bool try_book_move(Position& p) {
+    if (!ownBook || !book.loaded()) return false;
+    const Book::BookEntry* e = book.lookup(Book::book_key(p));
+    if (!e || e->pv.empty()) return false;
+
+    Move best = parse_move(p, e->pv[0]);
+    if (best == MOVE_NONE) return false; // not legal here — don't trust the book
+
+    std::cout << "info depth " << e->depth << " score ";
+    if (e->mate != 0) std::cout << "mate " << e->mate;
+    else std::cout << "cp " << e->score;
+    std::cout << " pv";
+    for (const std::string& mv : e->pv) std::cout << " " << mv;
+    std::cout << std::endl;
+    std::cout << "bestmove " << e->pv[0] << std::endl;
+    return true;
+}
+
 static void go_cmd(std::istringstream& is) {
     join_search();
     Search::Limits limits;
@@ -92,6 +119,7 @@ static void go_cmd(std::istringstream& is) {
         else if (token == "movetime") is >> limits.movetime;
         else if (token == "infinite") limits.infinite = true;
     }
+    if (try_book_move(pos)) return; // book hit: skip the search entirely
     Search::request_stop(false);
     searchThread = std::thread([limits]() { Search::start(pos, limits); });
 }
@@ -147,6 +175,10 @@ int uci_main() {
         std::cerr << "NNUE: loaded net.nnue\n";
     else
         std::cerr << "NNUE: net.nnue absent — using HCE\n";
+    if (book.load("book.bin"))
+        std::cerr << "Book: loaded book.bin\n";
+    else
+        std::cerr << "Book: book.bin absent/unusable — OwnBook will no-op\n";
     TT.resize(ttSizeMB);
 
     pos.set(START_FEN);
@@ -172,6 +204,7 @@ int uci_main() {
             std::cout << "option name CaptSeeCoeff type spin default 23 min 0 max 180\n";
             std::cout << "option name NmpEvalDiv type spin default 200 min 80 max 400\n";
             std::cout << "option name SingularMargin type spin default 32 min 16 max 80\n";
+            std::cout << "option name OwnBook type check default false\n";
             std::cout << "uciok" << std::endl;
         } else if (cmd == "isready") {
             std::cout << "readyok" << std::endl;
@@ -184,6 +217,8 @@ int uci_main() {
             if (name == "Hash") {
                 ttSizeMB = std::stoi(value);
                 TT.resize(ttSizeMB);
+            } else if (name == "OwnBook") {
+                ownBook = (value == "true");
             } else {
                 Search::set_tune_option(name, std::stoi(value));
             }
