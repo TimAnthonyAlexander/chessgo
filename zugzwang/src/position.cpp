@@ -84,8 +84,9 @@ void Position::set(const std::string& fen) {
 
     std::istringstream ss(fen);
     std::string boardStr, stm, castle, ep;
-    int halfmove = 0, fullmove = 1;
-    ss >> boardStr >> stm >> castle >> ep >> halfmove >> fullmove;
+    int halfmove = 0, fullmoveField = 1;
+    ss >> boardStr >> stm >> castle >> ep >> halfmove >> fullmoveField;
+    fullmove = fullmoveField > 0 ? fullmoveField : 1;
 
     int rank = 7, file = 0;
     for (char c : boardStr) {
@@ -164,7 +165,7 @@ std::string Position::fen() const {
     if (st->castlingRights & BLACK_OOO) c += 'q';
     ss << (c.empty() ? "-" : c) << ' ';
     ss << (st->epSquare == SQ_NONE ? "-" : SQ_NAMES[st->epSquare]);
-    ss << ' ' << st->rule50 << " 1";
+    ss << ' ' << st->rule50 << ' ' << fullmove;
     return ss.str();
 }
 
@@ -239,6 +240,7 @@ void Position::do_move(Move m, StateInfo& newSt) {
     Piece pc = board[from];
     MoveType mt = type_of_move(m);
     Piece captured = (mt == EN_PASSANT) ? make_piece(them, PAWN) : board[to];
+    if (us == BLACK) fullmove++; // FEN fullmove increments after Black's move (display-only)
 
     // Remove ep from key (will re-add if needed)
     if (st->epSquare != SQ_NONE)
@@ -333,6 +335,7 @@ void Position::undo_move(Move m) {
     Color us = sideToMove;
     Square from = from_sq(m), to = to_sq(m);
     MoveType mt = type_of_move(m);
+    if (us == BLACK) fullmove--; // symmetric with do_move's increment
 
     history_count--;
 

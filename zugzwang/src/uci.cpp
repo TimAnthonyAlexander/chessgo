@@ -123,7 +123,10 @@ static void bench() {
     (void)totalNodes;
 }
 
-int main() {
+// Entry point for the UCI CLI path (bare `./zugzwang`, no subcommand). Renamed
+// from `main` so main.cpp can dispatch between this and `serve_main` (the HTTP
+// serve subcommand, src/serve.cpp) — the UCI loop itself is untouched.
+int uci_main() {
     BB::init();
     Zobrist::init();
     Eval::init();

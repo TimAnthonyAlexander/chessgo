@@ -111,6 +111,12 @@ private:
     StateInfo* st;
     StateInfo rootState;
     NNUE::AccStack* nnueAcc = nullptr;
+    // Display-only FEN fullmove counter (SPSA/search/perft never read this —
+    // it exists purely so fen() round-trips correctly for the HTTP serve
+    // layer, which the search's own move-application never needed before).
+    // Incremented in do_move / decremented in undo_move whenever a BLACK move
+    // completes/is-undone, mirroring standard FEN semantics.
+    int fullmove = 1;
 };
 
 // Utility

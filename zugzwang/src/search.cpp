@@ -17,6 +17,7 @@ using namespace BB;
 namespace Search {
 
 std::atomic<bool> Stop{false};
+Result lastResult;
 
 namespace {
 
@@ -980,7 +981,15 @@ void start(Position& pos, const Limits& lim) {
 
         prevScore = score;
         lastBest = rootBestMove;
-        print_pv(pos, ss, depth, score, nodeCount);
+        if (!limits.silent) print_pv(pos, ss, depth, score, nodeCount);
+
+        // Snapshot the completed iteration for the HTTP serve layer (serve.cpp
+        // reads this instead of parsing the UCI stdout lines).
+        lastResult.bestMove = rootBestMove;
+        lastResult.score = score;
+        lastResult.depth = depth;
+        lastResult.nodes = nodeCount;
+        lastResult.pv.assign(ss->pv, ss->pv + ss->pvLen);
 
         // Soft time check between iterations
         if (!limits.infinite && timeLimitSoft && elapsed() >= timeLimitSoft) break;
@@ -991,11 +1000,18 @@ void start(Position& pos, const Limits& lim) {
 
     Move best = lastBest != MOVE_NONE ? lastBest : rootBestMove;
     if (best == MOVE_NONE) {
-        // Fallback: pick any legal move
+        // Fallback: pick any legal move (no iteration ever completed — e.g. an
+        // absurdly small movetime). lastResult wasn't populated above; do it here
+        // so callers (serve.cpp) always see a consistent result.
         MoveList list; generate<ALL>(pos, list);
         for (auto& m : list) if (pos.legal(m)) { best = m; break; }
+        lastResult.bestMove = best;
+        lastResult.score = 0;
+        lastResult.depth = 0;
+        lastResult.nodes = nodeCount;
+        lastResult.pv.assign(1, best);
     }
-    std::cout << "bestmove " << move_to_uci(best) << std::endl;
+    if (!limits.silent) std::cout << "bestmove " << move_to_uci(best) << std::endl;
 }
 
 } // namespace Search
