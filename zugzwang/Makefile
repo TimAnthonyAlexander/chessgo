@@ -1,5 +1,5 @@
 CXX      ?= clang++
-CXXFLAGS ?= -std=c++17 -O3 -flto -DNDEBUG -Wall -Wno-unused
+CXXFLAGS ?= -std=c++17 -O3 -flto -DNDEBUG -Wall -Wno-unused -ffp-contract=off
 LDFLAGS  ?= -flto -pthread
 TARGET    = zugzwang
 
