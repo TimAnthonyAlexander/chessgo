@@ -377,6 +377,27 @@ void score_moves_impl(Context& C, const Position& pos, ExtMove* begin, ExtMove* 
                        U64 tPawn, U64 tMinor, U64 tRook) {
     Color us = pos.side_to_move();
     for (ExtMove* m = begin; m != end; ++m) {
+        // Speed-only lookahead prefetch (zugzwang/docs/tasks/open/conthist-fn-to-mt.md):
+        // score_moves runs as one straight-line pass over the movelist before any
+        // recursion or reordering, so warming the ContHist cache line a few moves
+        // ahead of where it's actually read has real cycles to land. This is a pure
+        // hardware hint — it touches no table state and changes no value read by
+        // the move-scoring arithmetic below, so it cannot perturb the fixed-node
+        // search tree. Guarded the same way the real read is (ch1/ch2 non-null,
+        // WithContHist) so the CONTHIST=0 instantiation (score_moves_impl<false>)
+        // doesn't even see this code (elided by if constexpr, not just skipped).
+        if constexpr (WithContHist) {
+            constexpr int kPrefetchAhead = 4;
+            ExtMove* fut = m + kPrefetchAhead;
+            if (fut < end && (ch1 || ch2)) {
+                Move fm = fut->move;
+                if (fm != ttMove) {
+                    int foff = piece_dense(pos.moved_piece(fm)) * SQUARE_NB + to_sq(fm);
+                    if (ch1) __builtin_prefetch(&ch1[foff], 0, 1);
+                    if (ch2) __builtin_prefetch(&ch2[foff], 0, 1);
+                }
+            }
+        }
         Move mv = m->move;
         if (mv == ttMove) { m->score = TT_SCORE; continue; }
         MoveType mt = type_of_move(mv);
@@ -800,6 +821,21 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         // Captured BEFORE do_move empties from_sq(m) — needed both for ss->currentPiece
         // (children key their ContHist off this) and the LMR ContHist read below.
         Piece mover = pos.moved_piece(m);
+
+        // Speed-only warm-up prefetch for the LMR ContHist read further down this
+        // same iteration (conthist-fn-to-mt.md). For every move except the (at most
+        // one) ttMove that enters singular-extension verification, nothing between
+        // here and the LMR block runs a nested search, so this has real cycles to
+        // land before the actual load. The LMR block still performs its own fresh
+        // read of ch1[off]/ch2[off] at its usual point in the usual order — this is
+        // a pure hardware hint (no value or timing change), so it can't perturb the
+        // fixed-node search tree; it can only hide latency on the same reads that
+        // already happened before this change.
+        if (C.tune.contHist && isQuiet && (ch1 || ch2)) {
+            int off = piece_dense(mover) * SQUARE_NB + to_sq(m);
+            if (ch1) __builtin_prefetch(&ch1[off], 0, 1);
+            if (ch2) __builtin_prefetch(&ch2[off], 0, 1);
+        }
 
         // SF_MARGINS.md #4: a cheap post-LMR-reduction depth proxy, computed here
         // (before the pruning block) so the quiet-futility and SEE-quiet checks below
