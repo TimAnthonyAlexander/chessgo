@@ -37,16 +37,18 @@ struct Tune {
     bool negExt = true;
     bool rfpSoft = true;
     bool iir = true;  // internal iterative reduction — env IIR=0 to disable (PARITY_GOMACHINE.md C.2)
-    // ---- PARITY_GOMACHINE.md D.0/D.1 — default OFF, SPRT independently ----
-    bool pvGuard = false;  // D.0: add !PvNode to the LMP/futility/SEE-quiet/capture-SEE block
-    bool gmConst = false;  // D.1: transplant gomachine's tuned search constants (see load())
+    // ---- PARITY_GOMACHINE.md D.0/D.1 — ACCEPTED, baked into defaults 2026-07-14 ----
+    // (previously env-gated PVGUARD=1/GMCONST=1; now on by default — the env
+    // flags below are harmless no-ops that re-assert the same values.)
+    bool pvGuard = true;  // D.0: add !PvNode to the LMP/futility/SEE-quiet/capture-SEE block
+    bool gmConst = true;  // D.1: gomachine's tuned structural search constants (see load())
     int qsFutMargin = 300;
     // ---- Margin bundle 2 (SF_MARGINS.md #4/#5) — default OFF, SPRT independently ----
     bool nmpCutGate = false;    // NMP gate: cutNode && staticEval >= beta - 18*depth + 350
     bool lmrDepthPrune = false; // quiet futility + SEE-quiet pruning keyed on lmrDepth, not raw depth
-    // ---- PARITY_GOMACHINE.md D.2/D.3 — Wave B, default OFF, SPRT independently ----
-    bool contHist = false; // D.2: continuation history (parent/grandparent-keyed quiet magnitude)
-    bool doDeeper = false; // D.3: adaptive do-deeper/do-shallower LMR re-search depth
+    // ---- PARITY_GOMACHINE.md D.2/D.3 — Wave B, ACCEPTED, baked into defaults 2026-07-14 ----
+    bool contHist = true; // D.2: continuation history (parent/grandparent-keyed quiet magnitude)
+    bool doDeeper = true; // D.3: adaptive do-deeper/do-shallower LMR re-search depth
     // ---- PARITY_GOMACHINE.md D.5/D.7 — Wave C, default OFF, SPRT independently ----
     bool seeQuietLinear = false; // D.5: linear SEE-quiet shape -75*depth, depth<=6 (vs quadratic default)
     bool gmCheckExt = false;     // D.7: gomachine's per-node uncapped in-check depth++ (replaces per-move check ext)
@@ -61,13 +63,14 @@ struct Tune {
     int captSeeCoeff  = 23;   // capture SEE pruning: -captSeeCoeff*depth
     int nmpEvalDiv    = 200;  // null-move R eval term: min((eval-beta)/nmpEvalDiv, 3)
     int singularMargin = 32;  // singular beta: ttValue - singularMargin*depth/16 (32 -> 2*depth, exact)
-    // ---- D.1 gomachine-constant-transplant fields (env GMCONST, default off; not UCI-exposed) ----
-    int captSeeMaxDepth  = 6;      // capture SEE pruning: only at depth <= this
-    int singularMinDepth = 8;      // singular extension: only at depth >= this
-    int aspInitDelta     = 18;     // aspiration window initial half-width
-    int lmrMinMoves      = 1;      // LMR onset: reduce once moveCount > this (+1 at root)
-    double lmrBase       = 0.85;   // LMR table: base + log(d)*log(m)/div
-    double lmrDiv        = 2.6;
+    // ---- D.1 gomachine structural constants — ACCEPTED, baked into defaults 2026-07-14 ----
+    // (previously only applied via env GMCONST=1; not UCI-exposed)
+    int captSeeMaxDepth  = 4;      // capture SEE pruning: only at depth <= this
+    int singularMinDepth = 5;      // singular extension: only at depth >= this
+    int aspInitDelta     = 25;     // aspiration window initial half-width
+    int lmrMinMoves      = 4;      // LMR onset: reduce once moveCount > this (+1 at root)
+    double lmrBase       = 0.7844; // LMR table: base + log(d)*log(m)/div
+    double lmrDiv        = 2.4696;
     void load() {
         auto off = [](const char* n){ const char* e = getenv(n); return e && e[0]=='0'; };
         auto on  = [](const char* n){ const char* e = getenv(n); return e && e[0]=='1'; };
@@ -90,12 +93,15 @@ struct Tune {
         if (on("SEEQUIETLINEAR")) seeQuietLinear = true;
         if (on("GMCHECKEXT")) gmCheckExt = true;
         if (on("GMCONST")) {
-            // PARITY_GOMACHINE.md §D.1 — applied AFTER any UCI/env default so it wins
-            // regardless of prior `setoption` calls. Structural-only (not UCI-exposed):
-            // the 4 UCI-exposed margins this used to clobber (rfpMargin/futBase/futSlope/
-            // captSeeCoeff) now default to these same gomachine values directly in the
-            // field initializers above, so the accepted base is unchanged but SPSA can
-            // still `setoption` them without GMCONST overwriting the value on load().
+            // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
+            // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
+            // no-op re-assertion of the same values; kept so GMCONST=1 stays valid
+            // and explicit for anyone still setting it. Structural-only (not
+            // UCI-exposed): the 4 UCI-exposed margins this used to clobber
+            // (rfpMargin/futBase/futSlope/captSeeCoeff) default to these same
+            // gomachine values directly in the field initializers above, so SPSA
+            // can still `setoption` them without GMCONST overwriting the value on
+            // load().
             gmConst = true;
             captSeeMaxDepth  = 4;
             singularMinDepth = 5;
