@@ -48,11 +48,49 @@ Two important framings that came out of the comparison:
 none were measured on the C++ side. Treat them as *priority signal*, not promises;
 re-measure on the `~/zug_tax.log` 400-game match after each landed item.
 
-**Campaign log (2026-07-13, autonomous, movetime 100ms self-play SPRT, candidate vs accepted base):**
-- ✅ **CorrHist (#3): +57 ± 15 Elo, SHIPPED** (LLR 2.96 @ 890 games). First win; includes a real qsearch TT-eval bugfix (qsearch was storing garbage eval to TT).
-- ✗ **HistPrune (#4): wash (+1.9 ± 17), DROPPED.** Diagnosis-confirmed: Zugzwang loses to gomachine by searching *deeper but over-pruning* — so *adding* pruning is the wrong lever. The winners are **eval quality** (CorrHist) + **de-aggression** (margins).
-- 🚧 **SF-18 margin bundle 1 (#2): SPRT now** — negative singular extension + RFP soften/quiet-ttMove-gate + qsearch futility 130→300.
-- Method: each feature SPRT'd isolated vs the last accepted base; washes are `git revert`ed off main so main = only-accepted. The −93 gap vs current gomachine gets **re-taxed after the feature waves**, not inferred from the self-play deltas (non-transitivity).
+**Campaign log (2026-07-13 → 07-14, autonomous overnight, movetime 100ms self-play SPRT on coalla, candidate vs accepted base; ★ = re-tax vs gomachine, same net).**
+
+### ★★ HEADLINE: Zugzwang CROSSED gomachine. Re-tax progression (same net, 100ms movetime):
+- **−93.4 ± 24** (baseline, after inc-acc, before search campaign)
+- **−7.2 ± 27.7** (after CorrHist + margin bundle 1)
+- **+24.6 ± 28.1** (MID re-tax, after D.0 + D.1 + ContHist + doDeeper) — **stronger than gomachine.**
+- FINAL re-tax was the SAME binary (nothing landed after mid) → skipped as redundant; partial 68g tracked +30.7.
+
+### ACCEPTED (in the base, applied via env flags — see "NOT YET BAKED" below):
+| Change | Result | Notes |
+|---|---|---|
+| CorrHist (#3) | **+57 ± 15** (LLR 2.96 @890g) | + real qsearch TT-eval bugfix (was storing garbage eval to TT) |
+| SF-18 margin bundle 1 (#2) | **+22.8 ± 9.5** (cap 1600g, LB +13.3) | neg singular ext + RFP soften/quiet-ttMove-gate + qsearch futility 130→300 |
+| D.0 PV-guard bug fix | **+17.6 ± 9.1** (cap, LB +8.5) | LMP/futility/SEE-quiet/capt-SEE block was missing `!PvNode` — pruning inside our own PV. gomachine gates it; we didn't. `PVGUARD=1` |
+| D.1 gomachine-constants | **+22.4 ± 11.5** (accept @1010g) | RFP 80→75, LMR onset 2nd→5th move, CaptSEE 90→23/d≤4, futility base/slope 120/90→0/100, singular min-depth 8→5, aspiration 18→25, LMR table 0.85/2.6→0.7844/2.4696. `GMCONST=1` |
+| ContHist + doDeeper (bundled) | **FN +19.6 / MT +8.0 ±9** (LB −0.9) | marginal-MT accept on strong FN corroboration. 1-ply+2-ply cont-history → ordering + LMR; doDeeper adaptive re-search. `CONTHIST=1 DODEEPER=1` |
+
+### REJECTED / WASHED (correctly filtered — base stayed clean):
+| Change | Result |
+|---|---|
+| HistPrune (#4) | +1.9 ± 17 wash |
+| margin bundle 2 — nmp cutNode gate | **−27** reject |
+| margin bundle 2 — lmrDepth futility | +0.5 wash |
+| doDeeper ALONE | −5.7 wash (ships only bundled w/ ContHist) |
+| D.5 SEE-quiet linear shape | −4.3 reject |
+| D.7 gomachine check-ext mechanism | +4.3 wash |
+| razoring-off (C.2) | −0.6 wash |
+| IIR-off (C.2) | +3.8 wash |
+| SPSA (6 clamp-safe margins, 350 iters) | validation +5 wash, NOT adopted (base already on gomachine's SPSA-tuned values) |
+
+**Bugs caught + fixed mid-campaign:** doDeeper had a **−150 Elo** uninitialized-`score` read (consumed on non-LMR paths where it was never assigned; fixed by gating on `wasLMRReduced`, 36575bf). Wave C fine-transplants all washed → the base is near a local optimum; **the search well is largely dry.**
+
+**Method:** each change behind a default-OFF env flag, SPRT'd isolated vs the accepted base (`sprt.sh`); washes simply never flip on. FN-first for NPS-costly changes (ContHist), MT-only for NPS-neutral. Re-tax vs gomachine (not self-play deltas) is the cross-over signal (non-transitivity).
+
+### ⚠️ NOT YET BAKED (open task): the accepted stack is active only via env flags
+`PVGUARD=1 GMCONST=1 DODEEPER=1 CONTHIST=1` (the coalla `~/zug_base.sh` wrapper). The **default binary does NOT run the full stack** — GMCONST is now structural-only + the 4 gomachine margin values are baked into UCI defaults (d1df809), but `pvGuard`/`contHist`/`doDeeper` still default OFF. **Before shipping zugzwang as the strong engine (HTTP service / website), bake these into defaults OR ensure the service sets the env.** Current base commit: **0c9aeaf**.
+
+### STILL OPEN (next levers, none tried):
+1. **NPS/infra batch** (#7 TT modulo→mask, #12 prefetch, #14 align, #11 hugepages, #9 VNNI/NEON dot, #10 both-persp sweep) — bit-exact → MT-Elo. Lowest-risk next.
+2. **ContHist FN→MT conversion** — FN +20 but MT +8; ~+12 trapped behind table-read cost. Deeper hot-path speedup.
+3. **Book port** (#1) — +160 vs *external* SF (washes vs gomachine); serves the SF end-goal.
+4. **Move-aware threat delta** (#6, hard), novel search beyond the parity list.
+5. **THE REAL SF GAP IS THE EVAL/NET (~150–200 Elo), not search.** We won the search game on a shared brain; the mountain to SF is the net (data pipeline / arch), which is gomachine's weeks-of-work asset.
 
 ---
 

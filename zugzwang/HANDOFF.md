@@ -14,17 +14,33 @@ RFP/SEE/singular, UCI) with a **bit-exact C++ port of gomachine's prod full-thre
 bolted in. Both engines share the **same net** and produce **bit-identical eval**. Purpose:
 measure the Go-vs-C++ "tax" and have a second engine in the repo. The website is untouched.
 
-## Current status — DONE and validated
+## Current status — ★ STRONGER THAN GOMACHINE (2026-07-14)
 
-- **Eval bit-exact with gomachine:** 37/37 *legal* golden positions match exactly
-  (`test/golden_eval.txt`, 38 vectors from gomachine's `TestGoldenEval`; the 1 non-match is an
-  illegal no-black-king FEN our board declines). Verified on BOTH arm64 (M3) and amd64 (coalla).
-- **Plays real chess:** depth 15–17 at ~1–2 s, principled moves, no crashes.
-- **Tax measured (first pass): ~EVEN.** See below.
-- **Committed** (local `main`, NOT pushed):
-  - `81a1aef feat(zugzwang): C++ NNUE sister engine, bit-exact with gomachine`
-  - `a60f046 docs: Go<->Rust threat mismatch REFUTED (bit-exact x2)` (fixed stale claim in
-    CLAUDE.md, ENGINE_STRENGTH §36.3, docs/open_tasks/fullthreats-vs-sf-regression.md)
+**Zugzwang now beats gomachine at movetime on the shared net: −93 → −7 → +24.6 Elo** across a
+one-night SPRT-gated search campaign. It is no longer a "sister engine to measure the tax" — it is
+the **stronger engine**, slated to replace gomachine as the website's Analysis/BestMove/bot engine
+(see below). Full campaign record — everything tried, accepted, rejected, and open — is in
+**`OPTIMIZATIONS.md` → Campaign log** (the authoritative doc). Short version:
+
+- **Accepted (+~120 Elo of search):** CorrHist +57, SF-margin bundle 1 +23, D.0 PV-pruning bug fix
+  +17.6, D.1 gomachine-constant transplant +22.4, ContHist+doDeeper +8 (MT) / +20 (FN).
+- **Rejected/washed (correctly filtered):** HistPrune, margin bundle 2, all of Wave C (D.5/D.7/
+  razor-off/IIR-off), SPSA — the search well is now largely dry (base near a local optimum).
+- **Eval still bit-exact with gomachine:** 37/38 golden (the 1 miss is an illegal-FEN decline).
+- **⚠️ The accepted stack is env-flag-gated, NOT baked into defaults.** The default binary does NOT
+  run the full stack — it needs `PVGUARD=1 GMCONST=1 DODEEPER=1 CONTHIST=1` (coalla `~/zug_base.sh`)
+  or a bake-in. **Baking these into defaults is a prerequisite for the HTTP service / website cutover.**
+- **Current base commit: `0c9aeaf`.** GMCONST is now structural-only + gomachine margin values baked
+  into UCI defaults (d1df809); pvGuard/contHist/doDeeper still default-off.
+- **The real gap to Stockfish (~150–200 Elo) is the EVAL/NET, not search** — that's gomachine's
+  weeks-of-training asset. We won the search game on a shared brain.
+
+### Next phase (planned): HTTP service + website cutover
+Zugzwang is currently **UCI CLI only** — no HTTP `serve` endpoint like gomachine's stateless
+`(FEN, limit) → result`. To make the website use zugzwang for Analysis/BestMove/bot moves it needs
+an HTTP serve mode mirroring that API (or a UCI adapter in PHP's `GomachineClient`). Then: move all
+gomachine-focused repo docs (incl. `CLAUDE.md`) into `gomachine/docs`, **recreate** website docs
+(not edit), and write a new engine-focused `CLAUDE.md` + `zugzwang/CLAUDE.md`.
 
 ## File map (all under `zugzwang/src/`)
 
