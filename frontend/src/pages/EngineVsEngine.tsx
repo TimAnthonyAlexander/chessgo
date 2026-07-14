@@ -19,6 +19,7 @@ import {
     Telescope,
     Volume2,
     VolumeX,
+    Zap,
 } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import Board from '../components/Board'
@@ -52,13 +53,13 @@ const BOOK_ARROW_COLOR = '#4c8bf5'
 const sideToMoveOf = (fen: string): Color => (fen.split(' ')[1] === 'b' ? 'b' : 'w')
 
 // ---- Strength scales -----------------------------------------------------------
-// Both engines are shown on the truthful CCRL ruler (see docs/ENGINE_STRENGTH.md §20).
+// All three engines are shown on the truthful CCRL ruler (see docs/ENGINE_STRENGTH.md §20).
 //
-// gomachine: the engine's rating ladder is now NATIVELY CCRL — RatingMin..RatingMax =
-// 700..3500, full strength at 3500 (gomachine internal/engine/rating.go). This admin
-// page speaks raw CCRL: the slider value is sent straight through as the engine rating,
-// no conversion (the human-scale /bot picker + hub backfill convert separately, engine-
-// side). Bounds mirror the engine constants.
+// gomachine / zugzwang: both speak the same rating ladder — RatingMin..RatingMax =
+// 700..3500, full strength at 3500 (gomachine internal/engine/rating.go; zugzwang mirrors
+// the same mapping). This admin page speaks raw CCRL: the slider value is sent straight
+// through as the engine rating, no conversion (the human-scale /bot picker + hub backfill
+// convert separately, engine-side). Bounds mirror the engine constants.
 const GOMA_RATING_MIN = 700
 const GOMA_RATING_MAX = 3500
 
@@ -66,7 +67,7 @@ const GOMA_RATING_MAX = 3500
 // (UCI_Elo 3100 == 3190 == full strength). We display a truthful CCRL-ish number instead
 // of SF's own (misleading) figure, anchored at the one hard data point we have: UCI 3000
 // ≈ 3400 CCRL. At the top notch we UNCAP Stockfish entirely (send elo=0 → no
-// UCI_LimitStrength) and label it "Unleashed" — ~3700–4000, clearly above gomachine.
+// UCI_LimitStrength) and label it "Unleashed" — ~3700–4000, clearly above gomachine/zugzwang.
 const SF_UCI_MIN = 1320
 const SF_UNLEASHED_UCI = 3100 // slider top notch; at/above here SF plays at full force
 // affine on the UCI scale: UCI 1320→~1500, UCI 3000→3400 (slope ≈1.13, gap widens up top).
@@ -89,21 +90,24 @@ const DEPTH_MAX = 30
 const NODES_MIN = 1_000
 const NODES_MAX = 50_000_000
 
-type EngineKind = EngineSide // 'gomachine' | 'stockfish'
+type EngineKind = EngineSide // 'gomachine' | 'zugzwang' | 'stockfish'
 type LimitKind = 'movetime' | 'nodes' | 'depth' // stockfish uses movetime | depth only
 
-// One side's full configuration. gomachine fields (rating/aggr/book) and the
-// stockfish field (sfElo) coexist so switching engine keeps each side's last
-// settings; only the fields for the ACTIVE engine are ever sent.
+// One side's full configuration. gomachine/zugzwang fields (rating/aggr/book) and
+// the stockfish field (sfElo) coexist so switching engine keeps each side's last
+// settings; only the fields for the ACTIVE engine are ever sent. gomachine and
+// zugzwang share the exact same field shape — zugzwang's `/bestmove` honors
+// rating/movetime/nodes/depth; aggr/book are stubbed server-side but sent the
+// same way for forward-compat.
 interface SideConfig {
     engine: EngineKind
-    rating: number // gomachine target Elo (700..3500, display == engine rating)
-    aggr: number // gomachine aggression 0..100 (50 = neutral)
-    book: boolean // gomachine: consult the opening book on the rating path
+    rating: number // gomachine/zugzwang target Elo (700..3500, display == engine rating)
+    aggr: number // gomachine/zugzwang aggression 0..100 (50 = neutral)
+    book: boolean // gomachine/zugzwang: consult the opening book on the rating path
     sfElo: number // Stockfish UCI_Elo (1320..3100; 3100 = Unleashed/uncapped)
     limitKind: LimitKind // which budget dimension is active
     movetime: number // ms/move
-    nodes: number // fixed node budget (gomachine only)
+    nodes: number // fixed node budget (gomachine/zugzwang only)
     depth: number // fixed search depth
 }
 
@@ -136,14 +140,20 @@ const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n
 function coerceSide(p: Partial<SideConfig> | undefined, def: SideConfig): SideConfig {
     if (!p || typeof p !== 'object') return def
     return {
-        engine: p.engine === 'stockfish' ? 'stockfish' : 'gomachine',
+        engine:
+            p.engine === 'stockfish'
+                ? 'stockfish'
+                : p.engine === 'zugzwang'
+                  ? 'zugzwang'
+                  : 'gomachine',
         rating:
             typeof p.rating === 'number'
                 ? clamp(p.rating, GOMA_RATING_MIN, GOMA_RATING_MAX)
                 : def.rating,
         aggr: typeof p.aggr === 'number' ? clamp(p.aggr, 0, 100) : def.aggr,
         book: typeof p.book === 'boolean' ? p.book : def.book,
-        sfElo: typeof p.sfElo === 'number' ? clamp(p.sfElo, SF_UCI_MIN, SF_UNLEASHED_UCI) : def.sfElo,
+        sfElo:
+            typeof p.sfElo === 'number' ? clamp(p.sfElo, SF_UCI_MIN, SF_UNLEASHED_UCI) : def.sfElo,
         limitKind:
             p.limitKind === 'nodes' || p.limitKind === 'depth' || p.limitKind === 'movetime'
                 ? p.limitKind
@@ -183,22 +193,33 @@ function paramsForSide(cfg: SideConfig, fen: string): MoveParams {
             ? { fen, side: 'stockfish', elo, depth: cfg.depth }
             : { fen, side: 'stockfish', elo, movetime: cfg.movetime }
     }
-    const base = { fen, side: 'gomachine' as const, rating: cfg.rating, aggr: cfg.aggr, book: cfg.book }
+    // gomachine and zugzwang share the exact same param shape — only `side` differs.
+    const side: 'gomachine' | 'zugzwang' = cfg.engine === 'zugzwang' ? 'zugzwang' : 'gomachine'
+    const base = { fen, side, rating: cfg.rating, aggr: cfg.aggr, book: cfg.book }
     if (cfg.limitKind === 'depth') return { ...base, depth: cfg.depth }
     if (cfg.limitKind === 'nodes') return { ...base, nodes: cfg.nodes }
     return { ...base, movetime: cfg.movetime }
 }
 
-const engineName = (k: EngineKind) => (k === 'gomachine' ? 'gomachine' : 'Stockfish')
+// EvE is the one page that keeps the raw engine identifiers as labels (not the
+// site-wide "Zugzwang" rebrand) — this is an admin tool for comparing the actual
+// engines, so it names them literally.
+const engineName = (k: EngineKind) => (k === 'stockfish' ? 'Stockfish' : k)
 function sideDetail(cfg: SideConfig): string {
-    return cfg.engine === 'gomachine' ? `~${cfg.rating} Elo` : sfLabel(cfg.sfElo)
+    return cfg.engine === 'stockfish' ? sfLabel(cfg.sfElo) : `~${cfg.rating} Elo`
+}
+function engineIcon(k: EngineKind) {
+    if (k === 'gomachine') return <Cpu size={16} />
+    if (k === 'zugzwang') return <Zap size={16} />
+    return <Bot size={16} />
 }
 
-/** Admin-only: watch any pairing of our engine (gomachine) and Stockfish play each
- * other. Each side is configured independently — engine, strength, search budget
- * (movetime / nodes / depth), plus gomachine's aggression + opening book. The
- * browser drives the game ply-by-ply through the admin proxy; the engines
- * themselves stay stateless. */
+/** Admin-only: watch any pairing of our two engines (gomachine, zugzwang) and
+ * Stockfish play each other — any engine on either side, including an engine
+ * playing itself. Each side is configured independently — engine, strength,
+ * search budget (movetime / nodes / depth), plus gomachine/zugzwang's
+ * aggression + opening book. The browser drives the game ply-by-ply through the
+ * admin proxy; the engines themselves stay stateless. */
 export default function EngineVsEngine() {
     const { user, status: authStatus } = useAuth()
     const navigate = useNavigate()
@@ -211,8 +232,9 @@ export default function EngineVsEngine() {
     // White is the bottom player; Black is the top player (board is White-at-bottom).
     const [white, setWhite] = useState<SideConfig>(() => loadSettings().white)
     const [black, setBlack] = useState<SideConfig>(() => loadSettings().black)
-    // Duck Chess mode: both sides forced to gomachine (Stockfish can't play Duck
-    // Chess), driven through the duck engine. Persisted alongside the side configs.
+    // Duck Chess mode: both sides forced to gomachine (neither Stockfish nor
+    // zugzwang can play Duck Chess yet), driven through the duck engine. Persisted
+    // alongside the side configs.
     const [duckMode, setDuckMode] = useState<boolean>(() => loadSettings().duck ?? false)
 
     useEffect(() => {
@@ -281,7 +303,11 @@ export default function EngineVsEngine() {
     // Book panel: a tree of the game line so far, so the engine-owned OpeningPanel
     // can name the opening + show candidate-move eval bars for the live position.
     const { tree: bookTree, lastId: bookNodeId } = useMemo(
-        () => buildFromMoves(startFen, moves.map((m) => m.uci)),
+        () =>
+            buildFromMoves(
+                startFen,
+                moves.map((m) => m.uci),
+            ),
         [startFen, moves],
     )
     // UCI of the hovered book move → a blue arrow on the board (cleared each ply).
@@ -399,11 +425,13 @@ export default function EngineVsEngine() {
         }
     }, [running, ply, over, fen, sideToMove, moverCfg, duck, duckMode])
 
-    // Eval bar = ONE consistent evaluator: gomachine at full strength, re-reading the
-    // current position after every ply regardless of who moved. We deliberately do NOT
-    // use the mover's own search — gomachine's is rating-limited (and one-sided), and
-    // Stockfish returns no eval at all. A fast (300ms) /analyze keeps the loop snappy
-    // while still surfacing forced mates as M1/M2.
+    // Eval bar = ONE consistent evaluator: the site's primary analysis engine at
+    // full strength (plain /analyze, no `side` — engine-agnostic, see api/client.ts),
+    // re-reading the current position after every ply regardless of who moved. We
+    // deliberately do NOT use the mover's own search — a rating-limited (and
+    // one-sided) search is misleading, and Stockfish returns no eval at all. A
+    // fast (300ms) /analyze keeps the loop snappy while still surfacing forced
+    // mates as M1/M2.
     useEffect(() => {
         if (over) {
             if (duckMode) {
@@ -543,27 +571,25 @@ export default function EngineVsEngine() {
 
                     {/* Top player's card first: the top of the board is Black when
                         White-oriented, White when flipped. */}
-                    {(orientation === 'w'
-                        ? (['b', 'w'] as const)
-                        : (['w', 'b'] as const)
-                    ).map((c) =>
-                        c === 'w' ? (
-                            <SideControls
-                                key="w"
-                                cfg={white}
-                                onChange={(patch) => setWhite((s) => ({ ...s, ...patch }))}
-                                disabled={running}
-                                duckMode={duckMode}
-                            />
-                        ) : (
-                            <SideControls
-                                key="b"
-                                cfg={black}
-                                onChange={(patch) => setBlack((s) => ({ ...s, ...patch }))}
-                                disabled={running}
-                                duckMode={duckMode}
-                            />
-                        ),
+                    {(orientation === 'w' ? (['b', 'w'] as const) : (['w', 'b'] as const)).map(
+                        (c) =>
+                            c === 'w' ? (
+                                <SideControls
+                                    key="w"
+                                    cfg={white}
+                                    onChange={(patch) => setWhite((s) => ({ ...s, ...patch }))}
+                                    disabled={running}
+                                    duckMode={duckMode}
+                                />
+                            ) : (
+                                <SideControls
+                                    key="b"
+                                    cfg={black}
+                                    onChange={(patch) => setBlack((s) => ({ ...s, ...patch }))}
+                                    disabled={running}
+                                    duckMode={duckMode}
+                                />
+                            ),
                     )}
                 </Box>
             }
@@ -581,27 +607,20 @@ export default function EngineVsEngine() {
                             gap: 1,
                         }}
                     >
-                        {(orientation === 'w'
-                            ? (['b', 'w'] as const)
-                            : (['w', 'b'] as const)
-                        ).map((c) => {
-                            const cfg = c === 'w' ? white : black
-                            return (
-                                <MatchupRow
-                                    key={c}
-                                    icon={
-                                        duckMode || cfg.engine === 'gomachine' ? (
-                                            <Cpu size={16} />
-                                        ) : (
-                                            <Bot size={16} />
-                                        )
-                                    }
-                                    name={duckMode ? 'gomachine' : engineName(cfg.engine)}
-                                    detail={duckMode ? `~${cfg.rating} Elo` : sideDetail(cfg)}
-                                    side={c}
-                                />
-                            )
-                        })}
+                        {(orientation === 'w' ? (['b', 'w'] as const) : (['w', 'b'] as const)).map(
+                            (c) => {
+                                const cfg = c === 'w' ? white : black
+                                return (
+                                    <MatchupRow
+                                        key={c}
+                                        icon={engineIcon(duckMode ? 'gomachine' : cfg.engine)}
+                                        name={duckMode ? 'gomachine' : engineName(cfg.engine)}
+                                        detail={duckMode ? `~${cfg.rating} Elo` : sideDetail(cfg)}
+                                        side={c}
+                                    />
+                                )
+                            },
+                        )}
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
                             <Typography
                                 sx={{ fontSize: 13, fontWeight: 600, color: 'var(--text-dim)' }}
@@ -654,11 +673,7 @@ export default function EngineVsEngine() {
                             label={running ? 'Pause' : over ? 'Play again' : 'Start'}
                             onClick={toggleRun}
                         />
-                        <RunBtn
-                            icon={<RotateCcw size={16} />}
-                            label="Reset"
-                            onClick={reset}
-                        />
+                        <RunBtn icon={<RotateCcw size={16} />} label="Reset" onClick={reset} />
                     </Box>
 
                     {error && <ErrorBanner>{error}</ErrorBanner>}
@@ -763,10 +778,13 @@ function SideControls({
     duckMode?: boolean
 }) {
     // Duck mode pins the side to gomachine regardless of the stored engine pick.
-    const isGoma = duckMode || cfg.engine === 'gomachine'
+    // gomachine and zugzwang share identical controls (rating/aggr/book/search-
+    // limit incl. nodes) — only Stockfish's controls differ.
+    const isRatingEngine = duckMode || cfg.engine !== 'stockfish'
     // Stockfish offers only movetime | depth; if the stored kind is 'nodes' (carried
-    // over from gomachine), treat it as movetime for the toggle + sending.
-    const effKind: LimitKind = !isGoma && cfg.limitKind === 'nodes' ? 'movetime' : cfg.limitKind
+    // over from gomachine/zugzwang), treat it as movetime for the toggle + sending.
+    const effKind: LimitKind =
+        !isRatingEngine && cfg.limitKind === 'nodes' ? 'movetime' : cfg.limitKind
 
     return (
         <Box
@@ -801,14 +819,15 @@ function SideControls({
                     sx={{ ...toggleSx, mt: 0 }}
                 >
                     <ToggleButton value="gomachine">gomachine</ToggleButton>
+                    <ToggleButton value="zugzwang">zugzwang</ToggleButton>
                     <ToggleButton value="stockfish">Stockfish</ToggleButton>
                 </ToggleButtonGroup>
             )}
 
-            {isGoma ? (
+            {isRatingEngine ? (
                 <>
                     <SliderRow
-                        label="gomachine rating"
+                        label={`${duckMode ? 'gomachine' : engineName(cfg.engine)} rating`}
                         value={`~${cfg.rating} Elo`}
                         sliderValue={cfg.rating}
                         min={GOMA_RATING_MIN}
@@ -817,8 +836,8 @@ function SideControls({
                         disabled={disabled}
                         onChange={(n) => onChange({ rating: n })}
                     />
-                    {/* Aggression + opening book are gomachine-only knobs, hidden in
-                        Duck mode (the duck engine ignores them). */}
+                    {/* Aggression + opening book are gomachine/zugzwang-only knobs,
+                        hidden in Duck mode (the duck engine ignores them). */}
                     {!duckMode && (
                         <>
                             <SliderRow
@@ -875,7 +894,7 @@ function SideControls({
                     sx={toggleSx}
                 >
                     <ToggleButton value="movetime">Movetime</ToggleButton>
-                    {isGoma && <ToggleButton value="nodes">Nodes</ToggleButton>}
+                    {isRatingEngine && <ToggleButton value="nodes">Nodes</ToggleButton>}
                     <ToggleButton value="depth">Depth</ToggleButton>
                 </ToggleButtonGroup>
             </Box>
@@ -904,7 +923,7 @@ function SideControls({
                     onChange={(n) => onChange({ depth: n })}
                 />
             )}
-            {effKind === 'nodes' && isGoma && (
+            {effKind === 'nodes' && isRatingEngine && (
                 <Box>
                     <Label>Nodes</Label>
                     <TextField
@@ -915,7 +934,8 @@ function SideControls({
                         disabled={disabled}
                         onChange={(e) => {
                             const n = Number(e.target.value)
-                            if (Number.isFinite(n)) onChange({ nodes: clamp(Math.round(n), NODES_MIN, NODES_MAX) })
+                            if (Number.isFinite(n))
+                                onChange({ nodes: clamp(Math.round(n), NODES_MIN, NODES_MAX) })
                         }}
                         inputProps={{ min: NODES_MIN, max: NODES_MAX, step: 1000 }}
                         sx={numberSx}

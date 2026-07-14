@@ -2,6 +2,7 @@ import { Box, Typography } from '@mui/material'
 import { Infinity as InfinityIcon } from 'lucide-react'
 import { type Variant, VARIANT_LABEL } from '../lib/variants'
 import { ratingLabel, UNLOSABLE_RATING } from '../lib/botSettings'
+import NewBadge from './NewBadge'
 
 /** Left-side game-mode card. Untimed, casual play vs the engine; the headline
  * reflects the chosen variant (Standard → "Casual", otherwise the variant name). */
@@ -70,7 +71,10 @@ export default function GameModeCard({
                 >
                     Opponent
                 </Typography>
-                <Typography sx={{ fontWeight: 600, fontSize: 16 }}>gomachine</Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                    <Typography sx={{ fontWeight: 600, fontSize: 16 }}>Zugzwang</Typography>
+                    <NewBadge />
+                </Box>
                 <Typography sx={{ color: 'var(--text-dim)', fontSize: 13.5 }}>
                     Engine · {ratingLabel(rating)}
                 </Typography>

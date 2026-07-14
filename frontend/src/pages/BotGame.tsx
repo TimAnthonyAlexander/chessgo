@@ -27,6 +27,7 @@ import Board from '../components/Board'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveList from '../components/MoveList'
 import GameModeCard from '../components/GameModeCard'
+import NewBadge from '../components/NewBadge'
 import BoardPage from '../components/BoardPage'
 import { ActionBtn, Avatar, ErrorBanner, NavBtn } from '../components/PanelUI'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -440,7 +441,13 @@ export default function BotGame() {
 
     // Arrow keys scrub the move history (client-side review only; the live game is
     // untouched). Enabled once a game exists.
-    useMoveNavKeys({ onPrev: goPrev, onNext: goNext, onFirst: goFirst, onLast: goLast, enabled: !!game })
+    useMoveNavKeys({
+        onPrev: goPrev,
+        onNext: goNext,
+        onFirst: goFirst,
+        onLast: goLast,
+        enabled: !!game,
+    })
 
     const resultScore = resigned ? (humanColor === 'w' ? '0-1' : '1-0') : (game?.result ?? null)
     const caption = !atLive
@@ -479,7 +486,10 @@ export default function BotGame() {
                         />
                     )}
                     <Box sx={{ display: { xs: 'none', md: 'block' } }}>
-                        <GameModeCard rating={game?.rating ?? rating} variant={game?.variant ?? variant} />
+                        <GameModeCard
+                            rating={game?.rating ?? rating}
+                            variant={game?.variant ?? variant}
+                        />
                     </Box>
                 </>
             }
@@ -663,7 +673,11 @@ function MovePanel({
     // A linear tree of the game so far, so the engine-owned OpeningPanel can name
     // the opening (and show candidate lines) for the live position during play.
     const book = useMemo(
-        () => buildFromMoves(gameStartFen, game.moves.map((m) => m.uci)),
+        () =>
+            buildFromMoves(
+                gameStartFen,
+                game.moves.map((m) => m.uci),
+            ),
         [gameStartFen, game.moves],
     )
 
@@ -697,11 +711,18 @@ function MovePanel({
                     <Bot size={18} />
                 </Avatar>
                 <Box sx={{ minWidth: 0, lineHeight: 1.2 }}>
-                    <Typography
-                        sx={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 15.5 }}
-                    >
-                        gomachine
-                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                        <Typography
+                            sx={{
+                                fontFamily: 'var(--font-display)',
+                                fontWeight: 700,
+                                fontSize: 15.5,
+                            }}
+                        >
+                            Zugzwang
+                        </Typography>
+                        <NewBadge />
+                    </Box>
                     {/* Zen mode hides the rating chrome (distraction-free play). */}
                     {!zen && (
                         <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
@@ -837,18 +858,18 @@ function MovePanel({
 /** A player row's captured pieces (opponent's color, overlapped) + a signed "+N"
  * material-advantage badge. Mirrors the SpectateInfoCard readout so material reads
  * the same across the app. Renders nothing when there's nothing captured and no lead. */
-function MaterialStrip({
-    pieces,
-    color,
-    adv,
-}: {
-    pieces: string[]
-    color: Color
-    adv: number
-}) {
+function MaterialStrip({ pieces, color, adv }: { pieces: string[]; color: Color; adv: number }) {
     if (pieces.length === 0 && adv <= 0) return null
     return (
-        <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '1px', minWidth: 0 }}>
+        <Box
+            sx={{
+                display: 'flex',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '1px',
+                minWidth: 0,
+            }}
+        >
             {pieces.map((t, i) => (
                 <Box
                     key={i}
@@ -904,8 +925,8 @@ function Setup({
             : variant === 'duck'
               ? 'Play Duck Chess — capture the king; the duck blocks every square.'
               : customStart
-                ? 'Play the gomachine engine from this position.'
-                : 'Play the gomachine engine.'
+                ? 'Play the Zugzwang engine from this position.'
+                : 'Play the Zugzwang engine.'
     return (
         <Box
             sx={{

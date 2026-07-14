@@ -96,7 +96,7 @@ export function createBotGame(
 
 // --- Admin: engine vs engine (gomachine @ rating vs Stockfish @ Elo) ---
 
-export type EngineSide = 'gomachine' | 'stockfish'
+export type EngineSide = 'gomachine' | 'zugzwang' | 'stockfish'
 
 export interface EngineVsMove {
     bestmove: string | null
@@ -111,22 +111,25 @@ export interface EngineVsMove {
     reason?: string
 }
 
-/** Admin-only: play one ply of gomachine(rating) vs Stockfish(elo) and apply it.
+/** Admin-only: play one ply of gomachine/zugzwang(rating) vs Stockfish(elo) —
+ * or gomachine vs zugzwang — and apply it. Any engine may play either side.
  *
  * The search budget is pinned to EXACTLY ONE dimension per side — send only the
- * active one (leave the others undefined/0): gomachine takes movetime | nodes |
- * depth, Stockfish takes movetime | depth. `book` (gomachine only) consults the
- * opening book on the rating path. */
+ * active one (leave the others undefined/0): gomachine/zugzwang take movetime |
+ * nodes | depth, Stockfish takes movetime | depth. `book`/`aggr` (gomachine/
+ * zugzwang only) consult the opening book / set aggression on the rating path —
+ * zugzwang's `/bestmove` accepts them for forward-compat even though they're
+ * currently stubbed server-side. */
 export function engineVsMove(params: {
     fen: string
     side: EngineSide
     rating?: number
     elo?: number
     movetime?: number
-    nodes?: number // gomachine only: fixed-nodes budget
-    depth?: number // fixed-depth budget (both engines)
-    aggr?: number // gomachine aggression style 0..100 (50 = neutral); gomachine side only
-    book?: boolean // gomachine only: consult the opening book
+    nodes?: number // gomachine/zugzwang only: fixed-nodes budget
+    depth?: number // fixed-depth budget (any engine)
+    aggr?: number // gomachine/zugzwang aggression style 0..100 (50 = neutral)
+    book?: boolean // gomachine/zugzwang only: consult the opening book
 }): Promise<EngineVsMove> {
     return request<EngineVsMove>('/admin/engine-vs/move', {
         method: 'POST',
@@ -305,7 +308,13 @@ export interface DuckEval {
 export function duckEval(
     fen: string,
     duck: string,
-    opts?: { movetime?: number; rating?: number; depth?: number; nodes?: number; signal?: AbortSignal },
+    opts?: {
+        movetime?: number
+        rating?: number
+        depth?: number
+        nodes?: number
+        signal?: AbortSignal
+    },
 ): Promise<DuckEval> {
     const body: {
         fen: string
@@ -881,12 +890,7 @@ export function getAdminDashboard(): Promise<AdminDashboard> {
 // --- Admin users directory ---
 
 export type AdminUserSort =
-    | 'created_at'
-    | 'name'
-    | 'rating_bullet'
-    | 'rating_blitz'
-    | 'rating_rapid'
-    | 'rating_classical'
+    'created_at' | 'name' | 'rating_bullet' | 'rating_blitz' | 'rating_rapid' | 'rating_classical'
 export type AdminUserRole = 'user' | 'admin'
 export type AdminUserStatus = 'active' | 'banned'
 
