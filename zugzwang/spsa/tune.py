@@ -44,12 +44,13 @@ LOG_FILE = os.environ.get("SPSA_LOG", os.path.expanduser("~/spsa_zug.log"))
 # ---------------------------------------------------------------------------
 PARAMS = [
     # name              start min  max  c_end
-    ("RfpMargin",         80,  40, 130,   5),
+    # start = accepted-base value. FutBase (base 0) and CaptSeeCoeff (base 23) are EXCLUDED:
+    # their base values sit below the UCI option min (40) and the engine clamps setoption to
+    # [min,max], so SPSA could not test the true base for them. They stay pinned at base defaults.
+    ("RfpMargin",         75,  40, 130,   5),
     ("RazorMargin",      200, 100, 350,  12),
-    ("FutBase",          120,  40, 220,   9),
-    ("FutSlope",          90,  40, 150,   6),
+    ("FutSlope",         100,  40, 150,   6),
     ("SeeQuietCoeff",     25,  10,  45,   2),
-    ("CaptSeeCoeff",      90,  40, 180,   7),
     ("NmpEvalDiv",       200,  80, 400,  16),
     ("SingularMargin",    32,  16,  80,   3),
 ]
@@ -122,7 +123,7 @@ def run_batch(theta_plus, theta_minus, batch):
     cmd += engine_args("minus", theta_minus)
     cmd += ["-each", "st=0.1", "timemargin=1000", "option.Hash=64"]
     cmd += ["-openings", f"file={BOOK}", "format=epd", "order=random"]
-    cmd += ["-rounds", str(rounds), "-games", "2", "-repeat", "-concurrency", "6"]
+    cmd += ["-rounds", str(rounds), "-games", "2", "-repeat", "-concurrency", "8"]
 
     proc = subprocess.run(cmd, cwd=ZDIR, capture_output=True, text=True)
     output = proc.stdout + "\n" + proc.stderr
