@@ -98,6 +98,9 @@ struct Context {
         bool hindsight = true;  // #8:  priorReduction hindsight depth adjust (ON)
         bool ttCapR    = false; // #3a: +1 LMR reduction when ttMove is a capture (env TTCAPR=1)
         bool mcLinR    = false; // #3b: linear moveCount de-reduction (env MCLINR=1)
+        // ---- SF selectivity Wave 3 (move ordering) — default ON; env FLAG=0 disables ----
+        bool evalHist    = true;  // #12: eval-diff quiet-history bump
+        bool threatOrder = true;  // #10: threat-aware quiet move ordering
         // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
         // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
         // callers in uci.cpp for the option table incl. min/max).
@@ -149,6 +152,8 @@ struct Context {
             if (off("HINDSIGHT")) hindsight = false;
             if (on("TTCAPR")) ttCapR = true;
             if (on("MCLINR")) mcLinR = true;
+            if (off("EVALHIST")) evalHist = false;
+            if (off("THREATORDER")) threatOrder = false;
             if (on("GMCONST")) {
                 // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
                 // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
@@ -219,6 +224,7 @@ struct Stack {
     Move  excludedMove;
     int   cutoffCnt; // #6: count of beta-cutoffs seen at this node; read one ply up in LMR
     int   reduction; // #8: how much the move leading OUT of this node was LMR-reduced (SF ss->reduction)
+    bool  didCapture; // #12: was currentMove a capture? (read one ply down)
 };
 
 void build_reductions(Context& C) {
@@ -360,7 +366,8 @@ inline void cont_hist_planes(Context& C, const Stack* ss, int16_t*& ch1, int16_t
 // exactly once per quiet move and nothing else extra.
 template <bool WithContHist>
 void score_moves_impl(Context& C, const Position& pos, ExtMove* begin, ExtMove* end, Move ttMove,
-                       const Stack* ss, Move counter, const int16_t* ch1, const int16_t* ch2) {
+                       const Stack* ss, Move counter, const int16_t* ch1, const int16_t* ch2,
+                       U64 tPawn, U64 tMinor, U64 tRook) {
     Color us = pos.side_to_move();
     for (ExtMove* m = begin; m != end; ++m) {
         Move mv = m->move;
@@ -387,19 +394,30 @@ void score_moves_impl(Context& C, const Position& pos, ExtMove* begin, ExtMove* 
                 if (ch1) h += ch1[off];
                 if (ch2) h += ch2[off];
             }
+            if (tPawn | tMinor | tRook) {
+                PieceType pt = type_of(pos.moved_piece(mv));
+                U64 lesser = (pt == QUEEN) ? tRook
+                           : (pt == ROOK)  ? tMinor
+                           : (pt == KNIGHT || pt == BISHOP) ? tPawn : 0ULL;
+                if (lesser) {
+                    if (lesser & (1ULL << from_sq(mv))) h += PieceVal[pt] * 8; // escaping a lesser attacker
+                    if (lesser & (1ULL << to_sq(mv)))   h -= PieceVal[pt] * 8; // walking into one
+                }
+            }
             m->score = h;
         }
     }
 }
 
 inline void score_moves(Context& C, const Position& pos, ExtMove* begin, ExtMove* end, Move ttMove,
-                        const Stack* ss, Move counter) {
-    score_moves_impl<false>(C, pos, begin, end, ttMove, ss, counter, nullptr, nullptr);
+                        const Stack* ss, Move counter, U64 tPawn, U64 tMinor, U64 tRook) {
+    score_moves_impl<false>(C, pos, begin, end, ttMove, ss, counter, nullptr, nullptr, tPawn, tMinor, tRook);
 }
 
 inline void score_moves_cont(Context& C, const Position& pos, ExtMove* begin, ExtMove* end, Move ttMove,
-                             const Stack* ss, Move counter, const int16_t* ch1, const int16_t* ch2) {
-    score_moves_impl<true>(C, pos, begin, end, ttMove, ss, counter, ch1, ch2);
+                             const Stack* ss, Move counter, const int16_t* ch1, const int16_t* ch2,
+                             U64 tPawn, U64 tMinor, U64 tRook) {
+    score_moves_impl<true>(C, pos, begin, end, ttMove, ss, counter, ch1, ch2, tPawn, tMinor, tRook);
 }
 
 // Selection sort: move best remaining to front, return it
@@ -498,9 +516,9 @@ int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta) {
         int16_t* qsCh1 = nullptr;
         int16_t* qsCh2 = nullptr;
         cont_hist_planes(C, ss, qsCh1, qsCh2);
-        score_moves_cont(C, pos, list.begin(), list.end(), ttMove, ss, counter, qsCh1, qsCh2);
+        score_moves_cont(C, pos, list.begin(), list.end(), ttMove, ss, counter, qsCh1, qsCh2, 0, 0, 0);
     } else {
-        score_moves(C, pos, list.begin(), list.end(), ttMove, ss, counter);
+        score_moves(C, pos, list.begin(), list.end(), ttMove, ss, counter, 0, 0, 0);
     }
 
     ExtMove* cur = list.begin();
@@ -646,6 +664,18 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             depth--;
     }
 
+    // #12 (SF search.cpp:859): eval-diff quiet-history bump. A static-eval swing in
+    // the opponent's favor after a QUIET parent move retroactively credits that move
+    // for the opponent — a dense ordering signal that needs no search result. The
+    // parent move was played by ~stm, so bump that color's butterfly history.
+    if (C.tune.evalHist && !ss->inCheck
+        && (ss - 1)->currentMove != MOVE_NONE && (ss - 1)->currentMove != MOVE_NULL
+        && !(ss - 1)->didCapture && !(ss - 1)->inCheck
+        && ss->staticEval != VALUE_NONE && (ss - 1)->staticEval != VALUE_NONE) {
+        int evalBonus = std::max(-209, std::min(167, -((ss - 1)->staticEval + ss->staticEval))) + 59;
+        update_history(C, ~pos.side_to_move(), (ss - 1)->currentMove, evalBonus);
+    }
+
     // ---- Pruning (non-PV, not in check) ----
     if (!PvNode && !ss->inCheck && !excluded) {
         // Reverse futility pruning
@@ -667,6 +697,7 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             int R = 3 + depth / 4 + std::min((eval - beta) / C.tune.nmpEvalDiv, 3);
             StateInfo st;
             ss->currentMove = MOVE_NULL;
+            ss->didCapture = false;
             pos.do_null_move(st);
             int nullScore = -negamax<false>(C, pos, ss + 1, -beta, -beta + 1, depth - R, !cutNode);
             pos.undo_null_move();
@@ -704,6 +735,23 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
     MoveList list;
     generate<ALL>(pos, list);
     Color us = pos.side_to_move();
+    // #10: cumulative enemy-attack bitboards (pawns; +knights/bishops; +rooks),
+    // used to reward quiets escaping a lesser attacker and penalize entering one.
+    U64 threatByPawn = 0, threatByMinor = 0, threatByRook = 0;
+    if (C.tune.threatOrder) {
+        Color them = ~us;
+        U64 occ = pos.pieces();
+        U64 bb = pos.pieces(them, PAWN);
+        while (bb) threatByPawn |= pawn_attacks(them, pop_lsb(bb));
+        threatByMinor = threatByPawn;
+        bb = pos.pieces(them, KNIGHT);
+        while (bb) threatByMinor |= KnightAttacks[pop_lsb(bb)];
+        bb = pos.pieces(them, BISHOP);
+        while (bb) threatByMinor |= bishop_attacks(pop_lsb(bb), occ);
+        threatByRook = threatByMinor;
+        bb = pos.pieces(them, ROOK);
+        while (bb) threatByRook |= rook_attacks(pop_lsb(bb), occ);
+    }
     Move counter = (ss - 1)->currentMove ? C.counterMoves[pos.piece_on(to_sq((ss - 1)->currentMove))][to_sq((ss - 1)->currentMove)] : MOVE_NONE;
     // Continuation-history plane pointers are constant for every move at this
     // node (they key off the ply-1/ply-2 ancestor, not the candidate move), so
@@ -713,9 +761,11 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
     int16_t* ch2 = nullptr;
     if (C.tune.contHist) {
         cont_hist_planes(C, ss, ch1, ch2);
-        score_moves_cont(C, pos, list.begin(), list.end(), ttMove, ss, counter, ch1, ch2);
+        score_moves_cont(C, pos, list.begin(), list.end(), ttMove, ss, counter, ch1, ch2,
+                          threatByPawn, threatByMinor, threatByRook);
     } else {
-        score_moves(C, pos, list.begin(), list.end(), ttMove, ss, counter);
+        score_moves(C, pos, list.begin(), list.end(), ttMove, ss, counter,
+                    threatByPawn, threatByMinor, threatByRook);
     }
 
     ExtMove* cur = list.begin();
@@ -814,6 +864,7 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         int newDepth = depth - 1 + extension;
         ss->currentMove = m;
         ss->currentPiece = mover;
+        ss->didCapture = isCapture;
 
         pos.do_move(m, st);
         C.tt.prefetch(pos.key());
