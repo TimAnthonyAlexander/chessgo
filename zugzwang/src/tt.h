@@ -10,10 +10,11 @@ struct TTEntry {
     int16_t  value;   // score
     int16_t  eval;    // static eval
     uint8_t  depth;   // search depth
-    uint8_t  genBound;// generation (6 bits) + bound (2 bits)
+    uint8_t  genBound;// generation (5 bits) + isPv (1 bit) + bound (2 bits)
 
     Bound bound() const { return Bound(genBound & 3); }
-    uint8_t gen() const { return genBound & ~3; }
+    bool  is_pv() const { return genBound & 4; }        // #5 ttPv: "this entry was on a PV"
+    uint8_t gen() const { return genBound & 0xF8; }     // top 5 bits (bit2 is pv, bits0-1 bound)
 };
 
 class TranspositionTable {
@@ -21,7 +22,7 @@ public:
     ~TranspositionTable();
     void resize(size_t mb);
     void clear();
-    void new_search() { generation += 4; }
+    void new_search() { generation += 8; } // +8: gen occupies the top 5 bits (bit2=pv, bits0-1=bound)
     uint8_t gen() const { return generation; }
 
     TTEntry* probe(U64 key, bool& found) const;

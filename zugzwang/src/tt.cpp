@@ -50,8 +50,8 @@ TTEntry* TranspositionTable::probe(U64 key, bool& found) const {
     // Find entry to replace: lowest (depth - relative age)
     TTEntry* replace = &c.entry[0];
     for (int i = 1; i < ClusterSize; ++i) {
-        int rDepth = replace->depth - ((generation - replace->gen()) & 0xFC);
-        int eDepth = c.entry[i].depth - ((generation - c.entry[i].gen()) & 0xFC);
+        int rDepth = replace->depth - ((generation - replace->gen()) & 0xF8);
+        int eDepth = c.entry[i].depth - ((generation - c.entry[i].gen()) & 0xF8);
         if (rDepth > eDepth) replace = &c.entry[i];
     }
     found = false;
@@ -70,7 +70,7 @@ void TranspositionTable::store(TTEntry* tte, U64 key, int value, bool pv, Bound 
         tte->value = (int16_t)value;
         tte->eval = (int16_t)eval;
         tte->depth = (uint8_t)depth;
-        tte->genBound = (uint8_t)(generation | b); // generation (upper bits) + bound (low 2)
+        tte->genBound = (uint8_t)(generation | (pv ? 4 : 0) | b); // gen(top5) | pv(bit2) | bound(low2)
     }
 }
 

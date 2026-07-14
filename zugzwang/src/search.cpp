@@ -98,9 +98,13 @@ struct Context {
         bool hindsight = true;  // #8:  priorReduction hindsight depth adjust (ON)
         bool ttCapR    = false; // #3a: +1 LMR reduction when ttMove is a capture (env TTCAPR=1)
         bool mcLinR    = false; // #3b: linear moveCount de-reduction (env MCLINR=1)
-        // ---- SF selectivity Wave 3 (move ordering) — default ON; env FLAG=0 disables ----
-        bool evalHist    = true;  // #12: eval-diff quiet-history bump
-        bool threatOrder = true;  // #10: threat-aware quiet move ordering
+        // ---- SF selectivity Wave 3 (move ordering) — MT+FN wash (ordering saturated in zug),
+        // dropped to default-OFF, env-kept for a future fixed-nodes re-eval ----
+        bool evalHist    = false; // #12: eval-diff quiet-history bump (env EVALHIST=1)
+        bool threatOrder = false; // #10: threat-aware quiet move ordering (env THREATORDER=1)
+        // ---- SF selectivity Wave 4 — ttPv (#5): former-PV bit persisted in the TT,
+        // gates RFP + de-reduces LMR on tactically-live nodes. Default ON; env TTPV=0. ----
+        bool ttPvOn      = true;
         // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
         // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
         // callers in uci.cpp for the option table incl. min/max).
@@ -152,8 +156,9 @@ struct Context {
             if (off("HINDSIGHT")) hindsight = false;
             if (on("TTCAPR")) ttCapR = true;
             if (on("MCLINR")) mcLinR = true;
-            if (off("EVALHIST")) evalHist = false;
-            if (off("THREATORDER")) threatOrder = false;
+            if (on("EVALHIST")) evalHist = true;
+            if (on("THREATORDER")) threatOrder = true;
+            if (off("TTPV")) ttPvOn = false;
             if (on("GMCONST")) {
                 // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
                 // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
@@ -225,6 +230,7 @@ struct Stack {
     int   cutoffCnt; // #6: count of beta-cutoffs seen at this node; read one ply up in LMR
     int   reduction; // #8: how much the move leading OUT of this node was LMR-reduced (SF ss->reduction)
     bool  didCapture; // #12: was currentMove a capture? (read one ply down)
+    bool  ttPv;       // #5: this node is (or descends from) a PV — gates RFP, de-reduces LMR
 };
 
 void build_reductions(Context& C) {
@@ -619,6 +625,9 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
     int ttValue = ttHit ? C.tt.value_from_tt(tte->value, ss->ply) : VALUE_NONE;
     Move ttMove = rootNode ? C.rootBestMove : (ttHit ? tte->move : MOVE_NONE);
     bool ttCapture = ttMove && pos.is_capture(ttMove);
+    // #5 ttPv: this node counts as "PV-descended" if it is a PvNode or the TT entry
+    // was flagged PV. Preserved (not recomputed) on singular-verification re-entry.
+    ss->ttPv = excluded ? ss->ttPv : (PvNode || (ttHit && tte->is_pv()));
 
     if (!PvNode && ttHit && !excluded && tte->depth >= depth && ttValue != VALUE_NONE) {
         Bound b = tte->bound();
@@ -680,7 +689,7 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
     if (!PvNode && !ss->inCheck && !excluded) {
         // Reverse futility pruning
         bool quietTT = ttMove != MOVE_NONE && !ttCapture;   // ttCapture computed above at the TT probe
-        if (depth <= 8 && !(C.tune.rfpSoft && quietTT)
+        if (depth <= 8 && !(C.tune.rfpSoft && quietTT) && !(C.tune.ttPvOn && ss->ttPv)
             && eval - C.tune.rfpMargin * (depth - improving) >= beta && eval < VALUE_MATE_IN_MAX_PLY)
             return C.tune.rfpSoft ? (2 * beta + eval) / 3 : eval;
 
@@ -888,6 +897,9 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             if (C.tune.ttCapR && ttCapture) r++;                 // #3a (SF): ttMove-is-capture reduction
             if (C.tune.mcLinR) r -= moveCount * 73 / 1024;       // #3b (SF): linear moveCount de-reduction
             if (givesCheck) r--;
+            // #5 ttPv (SF): a former-PV node is tactically live — search its late
+            // moves a little more carefully (reduce one ply less).
+            if (C.tune.ttPvOn && ss->ttPv) r--;
             // #6 (SF): a child that fails high a lot means siblings here are unlikely
             // to matter — reduce them harder.
             if (C.tune.cutoffCnt && (ss + 1)->cutoffCnt > 3) r++;
@@ -997,10 +1009,16 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         }
     }
 
+    // #5 ttPv: a node that fails low keeps its PV bit if its parent was on a PV —
+    // SF propagates the "was live" mark forward so pruning stays cautious there.
+    if (C.tune.ttPvOn && !excluded && bestValue <= alpha && ss->ply > 0)
+        ss->ttPv = ss->ttPv || (ss - 1)->ttPv;
+
     if (!excluded) {
         Bound b = bestValue >= beta ? BOUND_LOWER
                 : (PvNode && bestMove) ? BOUND_EXACT : BOUND_UPPER;
-        C.tt.store(tte, pos.key(), C.tt.value_to_tt(bestValue, ss->ply), PvNode, b, depth,
+        C.tt.store(tte, pos.key(), C.tt.value_to_tt(bestValue, ss->ply),
+                   C.tune.ttPvOn ? ss->ttPv : PvNode, b, depth,
                    bestMove, ss->inCheck ? VALUE_NONE : rawEval);
 
         // Correction history update (§CorrHist, negamax only — never qsearch).
