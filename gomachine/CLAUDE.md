@@ -1,0 +1,350 @@
+# CLAUDE.md — chessgo
+
+A **production-ready chess website** + a **strong NNUE Go chess engine** (`gomachine`):
+play chess **vs other humans** (live matchmaking with clocks) and **vs the AI**,
+with all chess rules + the AI implemented in a dedicated Go engine.
+**Strength (state cleanly, never a point rating):** materially **above 3400** — v6's 100W–0L vs a
+~3400 engine (2026-07-01) is the hard floor, and it has shipped hundreds of Elo since with no
+re-anchor (v9 threats, v12 Leela/test80 data, the +23.3 search stack, king-bucket mirror, SF
+full-threats, …) — and **~150–200 Elo (closer to 150) below full-strength Stockfish at equal
+movetime**; warm gomachine already **beats cold Stockfish** (fresh process / empty hash per move).
+The old "beats full-force SF at time-odds / equal-TC" tell is **retracted** (ENGINE_STRENGTH §27.5 —
+it drove SF as a cold process, ~235 Elo of handicap). **Do NOT quote 3400 / 3700 / ~3900 / ≈3500 or
+any point as current strength, and do not hedge with "contested / reads span X–Y"** — the honest line
+is the two bounds above. Prod (2026-07-11) runs the **SF full-threats net** (`chessgo_threats_sf_640`),
+**+10 Elo over the previous efs28 net**.
+See §Status. The engine is the centerpiece; the website is the front door to it.
+
+> Read `docs/SPEC.md` for the full design and `docs/COMMANDS.md` to run/deploy.
+> This file is the fast orientation.
+
+## Components (4 services + MySQL)
+
+| Service | Tech | Port | Role |
+|---|---|---|---|
+| BaseAPI | PHP 8.4 (`base-api` / `mason`) | 6464 | REST: auth (session cookies), bot games, `/analyze`, `/ws-ticket`, `/stats`, game persistence + Elo (`/internal/games`) |
+| Frontend | React + Vite + TS + MUI + Bun | 6465 | lobby, `/bot`, live game `/game/:id`, signup/login + user menu |
+| gomachine **engine** | Go | 6466 | internal HTTP: rules + AI, pure `(FEN, limit) → result` |
+| gomachine **hub** | Go | 6467 | WebSocket: matchmaking + live games + clocks + **bot backfill**; `GET /stats`; persists results to BaseAPI |
+| MySQL | — | 3306 | durable data (always running; chessgo never manages it) |
+
+**The engine and hub are the same Go binary** (`gomachine`) with subcommands
+`serve` and `hub`. The hub imports `internal/chess` directly — no rules
+duplication, no HTTP hop. Engine is internal (PHP calls it); hub is client-facing
+(browser WebSocket, proxied as `wss://…/ws` in prod).
+
+## Where things live
+
+- `app/` — BaseAPI PHP. Models (`User` w/ per-category ratings, `BotGame`,
+  `Game`), Services (`GomachineClient`, `BotGameService`, `WsTicketService`,
+  `HubClient`, `Glicko2Service`), Controllers (`BotGame`, `BotMove`, `Analyze`,
+  `WsTicket`, `Stats`, `GameResult`, plus auth `Login`/`Signup`/`Logout`/`Me`),
+  `Providers/AppServiceProvider` (DI). Routes in `routes/api.php`.
+- `gomachine/internal/chess` — the rules core (bitboards/magic, FEN, Zobrist,
+  movegen, make/unmake, SAN, draw rules, perft). **Single source of truth for chess.**
+- `gomachine/internal/{eval,search,engine}` — PeSTO eval, αβ search, level mapping.
+- `gomachine/internal/{hub,auth}` — realtime hub (`hub.go` matchmaking/clocks/
+  persistence, `bot.go` bot backfill) + HMAC ticket verify (`auth.Identity` carries
+  per-category `Ratings`).
+- `gomachine/cmd/gomachine` — CLI dispatch; `hub.go` wires bot flags + posts
+  finished games to BaseAPI.
+- `frontend/src/{pages,components,lib,api}` — `lib/socket.ts` is the WS store
+  (singleton, `useSyncExternalStore`); `lib/auth.ts` is the session/user store;
+  `lib/sounds.ts` is the Web-Audio engine; `lib/chess.ts` is display-only board
+  helpers; `lib/useBoardInteraction.ts` is the board-interaction controller (the
+  local player's move lifecycle — optimistic overlay + sound + submit + **premove**
+  queue — behind a `BoardControl` contract, so live/bot wire it once, not per page);
+  `components/AuthDialog.tsx` is login/signup.
+
+## Run (dev)
+
+See `docs/COMMANDS.md` for the canonical commands (screens, prod, health checks).
+Quick version: `./mason serve --screen` (API), `gomachine serve` (engine),
+`WS_TICKET_SECRET=… gomachine hub` (hub), `cd frontend && bun run dev`. Open
+<http://127.0.0.1:6465>.
+
+## Build / test
+
+```sh
+cd gomachine && go build -o bin/gomachine ./cmd/gomachine && go test ./...   # Go
+cd gomachine && ./bin/gomachine perft -depth 5                                # movegen sanity
+cd gomachine && ./bin/gomachine bench sprt --new "" --old "lmr=off"           # strength SPRT (self-play FILTER, not the ship gate; docs/ENGINE_STRENGTH.md)
+cd gomachine && ./bin/gomachine bench abitur --config abitur.json             # EXTERNAL gauntlet = the real ship gate (time-odds ladder; docs/ABITUR.md)
+cd gomachine && ./bin/gomachine bench vs-stockfish --sf-elo 2500              # single-opponent absolute Elo anchor (noisy — a band, not a number)
+cd gomachine && ./bin/gomachine tune --epd quiet-labeled.epd --out internal/eval/tuned_tables.go   # Texel eval tuner (shipped, +101 Elo)
+cd frontend && bun run typecheck && bun run build                            # frontend
+php mason migrate:generate && php mason migrate:apply -y                     # DB schema
+```
+
+**SIMD builds (`GOEXPERIMENT=simd`) — toolchain split by arch:**
+- **amd64 / prod (lairner, coalla):** `GOEXPERIMENT=simd GOAMD64=v4 ~/go/bin/go1.26.4 build …` (AVX-512 kernels).
+- **arm64 / local M3:** must use **`go1.27rc1`** — `GOEXPERIMENT=simd ~/go/bin/go1.27rc1 build -o bin/gomachine ./cmd/gomachine` (and `… test ./internal/nnue/`). go1.26.4's arm64 `archsimd` is **incomplete** (missing `BroadcastFloat32x4`/`LoadFloat32x4` etc. → "undefined: archsimd.*" build errors). The plain `go build` (system go, no `GOEXPERIMENT`) compiles a scalar binary that's fine for logic but **not** for movetime/NPS work. No hand-written Go assembly is needed — `archsimd` provides the NEON/AVX intrinsics; you just need the toolchain that has the arm64 ops.
+
+## Conventions & gotchas (project-specific)
+
+- **Schema = models.** Change a BaseAPI model, then `migrate:generate` →
+  `migrate:apply -y`. **Never** hand-write SQL/DDL, never `--safe`. Table names
+  are **singular snake_case** (`BotGame` → `bot_game`).
+- **BaseAPI array-cast footgun:** an `array`-typed model property is decoded on
+  read but **NOT encoded on write** (it becomes the string `"Array"`). Store
+  JSON-shaped data in a `?string` TEXT column (`static $columns`) with explicit
+  `json_encode/decode` accessors. See `app/Models/BotGame.php`.
+- **Env reaches code via `config/app.php` + `App::config()`, NOT `$_ENV`.** Under
+  PHP-FPM (`variables_order` has no `E` + `App::boot()`'s static guard) `$_ENV` is
+  empty on a worker's 2nd+ request, so direct `$_ENV` reads silently fall back to
+  defaults in prod. Resolve env in `config/app.php` (the `gomachine` block) at
+  boot and read via `App::config('gomachine.*')`. Also: prod `.env` must be
+  readable by the FPM user (`640 tim:www-data`, never `600`), and after a
+  `.env`/`config` change **restart** php-fpm (reload won't re-read). See
+  `docs/COMMANDS.md` → Critical prod gotchas.
+- **Controllers** use HTTP-verb methods (`get`/`post`/…), `$this->validate([...])`
+  first, `JsonResponse` helpers, constructor DI. Always null-check `find()` with
+  `instanceof`.
+- **Engine owns rules.** PHP never re-implements chess — it calls the engine /
+  the hub uses `internal/chess`. Keep the engine HTTP boundary **stateless**
+  (FEN-in) so magic tables + TT stay warm.
+- **SPRT gates, Abitur decides — self-play SPRT is necessary but NOT sufficient.**
+  Self-play SPRT only measures strength **relative to your sparring partner** (the
+  previous gomachine), and chess strength is **non-transitive**: a change can be
+  +N in self-play yet WEAKER vs external engines (`B beats A`, `A beats SF`, `SF
+  beats B` is a consistent cycle). This is not hypothetical — the full-threats net
+  was **+10 self-play but LOST ground vs cold Stockfish** that efs28 beat ~90%
+  (`docs/open_tasks/fullthreats-vs-sf-regression.md`, ENGINE_STRENGTH §36). **So:
+  SPRT to filter cheaply, then Abitur (`gomachine bench abitur`, the multi-engine
+  external gauntlet, `docs/ABITUR.md`) as the SHIP GATE — especially for any NET or
+  eval change.** And **be smart with Abitur**: do NOT just play full-strength
+  Stockfish at equal TC and read the Elo off a 100L rail — *every* engine from 0 to
+  3400 Elo loses ~100/100 to a 3500 engine, so that estimate means nothing. Use the
+  **time-odds ladder**: give gomachine a movetime advantage to land in a scoreable
+  band (both nets in ~[15%,85%]), read the before/after there, then walk the odds
+  down toward parity to feel out the true gap. Triangulate across ≥2 opponents /
+  strengths, never a single anchor.
+- **Search-flag changes still SPRT first** (see `docs/ENGINE_STRENGTH.md`).
+  Implement behind a `search.Params`/`eval.Config` flag
+  (default off), then `gomachine bench sprt --new "flag=on" --old "flag=off"`; only
+  flip the default if it accepts H1 — **but confirm net/eval-level changes and
+  margin re-tunes with an Abitur pass before trusting them (above).** Search patches (SEE/delta/aspiration/RFP/LMP)
+  + **Lazy SMP** are shipped (~+250/+97 Elo), plus a later wave —
+  **corrhist/singular/futility** (+66.9/+22.2/+21.3 @ 40k nodes, `docs/ENGINE_STRENGTH.md
+  §13`; the cheap long tail — conthist/IIR/capthist/probcut/razor + lmr2-on-singular —
+  all SPRT'd flat/negative on our already-heavily-pruned baseline). **The Texel-tuned eval is ON by
+  default** (tuned PSQT + knowledge terms, `internal/eval/tuned_tables.go`):
+  +128 Elo @ fixed nodes, **+101 Elo @ 100ms/move**, SPRT-gated. This *replaced*
+  the old result: the earlier −148 Elo loss was a broken *method* (coordinate
+  descent on MSE, distilled CP target, frozen PSQT), not a verdict on HCE — the
+  rebuilt tuner (joint Adam on WDL, **tuning the PSQT itself**, quiet Lichess
+  positions; `internal/tune`) wins. Re-tune via `gomachine tune --epd <file>
+  --out internal/eval/tuned_tables.go`, then SPRT `--new "tuned=on"`. The lock-free TT (`tt.go`, Hyatt XOR) makes the
+  TT concurrency-safe; `threads=1` is byte-identical to serial — **run
+  `go test -race ./internal/search/` after touching the TT or the parallel driver.**
+- **`WS_TICKET_SECRET` must match** between BaseAPI (`.env`) and the hub's env, or
+  every WebSocket connection is rejected. It's **also** the shared secret the hub
+  sends as `X-Hub-Secret` when persisting games to `POST /internal/games`. The dev
+  commands derive it from `.env`.
+- **Hub→BaseAPI persistence:** on game end the hub fire-and-forgets a POST to
+  `BASEAPI_URL/internal/games` (off its goroutine). BaseAPI stores the `Game` and,
+  if rated, applies Elo. `HUB_URL` lets BaseAPI proxy the hub's `/stats` **and
+  `/games`** (the Watch lobby; BaseAPI route `GET /watch`).
+- **Watch / spectating:** read-only viewers connect with `?spectate=1` (the hub
+  skips player reattach + doesn't count them online) and send `watch`/`unwatch`;
+  the game fans `state`/`end` out to its `spectators` set. The Watch page **polls**
+  `GET /watch` (top-5 snapshot, hub-side sorted real-first-by-rating, capped at
+  `lobbyMax`) for previews; clicking opens a **separate** spectator socket
+  (`lib/spectate.ts`, not `lib/socket.ts`, so it never clobbers your own game).
+- **Watch fillers are JIT engine-vs-engine games** (`filler.go`): they pad the
+  lobby up to `-watch-target` (5) on a **dedicated** small engine pool (can't
+  starve human bot-fill), and **only while someone's watching** — the `GET /games`
+  poll stamps `lastWatchActivity` (`watchWindow` 12s). They're `filler=true`:
+  **never `onFinish`-persisted, never Elo'd** — `finish()` gates that on the
+  `filler` flag, NOT on `rated`. They're created with `rated:true` purely for
+  **display** (so the lobby looks like ranked play); the single `rated` field is
+  the source of truth both the `/games` summary and the `watching` payload read,
+  so overview + spectate stay consistent. Their bot-ness is **never sent to the
+  client** (no `bot` flag in `sideInfo`/the summary). In-flight fillers always
+  **finish naturally**; we only stop replenishing once watchers leave. They DO
+  count toward `activeGames` (so the homepage stat ticks up a few while watched).
+  Both filler sides are bots → `scheduleBotMove` reschedules from `applyBotMove`
+  (not just `move()`); each `player` carries its own `level`. **~80% of fillers
+  are seeded from a realistic midgame** (the rest from the opening): at hub
+  startup `cmd/gomachine/hub.go` fetches a pool of puzzle FENs from BaseAPI's
+  hub-secret-gated `GET /internal/filler-fens?theme=pin` (`FillerFensController`)
+  and hands it to the hub via `SetFillerFENs` (delivered to the Run goroutine over
+  `fillerFensCh`); `pickFillerStart` chooses per game, validating the FEN and
+  falling back to `StartFEN` on any miss — so an empty/unreachable pool degrades to
+  opening-only. We seed from the puzzle's **raw `fen`** (a balanced position, per
+  Lichess convention `fen` is *before* the setup blunder), **not** after `moves[0]`
+  — the theme just selects believable middlegames, it doesn't put a motif on the
+  board. `scheduleBotMove` keys off `pos.SideToMove()`, so a Black-to-move seed
+  works (White no longer always moves first).
+- **Session-cookie auth:** the SPA sends `credentials: 'include'`; CORS must
+  echo the origin + allow credentials (`CORS_ALLOWLIST` includes `:6465`).
+  `/ws-ticket` runs `SessionStartMiddleware` and resolves the user from the
+  session (optional auth — anonymous still gets a casual ticket).
+- **Web Audio needs a user gesture:** the `AudioContext` starts *suspended* and
+  only resumes inside a gesture handler. Play the local player's own move
+  **synchronously in the click handler** (not from an async socket/state effect),
+  and `lib/sounds.ts` installs a one-time `pointerdown`/`keydown` unlock. Safari
+  is strictest here. `useBoardInteraction` already plays the move sound
+  synchronously in its `onMove` — route player moves through it, don't re-add sound.
+- **Premoves are client-side only** (`useBoardInteraction`): a move made while
+  it's not your turn is queued (not sent), shown with the `.premove` highlight, and
+  **survives the opponent's reply**; when it becomes your turn the controller plays
+  it if it matches a move in the new `legalMoves` (ignoring the promo piece —
+  auto-queen), else discards it. No hub/protocol change — it's sent as a normal
+  `move` once legal. Board input during the opponent's turn is gated by
+  `premoveColor` (the player's own color) + `premoveTargets` (pseudo-legal dots).
+- **After Go changes**, rebuild the binary and **restart the engine + hub
+  screens** (no hot reload). The frontend has Vite HMR; PHP re-reads code per
+  request — but **`.env` is read at boot, so restart `chessgo-api` after `.env` edits**.
+- **Frontend TS is strict** (`noUnusedLocals/Parameters`); run `bun run typecheck`
+  before claiming done. Pieces are real cburnett SVGs in `public/piece/cburnett/`.
+
+## Correctness invariants (don't break)
+
+- Zobrist key includes castling rights + **legal** en-passant (FIDE 9.2.3);
+  normalize ep to "capturable" before hashing.
+- **Threefold & fifty-move are claimable; fivefold & seventy-five-move are
+  automatic.** The timeout K+N+N case is a **win on time** (separate "any legal
+  series mates" test — `Position.CanAnyoneMate`).
+- Movegen is guarded by **perft** against 6 known positions — keep it green.
+- The hub mutates all shared state on **one goroutine** (no locks); connections
+  talk to it via channels. A slow client must never block the hub (per-client
+  send channel + writer goroutine). **Bot move search runs off the goroutine**
+  (engine pool) and is applied back via the `botMoves` channel.
+- **Clocks start Lichess-style:** neither side's clock runs until it has made its
+  first move — i.e. the clock is live only once 2 plies are played
+  (`game.clocksRunning()`); both opening moves are untimed. A stalled first move
+  is handled by a **30s abort** (`firstMoveTimeout`), not the clock.
+- **`finish()` snapshots both clocks BEFORE setting `over=true`** — `remainingMs`
+  stops deducting once `over`, so reading after would report the flagged side's
+  pre-flag time instead of 0.
+
+## Status / next
+
+Built and tested: engine, bot games, lobby, **live human-vs-human play**
+(**rating-proximity matchmaking** — a wait-widening rating bracket, 100→400 cap, so
+mismatched players never pair; server clocks, reconnect/resume), **bot backfill**
+(a fill-in bot after a 15s wait, **rating-matched to the human** — displayed rating
+±120 of the user, engine level derived via `levelForRating`; human-like pacing —
+`-bots`/`-bot-level`/`-bot-delay` flags), **accounts** (signup/login via session cookies),
+**per-time-control Glicko-2** (bullet/blitz/rapid/classical; rating + RD +
+volatility, start 1500/RD 350, RD-scaled steps, provisional while RD>110,
+inactivity RD regrowth; see `docs/ELO_SYSTEM.md`), and
+**game persistence** (hub → `POST /internal/games`). Rated when both are accounts;
+a logged-in human vs a fill-in bot is one-sided rated; explicit `/bot` games never
+hit the hub so they're unrated. **Resume is still in-memory** — survives tab
+close/refresh but not a hub restart. Also: **Puzzles** (`/puzzles`) — Lichess-
+seeded tactical trainer on an **isolated** `rating_puzzle` (never touches the
+time-control ratings); `puzzle`/`puzzle_theme`/`puzzle_attempt` models + the
+`scripts/import_puzzles.php` CSV importer; serving is rating-matched + de-duped
+with a theme filter, and the solution is validated server-side (never sent to the
+client). See SPEC.md §9. Also: **premoves** — a move made during the opponent's
+turn is queued by the shared `useBoardInteraction` controller, held across the
+reply, then played if legal in the new position (else discarded); client-side
+only, live + bot. Also: **engine strength push** (`docs/ENGINE_STRENGTH.md`)
+— a native in-process self-play **SPRT** harness (`gomachine bench`) drove five
+SPRT-gated search improvements (SEE, delta/aspiration/reverse-futility/late-move
+pruning; ~+250 Elo) and **Lazy SMP** (lock-free TT; ~+97 Elo), then the
+**Texel-tuned eval** (`gomachine tune`: joint Adam on WDL-labelled quiet Lichess
+positions, tuning the PSQT itself via coefficient tracing; **+101 Elo @ movetime**,
+SPRT-gated), then **5-piece Syzygy tablebases** (CGo + Fathom, root DTZ probe, `tb`
+flag; **+18.8 Elo @ movetime**, SPRT-accepted, zero lost pairs) — reaching **≈2782**
+on the Stockfish-2500 anchor (83.5%, up from ~2600). The old −148 Elo eval was a
+broken method (coordinate-descent MSE on a frozen PSQT), not HCE itself.
+**Syzygy auto-loads in prod** from `gomachine/data/syzygy/` (in-repo, gitignored,
+next to `data/book.bin`; `serve`+`hub` discover it cwd-relative with no env/flag/
+deploy change — `SYZYGY_PATH` overrides). Default-on but inert until a tablebase is
+attached; full-strength bot moves + `/analyze` probe it, weakened bots stay at
+their level. See `docs/SYZYGY_PLAN.md` for the download command, the
+*legal-positions-only* Fathom gotcha, and why the simple `tb_probe_root` (not
+`tb_probe_root_dtz`, whose rank shuffles a won KBN to a draw) is the right probe.
+**SMP is live in prod** (balanced 2-thread: `serve -workers 2 -search-threads 2`,
+`hub -bot-search-threads 2` in the systemd units; Syzygy already auto-loads).
+Then **NNUE replaced HCE as the default eval** (`docs/NNUE/PLAN.md`): a
+`(768→256)×2→1` SCReLU net trained with **bullet** on the M3 Pro's Metal GPU over
+~40 GB of Stockfish data, made movetime-viable by an incremental int16 accumulator
+— **+212 Elo @ movetime** over HCE (v4), shipped default-on. Then **v6 (512-wide) +
+`archsimd` AVX2/NEON SIMD** (bit-exact kernels; 6.5×/4.16× eval): **+124 @ fixed
+nodes / +101 @ movetime** over v4, **live in prod** (lairner = amd64, Go 1.26.4
+`GOEXPERIMENT=simd GOAMD64=v4`; the SIMD build ships with the net — a net on a
+scalar build is a movetime wash). Then a **search-feature wave** (`docs/ENGINE_STRENGTH.md
+§13`) shipped **corrhist + singular + futility** (+66.9/+22.2/+21.3 @ 40k nodes; owes a
+movetime re-anchor) and rejected the cheap long tail (conthist/IIR/capthist/probcut/razor
+flat-or-negative; lmr2-on-singular −67 anti-synergy) — the cheap-search-patch well is now
+mostly dry on this baseline. **Current strength (state cleanly, never a point rating):** gomachine is
+**materially above 3400** (v6's 100W–0L vs a ~3400 engine is the hard floor, upper bound unmeasured)
+and sits **~150–200 Elo (closer to 150) below full-strength Stockfish at equal movetime**. Warm
+gomachine already **beats cold Stockfish** (fresh process / empty hash every move) at the same
+movetime. The current net is **+10 Elo over the previous efs28 net** (FN +11 / MT +9 @100ms).
+**Do NOT quote 3400, 3700, ≈3500, or any point as current strength** (that's the stale-docs trap), and
+do not hedge with "contested / our reads span X–Y". What we can honestly say:
+- **Last real CCRL-style anchor:** v6, ENGINE_STRENGTH.md §20 — **100W–0L vs a ~3400 engine** (a blowout,
+  so an *underestimate* even for v6). The engine has shipped hundreds of Elo since with no re-anchor,
+  so today's binary is materially above that floor.
+- **Shipped since v6, unmeasured:** v9 threats, v12 Leela/test80 data (+24 movetime), the
+  +23.3 search stack, corrhist/singular/futility, nmpgate/qsfut, recompiled book,
+  **king-bucket horizontal mirror (§31)**, **32-key Finny refresh cache (Stormphrax pattern)**
+  — hundreds of Elo, zero re-anchors.
+- **Empirical tell (§27) — ⚠️ RETRACTED (§27.5, 2026-07-08):** the "beats full-force SF at ~2×
+  time-odds / sometimes at equal TC / ~70-Elo blitz gap" claim came from the admin frontend
+  Engine-vs-Engine view, which drives Stockfish via `handleStockfishMove` — a **fresh SF process
+  every move** (empty hash, no move history, cold), worth **~235 Elo** of handicap. Controlled
+  bench (coalla, 100/100, full-strength SF, 60 games, `--sf-cold` flag): **warm SF → W0 D15 L45
+  (12.5%, ≈ −335 Elo); cold SF → W4 D35 L21 (35.8%)**. The frontend Engine-vs-Engine view is
+  **retired as a strength signal**; use `bench vs-stockfish` (warm, default). This does not touch
+  the v6 CCRL floor — it just deletes "beats full-force SF at blitz" as evidence.
+- **Warm-SF gap:** at equal movetime gomachine is **~150–200 Elo (closer to 150) below full-strength
+  Stockfish**, and already **beats cold SF** (fresh process / empty hash per move). Report this as a
+  relative gap — do **NOT** map it to a point Elo for SF (that anchors us to SF's long-TC/many-thread
+  rating, not its 100ms strength).
+- **Conclusion:** strength is **materially above the ~3400 v6 floor, upper bound unmeasured**, and
+  **~150–200 Elo below full-strength SF at equal movetime**. Publish it that way — never a point
+  number. This **supersedes** the earlier ≈3260 "dirty" read (§15) and the one-sided **≈3200** artifact.
+
+**★ DATA RETRAIN SHIPPED (2026-07-09): efs28 + 640-sb → +19 movetime.** The mirror-KB arch retrained
+on the FIXED data pipeline (early-fen-skipping `ply≥16→28` = SF's master-net cutoff PR #4314, +
+superbatches `320→640`; WDL kept `ConstantWDL 0.6` after the Leela-grade-eval debate) beats the prod
+kb-mirror net by **+18.8 ± 13.8 Elo @ 100ms** (443 pairs, LLR +1.64, CI lb +5.0). Net
+`chessgo_efs28_wdl06_640` (md5 92294de3) shipped as prod `data/nnue/kb-mirror.bin` (file-swap ship) —
+**now itself superseded by the full-threats net below (2026-07-11).**
+See `ENGINE_STRENGTH.md §32`, `docs/open_tasks/retrain-efs28-wdlanneal.md`. The prior
+KB v2 horizontal mirror (+10 fixed / +4.5 movetime, §31; Finny 32-key cache load-bearing) was the
+retrained base.
+
+**★ FULL-THREATS NET SHIPPED (2026-07-11, lairner) → +10 over efs28, now prod default.** The current
+prod eval is the **Stockfish full-threats net `chessgo_threats_sf_640`** — it replaced efs28 as
+`data/nnue/kb-mirror.bin`, which is now the **~180 MB full-threats file** (was the 44 MB efs28). Arch:
+a **single** net — 512-wide FT, **16 king-buckets** (base 12,288) + **79,856 SF full-threats**, a
+pairwise tail **16→32**, NB=8, **int16 threat FT**, move-aware (NOT dual, NOT 1024-wide). It's a clean
+**+10 Elo** over efs28 (FN +11 / MT +9 @100ms) — modest **because it was coarse→rich, not off→rich**:
+the old coarse 9,216-input threat block already banked the load-bearing threat Elo. Forward arch plan
+(data → 32 king-buckets → dual net → threat-PSQT skip → 1024 width; **1024 is NOT cheap**; king-buckets
+are SHIPPED) lives in `docs/NNUE/SF_PARITY_ROADMAP.md`.
+
+> **⚠️ That +10 is SELF-PLAY ONLY, and it is under active dispute (2026-07-11).** Owner ground truth:
+> full-threats **draws/loses vs cold Stockfish that efs28 beat ~90%** — a real, self-play-invisible
+> regression vs external engines (the non-transitivity trap this net is the poster child for). Profiling
+> **ruled out speed** (NPS flat, `docs/PROFILING/{amd,arm}/11Jul2026.md`) **and deployment quantization**
+> (int8 tail vs float ≤31 cp), AND the once-suspected **Go↔Rust threat-feature inference mismatch**
+> (`threats_sf.go:175`) is **RULED OUT — the Go threats are proven bit-exact vs the Rust trainer (×2)**;
+> the remaining live causes are H2/H3 (eval-noise reshaping the tree / self-play being the wrong gate),
+> NOT a threat bug. See `docs/open_tasks/fullthreats-vs-sf-regression.md`, ENGINE_STRENGTH §36. **Do NOT
+> quote the +10 as a strength gain until Abitur clears it.**
+
+**BUT search is NOT dry — the "dry well" call was retracted same day.** Re-tuning the SEE/singular/
+null-move margins **SHIPPED +38.7 ± 5.5 Elo movetime** (`singulardepth 8→6, seequietmargin 150→103,
+captseemaxdepth 6→4, nullr 4→3`; 640 pairs, lb +33.2) — because the OLD defaults were **stale**
+(tuned pre-v12/mirror; the engine grew past its own hand-set constants). The cheap Stormphrax on/off flags
+*did* wash at movetime (combo −1.7, aspinitdelta −15.5, rfpsoft/nodetm ~wash — none shipped), but
+**defaults-re-tuning via SPSA is a LIVE lever**: a proper mirror-native SPSA (binary w/ `df51c9d`;
+`docs/open_tasks/spsa-margins.md`) is high-priority and likely finds more. Lesson: our hand-tuned
+constants go stale as the engine evolves — periodically re-SPSA them.
+
+Backlog (lower priority, after eval): the forward NNUE arch ladder (data → 32 king-buckets → dual net →
+threat-PSQT skip → **1024 width**) lives in `docs/NNUE/SF_PARITY_ROADMAP.md`. Width → **1024** is NOT "cheap"
+— a single-SCReLU→1 tail is int16-bound, ~1.7× node cost with no int8-tail relief; the only prior 1024 was a
+32-sb *stub*, never tested at maturity (see ARCH_DIRECTION §6 / ENGINE_STRENGTH §29.5); data-first is the safer
+next lever. Also: hub-restart-durable resume, puzzle generation
+pipeline, reworked-selective versions of the rejected search patches (PV-only IIR,
+scaled capthist, conthist that doesn't double-count history), **SPSA**,
+precise level↔Elo *calibration*, a true cross-pool ranked queue. See `docs/SPEC.md` §11 roadmap.
