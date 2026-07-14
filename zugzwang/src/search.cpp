@@ -564,6 +564,13 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
     if (C.tune.gmCheckExt && pos.in_check())
         depth++;
 
+    // A PvNode child re-searched with newDepth<=0 dispatches straight to qsearch,
+    // which never touches ss->pv/pvLen — so without resetting it here the parent
+    // would copy a STALE (now-illegal) pv line from a prior use of this stack slot
+    // into its own PV (the "Illegal PV move" fastchess warnings + glitched
+    // /candidates/analyze-game arrows). Search-neutral: pvLen feeds only PV
+    // reporting, never a pruning/ordering decision, so node counts are unchanged.
+    ss->pvLen = 0;
     if (depth <= 0) return qsearch(C, pos, ss, alpha, beta);
 
     if ((++C.nodeCount & 1023) == 0) check_time(C);
