@@ -640,6 +640,18 @@ void score_moves_impl(Context& C, const Position& pos, ExtMove* begin, ExtMove* 
                        const Stack* ss, Move counter, const int16_t* ch1, const int16_t* ch2,
                        U64 tPawn, U64 tMinor, U64 tRook) {
     Color us = pos.side_to_move();
+    // LOWPLYHIST hoist: ss->ply (hence the flag/ply gate, the C.lowPly[ss->ply]
+    // plane, and the 1+ss->ply divisor) is constant across every move scored at
+    // this node — score_moves_impl is one call per node. Do the gate + plane
+    // pointer + divisor ONCE here, not per move. lpPlane == nullptr <=> the
+    // per-move code below adds nothing, collapsing to the exact original
+    // condition `C.tune.lowPlyHist && ss->ply < 5`.
+    const int (*lpPlane)[64] = nullptr;
+    int lpDen = 0;
+    if (C.tune.lowPlyHist && ss->ply < 5) {
+        lpPlane = C.lowPly[ss->ply];
+        lpDen = 1 + ss->ply;
+    }
     for (ExtMove* m = begin; m != end; ++m) {
         Move mv = m->move;
         // Default: not cached. Overwritten below only for general quiets (the else
@@ -694,8 +706,24 @@ void score_moves_impl(Context& C, const Position& pos, ExtMove* begin, ExtMove* 
             // 8*table[ply][m.raw()]/(1+ply); zug's butterfly read is unweighted
             // (no outer /256-ish scale like SF's statScore), so we apply half of
             // SF's numerator (4, not 8) to land in a comparable magnitude band.
-            if (C.tune.lowPlyHist && ss->ply < 5)
-                h += 4 * C.lowPly[ss->ply][from_sq(mv)][to_sq(mv)] / (1 + ss->ply);
+            // Per-move cost is now just a hoisted-pointer read (lpPlane, set up
+            // once per node above) plus a switch on lpDen (also node-invariant —
+            // same case every iteration, so the branch predictor nails it after
+            // the first move and it never mispredicts within a node). Each case's
+            // divisor is a compile-time LITERAL, so the compiler emits a shift
+            // (1,2,4) or an exact magic-multiply (3,5) with correct C++
+            // truncating-toward-zero semantics for negative x — no runtime idiv,
+            // byte-identical to the original `4*x/(1+ss->ply)` for every x.
+            if (lpPlane) {
+                int x = lpPlane[from_sq(mv)][to_sq(mv)];
+                switch (lpDen) {
+                    case 1: h += 4 * x / 1; break;
+                    case 2: h += 4 * x / 2; break;
+                    case 3: h += 4 * x / 3; break;
+                    case 4: h += 4 * x / 4; break;
+                    case 5: h += 4 * x / 5; break;
+                }
+            }
             // PAWNORDHIST (SF PawnHistory): pawn-structure-keyed quiet ordering,
             // unweighted (matches zug's unweighted butterfly read).
             if (C.tune.pawnOrderHist)
