@@ -78,8 +78,22 @@ struct Context {
         // ---- Margin bundle 2 (SF_MARGINS.md #4/#5) — default OFF, SPRT independently ----
         bool nmpCutGate = false;    // NMP gate: cutNode && staticEval >= beta - 18*depth + 350
         bool lmrDepthPrune = false; // quiet futility + SEE-quiet pruning keyed on lmrDepth, not raw depth
-        bool lmrHistCache = false;  // reuse ordering-time butterfly+conthist for the LMR read (NOT
-                                    // byte-identical: LMR then reads ordering-time, not move-time, history)
+        // LMRHIST: reuse the ordering-time butterfly+conthist sum for the LMR reduction
+        // read instead of re-reading the tables at move-time. NOT byte-identical — LMR
+        // then sees ordering-time history, not history updated by the siblings already
+        // searched at this node. Default OFF: a movetime SPRT (coalla, 100ms, LMRHIST=1
+        // vs 0, 2026-07-15) measured it WORSE (~-16 Elo, rejecting). That confirms SF's
+        // design rationale for recomputing statScore fresh per move: sibling-updated
+        // ("fresh") history makes better reductions than ordering-time ("stale") history,
+        // and the hoped-for speed win doesn't exist (the LMR re-reads hit L1 — the
+        // ordering pass just warmed the planes — so local NPS is flat). Kept as a dormant
+        // opt-in, NOT deleted: this is worse for our CURRENT baseline (2-ply conthist,
+        // current tree). It warrants a RE-SPRT if that baseline changes in a way that
+        // shifts the freshness/read-cost tradeoff — e.g. going to more conthist plies like
+        // SF's 5 (heavier per-move reads may outweigh the freshness loss), or a relayout
+        // that makes the ordering-pass cold-read the dominant cost. See
+        // docs/tasks/open/conthist-fn-to-mt.md.
+        bool lmrHistCache = false;
         // ---- PARITY_GOMACHINE.md D.2/D.3 — Wave B, ACCEPTED, baked into defaults 2026-07-14 ----
         bool contHist = true; // D.2: continuation history (parent/grandparent-keyed quiet magnitude)
         bool doDeeper = true; // D.3: adaptive do-deeper/do-shallower LMR re-search depth
