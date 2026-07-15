@@ -15,6 +15,13 @@ struct StateInfo {
     // folded into `key` itself — perft/TT must be byte-unaffected by these.
     U64      pawnKey;               // XOR of Zobrist::psq[pc][sq] over pawns only
     U64      nonPawnKey[COLOR_NB];  // per-color XOR over that color's non-pawn pieces (incl. king)
+    // §CorrHist variants (CORRVARIANTS): XOR of Zobrist::psq[pc][sq] over KNIGHT
+    // + BISHOP of BOTH colors only (mirrors SF's minorPieceKey). Maintained
+    // ALWAYS (same lockstep discipline as pawnKey/nonPawnKey above) — a few
+    // extra XORs per move, never folded into `key`, so perft/TT/search node
+    // counts are unaffected regardless of the CORRVARIANTS flag; only the
+    // corrhist READ (gated on the flag) ever consults it.
+    U64      minorKey;
     int      castlingRights;
     Square   epSquare;
     int      rule50;
@@ -63,6 +70,7 @@ public:
     U64 key() const { return st->key; }
     U64 pawn_key() const { return st->pawnKey; }
     U64 non_pawn_key(Color c) const { return st->nonPawnKey[c]; }
+    U64 minor_key() const { return st->minorKey; }
     U64 checkers() const { return st->checkers; }
     U64 blockers_for_king(Color c) const { return st->blockersForKing[c]; }
     bool in_check() const { return st->checkers != 0; }

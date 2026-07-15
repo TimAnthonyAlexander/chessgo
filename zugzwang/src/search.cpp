@@ -43,6 +43,22 @@ constexpr int CORR_APPLY_SHIFT  = 131072;
 constexpr int CORR_NONPAWN_UPDATE_NUM = 178;
 constexpr int CORR_NONPAWN_UPDATE_DEN = 128;
 
+// ---- CorrHist variants (CORRVARIANTS, default OFF, env-gated) ----
+// Two extra SF18 corrhist terms, keyed/weighted to match SF exactly
+// (src/search.cpp correction_value/update_correction_history,
+// src/history.h minor_piece_correction_entry): minor-piece placement (KNIGHT+
+// BISHOP of both colors, Position::minor_key()) and own-side continuation
+// (own move 2 and 4 plies back, [piece][to]-keyed like zug's contHist1/2
+// planes). Gated end-to-end by Context::Tune::corrVariants — OFF reproduces
+// today's correction()/update_corrhist() exactly (dead code below the flag).
+constexpr int CORR_W_MINOR        = 8821;
+constexpr int CORR_W_CONT         = 7841;
+constexpr int CORR_MINOR_UP_NUM   = 156;
+constexpr int CORR_CONT_NEAR_NUM  = 127; // ss-2 tap
+constexpr int CORR_CONT_FAR_NUM   = 59;  // ss-4 tap
+constexpr int CORR_VARIANT_UP_DEN = 128;
+constexpr int CORR_CONT_FALLBACK  = 8;   // SF's cntcv when the ss-1 move isn't real
+
 // ---- Continuation history (PARITY_GOMACHINE.md D.2) sizing ----
 // Packed to a dense [12] piece range (W_PAWN..W_KING -> 0..5, B_PAWN..B_KING ->
 // 6..11) rather than raw Piece (0..15, with unused gaps) — halves each table.
@@ -66,6 +82,11 @@ struct Context {
     struct Tune {
         bool lmp = true, quietSee = true, futility = true, razor = true, nullMove = true, lmr = true;
         bool corrHist = true;
+        // CorrHist variants (2026-07-15): minor-piece + own-side continuation
+        // corrhist terms (SF18 micv/cntcv). Default OFF; env CORRVARIANTS=1.
+        // OFF must reproduce today's correction()/update_corrhist() exactly —
+        // no new terms read or written, byte-identical search node counts.
+        bool corrVariants = false;
         bool negExt = true;
         bool rfpSoft = true;
         bool iir = true;  // internal iterative reduction — env IIR=0 to disable (PARITY_GOMACHINE.md C.2)
@@ -189,6 +210,7 @@ struct Context {
             if (off("NULL")) nullMove = false;
             if (off("LMR")) lmr = false;
             if (off("CORRHIST")) corrHist = false;
+            if (on("CORRVARIANTS")) corrVariants = true;
             if (off("NEGEXT")) negExt = false;
             if (off("RFPSOFT")) rfpSoft = false;
             if (off("IIR")) iir = false;
@@ -260,6 +282,12 @@ struct Context {
     Move counterMoves[PIECE_NB][64] = {};
     int  corrHist[COLOR_NB][CORR_SIZE] = {};
     int  corrHistNP[COLOR_NB][COLOR_NB][CORR_SIZE] = {};
+    // CorrHist variants (CORRVARIANTS): minor-piece placement table, keyed
+    // like corrHist above but by Position::minor_key(); and an own-side
+    // continuation table keyed [piece][to] like zug's contHist1/2 planes
+    // below. Both read/written only when Tune::corrVariants is on.
+    int  corrHistMinor[COLOR_NB][CORR_SIZE] = {};
+    int  corrHistCont[CONT_PIECE_NB][SQUARE_NB] = {};
     int16_t contHist1[CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // parent (1-ply)
     int16_t contHist2[CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // grandparent (2-ply)
     // Capture history (SF CapturePieceToHistory): learned capture-ordering magnitude,
@@ -355,6 +383,8 @@ void reset_tables(Context& C) {
     std::memset(C.counterMoves, 0, sizeof(C.counterMoves));
     std::memset(C.corrHist, 0, sizeof(C.corrHist));
     std::memset(C.corrHistNP, 0, sizeof(C.corrHistNP));
+    std::memset(C.corrHistMinor, 0, sizeof(C.corrHistMinor));
+    std::memset(C.corrHistCont, 0, sizeof(C.corrHistCont));
     std::memset(C.contHist1, 0, sizeof(C.contHist1));
     std::memset(C.contHist2, 0, sizeof(C.contHist2));
     std::memset(C.captHist, 0, sizeof(C.captHist));
@@ -396,36 +426,65 @@ void ttmovehist_update(int& e, int bonus) {
     e += bonus - e * std::abs(bonus) / TTMOVEHIST_D;
 }
 
+// CORRVARIANTS: own-side continuation-corrhist term (SF's cntcv) — sum of
+// corrHistCont at ss-2 and ss-4 (two of MY OWN previous moves; ply parity
+// means ss-2/ss-4 share side-to-move with ss), keyed [piece][to] exactly
+// like zug's contHist1/contHist2 planes (cont_hist_planes above). Falls back
+// to CORR_CONT_FALLBACK, matching SF's cntcv fallback, when either tap isn't
+// a real move (near the root, or a null move sits within the last 4 plies).
+inline int corr_hist_cont_term(const Context& C, const Stack* ss) {
+    const Stack* p2 = ss - 2;
+    const Stack* p4 = ss - 4;
+    bool valid2 = ss->ply >= 2 && p2->currentMove != MOVE_NONE && p2->currentMove != MOVE_NULL;
+    bool valid4 = ss->ply >= 4 && p4->currentMove != MOVE_NONE && p4->currentMove != MOVE_NULL;
+    if (!valid2 || !valid4) return CORR_CONT_FALLBACK;
+    return C.corrHistCont[piece_dense(p2->currentPiece)][to_sq(p2->currentMove)]
+         + C.corrHistCont[piece_dense(p4->currentPiece)][to_sq(p4->currentMove)];
+}
+
 // Weighted, blended correction (centipawns, side-to-move-relative) — SF's
-// correction_value(), pawn + white-nonpawn + black-nonpawn terms only.
-int correction(const Context& C, const Position& pos) {
+// correction_value(): pawn + white-nonpawn + black-nonpawn always; minor-piece
+// + own-side continuation ADDITIONALLY when Tune::corrVariants is on (OFF is
+// byte-identical to the pre-CORRVARIANTS sum — no new table read at all).
+int correction(const Context& C, const Position& pos, const Stack* ss) {
     Color stm = pos.side_to_move();
     int pcv   = C.corrHist[stm][pos.pawn_key() & CORR_MASK];
     int wnpcv = C.corrHistNP[stm][WHITE][pos.non_pawn_key(WHITE) & CORR_MASK];
     int bnpcv = C.corrHistNP[stm][BLACK][pos.non_pawn_key(BLACK) & CORR_MASK];
     long long cv = (long long)CORR_W_PAWN * pcv + (long long)CORR_W_NONPAWN * (wnpcv + bnpcv);
+    if (C.tune.corrVariants) {
+        int mcv   = C.corrHistMinor[stm][pos.minor_key() & CORR_MASK];
+        int cntcv = corr_hist_cont_term(C, ss);
+        cv += (long long)CORR_W_MINOR * mcv + (long long)CORR_W_CONT * cntcv;
+    }
     return int(cv / CORR_APPLY_SHIFT);
 }
 
 // Raw (pre-shift) blended correction sum — unit-identical to SF's
-// correctionValue (same CORR_W_PAWN/CORR_W_NONPAWN weights, same CORR_APPLY_SHIFT
-// denominator SF calls CorrectionHistoryScale), used by CORRMARGIN as an
-// uncertainty discount fed directly into margins (SF search.cpp futility_margin
-// and the LMR reduction), rather than through correction()'s already-shifted cp.
-long long correction_raw(const Context& C, const Position& pos) {
+// correctionValue (same weights, same CORR_APPLY_SHIFT denominator SF calls
+// CorrectionHistoryScale), used by CORRMARGIN as an uncertainty discount fed
+// directly into margins (SF search.cpp futility_margin and the LMR
+// reduction), rather than through correction()'s already-shifted cp.
+long long correction_raw(const Context& C, const Position& pos, const Stack* ss) {
     Color stm = pos.side_to_move();
     int pcv   = C.corrHist[stm][pos.pawn_key() & CORR_MASK];
     int wnpcv = C.corrHistNP[stm][WHITE][pos.non_pawn_key(WHITE) & CORR_MASK];
     int bnpcv = C.corrHistNP[stm][BLACK][pos.non_pawn_key(BLACK) & CORR_MASK];
-    return (long long)CORR_W_PAWN * pcv + (long long)CORR_W_NONPAWN * (wnpcv + bnpcv);
+    long long cv = (long long)CORR_W_PAWN * pcv + (long long)CORR_W_NONPAWN * (wnpcv + bnpcv);
+    if (C.tune.corrVariants) {
+        int mcv   = C.corrHistMinor[stm][pos.minor_key() & CORR_MASK];
+        int cntcv = corr_hist_cont_term(C, ss);
+        cv += (long long)CORR_W_MINOR * mcv + (long long)CORR_W_CONT * cntcv;
+    }
+    return cv;
 }
 
 // Applies the learned correction to a raw static eval and clamps well clear of
 // mate scores (SF's to_corrected_static_eval). With CorrHist off, returns
 // rawEval untouched — CORRHIST=0 must reproduce the pre-CorrHist search exactly.
-int corrected_eval(const Context& C, const Position& pos, int rawEval) {
+int corrected_eval(const Context& C, const Position& pos, const Stack* ss, int rawEval) {
     if (!C.tune.corrHist) return rawEval;
-    int v = rawEval + correction(C, pos);
+    int v = rawEval + correction(C, pos, ss);
     if (v >= VALUE_MATE_IN_MAX_PLY) v = VALUE_MATE_IN_MAX_PLY - 1;
     else if (v <= -VALUE_MATE_IN_MAX_PLY) v = -VALUE_MATE_IN_MAX_PLY + 1;
     return v;
@@ -438,7 +497,7 @@ int corrected_eval(const Context& C, const Position& pos, int rawEval) {
 // result, and gomachine's corrhist.go updates toward the same corrected value.
 // Guard is SF's exact guard: skip on capture bestMoves, and only trust the
 // residual when its sign agrees with whether a move raised alpha at all.
-void update_corrhist(Context& C, const Position& pos, int staticEval, int bestValue, int depth, Move bestMove) {
+void update_corrhist(Context& C, const Position& pos, const Stack* ss, int staticEval, int bestValue, int depth, Move bestMove) {
     if (!C.tune.corrHist) return;
     if (bestMove != MOVE_NONE && pos.is_capture(bestMove)) return;
     if ((bestValue > staticEval) != (bestMove != MOVE_NONE)) return;
@@ -449,6 +508,28 @@ void update_corrhist(Context& C, const Position& pos, int staticEval, int bestVa
     int npBonus = bonus * CORR_NONPAWN_UPDATE_NUM / CORR_NONPAWN_UPDATE_DEN;
     corrhist_update_entry(C.corrHistNP[stm][WHITE][pos.non_pawn_key(WHITE) & CORR_MASK], npBonus);
     corrhist_update_entry(C.corrHistNP[stm][BLACK][pos.non_pawn_key(BLACK) & CORR_MASK], npBonus);
+    if (C.tune.corrVariants) {
+        int minorBonus = bonus * CORR_MINOR_UP_NUM / CORR_VARIANT_UP_DEN;
+        corrhist_update_entry(C.corrHistMinor[stm][pos.minor_key() & CORR_MASK], minorBonus);
+        // Continuation taps: update the SAME ss-2/ss-4 planes the read above
+        // consults, keyed by that ply's own [piece][to] (not gated on the
+        // read's "both taps valid" check — SF updates each tap independently
+        // whenever the move at that ply was real).
+        if (ss->ply >= 2) {
+            const Stack* p2 = ss - 2;
+            if (p2->currentMove != MOVE_NONE && p2->currentMove != MOVE_NULL) {
+                int nearBonus = bonus * CORR_CONT_NEAR_NUM / CORR_VARIANT_UP_DEN;
+                corrhist_update_entry(C.corrHistCont[piece_dense(p2->currentPiece)][to_sq(p2->currentMove)], nearBonus);
+            }
+        }
+        if (ss->ply >= 4) {
+            const Stack* p4 = ss - 4;
+            if (p4->currentMove != MOVE_NONE && p4->currentMove != MOVE_NULL) {
+                int farBonus = bonus * CORR_CONT_FAR_NUM / CORR_VARIANT_UP_DEN;
+                corrhist_update_entry(C.corrHistCont[piece_dense(p4->currentPiece)][to_sq(p4->currentMove)], farBonus);
+            }
+        }
+    }
 }
 
 int64_t elapsed(const Context& C) { return now_ms() - C.limits.startTime; }
@@ -695,7 +776,7 @@ int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta) {
         bestValue = futilityBase = -VALUE_INFINITE;
     } else {
         rawEval = (ttHit && tte->eval != VALUE_NONE) ? tte->eval : Eval::evaluate(pos);
-        int staticEval = ss->staticEval = corrected_eval(C, pos, rawEval);
+        int staticEval = ss->staticEval = corrected_eval(C, pos, ss, rawEval);
         bestValue = staticEval;
         if (ttHit && (tte->bound() & (ttValue > staticEval ? BOUND_LOWER : BOUND_UPPER)))
             bestValue = ttValue;
@@ -847,7 +928,7 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         eval = ss->staticEval = VALUE_NONE;
     } else {
         rawEval = (ttHit && tte->eval != VALUE_NONE) ? tte->eval : Eval::evaluate(pos);
-        eval = ss->staticEval = corrected_eval(C, pos, rawEval);
+        eval = ss->staticEval = corrected_eval(C, pos, ss, rawEval);
         if (ttHit && ttValue != VALUE_NONE && (tte->bound() & (ttValue > eval ? BOUND_LOWER : BOUND_UPPER)))
             eval = ttValue;
     }
@@ -910,7 +991,7 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         // the static eval is less trustworthy, so relax (widen) the RFP margin rather
         // than pruning on an uncertain eval. Off -> corrMarginTerm is 0, no-op.
         int corrMarginTerm = C.tune.corrMargin
-            ? (int)(std::abs(correction_raw(C, pos)) / 174665) : 0;
+            ? (int)(std::abs(correction_raw(C, pos, ss)) / 174665) : 0;
         int rfpDepthCap = C.tune.rfpDeep ? 13 : 8; // RFPDEEP: SF's depth<14 vs zug's depth<=8
         if (depth <= rfpDepthCap && !(C.tune.rfpSoft && quietTT) && !(C.tune.ttPvOn && ss->ttPv)
             && eval - C.tune.rfpMargin * (depth - improving) - rfpOwTerm - corrMarginTerm >= beta
@@ -1226,7 +1307,7 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             // reduce less. SF's 30370/1024 (its r is x1024) scales to zug's whole-ply
             // r as /31098880. Off -> no-op (corrMargin default false).
             if (C.tune.corrMargin)
-                r -= (int)(std::abs(correction_raw(C, pos)) / 31098880);
+                r -= (int)(std::abs(correction_raw(C, pos, ss)) / 31098880);
             // ALLNODELMR (SF search.cpp:1227): an "all" node (neither PV nor cut) is
             // expected to fail low on every move — reduce late moves progressively
             // harder the deeper we are. Self-ratio term, no rescaling needed (zug's r
@@ -1395,7 +1476,7 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         // Excluded (singular-verification) nodes must not teach it either, hence
         // this living inside the same `!excluded` guard as the TT store.
         if (!ss->inCheck)
-            update_corrhist(C, pos, ss->staticEval, bestValue, depth, bestMove);
+            update_corrhist(C, pos, ss, ss->staticEval, bestValue, depth, bestMove);
     }
 
     return bestValue;

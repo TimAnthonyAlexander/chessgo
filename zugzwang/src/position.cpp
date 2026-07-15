@@ -223,11 +223,13 @@ void Position::set(const std::string& fen) {
     // done here; do_move() mirrors every psq XOR incrementally from this point on.
     st->pawnKey = 0;
     st->nonPawnKey[WHITE] = st->nonPawnKey[BLACK] = 0;
+    st->minorKey = 0;
     for (Square s = A1; s <= H8; s = Square(s + 1)) {
         Piece pc = board[s];
         if (pc == NO_PIECE) continue;
         if (type_of(pc) == PAWN) st->pawnKey ^= Zobrist::psq[pc][s];
         else st->nonPawnKey[color_of(pc)] ^= Zobrist::psq[pc][s];
+        if (type_of(pc) == KNIGHT || type_of(pc) == BISHOP) st->minorKey ^= Zobrist::psq[pc][s];
     }
 
     set_check_info();
@@ -326,6 +328,7 @@ void Position::do_move(Move m, StateInfo& newSt) {
     newSt.pawnKey = st->pawnKey;
     newSt.nonPawnKey[WHITE] = st->nonPawnKey[WHITE];
     newSt.nonPawnKey[BLACK] = st->nonPawnKey[BLACK];
+    newSt.minorKey = st->minorKey;
 
     Color us = sideToMove, them = ~us;
     Square from = from_sq(m), to = to_sq(m);
@@ -388,11 +391,15 @@ void Position::do_move(Move m, StateInfo& newSt) {
             k ^= Zobrist::psq[captured][capsq];
             if (type_of(captured) == PAWN) newSt.pawnKey ^= Zobrist::psq[captured][capsq];
             else newSt.nonPawnKey[them] ^= Zobrist::psq[captured][capsq];
+            if (type_of(captured) == KNIGHT || type_of(captured) == BISHOP)
+                newSt.minorKey ^= Zobrist::psq[captured][capsq];
             newSt.rule50 = 0;
         }
         k ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
         if (type_of(pc) == PAWN) newSt.pawnKey ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
         else newSt.nonPawnKey[us] ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
+        if (type_of(pc) == KNIGHT || type_of(pc) == BISHOP)
+            newSt.minorKey ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
         move_piece(from, to);
     }
 
@@ -409,6 +416,7 @@ void Position::do_move(Move m, StateInfo& newSt) {
         k ^= Zobrist::psq[pc][to] ^ Zobrist::psq[promoPiece][to];
         newSt.pawnKey ^= Zobrist::psq[pc][to];
         newSt.nonPawnKey[us] ^= Zobrist::psq[promoPiece][to];
+        if (promo == KNIGHT || promo == BISHOP) newSt.minorKey ^= Zobrist::psq[promoPiece][to];
     }
 
     // Pawn special: reset rule50, set ep
@@ -503,6 +511,7 @@ void Position::do_drop(Piece pc, Square s, StateInfo& newSt) {
     newSt.pawnKey = st->pawnKey;
     newSt.nonPawnKey[WHITE] = st->nonPawnKey[WHITE];
     newSt.nonPawnKey[BLACK] = st->nonPawnKey[BLACK];
+    newSt.minorKey = st->minorKey;
 
     Color us = sideToMove;
     if (st->epSquare != SQ_NONE)
@@ -515,6 +524,7 @@ void Position::do_drop(Piece pc, Square s, StateInfo& newSt) {
     k ^= Zobrist::psq[pc][s];
     if (type_of(pc) == PAWN) newSt.pawnKey ^= Zobrist::psq[pc][s];
     else newSt.nonPawnKey[us] ^= Zobrist::psq[pc][s];
+    if (type_of(pc) == KNIGHT || type_of(pc) == BISHOP) newSt.minorKey ^= Zobrist::psq[pc][s];
 
     sideToMove = ~us;
     newSt.key = k;
