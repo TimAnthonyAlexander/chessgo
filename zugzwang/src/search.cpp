@@ -96,7 +96,8 @@ struct Context {
         bool lmrHistCache = false;
         // ---- PARITY_GOMACHINE.md D.2/D.3 — Wave B, ACCEPTED, baked into defaults 2026-07-14 ----
         bool contHist = true; // D.2: continuation history (parent/grandparent-keyed quiet magnitude)
-        bool captHist = false; // SF capture history: learned capture-ordering table (opt-in, for SPRT)
+        bool captHist = true; // SF capture history: learned capture-ordering table (banked modest +, 2026-07-15)
+        int  captHistWeight = 128; // read weight /256 (128 = half weight); SPSA-tunable via CaptHistWeight
         bool doDeeper = true; // D.3: adaptive do-deeper/do-shallower LMR re-search depth
         // ---- PARITY_GOMACHINE.md D.5/D.7 — Wave C, default OFF, SPRT independently ----
         bool seeQuietLinear = false; // D.5: linear SEE-quiet shape -75*depth, depth<=6 (vs quadratic default)
@@ -170,7 +171,7 @@ struct Context {
             if (on("LMRHIST")) lmrHistCache = true;
             if (on("PVGUARD")) pvGuard = true;
             if (on("CONTHIST")) contHist = true;
-            if (on("CAPTHIST")) captHist = true;
+            if (off("CAPTHIST")) captHist = false; // default-on now; kill-switch for A/B
             if (on("DODEEPER")) doDeeper = true;
             if (on("SEEQUIETLINEAR")) seeQuietLinear = true;
             if (on("GMCHECKEXT")) gmCheckExt = true;
@@ -311,6 +312,7 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     else if (name == "CaptSeeCoeff")   tune.captSeeCoeff   = clamp(value, 40, 180);
     else if (name == "NmpEvalDiv")     tune.nmpEvalDiv     = clamp(value, 80, 400);
     else if (name == "SingularMargin") tune.singularMargin = clamp(value, 16, 80);
+    else if (name == "CaptHistWeight") tune.captHistWeight = clamp(value, 16, 512);
     else return false;
     return true;
 }
@@ -445,12 +447,14 @@ void score_moves_impl(Context& C, const Position& pos, ExtMove* begin, ExtMove* 
             int mvvlva = PieceVal[victim] * 16 - PieceVal[attacker];
             if (mt == PROMOTION) mvvlva += PieceVal[promotion_type(mv)] * 16;
             // Capture history: learned ordering within the good/bad-capture bucket. Read
-            // at half weight (house gravity trends to ±16k; /2 keeps it under a queen's
-            // MVV term ~14k so MVV stays primary for big captures and history breaks ties
-            // / reorders similar-value captures — SF's balance). Real captures (`cap`)
-            // only, not non-capture promotions. Well inside the ±(1<<22) bucket gap.
+            // at captHistWeight/256 (default 128 = half weight; house gravity trends to
+            // ±16k, so /2 keeps it under a queen's MVV term ~14k → MVV stays primary for
+            // big captures, history breaks ties / reorders similar-value captures, SF's
+            // balance). SPSA-tunable. Real captures (`cap`) only, not non-capture
+            // promotions. Well inside the ±(1<<22) bucket gap even at the max weight.
             if (C.tune.captHist && cap)
-                mvvlva += C.captHist[piece_dense(pos.moved_piece(mv))][to_sq(mv)][victim] / 2;
+                mvvlva += C.captHist[piece_dense(pos.moved_piece(mv))][to_sq(mv)][victim]
+                          * C.tune.captHistWeight / 256;
             bool good = pos.see_ge(mv, -50);
             m->score = (good ? GOOD_CAP_SCORE : BAD_CAP_SCORE) + mvvlva;
         } else if (mv == ss->killers[0]) {
