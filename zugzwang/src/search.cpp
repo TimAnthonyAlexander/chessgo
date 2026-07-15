@@ -148,6 +148,9 @@ struct Context {
         bool captHistMargin = false; // split of CAPTHISTPRUNE: captHist term in the capture-SEE prune margin ONLY, no LMR-capture-enable (env CAPTHISTMARGIN=1)
         bool allNodeLmr    = false; // SF's allNode self-scaling LMR term: r += r/(depth+1) when !(PvNode||cutNode) (env ALLNODELMR=1; SF search.cpp:1227)
         bool rootDeltaLmr  = false; // aspiration-window-relative LMR term: r -= delta/rootDelta (env ROOTDELTALMR=1; SF search.cpp delta*608/rootDelta)
+        // ---- 2 new SF-ported history ordering tables (2026-07-15) — default OFF, env-gated ----
+        bool lowPlyHist   = false; // SF LowPlyHistory: ply<5 butterfly-shaped table, extra ordering weight near the root (env LOWPLYHIST=1; SF history.h/movepick.cpp)
+        bool pawnOrderHist = false; // SF PawnHistory: pawn-structure-keyed quiet ordering table (env PAWNORDHIST=1; SF history.h/movepick.cpp)
         // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
         // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
         // callers in uci.cpp for the option table incl. min/max).
@@ -218,6 +221,8 @@ struct Context {
             if (on("CAPTHISTMARGIN")) captHistMargin = true;
             if (on("ALLNODELMR")) allNodeLmr = true;
             if (on("ROOTDELTALMR")) rootDeltaLmr = true;
+            if (on("LOWPLYHIST")) lowPlyHist = true;
+            if (on("PAWNORDHIST")) pawnOrderHist = true;
             if (on("GMCONST")) {
                 // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
                 // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
@@ -256,6 +261,18 @@ struct Context {
     // updated on beta cutoff (bonus to the cutoff capture, malus to searched-not-best
     // captures). Gated by Tune::captHist. ~10 KB.
     int16_t captHist[CONT_PIECE_NB][SQUARE_NB][PIECE_TYPE_NB] = {};
+    // Low-ply history (SF LowPlyHistory): a second butterfly-shaped table keyed
+    // additionally by ss->ply, valid only for ply<5 — near the root, the same
+    // from/to pair recurs across ID iterations far more than deep in the tree,
+    // so a ply-scoped table gives a sharper ordering signal than the global
+    // butterfly table alone. Gated by Tune::lowPlyHist. 5*64*64*4B = ~80 KB.
+    int  lowPly[5][64][64] = {};
+    // Pawn-structure history (SF PawnHistory): quiet ordering keyed by pawn_key
+    // (masked to PAWN_HIST_SIZE) x moving-piece x to-square — captures the idea
+    // that a quiet move's value is often pawn-structure-dependent (outposts,
+    // levers) in a way the plain butterfly table can't see. Gated by
+    // Tune::pawnOrderHist. int16_t[8192][12][64] = ~12.6 MB per Context.
+    int16_t pawnOrderHist[8192][CONT_PIECE_NB][64] = {};
     int  Reductions[64][64] = {};
 
     Limits  limits;
@@ -329,6 +346,8 @@ void reset_tables(Context& C) {
     std::memset(C.contHist1, 0, sizeof(C.contHist1));
     std::memset(C.contHist2, 0, sizeof(C.contHist2));
     std::memset(C.captHist, 0, sizeof(C.captHist));
+    std::memset(C.lowPly, 0, sizeof(C.lowPly));
+    std::memset(C.pawnOrderHist, 0, sizeof(C.pawnOrderHist));
     C.tt.clear();
 }
 
@@ -525,6 +544,17 @@ void score_moves_impl(Context& C, const Position& pos, ExtMove* begin, ExtMove* 
                     if (lesser & (1ULL << to_sq(mv)))   h -= PieceVal[pt] * 8; // walking into one
                 }
             }
+            // LOWPLYHIST (SF LowPlyHistory): extra ordering weight for the same
+            // from/to pair recurring near the root (ply<5). SF reads
+            // 8*table[ply][m.raw()]/(1+ply); zug's butterfly read is unweighted
+            // (no outer /256-ish scale like SF's statScore), so we apply half of
+            // SF's numerator (4, not 8) to land in a comparable magnitude band.
+            if (C.tune.lowPlyHist && ss->ply < 5)
+                h += 4 * C.lowPly[ss->ply][from_sq(mv)][to_sq(mv)] / (1 + ss->ply);
+            // PAWNORDHIST (SF PawnHistory): pawn-structure-keyed quiet ordering,
+            // unweighted (matches zug's unweighted butterfly read).
+            if (C.tune.pawnOrderHist)
+                h += C.pawnOrderHist[pos.pawn_key() & 8191][piece_dense(pos.moved_piece(mv))][to_sq(mv)];
             m->score = h;
         }
     }
@@ -584,6 +614,29 @@ void update_cont_hist(int16_t* ch1, int16_t* ch2, Piece pc, Square to, int bonus
 // Caller has verified tune.captHist and that the move is a real capture (victim valid).
 void update_capt_hist(Context& C, Piece pc, Square to, PieceType victim, int bonus) {
     update_cont_entry(C.captHist[piece_dense(pc)][to][victim], bonus);
+}
+
+// update_low_ply_hist: SF LowPlyHistory update (SF history.h/movepick.cpp),
+// via zug's exact house gravity idiom (same clamp/scale as update_history).
+// SF scales this entry's bonus by 805/1024 relative to its normal stat_bonus;
+// applied here to zug's raw bonus (depth*depth, same value update_history
+// gets) before the gravity nudge. Caller has verified tune.lowPlyHist and
+// ply<5.
+void update_low_ply_hist(Context& C, int ply, Move m, int bonus) {
+    int& h = C.lowPly[ply][from_sq(m)][to_sq(m)];
+    bonus = bonus * 805 / 1024;
+    bonus = std::max(-400, std::min(400, bonus));
+    h += 32 * bonus - h * std::abs(bonus) / 512;
+}
+
+// update_pawn_order_hist: SF PawnHistory update (SF history.h/movepick.cpp),
+// via the same int16 gravity as ContHist/CaptHist. SF applies an asymmetric
+// win/lose scale to the bonus (905/1024 winner, 505/1024 loser) before the
+// gravity nudge — mirrored here on the sign of the incoming (already +/-
+// depth*depth) bonus. Caller has verified tune.pawnOrderHist.
+void update_pawn_order_hist(Context& C, const Position& pos, Piece pc, Square to, int bonus) {
+    int scaled = bonus * (bonus > 0 ? 905 : 505) / 1024;
+    update_cont_entry(C.pawnOrderHist[pos.pawn_key() & 8191][piece_dense(pc)][to], scaled);
 }
 
 int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta);
@@ -1241,6 +1294,21 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             for (int i = 0; i < quietCount; ++i)
                 if (quietsSearched[i] != bestMove)
                     update_history(C, us, quietsSearched[i], -bonus);
+            if (C.tune.lowPlyHist && ss->ply < 5) {
+                update_low_ply_hist(C, ss->ply, bestMove, bonus);
+                for (int i = 0; i < quietCount; ++i)
+                    if (quietsSearched[i] != bestMove)
+                        update_low_ply_hist(C, ss->ply, quietsSearched[i], -bonus);
+            }
+            if (C.tune.pawnOrderHist) {
+                // pos is back at the pre-move-loop position here (same guard
+                // update_cont_hist/update_capt_hist above rely on), so
+                // moved_piece() is valid for bestMove and every searched quiet.
+                update_pawn_order_hist(C, pos, pos.moved_piece(bestMove), to_sq(bestMove), bonus);
+                for (int i = 0; i < quietCount; ++i)
+                    if (quietsSearched[i] != bestMove)
+                        update_pawn_order_hist(C, pos, pos.moved_piece(quietsSearched[i]), to_sq(quietsSearched[i]), -bonus);
+            }
             if (C.tune.contHist) {
                 // pos is back at the pre-move-loop position here (every iteration
                 // above paired do_move with undo_move), so moved_piece() is valid.
