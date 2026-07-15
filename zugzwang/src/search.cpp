@@ -142,6 +142,8 @@ struct Context {
         bool rfpDeep    = false; // raise RFP depth cap 8 -> 13, matching SF's depth<14 (env RFPDEEP=1)
         bool razorQuad  = false; // quadratic razoring curve (SF-scaled consts), no depth cap (env RAZORQUAD=1)
         bool negExt3    = false; // negative-extension magnitude -2/-1 -> -3/-2 (env NEGEXT3=1)
+        bool singRetScore = false; // singular multi-cut returns verification score, not singularBeta (env SINGRETSCORE=1; SF search.cpp:1160)
+        bool aspAdapt     = false; // adaptive aspiration initial delta (prevScore-scaled) + delta/3 widening, not delta/2 (env ASPADAPT=1; SF search.cpp:355,418)
         // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
         // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
         // callers in uci.cpp for the option table incl. min/max).
@@ -207,6 +209,8 @@ struct Context {
             if (on("RFPDEEP")) rfpDeep = true;
             if (on("RAZORQUAD")) razorQuad = true;
             if (on("NEGEXT3")) negExt3 = true;
+            if (on("SINGRETSCORE")) singRetScore = true;
+            if (on("ASPADAPT")) aspAdapt = true;
             if (on("GMCONST")) {
                 // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
                 // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
@@ -1034,7 +1038,13 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                     if (C.tune.tripleExt && s < singularBeta - 200) extension = 3;
                 }
             }
-            else if (singularBeta >= beta) return singularBeta; // multi-cut
+            else if (singularBeta >= beta) {
+                // SF search.cpp:1160: `else if (value >= beta && !is_decisive(value)) return value;`
+                // — returns the singular-verification search score `value`, not the margin
+                // `singularBeta`. `s` above is zug's equivalent verification score.
+                if (C.tune.singRetScore && !is_mate_score(s)) return s;
+                return singularBeta; // multi-cut
+            }
             else if (C.tune.negExt) {
                 // ttMove is provably NOT singular — SF's negative extension de-prioritizes a
                 // move the TT overrates. Reuses the verification search already run (no new search).
@@ -1609,7 +1619,18 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
         if (depth <= 4) {
             score = negamax<true>(C, pos, ss, -VALUE_INFINITE, VALUE_INFINITE, depth, false);
         } else {
-            int delta = C.tune.aspInitDelta;
+            // SF search.cpp:355 scales the initial delta off |meanSquaredScore| (a
+            // quadratic volatility signal zug doesn't track); zug's only available
+            // prior-score signal at this point is `prevScore` (the completed
+            // previous iteration's root score), so ASPADAPT uses a linear proxy:
+            // delta = aspInitDelta + |prevScore|/12. K=12 chosen so a near-zero eval
+            // leaves delta at the unchanged baseline (25), a one-pawn score (100cp)
+            // adds ~8, and a clearly-won position (300cp) roughly doubles delta to
+            // ~50 — widening the window before the volatile position forces a
+            // re-search, without perturbing quiet/equal positions.
+            int delta = C.tune.aspAdapt
+                ? C.tune.aspInitDelta + std::abs(prevScore) / 12
+                : C.tune.aspInitDelta;
             int alpha = std::max(prevScore - delta, -VALUE_INFINITE);
             int beta  = std::min(prevScore + delta, VALUE_INFINITE);
             while (true) {
@@ -1621,7 +1642,8 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
                 } else if (score >= beta) {
                     beta = std::min(score + delta, VALUE_INFINITE);
                 } else break;
-                delta += delta / 2;
+                // SF search.cpp:418: delta += delta / 3 (vs zug's default delta/2).
+                delta += C.tune.aspAdapt ? delta / 3 : delta / 2;
             }
         }
 
