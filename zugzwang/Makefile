@@ -1,7 +1,10 @@
 CXX      ?= clang++
-CXXFLAGS ?= -std=c++17 -O3 -flto -DNDEBUG -Wall -Wno-unused -ffp-contract=off
-LDFLAGS  ?= -flto -pthread
+CXXFLAGS ?= -std=c++17 -O3 -flto=auto -DNDEBUG -Wall -Wno-unused -ffp-contract=off
+LDFLAGS  ?= -flto=auto -pthread
 TARGET    = zugzwang
+
+# Cores for the LTO link (-flto=auto) and, when -j is passed, the compile fan-out.
+NPROC := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
 SRC = src/main.cpp src/uci.cpp src/search.cpp src/eval.cpp src/position.cpp \
       src/bitboard.cpp src/zobrist.cpp src/movegen.cpp src/tt.cpp \
@@ -10,6 +13,7 @@ SRC = src/main.cpp src/uci.cpp src/search.cpp src/eval.cpp src/position.cpp \
       src/rules.cpp src/rating.cpp src/serve.cpp src/serve_handlers.cpp \
       src/sf_uci.cpp src/crazyhouse.cpp src/duck.cpp src/book.cpp src/openings.cpp
 OBJ = $(SRC:.cpp=.o)
+DEP = $(OBJ:.o=.d)
 
 # ASSERT=1 compiles the incremental-accumulator bit-exactness check: every in-search
 # eval rebuilds the halves from scratch and aborts on any int16 drift. Slow — gate only.
@@ -26,13 +30,21 @@ endif
 
 all: $(TARGET)
 
-$(TARGET): $(SRC)
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $(SRC)
+# Per-object compilation so `make -j` fans the 22 TUs across cores; -MMD -MP tracks
+# header deps so incremental (no `make clean`) rebuilds only what changed. The link
+# step re-runs whole-program LTO — -flto=auto parallelizes its LTRANS jobs.
+$(TARGET): $(OBJ)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $(OBJ)
+
+%.o: %.cpp
+	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
 perft: src/perft.cpp src/position.cpp src/bitboard.cpp src/zobrist.cpp src/movegen.cpp
 	$(CXX) $(CXXFLAGS) -o perft_test $^
 
 clean:
-	rm -f $(TARGET) perft_test $(OBJ)
+	rm -f $(TARGET) perft_test $(OBJ) $(DEP)
+
+-include $(DEP)
 
 .PHONY: all clean perft
