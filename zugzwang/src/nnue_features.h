@@ -55,8 +55,8 @@ void changed_edges_delta(const BoardSnapshot& oldb, const Position& child,
 // delta (new bucket copy or every square reflected) and forces a from-scratch refresh.
 int perspective_bucket_key(Square ksq, Color persp);
 
-// threat_delta_enabled reads the THREATDELTA env once (default OFF): "1" turns the
-// move-aware delta push path on, for A/B SPRT vs the full-enumerate push.
+// threat_delta_enabled reads the THREATDELTA env once (default ON, banked +43 Elo):
+// THREATDELTA=0 is the parity/debug kill-switch back to the full-enumerate push().
 bool threat_delta_enabled();
 
 } // namespace NNUE

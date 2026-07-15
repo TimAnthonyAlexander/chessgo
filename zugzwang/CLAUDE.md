@@ -9,6 +9,26 @@ now a deletable legacy reference (see `../gomachine/CLAUDE.md`).
 This doc is engine-internals orientation. The engine backlog lives in
 `../docs/tasks/`.
 
+## Cross-reference Stockfish 18 before implementing (`~/sf18-arm`)
+
+`~/sf18-arm` is the **official Stockfish 18 release** — HEAD == tag `sf_18` ==
+commit `cb3d4ee`, verified byte-identical to `git fetch origin sf_18` from
+official-stockfish/Stockfish. It is **NOT an experimental fork and NOT a feature
+branch** — it is shipped, production Stockfish. (SF 18 postdates the assistant's
+knowledge cutoff, so **verify any "SF does/doesn't have X" claim against this tree
+with git + grep, never from memory** — a subagent once fabricated an "experimental
+fork" framing that a `git remote`/`git describe` check immediately disproved.)
+
+**Before implementing any search/eval technique SF might already have** (a pruning
+rule, an extension, an NNUE feature/accumulator trick, a movepick heuristic), spawn
+a subagent to read `~/sf18-arm/src` and report exactly how SF does it — file:line,
+constants, edge cases — then port against that ground truth. Two examples already in
+play: SF18 ships **move-aware full-threats NNUE deltas** (`FullThreats`, same
+79,856-dim threat space as our `ThreatBlock` — reference for
+`docs/tasks/open/threat-delta.md`), and the SF-selectivity search stack was ported
+this way. Cross-check, don't guess — a "washed" SF technique usually means OUR port
+has a bug, not that the technique is bad.
+
 ## Build
 
 ```sh
@@ -113,6 +133,12 @@ H=512 FT, 16 king-buckets, 79,856 Stockfish full-threats, pairwise 16→32 tail,
 NB=8, int16 threat FT). `serve` calls `NNUE::load("net.nnue")` at startup (cwd-
 relative); **absent → falls back to HCE** (`src/eval.cpp`, a hand-crafted eval).
 Incremental int16 accumulator with native SIMD; `ASSERT=1` bit-checks it.
+**Move-aware threat delta (default-on, +43 Elo movetime, 2026-07-15):** `do_move`
+snapshots the pre-move board and `AccStack::push_delta` (`nnue_accumulator.cpp`)
+folds a move in by diffing only the changed base+threat edges (`changed_edges_delta`,
+`nnue_features.cpp`) instead of re-enumerating every node's full threat set — same
+`apply_diff` machinery, byte-identical eval. `THREATDELTA=0` is the parity/debug
+kill-switch back to the full-enumerate `push()`. Details: `docs/tasks/done/threat-delta.md`.
 
 ## Rules / movegen
 

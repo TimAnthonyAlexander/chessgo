@@ -358,7 +358,9 @@ int perspective_bucket_key(Square ksq, Color persp) {
 }
 
 bool threat_delta_enabled() {
-    static const bool on = [] { const char* e = getenv("THREATDELTA"); return e && e[0] == '1'; }();
+    // Default ON (banked +43 Elo movetime, coalla 966g LLR 2.95, 2026-07-15). THREATDELTA=0
+    // is the parity/debug kill-switch back to the full-enumerate push().
+    static const bool on = [] { const char* e = getenv("THREATDELTA"); return !(e && e[0] == '0'); }();
     return on;
 }
 
