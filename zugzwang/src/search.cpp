@@ -144,6 +144,10 @@ struct Context {
         bool negExt3    = false; // negative-extension magnitude -2/-1 -> -3/-2 (env NEGEXT3=1)
         bool singRetScore = false; // singular multi-cut returns verification score, not singularBeta (env SINGRETSCORE=1; SF search.cpp:1160)
         bool aspAdapt     = false; // adaptive aspiration initial delta (prevScore-scaled) + delta/3 widening, not delta/2 (env ASPADAPT=1; SF search.cpp:355,418)
+        // ---- 3 independent SF-cross-referenced levers (2026-07-15) — default OFF, env-gated ----
+        bool captHistMargin = false; // split of CAPTHISTPRUNE: captHist term in the capture-SEE prune margin ONLY, no LMR-capture-enable (env CAPTHISTMARGIN=1)
+        bool allNodeLmr    = false; // SF's allNode self-scaling LMR term: r += r/(depth+1) when !(PvNode||cutNode) (env ALLNODELMR=1; SF search.cpp:1227)
+        bool rootDeltaLmr  = false; // aspiration-window-relative LMR term: r -= delta/rootDelta (env ROOTDELTALMR=1; SF search.cpp delta*608/rootDelta)
         // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
         // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
         // callers in uci.cpp for the option table incl. min/max).
@@ -211,6 +215,9 @@ struct Context {
             if (on("NEGEXT3")) negExt3 = true;
             if (on("SINGRETSCORE")) singRetScore = true;
             if (on("ASPADAPT")) aspAdapt = true;
+            if (on("CAPTHISTMARGIN")) captHistMargin = true;
+            if (on("ALLNODELMR")) allNodeLmr = true;
+            if (on("ROOTDELTALMR")) rootDeltaLmr = true;
             if (on("GMCONST")) {
                 // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
                 // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
@@ -257,6 +264,8 @@ struct Context {
     int     rootDepthGlobal = 0;
     Move    rootBestMove = MOVE_NONE;
     int     rootBestScore = 0;
+    int     rootDelta = 0; // ROOTDELTALMR: root aspiration window width (beta-alpha), set once per ID
+                            // iteration before the root negamax<true> call(s) (SF search.cpp rootDelta)
 
     NNUE::AccStack accStack; // per-search incremental accumulator (was a
                               // function-local `static` — one shared instance
@@ -693,6 +702,7 @@ int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta) {
 template <bool PvNode>
 int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNode) {
     bool rootNode = PvNode && ss->ply == 0;
+    bool allNode  = !(PvNode || cutNode); // ALLNODELMR (SF search.cpp): neither PV nor cut -> "all" node
 
     // D.7 (GMCHECKEXT): gomachine's per-node check extension fires here, at node
     // entry, BEFORE the depth<=0 qsearch dispatch and before the TT probe
@@ -1005,7 +1015,11 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                 // 2.22 ratio against captSeeCoeff's default (23) gives
                 // 16384/(2.22*23) ~= 320.
                 int margin = C.tune.captSeeCoeff * depth;
-                if (C.tune.captHistPrune) {
+                // CAPTHISTMARGIN: split of captHistPrune isolating just the margin
+                // term (a) below, without the LMR-capture-enable (b) further down
+                // (that bundle measured negative, likely due to (b)) — env-gated
+                // independently so CAPTHISTMARGIN=1 alone tests (a) only.
+                if (C.tune.captHistPrune || C.tune.captHistMargin) {
                     PieceType victim = (type_of_move(m) == EN_PASSANT)
                         ? PAWN : type_of(pos.piece_on(to_sq(m)));
                     margin += C.captHist[piece_dense(mover)][to_sq(m)][victim] / 320;
@@ -1129,6 +1143,19 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             // r as /31098880. Off -> no-op (corrMargin default false).
             if (C.tune.corrMargin)
                 r -= (int)(std::abs(correction_raw(C, pos)) / 31098880);
+            // ALLNODELMR (SF search.cpp:1227): an "all" node (neither PV nor cut) is
+            // expected to fail low on every move — reduce late moves progressively
+            // harder the deeper we are. Self-ratio term, no rescaling needed (zug's r
+            // is whole-ply, same as SF's before its x1024 scaling is applied).
+            if (C.tune.allNodeLmr && allNode) r += r / (depth + 1);
+            // ROOTDELTALMR (SF search.cpp: delta*608/rootDelta on its x1024 r): reduce
+            // less when this node's alpha-beta window is wide relative to the root's
+            // aspiration window (this line is more "PV-like" than its ancestors
+            // suggest). delta<=rootDelta by construction, so the ratio saturates at 1.
+            if (C.tune.rootDeltaLmr) {
+                int delta = beta - alpha;
+                r -= delta / std::max(1, C.rootDelta);
+            }
             int d = std::max(1, std::min(newDepth - r, newDepth));
             ss->reduction = newDepth - d;
             score = -negamax<false>(C, pos, ss + 1, -alpha - 1, -alpha, d, true);
@@ -1617,6 +1644,7 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
         // Aspiration windows
         int score;
         if (depth <= 4) {
+            C.rootDelta = VALUE_INFINITE - (-VALUE_INFINITE); // ROOTDELTALMR: full-window branch (SF sets rootDelta unconditionally)
             score = negamax<true>(C, pos, ss, -VALUE_INFINITE, VALUE_INFINITE, depth, false);
         } else {
             // SF search.cpp:355 scales the initial delta off |meanSquaredScore| (a
@@ -1633,6 +1661,7 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
                 : C.tune.aspInitDelta;
             int alpha = std::max(prevScore - delta, -VALUE_INFINITE);
             int beta  = std::min(prevScore + delta, VALUE_INFINITE);
+            C.rootDelta = beta - alpha; // ROOTDELTALMR: fixed for this ID iteration (SF sets it once, not per re-search widening)
             while (true) {
                 score = negamax<true>(C, pos, ss, alpha, beta, depth, false);
                 if (C.stop) break;
