@@ -2,6 +2,7 @@
 #include "book.h"
 #include "crazyhouse.h"
 #include "duck.h"
+#include "openings.h"
 #include "rules.h"
 #include "rating.h"
 #include "search.h"
@@ -54,6 +55,40 @@ std::vector<std::string> uci_pv(const std::vector<Move>& pv) {
 json book_eval_json(const Book::BookEntry& e) {
     if (e.mate != 0) return json{{"type", "mate"}, {"value", e.mate}};
     return json{{"type", "cp"}, {"value", e.score}};
+}
+
+// ---- opening NAME/ECO classification (gomachine's openingFor/Classify) ----
+// The openings table is keyed by gomachine's NATIVE Zobrist scheme
+// (Book::book_key, NOT zugzwang's own Position::key()), so the request's
+// `history` FENs must be re-walked through book_key() independently of
+// Rules::history_keys (which produces zugzwang's OWN keys, used only for
+// in-search repetition detection). Mirrors server.go's historyKeys+
+// append(pos.Key()) pairing inside openingFor/handleCandidates.
+
+// Ordered gomachine-Zobrist key line (root -> `pos`, inclusive) for a game
+// whose prior positions are `historyFens` (oldest-first, the same raw
+// `history` field Rules::history_keys consumes). Unparsable/illegal FENs are
+// skipped — same best-effort behavior as Rules::history_keys.
+std::vector<uint64_t> opening_key_line(const std::vector<std::string>& historyFens, const Position& pos) {
+    std::vector<uint64_t> keys;
+    keys.reserve(historyFens.size() + 1);
+    for (const std::string& f : historyFens) {
+        if (f.empty() || !Rules::valid_fen_structure(f)) continue;
+        Position p;
+        p.set(f);
+        if (!Rules::position_legal(p)) continue;
+        keys.push_back(Book::book_key(p));
+    }
+    keys.push_back(Book::book_key(pos));
+    return keys;
+}
+
+// {"eco","name"} for a key line, or null when no position along it is a named
+// opening — mirrors a nil *openings.Opening marshaling to JSON null.
+json opening_json(const std::vector<uint64_t>& keyLine) {
+    Openings::Opening o;
+    if (Openings::classify(keyLine, o)) return json{{"eco", o.eco}, {"name", o.name}};
+    return nullptr;
 }
 
 // gomachine's ClaimableDraws is a Go nil slice when empty (never `make`'d),
@@ -274,7 +309,13 @@ json best_move(const json& body) {
     Position pos;
     parse_legal_or_throw(fen, pos);
 
-    std::vector<uint64_t> hist = Rules::history_keys(json_str_vec(body.value("history", json::array())));
+    std::vector<std::string> historyFens = json_str_vec(body.value("history", json::array()));
+    std::vector<uint64_t> hist = Rules::history_keys(historyFens);
+    // Opening NAME/ECO for the REQUEST position (root->current, inclusive) —
+    // same for every branch below (book-hit, weakened, and full-strength),
+    // mirrors gomachine's openingFor(pos, req.History) being called with the
+    // same `pos`/`req.History` at all three call sites in handleBestMove.
+    json openingResp = opening_json(opening_key_line(historyFens, pos));
     json limits = body.value("limits", json::object());
 
     bool worst = jbool(limits, "worst");
@@ -333,7 +374,7 @@ json best_move(const json& body) {
             {"nodes", wr.nodes},
             {"nps", nps},
             {"level", level},
-            {"opening", nullptr}, // STUB: no opening-name table ported (Wave 1)
+            {"opening", openingResp},
         };
     }
 
@@ -356,7 +397,7 @@ json best_move(const json& body) {
                     {"nodes", 0},
                     {"nps", 0},
                     {"level", -1}, // matches gomachine's book-hit Level (-1)
-                    {"opening", nullptr}, // STUB: no opening-name table ported (Wave 1)
+                    {"opening", openingResp},
                 };
             }
         }
@@ -388,7 +429,7 @@ json best_move(const json& body) {
         {"nodes", r.nodes},
         {"nps", nps},
         {"level", -1}, // matches SearchDirectLimits (server.go:452-456)
-        {"opening", nullptr}, // STUB: no opening-name table ported (Wave 1)
+        {"opening", openingResp},
     };
 }
 
@@ -411,24 +452,36 @@ json candidates(const json& body) {
     int movetimeMs = limits.value("movetime", 0);
     if (depth <= 0 && movetimeMs == 0) movetimeMs = 300; // server.go:283-285 default
 
-    std::vector<uint64_t> hist = Rules::history_keys(json_str_vec(body.value("history", json::array())));
+    std::vector<std::string> historyFens = json_str_vec(body.value("history", json::array()));
+    std::vector<uint64_t> hist = Rules::history_keys(historyFens);
     Rules::seed_history(pos, hist);
 
     auto cands = multi_pv(ctx, pos, depth, movetimeMs);
     if (multipv > 0 && static_cast<size_t>(multipv) < cands.size()) cands.resize(multipv);
 
+    // Line up to and including the current position, reused to name the
+    // opening EACH candidate move leads to (deepest match including that
+    // move) — mirrors gomachine's baseKeys in handleCandidates.
+    std::vector<uint64_t> baseKeys = opening_key_line(historyFens, pos);
+
     json moves = json::array();
     for (const CandidateLine& c : cands) {
+        std::vector<uint64_t> childKeys = baseKeys;
+        StateInfo st;
+        pos.do_move(c.move, st);
+        childKeys.push_back(Book::book_key(pos));
+        pos.undo_move(c.move);
+
         moves.push_back(json{
             {"uci", move_to_uci(c.move)},
             {"san", Rules::san(pos, c.move)},
             {"eval", eval_json(c.score)},
             {"pv", uci_pv(c.pv)},
             {"depth", c.depth},
-            {"opening", nullptr}, // STUB: no opening-name table ported (Wave 1)
+            {"opening", opening_json(childKeys)}, // opening this move leads to (null if unnamed)
         });
     }
-    return json{{"opening", nullptr}, {"moves", moves}};
+    return json{{"opening", opening_json(baseKeys)}, {"moves", moves}};
 }
 
 json analyze_game(const json& body) {

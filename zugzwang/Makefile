@@ -8,7 +8,7 @@ SRC = src/main.cpp src/uci.cpp src/search.cpp src/eval.cpp src/position.cpp \
       src/nnue_net.cpp src/nnue_features.cpp src/nnue_eval.cpp \
       src/nnue_accumulator.cpp \
       src/rules.cpp src/rating.cpp src/serve.cpp src/serve_handlers.cpp \
-      src/sf_uci.cpp src/crazyhouse.cpp src/duck.cpp src/book.cpp
+      src/sf_uci.cpp src/crazyhouse.cpp src/duck.cpp src/book.cpp src/openings.cpp
 OBJ = $(SRC:.cpp=.o)
 
 # ASSERT=1 compiles the incremental-accumulator bit-exactness check: every in-search

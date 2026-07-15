@@ -12,6 +12,7 @@
 #include "book.h"
 #include "eval.h"
 #include "nnue.h"
+#include "openings.h"
 #include "position.h"
 #include "search.h"
 #include "sf_uci.h"
@@ -121,6 +122,13 @@ int serve_main(int argc, char** argv) {
         std::cerr << "Book: loaded book.bin\n";
     } else {
         std::cerr << "Book: book.bin absent/unusable — full-strength /bestmove will search instead\n";
+    }
+    // Opening NAME/ECO classifier (gomachine parity): absent/unusable is
+    // non-fatal — /bestmove and /candidates just always report `opening: null`.
+    if (Openings::load("openings.bin")) {
+        std::cerr << "Openings: loaded openings.bin\n";
+    } else {
+        std::cerr << "Openings: openings.bin absent/unusable — opening name/ECO will be null\n";
     }
     // default_context()'s TT (used only by the legacy 2-arg Search::start(),
     // which nothing in `serve` mode calls — every search-backed handler leases
