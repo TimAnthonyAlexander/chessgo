@@ -137,6 +137,11 @@ struct Context {
         int  rfpOwCoeff      = 10;   // flat extra margin when opponentWorsening (~13% of rfpMargin=75, matching
                                      // SF's 331/2474 ratio of its opponentWorsening/improving futility_margin terms)
         bool improvingRelax  = true; // #B: improving |= staticEval >= beta, after NMP (env IMPROVERELAX=0)
+        // ---- 4 independent SF-cross-referenced levers — default OFF, env-gated ----
+        bool corrMargin = false; // raw (pre-shift) correction magnitude discounts RFP margin + LMR reduction (env CORRMARGIN=1)
+        bool rfpDeep    = false; // raise RFP depth cap 8 -> 13, matching SF's depth<14 (env RFPDEEP=1)
+        bool razorQuad  = false; // quadratic razoring curve (SF-scaled consts), no depth cap (env RAZORQUAD=1)
+        bool negExt3    = false; // negative-extension magnitude -2/-1 -> -3/-2 (env NEGEXT3=1)
         // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
         // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
         // callers in uci.cpp for the option table incl. min/max).
@@ -198,6 +203,10 @@ struct Context {
             if (off("RFPOW")) rfpOppWorsening = false;
             if (const char* e = getenv("RFPOW_COEFF")) { int v = atoi(e); if (v >= 0) rfpOwCoeff = v; }
             if (off("IMPROVERELAX")) improvingRelax = false;
+            if (on("CORRMARGIN")) corrMargin = true;
+            if (on("RFPDEEP")) rfpDeep = true;
+            if (on("RAZORQUAD")) razorQuad = true;
+            if (on("NEGEXT3")) negExt3 = true;
             if (on("GMCONST")) {
                 // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
                 // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
@@ -342,6 +351,19 @@ int correction(const Context& C, const Position& pos) {
     int bnpcv = C.corrHistNP[stm][BLACK][pos.non_pawn_key(BLACK) & CORR_MASK];
     long long cv = (long long)CORR_W_PAWN * pcv + (long long)CORR_W_NONPAWN * (wnpcv + bnpcv);
     return int(cv / CORR_APPLY_SHIFT);
+}
+
+// Raw (pre-shift) blended correction sum — unit-identical to SF's
+// correctionValue (same CORR_W_PAWN/CORR_W_NONPAWN weights, same CORR_APPLY_SHIFT
+// denominator SF calls CorrectionHistoryScale), used by CORRMARGIN as an
+// uncertainty discount fed directly into margins (SF search.cpp futility_margin
+// and the LMR reduction), rather than through correction()'s already-shifted cp.
+long long correction_raw(const Context& C, const Position& pos) {
+    Color stm = pos.side_to_move();
+    int pcv   = C.corrHist[stm][pos.pawn_key() & CORR_MASK];
+    int wnpcv = C.corrHistNP[stm][WHITE][pos.non_pawn_key(WHITE) & CORR_MASK];
+    int bnpcv = C.corrHistNP[stm][BLACK][pos.non_pawn_key(BLACK) & CORR_MASK];
+    return (long long)CORR_W_PAWN * pcv + (long long)CORR_W_NONPAWN * (wnpcv + bnpcv);
 }
 
 // Applies the learned correction to a raw static eval and clamps well clear of
@@ -795,8 +817,15 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         // 0.134*75 ~ 10), so this stays a conservative nudge, not a rewrite of the
         // margin's shape.
         int rfpOwTerm = (C.tune.rfpOppWorsening && opponentWorsening) ? C.tune.rfpOwCoeff : 0;
-        if (depth <= 8 && !(C.tune.rfpSoft && quietTT) && !(C.tune.ttPvOn && ss->ttPv)
-            && eval - C.tune.rfpMargin * (depth - improving) - rfpOwTerm >= beta && eval < VALUE_MATE_IN_MAX_PLY)
+        // CORRMARGIN (SF search.cpp futility_margin): a large |correctionValue| means
+        // the static eval is less trustworthy, so relax (widen) the RFP margin rather
+        // than pruning on an uncertain eval. Off -> corrMarginTerm is 0, no-op.
+        int corrMarginTerm = C.tune.corrMargin
+            ? (int)(std::abs(correction_raw(C, pos)) / 174665) : 0;
+        int rfpDepthCap = C.tune.rfpDeep ? 13 : 8; // RFPDEEP: SF's depth<14 vs zug's depth<=8
+        if (depth <= rfpDepthCap && !(C.tune.rfpSoft && quietTT) && !(C.tune.ttPvOn && ss->ttPv)
+            && eval - C.tune.rfpMargin * (depth - improving) - rfpOwTerm - corrMarginTerm >= beta
+            && eval < VALUE_MATE_IN_MAX_PLY)
             return C.tune.rfpSoft ? (2 * beta + eval) / 3 : eval;
 
         // Null move pruning
@@ -834,7 +863,13 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         if (C.tune.improvingRelax) improving = improving || (ss->staticEval >= beta);
 
         // Razoring
-        if (C.tune.razor && depth <= 3 && eval + C.tune.razorMargin * depth <= alpha) {
+        // RAZORQUAD (SF search.cpp: eval < alpha - 485 - 281*depth*depth, no depth
+        // cap): SF-scaled quadratic curve (SF consts x0.481, zug/SF pawn-value ratio
+        // 100/208). Off keeps the exact linear form + depth<=3 cap, byte-identical.
+        bool razorCond = C.tune.razorQuad
+            ? (eval < alpha - 233 - 135 * depth * depth)
+            : (depth <= 3 && eval + C.tune.razorMargin * depth <= alpha);
+        if (C.tune.razor && razorCond) {
             int v = qsearch(C, pos, ss, alpha, alpha + 1);
             if (v <= alpha) return v;
         }
@@ -1003,8 +1038,9 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             else if (C.tune.negExt) {
                 // ttMove is provably NOT singular — SF's negative extension de-prioritizes a
                 // move the TT overrates. Reuses the verification search already run (no new search).
-                if (ttValue >= beta) extension = -2;
-                else if (cutNode)    extension = -1;
+                // NEGEXT3: SF's magnitudes are -3/-2 vs zug's default -2/-1.
+                if (ttValue >= beta) extension = C.tune.negExt3 ? -3 : -2;
+                else if (cutNode)    extension = C.tune.negExt3 ? -2 : -1;
             }
         }
 
@@ -1077,6 +1113,12 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                 }
             }
             r -= hist / 8000;
+            // CORRMARGIN (SF search.cpp LMR reduction term): a large raw correction
+            // means the eval driving this reduction decision is less trustworthy —
+            // reduce less. SF's 30370/1024 (its r is x1024) scales to zug's whole-ply
+            // r as /31098880. Off -> no-op (corrMargin default false).
+            if (C.tune.corrMargin)
+                r -= (int)(std::abs(correction_raw(C, pos)) / 31098880);
             int d = std::max(1, std::min(newDepth - r, newDepth));
             ss->reduction = newDepth - d;
             score = -negamax<false>(C, pos, ss + 1, -alpha - 1, -alpha, d, true);
