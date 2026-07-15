@@ -1335,19 +1335,23 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         // formula to every move, capture or quiet — zug's default gate is isQuiet-only).
         bool lmrEligible = isQuiet || (C.tune.captHistPrune && isCapture);
         if (C.tune.lmr && depth >= 3 && moveCount > C.tune.lmrMinMoves + (rootNode ? 1 : 0) && lmrEligible) {
-            int r = C.Reductions[std::min(depth, 63)][std::min(moveCount, 63)];
-            if (!PvNode) r++;
-            if (!improving) r++;
-            if (cutNode) r += 1;
-            if (C.tune.ttCapR && ttCapture) r++;                 // #3a (SF): ttMove-is-capture reduction
-            if (C.tune.mcLinR) r -= moveCount * 73 / 1024;       // #3b (SF): linear moveCount de-reduction
-            if (givesCheck) r--;
+            // r is x1024 fixed-point (SF search.cpp convention: newDepth - r/1024).
+            // Every adjustment below is scaled to x1024 units so that, with all
+            // fine-resolution flags off, r/1024 reproduces the old whole-ply r
+            // EXACTLY (byte-identical) — see the final `red = r / 1024` below.
+            int r = C.Reductions[std::min(depth, 63)][std::min(moveCount, 63)] * 1024;
+            if (!PvNode) r += 1024;
+            if (!improving) r += 1024;
+            if (cutNode) r += 1024;
+            if (C.tune.ttCapR && ttCapture) r += 1024;           // #3a (SF): ttMove-is-capture reduction
+            if (C.tune.mcLinR) r -= (moveCount * 73 / 1024) * 1024; // #3b (SF): linear moveCount de-reduction (old whole-ply value, then x1024)
+            if (givesCheck) r -= 1024;
             // #5 ttPv (SF): a former-PV node is tactically live — search its late
             // moves a little more carefully (reduce one ply less).
-            if (C.tune.ttPvOn && ss->ttPv) r--;
+            if (C.tune.ttPvOn && ss->ttPv) r -= 1024;
             // #6 (SF): a child that fails high a lot means siblings here are unlikely
             // to matter — reduce them harder.
-            if (C.tune.cutoffCnt && (ss + 1)->cutoffCnt > 3) r++;
+            if (C.tune.cutoffCnt && (ss + 1)->cutoffCnt > 3) r += 1024;
             // cur was post-incremented by pick_next, so (cur-1) is THIS move's ExtMove.
             // With LMRHIST on, reuse the ordering-time butterfly+conthist sum for general
             // quiets instead of re-reading the conthist tables (NOT byte-identical: this
@@ -1375,27 +1379,40 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                     if (ch2) hist += ch2[off];
                 }
             }
-            r -= hist / 8000;
+            r -= (hist / 8000) * 1024;                            // old whole-ply value, then x1024
             // CORRMARGIN (SF search.cpp LMR reduction term): a large raw correction
             // means the eval driving this reduction decision is less trustworthy —
-            // reduce less. SF's 30370/1024 (its r is x1024) scales to zug's whole-ply
-            // r as /31098880. Off -> no-op (corrMargin default false).
+            // reduce less. Now that r is natively x1024, this is SF's exact term
+            // (search.cpp: r -= std::abs(correctionValue) / 30370, correctionValue
+            // being SF's raw pre-shift correction sum). Off -> no-op (corrMargin
+            // default false).
             if (C.tune.corrMargin)
-                r -= (int)(std::abs(correction_raw(C, pos, ss)) / 31098880);
+                r -= (int)(std::abs(correction_raw(C, pos, ss)) / 30370);
             // ALLNODELMR (SF search.cpp:1227): an "all" node (neither PV nor cut) is
             // expected to fail low on every move — reduce late moves progressively
-            // harder the deeper we are. Self-ratio term, no rescaling needed (zug's r
-            // is whole-ply, same as SF's before its x1024 scaling is applied).
+            // harder the deeper we are. Self-ratio term: r is genuinely perturbed now
+            // (verified live — stacks with CORRMARGIN to change node counts), unlike
+            // the pre-x1024 port where it was a hard no-op. Tested in ISOLATION on
+            // startpos/tactical positions it still nets to the same node count as
+            // baseline: with no other fine term active, r stays an exact multiple of
+            // 1024, so floor(r/1024) only moves when the bump reaches a full extra
+            // 1024 — which only happens once the already-accumulated reduction k
+            // exceeds depth (k >= depth+1), a regime std::max(1, newDepth-red) already
+            // clamps to d=1 on both sides. Real effect requires another fine term
+            // (CORRMARGIN/ROOTDELTALMR) to first break r off an exact 1024 multiple.
             if (C.tune.allNodeLmr && allNode) r += r / (depth + 1);
-            // ROOTDELTALMR (SF search.cpp: delta*608/rootDelta on its x1024 r): reduce
-            // less when this node's alpha-beta window is wide relative to the root's
-            // aspiration window (this line is more "PV-like" than its ancestors
-            // suggest). delta<=rootDelta by construction, so the ratio saturates at 1.
+            // ROOTDELTALMR (SF search.cpp: r -= delta * 608 / rootDelta, its r being
+            // x1024): reduce less when this node's alpha-beta window is wide relative
+            // to the root's aspiration window (this line is more "PV-like" than its
+            // ancestors suggest). delta<=rootDelta by construction, so the ratio
+            // saturates at 608 (x1024 units, i.e. ~0.59 ply) — far less coarse than
+            // the old whole-ply `delta/rootDelta` term.
             if (C.tune.rootDeltaLmr) {
                 int delta = beta - alpha;
-                r -= delta / std::max(1, C.rootDelta);
+                r -= delta * 608 / std::max(1, C.rootDelta);
             }
-            int d = std::max(1, std::min(newDepth - r, newDepth));
+            int red = r / 1024;
+            int d = std::max(1, std::min(newDepth - red, newDepth));
             ss->reduction = newDepth - d;
             score = -negamax<false>(C, pos, ss + 1, -alpha - 1, -alpha, d, true);
             ss->reduction = 0;
