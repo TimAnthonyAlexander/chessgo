@@ -5,6 +5,7 @@
 #include "nnue_accumulator.h"
 #include "tt.h"
 #include "bitboard.h"
+#include <cassert>
 #include <chrono>
 #include <cstring>
 #include <iostream>
@@ -177,6 +178,15 @@ struct Context {
         // ttMove (frequently the actual best move) lowers the margin, a poorly-trusted one
         // raises it. Default OFF; env TTMOVEHIST=1 (SF search.cpp:1144/1162/1420).
         bool ttMoveHist = false;
+        // ---- NMPSF (2026-07-15): full SF18 null-move-pruning port (search.cpp
+        // "Step 9. Null move search with verification search") — cutNode gate +
+        // depth-only R (7+depth/3) + nmpMinPly verification search, all three
+        // together. A previous port of the cutNode gate ALONE (nmpCutGate above)
+        // washed −27 Elo precisely because it's an incomplete port: SF's relaxed
+        // gate only works alongside SF's R and its verification safety net.
+        // Default OFF; env NMPSF=1. OFF path must stay byte-identical to today's
+        // nullMove/nmpCutGate/nmpEvalDiv mechanism.
+        bool nmpSf = false;
         // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
         // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
         // callers in uci.cpp for the option table incl. min/max).
@@ -251,6 +261,7 @@ struct Context {
             if (on("LOWPLYHIST")) lowPlyHist = true;
             if (on("PAWNORDHIST")) pawnOrderHist = true;
             if (on("TTMOVEHIST")) ttMoveHist = true;
+            if (on("NMPSF")) nmpSf = true;
             if (on("GMCONST")) {
                 // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
                 // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
@@ -323,6 +334,12 @@ struct Context {
     // that's where SF actually resets it too (Search::Worker::clear(), search.cpp:594
     // — "usually before a new game", not per-iteration).
     int     ttMoveHistory = 0;
+    // NMPSF: SF's Worker::nmpMinPly (search.h:335) — the null-move verification
+    // recursion guard. 0 = verification not in progress (NMP allowed everywhere);
+    // while a verification search is running it holds ss->ply + 3*(depth-R)/4 so
+    // nested nodes with ply < nmpMinPly skip NMP (search.cpp Step 9). Only ever
+    // touched when tune.nmpSf is on; harmless dead field otherwise.
+    int     nmpMinPly = 0;
 
     NNUE::AccStack accStack; // per-search incremental accumulator (was a
                               // function-local `static` — one shared instance
@@ -391,6 +408,7 @@ void reset_tables(Context& C) {
     std::memset(C.lowPly, 0, sizeof(C.lowPly));
     std::memset(C.pawnOrderHist, 0, sizeof(C.pawnOrderHist));
     C.ttMoveHistory = 0;
+    C.nmpMinPly = 0;
     C.tt.clear();
 }
 
@@ -1003,22 +1021,78 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         // relaxed eval margin (beta - 18*depth + 350) rather than requiring eval>=beta
         // outright. Gated behind tune.nmpCutGate (default off) — R computation below
         // is unchanged either way.
-        bool nmpGate = C.tune.nmpCutGate
-            ? (cutNode && ss->staticEval >= beta - 18 * depth + 350)
-            : (eval >= beta);
-        if (C.tune.nullMove && depth >= 3 && nmpGate && (ss - 1)->currentMove != MOVE_NULL
-            && pos.non_pawn_material(pos.side_to_move())) {
-            int R = 3 + depth / 4 + std::min((eval - beta) / C.tune.nmpEvalDiv, 3);
-            StateInfo st;
-            ss->currentMove = MOVE_NULL;
-            ss->didCapture = false;
-            pos.do_null_move(st);
-            int nullScore = -negamax<false>(C, pos, ss + 1, -beta, -beta + 1, depth - R, !cutNode);
-            pos.undo_null_move();
-            if (C.stop) return 0;
-            if (nullScore >= beta) {
-                if (nullScore >= VALUE_MATE_IN_MAX_PLY) nullScore = beta;
-                return nullScore;
+        //
+        // NMPSF (default off, env NMPSF=1): SF18's COMPLETE Step-9 mechanism —
+        // cutNode gate + depth-only R + nmpMinPly verification search — ported
+        // together (~sf18-arm/src/search.cpp:892-925). A prior port of the cutNode
+        // gate ALONE (nmpCutGate above) washed −27 Elo; SF's gate is only sound
+        // paired with SF's R and its verification safety net, which is why this is
+        // one atomic mechanism switch, not another independent sub-toggle. When
+        // nmpSf is on, it fully REPLACES the block below (nmpCutGate/nmpEvalDiv/
+        // the depth>=3 + eval>=beta gate are all SF-legacy zug mechanics and take
+        // no part in the SF path); when off, the existing path runs completely
+        // unchanged (byte-identical node counts).
+        if (C.tune.nmpSf) {
+            // Gate (SF search.cpp:893-894): cutNode && ss->staticEval >= beta -
+            // 18*depth + 350 && !excludedMove && non-pawn material && ss->ply >=
+            // nmpMinPly && !is_loss(beta). The two cp constants (18, 350) are
+            // scaled from SF's pawn=208 cp scale to zug's pawn=100 scale by
+            // *100/208 ~ 0.4808: 18 -> 8.65 -> 9, 350 -> 168.3 -> 168. R and the
+            // ply/depth thresholds below are depth/ply-only and stay unscaled.
+            // cutNode implies !PvNode (SF asserts !(PvNode && cutNode)), and this
+            // whole block already sits inside the enclosing `!PvNode` guard.
+            if (C.tune.nullMove && cutNode && ss->staticEval >= beta - 9 * depth + 168
+                && !excluded && pos.non_pawn_material(pos.side_to_move())
+                && ss->ply >= C.nmpMinPly && beta > -VALUE_MATE_IN_MAX_PLY) {
+                // R (SF search.cpp:899): depth-only dynamic reduction, no eval term.
+                int R = 7 + depth / 3;
+                StateInfo st;
+                ss->currentMove = MOVE_NULL;
+                ss->didCapture = false;
+                pos.do_null_move(st);
+                int nullValue = -negamax<false>(C, pos, ss + 1, -beta, -beta + 1, depth - R, false);
+                pos.undo_null_move();
+                if (C.stop) return 0;
+
+                // Do not return unproven mate scores (SF search.cpp:906-907).
+                if (nullValue >= beta && nullValue < VALUE_MATE_IN_MAX_PLY) {
+                    // Shallow or already-inside-a-verification: take the cutoff
+                    // unverified, exactly like SF (search.cpp:909-910).
+                    if (C.nmpMinPly || depth < 16)
+                        return nullValue;
+
+                    assert(!C.nmpMinPly);  // recursive verification is not allowed
+
+                    // Verification search (SF search.cpp:914-923): re-search THIS
+                    // node (same ss/ply, no move made) at reduced depth with NMP
+                    // disabled from here up to nmpMinPly, cutNode=false. Only take
+                    // the null-move cutoff if the verification also fails high.
+                    C.nmpMinPly = ss->ply + 3 * (depth - R) / 4;
+                    int v = negamax<false>(C, pos, ss, beta - 1, beta, depth - R, false);
+                    C.nmpMinPly = 0;
+
+                    if (v >= beta)
+                        return nullValue;
+                }
+            }
+        } else {
+            bool nmpGate = C.tune.nmpCutGate
+                ? (cutNode && ss->staticEval >= beta - 18 * depth + 350)
+                : (eval >= beta);
+            if (C.tune.nullMove && depth >= 3 && nmpGate && (ss - 1)->currentMove != MOVE_NULL
+                && pos.non_pawn_material(pos.side_to_move())) {
+                int R = 3 + depth / 4 + std::min((eval - beta) / C.tune.nmpEvalDiv, 3);
+                StateInfo st;
+                ss->currentMove = MOVE_NULL;
+                ss->didCapture = false;
+                pos.do_null_move(st);
+                int nullScore = -negamax<false>(C, pos, ss + 1, -beta, -beta + 1, depth - R, !cutNode);
+                pos.undo_null_move();
+                if (C.stop) return 0;
+                if (nullScore >= beta) {
+                    if (nullScore >= VALUE_MATE_IN_MAX_PLY) nullScore = beta;
+                    return nullScore;
+                }
             }
         }
 
