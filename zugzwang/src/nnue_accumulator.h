@@ -44,6 +44,15 @@ public:
     // child's features and applies the multiset diff vs the parent slot.
     void push(const Position& pos);
 
+    // push_delta is the move-aware O(changed-edges) variant of push (gated by
+    // THREATDELTA=1): instead of re-enumerating the child's full feature set, it copies
+    // the parent half and applies only the changed base+threat edges computed from the
+    // pre-move board `oldb` (captured by do_move before it mutated Position) vs the child
+    // `pos`. A perspective whose king crossed a bucket/mirror boundary is refreshed from
+    // scratch (its delta would be invalid); the other is deltaed. Result is byte-identical
+    // to push() — ASSERT gates the invariant.
+    void push_delta(const BoardSnapshot& oldb, const Position& pos);
+
     // pushNull duplicates the top slot — a null move changes no piece placement, so the
     // (color-absolute) accumulator halves and feature sets are unchanged.
     void pushNull();
@@ -85,6 +94,8 @@ private:
     std::vector<Slot>    slots_;
     std::vector<int16_t> counts_;   // len InputTotal, kept all-zero between apply_diff calls
     Features             scratch_;  // reusable Features for enumerate_flat
+    // Reusable per-perspective sub/add scratch for push_delta (capacity persists).
+    std::vector<int>     dSubW_, dAddW_, dSubB_, dAddB_;
     int                  sp_ = 0;
 };
 

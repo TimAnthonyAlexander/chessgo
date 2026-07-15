@@ -76,6 +76,11 @@ public:
     // Attacks
     U64 attackers_to(Square s, U64 occ) const;
     U64 attackers_to(Square s) const { return attackers_to(s, byTypeBB[0]); }
+    // Static form over raw piece bitboards — the single shared implementation, so
+    // the move-aware NNUE threat delta can query a pre-move board SNAPSHOT
+    // (NNUE::BoardSnapshot) after do_move has mutated Position in place.
+    static U64 attackers_to(const U64 byType[PIECE_TYPE_NB], const U64 byColor[COLOR_NB],
+                            Square s, U64 occ);
     bool is_attacked(Square s, Color by) const;
 
     // Move machinery

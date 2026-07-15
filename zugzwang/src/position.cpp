@@ -257,12 +257,17 @@ std::string Position::fen() const {
 }
 
 U64 Position::attackers_to(Square s, U64 occ) const {
-    return (pawn_attacks(BLACK, s) & pieces(WHITE, PAWN))
-         | (pawn_attacks(WHITE, s) & pieces(BLACK, PAWN))
-         | (KnightAttacks[s] & pieces(KNIGHT))
-         | (rook_attacks(s, occ) & pieces(ROOK, QUEEN))
-         | (bishop_attacks(s, occ) & pieces(BISHOP, QUEEN))
-         | (KingAttacks[s] & pieces(KING));
+    return attackers_to(byTypeBB, byColorBB, s, occ);
+}
+
+U64 Position::attackers_to(const U64 byType[PIECE_TYPE_NB], const U64 byColor[COLOR_NB],
+                           Square s, U64 occ) {
+    return (pawn_attacks(BLACK, s) & (byColor[WHITE] & byType[PAWN]))
+         | (pawn_attacks(WHITE, s) & (byColor[BLACK] & byType[PAWN]))
+         | (KnightAttacks[s] & byType[KNIGHT])
+         | (rook_attacks(s, occ) & (byType[ROOK] | byType[QUEEN]))
+         | (bishop_attacks(s, occ) & (byType[BISHOP] | byType[QUEEN]))
+         | (KingAttacks[s] & byType[KING]);
 }
 
 bool Position::is_attacked(Square s, Color by) const {
@@ -328,6 +333,17 @@ void Position::do_move(Move m, StateInfo& newSt) {
     MoveType mt = type_of_move(m);
     Piece captured = (mt == EN_PASSANT) ? make_piece(them, PAWN) : board[to];
     if (us == BLACK) fullmove++; // FEN fullmove increments after Black's move (display-only)
+
+    // Move-aware NNUE threat delta (THREATDELTA=1): snapshot the pre-move piece
+    // placement NOW, before the board mutation below, so push_delta can diff the OLD
+    // board against the child. ~136 bytes; only when a search has attached an acc.
+    const bool useDelta = nnueAcc && NNUE::threat_delta_enabled();
+    NNUE::BoardSnapshot snap;
+    if (useDelta) {
+        std::memcpy(snap.byType, byTypeBB, sizeof(byTypeBB));
+        std::memcpy(snap.byColor, byColorBB, sizeof(byColorBB));
+        std::memcpy(snap.board, board, sizeof(board));
+    }
 
     // Remove ep from key (will re-add if needed)
     if (st->epSquare != SQ_NONE)
@@ -427,7 +443,10 @@ void Position::do_move(Move m, StateInfo& newSt) {
     game_key_history[history_count++] = k;
 
     // Child board fully formed — fold the move into the incremental accumulator.
-    if (nnueAcc) nnueAcc->push(*this);
+    if (nnueAcc) {
+        if (useDelta) nnueAcc->push_delta(snap, *this);
+        else          nnueAcc->push(*this);
+    }
 }
 
 void Position::undo_move(Move m) {

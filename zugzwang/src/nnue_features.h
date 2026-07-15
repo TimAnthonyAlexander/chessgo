@@ -24,4 +24,39 @@ struct Features {
 // own king selects the bucket + horizontal mirror, applied to every feature square.
 void active_features(const Position& pos, Color persp, Features& out);
 
+// BoardSnapshot — a lightweight copy of just the piece placement (piece bitboards +
+// mailbox) of a position taken BEFORE a move. do_move mutates Position in place, so
+// the move-aware threat delta captures this at the top of do_move to still be able to
+// query the OLD board once the child is formed. ~136 bytes; cheap to memcpy per node.
+struct BoardSnapshot {
+    U64   byType[PIECE_TYPE_NB];
+    U64   byColor[COLOR_NB];
+    Piece board[SQUARE_NB];
+    U64   occ()                          const { return byType[0]; }
+    Piece piece_on(Square s)             const { return board[s]; }
+    U64   pieces(Color c, PieceType pt)  const { return byColor[c] & byType[pt]; }
+    U64   attackers_to(Square s, U64 o)  const { return Position::attackers_to(byType, byColor, s, o); }
+};
+
+// changed_edges_delta — the move-aware threat delta (cut-1 "correct-by-construction
+// enumerate" variant, mirroring gomachine's pushMoveAwareEnumerate). Given the pre-move
+// board `oldb` and the fully-formed child, it appends the flat base+threat feature
+// indices to SUBTRACT (parent) and ADD (child) so the incremental halves reach the
+// child's active set — for whichever perspectives are requested (doW/doB). A requested
+// perspective's king MUST NOT have crossed a bucket/mirror boundary (callers rebuild
+// such halves from scratch instead). Index encoding is byte-identical to
+// active_features (both route threats through the same emit path).
+void changed_edges_delta(const BoardSnapshot& oldb, const Position& child,
+                         bool doW, std::vector<int>& subW, std::vector<int>& addW,
+                         bool doB, std::vector<int>& subB, std::vector<int>& addB);
+
+// perspective_bucket_key packs (bucket, mirror) for `persp`'s king square into a small
+// int — a king move that changes this key invalidates that perspective's incremental
+// delta (new bucket copy or every square reflected) and forces a from-scratch refresh.
+int perspective_bucket_key(Square ksq, Color persp);
+
+// threat_delta_enabled reads the THREATDELTA env once (default OFF): "1" turns the
+// move-aware delta push path on, for A/B SPRT vs the full-enumerate push.
+bool threat_delta_enabled();
+
 } // namespace NNUE

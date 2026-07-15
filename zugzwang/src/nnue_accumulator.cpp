@@ -33,6 +33,10 @@ AccStack::AccStack() : slots_(NumSlots), counts_(static_cast<std::size_t>(InputT
     }
     scratch_.base.reserve(MaxActive);
     scratch_.threat.reserve(MaxActive);
+    dSubW_.reserve(MaxActive);
+    dAddW_.reserve(MaxActive);
+    dSubB_.reserve(MaxActive);
+    dAddB_.reserve(MaxActive);
 }
 
 void AccStack::enumerate_flat(const Position& pos, Color persp, std::vector<int>& out) {
@@ -88,6 +92,45 @@ void AccStack::push(const Position& pos) {
     std::memcpy(dst.b, src.b, sizeof(dst.b));
     apply_diff(dst.w, src.fw, dst.fw);
     apply_diff(dst.b, src.fb, dst.fb);
+    ++sp_;
+}
+
+void AccStack::push_delta(const BoardSnapshot& oldb, const Position& pos) {
+    Slot& src = slots_[sp_];
+    Slot& dst = slots_[sp_ + 1];
+
+    // Per-perspective refresh: a king move that changes this perspective's bucket/mirror
+    // key invalidates its delta (new bucket copy / full reflection). Only the moving
+    // side's king moved, so at most one of these is true.
+    const bool refreshW = perspective_bucket_key(BB::lsb(oldb.pieces(WHITE, KING)), WHITE)
+                       != perspective_bucket_key(pos.king_square(WHITE), WHITE);
+    const bool refreshB = perspective_bucket_key(BB::lsb(oldb.pieces(BLACK, KING)), BLACK)
+                       != perspective_bucket_key(pos.king_square(BLACK), BLACK);
+
+    // Changed base+threat edges for the perspectives that are NOT refreshed.
+    dSubW_.clear(); dAddW_.clear(); dSubB_.clear(); dAddB_.clear();
+    changed_edges_delta(oldb, pos, !refreshW, dSubW_, dAddW_, !refreshB, dSubB_, dAddB_);
+
+    // White half: rebuild from scratch on a bucket/mirror cross, else copy parent + delta.
+    if (refreshW) {
+        enumerate_flat(pos, WHITE, dst.fw);
+        build_half(dst.w, dst.fw);
+    } else {
+        std::memcpy(dst.w, src.w, sizeof(dst.w));
+        apply_diff(dst.w, dSubW_, dAddW_); // sub decremented, add incremented
+    }
+    // Black half: same.
+    if (refreshB) {
+        enumerate_flat(pos, BLACK, dst.fb);
+        build_half(dst.b, dst.fb);
+    } else {
+        std::memcpy(dst.b, src.b, sizeof(dst.b));
+        apply_diff(dst.b, dSubB_, dAddB_);
+    }
+    // NOTE: in the delta path dst.fw/dst.fb are left stale for deltaed halves — nothing
+    // reads them (the next push_delta / refresh / eval never consults a slot's feature
+    // list; only the legacy full-enumerate push() does, and it is never mixed in when
+    // THREATDELTA=1). reset() and refreshed halves keep their lists valid regardless.
     ++sp_;
 }
 

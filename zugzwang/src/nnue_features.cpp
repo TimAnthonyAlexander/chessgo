@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <array>
+#include <cstdlib>
 
 // NNUE feature extraction — a bit-exact C++ port of gomachine's
 // internal/nnue/{kingbucket.go, threats_sf.go, enriched.go}. See the porting spec
@@ -178,6 +179,55 @@ const SFTables& tables() {
     return t;
 }
 
+// PerspXform — the per-perspective canonicalization (king bucket + horizontal mirror)
+// shared by active_features and the move-aware delta so both orient IDENTICALLY.
+struct PerspXform {
+    int   off;    // bucket * InputDim — this perspective's base-block offset
+    int   mir;    // 0 or 7 — horizontal mirror mask
+    Color persp;
+    int orient(int s) const {
+        int r = s;
+        if (persp == BLACK) r ^= 56;
+        r ^= mir;
+        return r;
+    }
+};
+
+inline PerspXform make_xform(Square ksq, Color persp) {
+    const int k      = int(ksq);
+    const int ko     = (persp == BLACK) ? (k ^ 56) : k;
+    const int mir    = ((ko & 7) >= 4) ? 7 : 0;
+    const int bucket = ((ko ^ mir) >> 3) * 2 + (((ko ^ mir) & 7) >> 1);
+    return PerspXform{ bucket * int(InputDim), mir, persp };
+}
+
+// base_index — the king-bucketed + mirrored PSQ feature index for a piece of 0-indexed
+// type `pt0` and relative color `aRel` (0 = perspective's own, 1 = enemy) on `sq`.
+inline int base_index(const PerspXform& x, int aRel, int pt0, Square sq) {
+    return x.off + (aRel * 6 + pt0) * 64 + x.orient(int(sq));
+}
+
+// emit_piece_threats — append the threat feature indices for ONE attacker piece
+// (0-indexed type `pt0`, color `c`, relative color `aRel`) on `sq` against occupancy
+// `occ`, reading victims via `pieceAt`. Shared by active_features and the delta so both
+// produce byte-identical threat indices (PsqSize + threatIndex per surviving edge).
+template <class PieceAt>
+inline void emit_piece_threats(const SFTables& T, const PerspXform& x, int aRel,
+                               int pt0, Color c, Square sq, U64 occ,
+                               PieceAt&& pieceAt, std::vector<int>& out) {
+    const int rfrom = x.orient(int(sq));
+    U64 targets = attacks0(pt0, c, sq, occ) & occ;
+    while (targets) {
+        const Square tsq   = BB::pop_lsb(targets);
+        const Piece victim = pieceAt(tsq);
+        const int   vt0    = int(type_of(victim)) - 1;
+        const int   vRel   = (color_of(victim) != x.persp) ? 1 : 0;
+        int idx;
+        if (T.threatIndex(aRel, pt0, vRel, vt0, rfrom, x.orient(int(tsq)), idx))
+            out.push_back(int(PsqSize) + idx);
+    }
+}
+
 } // namespace
 
 namespace NNUE {
@@ -193,24 +243,11 @@ void active_features(const Position& pos, Color persp, Features& out) {
     out.threat.clear();
 
     // Perspective canonicalization (kingbucket.go): orient by ^56 for Black, then the
-    // horizontal mirror (^7) when the oriented king sits on the e-h half. off selects
-    // this perspective's copy of the 768-wide PSQ block.
-    const int ksq = int(pos.king_square(persp));
-    const int ko  = (persp == BLACK) ? (ksq ^ 56) : ksq;
-    const int mir = ((ko & 7) >= 4) ? 7 : 0;
-    const int bucket = ((ko ^ mir) >> 3) * 2 + (((ko ^ mir) & 7) >> 1);
-    const int off = bucket * InputDim;
-
-    // orient maps a real square into the perspective's oriented+mirrored frame — the
-    // SAME transform for base piece squares and threat endpoints.
-    auto orient = [persp, mir](int s) -> int {
-        int r = s;
-        if (persp == BLACK) r ^= 56;
-        r ^= mir;
-        return r;
-    };
-
+    // horizontal mirror (^7) when the oriented king sits on the e-h half; the bucket
+    // selects this perspective's copy of the 768-wide PSQ block.
+    const PerspXform x = make_xform(pos.king_square(persp), persp);
     const U64 occ = pos.pieces();
+    auto pieceAt = [&pos](Square t) { return pos.piece_on(t); };
 
     // Sweep every piece. gomachine iterates WhitePawn..BlackKing; we iterate
     // (color, type) — identical set, and both blocks are order-independent.
@@ -219,34 +256,110 @@ void active_features(const Position& pos, Color persp, Features& out) {
             U64 bb = pos.pieces(Color(c), PieceType(pt));
             if (!bb) continue;
 
-            const int t0 = pt - 1;                              // 0-indexed type
-            const int aRel = (Color(c) != persp) ? 1 : 0;       // 0 = own, 1 = enemy
-            const int baseIdx = (aRel * 6 + t0) * 64;           // PSQ sub-block
+            const int t0 = pt - 1;                        // 0-indexed type
+            const int aRel = (Color(c) != persp) ? 1 : 0; // 0 = own, 1 = enemy
 
             U64 b = bb;
             while (b) {
                 const Square sq = BB::pop_lsb(b);
-                const int rsq = orient(int(sq));
-
-                // base (king-bucketed + mirrored)
-                out.base.push_back(off + baseIdx + rsq);
-
-                // threats: every attacker -> occupied-square edge that survives the
-                // victim-exclusion / same-type-dedup filter (real-board geometry,
-                // oriented endpoints).
-                U64 targets = attacks0(t0, Color(c), sq, occ) & occ;
-                while (targets) {
-                    const Square tsq = BB::pop_lsb(targets);
-                    const Piece victim = pos.piece_on(tsq);
-                    const int vt0 = int(type_of(victim)) - 1;
-                    const int vRel = (color_of(victim) != persp) ? 1 : 0;
-                    int idx;
-                    if (T.threatIndex(aRel, t0, vRel, vt0, rsq, orient(int(tsq)), idx))
-                        out.threat.push_back(PsqSize + idx);
-                }
+                out.base.push_back(base_index(x, aRel, t0, sq));
+                emit_piece_threats(T, x, aRel, t0, Color(c), sq, occ, pieceAt, out.threat);
             }
         }
     }
+}
+
+// changed_edges_delta — cut-1 "correct-by-construction enumerate" move-aware delta.
+// Correctness proof (why the from-scratch ASSERT rebuild must match int16-exact):
+//   A threat edge (attacker@a -> victim@v) can only differ old vs child if
+//     (1) a's occupant changed (a ∈ D), or
+//     (2) v's occupant changed (v ∈ D  =>  a attacks a D-square under old or new occ), or
+//     (3) a slider a's ray to v gained/lost a blocker b ∈ D (a attacks b under EXACTLY
+//         one occupancy  =>  a ∈ attackers_to(b, oldOcc) ∪ attackers_to(b, newOcc)).
+//   So every attacker whose edges change lies in
+//     affected = D ∪ ⋃_{d∈D} (attackers_to(d,oldOcc) ∪ attackers_to(d,newOcc)).
+//   Base-768 features change only on D. For every s ∈ affected we subtract s's FULL old
+//   edge set and add its FULL new set; an attacker whose edges did NOT change is either
+//   outside affected (untouched) or emits identical old/new edges that cancel in
+//   apply_diff. Hence (parent half) + delta == (child half) as int16-column multisets.
+void changed_edges_delta(const BoardSnapshot& oldb, const Position& child,
+                         bool doW, std::vector<int>& subW, std::vector<int>& addW,
+                         bool doB, std::vector<int>& subB, std::vector<int>& addB) {
+    const SFTables& T = tables();
+    const U64 oldOcc = oldb.occ();
+    const U64 newOcc = child.pieces();
+
+    // D = squares whose occupant changed (per-piece bitboard XOR) — robust to castling /
+    // en passant / promotion without decoding move flags (a promotion shows as pawn-left
+    // at `from` + promo-piece-arrived at `to`; en passant as three changed squares).
+    U64 D = 0;
+    for (int c = WHITE; c <= BLACK; ++c)
+        for (int pt = PAWN; pt <= KING; ++pt)
+            D |= oldb.pieces(Color(c), PieceType(pt)) ^ child.pieces(Color(c), PieceType(pt));
+
+    // affected — the both-occupancy seeding is what catches discovered AND retracted
+    // slider threats (case 3 above).
+    U64 affected = D;
+    for (U64 d = D; d;) {
+        const Square s = BB::pop_lsb(d);
+        affected |= oldb.attackers_to(s, oldOcc);
+        affected |= child.attackers_to(s, newOcc);
+    }
+
+    auto oldPieceAt = [&oldb](Square t)  { return oldb.piece_on(t); };
+    auto newPieceAt = [&child](Square t) { return child.piece_on(t); };
+
+    struct PerspReq { bool on; Color color; std::vector<int>* sub; std::vector<int>* add; };
+    const PerspReq reqs[2] = {
+        { doW, WHITE, &subW, &addW },
+        { doB, BLACK, &subB, &addB },
+    };
+    for (const PerspReq& p : reqs) {
+        if (!p.on) continue;
+        // A requested perspective's king did NOT cross a bucket/mirror boundary (else the
+        // caller refreshes that half), so parent and child share this transform — take it
+        // from the child.
+        const PerspXform x = make_xform(child.king_square(p.color), p.color);
+
+        // Base-768: changes only on D squares (piece left / arrived / changed identity).
+        for (U64 d = D; d;) {
+            const Square s = BB::pop_lsb(d);
+            const Piece op = oldb.piece_on(s);
+            const Piece np = child.piece_on(s);
+            if (op != NO_PIECE)
+                p.sub->push_back(base_index(x, (color_of(op) != p.color) ? 1 : 0,
+                                            int(type_of(op)) - 1, s));
+            if (np != NO_PIECE)
+                p.add->push_back(base_index(x, (color_of(np) != p.color) ? 1 : 0,
+                                            int(type_of(np)) - 1, s));
+        }
+
+        // Threat edges: subtract each affected attacker's FULL old edge set, add its FULL
+        // new set. Unchanged edges cancel in apply_diff.
+        for (U64 a = affected; a;) {
+            const Square s = BB::pop_lsb(a);
+            const Piece op = oldb.piece_on(s);
+            if (op != NO_PIECE)
+                emit_piece_threats(T, x, (color_of(op) != p.color) ? 1 : 0,
+                                   int(type_of(op)) - 1, color_of(op), s, oldOcc,
+                                   oldPieceAt, *p.sub);
+            const Piece np = child.piece_on(s);
+            if (np != NO_PIECE)
+                emit_piece_threats(T, x, (color_of(np) != p.color) ? 1 : 0,
+                                   int(type_of(np)) - 1, color_of(np), s, newOcc,
+                                   newPieceAt, *p.add);
+        }
+    }
+}
+
+int perspective_bucket_key(Square ksq, Color persp) {
+    const PerspXform x = make_xform(ksq, persp);
+    return x.off | x.mir; // off is a multiple of InputDim (768, div by 8); mir ∈ {0,7}
+}
+
+bool threat_delta_enabled() {
+    static const bool on = [] { const char* e = getenv("THREATDELTA"); return e && e[0] == '1'; }();
+    return on;
 }
 
 } // namespace NNUE
