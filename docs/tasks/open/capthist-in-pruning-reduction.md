@@ -15,6 +15,8 @@ sharpened ordering. Cheapest fresh lever — build-on a table already maintained
 
 **How.** Scale SF's constants (166, /29, 868/128) to zug's `PieceVal`/history magnitudes (zug's are
 ~14× smaller than SF's PieceValue; the capthist gravity is ±16k int16 house-style). Gate behind an
-env flag, movetime SPRT on coalla. Low risk (the table + `piece_dense`/victim plumbing already exist).
+env flag, movetime SPRT on coalla. The table + `piece_dense`/victim plumbing already exist, so this
+is small code. Reference impls: SF (`~/sf18-arm`), Stormphrax, Reckless — all use captHist in
+pruning/reduction; cross-ref for the exact wiring.
 
-**Priority.** Highest of the SF-search-gaps — do first.
+**Priority.** Highest of the SF-search-gaps — do first (no prerequisites; builds on the shipped table).

@@ -14,12 +14,14 @@ one of the highest-value ordering features in modern engines. **~+10–20 ceilin
 2-ply banked +19.6 FN but only +8.0 movetime (`conthist-fn-to-mt.md`), and the LMRHIST experiment
 confirmed the cost is the **cold first-touch of each node's conthist plane in the ordering pass**.
 More plies = more cold plane touches per node → the FN gain likely **does not convert to movetime**.
-So temper expectations: this is high FN ceiling but a real movetime risk. Mitigations: read SF's
+So the real problem to solve here is the read cost, not the coding: high FN ceiling, but movetime only
+pays if the extra cold plane touches don't eat the gain. The work IS beating that. Levers: read SF's
 *selective* ply subset (it skips ply 5 for ordering), and/or gate extra plies to a subset of moves.
+Reference impls: SF (`~/sf18-arm`), Stormphrax, Reckless — compare how they bound the per-node cost.
 
 **How.** Add `(ss-3)..(ss-6)` continuation planes + Stack plumbing, new `contHist3..` tables (memory:
 each is ~2.4 MB), read/update sites. Gate: FIXED-nodes SPRT first (cheap corroboration), then the
 real movetime SPRT — do NOT ship on the FN number, the whole point is whether it survives movetime.
 
-**Effort.** Medium-high. **Priority.** After the low-risk build-ons; treat as a "fight the read cost"
-project, not a free win.
+**Effort.** Medium-high. **Priority.** After the build-ons; treat as a "fight the read cost" project,
+not a free win — the Elo is there at FN, the job is converting it to movetime.

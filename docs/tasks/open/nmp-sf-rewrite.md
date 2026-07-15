@@ -19,6 +19,8 @@ incomplete port" — SF's gate only works alongside the rest of its NMP structur
 `eval>=beta`, plain non-PV, no verification. `nmpCutGate` flag exists (default-off, −27) — do NOT
 just flip it; port the whole mechanism behind a new flag.
 
-**Value / risk.** Medium-high value (over-pruning fix + verification safety net), medium risk (touches
-the most load-bearing pruning rule). Gate: movetime SPRT + a tactics-suite sanity (verification search
-is a correctness net). Consider isolating the three parts to see which carries the Elo.
+**Value / dependency.** Medium-high value (over-pruning fix + verification safety net). The dependency
+is the whole point: the gate can't work without the depth-only R + verification search — do them
+together, not piecemeal. Gate: movetime SPRT + a tactics-suite sanity. Isolate the three parts once
+the bundle clears, to see which carries the Elo. Reference impls: SF (`~/sf18-arm/src/search.cpp`),
+Stormphrax, Reckless — all null-move exactly this way; port against them, don't guess.
