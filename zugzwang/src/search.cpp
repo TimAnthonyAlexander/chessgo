@@ -151,6 +151,11 @@ struct Context {
         // ---- 2 new SF-ported history ordering tables (2026-07-15) — default OFF, env-gated ----
         bool lowPlyHist   = false; // SF LowPlyHistory: ply<5 butterfly-shaped table, extra ordering weight near the root (env LOWPLYHIST=1; SF history.h/movepick.cpp)
         bool pawnOrderHist = false; // SF PawnHistory: pawn-structure-keyed quiet ordering table (env PAWNORDHIST=1; SF history.h/movepick.cpp)
+        // ---- SF TTMoveHistory (2026-07-15) — a single running scalar (SF history.h:216,
+        // StatsEntry<int16_t,8192>) that feeds the double-extension margin: a well-trusted
+        // ttMove (frequently the actual best move) lowers the margin, a poorly-trusted one
+        // raises it. Default OFF; env TTMOVEHIST=1 (SF search.cpp:1144/1162/1420).
+        bool ttMoveHist = false;
         // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
         // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
         // callers in uci.cpp for the option table incl. min/max).
@@ -223,6 +228,7 @@ struct Context {
             if (on("ROOTDELTALMR")) rootDeltaLmr = true;
             if (on("LOWPLYHIST")) lowPlyHist = true;
             if (on("PAWNORDHIST")) pawnOrderHist = true;
+            if (on("TTMOVEHIST")) ttMoveHist = true;
             if (on("GMCONST")) {
                 // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
                 // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
@@ -283,6 +289,12 @@ struct Context {
     int     rootBestScore = 0;
     int     rootDelta = 0; // ROOTDELTALMR: root aspiration window width (beta-alpha), set once per ID
                             // iteration before the root negamax<true> call(s) (SF search.cpp rootDelta)
+    // TTMOVEHIST: SF's ttMoveHistory (search.h:297) — a single running scalar,
+    // gravity-updated toward ±8192 (SF's StatsEntry<int16_t,8192> D-clamp). Reset
+    // per new-game (reset_tables), same lifetime as history/corrHist below, since
+    // that's where SF actually resets it too (Search::Worker::clear(), search.cpp:594
+    // — "usually before a new game", not per-iteration).
+    int     ttMoveHistory = 0;
 
     NNUE::AccStack accStack; // per-search incremental accumulator (was a
                               // function-local `static` — one shared instance
@@ -348,6 +360,7 @@ void reset_tables(Context& C) {
     std::memset(C.captHist, 0, sizeof(C.captHist));
     std::memset(C.lowPly, 0, sizeof(C.lowPly));
     std::memset(C.pawnOrderHist, 0, sizeof(C.pawnOrderHist));
+    C.ttMoveHistory = 0;
     C.tt.clear();
 }
 
@@ -372,6 +385,15 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
 void corrhist_update_entry(int& e, int bonus) {
     bonus = std::max(-CORR_LIMIT, std::min(CORR_LIMIT, bonus));
     e += bonus - e * std::abs(bonus) / CORR_LIMIT;
+}
+
+// TTMOVEHIST: same gravity idiom as corrhist_update_entry, but toward SF's
+// ttMoveHistory D-clamp (8192, StatsEntry<int16_t,8192>) instead of CORR_LIMIT.
+// zug's stat is a plain int (no int16 overflow risk), so no extra clamp needed.
+constexpr int TTMOVEHIST_D = 8192;
+void ttmovehist_update(int& e, int bonus) {
+    bonus = std::max(-TTMOVEHIST_D, std::min(TTMOVEHIST_D, bonus));
+    e += bonus - e * std::abs(bonus) / TTMOVEHIST_D;
 }
 
 // Weighted, blended correction (centipawns, side-to-move-relative) — SF's
@@ -1097,7 +1119,12 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                 // (negative for non-captures → double-extend routinely) explode zug's
                 // tree ~2 plies without SF's corrVal/cutoffCnt damping, so this uses a
                 // conservative POSITIVE margin and no triple tier. env DBLEXT=0.
-                if (C.tune.dblExt && !PvNode && s < singularBeta - 64) {
+                // TTMOVEHIST (SF search.cpp:1144): a well-trusted ttMove (high running
+                // ttMoveHistory) lowers the double-ext margin — easier to double-extend;
+                // a poorly-trusted one raises it. Conservative first cut: +-8192 swings
+                // the fixed 64 margin by +-12 (~19%). Off -> plain 64, byte-identical.
+                int dblMargin = C.tune.ttMoveHist ? (64 - C.ttMoveHistory * 12 / TTMOVEHIST_D) : 64;
+                if (C.tune.dblExt && !PvNode && s < singularBeta - dblMargin) {
                     extension = 2;
                     // Wave 6: a 3rd ply only when the move fails verification by a very
                     // wide margin — rare, so it can't explode the tree the way SF's raw
@@ -1106,6 +1133,10 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                 }
             }
             else if (singularBeta >= beta) {
+                // TTMOVEHIST malus (SF search.cpp:1162): multi-cut means the ttMove
+                // ISN'T singular after all — a mild malus to the running stat.
+                if (C.tune.ttMoveHist)
+                    ttmovehist_update(C.ttMoveHistory, std::max(-400 - 100 * depth, -4000));
                 // SF search.cpp:1160: `else if (value >= beta && !is_decisive(value)) return value;`
                 // — returns the singular-verification search score `value`, not the margin
                 // `singularBeta`. `s` above is zug's equivalent verification score.
@@ -1284,6 +1315,13 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
 
     // Update killers / history on beta cutoff
     if (bestMove != MOVE_NONE && bestValue >= beta) {
+        // TTMOVEHIST (SF search.cpp:1420): reward the running stat when the ttMove
+        // held up as bestMove, penalize when some other move cut instead. SF gates
+        // this on !PvNode only (fires whenever bestMove is set, not just on a beta
+        // cutoff); this block only runs on cutoff, so it's a subset of SF's site —
+        // still the natural spot since bestMove/ttMove/PvNode are all in scope here.
+        if (C.tune.ttMoveHist && !PvNode)
+            ttmovehist_update(C.ttMoveHistory, bestMove == ttMove ? 809 : -865);
         int bonus = depth * depth;
         if (!pos.is_capture(bestMove) && type_of_move(bestMove) != PROMOTION) {
             if (ss->killers[0] != bestMove) {
