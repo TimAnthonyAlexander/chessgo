@@ -102,6 +102,10 @@ struct Context {
         bool contHist = true; // D.2: continuation history (parent/grandparent-keyed quiet magnitude)
         bool captHist = true; // SF capture history: learned capture-ordering table (banked modest +, 2026-07-15)
         int  captHistWeight = 128; // read weight /256 (128 = half weight); SPSA-tunable via CaptHistWeight
+        // captHistPrune: build-on captHist (docs/tasks/open/capthist-in-pruning-reduction.md)
+        // — feed the same table into (a) the capture-SEE pruning margin and (b) the LMR
+        // statScore for captures, not just ordering. Default OFF; env CAPTHISTPRUNE=1.
+        bool captHistPrune = false;
         bool doDeeper = true; // D.3: adaptive do-deeper/do-shallower LMR re-search depth
         // ---- PARITY_GOMACHINE.md D.5/D.7 — Wave C, default OFF, SPRT independently ----
         bool seeQuietLinear = false; // D.5: linear SEE-quiet shape -75*depth, depth<=6 (vs quadratic default)
@@ -176,6 +180,7 @@ struct Context {
             if (on("PVGUARD")) pvGuard = true;
             if (on("CONTHIST")) contHist = true;
             if (off("CAPTHIST")) captHist = false; // default-on now; kill-switch for A/B
+            if (on("CAPTHISTPRUNE")) captHistPrune = true;
             if (on("DODEEPER")) doDeeper = true;
             if (on("SEEQUIETLINEAR")) seeQuietLinear = true;
             if (on("GMCHECKEXT")) gmCheckExt = true;
@@ -951,7 +956,23 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                 if (C.tune.quietSee && seeQuietPrune) continue;
             } else {
                 // SEE pruning of captures
-                if (depth <= C.tune.captSeeMaxDepth && !givesCheck && !pos.see_ge(m, -C.tune.captSeeCoeff * depth)) continue;
+                // captHistPrune (build-on captHist, SF search.cpp:1077: margin =
+                // max(166*depth + captHist/29, 0)): add a captHist-scaled term to zug's
+                // flat coeff*depth margin. K=320 derivation: SF's max history swing is
+                // its hard D-clamp (StatsEntry<int16_t,10692>), so captHist/29 maxes at
+                // 10692/29 ~= 368.7, i.e. ~2.22x its per-depth coefficient (166). Zug's
+                // captHist has no D-clamp but self-limits to ~16384 in steady state
+                // (search.cpp:455's "house gravity trends to ~16k"); solving the same
+                // 2.22 ratio against captSeeCoeff's default (23) gives
+                // 16384/(2.22*23) ~= 320.
+                int margin = C.tune.captSeeCoeff * depth;
+                if (C.tune.captHistPrune) {
+                    PieceType victim = (type_of_move(m) == EN_PASSANT)
+                        ? PAWN : type_of(pos.piece_on(to_sq(m)));
+                    margin += C.captHist[piece_dense(mover)][to_sq(m)][victim] / 320;
+                    margin = std::max(margin, 0); // SF clamps the same way (search.cpp:1077)
+                }
+                if (depth <= C.tune.captSeeMaxDepth && !givesCheck && !pos.see_ge(m, -margin)) continue;
             }
         }
 
@@ -1011,7 +1032,10 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         bool wasLMRReduced = false;
 
         // Late Move Reductions
-        if (C.tune.lmr && depth >= 3 && moveCount > C.tune.lmrMinMoves + (rootNode ? 1 : 0) && isQuiet) {
+        // captHistPrune extends LMR to captures too (SF applies the same reduction
+        // formula to every move, capture or quiet — zug's default gate is isQuiet-only).
+        bool lmrEligible = isQuiet || (C.tune.captHistPrune && isCapture);
+        if (C.tune.lmr && depth >= 3 && moveCount > C.tune.lmrMinMoves + (rootNode ? 1 : 0) && lmrEligible) {
             int r = C.Reductions[std::min(depth, 63)][std::min(moveCount, 63)];
             if (!PvNode) r++;
             if (!improving) r++;
@@ -1031,7 +1055,18 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             // is the ordering-time value, not the move-time value — sibling subtree
             // cutoffs may have updated the tables since).
             int hist;
-            if (C.tune.lmrHistCache && C.tune.contHist && (cur - 1)->histScore != HIST_NONE) {
+            if (!isQuiet) {
+                // Capture reaching LMR — only possible when captHistPrune gated
+                // lmrEligible above. Mirrors SF's capture statScore (search.cpp:1216):
+                // 868*PieceValue[captured]/128 + captHist[...]. K=29 derivation: SF's
+                // PieceValue term maxes at 868*QueenValue/128 = 17209, ~1.61x its
+                // captHist D-clamp (10692). Zug's captHist self-limits to ~16384
+                // (search.cpp:455); solving the same 1.61 ratio against zug's QueenVal
+                // (900) gives K = 1.61*16384/900 ~= 29.
+                PieceType victim = (type_of_move(m) == EN_PASSANT)
+                    ? PAWN : type_of(pos.piece_on(to_sq(m)));
+                hist = PieceVal[victim] * 29 + C.captHist[piece_dense(mover)][to_sq(m)][victim];
+            } else if (C.tune.lmrHistCache && C.tune.contHist && (cur - 1)->histScore != HIST_NONE) {
                 hist = (cur - 1)->histScore;
             } else {
                 hist = C.history[us][from_sq(m)][to_sq(m)];
