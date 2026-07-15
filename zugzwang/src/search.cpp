@@ -106,6 +106,11 @@ struct Context {
         // ---- SF selectivity Wave 4 — ttPv (#5): former-PV bit persisted in the TT,
         // gates RFP + de-reduces LMR on tactically-live nodes. Default ON; env TTPV=0. ----
         bool ttPvOn      = true;
+        // ---- SF parity micro-pair (SF search.cpp:883/927) — default ON; independent env kill-switches ----
+        bool rfpOppWorsening = true; // #A: fold opponentWorsening into the RFP/static-null margin (env RFPOW=0)
+        int  rfpOwCoeff      = 10;   // flat extra margin when opponentWorsening (~13% of rfpMargin=75, matching
+                                     // SF's 331/2474 ratio of its opponentWorsening/improving futility_margin terms)
+        bool improvingRelax  = true; // #B: improving |= staticEval >= beta, after NMP (env IMPROVERELAX=0)
         // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
         // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
         // callers in uci.cpp for the option table incl. min/max).
@@ -161,6 +166,9 @@ struct Context {
             if (on("EVALHIST")) evalHist = true;
             if (on("THREATORDER")) threatOrder = true;
             if (off("TTPV")) ttPvOn = false;
+            if (off("RFPOW")) rfpOppWorsening = false;
+            if (const char* e = getenv("RFPOW_COEFF")) { int v = atoi(e); if (v >= 0) rfpOwCoeff = v; }
+            if (off("IMPROVERELAX")) improvingRelax = false;
             if (on("GMCONST")) {
                 // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
                 // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
@@ -660,6 +668,18 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                      && (ss - 2)->staticEval != VALUE_NONE
                      && ss->staticEval > (ss - 2)->staticEval;
 
+    // opponentWorsening (SF search.cpp:751): true if our static eval looks better
+    // for us than the negated static eval one ply up — i.e. the opponent's own
+    // move made their position worse than expected. Hoisted out of the #8
+    // hindsight block below (was local to it) so the RFP margin further down can
+    // also read it (SF folds it into futility_margin, search.cpp:883); guarded
+    // like every other (ss-1)-reading site here with !rootNode + staticEval
+    // validity, since the padded sentinel stack entries are zero-initialized,
+    // not VALUE_NONE (see start()'s `memset(stack, 0, ...)`).
+    bool opponentWorsening = !rootNode && !ss->inCheck
+                              && ss->staticEval != VALUE_NONE && (ss - 1)->staticEval != VALUE_NONE
+                              && ss->staticEval > -(ss - 1)->staticEval;
+
     // #8 hindsight (SF search.cpp:754-757): a heavily-reduced parent move may have
     // under-searched this node — extend if the position isn't worsening for us,
     // reduce further if the stacked static-eval swing says the reduction was fine.
@@ -667,7 +687,6 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
     if (C.tune.hindsight && !rootNode && !ss->inCheck
         && ss->staticEval != VALUE_NONE && (ss - 1)->staticEval != VALUE_NONE) {
         int priorReduction = (ss - 1)->reduction;
-        bool opponentWorsening = ss->staticEval > -(ss - 1)->staticEval;
         if (priorReduction >= 3 && !opponentWorsening)
             depth++;
         else if (priorReduction >= 2 && depth >= 2
@@ -691,8 +710,16 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
     if (!PvNode && !ss->inCheck && !excluded) {
         // Reverse futility pruning
         bool quietTT = ttMove != MOVE_NONE && !ttCapture;   // ttCapture computed above at the TT probe
+        // #A opponentWorsening fold (SF search.cpp:876-890): SF's futility_margin
+        // subtracts a fixed-point (2474*improving + 331*opponentWorsening)*mult/1024
+        // term. zug's RFP margin is a flat rfpMargin*(depth-improving); add a small
+        // flat rfpOwCoeff on top when opponentWorsening, sized to the same ratio SF
+        // uses between its two terms (331/2474 ~ 0.134 of the improving weight ->
+        // 0.134*75 ~ 10), so this stays a conservative nudge, not a rewrite of the
+        // margin's shape.
+        int rfpOwTerm = (C.tune.rfpOppWorsening && opponentWorsening) ? C.tune.rfpOwCoeff : 0;
         if (depth <= 8 && !(C.tune.rfpSoft && quietTT) && !(C.tune.ttPvOn && ss->ttPv)
-            && eval - C.tune.rfpMargin * (depth - improving) >= beta && eval < VALUE_MATE_IN_MAX_PLY)
+            && eval - C.tune.rfpMargin * (depth - improving) - rfpOwTerm >= beta && eval < VALUE_MATE_IN_MAX_PLY)
             return C.tune.rfpSoft ? (2 * beta + eval) / 3 : eval;
 
         // Null move pruning
@@ -718,6 +745,16 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                 return nullScore;
             }
         }
+
+        // #B improving relax (SF search.cpp:927), right after the null-move step:
+        // a static eval that already clears beta at this (non-PV, not-in-check,
+        // non-excluded) node is itself a sign the position is fine for us, even
+        // absent the (ss-2) comparison `improving` is normally built from — loosens
+        // the LMP move-count limit and skips the "!improving -> r++" LMR bump a
+        // little further down. Placed inside this block (not hoisted to file scope
+        // like opponentWorsening) so staticEval is guaranteed valid here (in-check
+        // nodes hold VALUE_NONE, which would otherwise spuriously satisfy >= beta).
+        if (C.tune.improvingRelax) improving = improving || (ss->staticEval >= beta);
 
         // Razoring
         if (C.tune.razor && depth <= 3 && eval + C.tune.razorMargin * depth <= alpha) {
