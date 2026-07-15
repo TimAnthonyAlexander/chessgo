@@ -54,10 +54,13 @@ struct WeakResult {
 // + clean-search-or-weakened-ranking branch (mirrors BestMoveConfig). `pos`
 // is mutated and restored (do_move/undo_move) during ranking, left unchanged
 // on return. `history` = prior-position Zobrist keys (current position's key
-// is added internally). `ctx` is the caller's leased Search::Context — every
-// sub-search this runs uses it, so concurrent /bestmove calls (each with
-// their own leased Context) never share search state.
-WeakResult best_move_for_rating(Search::Context& ctx, Position& pos, int rating, int limitDepth,
+// is added internally). `group` is the caller's leased search group: the CLEAN
+// (unweakened, rating>=RatingCleanFloor) branch fans the search across the whole
+// group via start_group (Lazy SMP — so a full-strength rating request, e.g. the
+// admin engine-vs-engine page at max rating, uses all the group's threads); the
+// weakened ranking branch runs single-threaded on the group's primary Context
+// (extra threads are pointless once noise/blunders dominate).
+WeakResult best_move_for_rating(Search::SearchGroup& group, Position& pos, int rating, int limitDepth,
                                  int limitMoveTimeMs, int64_t limitNodes,
                                  const std::vector<uint64_t>& history);
 

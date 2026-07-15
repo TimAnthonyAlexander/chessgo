@@ -331,12 +331,38 @@ json best_move(const json& body) {
     int depth = limits.value("depth", 0);
     int movetimeMs = limits.value("movetime", 0);
     int64_t nodes = limits.value("nodes", static_cast<int64_t>(0));
-    // aggr/book/fast: STUBBED (ignored) — see WIRING_RECON.md + the port report.
+    // aggr/fast: STUBBED (ignored) — see WIRING_RECON.md + the port report.
+    // `book` is now HONORED on the rating path below (was previously stubbed).
     // The rating weakening itself (the load-bearing knob) is real below.
 
     int64_t t0 = Search::now_ms();
 
     if (worst || hasRating || hasLevel) {
+        // Opening book on the rating/level path: honor the `book` flag (the admin
+        // engine-vs-engine "Opening book" toggle sends limits.book). A book hit
+        // plays instantly, BEFORE any weakening — mirrors gomachine's rating-path
+        // book. `worst` skips the book (it deliberately wants the worst move, not
+        // theory). Movegen-validated, so a stale record can't yield an illegal move.
+        if (!worst && jbool(limits, "book") && Book::shared().loaded()) {
+            if (const Book::BookEntry* e = Book::shared().lookup(Book::book_key(pos));
+                e && !e->pv.empty()) {
+                Move bm = Rules::parse_uci_move(pos, e->pv[0]);
+                if (bm != MOVE_NONE) {
+                    return json{
+                        {"bestmove", move_to_uci(bm)},
+                        {"san", Rules::san(pos, bm)},
+                        {"eval", book_eval_json(*e)},
+                        {"pv", e->pv},
+                        {"depth", e->depth},
+                        {"nodes", 0},
+                        {"nps", 0},
+                        {"level", -1}, // book move — same as the full-strength book hit
+                        {"opening", openingResp},
+                    };
+                }
+            }
+        }
+
         Rating::WeakResult wr;
         int level;
         if (worst) {
@@ -344,7 +370,7 @@ json best_move(const json& body) {
             level = -1; // matches gomachine's BestMoveWorst (Level: -1)
         } else if (hasRating) {
             int rating = limits["rating"].get<int>();
-            wr = Rating::best_move_for_rating(ctx, pos, rating, depth, movetimeMs, nodes, hist);
+            wr = Rating::best_move_for_rating(group, pos, rating, depth, movetimeMs, nodes, hist);
             // matches gomachine's ACTUAL BestMoveConfig (used by the rating
             // path): it never sets BestResult.Level, so it serializes as the
             // Go zero value 0 — NOT -1. (WIRING_RECON's summary table says
@@ -363,7 +389,7 @@ json best_move(const json& body) {
             // fallback for the legacy field.
             int approxRating = Rating::RatingMin +
                                 (Rating::RatingMax - Rating::RatingMin) * lvl / 10;
-            wr = Rating::best_move_for_rating(ctx, pos, approxRating, depth, movetimeMs, nodes, hist);
+            wr = Rating::best_move_for_rating(group, pos, approxRating, depth, movetimeMs, nodes, hist);
             level = lvl;
         }
 

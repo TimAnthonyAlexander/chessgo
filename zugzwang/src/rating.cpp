@@ -126,7 +126,7 @@ LevelConfig config_for_rating(int rating) {
     return LevelConfig{depth, moveTimeMs, noiseCp, blunder};
 }
 
-WeakResult best_move_for_rating(Search::Context& ctx, Position& pos, int rating, int limitDepth,
+WeakResult best_move_for_rating(Search::SearchGroup& group, Position& pos, int rating, int limitDepth,
                                  int limitMoveTimeMs, int64_t limitNodes,
                                  const std::vector<uint64_t>& history) {
     LevelConfig cfg = config_for_rating(rating);
@@ -151,14 +151,21 @@ WeakResult best_move_for_rating(Search::Context& ctx, Position& pos, int rating,
     Rules::seed_history(pos, history);
 
     if (cfg.noiseCp == 0 && cfg.blunder == 0.0) {
+        // Clean (unweakened) search — the full-strength rating path. Fan out
+        // across the whole group (Lazy SMP) so a high/max-rating request uses
+        // all the group's threads, same as the no-rating full-strength path.
         Search::Limits lim;
         lim.depth = depth;
         lim.movetime = moveTimeMs;
         lim.nodes = nodes;
         lim.silent = true;
-        Search::Result r = Search::start(ctx, pos, lim);
+        Search::Result r = Search::start_group(group, pos, lim);
         return WeakResult{r.bestMove, r.score, r.depth, r.nodes, r.pv};
     }
+
+    // Weakened ranking: single-threaded on the group's primary Context — extra
+    // threads are pointless once noise/blunders dominate the move choice.
+    Search::Context& ctx = Search::primary_context(group);
 
     int rankDepth = depth;
     if (rankDepth < 1) rankDepth = 1;
