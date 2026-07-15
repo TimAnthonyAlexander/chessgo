@@ -78,6 +78,8 @@ struct Context {
         // ---- Margin bundle 2 (SF_MARGINS.md #4/#5) — default OFF, SPRT independently ----
         bool nmpCutGate = false;    // NMP gate: cutNode && staticEval >= beta - 18*depth + 350
         bool lmrDepthPrune = false; // quiet futility + SEE-quiet pruning keyed on lmrDepth, not raw depth
+        bool lmrHistCache = false;  // reuse ordering-time butterfly+conthist for the LMR read (NOT
+                                    // byte-identical: LMR then reads ordering-time, not move-time, history)
         // ---- PARITY_GOMACHINE.md D.2/D.3 — Wave B, ACCEPTED, baked into defaults 2026-07-14 ----
         bool contHist = true; // D.2: continuation history (parent/grandparent-keyed quiet magnitude)
         bool doDeeper = true; // D.3: adaptive do-deeper/do-shallower LMR re-search depth
@@ -150,6 +152,7 @@ struct Context {
             if (const char* e = getenv("QSFUT_MARGIN")) { int v = atoi(e); if (v > 0) qsFutMargin = v; }
             if (on("NMPCUTGATE")) nmpCutGate = true;
             if (on("LMRDEPTHPRUNE")) lmrDepthPrune = true;
+            if (on("LMRHIST")) lmrHistCache = true;
             if (on("PVGUARD")) pvGuard = true;
             if (on("CONTHIST")) contHist = true;
             if (on("DODEEPER")) doDeeper = true;
@@ -395,6 +398,11 @@ inline void cont_hist_planes(Context& C, const Stack* ss, int16_t*& ch1, int16_t
 // MORE than the packed-table read it was protecting (net regression on the
 // CONTHIST=1 path); this version pays the piece_dense()+table-read cost
 // exactly once per quiet move and nothing else extra.
+// HIST_NONE marks an ExtMove whose LMR history sum was NOT cached during ordering
+// (ttMove/killer/counter/capture) — the LMR read recomputes for those. Out of the
+// legitimate butterfly+conthist range (~±48k), so it can never collide with a real sum.
+constexpr int HIST_NONE = -1000000000;
+
 template <bool WithContHist>
 void score_moves_impl(Context& C, const Position& pos, ExtMove* begin, ExtMove* end, Move ttMove,
                        const Stack* ss, Move counter, const int16_t* ch1, const int16_t* ch2,
@@ -402,6 +410,10 @@ void score_moves_impl(Context& C, const Position& pos, ExtMove* begin, ExtMove* 
     Color us = pos.side_to_move();
     for (ExtMove* m = begin; m != end; ++m) {
         Move mv = m->move;
+        // Default: not cached. Overwritten below only for general quiets (the else
+        // branch). Under if constexpr so the WithContHist=false instantiation is
+        // byte-for-byte unchanged.
+        if constexpr (WithContHist) m->histScore = HIST_NONE;
         if (mv == ttMove) { m->score = TT_SCORE; continue; }
         MoveType mt = type_of_move(mv);
         bool cap = pos.is_capture(mv);
@@ -424,6 +436,7 @@ void score_moves_impl(Context& C, const Position& pos, ExtMove* begin, ExtMove* 
                 int off = piece_dense(pos.moved_piece(mv)) * SQUARE_NB + to_sq(mv);
                 if (ch1) h += ch1[off];
                 if (ch2) h += ch2[off];
+                m->histScore = h; // cache butterfly+conthist (== the LMR read) before threat bonus
             }
             if (tPawn | tMinor | tRook) {
                 PieceType pt = type_of(pos.moved_piece(mv));
@@ -966,11 +979,21 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             // #6 (SF): a child that fails high a lot means siblings here are unlikely
             // to matter — reduce them harder.
             if (C.tune.cutoffCnt && (ss + 1)->cutoffCnt > 3) r++;
-            int hist = C.history[us][from_sq(m)][to_sq(m)];
-            if (C.tune.contHist) {
-                int off = piece_dense(mover) * SQUARE_NB + to_sq(m);
-                if (ch1) hist += ch1[off];
-                if (ch2) hist += ch2[off];
+            // cur was post-incremented by pick_next, so (cur-1) is THIS move's ExtMove.
+            // With LMRHIST on, reuse the ordering-time butterfly+conthist sum for general
+            // quiets instead of re-reading the conthist tables (NOT byte-identical: this
+            // is the ordering-time value, not the move-time value — sibling subtree
+            // cutoffs may have updated the tables since).
+            int hist;
+            if (C.tune.lmrHistCache && C.tune.contHist && (cur - 1)->histScore != HIST_NONE) {
+                hist = (cur - 1)->histScore;
+            } else {
+                hist = C.history[us][from_sq(m)][to_sq(m)];
+                if (C.tune.contHist) {
+                    int off = piece_dense(mover) * SQUARE_NB + to_sq(m);
+                    if (ch1) hist += ch1[off];
+                    if (ch2) hist += ch2[off];
+                }
             }
             r -= hist / 8000;
             int d = std::max(1, std::min(newDepth - r, newDepth));

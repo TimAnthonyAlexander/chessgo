@@ -7,6 +7,11 @@ enum GenType { CAPTURES, QUIETS, ALL };
 struct ExtMove {
     Move move;
     int  score;
+    // histScore: cached butterfly+continuation-history sum for general quiets (set by
+    // score_moves during ordering), reused by the LMR reduction read to avoid a second
+    // conthist lookup. INT_MIN sentinel = "not cached" (ttMove/killer/counter/capture)
+    // → LMR recomputes. Only consulted when the LMRHIST toggle is on.
+    int  histScore;
     operator Move() const { return move; }
     void operator=(Move m) { move = m; }
 };
