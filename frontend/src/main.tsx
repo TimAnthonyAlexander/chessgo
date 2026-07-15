@@ -1,8 +1,8 @@
 import { lazy, Suspense, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
-import { Box, CircularProgress, CssBaseline, ThemeProvider } from '@mui/material'
-import theme from './theme'
+import { Box, CircularProgress } from '@mui/material'
+import SiteThemeProvider from './components/SiteThemeProvider'
 import Layout from './components/Layout'
 import Home from './pages/Home'
 import LiveGame from './pages/LiveGame'
@@ -29,10 +29,13 @@ const AdminAnticheatUser = lazy(() => import('./pages/AdminAnticheatUser'))
 const AdminAnticheatGame = lazy(() => import('./pages/AdminAnticheatGame'))
 import { initTheme } from './lib/boardTheme'
 import { initSettings } from './lib/settings'
+import { initSiteTheme } from './lib/siteTheme'
 import './styles.css'
 
-// Apply the persisted board/piece appearance + user preferences before first
-// paint (no theme flash; CSS-var-driven settings land on <html> up front).
+// Apply the persisted site theme (chrome), board/piece appearance, and user
+// preferences before first paint (no theme flash; every CSS-var-driven setting
+// lands on <html> up front).
+initSiteTheme()
 initTheme()
 initSettings()
 
@@ -94,8 +97,7 @@ const router = createBrowserRouter([
 ])
 
 createRoot(document.getElementById('root')!).render(
-    <ThemeProvider theme={theme}>
-        <CssBaseline />
+    <SiteThemeProvider>
         <RouterProvider router={router} />
-    </ThemeProvider>,
+    </SiteThemeProvider>,
 )

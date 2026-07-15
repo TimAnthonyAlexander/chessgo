@@ -30,6 +30,16 @@ import {
 } from '../lib/soundTheme'
 import { previewMaterial, setSoundEnabled, soundEnabled } from '../lib/sounds'
 import { settingsStore, usePrefs, type Prefs } from '../lib/settings'
+import {
+    SITE_BACKDROPS,
+    SITE_PALETTES,
+    siteThemeStore,
+    paletteSwatch,
+    useSiteTheme,
+    type BackdropId,
+    type SitePaletteId,
+    type ThemeMode,
+} from '../lib/siteTheme'
 import { pieceImageUrl } from '../lib/chess'
 import MiniBoard from './MiniBoard'
 
@@ -38,7 +48,7 @@ import MiniBoard from './MiniBoard'
 const PREVIEW_FEN = 'r2q1rk1/ppp2ppp/2np1n2/2b1p1B1/2B1P1b1/2NP1N2/PPP2PPP/R2Q1RK1 w - - 0 1'
 const PREVIEW_LAST = 'c1g5'
 
-type TabKey = 'board' | 'gameplay' | 'sound'
+type TabKey = 'theme' | 'board' | 'gameplay' | 'sound'
 
 /** A board square's paint: a plain color, or (for photographic themes like Cherry)
  * a url() texture sized to cover. Keeps color- and image-valued themes uniform. */
@@ -57,7 +67,7 @@ function paintSquare(value: string) {
  * Apply/Save step, just a Done to close. Organized into Board / Gameplay / Sound
  * tabs so the ~20 settings fit cleanly. */
 export default function ThemeDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-    const [tab, setTab] = useState<TabKey>('board')
+    const [tab, setTab] = useState<TabKey>('theme')
 
     return (
         <Dialog
@@ -106,11 +116,13 @@ export default function ThemeDialog({ open, onClose }: { open: boolean; onClose:
                         '& .MuiTabs-indicator': { backgroundColor: 'var(--accent)' },
                     }}
                 >
+                    <Tab value="theme" label="Theme" />
                     <Tab value="board" label="Board" />
                     <Tab value="gameplay" label="Gameplay" />
                     <Tab value="sound" label="Sound" />
                 </Tabs>
 
+                {tab === 'theme' && <ThemeTab />}
                 {tab === 'board' && <BoardTab />}
                 {tab === 'gameplay' && <GameplayTab />}
                 {tab === 'sound' && <SoundTab />}
@@ -124,7 +136,10 @@ export default function ThemeDialog({ open, onClose }: { open: boolean; onClose:
                     }}
                 >
                     <Button
-                        onClick={() => settingsStore.reset()}
+                        onClick={() => {
+                            settingsStore.reset()
+                            siteThemeStore.reset()
+                        }}
                         sx={{ textTransform: 'none', color: 'var(--text-dim)', fontSize: 13 }}
                     >
                         Reset to defaults
@@ -143,6 +158,75 @@ export default function ThemeDialog({ open, onClose }: { open: boolean; onClose:
 }
 
 // --- Tabs -------------------------------------------------------------------
+
+/** Site theme: light/dark mode, accent+neutral palette, and page backdrop. These
+ * control the WEBSITE chrome and are fully independent of the board theme below —
+ * changing one never touches the other. Every choice applies live to the whole
+ * app behind the dialog (no Apply step), mirroring the board picker. */
+function ThemeTab() {
+    const site = useSiteTheme()
+
+    return (
+        <>
+            <SectionHeading>Appearance</SectionHeading>
+            <SegmentRow
+                label="Mode"
+                hint="System follows your device's light/dark setting"
+                value={site.mode}
+                options={[
+                    { value: 'light', label: 'Light' },
+                    { value: 'dark', label: 'Dark' },
+                    { value: 'system', label: 'System' },
+                ]}
+                onChange={(v) => siteThemeStore.setMode(v as ThemeMode)}
+            />
+
+            <Box sx={{ mt: 2.5 }}>
+                <SectionHeading>Palette</SectionHeading>
+                <Box
+                    sx={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                        gap: 1.25,
+                        mb: 3,
+                    }}
+                >
+                    {SITE_PALETTES.map((p) => (
+                        <PaletteCard
+                            key={p.id}
+                            id={p.id}
+                            label={p.label}
+                            note={p.note}
+                            mode={site.resolved}
+                            selected={site.palette === p.id}
+                            onSelect={() => siteThemeStore.setPalette(p.id)}
+                        />
+                    ))}
+                </Box>
+            </Box>
+
+            <SectionHeading>Backdrop</SectionHeading>
+            <Box
+                sx={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, 1fr)',
+                    gap: 1.25,
+                }}
+            >
+                {SITE_BACKDROPS.map((b) => (
+                    <BackdropCard
+                        key={b.id}
+                        id={b.id}
+                        label={b.label}
+                        note={b.note}
+                        selected={site.backdrop === b.id}
+                        onSelect={() => siteThemeStore.setBackdrop(b.id)}
+                    />
+                ))}
+            </Box>
+        </>
+    )
+}
 
 function BoardTab() {
     const boardId = useBoardThemeId()
@@ -696,6 +780,133 @@ function BoardTile({
                 />
             </Box>
         </Tooltip>
+    )
+}
+
+/** A site-palette option. Renders a miniature of the chrome in THIS palette's own
+ * colors (canvas, a surface chip, a heading/body line, an accent pill) for the
+ * currently resolved light/dark mode — so options are comparable at a glance
+ * regardless of which is active. */
+function PaletteCard({
+    id,
+    label,
+    note,
+    mode,
+    selected,
+    onSelect,
+}: {
+    id: SitePaletteId
+    label: string
+    note: string
+    mode: 'light' | 'dark'
+    selected: boolean
+    onSelect: () => void
+}) {
+    const sw = paletteSwatch(id, mode)
+    return (
+        <Tooltip title={note} arrow disableInteractive enterDelay={300}>
+            <Box
+                onClick={onSelect}
+                role="button"
+                aria-label={label}
+                aria-pressed={selected}
+                sx={selectionSx(selected)}
+            >
+                {/* Miniature chrome in this palette's colors. */}
+                <Box
+                    sx={{
+                        borderRadius: 1.5,
+                        overflow: 'hidden',
+                        border: `1px solid ${sw.line}`,
+                        bgcolor: sw.bg,
+                        p: 1,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 0.75,
+                    }}
+                >
+                    <Box
+                        sx={{
+                            bgcolor: sw.surface,
+                            border: `1px solid ${sw.line}`,
+                            borderRadius: 1,
+                            px: 0.75,
+                            py: 0.6,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 0.5,
+                        }}
+                    >
+                        <Box sx={{ height: 5, width: '62%', borderRadius: 2, bgcolor: sw.text }} />
+                        <Box sx={{ height: 4, width: '88%', borderRadius: 2, bgcolor: sw.text, opacity: 0.35 }} />
+                    </Box>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                        <Box
+                            sx={{
+                                height: 14,
+                                minWidth: 34,
+                                borderRadius: 2,
+                                bgcolor: sw.accent,
+                            }}
+                        />
+                        <Box sx={{ height: 8, width: 8, borderRadius: '50%', bgcolor: sw.accent }} />
+                    </Box>
+                </Box>
+                <Typography
+                    sx={{ mt: 0.75, fontSize: 13.5, fontWeight: selected ? 600 : 500, color: 'var(--text)' }}
+                >
+                    {label}
+                </Typography>
+            </Box>
+        </Tooltip>
+    )
+}
+
+/** A backdrop option — the preview box paints the actual backdrop the choice would
+ * apply under the active palette/mode (accent-tinted glows, hairline grid, or a
+ * flat fill), so the difference is visible before committing. */
+function BackdropCard({
+    id,
+    label,
+    note,
+    selected,
+    onSelect,
+}: {
+    id: BackdropId
+    label: string
+    note: string
+    selected: boolean
+    onSelect: () => void
+}) {
+    const bd = siteThemeStore.backdropPreview(id)
+    return (
+        <Box
+            onClick={onSelect}
+            role="button"
+            aria-label={label}
+            aria-pressed={selected}
+            sx={selectionSx(selected)}
+        >
+            <Box
+                sx={{
+                    height: 56,
+                    borderRadius: 1.5,
+                    border: '1px solid var(--line)',
+                    bgcolor: 'var(--bg)',
+                    backgroundImage: bd.image === 'none' ? undefined : bd.image,
+                    backgroundSize: bd.size,
+                    backgroundPosition: 'center',
+                }}
+            />
+            <Typography
+                sx={{ mt: 0.75, fontSize: 13, fontWeight: selected ? 600 : 500, color: 'var(--text)' }}
+            >
+                {label}
+            </Typography>
+            <Typography sx={{ fontSize: 10.5, color: 'var(--text-dim)', lineHeight: 1.4 }}>
+                {note}
+            </Typography>
+        </Box>
     )
 }
 

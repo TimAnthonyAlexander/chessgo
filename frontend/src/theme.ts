@@ -1,69 +1,77 @@
-import { createTheme } from '@mui/material/styles'
+import { createTheme, type Theme } from '@mui/material/styles'
+import type { MuiSeed } from './lib/siteTheme'
 
-// MUI theme mirrors the CSS variables in styles.css so MUI primitives sit
-// seamlessly in the editorial-minimalist look (no stock MUI blue/elevation).
-const theme = createTheme({
-    palette: {
-        mode: 'dark',
-        background: { default: '#131419', paper: '#1d2029' },
-        primary: { main: '#d8a657', contrastText: '#16140f' },
-        text: { primary: '#ece9e1', secondary: '#9fa1ac' },
-        divider: '#2c313d',
-    },
-    shape: { borderRadius: 12 },
-    typography: {
-        fontFamily: "'Hanken Grotesk', system-ui, sans-serif",
-        h1: { fontFamily: "'Fraunces', Georgia, serif", fontWeight: 600, letterSpacing: '-0.01em' },
-        h2: { fontFamily: "'Fraunces', Georgia, serif", fontWeight: 600, letterSpacing: '-0.01em' },
-        h3: { fontFamily: "'Fraunces', Georgia, serif", fontWeight: 600 },
-        h4: { fontFamily: "'Fraunces', Georgia, serif", fontWeight: 600 },
-        button: { textTransform: 'none', fontWeight: 600, letterSpacing: '0.01em' },
-        overline: { letterSpacing: '0.18em', fontWeight: 600 },
-    },
-    components: {
-        MuiButton: {
-            defaultProps: { disableElevation: true },
-            styleOverrides: {
-                root: { borderRadius: 10, paddingInline: 18, paddingBlock: 9 },
-            },
+// The MUI theme mirrors the site CSS variables (lib/siteTheme.ts) so MUI
+// primitives sit seamlessly in the editorial-minimalist look (no stock MUI
+// blue/elevation). It is REBUILT from the active palette seed whenever the site
+// theme changes (see SiteThemeProvider), so MUI-internal colors — contained
+// buttons, hover/disabled states, default text — track light/dark and the accent.
+//
+// Component overrides keep referencing the `var(--…)` tokens directly, so those
+// pieces (tooltips, dialogs, papers) repaint for free on any theme change without
+// a rebuild; only the palette-derived internals need this factory.
+export function buildTheme(seed: MuiSeed): Theme {
+    return createTheme({
+        palette: {
+            mode: seed.mode,
+            background: { default: seed.bg, paper: seed.paper },
+            primary: { main: seed.primary, contrastText: seed.onPrimary },
+            text: { primary: seed.text, secondary: seed.textSecondary },
+            divider: seed.divider,
         },
-        MuiPaper: {
-            styleOverrides: {
-                root: {
-                    backgroundImage: 'none',
-                    border: '1px solid var(--line-soft)',
+        shape: { borderRadius: 12 },
+        typography: {
+            fontFamily: "'Hanken Grotesk', system-ui, sans-serif",
+            h1: { fontFamily: "'Fraunces', Georgia, serif", fontWeight: 600, letterSpacing: '-0.01em' },
+            h2: { fontFamily: "'Fraunces', Georgia, serif", fontWeight: 600, letterSpacing: '-0.01em' },
+            h3: { fontFamily: "'Fraunces', Georgia, serif", fontWeight: 600 },
+            h4: { fontFamily: "'Fraunces', Georgia, serif", fontWeight: 600 },
+            button: { textTransform: 'none', fontWeight: 600, letterSpacing: '0.01em' },
+            overline: { letterSpacing: '0.18em', fontWeight: 600 },
+        },
+        components: {
+            MuiButton: {
+                defaultProps: { disableElevation: true },
+                styleOverrides: {
+                    root: { borderRadius: 10, paddingInline: 18, paddingBlock: 9 },
+                },
+            },
+            MuiPaper: {
+                styleOverrides: {
+                    root: {
+                        backgroundImage: 'none',
+                        border: '1px solid var(--line-soft)',
+                    },
+                },
+            },
+            MuiTooltip: {
+                styleOverrides: {
+                    tooltip: {
+                        background: 'var(--surface)',
+                        border: '1px solid var(--line)',
+                        color: 'var(--text)',
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 13,
+                        borderRadius: 8,
+                        paddingInline: 10,
+                        paddingBlock: 6,
+                    },
+                    arrow: {
+                        color: 'var(--surface)',
+                        '&::before': { border: '1px solid var(--line)' },
+                    },
+                },
+            },
+            MuiDialog: {
+                styleOverrides: {
+                    paper: {
+                        backgroundColor: 'var(--surface)',
+                        backgroundImage: 'none',
+                        border: '1px solid var(--line)',
+                        borderRadius: 14,
+                    },
                 },
             },
         },
-        MuiTooltip: {
-            styleOverrides: {
-                tooltip: {
-                    background: 'var(--surface)',
-                    border: '1px solid var(--line)',
-                    color: 'var(--text)',
-                    fontFamily: 'var(--font-mono)',
-                    fontSize: 13,
-                    borderRadius: 8,
-                    paddingInline: 10,
-                    paddingBlock: 6,
-                },
-                arrow: {
-                    color: 'var(--surface)',
-                    '&::before': { border: '1px solid var(--line)' },
-                },
-            },
-        },
-        MuiDialog: {
-            styleOverrides: {
-                paper: {
-                    backgroundColor: 'var(--surface)',
-                    backgroundImage: 'none',
-                    border: '1px solid var(--line)',
-                    borderRadius: 14,
-                },
-            },
-        },
-    },
-})
-
-export default theme
+    })
+}

@@ -79,16 +79,24 @@ body {
 }
 
 body {
-    background: var(--bg);
-    /* Faint atmospheric depth — a single soft radial, no gradients-on-white cliché */
-    background-image:
+    background-color: var(--bg);
+    /* The page backdrop (atmospheric glows / hairline grid / none) is chosen in the
+       Theme settings and painted via --backdrop-image by the site theme store
+       (lib/siteTheme.ts), tinted by the active accent. Defaults to the brass
+       atmosphere here so a no-JS / pre-init paint still has depth. */
+    background-image: var(
+        --backdrop-image,
         radial-gradient(1100px 620px at 50% -8%, rgba(216, 166, 87, 0.06), transparent 70%),
-        radial-gradient(900px 600px at 88% 110%, rgba(79, 111, 104, 0.08), transparent 70%);
+        radial-gradient(900px 600px at 88% 110%, rgba(79, 111, 104, 0.08), transparent 70%)
+    );
+    background-size: var(--backdrop-size, auto);
+    background-position: center top;
     background-attachment: fixed;
     color: var(--text);
     font-family: var(--font-ui);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    transition: background-color 220ms ease, color 220ms ease;
 }
 
 a {
