@@ -122,6 +122,14 @@ struct Context {
         bool lmrHistCache = false;
         // ---- PARITY_GOMACHINE.md D.2/D.3 — Wave B, ACCEPTED, baked into defaults 2026-07-14 ----
         bool contHist = true; // D.2: continuation history (parent/grandparent-keyed quiet magnitude)
+        // CONTHISTSPLIT (2026-07-15): split contHist1/contHist2 by [inCheck][capture] of the
+        // ancestor move that owns the plane, matching SF's ContinuationHistory[2][2][PIECE_NB]
+        // [SQUARE_NB] (history.h:150, search.h:294; indexed at do_move time — search.cpp:564
+        // `&continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()]`, where
+        // ss->inCheck/capture are the MOVER's inCheck and the MOVE's capture-ness, not the
+        // child's). Default OFF; env CONTHISTSPLIT=1. OFF forces index [0][0] for every
+        // plane lookup — byte-identical to the pre-split single-plane tables.
+        bool contHistSplit = false;
         bool captHist = true; // SF capture history: learned capture-ordering table (banked modest +, 2026-07-15)
         int  captHistWeight = 128; // read weight /256 (128 = half weight); SPSA-tunable via CaptHistWeight
         // captHistPrune: build-on captHist (docs/tasks/open/capthist-in-pruning-reduction.md)
@@ -230,6 +238,7 @@ struct Context {
             if (on("LMRHIST")) lmrHistCache = true;
             if (on("PVGUARD")) pvGuard = true;
             if (on("CONTHIST")) contHist = true;
+            if (on("CONTHISTSPLIT")) contHistSplit = true;
             if (off("CAPTHIST")) captHist = false; // default-on now; kill-switch for A/B
             if (on("CAPTHISTPRUNE")) captHistPrune = true;
             if (on("DODEEPER")) doDeeper = true;
@@ -299,8 +308,12 @@ struct Context {
     // below. Both read/written only when Tune::corrVariants is on.
     int  corrHistMinor[COLOR_NB][CORR_SIZE] = {};
     int  corrHistCont[CONT_PIECE_NB][SQUARE_NB] = {};
-    int16_t contHist1[CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // parent (1-ply)
-    int16_t contHist2[CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // grandparent (2-ply)
+    // CONTHISTSPLIT: leading [inCheck][capture] dims (SF ContinuationHistory[2][2][...]),
+    // keyed off the ANCESTOR move that owns the plane (see cont_hist_planes). OFF (default)
+    // always indexes [0][0] here, so these are byte-identical to the pre-split single-plane
+    // tables in that slice — the [1][*]/[*][1] slices simply stay untouched/zero.
+    int16_t contHist1[2][2][CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // parent (1-ply)
+    int16_t contHist2[2][2][CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // grandparent (2-ply)
     // Capture history (SF CapturePieceToHistory): learned capture-ordering magnitude,
     // keyed [movedPieceDense][to][capturedType]. Read in score_moves' capture branch,
     // updated on beta cutoff (bonus to the cutoff capture, malus to searched-not-best
@@ -581,15 +594,26 @@ const int PieceVal[7] = {0, 100, 320, 330, 500, 900, 20000};
 // and update_cont_hist writes at a node.
 inline void cont_hist_planes(Context& C, const Stack* ss, int16_t*& ch1, int16_t*& ch2) {
     ch1 = ch2 = nullptr;
+    // CONTHISTSPLIT: [inCheck][capture] of the plane-owning ancestor move itself — p->inCheck
+    // is whether p (the node that MADE the move) was in check, p->didCapture is whether that
+    // move was a capture (both set at move-make time, search.cpp ~904/1316-1318; mirrors SF's
+    // ss->inCheck/capture captured at do_move — search.cpp:564). OFF forces [0][0], matching
+    // the pre-split single-plane table exactly.
     if (ss->ply >= 1) {
         const Stack* p = ss - 1;
-        if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL)
-            ch1 = &C.contHist1[piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
+        if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL) {
+            int ic  = (C.tune.contHistSplit && p->inCheck) ? 1 : 0;
+            int cap = (C.tune.contHistSplit && p->didCapture) ? 1 : 0;
+            ch1 = &C.contHist1[ic][cap][piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
+        }
     }
     if (ss->ply >= 2) {
         const Stack* p = ss - 2;
-        if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL)
-            ch2 = &C.contHist2[piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
+        if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL) {
+            int ic  = (C.tune.contHistSplit && p->inCheck) ? 1 : 0;
+            int cap = (C.tune.contHistSplit && p->didCapture) ? 1 : 0;
+            ch2 = &C.contHist2[ic][cap][piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
+        }
     }
 }
 
