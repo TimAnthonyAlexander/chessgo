@@ -88,15 +88,22 @@ int serve_main(int argc, char** argv) {
     // getting the full -tt size, so `-tt 128` doesn't balloon into
     // `128 * poolSize` MB resident.
     int searchPoolSize = static_cast<int>(std::min(6u, std::max(1u, std::thread::hardware_concurrency())));
+    // -search-threads K: Lazy-SMP threads PER search (per group). Default 1 =
+    // the historical single-thread-per-request behavior (byte-identical). K>1
+    // gives every /bestmove /candidates /analyze-game the multi-thread search
+    // strength that was previously UCI-only. Peak engine threads = pool * K.
+    int searchThreads = 1;
     std::string sfPath; // -sf-path override for SFUCI::resolve_path() (empty = env/PATH/fallbacks)
     for (int i = 2; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "-addr" && i + 1 < argc) addr = argv[++i];
         else if (a == "-tt" && i + 1 < argc) ttSizeMB = std::stoi(argv[++i]);
         else if (a == "-search-pool" && i + 1 < argc) searchPoolSize = std::stoi(argv[++i]);
+        else if (a == "-search-threads" && i + 1 < argc) searchThreads = std::stoi(argv[++i]);
         else if (a == "-sf-path" && i + 1 < argc) sfPath = argv[++i];
     }
     if (searchPoolSize < 1) searchPoolSize = 1;
+    if (searchThreads < 1) searchThreads = 1;
     SFUCI::set_path_override(sfPath);
 
     std::string host;
@@ -136,18 +143,19 @@ int serve_main(int argc, char** argv) {
     // unresized (unusable) table if anything ever falls back to it.
     TT.resize(static_cast<size_t>(ttSizeMB));
 
-    // The concurrency pool: N independent Search::Contexts, each with its own
-    // TT (total -tt split evenly, floor 8MB) — this is what actually serves
-    // /bestmove, /candidates, /analyze-game concurrently (search.h's
-    // Context/ContextLease doc comments have the full story).
+    // The concurrency pool: G search GROUPS, each K (= searchThreads) worker
+    // Contexts sharing ONE TT (total -tt split evenly across the G groups, floor
+    // 8MB per group) + one stop flag. A request leases a whole group and runs a
+    // K-thread Lazy-SMP search on it (Search::start_group); up to G run at once
+    // (peak G*K threads). See search.h's SearchGroup/GroupLease doc comments.
     //
-    // TODO: SMP on serve path. Each request currently searches on ONE leased
-    // Context (single-thread-per-request). Lazy SMP (Search::start_smp) lives on
-    // the UCI path only; wiring it here would mean a per-request SMP group of
-    // Contexts sharing one TT rather than the current independent-TT pool, and a
-    // policy for dividing cores across concurrent requests. Left as future work.
-    size_t ttPerContextMB = std::max<size_t>(8, static_cast<size_t>(ttSizeMB) / static_cast<size_t>(searchPoolSize));
-    Search::init_pool(searchPoolSize, ttPerContextMB);
+    // SMP on the serve path (was the "// TODO: SMP on serve path" here): the
+    // per-request search now fans out across the group's K workers on the
+    // group's shared TT — the same Lazy-SMP core (run_lazy_smp) the UCI path
+    // uses — instead of a single-thread-per-request search. K==1 (the default)
+    // is byte-identical to the old independent-TT one-Context-per-request pool.
+    size_t ttPerGroupMB = std::max<size_t>(8, static_cast<size_t>(ttSizeMB) / static_cast<size_t>(searchPoolSize));
+    Search::init_pool(searchPoolSize, searchThreads, ttPerGroupMB);
 
     if (std::string sfFound = SFUCI::resolve_path(); !sfFound.empty()) {
         std::cerr << "stockfish: found at " << sfFound << "\n";
@@ -168,7 +176,7 @@ int serve_main(int argc, char** argv) {
 
     // httplib's own worker-thread pool is shared across EVERY route (there is
     // no per-route pool). A search handler that's blocked inside
-    // Search::ContextLease waiting for a free pool Context still occupies one
+    // Search::GroupLease waiting for a free search group still occupies one
     // of these worker threads for the whole wait — so if this pool were left
     // at httplib's default (~hardware_concurrency, i.e. comparable to
     // searchPoolSize), a burst of concurrent search requests could saturate
@@ -179,7 +187,7 @@ int serve_main(int argc, char** argv) {
     // pool" requirement this file's routes below promise. Size it generously
     // (independent of searchPoolSize) so there are always plenty of threads
     // free for rules-only work no matter how many search requests are queued
-    // up waiting on the (much smaller) search-context pool.
+    // up waiting on the (much smaller) search-group pool.
     constexpr size_t kHttpThreads = 128;
     svr.new_task_queue = [] { return new httplib::ThreadPool(kHttpThreads); };
 
@@ -213,7 +221,8 @@ int serve_main(int argc, char** argv) {
 
     std::cerr << "zugzwang serve: listening on " << host << ":" << port
               << " (TT " << ttSizeMB << "MB, search-pool " << searchPoolSize
-              << "x" << ttPerContextMB << "MB)\n";
+              << "x" << searchThreads << " groupsxthreads, " << ttPerGroupMB
+              << "MB/group)\n";
     if (!svr.listen(host, port)) {
         std::cerr << "serve: failed to bind " << host << ":" << port << "\n";
         return 1;

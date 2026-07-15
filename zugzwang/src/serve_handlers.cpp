@@ -155,7 +155,7 @@ struct CandidateLine {
 // budget evenly across the legal moves (gomachine instead shares one
 // iterative-deepening pass with a global time budget across all moves at
 // once — a real but reasonable engineering deviation for Wave 1; see report).
-std::vector<CandidateLine> multi_pv(Search::Context& ctx, Position& pos, int depth, int movetimeMs) {
+std::vector<CandidateLine> multi_pv(Search::SearchGroup& group, Position& pos, int depth, int movetimeMs) {
     MoveList ml;
     Rules::generate_legal(pos, ml);
 
@@ -183,7 +183,9 @@ std::vector<CandidateLine> multi_pv(Search::Context& ctx, Position& pos, int dep
             lim.silent = true;
             if (depth > 0) lim.depth = depth - 1;
             else lim.movetime = perMoveTimeMs;
-            Search::Result r = Search::start(ctx, pos, lim);
+            // SMP per candidate sub-search: fans out across the group's K
+            // workers on its shared TT (K==1 => byte-identical single thread).
+            Search::Result r = Search::start_group(group, pos, lim);
             line.score = -r.score;
             line.depth = r.depth + 1;
             line.pv.push_back(m);
@@ -302,8 +304,13 @@ json perft(const json& body) {
 // ==================== search-backed handlers ====================
 
 json best_move(const json& body) {
-    Search::ContextLease lease;
-    Search::Context& ctx = lease.ctx();
+    Search::GroupLease lease;
+    Search::SearchGroup& group = lease.group();
+    // Rating/worst weakening runs single-threaded on the group's primary
+    // Context (extra SMP strength is pointless when the goal is to play weaker);
+    // the full-strength path below fans out across the whole group via
+    // start_group. Both released together when `lease` goes out of scope (RAII).
+    Search::Context& ctx = Search::primary_context(group);
 
     std::string fen = body.value("fen", "");
     Position pos;
@@ -414,7 +421,7 @@ json best_move(const json& body) {
     } else {
         lim.movetime = 1000;
     }
-    Search::Result r = Search::start(ctx, pos, lim);
+    Search::Result r = Search::start_group(group, pos, lim);
     if (r.bestMove == MOVE_NONE) {
         return json{{"bestmove", nullptr}, {"reason", "no legal moves"}};
     }
@@ -439,8 +446,8 @@ json best_move(const json& body) {
 // move), not a book shortcut for just one of them. Parity means matching
 // that omission, not adding a probe gomachine itself doesn't have here.
 json candidates(const json& body) {
-    Search::ContextLease lease;
-    Search::Context& ctx = lease.ctx();
+    Search::GroupLease lease;
+    Search::SearchGroup& group = lease.group();
 
     std::string fen = body.value("fen", "");
     Position pos;
@@ -456,7 +463,7 @@ json candidates(const json& body) {
     std::vector<uint64_t> hist = Rules::history_keys(historyFens);
     Rules::seed_history(pos, hist);
 
-    auto cands = multi_pv(ctx, pos, depth, movetimeMs);
+    auto cands = multi_pv(group, pos, depth, movetimeMs);
     if (multipv > 0 && static_cast<size_t>(multipv) < cands.size()) cands.resize(multipv);
 
     // Line up to and including the current position, reused to name the
@@ -485,8 +492,8 @@ json candidates(const json& body) {
 }
 
 json analyze_game(const json& body) {
-    Search::ContextLease lease;
-    Search::Context& ctx = lease.ctx();
+    Search::GroupLease lease;
+    Search::SearchGroup& group = lease.group();
 
     constexpr int kDefaultMoveTime = 100, kMinMoveTime = 100, kMaxMoveTime = 3000, kMaxMoves = 600;
 
@@ -517,10 +524,11 @@ json analyze_game(const json& body) {
     // No book (we don't have one) and no game history threaded through search
     // (deliberately — analyze.go:163-171: game review wants the OBJECTIVE
     // best move/eval, not a practical anti-repetition playing decision).
-    // Sequential, not gomachine's block-stealing worker-pool fan-out — same
-    // JSON shape, just single-threaded PER REQUEST (this request's own leased
-    // Context is used serially across the game's positions); concurrent
-    // /analyze-game calls each get their own Context via the lease above.
+    // Positions analyzed sequentially, not gomachine's block-stealing
+    // worker-pool fan-out — same JSON shape. Each position's search DOES fan
+    // out across the leased group's K workers via start_group (Lazy SMP);
+    // concurrent /analyze-game calls each get their own group via the lease
+    // above, so the two levels of parallelism don't oversubscribe past G*K.
     json positions = json::array();
     for (const std::string& f : fens) {
         Position p;
@@ -549,7 +557,7 @@ json analyze_game(const json& body) {
         Search::Limits lim;
         lim.silent = true;
         lim.movetime = movetimeMs;
-        Search::Result r = Search::start(ctx, p, lim);
+        Search::Result r = Search::start_group(group, p, lim);
 
         entry["eval"] = eval_json(r.score);
         entry["bestmove"] = move_to_uci(r.bestMove);

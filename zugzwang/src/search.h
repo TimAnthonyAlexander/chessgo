@@ -52,6 +52,14 @@ struct Result {
 // Context& (an opaque handle) and pass it back into start()/Rating::*.
 struct Context;
 
+// A SearchGroup bundles K worker Contexts + ONE shared TranspositionTable +
+// ONE shared std::atomic<bool> stop flag — the unit of Lazy SMP. Running a
+// search over a group fans out across its K workers, all cooperating through
+// the group's single TT (classic Lazy SMP). Like Context, its layout is
+// private to search.cpp; callers hold an opaque SearchGroup& (from the serve
+// pool via GroupLease) and pass it into start_group()/primary_context().
+struct SearchGroup;
+
 // default_context() is the single Context used by the UCI CLI path (bare
 // `./zugzwang`, one search at a time) — its TT and stop flag are bound to
 // the pre-existing global `TT` (tt.h) and the UCI engine's stop signal, so
@@ -110,30 +118,51 @@ void clear(); // clear history/killers/TT for a new game, on default_context()
 // letting callers touch default_context().stop directly.
 void request_stop(bool value);
 
+// Runs one search over `group` and returns the completed Result. This is the
+// serve-path counterpart of start_smp(): K==1 is the exact single-thread
+// start() fast path (byte-identical to a plain start(primary_context(group),
+// ...) — no threads spawned); K>1 runs Lazy SMP over the group's K workers,
+// all sharing the group's one TT (tt.new_search() ONCE) + one stop flag, with
+// the same SF-style best-thread vote and aggregate node count as start_smp.
+// The shared SMP core is literally the same routine start_smp uses; the only
+// difference is which TT + stop + worker set it drives. limits.silent is
+// honoured (serve always sets it), so this never writes to stdout.
+Result start_group(SearchGroup& group, Position& pos, const Limits& limits);
+
+// The group's worker-0 Context — a fully-usable single Context for callers
+// that run a genuinely single-threaded search on a leased group (the rating/
+// worst weakening path in serve_handlers, where extra SMP strength is
+// pointless because the whole point is to play *weaker*). Sharing TT/stop with
+// the group's other workers is irrelevant while none of them is running.
+Context& primary_context(SearchGroup& group);
+
 // ---- HTTP serve concurrency pool ----
 //
-// A fixed-size pool of N independent Contexts, each with its OWN
-// TranspositionTable (sized ttMbEach) and its own copy of every other
-// mutable search table — so up to N searches run genuinely in parallel.
-// Call init_pool() once at server startup; HTTP handlers then lease a
-// Context via ContextLease for the duration of one search and it's
-// automatically returned to the pool (even on exception).
-void init_pool(int size, size_t ttMbEach);
-int pool_size();
+// A fixed-size pool of G SearchGroups. Each group owns K worker Contexts + ONE
+// shared TranspositionTable (sized ttMbPerGroup) + one shared stop flag — so a
+// leased group runs a K-thread Lazy-SMP search, and up to G such searches run
+// genuinely in parallel (peak threads = G*K, total resident TT ≈ G*ttMbPerGroup).
+// Call init_pool() once at server startup; HTTP handlers then lease a group via
+// GroupLease for the duration of one search and it's automatically returned to
+// the pool (even on exception). K==1 makes this equivalent to the old
+// one-Context-per-request pool (byte-identical single-thread search).
+void init_pool(int groups, int threadsPerGroup, size_t ttMbPerGroup);
+int pool_group_count();      // number of concurrent groups (G)
+int pool_threads_per_group(); // workers per group (K)
 
-Context& acquire_context(); // blocks until a Context is free
-void release_context(Context& ctx);
+SearchGroup& acquire_group(); // blocks until a group is free
+void release_group(SearchGroup& group);
 
-class ContextLease {
+class GroupLease {
 public:
-    ContextLease();
-    ~ContextLease();
-    ContextLease(const ContextLease&) = delete;
-    ContextLease& operator=(const ContextLease&) = delete;
-    Context& ctx() { return *ctx_; }
+    GroupLease();
+    ~GroupLease();
+    GroupLease(const GroupLease&) = delete;
+    GroupLease& operator=(const GroupLease&) = delete;
+    SearchGroup& group() { return *group_; }
 
 private:
-    Context* ctx_;
+    SearchGroup* group_;
 };
 
 } // namespace Search

@@ -220,6 +220,21 @@ struct Context {
     Context(TranspositionTable& ttRef, std::atomic<bool>& stopRef) : tt(ttRef), stop(stopRef) {}
 };
 
+// ---- SearchGroup: the unit of Lazy SMP ----
+// K worker Contexts, ONE shared TranspositionTable, and ONE shared stop flag.
+// Every worker Context is constructed bound to *this* group's tt + stop (so
+// all K cooperate through the one table, exactly as the UCI smpContexts bind
+// to the global ::TT + smpStop). workerPtrs caches the raw Context* in worker
+// order for run_lazy_smp(). Owned by the serve GroupPool (below); defined in
+// namespace Search (non-anon) so it matches search.h's `struct SearchGroup`
+// forward declaration — callers only ever see it as an opaque handle.
+struct SearchGroup {
+    std::unique_ptr<TranspositionTable> tt;
+    std::unique_ptr<std::atomic<bool>> stop;
+    std::vector<std::unique_ptr<Context>> contexts; // K workers (own the storage)
+    std::vector<Context*> workerPtrs;               // same K, raw, in worker order
+};
+
 namespace {
 
 // Search stack per ply — already local to one search's call tree (allocated
@@ -1144,18 +1159,22 @@ Context& default_ctx_ref() {
     return *defaultCtxPtr;
 }
 
-// ---- Concurrent search-context pool (HTTP serve mode) ----
-struct Pool {
+// ---- Concurrent search-GROUP pool (HTTP serve mode) ----
+// G groups, each a K-worker SearchGroup with its own TT + stop flag. A handler
+// leases a whole group (GroupLease) and runs a K-thread Lazy-SMP search on it;
+// up to G run concurrently (peak G*K threads). free_ holds the currently-idle
+// groups; the mutex/cv give the same blocking-lease semantics the old
+// per-Context pool had.
+struct GroupPool {
     std::mutex m;
     std::condition_variable cv;
-    std::vector<std::unique_ptr<TranspositionTable>> tables;
-    std::vector<std::unique_ptr<std::atomic<bool>>> stops;
-    std::vector<std::unique_ptr<Context>> contexts;
-    std::vector<Context*> free_;
+    std::vector<std::unique_ptr<SearchGroup>> groups;
+    std::vector<SearchGroup*> free_;
+    int threadsPerGroup = 1;
 };
 
-Pool& pool() {
-    static Pool p;
+GroupPool& gpool() {
+    static GroupPool p;
     return p;
 }
 
@@ -1205,6 +1224,88 @@ void print_smp_result(const Result& r, int64_t startTime) {
     std::cout << "bestmove " << move_to_uci(r.bestMove) << std::endl;
 }
 
+// ---- Lazy SMP core (shared by the UCI start_smp path and the serve
+// start_group path) ----
+//
+// Runs one search over `workers` (K Context*), all sharing `tt` + `stop`.
+// This is the ONE place the fan-out lives; start_smp() drives it with the
+// global smpContexts + ::TT + smpStop, start_group() drives it with a leased
+// group's workers + its own TT + its own stop flag. Never prints — the caller
+// owns any UCI stdout (start_smp prints once via print_smp_result; serve runs
+// silent). Returns the best-thread-voted Result with an aggregate node count.
+//
+// K==1 is the exact single-thread fast path: NO threads are spawned, and
+// start() runs with its default resetShared=true (clears `stop`, bumps `tt`),
+// so the tree, the bestmove and the node count are byte-identical to a plain
+// start(*workers[0], pos, limits). This is what makes -search-threads 1 (and
+// UCI Threads=1, which never reaches here) behave exactly as before.
+Result run_lazy_smp(std::vector<Context*>& workers, TranspositionTable& tt,
+                    std::atomic<bool>& stop, Position& rootPos, const Limits& limits) {
+    int threads = static_cast<int>(workers.size());
+    if (threads <= 1)
+        return start(*workers[0], rootPos, limits); // resetShared=true: byte-identical single thread
+
+    // Shared side-effects, done exactly ONCE (workers pass resetShared=false):
+    // clear the shared stop flag and bump the shared TT generation. After this
+    // point tt.generation is only READ by probe/store — no write race. Within a
+    // group the K workers share `tt` with NO locks: torn reads fail the key16
+    // low-bit verification (tt.cpp, commit d43d489) and are treated as a miss.
+    stop = false;
+    tt.new_search();
+
+    // Per-worker Limits: every worker runs silent (the caller prints, if at
+    // all), and any explicit node budget is split across workers so the
+    // AGGREGATE node count ~= limits.nodes. Movetime/time/depth are shared
+    // unchanged (all workers derive the same hard deadline from startTime).
+    Limits shared = limits;
+    shared.silent = true;
+    if (shared.nodes > 0)
+        shared.nodes = std::max<int64_t>(1, shared.nodes / threads);
+
+    // Independent Position copy per worker (self-contained search root; search
+    // only pushes NEW StateInfos on each worker's own do_move stack). rootPos
+    // stays alive + unmutated for the whole search (caller joins before reuse).
+    std::vector<Position> positions(threads, rootPos);
+    std::vector<Result>   results(threads);
+    std::vector<std::thread> helpers;
+    helpers.reserve(threads - 1);
+
+    // Helpers: workers 1..threads-1. resetShared=false — they must NOT touch
+    // the shared stop/generation (that would race the driver's one-time reset).
+    for (int i = 1; i < threads; ++i)
+        helpers.emplace_back([i, &results, &positions, &workers, shared]() {
+            results[i] = start(*workers[i], positions[i], shared, /*resetShared=*/false);
+        });
+
+    // Worker 0 runs inline on the calling thread.
+    results[0] = start(*workers[0], positions[0], shared, /*resetShared=*/false);
+
+    // Driver finished (soft-time / stop): force every still-running helper to
+    // stop at its next node-count check, then join them ALL before returning
+    // (so no helper can outlive the group / touch its Contexts after release).
+    stop = true;
+    for (auto& t : helpers) t.join();
+
+    // Best-thread selection (SF-style, simplified): greatest depth, tie ->
+    // greatest score. Each Result is internally consistent (pv[0]==bestMove).
+    int best = 0;
+    for (int i = 1; i < threads; ++i) {
+        if (results[i].bestMove == MOVE_NONE) continue;
+        if (results[best].bestMove == MOVE_NONE
+            || results[i].depth > results[best].depth
+            || (results[i].depth == results[best].depth
+                && results[i].score > results[best].score))
+            best = i;
+    }
+    Result chosen = results[best];
+
+    // Report the true aggregate node count across all workers.
+    int64_t total = 0;
+    for (const Result& r : results) total += r.nodes;
+    chosen.nodes = total;
+    return chosen;
+}
+
 } // namespace
 
 Context& default_context() { return default_ctx_ref(); }
@@ -1229,48 +1330,71 @@ void clear() {
     reset_tables(default_ctx_ref());
 }
 
-void init_pool(int size, size_t ttMbEach) {
-    Pool& p = pool();
+void init_pool(int groups, int threadsPerGroup, size_t ttMbPerGroup) {
+    GroupPool& p = gpool();
     std::lock_guard<std::mutex> lock(p.m);
-    if (!p.contexts.empty()) return; // already initialized — idempotent
-    if (size < 1) size = 1;
-    for (int i = 0; i < size; ++i) {
-        p.tables.push_back(std::make_unique<TranspositionTable>());
-        p.tables.back()->resize(ttMbEach);
-        p.stops.push_back(std::make_unique<std::atomic<bool>>(false));
-        auto ctx = std::make_unique<Context>(*p.tables.back(), *p.stops.back());
-        build_reductions(*ctx);
-        p.free_.push_back(ctx.get());
-        p.contexts.push_back(std::move(ctx));
+    if (!p.groups.empty()) return; // already initialized — idempotent
+    if (groups < 1) groups = 1;
+    if (threadsPerGroup < 1) threadsPerGroup = 1;
+    p.threadsPerGroup = threadsPerGroup;
+    for (int g = 0; g < groups; ++g) {
+        auto grp = std::make_unique<SearchGroup>();
+        grp->tt = std::make_unique<TranspositionTable>();
+        grp->tt->resize(ttMbPerGroup);
+        grp->stop = std::make_unique<std::atomic<bool>>(false);
+        // K worker Contexts, all bound to THIS group's shared tt + stop.
+        for (int k = 0; k < threadsPerGroup; ++k) {
+            auto ctx = std::make_unique<Context>(*grp->tt, *grp->stop);
+            build_reductions(*ctx);
+            grp->workerPtrs.push_back(ctx.get());
+            grp->contexts.push_back(std::move(ctx));
+        }
+        p.free_.push_back(grp.get());
+        p.groups.push_back(std::move(grp));
     }
 }
 
-int pool_size() {
-    Pool& p = pool();
+int pool_group_count() {
+    GroupPool& p = gpool();
     std::lock_guard<std::mutex> lock(p.m);
-    return static_cast<int>(p.contexts.size());
+    return static_cast<int>(p.groups.size());
 }
 
-Context& acquire_context() {
-    Pool& p = pool();
+int pool_threads_per_group() {
+    GroupPool& p = gpool();
+    std::lock_guard<std::mutex> lock(p.m);
+    return p.threadsPerGroup;
+}
+
+SearchGroup& acquire_group() {
+    GroupPool& p = gpool();
     std::unique_lock<std::mutex> lock(p.m);
     p.cv.wait(lock, [&] { return !p.free_.empty(); });
-    Context* c = p.free_.back();
+    SearchGroup* g = p.free_.back();
     p.free_.pop_back();
-    return *c;
+    return *g;
 }
 
-void release_context(Context& ctx) {
-    Pool& p = pool();
+void release_group(SearchGroup& g) {
+    GroupPool& p = gpool();
     {
         std::lock_guard<std::mutex> lock(p.m);
-        p.free_.push_back(&ctx);
+        p.free_.push_back(&g);
     }
     p.cv.notify_one();
 }
 
-ContextLease::ContextLease() : ctx_(&acquire_context()) {}
-ContextLease::~ContextLease() { release_context(*ctx_); }
+GroupLease::GroupLease() : group_(&acquire_group()) {}
+GroupLease::~GroupLease() { release_group(*group_); }
+
+Context& primary_context(SearchGroup& g) { return *g.workerPtrs[0]; }
+
+// Serve-path SMP entry point: run one search across the leased group's K
+// workers on the group's own TT + stop flag. Shares run_lazy_smp() with the
+// UCI start_smp path — the ONLY difference is which TT/stop/workers it drives.
+Result start_group(SearchGroup& g, Position& pos, const Limits& limits) {
+    return run_lazy_smp(g.workerPtrs, *g.tt, *g.stop, pos, limits);
+}
 
 int64_t now_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1392,71 +1516,17 @@ Result start_smp(Position& rootPos, const Limits& limits, int threads) {
         return start(default_ctx_ref(), rootPos, limits);
 
     // Create all worker Contexts up front, on THIS (driver) thread, so the
-    // smpContexts vector is never grown while worker threads run.
-    for (int i = 0; i < threads; ++i) smp_context(i);
+    // smpContexts vector is never grown while worker threads run, then collect
+    // them into the worker-pointer view run_lazy_smp() drives. This UCI path's
+    // global group = { smpContexts[0..threads-1], ::TT, smpStop }.
+    std::vector<Context*> workers;
+    workers.reserve(threads);
+    for (int i = 0; i < threads; ++i) workers.push_back(&smp_context(i));
 
-    // Shared side-effects, done exactly ONCE (workers pass resetShared=false):
-    // clear the shared stop flag and bump the shared TT generation. After this
-    // point TT.generation is only READ by probe/store — no write race.
-    smpStop = false;
-    TT.new_search();
-
-    // Per-worker Limits: run every worker silent (the driver prints the single
-    // final info/bestmove), and split any explicit node budget across workers so
-    // the AGGREGATE node count ~= limits.nodes (workers share no live node
-    // counter; time is shared implicitly since all derive the same hard deadline
-    // from the shared limits.startTime). Movetime/time/depth are unchanged.
-    Limits shared = limits;
-    shared.silent = true;
-    if (shared.nodes > 0)
-        shared.nodes = std::max<int64_t>(1, shared.nodes / threads);
-
-    // Independent Position per worker. A by-value Position copy is a self-
-    // contained search root: search only ever pushes NEW StateInfos (on each
-    // worker's own do_move stack) above the shared, read-only lower StateInfo
-    // chain, and rootPos stays alive and unmutated for the whole search (the
-    // UCI layer joins the search thread before touching `pos` again). Each
-    // worker's start() rebinds the copy to its own Context's accumulator stack.
-    std::vector<Position> positions(threads, rootPos);
-    std::vector<Result>   results(threads);
-    std::vector<std::thread> workers;
-    workers.reserve(threads - 1);
-
-    // Helpers: workers 1..threads-1. They warm the shared TT and vote on the
-    // result. resetShared=false: they must not touch the shared stop/generation.
-    for (int i = 1; i < threads; ++i)
-        workers.emplace_back([i, &results, &positions, shared]() {
-            results[i] = start(smp_context(i), positions[i], shared, /*resetShared=*/false);
-        });
-
-    // Main search runs on the driver thread (worker 0).
-    results[0] = start(smp_context(0), positions[0], shared, /*resetShared=*/false);
-
-    // Main finished (soft-time / stop): force every still-running helper to stop
-    // at its next node-count check, then join them all.
-    smpStop = true;
-    for (auto& t : workers) t.join();
-
-    // Best-thread selection (SF-style, simplified): pick the worker that reached
-    // the greatest depth; tie -> greatest score. Each Result is internally
-    // consistent (its pv[0] == its bestMove), so the chosen PV is valid. Skip
-    // workers that produced no move (only possible at a mated/stalemate root,
-    // where every worker agrees anyway).
-    int best = 0;
-    for (int i = 1; i < threads; ++i) {
-        if (results[i].bestMove == MOVE_NONE) continue;
-        if (results[best].bestMove == MOVE_NONE
-            || results[i].depth > results[best].depth
-            || (results[i].depth == results[best].depth
-                && results[i].score > results[best].score))
-            best = i;
-    }
-    Result chosen = results[best];
-
-    // Report the true aggregate node count across all workers.
-    int64_t total = 0;
-    for (const Result& r : results) total += r.nodes;
-    chosen.nodes = total;
+    // Same Lazy-SMP core the serve start_group() path uses — driven here with
+    // the global TT + smpStop. Workers run silent; the driver prints the single
+    // final info/bestmove below. Byte-identical to the pre-refactor start_smp.
+    Result chosen = run_lazy_smp(workers, ::TT, smpStop, rootPos, limits);
 
     if (!limits.silent)
         print_smp_result(chosen, limits.startTime ? limits.startTime : now_ms());

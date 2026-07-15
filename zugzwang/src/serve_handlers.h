@@ -16,14 +16,16 @@ json legal_moves(const json& body);
 json status(const json& body);
 json perft(const json& body);
 
-// Search-backed endpoints. Each leases an independent Search::Context from
-// the pool (Search::ContextLease, search.h/.cpp) for the duration of its
-// search — including the rating-weakening path's per-candidate sub-searches
-// — so up to `-search-pool` concurrent searches run genuinely in parallel,
-// each with its own TT/history/corrhist/NNUE-accumulator state. The pool's
-// size bounds how many run at once; a lease blocks (briefly) only when every
-// context is busy, and never blocks the rules-only handlers above (they
-// never touch the pool).
+// Search-backed endpoints. Each leases an independent Search::SearchGroup from
+// the pool (Search::GroupLease, search.h/.cpp) for the duration of its search.
+// A group is K worker Contexts sharing one TT + stop flag: the search fans out
+// across them (Lazy SMP, K = -search-threads) via Search::start_group, so a
+// single request gets the multi-thread search strength. Up to `-search-pool`
+// (G) groups run concurrently (peak G*K threads), each with its own
+// TT/history/corrhist/NNUE-accumulator state. A lease blocks (briefly) only
+// when every group is busy, and never blocks the rules-only handlers above
+// (they never touch the pool). The rating-weakening path runs single-threaded
+// on the group's primary Context (weaker-by-design, no SMP benefit).
 json best_move(const json& body);
 json candidates(const json& body);
 json analyze_game(const json& body);
