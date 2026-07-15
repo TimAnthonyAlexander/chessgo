@@ -42,7 +42,16 @@ LOG_FILE = os.environ.get("SPSA_LOG", os.path.expanduser("~/spsa_zug.log"))
 # the values handed off by the task, tuned by feel to the margin's practical
 # scale (e.g. SingularMargin's effective step is /16, so its c_end is small).
 # ---------------------------------------------------------------------------
-PARAMS = [
+# Selectable param sets (SPSA_SET env picks one; default "capthist"):
+#   "capthist" — focused tune of the capture-history read weight only (2026-07-15).
+#   "margins"  — the stale-margin re-tune (docs/tasks/open/spsa-margin-polish.md).
+CAPTHIST_PARAMS = [
+    # name             start min  max  c_end
+    # CaptHistWeight is the capture-history read weight /256 (128 = the half-weight we
+    # SPRT'd as a modest win). Focused single-param tune to find its true optimum.
+    ("CaptHistWeight", 128,  16, 512,  25),
+]
+MARGIN_PARAMS = [
     # name              start min  max  c_end
     # start = accepted-base value. FutBase (base 0) and CaptSeeCoeff (base 23) are EXCLUDED:
     # their base values sit below the UCI option min (40) and the engine clamps setoption to
@@ -54,6 +63,7 @@ PARAMS = [
     ("NmpEvalDiv",       200,  80, 400,  16),
     ("SingularMargin",    32,  16,  80,   3),
 ]
+PARAMS = MARGIN_PARAMS if os.environ.get("SPSA_SET", "capthist") == "margins" else CAPTHIST_PARAMS
 NAMES = [p[0] for p in PARAMS]
 START = {p[0]: float(p[1]) for p in PARAMS}
 LO = {p[0]: p[2] for p in PARAMS}
