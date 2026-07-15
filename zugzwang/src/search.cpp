@@ -96,6 +96,7 @@ struct Context {
         bool lmrHistCache = false;
         // ---- PARITY_GOMACHINE.md D.2/D.3 — Wave B, ACCEPTED, baked into defaults 2026-07-14 ----
         bool contHist = true; // D.2: continuation history (parent/grandparent-keyed quiet magnitude)
+        bool captHist = false; // SF capture history: learned capture-ordering table (opt-in, for SPRT)
         bool doDeeper = true; // D.3: adaptive do-deeper/do-shallower LMR re-search depth
         // ---- PARITY_GOMACHINE.md D.5/D.7 — Wave C, default OFF, SPRT independently ----
         bool seeQuietLinear = false; // D.5: linear SEE-quiet shape -75*depth, depth<=6 (vs quadratic default)
@@ -169,6 +170,7 @@ struct Context {
             if (on("LMRHIST")) lmrHistCache = true;
             if (on("PVGUARD")) pvGuard = true;
             if (on("CONTHIST")) contHist = true;
+            if (on("CAPTHIST")) captHist = true;
             if (on("DODEEPER")) doDeeper = true;
             if (on("SEEQUIETLINEAR")) seeQuietLinear = true;
             if (on("GMCHECKEXT")) gmCheckExt = true;
@@ -219,6 +221,11 @@ struct Context {
     int  corrHistNP[COLOR_NB][COLOR_NB][CORR_SIZE] = {};
     int16_t contHist1[CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // parent (1-ply)
     int16_t contHist2[CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // grandparent (2-ply)
+    // Capture history (SF CapturePieceToHistory): learned capture-ordering magnitude,
+    // keyed [movedPieceDense][to][capturedType]. Read in score_moves' capture branch,
+    // updated on beta cutoff (bonus to the cutoff capture, malus to searched-not-best
+    // captures). Gated by Tune::captHist. ~10 KB.
+    int16_t captHist[CONT_PIECE_NB][SQUARE_NB][PIECE_TYPE_NB] = {};
     int  Reductions[64][64] = {};
 
     Limits  limits;
@@ -289,6 +296,7 @@ void reset_tables(Context& C) {
     std::memset(C.corrHistNP, 0, sizeof(C.corrHistNP));
     std::memset(C.contHist1, 0, sizeof(C.contHist1));
     std::memset(C.contHist2, 0, sizeof(C.contHist2));
+    std::memset(C.captHist, 0, sizeof(C.captHist));
     C.tt.clear();
 }
 
@@ -436,6 +444,13 @@ void score_moves_impl(Context& C, const Position& pos, ExtMove* begin, ExtMove* 
             PieceType attacker = type_of(pos.moved_piece(mv));
             int mvvlva = PieceVal[victim] * 16 - PieceVal[attacker];
             if (mt == PROMOTION) mvvlva += PieceVal[promotion_type(mv)] * 16;
+            // Capture history: learned ordering within the good/bad-capture bucket. Read
+            // at half weight (house gravity trends to ±16k; /2 keeps it under a queen's
+            // MVV term ~14k so MVV stays primary for big captures and history breaks ties
+            // / reorders similar-value captures — SF's balance). Real captures (`cap`)
+            // only, not non-capture promotions. Well inside the ±(1<<22) bucket gap.
+            if (C.tune.captHist && cap)
+                mvvlva += C.captHist[piece_dense(pos.moved_piece(mv))][to_sq(mv)][victim] / 2;
             bool good = pos.see_ge(mv, -50);
             m->score = (good ? GOOD_CAP_SCORE : BAD_CAP_SCORE) + mvvlva;
         } else if (mv == ss->killers[0]) {
@@ -514,6 +529,13 @@ void update_cont_hist(int16_t* ch1, int16_t* ch2, Piece pc, Square to, int bonus
     int off = piece_dense(pc) * SQUARE_NB + to;
     if (ch1) update_cont_entry(ch1[off], bonus);
     if (ch2) update_cont_entry(ch2[off], bonus);
+}
+
+// update_capt_hist: credit/penalize one CAPTURE (pc captures a `victim`-type piece on
+// `to`) in the capture-history table, via the same int16 gravity as continuation history.
+// Caller has verified tune.captHist and that the move is a real capture (victim valid).
+void update_capt_hist(Context& C, Piece pc, Square to, PieceType victim, int bonus) {
+    update_cont_entry(C.captHist[piece_dense(pc)][to][victim], bonus);
 }
 
 int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta);
@@ -866,6 +888,8 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
 
     Move quietsSearched[64];
     int quietCount = 0;
+    Move capturesSearched[64];
+    int captureCount = 0;
 
     while (cur != list.end()) {
         Move m = pick_next(cur, list.end());
@@ -1076,6 +1100,7 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         }
 
         if (isQuiet && quietCount < 64) quietsSearched[quietCount++] = m;
+        else if (isCapture && captureCount < 64) capturesSearched[captureCount++] = m;
     }
 
     // Checkmate / stalemate
@@ -1084,12 +1109,12 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
 
     // Update killers / history on beta cutoff
     if (bestMove != MOVE_NONE && bestValue >= beta) {
+        int bonus = depth * depth;
         if (!pos.is_capture(bestMove) && type_of_move(bestMove) != PROMOTION) {
             if (ss->killers[0] != bestMove) {
                 ss->killers[1] = ss->killers[0];
                 ss->killers[0] = bestMove;
             }
-            int bonus = depth * depth;
             update_history(C, us, bestMove, bonus);
             for (int i = 0; i < quietCount; ++i)
                 if (quietsSearched[i] != bestMove)
@@ -1106,6 +1131,23 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             }
             if ((ss - 1)->currentMove)
                 C.counterMoves[pos.piece_on(to_sq((ss - 1)->currentMove))][to_sq((ss - 1)->currentMove)] = bestMove;
+        } else if (C.tune.captHist && pos.is_capture(bestMove)) {
+            // Best move was a capture: reward it in capture history.
+            PieceType vic = (type_of_move(bestMove) == EN_PASSANT) ? PAWN
+                                                                   : type_of(pos.piece_on(to_sq(bestMove)));
+            update_capt_hist(C, pos.moved_piece(bestMove), to_sq(bestMove), vic, bonus);
+        }
+        // Penalize every searched-but-not-best capture (on ANY cutoff — a capture tried
+        // that didn't cut is bad ordering). pos is back at the node position here, so
+        // moved_piece()/piece_on() are valid.
+        if (C.tune.captHist) {
+            for (int i = 0; i < captureCount; ++i) {
+                Move cm = capturesSearched[i];
+                if (cm == bestMove) continue;
+                PieceType vic = (type_of_move(cm) == EN_PASSANT) ? PAWN
+                                                                 : type_of(pos.piece_on(to_sq(cm)));
+                update_capt_hist(C, pos.moved_piece(cm), to_sq(cm), vic, -bonus);
+            }
         }
     }
 
