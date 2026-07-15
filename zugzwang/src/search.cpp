@@ -76,7 +76,11 @@ struct Context {
         bool gmConst = true;  // D.1: gomachine's tuned structural search constants (see load())
         int qsFutMargin = 300;
         // ---- Margin bundle 2 (SF_MARGINS.md #4/#5) — default OFF, SPRT independently ----
-        bool nmpCutGate = false;    // NMP gate: cutNode && staticEval >= beta - 18*depth + 350
+        bool nmpCutGate = false;    // NMP gate: cutNode && staticEval >= beta - 18*depth + 350.
+                                    // SPRT'd −27 REJECT (OPTIMIZATIONS.md:72, margin bundle 2) — the
+                                    // SF gate needs SF's whole NMP rewrite (depth-only R + verification
+                                    // search + nmpMinPly), not just the gate bolted onto zug's NMP.
+                                    // Default-off because it LOST, not because it's untried.
         bool lmrDepthPrune = false; // quiet futility + SEE-quiet pruning keyed on lmrDepth, not raw depth
         // LMRHIST: reuse the ordering-time butterfly+conthist sum for the LMR reduction
         // read instead of re-reading the tables at move-time. NOT byte-identical — LMR
