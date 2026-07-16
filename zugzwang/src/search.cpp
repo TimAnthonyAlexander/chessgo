@@ -339,8 +339,10 @@ struct Context {
     int     rootDepthGlobal = 0;
     Move    rootBestMove = MOVE_NONE;
     int     rootBestScore = 0;
-    int     rootDelta = 0; // ROOTDELTALMR: root aspiration window width (beta-alpha), set once per ID
-                            // iteration before the root negamax<true> call(s) (SF search.cpp rootDelta)
+    int     rootDelta = 0; // ROOTDELTALMR: root aspiration window width (beta-alpha), reset
+                            // immediately before every root negamax<true> call, including each
+                            // aspiration re-search after widening (SF search.cpp:374, inside the
+                            // `while (true)` re-search loop, not before it).
     // TTMOVEHIST: SF's ttMoveHistory (search.h:297) — a single running scalar,
     // gravity-updated toward ±8192 (SF's StatsEntry<int16_t,8192> D-clamp). Reset
     // per new-game (reset_tables), same lifetime as history/corrHist below, since
@@ -1453,12 +1455,22 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             // clamps to d=1 on both sides. Real effect requires another fine term
             // (CORRMARGIN/ROOTDELTALMR) to first break r off an exact 1024 multiple.
             if (C.tune.allNodeLmr && allNode) r += r / (depth + 1);
-            // ROOTDELTALMR (SF search.cpp: r -= delta * 608 / rootDelta, its r being
-            // x1024): reduce less when this node's alpha-beta window is wide relative
-            // to the root's aspiration window (this line is more "PV-like" than its
-            // ancestors suggest). delta<=rootDelta by construction, so the ratio
-            // saturates at 608 (x1024 units, i.e. ~0.59 ply) — far less coarse than
-            // the old whole-ply `delta/rootDelta` term.
+            // ROOTDELTALMR (SF search.cpp:1737: r -= delta * 608 / rootDelta, its r
+            // being x1024): reduce less when this node's alpha-beta window is wide
+            // relative to the root's aspiration window (this line is more "PV-like"
+            // than its ancestors suggest). delta<=rootDelta holds structurally, the
+            // same way it does in SF: every recursive call in negamax passes a
+            // sub-window of its parent's (-alpha-1,-alpha / -beta,-alpha / null-move
+            // and singular probes are all width<=parent), so window width is
+            // non-increasing with depth; and C.rootDelta is re-synced to beta-alpha
+            // immediately before *every* root negamax<true> call, including each
+            // aspiration re-search after widening (see the ID loop below), so it
+            // always matches the outermost window of the tree currently being
+            // walked. Together these guarantee delta<=C.rootDelta for the whole
+            // search, so the ratio saturates at 608 (x1024 units, ~0.59 ply) — far
+            // less coarse than the old whole-ply `delta/rootDelta` term. The
+            // std::max(1, ...) is only a divide-by-zero guard (SF never sees
+            // rootDelta==0 since the aspiration window is always >0 wide).
             if (C.tune.rootDeltaLmr) {
                 int delta = beta - alpha;
                 r -= delta * 608 / std::max(1, C.rootDelta);
@@ -1991,8 +2003,16 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
                 : C.tune.aspInitDelta;
             int alpha = std::max(prevScore - delta, -VALUE_INFINITE);
             int beta  = std::min(prevScore + delta, VALUE_INFINITE);
-            C.rootDelta = beta - alpha; // ROOTDELTALMR: fixed for this ID iteration (SF sets it once, not per re-search widening)
             while (true) {
+                // ROOTDELTALMR: re-sync rootDelta to the window about to be searched
+                // on *every* pass through this loop, including re-searches after a
+                // fail-high/low widens [alpha,beta] below (SF search.cpp:374 does the
+                // same — rootDelta is set inside its `while (true)` re-search loop,
+                // not before it). Without this, a widened re-search window makes
+                // node-local delta (beta-alpha at depth) exceed a stale rootDelta
+                // frozen from before the widening, blowing the ROOTDELTALMR term past
+                // its intended [0,608] bound.
+                C.rootDelta = beta - alpha;
                 score = negamax<true>(C, pos, ss, alpha, beta, depth, false);
                 if (C.stop) break;
                 if (score <= alpha) {
