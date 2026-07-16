@@ -56,3 +56,46 @@ small, per SF).
 ## Infra added
 `zugzwang/zbuild.sh` (standard coalla build, excludes perft.cpp dual-main), per-lever
 `cand_*.sh` wrappers, concurrency-10 SPRT scripts.
+
+---
+
+# Follow-up: fixed-nodes triage + harness control + SPSA (2026-07-15/16 overnight)
+
+**Why FN:** movetime SPRTs conflate "does it improve the tree?" with "is it worth the NPS
+cost?" and bury both under noise. Fixed-nodes (every engine searches the same 50k/30k nodes)
+isolates pure search QUALITY. Ran an FN sweep (`fn_sweep.sh`, 30k nodes, 600g/lever) over all
+levers.
+
+**FN table (Elo at fixed nodes) vs movetime:**
+| Lever | FN | Movetime | Read |
+|---|---|---|---|
+| LOWPLYHIST | **+7.5** | −3.4 | REAL divergence: quality masked by per-move read cost |
+| NMPSF | +5.2 | 0.0 | weak divergence (verification-search cost) |
+| RAZORQUAD | +3.5 | 0.0 | no per-node cost → FN/MT gap is noise |
+| SINGRETSCORE | +2.9 | +1.3 | small+, no divergence |
+| CORRVARIANTS | −0.6 | ~0 | ~0 both |
+| CAPTHISTPRUNE/MARGIN, CONTHISTSPLIT, TTMOVEHIST | ~ −2 to −4 | ~0 | ~0 both |
+| RFPDEEP −5.8, ASPADAPT −6.4, CORRMARGIN −9.3, PAWNORDHIST −12.2, NEGEXT3 −15.1 | **FN-negative** | — | genuinely HURT tree quality — dead ends, drop |
+
+**Harness control (important):** null wrapper (same binary, no flag) vs direct base at
+movetime = **−1.7 ±11.4 @1032** → no meaningful wrapper artifact. The systematic MT<FN gap
+(3-11 Elo across feature-adding levers) is **real feature NPS-cost**, not a harness bug.
+
+**LOWPLYHIST optimization (the one actionable divergence):** hoisted the ordering read's
+gate/plane-pointer/divisor out of the per-move loop, replaced the per-move runtime divide
+with compile-time-constant `switch` cases — **behavior-identical** (node counts unchanged),
+committed `1920d75`. Movetime re-test: −3.4 → **−0.00 ±12.0 @810**. The optimization recovered
+~+4 Elo but it lands at a **wash**. The FN +7.5 was partly noise (true quality ~+4-5) + residual
+cost. **Even the cleanest FN divergence does not convert to a shippable movetime win.**
+
+**SPSA margin re-tune** (`SPSA_SET=margins`, 6 margins): theta **orbits the defaults** (RfpMargin
+75→77, SingularMargin 32→36 after an early 49 noise-spike; RazorMargin/FutSlope/NmpEvalDiv drift
+modestly). iter-500 theta validated vs defaults = **−0.9 ±12.9 @768 → flat.** The margins are
+already near-optimal; SPSA finds no edge. (Left running toward higher iters for a final check.)
+
+## Bottom line
+Individual + cost-optimized search levers AND a joint margin re-tune are all **tapped for
+shippable movetime Elo** on this engine (post SF-selectivity + SMP). Nothing cleared LB>0; nothing
+shipped to prod. Real remaining Elo is in the **net/data pipeline** (the August track), consistent
+with the engine's own history. Kept: the FN-triage method (`fn_sweep.sh`) and the LOWPLYHIST perf
+opt (real, behavior-identical). Deploy-ready wins: **none.**
