@@ -3,6 +3,7 @@ zugzwang
 hce
 perft_test
 *.o
+*.d
 
 # the NNUE net is provided out-of-band: a symlink to gomachine's gitignored 180 MB
 # prod net (../gomachine/data/nnue/kb-mirror.bin). Recreate with:
