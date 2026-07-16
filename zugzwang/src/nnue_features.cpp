@@ -453,11 +453,12 @@ bool threat_delta_enabled() {
 }
 
 bool threat_delta_fast_enabled() {
-    // Default OFF (follow-on candidate, docs/tasks/open/threat-delta-followon.md §1):
-    // THREATDELTA_FAST=1 opts into the masked-line diff inside changed_edges_delta.
+    // Default ON (shipped: +16.7 Elo movetime, LB +7.8, coalla 1600g LLR 1.93 trend-accept,
+    // 2026-07-16). The masked-line diff inside changed_edges_delta emits only the edges that
+    // actually change; eval is ASSERT-proven byte-identical to the enumerate variant (pure NPS).
+    // THREATDELTA_FAST=0 is the parity/debug kill-switch back to the full-enumerate diff.
     // Only consulted when threat_delta_enabled() is already true (push_delta's caller).
-    // Eval MUST be byte-identical to the enumerate variant — this is a pure NPS opt.
-    static const bool on = [] { const char* e = getenv("THREATDELTA_FAST"); return e && e[0] == '1'; }();
+    static const bool on = [] { const char* e = getenv("THREATDELTA_FAST"); return !(e && e[0] == '0'); }();
     return on;
 }
 

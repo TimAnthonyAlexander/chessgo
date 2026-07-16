@@ -4,7 +4,18 @@ Follow-ons to the **shipped** move-aware threat delta (`docs/tasks/done/threat-d
 banked +43 Elo movetime 2026-07-15, default-on via `THREATDELTA`). Cut-1 shipped the
 **correct-by-construction enumerate variant**; these squeeze more NPS on top of it.
 
-## 1. `appendChangedEdges` masked-line slider diff (primary)
+## 1. `appendChangedEdges` masked-line slider diff (primary) — ✅ SHIPPED 2026-07-16
+
+> **DONE (commit pending, default-on via `THREATDELTA_FAST`, `=0` kill-switch).** Movetime
+> SPRT on coalla (100 ms, `THREATDELTA_FAST=1` vs `=0`, both `THREATDELTA=1`, same binary):
+> **+16.73 ±8.95 Elo, LB +7.78, LLR 1.93 @1600g (trend-accept, LB>0)**, 52.41%, Ptnml
+> `[13,119,473,168,27]`. Implemented exactly as below: leaper diff `attacks&D` under old/new
+> occ; slider diff `attacks&occ&mask`, `mask = ⋃ LineBB(s,d)` over changed sqs; Group-1
+> (attacker identity changed, `s∈D`) keeps full emission, Group-2 (unchanged attacker) uses
+> the masked diff. **ASSERT=1 zero drift** on 10 FENs, A/B eval byte-identical, default path
+> byte-identical (perft5=4865609, d14=63075), +7.3% local arm64 NPS. `emit_changed_edges` in
+> `nnue_features.cpp`. SF geometry cross-checked at `~/sf18-arm/src/position.cpp:1170`
+> (`RayPassBB & ~BetweenBB`). §2 (split king-refresh Finny cache) still open.
 
 **What.** Cut-1's `changed_edges_delta` (`zugzwang/src/nnue_features.cpp`) re-enumerates
 the **full** edge set of every affected attacker (old occ → sub, new occ → add) and lets
