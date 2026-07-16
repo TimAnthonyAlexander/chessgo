@@ -130,6 +130,25 @@ struct Context {
         // child's). Default OFF; env CONTHISTSPLIT=1. OFF forces index [0][0] for every
         // plane lookup — byte-identical to the pre-split single-plane tables.
         bool contHistSplit = false;
+        // CONTHISTPLIES (2026-07-16): deeper continuation-history plies 3, 4, 6 —
+        // matching SF's move-ordering READ set (~sf18-arm/src/movepick.cpp:163-167,
+        // `continuationHistory[0..3]` + `[5]` against the {ss-1..ss-6} array built at
+        // ~sf18-arm/src/search.cpp:991-993 — i.e. reads ss-1,ss-2,ss-3,ss-4,ss-6 and
+        // SKIPS ss-5). Note SF's statScore (search.cpp:1219-1221) only ever reads
+        // ss-1/ss-2 (unchanged here — zug's existing contHist1/contHist2 already
+        // cover that). Note also that SF's UPDATE loop (update_continuation_histories,
+        // search.cpp:1876-1889) actually touches ALL SIX ancestor plies including ss-5
+        // (weight 149/1024) despite the function's stale comment claiming "-1,-2,-3,-4,
+        // and -6" — verified from the code, not the comment (the loop is
+        // `for (i,weight) in {{1,1133},{2,683},{3,312},{4,582},{5,149},{6,474}}` with no
+        // skip of i==5). Since zug carries no ply-5 table (matching the ordering READ
+        // set exactly, per the task scope), ply 5 is simply not ported here — only
+        // the plies zug also reads (3,4,6) get update weights, taken directly from
+        // SF's table: 312/1024, 582/1024, 474/1024. Default OFF; env CONTHISTPLIES=1.
+        // OFF path: cont_hist_planes leaves ch3/ch4/ch6 nullptr, so every read/update
+        // site below collapses to its pre-existing ch1/ch2-only behavior — provably
+        // unchanged node counts (see perft5/d14 verification in the task report).
+        bool contHistPlies = false;
         bool captHist = true; // SF capture history: learned capture-ordering table (banked modest +, 2026-07-15)
         int  captHistWeight = 128; // read weight /256 (128 = half weight); SPSA-tunable via CaptHistWeight
         // captHistPrune: build-on captHist (docs/tasks/open/capthist-in-pruning-reduction.md)
@@ -239,6 +258,7 @@ struct Context {
             if (on("PVGUARD")) pvGuard = true;
             if (on("CONTHIST")) contHist = true;
             if (on("CONTHISTSPLIT")) contHistSplit = true;
+            if (on("CONTHISTPLIES")) contHistPlies = true;
             if (off("CAPTHIST")) captHist = false; // default-on now; kill-switch for A/B
             if (on("CAPTHISTPRUNE")) captHistPrune = true;
             if (on("DODEEPER")) doDeeper = true;
@@ -314,6 +334,22 @@ struct Context {
     // tables in that slice — the [1][*]/[*][1] slices simply stay untouched/zero.
     int16_t contHist1[2][2][CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // parent (1-ply)
     int16_t contHist2[2][2][CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // grandparent (2-ply)
+    // CONTHISTPLIES: deeper plies 3, 4, 6 (SF's ordering-read set minus ply 5 — see
+    // Tune::contHistPlies above for the full SF citation). Flat [CONT_PIECE_NB][SQUARE_NB]
+    // [CONT_PIECE_NB][SQUARE_NB] planes — deliberately WITHOUT contHist1/contHist2's
+    // leading [inCheck][capture] split dims. This is a phase-1 scope choice: the task
+    // is "add deeper plies", not "add deeper plies AND retrofit the split onto them",
+    // and pre-allocating an unused 4x split for tables nothing yet indexes would just be
+    // dead memory. TODO(phase 2): give these the same [2][2] split as contHist1/contHist2
+    // (SF ContinuationHistory[2][2][PIECE_NB][SQUARE_NB], history.h:150 + search.h:294;
+    // indexed at do_move time by the ancestor's OWN inCheck/capture-ness, search.cpp:564)
+    // once CONTHISTSPLIT is proven and someone wants to extend it to these plies too.
+    // Always allocated (like contHist1/2) regardless of the flag; only read/written when
+    // Tune::contHistPlies is on (cont_hist_planes leaves the pointers null otherwise).
+    // ~1.125 MB each (12*64*12*64*2 bytes) — see task report for the added-memory total.
+    int16_t contHist3[CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // 3-ply
+    int16_t contHist4[CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // 4-ply
+    int16_t contHist6[CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // 6-ply
     // Capture history (SF CapturePieceToHistory): learned capture-ordering magnitude,
     // keyed [movedPieceDense][to][capturedType]. Read in score_moves' capture branch,
     // updated on beta cutoff (bonus to the cutoff capture, malus to searched-not-best
@@ -419,6 +455,9 @@ void reset_tables(Context& C) {
     std::memset(C.corrHistCont, 0, sizeof(C.corrHistCont));
     std::memset(C.contHist1, 0, sizeof(C.contHist1));
     std::memset(C.contHist2, 0, sizeof(C.contHist2));
+    std::memset(C.contHist3, 0, sizeof(C.contHist3));
+    std::memset(C.contHist4, 0, sizeof(C.contHist4));
+    std::memset(C.contHist6, 0, sizeof(C.contHist6));
     std::memset(C.captHist, 0, sizeof(C.captHist));
     std::memset(C.lowPly, 0, sizeof(C.lowPly));
     std::memset(C.pawnOrderHist, 0, sizeof(C.pawnOrderHist));
@@ -594,8 +633,16 @@ const int PieceVal[7] = {0, 100, 320, 330, 500, 900, 20000};
 // Caller has verified tune.contHist is on; ch1/ch2 are pointers into the
 // live (writable) tables so the same pointers serve both cont-score reads
 // and update_cont_hist writes at a node.
-inline void cont_hist_planes(Context& C, const Stack* ss, int16_t*& ch1, int16_t*& ch2) {
+// CONTHISTPLIES: also hoist the ss-3/ss-4/ss-6 plane pointers (SF's ordering-read
+// set minus ply 5 — see Tune::contHistPlies for the SF citation). Only computed
+// when the flag is on; otherwise ch3/ch4/ch6 stay nullptr, so every downstream
+// read/update site (guarded by `if (chN)`) is a no-op, exactly like a missing
+// ancestor at ply 1/2 already is. No [inCheck][capture] split for these three
+// (TODO(phase 2) — see the contHist3/4/6 declarations on Context above).
+inline void cont_hist_planes(Context& C, const Stack* ss, int16_t*& ch1, int16_t*& ch2,
+                              int16_t*& ch3, int16_t*& ch4, int16_t*& ch6) {
     ch1 = ch2 = nullptr;
+    ch3 = ch4 = ch6 = nullptr;
     // CONTHISTSPLIT: [inCheck][capture] of the plane-owning ancestor move itself — p->inCheck
     // is whether p (the node that MADE the move) was in check, p->didCapture is whether that
     // move was a capture (both set at move-make time, search.cpp ~904/1316-1318; mirrors SF's
@@ -616,6 +663,22 @@ inline void cont_hist_planes(Context& C, const Stack* ss, int16_t*& ch1, int16_t
             int cap = (C.tune.contHistSplit && p->didCapture) ? 1 : 0;
             ch2 = &C.contHist2[ic][cap][piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
         }
+    }
+    if (!C.tune.contHistPlies) return;
+    if (ss->ply >= 3) {
+        const Stack* p = ss - 3;
+        if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL)
+            ch3 = &C.contHist3[piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
+    }
+    if (ss->ply >= 4) {
+        const Stack* p = ss - 4;
+        if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL)
+            ch4 = &C.contHist4[piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
+    }
+    if (ss->ply >= 6) {
+        const Stack* p = ss - 6;
+        if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL)
+            ch6 = &C.contHist6[piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
     }
 }
 
@@ -640,6 +703,7 @@ constexpr int HIST_NONE = -1000000000;
 template <bool WithContHist>
 void score_moves_impl(Context& C, const Position& pos, ExtMove* begin, ExtMove* end, Move ttMove,
                        const Stack* ss, Move counter, const int16_t* ch1, const int16_t* ch2,
+                       const int16_t* ch3, const int16_t* ch4, const int16_t* ch6,
                        U64 tPawn, U64 tMinor, U64 tRook) {
     Color us = pos.side_to_move();
     // LOWPLYHIST hoist: ss->ply (hence the flag/ply gate, the C.lowPly[ss->ply]
@@ -691,6 +755,11 @@ void score_moves_impl(Context& C, const Position& pos, ExtMove* begin, ExtMove* 
                 int off = piece_dense(pos.moved_piece(mv)) * SQUARE_NB + to_sq(mv);
                 if (ch1) h += ch1[off];
                 if (ch2) h += ch2[off];
+                // CONTHISTPLIES: ch3/ch4/ch6 are only non-null when Tune::contHistPlies
+                // is on (cont_hist_planes), so this is a no-op on the default-off path.
+                if (ch3) h += ch3[off];
+                if (ch4) h += ch4[off];
+                if (ch6) h += ch6[off];
                 m->histScore = h; // cache butterfly+conthist (== the LMR read) before threat bonus
             }
             if (tPawn | tMinor | tRook) {
@@ -737,13 +806,16 @@ void score_moves_impl(Context& C, const Position& pos, ExtMove* begin, ExtMove* 
 
 inline void score_moves(Context& C, const Position& pos, ExtMove* begin, ExtMove* end, Move ttMove,
                         const Stack* ss, Move counter, U64 tPawn, U64 tMinor, U64 tRook) {
-    score_moves_impl<false>(C, pos, begin, end, ttMove, ss, counter, nullptr, nullptr, tPawn, tMinor, tRook);
+    score_moves_impl<false>(C, pos, begin, end, ttMove, ss, counter, nullptr, nullptr,
+                             nullptr, nullptr, nullptr, tPawn, tMinor, tRook);
 }
 
 inline void score_moves_cont(Context& C, const Position& pos, ExtMove* begin, ExtMove* end, Move ttMove,
                              const Stack* ss, Move counter, const int16_t* ch1, const int16_t* ch2,
+                             const int16_t* ch3, const int16_t* ch4, const int16_t* ch6,
                              U64 tPawn, U64 tMinor, U64 tRook) {
-    score_moves_impl<true>(C, pos, begin, end, ttMove, ss, counter, ch1, ch2, tPawn, tMinor, tRook);
+    score_moves_impl<true>(C, pos, begin, end, ttMove, ss, counter, ch1, ch2, ch3, ch4, ch6,
+                            tPawn, tMinor, tRook);
 }
 
 // Selection sort: move best remaining to front, return it
@@ -778,10 +850,27 @@ void update_cont_entry(int16_t& h, int bonus) {
 // cont_hist_planes (ch1/ch2 nullptr <=> no real ancestor at that ply, same
 // guard cont_hist_planes applies). Caller has verified tune.contHist is on.
 // (No Context param needed — ch1/ch2 are already Context-resolved pointers.)
-void update_cont_hist(int16_t* ch1, int16_t* ch2, Piece pc, Square to, int bonus) {
+// CONTHISTPLIES: ch3/ch4/ch6 (nullptr unless Tune::contHistPlies is on, same
+// guard as ch1/ch2) get SF's own per-ply update weight applied to `bonus`
+// before the gravity nudge, taken verbatim from SF's conthist_bonuses table
+// (~sf18-arm/src/search.cpp:1877-1878: {{1,1133},{2,683},{3,312},{4,582},
+// {5,149},{6,474}}, each applied as bonus*weight/1024). zug's ch1/ch2 apply
+// the raw `bonus` unweighted (an existing, unchanged convention — not SF's
+// 1133/683), so ch3/ch4/ch6 use SF's weight/1024 fraction directly against
+// that same raw-bonus scale rather than re-deriving a ratio relative to
+// ch1's implicit weight; this is the smallest, most reviewable mapping that
+// doesn't touch ch1/ch2 or open a re-tune of them. Ply 5's weight (149/1024)
+// is unused — zug has no ply-5 table (see Tune::contHistPlies). SF's flat
+// "+88 * (i<2)" term (search.cpp:1887) only applies to i=1,2, so it's
+// correctly omitted for the deeper plies here too.
+void update_cont_hist(int16_t* ch1, int16_t* ch2, int16_t* ch3, int16_t* ch4, int16_t* ch6,
+                       Piece pc, Square to, int bonus) {
     int off = piece_dense(pc) * SQUARE_NB + to;
     if (ch1) update_cont_entry(ch1[off], bonus);
     if (ch2) update_cont_entry(ch2[off], bonus);
+    if (ch3) update_cont_entry(ch3[off], bonus * 312 / 1024);
+    if (ch4) update_cont_entry(ch4[off], bonus * 582 / 1024);
+    if (ch6) update_cont_entry(ch6[off], bonus * 474 / 1024);
 }
 
 // update_capt_hist: credit/penalize one CAPTURE (pc captures a `victim`-type piece on
@@ -871,8 +960,12 @@ int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta) {
     if (C.tune.contHist) {
         int16_t* qsCh1 = nullptr;
         int16_t* qsCh2 = nullptr;
-        cont_hist_planes(C, ss, qsCh1, qsCh2);
-        score_moves_cont(C, pos, list.begin(), list.end(), ttMove, ss, counter, qsCh1, qsCh2, 0, 0, 0);
+        int16_t* qsCh3 = nullptr;
+        int16_t* qsCh4 = nullptr;
+        int16_t* qsCh6 = nullptr;
+        cont_hist_planes(C, ss, qsCh1, qsCh2, qsCh3, qsCh4, qsCh6);
+        score_moves_cont(C, pos, list.begin(), list.end(), ttMove, ss, counter,
+                          qsCh1, qsCh2, qsCh3, qsCh4, qsCh6, 0, 0, 0);
     } else {
         score_moves(C, pos, list.begin(), list.end(), ttMove, ss, counter, 0, 0, 0);
     }
@@ -1217,9 +1310,12 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
     // candidate in score_moves, per LMR reduction read, and per cutoff update.
     int16_t* ch1 = nullptr;
     int16_t* ch2 = nullptr;
+    int16_t* ch3 = nullptr;
+    int16_t* ch4 = nullptr;
+    int16_t* ch6 = nullptr;
     if (C.tune.contHist) {
-        cont_hist_planes(C, ss, ch1, ch2);
-        score_moves_cont(C, pos, list.begin(), list.end(), ttMove, ss, counter, ch1, ch2,
+        cont_hist_planes(C, ss, ch1, ch2, ch3, ch4, ch6);
+        score_moves_cont(C, pos, list.begin(), list.end(), ttMove, ss, counter, ch1, ch2, ch3, ch4, ch6,
                           threatByPawn, threatByMinor, threatByRook);
     } else {
         score_moves(C, pos, list.begin(), list.end(), ttMove, ss, counter,
@@ -1431,6 +1527,10 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                     int off = piece_dense(mover) * SQUARE_NB + to_sq(m);
                     if (ch1) hist += ch1[off];
                     if (ch2) hist += ch2[off];
+                    // CONTHISTPLIES: no-op (ch3/ch4/ch6 stay null) unless the flag is on.
+                    if (ch3) hist += ch3[off];
+                    if (ch4) hist += ch4[off];
+                    if (ch6) hist += ch6[off];
                 }
             }
             r -= (hist / 8000) * 1024;                            // old whole-ply value, then x1024
@@ -1588,10 +1688,10 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                 // above paired do_move with undo_move), so moved_piece() is valid.
                 // ch1/ch2 were hoisted once for this node above the move loop —
                 // reuse them here instead of re-deriving the parent key.
-                update_cont_hist(ch1, ch2, pos.moved_piece(bestMove), to_sq(bestMove), bonus);
+                update_cont_hist(ch1, ch2, ch3, ch4, ch6, pos.moved_piece(bestMove), to_sq(bestMove), bonus);
                 for (int i = 0; i < quietCount; ++i)
                     if (quietsSearched[i] != bestMove)
-                        update_cont_hist(ch1, ch2, pos.moved_piece(quietsSearched[i]), to_sq(quietsSearched[i]), -bonus);
+                        update_cont_hist(ch1, ch2, ch3, ch4, ch6, pos.moved_piece(quietsSearched[i]), to_sq(quietsSearched[i]), -bonus);
             }
             if ((ss - 1)->currentMove)
                 C.counterMoves[pos.piece_on(to_sq((ss - 1)->currentMove))][to_sq((ss - 1)->currentMove)] = bestMove;
@@ -1969,10 +2069,20 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
     bool useAcc = NNUE::loaded();
     if (useAcc) { C.accStack.reset(pos); pos.set_nnue_acc(&C.accStack); }
 
-    Stack stack[MAX_PLY + 10];
+    // Leading pad is 7 (not just 4) so CONTHISTPLIES can safely dereference
+    // (ss - 6) at ply 0..5 without underflowing the array — mirrors SF's own
+    // reasoning for a 7-slot pad (~sf18-arm/src/search.cpp:275-279: "(ss - 7)
+    // is needed for update_continuation_histories(ss - 1) which accesses
+    // (ss - 6)"). Total size bumped by the same +3 so the forward extent
+    // (ss + MAX_PLY + 5) is unchanged from before this change. The memset
+    // zero-inits every pad slot's currentMove to MOVE_NONE (move.h:11), which
+    // is exactly the sentinel cont_hist_planes/corrHistCont already guard on
+    // for "no real ancestor at this ply" — so the deeper pad slots are just as
+    // inert as the original ss-4 pad slot was.
+    Stack stack[MAX_PLY + 13];
     std::memset(stack, 0, sizeof(stack));
-    Stack* ss = stack + 4;
-    for (int i = 0; i < MAX_PLY + 10; ++i) stack[i].ply = i - 4;
+    Stack* ss = stack + 7;
+    for (int i = 0; i < MAX_PLY + 13; ++i) stack[i].ply = i - 7;
 
     C.rootBestMove = MOVE_NONE;
     int maxDepth = C.limits.depth ? C.limits.depth : MAX_PLY - 1;
