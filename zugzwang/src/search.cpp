@@ -128,7 +128,10 @@ struct Context {
         // `&continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()]`, where
         // ss->inCheck/capture are the MOVER's inCheck and the MOVE's capture-ness, not the
         // child's). Default OFF; env CONTHISTSPLIT=1. OFF forces index [0][0] for every
-        // plane lookup — byte-identical to the pre-split single-plane tables.
+        // plane lookup — byte-identical to the pre-split single-plane tables. Kept as a
+        // standalone 1/2-only flag for isolated A/B; CONTHISTPLIES=1 (below) now also
+        // turns on this exact [inCheck][capture] selection — extended to plies 3/4/6 too
+        // — as part of the complete SF-faithful port, independent of this flag.
         bool contHistSplit = false;
         // CONTHISTPLIES (2026-07-16): deeper continuation-history plies 3, 4, 6 —
         // matching SF's move-ordering READ set (~sf18-arm/src/movepick.cpp:163-167,
@@ -144,9 +147,28 @@ struct Context {
         // skip of i==5). Since zug carries no ply-5 table (matching the ordering READ
         // set exactly, per the task scope), ply 5 is simply not ported here — only
         // the plies zug also reads (3,4,6) get update weights, taken directly from
-        // SF's table: 312/1024, 582/1024, 474/1024. Default OFF; env CONTHISTPLIES=1.
-        // OFF path: cont_hist_planes leaves ch3/ch4/ch6 nullptr, so every read/update
-        // site below collapses to its pre-existing ch1/ch2-only behavior — provably
+        // SF's table: 312/1024, 582/1024, 474/1024.
+        //
+        // PHASE 2 (2026-07-16 revision): CONTHISTPLIES now ALSO applies the
+        // [inCheck][capture] split (SF ContinuationHistory[2][2][PIECE_NB][SQUARE_NB],
+        // history.h:150 + search.h:294) to plies 3/4/6, not just 1/2 — SF indexes
+        // ALL SIX read planes through the same split array (search.cpp:563-564:
+        // `&continuationHistory[ss->inCheck][capture][dirtyPiece.pc][move.to_sq()]`,
+        // keyed by the MOVER's own inCheck/capture-ness at do_move time — same array
+        // for every ply, no unsplit variant exists in SF). The FN-SPRT wash of the
+        // plies-only port (49.82%) is hypothesized to be exactly this gap: SF never
+        // reads the deeper planes unsplit, so the earlier port tested a shape SF
+        // doesn't actually run. CONTHISTPLIES=1 is now the single flag for the
+        // complete port: deeper plies AND the split together, reusing the exact
+        // selection logic Tune::contHistSplit already validated for 1/2 (see
+        // cont_hist_planes) — when contHistPlies is on, ic/cap are computed from
+        // p->inCheck/p->didCapture for planes 3/4/6 too, and ALSO for planes 1/2
+        // (independent of whether contHistSplit is separately set — one flag now
+        // gives the full port; contHistSplit remains available standalone for an
+        // isolated 1/2-only A/B). Default OFF; env CONTHISTPLIES=1. OFF path:
+        // cont_hist_planes leaves ch3/ch4/ch6 nullptr and (absent contHistSplit)
+        // always resolves ch1/ch2 at [0][0], so every read/update site below
+        // collapses to its pre-existing ch1/ch2-only [0][0] behavior — provably
         // unchanged node counts (see perft5/d14 verification in the task report).
         bool contHistPlies = false;
         bool captHist = true; // SF capture history: learned capture-ordering table (banked modest +, 2026-07-15)
@@ -335,21 +357,20 @@ struct Context {
     int16_t contHist1[2][2][CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // parent (1-ply)
     int16_t contHist2[2][2][CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // grandparent (2-ply)
     // CONTHISTPLIES: deeper plies 3, 4, 6 (SF's ordering-read set minus ply 5 — see
-    // Tune::contHistPlies above for the full SF citation). Flat [CONT_PIECE_NB][SQUARE_NB]
-    // [CONT_PIECE_NB][SQUARE_NB] planes — deliberately WITHOUT contHist1/contHist2's
-    // leading [inCheck][capture] split dims. This is a phase-1 scope choice: the task
-    // is "add deeper plies", not "add deeper plies AND retrofit the split onto them",
-    // and pre-allocating an unused 4x split for tables nothing yet indexes would just be
-    // dead memory. TODO(phase 2): give these the same [2][2] split as contHist1/contHist2
+    // Tune::contHistPlies above for the full SF citation). PHASE 2 (2026-07-16): now
+    // carry the SAME leading [inCheck][capture] split dims as contHist1/contHist2
     // (SF ContinuationHistory[2][2][PIECE_NB][SQUARE_NB], history.h:150 + search.h:294;
-    // indexed at do_move time by the ancestor's OWN inCheck/capture-ness, search.cpp:564)
-    // once CONTHISTSPLIT is proven and someone wants to extend it to these plies too.
-    // Always allocated (like contHist1/2) regardless of the flag; only read/written when
-    // Tune::contHistPlies is on (cont_hist_planes leaves the pointers null otherwise).
-    // ~1.125 MB each (12*64*12*64*2 bytes) — see task report for the added-memory total.
-    int16_t contHist3[CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // 3-ply
-    int16_t contHist4[CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // 4-ply
-    int16_t contHist6[CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // 6-ply
+    // indexed at do_move time by the ancestor's OWN inCheck/capture-ness, search.cpp:
+    // 563-564) — SF has no unsplit variant of these planes, so this is required for a
+    // faithful port, not an optional retrofit. Always allocated (like contHist1/2)
+    // regardless of the flag; only read/written when Tune::contHistPlies is on
+    // (cont_hist_planes leaves the pointers null otherwise, same guard as before —
+    // the added [2][2] dims are simply inert extra zeroed memory on the OFF path).
+    // ~4.5 MB each (2*2*12*64*12*64*2 bytes, 4x the phase-1 flat-table size) — see
+    // task report for the added-memory total.
+    int16_t contHist3[2][2][CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // 3-ply
+    int16_t contHist4[2][2][CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // 4-ply
+    int16_t contHist6[2][2][CONT_PIECE_NB][SQUARE_NB][CONT_PIECE_NB][SQUARE_NB] = {}; // 6-ply
     // Capture history (SF CapturePieceToHistory): learned capture-ordering magnitude,
     // keyed [movedPieceDense][to][capturedType]. Read in score_moves' capture branch,
     // updated on beta cutoff (bonus to the cutoff capture, malus to searched-not-best
@@ -637,48 +658,68 @@ const int PieceVal[7] = {0, 100, 320, 330, 500, 900, 20000};
 // set minus ply 5 — see Tune::contHistPlies for the SF citation). Only computed
 // when the flag is on; otherwise ch3/ch4/ch6 stay nullptr, so every downstream
 // read/update site (guarded by `if (chN)`) is a no-op, exactly like a missing
-// ancestor at ply 1/2 already is. No [inCheck][capture] split for these three
-// (TODO(phase 2) — see the contHist3/4/6 declarations on Context above).
+// ancestor at ply 1/2 already is. PHASE 2 (2026-07-16): these three now carry the
+// SAME [inCheck][capture] split as ch1/ch2 (contHist3/4/6 grew the [2][2] leading
+// dims — see the Context declarations above) — SF indexes every read plane
+// (1,2,3,4,6) through one split array, so a faithful "deeper plies" port must
+// split them too. `splitOn` below is shared by ch1..ch6: contHistPlies=1 turns
+// the split on for ALL SIX planes in one shot (independent of contHistSplit),
+// so CONTHISTPLIES alone gives the complete SF-faithful port; contHistSplit
+// remains available standalone for an isolated 1/2-only split A/B.
 inline void cont_hist_planes(Context& C, const Stack* ss, int16_t*& ch1, int16_t*& ch2,
                               int16_t*& ch3, int16_t*& ch4, int16_t*& ch6) {
     ch1 = ch2 = nullptr;
     ch3 = ch4 = ch6 = nullptr;
-    // CONTHISTSPLIT: [inCheck][capture] of the plane-owning ancestor move itself — p->inCheck
-    // is whether p (the node that MADE the move) was in check, p->didCapture is whether that
-    // move was a capture (both set at move-make time, search.cpp ~904/1316-1318; mirrors SF's
-    // ss->inCheck/capture captured at do_move — search.cpp:564). OFF forces [0][0], matching
-    // the pre-split single-plane table exactly.
+    // CONTHISTSPLIT / CONTHISTPLIES: [inCheck][capture] of the plane-owning ancestor
+    // move itself — p->inCheck is whether p (the node that MADE the move) was in
+    // check, p->didCapture is whether that move was a capture (both set at
+    // move-make time, search.cpp ~1051/1468; mirrors SF's ss->inCheck/capture
+    // captured at do_move — search.cpp:563-564). Neither flag set -> forces [0][0],
+    // matching the pre-split single-plane table exactly.
+    bool splitOn = C.tune.contHistSplit || C.tune.contHistPlies;
     if (ss->ply >= 1) {
         const Stack* p = ss - 1;
         if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL) {
-            int ic  = (C.tune.contHistSplit && p->inCheck) ? 1 : 0;
-            int cap = (C.tune.contHistSplit && p->didCapture) ? 1 : 0;
+            int ic  = (splitOn && p->inCheck) ? 1 : 0;
+            int cap = (splitOn && p->didCapture) ? 1 : 0;
             ch1 = &C.contHist1[ic][cap][piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
         }
     }
     if (ss->ply >= 2) {
         const Stack* p = ss - 2;
         if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL) {
-            int ic  = (C.tune.contHistSplit && p->inCheck) ? 1 : 0;
-            int cap = (C.tune.contHistSplit && p->didCapture) ? 1 : 0;
+            int ic  = (splitOn && p->inCheck) ? 1 : 0;
+            int cap = (splitOn && p->didCapture) ? 1 : 0;
             ch2 = &C.contHist2[ic][cap][piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
         }
     }
     if (!C.tune.contHistPlies) return;
+    // contHistPlies is on here (early-returned above otherwise), so splitOn is
+    // unconditionally true for these three planes too — same [inCheck][capture]
+    // selection as ch1/ch2, just spelled directly since the guard is already known.
     if (ss->ply >= 3) {
         const Stack* p = ss - 3;
-        if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL)
-            ch3 = &C.contHist3[piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
+        if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL) {
+            int ic  = p->inCheck ? 1 : 0;
+            int cap = p->didCapture ? 1 : 0;
+            ch3 = &C.contHist3[ic][cap][piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
+        }
     }
     if (ss->ply >= 4) {
         const Stack* p = ss - 4;
-        if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL)
-            ch4 = &C.contHist4[piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
+        if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL) {
+            int ic  = p->inCheck ? 1 : 0;
+            int cap = p->didCapture ? 1 : 0;
+            ch4 = &C.contHist4[ic][cap][piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
+        }
     }
     if (ss->ply >= 6) {
         const Stack* p = ss - 6;
-        if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL)
-            ch6 = &C.contHist6[piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
+        if (p->currentMove != MOVE_NONE && p->currentMove != MOVE_NULL) {
+            int ic  = p->inCheck ? 1 : 0;
+            int cap = p->didCapture ? 1 : 0;
+            ch6 = &C.contHist6[ic][cap][piece_dense(p->currentPiece)][to_sq(p->currentMove)][0][0];
+        }
     }
 }
 
