@@ -50,6 +50,11 @@ type Engine struct {
 // engine's params have UseBook set (otherwise it's inert). Pass nil to detach.
 func (e *Engine) SetBook(b *book.Book) { e.book = b }
 
+// SetUseBook toggles book consultation. NewWithThreads leaves useBook off
+// (unlike NewWithParams, which mirrors params.UseBook), so the UCI path enables
+// its attached book explicitly. Inert unless a book is also attached via SetBook.
+func (e *Engine) SetUseBook(v bool) { e.useBook = v }
+
 // SetNetOverride installs per-engine NNUE nets that this engine's searches use
 // instead of the process-global default eval — so the self-play harness can run
 // each side's own net concurrently (Concurrency>1) without a shared global swap.

@@ -13,12 +13,40 @@ import (
 	"strings"
 	"time"
 
+	assets "github.com/timanthonyalexander/gomachine"
+	"github.com/timanthonyalexander/gomachine/internal/book"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
 	"github.com/timanthonyalexander/gomachine/internal/engine"
 	"github.com/timanthonyalexander/gomachine/internal/search"
 )
 
 const ttSizeMB = 64
+
+// loadBook loads the opening book the same way `serve` does: prefer the
+// cwd-relative data/book.bin, else fall back to the copy embedded in the binary.
+// Returns nil on total failure (book stays inert). Matches the engine's own book
+// so a UCI gauntlet can exercise gomachine's internal book, not an external one.
+func loadBook() *book.Book {
+	if b, err := book.Load("data/book.bin"); err == nil && b != nil {
+		fmt.Fprintf(os.Stderr, "book: loaded data/book.bin (%d positions)\n", b.Len())
+		return b
+	}
+	if eb, err := book.Parse(assets.Book); err == nil && eb != nil {
+		fmt.Fprintf(os.Stderr, "book: loaded embedded (%d positions)\n", eb.Len())
+		return eb
+	}
+	fmt.Fprintln(os.Stderr, "book: none available (playing bookless)")
+	return nil
+}
+
+// newEngine builds a UCI engine and attaches the shared opening book, enabling it
+// per ownBook. NewWithThreads leaves useBook off, so we flip it explicitly.
+func newEngine(ttMB, threads int, bk *book.Book, ownBook bool) *engine.Engine {
+	eng := engine.NewWithThreads(ttMB, threads)
+	eng.SetBook(bk)
+	eng.SetUseBook(ownBook && bk != nil)
+	return eng
+}
 
 // Run starts the UCI loop reading from stdin and writing to stdout.
 func Run() {
@@ -34,7 +62,9 @@ func runIO(in io.Reader, out io.Writer) {
 	// UCI gomachine plays Syzygy-free — fair against opponents without EGTBs.
 	threads := 1
 	ttMB := ttSizeMB
-	eng := engine.NewWithThreads(ttMB, threads)
+	ownBook := true
+	bk := loadBook()
+	eng := newEngine(ttMB, threads, bk, ownBook)
 	pos, _ := chess.ParseFEN(chess.StartFEN)
 	var history []uint64
 
@@ -53,6 +83,7 @@ func runIO(in io.Reader, out io.Writer) {
 			fmt.Fprintln(out, "option name Level type spin default 10 min 0 max 10")
 			fmt.Fprintln(out, "option name Threads type spin default 1 min 1 max 256")
 			fmt.Fprintln(out, "option name Hash type spin default 64 min 1 max 1048576")
+			fmt.Fprintln(out, "option name OwnBook type check default true")
 			fmt.Fprintln(out, "uciok")
 		case "isready":
 			fmt.Fprintln(out, "readyok")
@@ -62,17 +93,20 @@ func runIO(in io.Reader, out io.Writer) {
 				case "threads":
 					if n, err := strconv.Atoi(value); err == nil && n >= 1 {
 						threads = n
-						eng = engine.NewWithThreads(ttMB, threads)
+						eng = newEngine(ttMB, threads, bk, ownBook)
 					}
 				case "hash":
 					if n, err := strconv.Atoi(value); err == nil && n >= 1 {
 						ttMB = n
-						eng = engine.NewWithThreads(ttMB, threads)
+						eng = newEngine(ttMB, threads, bk, ownBook)
 					}
+				case "ownbook":
+					ownBook = strings.EqualFold(value, "true")
+					eng.SetUseBook(ownBook && bk != nil)
 				}
 			}
 		case "ucinewgame":
-			eng = engine.NewWithThreads(ttMB, threads)
+			eng = newEngine(ttMB, threads, bk, ownBook)
 			pos, _ = chess.ParseFEN(chess.StartFEN)
 			history = nil
 		case "position":
