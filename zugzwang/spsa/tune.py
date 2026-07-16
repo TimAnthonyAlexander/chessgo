@@ -63,7 +63,22 @@ MARGIN_PARAMS = [
     ("NmpEvalDiv",       200,  80, 400,  16),
     ("SingularMargin",    32,  16,  80,   3),
 ]
-PARAMS = MARGIN_PARAMS if os.environ.get("SPSA_SET", "capthist") == "margins" else CAPTHIST_PARAMS
+LMRCLUSTER_PARAMS = [
+    # name              start   min     max    c_end     (SPSA_SET=lmrcluster)
+    # The co-tuned LMR fine-term cluster (rootDeltaLmr+allNodeLmr+corrMargin) + extension/LMR
+    # constants, exposed 2026-07-16. Run with ZUGZWANG_ENGINE=./cand_lmrcluster.sh so both arms
+    # have LMRCLUSTER=1 (the terms active) while SPSA drives the constants. Bundle SPRT at these
+    # defaults was +3.9 ±8.7 (positive basin where each term washes solo) — SPSA optimizes upward.
+    # LmrBase/LmrDiv are the reduction-table double x LMR_DOUBLE_SCALE (10000).
+    ("RootDeltaCoeff",   608,   200,   1200,    50),
+    ("CorrMarginDiv",  30370, 10000, 100000,  4500),
+    ("AllNodeDiv",         1,     1,      6,     1),
+    ("DblExtMargin",      64,    20,    130,     6),
+    ("LmrBase",         7844,  3000,  15000,   600),
+    ("LmrDiv",         24696, 15000,  40000,  1250),
+]
+_SPSA_SET = os.environ.get("SPSA_SET", "capthist")
+PARAMS = {"margins": MARGIN_PARAMS, "lmrcluster": LMRCLUSTER_PARAMS}.get(_SPSA_SET, CAPTHIST_PARAMS)
 NAMES = [p[0] for p in PARAMS]
 START = {p[0]: float(p[1]) for p in PARAMS}
 LO = {p[0]: p[2] for p in PARAMS}
