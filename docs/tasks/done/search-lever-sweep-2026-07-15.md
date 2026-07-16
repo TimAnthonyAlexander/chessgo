@@ -20,7 +20,7 @@ base (flag off) + cand (wrapper sets flag on), movetime SPRT `st=0.1` on coalla
 | PAWNORDHIST (SF pawn-structure ordering history) | −0.6 @548 | wash |
 | TTMOVEHIST (adaptive double-ext margin) | +9.9 @463 / −4.0 @436 | wash (not reproducible) |
 | STACK: CORRVARIANTS+TTMOVEHIST | −15.8 @198 | negative (levers don't stack) |
-| ROOTDELTALMR (fixed-point LMR rootDelta term) | −190 @15 | **BUG** — over-reduces (see below) |
+| ROOTDELTALMR (fixed-point LMR rootDelta term) | **FIXED → wash** | bug killed (see below); +1.1 ±11.8 @982, LLR ~0 |
 | ALLNODELMR | no-op alone | needs a working fine-term to bite |
 | RAZORQUAD / NEGEXT3 / ASPADAPT / CORRMARGIN / CONTHISTSPLIT | (built, untested) | dormant, low prior |
 
@@ -46,12 +46,24 @@ gated off — main byte-identical (d14=63075, perft5=4865609). They're combinati
 candidates: a lever that washes solo can carry Elo stacked or once the net/tree shifts
 (a wash-at-SPRT ≠ dead — per the "keep dormant, don't revert" policy).
 
-## Known bug to fix
-**ROOTDELTALMR** (`search.cpp`, fixed-point LMR): `r -= delta*608/max(1,rootDelta)`
-blows up (−190 Elo) — the node-local `delta` can exceed `rootDelta` at wide-window
-internal re-search nodes, making the term a multi-ply over-reduction. Fix: clamp
-`delta` to `rootDelta`, or verify rootDelta is the widest window. Then re-SPRT (expect
-small, per SF).
+## ROOTDELTALMR — FIXED 2026-07-16 (commit `131d17d`), re-SPRT'd → wash
+The −190 blow-up was a real bug: `C.rootDelta` was frozen once per ID iteration
+*before* the aspiration re-search loop, so a fail-high/low widened `[alpha,beta]`
+without updating it — node-local `delta = beta-alpha` then exceeded the stale
+`rootDelta` and `r -= delta*608/rootDelta` overshot its intended `[0,608]` (~0.59-ply)
+bound. **Root cause = OUR port, not the technique** (SF cross-ref, `~/sf18-arm`): SF
+sets `rootDelta` *inside* its `while(true)` re-search loop (`search.cpp:374`) and never
+clamps `delta` — the bound holds structurally because every recursive call passes a
+sub-window (width non-increasing with depth) and rootDelta always tracks the outermost
+window currently executing. Fix = move zug's `C.rootDelta = beta-alpha;` to the top of
+the aspiration loop to match SF; no clamp needed. Flag-gated, default-off byte-identical
+(perft5=4865609, d14=63075 unchanged); flag-on d16 now 175924 vs 176724 off (bounded,
+not exploded). **Re-SPRT (coalla, movetime 100 ms, `ROOTDELTALMR=1` vs off, same binary):
++1.1 ±11.8 Elo @982 games, LLR −0.02 → clean wash**, killed at the wash (no LB>0).
+Verdict: pathology gone, term now behaves as SF's "small" bounded tweak. **Not a
+standalone ship; kept default-off as a fixed cluster candidate** — re-test co-tuned in
+the combined LMR-cluster + joint-SPSA branch (see `open/spsa-margin-polish.md` /
+`open/aspiration-and-lmr-terms.md`), not solo.
 
 ## Infra added
 `zugzwang/zbuild.sh` (standard coalla build, excludes perft.cpp dual-main), per-lever
