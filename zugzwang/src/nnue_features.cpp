@@ -228,6 +228,62 @@ inline void emit_piece_threats(const SFTables& T, const PerspXform& x, int aRel,
     }
 }
 
+// emit_changed_edges — appends ONLY the threat edges that differ old vs new occupancy
+// for attacker square `s`, whose OCCUPANT IS UNCHANGED between the old and new board
+// (s ∉ D — same piece, so old/new attacker identity is identical). Port of gomachine's
+// appendChangedEdges (enriched_delta.go): the THREATDELTA_FAST candidate for the
+// enumerate variant's per-affected-attacker full old/new edge emission.
+//
+// Leaper (knight/king/pawn): the attack set is occupancy-independent, so an edge can
+// only change where the TARGET square's occupant changed — i.e. targets in D. Diff
+// `PseudoAttacks(pc,s) & D` under old vs new occ.
+// Slider (bishop/rook/queen): an edge can only shift along a ray crossing a changed
+// square, so restrict to `mask = ⋃ LineBB(s,d)` over d ∈ D, then diff
+// `attacks(s,oldOcc)&oldOcc&mask` vs `attacks(s,newOcc)&newOcc&mask` — this captures
+// blocked, discovered (ray extends past a departed blocker) and retracted (ray shortens
+// at a newly-appeared piece) edges uniformly; unshifted targets on the masked lines
+// appear in both sets with the same victim and cancel (well, are simply omitted here —
+// unlike the enumerate variant's count-array cancellation, this path never emits them).
+template <class OldPieceAt, class NewPieceAt>
+inline void emit_changed_edges(const SFTables& T, const PerspXform& x, int aRel,
+                               int pt0, Color c, Square s, U64 oldOcc, U64 newOcc, U64 D,
+                               OldPieceAt&& oldPieceAt, NewPieceAt&& newPieceAt,
+                               std::vector<int>& sub, std::vector<int>& add) {
+    const int rfrom = x.orient(int(s));
+    U64 oldT, newT;
+    if (pt0 == 2 || pt0 == 3 || pt0 == 4) { // Bishop, Rook, Queen
+        U64 mask = 0;
+        for (U64 d = D; d;) {
+            const Square dsq = BB::pop_lsb(d);
+            mask |= BB::line_bb(s, dsq);
+        }
+        oldT = attacks0(pt0, c, s, oldOcc) & oldOcc & mask;
+        newT = attacks0(pt0, c, s, newOcc) & newOcc & mask;
+    } else { // Pawn, Knight, King
+        const U64 a = attacks0(pt0, c, s, oldOcc) & D; // occ-independent; shifts only at D
+        oldT = a & oldOcc;
+        newT = a & newOcc;
+    }
+    while (oldT) {
+        const Square tsq   = BB::pop_lsb(oldT);
+        const Piece victim = oldPieceAt(tsq);
+        const int   vt0    = int(type_of(victim)) - 1;
+        const int   vRel   = (color_of(victim) != x.persp) ? 1 : 0;
+        int idx;
+        if (T.threatIndex(aRel, pt0, vRel, vt0, rfrom, x.orient(int(tsq)), idx))
+            sub.push_back(int(PsqSize) + idx);
+    }
+    while (newT) {
+        const Square tsq   = BB::pop_lsb(newT);
+        const Piece victim = newPieceAt(tsq);
+        const int   vt0    = int(type_of(victim)) - 1;
+        const int   vRel   = (color_of(victim) != x.persp) ? 1 : 0;
+        int idx;
+        if (T.threatIndex(aRel, pt0, vRel, vt0, rfrom, x.orient(int(tsq)), idx))
+            add.push_back(int(PsqSize) + idx);
+    }
+}
+
 } // namespace
 
 namespace NNUE {
@@ -288,6 +344,7 @@ void changed_edges_delta(const BoardSnapshot& oldb, const Position& child,
     const SFTables& T = tables();
     const U64 oldOcc = oldb.occ();
     const U64 newOcc = child.pieces();
+    const bool fast = threat_delta_fast_enabled();
 
     // D = squares whose occupant changed (per-piece bitboard XOR) — robust to castling /
     // en passant / promotion without decoding move flags (a promotion shows as pawn-left
@@ -334,20 +391,51 @@ void changed_edges_delta(const BoardSnapshot& oldb, const Position& child,
                                             int(type_of(np)) - 1, s));
         }
 
-        // Threat edges: subtract each affected attacker's FULL old edge set, add its FULL
-        // new set. Unchanged edges cancel in apply_diff.
-        for (U64 a = affected; a;) {
-            const Square s = BB::pop_lsb(a);
-            const Piece op = oldb.piece_on(s);
-            if (op != NO_PIECE)
-                emit_piece_threats(T, x, (color_of(op) != p.color) ? 1 : 0,
-                                   int(type_of(op)) - 1, color_of(op), s, oldOcc,
-                                   oldPieceAt, *p.sub);
-            const Piece np = child.piece_on(s);
-            if (np != NO_PIECE)
-                emit_piece_threats(T, x, (color_of(np) != p.color) ? 1 : 0,
-                                   int(type_of(np)) - 1, color_of(np), s, newOcc,
-                                   newPieceAt, *p.add);
+        if (!fast) {
+            // Enumerate variant (shipped cut-1, default): subtract each affected
+            // attacker's FULL old edge set, add its FULL new set. Unchanged edges
+            // cancel in apply_diff's count array.
+            for (U64 a = affected; a;) {
+                const Square s = BB::pop_lsb(a);
+                const Piece op = oldb.piece_on(s);
+                if (op != NO_PIECE)
+                    emit_piece_threats(T, x, (color_of(op) != p.color) ? 1 : 0,
+                                       int(type_of(op)) - 1, color_of(op), s, oldOcc,
+                                       oldPieceAt, *p.sub);
+                const Piece np = child.piece_on(s);
+                if (np != NO_PIECE)
+                    emit_piece_threats(T, x, (color_of(np) != p.color) ? 1 : 0,
+                                       int(type_of(np)) - 1, color_of(np), s, newOcc,
+                                       newPieceAt, *p.add);
+            }
+        } else {
+            // THREATDELTA_FAST candidate: Group 1 (s ∈ D, attacker identity changed)
+            // still needs its FULL old/new edge set — same as the enumerate variant.
+            for (U64 d = D; d;) {
+                const Square s = BB::pop_lsb(d);
+                const Piece op = oldb.piece_on(s);
+                if (op != NO_PIECE)
+                    emit_piece_threats(T, x, (color_of(op) != p.color) ? 1 : 0,
+                                       int(type_of(op)) - 1, color_of(op), s, oldOcc,
+                                       oldPieceAt, *p.sub);
+                const Piece np = child.piece_on(s);
+                if (np != NO_PIECE)
+                    emit_piece_threats(T, x, (color_of(np) != p.color) ? 1 : 0,
+                                       int(type_of(np)) - 1, color_of(np), s, newOcc,
+                                       newPieceAt, *p.add);
+            }
+            // Group 2 (s ∈ affected \ D, attacker identity UNCHANGED): masked-line
+            // diff — emit ONLY the edges that actually differ, instead of the full
+            // old/new edge set.
+            for (U64 a = affected & ~D; a;) {
+                const Square s = BB::pop_lsb(a);
+                const Piece pc = child.piece_on(s); // == oldb.piece_on(s), s ∉ D
+                if (pc == NO_PIECE) continue; // defensive; attackers_to never yields an empty square
+                emit_changed_edges(T, x, (color_of(pc) != p.color) ? 1 : 0,
+                                   int(type_of(pc)) - 1, color_of(pc), s,
+                                   oldOcc, newOcc, D, oldPieceAt, newPieceAt,
+                                   *p.sub, *p.add);
+            }
         }
     }
 }
@@ -361,6 +449,15 @@ bool threat_delta_enabled() {
     // Default ON (banked +43 Elo movetime, coalla 966g LLR 2.95, 2026-07-15). THREATDELTA=0
     // is the parity/debug kill-switch back to the full-enumerate push().
     static const bool on = [] { const char* e = getenv("THREATDELTA"); return !(e && e[0] == '0'); }();
+    return on;
+}
+
+bool threat_delta_fast_enabled() {
+    // Default OFF (follow-on candidate, docs/tasks/open/threat-delta-followon.md §1):
+    // THREATDELTA_FAST=1 opts into the masked-line diff inside changed_edges_delta.
+    // Only consulted when threat_delta_enabled() is already true (push_delta's caller).
+    // Eval MUST be byte-identical to the enumerate variant — this is a pure NPS opt.
+    static const bool on = [] { const char* e = getenv("THREATDELTA_FAST"); return e && e[0] == '1'; }();
     return on;
 }
 

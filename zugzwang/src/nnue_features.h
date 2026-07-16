@@ -59,4 +59,12 @@ int perspective_bucket_key(Square ksq, Color persp);
 // THREATDELTA=0 is the parity/debug kill-switch back to the full-enumerate push().
 bool threat_delta_enabled();
 
+// threat_delta_fast_enabled reads THREATDELTA_FAST once (default OFF): =1 switches
+// changed_edges_delta's Group-2 (attacker-identity-unchanged) inner loop from the
+// enumerate variant's full old/new edge re-enumeration to the leaper/slider
+// masked-line diff (docs/tasks/open/threat-delta-followon.md §1) — fewer threatIndex
+// calls, byte-identical resulting edge multiset. Only meaningful when
+// threat_delta_enabled() is true.
+bool threat_delta_fast_enabled();
+
 } // namespace NNUE
