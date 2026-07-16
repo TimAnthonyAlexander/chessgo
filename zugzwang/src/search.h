@@ -103,10 +103,16 @@ void start(Position& pos, const Limits& limits);
 
 int64_t now_ms();
 
-// UCI setoption hook for the 8 SPSA-tunable search margins (search.cpp's
+// UCI setoption hook for the SPSA-tunable search margins (search.cpp's
 // Tune struct), applied to default_context(). Returns false if `name`
 // doesn't match a tune option.
 bool set_tune_option(const std::string& name, int value);
+
+// LmrBase/LmrDiv are sub-1-precision doubles (Tune::lmrBase/lmrDiv) but UCI
+// `spin` options are integers — the wire value is the double x LMR_DOUBLE_SCALE
+// (e.g. default lmrBase 0.7844 <-> spin value 7844). Shared by uci.cpp (option
+// table defaults) and search.cpp (set_tune_option_impl's conversion back).
+constexpr int LMR_DOUBLE_SCALE = 10000;
 
 void init();  // one-time startup init (LMR table etc) for default_context()
 void clear(); // clear history/killers/TT for a new game, on default_context()

@@ -219,6 +219,15 @@ struct Context {
         bool captHistMargin = false; // split of CAPTHISTPRUNE: captHist term in the capture-SEE prune margin ONLY, no LMR-capture-enable (env CAPTHISTMARGIN=1)
         bool allNodeLmr    = false; // SF's allNode self-scaling LMR term: r += r/(depth+1) when !(PvNode||cutNode) (env ALLNODELMR=1; SF search.cpp:1227)
         bool rootDeltaLmr  = false; // aspiration-window-relative LMR term: r -= delta/rootDelta (env ROOTDELTALMR=1; SF search.cpp delta*608/rootDelta)
+        // LMRCLUSTER (2026-07-16): corrMargin/allNodeLmr/rootDeltaLmr are a co-dependent
+        // unit, not three independent levers — each washed SOLO in isolated SPRTs, but
+        // allNodeLmr (r += r/(depth+1)) is a near-no-op until another term first breaks r
+        // off an exact 1024 multiple (see the allNodeLmr comment at the read site,
+        // search.cpp ~1586-1597). LMRCLUSTER=1 turns all three on together for a single
+        // bundle SPRT/SPSA campaign; the three individual flags (CORRMARGIN/ALLNODELMR/
+        // ROOTDELTALMR) still work standalone for isolated A/B. Default OFF — OFF must
+        // stay byte-identical (none of the three terms fire).
+        bool lmrCluster    = false;
         // ---- 2 new SF-ported history ordering tables (2026-07-15) — default OFF, env-gated ----
         bool lowPlyHist   = false; // SF LowPlyHistory: ply<5 butterfly-shaped table, extra ordering weight near the root (env LOWPLYHIST=1; SF history.h/movepick.cpp)
         bool pawnOrderHist = false; // SF PawnHistory: pawn-structure-keyed quiet ordering table (env PAWNORDHIST=1; SF history.h/movepick.cpp)
@@ -247,6 +256,14 @@ struct Context {
         int captSeeCoeff  = 23;   // capture SEE pruning: -captSeeCoeff*depth
         int nmpEvalDiv    = 200;  // null-move R eval term: min((eval-beta)/nmpEvalDiv, 3)
         int singularMargin = 32;  // singular beta: ttValue - singularMargin*depth/16 (32 -> 2*depth, exact)
+        // ---- LMRCLUSTER fine-term constants (2026-07-16) — UCI-exposed for joint SPSA.
+        // Defaults reproduce the pre-tunable literals exactly; only read when the owning
+        // flag (corrMargin/allNodeLmr/rootDeltaLmr, or the LMRCLUSTER bundle) is on, so
+        // these are no-ops at their defaults on the OFF path regardless of value. ----
+        int rootDeltaCoeff = 608;   // ROOTDELTALMR: r -= delta*rootDeltaCoeff/max(1,rootDelta) (SF search.cpp:1737, 608)
+        int corrMarginDiv  = 30370; // CORRMARGIN (LMR term only): r -= abs(correction_raw)/corrMarginDiv (SF search.cpp:1197, 30370)
+        int allNodeDiv     = 1;     // ALLNODELMR: r += r/(depth+allNodeDiv) at allNodes (SF search.cpp:1228 uses depth+1 -> allNodeDiv=1)
+        int dblExtMargin   = 64;    // double-extension verification margin (search.cpp singular block; was a bare 64)
         // ---- D.1 gomachine structural constants — ACCEPTED, baked into defaults 2026-07-14 ----
         // (previously only applied via env GMCONST=1; not UCI-exposed)
         int captSeeMaxDepth  = 4;      // capture SEE pruning: only at depth <= this
@@ -255,6 +272,10 @@ struct Context {
         int lmrMinMoves      = 4;      // LMR onset: reduce once moveCount > this (+1 at root)
         double lmrBase       = 0.7844; // LMR table: base + log(d)*log(m)/div
         double lmrDiv        = 2.4696;
+        // lmrBase/lmrDiv are UCI-exposed too (uci.cpp "LmrBase"/"LmrDiv"), but UCI `spin`
+        // options are integers and these are sub-1-precision doubles: the wire value is
+        // the double x10000 (LMRBASE_SCALE below), e.g. default 0.7844 <-> spin value 7844.
+        // set_tune_option_impl divides back by the scale; SPSA drives the integer spin.
         // load() applies env overrides but does NOT rebuild the LMR table
         // itself (that needs the owning Context's Reductions array, which
         // Tune has no access to) — every load() call site must follow up
@@ -309,6 +330,10 @@ struct Context {
             if (on("CAPTHISTMARGIN")) captHistMargin = true;
             if (on("ALLNODELMR")) allNodeLmr = true;
             if (on("ROOTDELTALMR")) rootDeltaLmr = true;
+            // LMRCLUSTER: bundle switch for the co-dependent corrMargin/allNodeLmr/
+            // rootDeltaLmr trio — sets all three individual flags together (each also
+            // stays settable standalone via its own env var above).
+            if (on("LMRCLUSTER")) { lmrCluster = true; corrMargin = true; allNodeLmr = true; rootDeltaLmr = true; }
             if (on("LOWPLYHIST")) lowPlyHist = true;
             if (on("PAWNORDHIST")) pawnOrderHist = true;
             if (on("TTMOVEHIST")) ttMoveHist = true;
@@ -499,6 +524,15 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     else if (name == "NmpEvalDiv")     tune.nmpEvalDiv     = clamp(value, 80, 400);
     else if (name == "SingularMargin") tune.singularMargin = clamp(value, 16, 80);
     else if (name == "CaptHistWeight") tune.captHistWeight = clamp(value, 16, 512);
+    // ---- LMRCLUSTER fine-term tunables (2026-07-16) ----
+    else if (name == "RootDeltaCoeff") tune.rootDeltaCoeff = clamp(value, 200, 1200);
+    else if (name == "CorrMarginDiv")  tune.corrMarginDiv  = clamp(value, 10000, 100000);
+    else if (name == "AllNodeDiv")     tune.allNodeDiv     = clamp(value, 1, 6);
+    else if (name == "DblExtMargin")   tune.dblExtMargin   = clamp(value, 20, 130);
+    // LmrBase/LmrDiv: wire value is the double x LMR_DOUBLE_SCALE (search.h) — see the
+    // Tune::lmrBase/lmrDiv comment. Clamp in wire units, convert on the way in.
+    else if (name == "LmrBase")        tune.lmrBase        = clamp(value, 3000, 15000) / double(LMR_DOUBLE_SCALE);
+    else if (name == "LmrDiv")         tune.lmrDiv         = clamp(value, 15000, 40000) / double(LMR_DOUBLE_SCALE);
     else return false;
     return true;
 }
@@ -1468,8 +1502,9 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                 // TTMOVEHIST (SF search.cpp:1144): a well-trusted ttMove (high running
                 // ttMoveHistory) lowers the double-ext margin — easier to double-extend;
                 // a poorly-trusted one raises it. Conservative first cut: +-8192 swings
-                // the fixed 64 margin by +-12 (~19%). Off -> plain 64, byte-identical.
-                int dblMargin = C.tune.ttMoveHist ? (64 - C.ttMoveHistory * 12 / TTMOVEHIST_D) : 64;
+                // the base margin (default 64, DblExtMargin) by +-12 (~19%). Off -> plain
+                // dblExtMargin, byte-identical to the old bare-64 literal at the default.
+                int dblMargin = C.tune.ttMoveHist ? (C.tune.dblExtMargin - C.ttMoveHistory * 12 / TTMOVEHIST_D) : C.tune.dblExtMargin;
                 if (C.tune.dblExt && !PvNode && s < singularBeta - dblMargin) {
                     extension = 2;
                     // Wave 6: a 3rd ply only when the move fails verification by a very
@@ -1582,7 +1617,7 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             // being SF's raw pre-shift correction sum). Off -> no-op (corrMargin
             // default false).
             if (C.tune.corrMargin)
-                r -= (int)(std::abs(correction_raw(C, pos, ss)) / 30370);
+                r -= (int)(std::abs(correction_raw(C, pos, ss)) / C.tune.corrMarginDiv);
             // ALLNODELMR (SF search.cpp:1227): an "all" node (neither PV nor cut) is
             // expected to fail low on every move — reduce late moves progressively
             // harder the deeper we are. Self-ratio term: r is genuinely perturbed now
@@ -1595,7 +1630,7 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             // exceeds depth (k >= depth+1), a regime std::max(1, newDepth-red) already
             // clamps to d=1 on both sides. Real effect requires another fine term
             // (CORRMARGIN/ROOTDELTALMR) to first break r off an exact 1024 multiple.
-            if (C.tune.allNodeLmr && allNode) r += r / (depth + 1);
+            if (C.tune.allNodeLmr && allNode) r += r / (depth + C.tune.allNodeDiv);
             // ROOTDELTALMR (SF search.cpp:1737: r -= delta * 608 / rootDelta, its r
             // being x1024): reduce less when this node's alpha-beta window is wide
             // relative to the root's aspiration window (this line is more "PV-like"
@@ -1614,7 +1649,7 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             // rootDelta==0 since the aspiration window is always >0 wide).
             if (C.tune.rootDeltaLmr) {
                 int delta = beta - alpha;
-                r -= delta * 608 / std::max(1, C.rootDelta);
+                r -= delta * C.tune.rootDeltaCoeff / std::max(1, C.rootDelta);
             }
             int red = r / 1024;
             int d = std::max(1, std::min(newDepth - red, newDepth));

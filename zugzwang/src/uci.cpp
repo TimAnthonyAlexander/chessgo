@@ -212,6 +212,18 @@ int uci_main() {
             std::cout << "option name CaptSeeCoeff type spin default 23 min 0 max 180\n";
             std::cout << "option name NmpEvalDiv type spin default 200 min 80 max 400\n";
             std::cout << "option name SingularMargin type spin default 32 min 16 max 80\n";
+            // LMRCLUSTER fine-term tunables (2026-07-16, search.cpp Tune struct) — the
+            // co-dependent corrMargin/allNodeLmr/rootDeltaLmr trio's constants, exposed
+            // for a joint SPSA campaign (env LMRCLUSTER=1 turns the trio on; these
+            // options tune the constants regardless of which of the trio's flags are
+            // set). LmrBase/LmrDiv wire values are the underlying double x 10000
+            // (Search::LMR_DOUBLE_SCALE) since UCI spin options are integers.
+            std::cout << "option name RootDeltaCoeff type spin default 608 min 200 max 1200\n";
+            std::cout << "option name CorrMarginDiv type spin default 30370 min 10000 max 100000\n";
+            std::cout << "option name AllNodeDiv type spin default 1 min 1 max 6\n";
+            std::cout << "option name DblExtMargin type spin default 64 min 20 max 130\n";
+            std::cout << "option name LmrBase type spin default 7844 min 3000 max 15000\n";
+            std::cout << "option name LmrDiv type spin default 24696 min 15000 max 40000\n";
             std::cout << "option name OwnBook type check default false\n";
             std::cout << "uciok" << std::endl;
         } else if (cmd == "isready") {
