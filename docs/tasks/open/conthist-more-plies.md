@@ -1,5 +1,24 @@
 # Continuation history: 2 plies → more (3/4/6)
 
+> **TESTED 2026-07-16 → FN-real but MOVETIME read-cost-bound. Dormant (default-off), NOT dead.**
+> Built the full SF read set (plies 1,2,3,4,6) behind `CONTHISTPLIES` (commit 67cec69), then
+> completed the port with SF's `[inCheck][capture]` split on all plies (commit 7c9b011).
+> **The split is load-bearing** — the exact incomplete-port trap this doc's headwind section
+> predicted, but on the *ordering* axis, not the read axis:
+> - plies 3/4/6 **without** the split: FN **−1.3** (49.82% @5000g) — deeper plies raw add noise.
+> - plies 3/4/6 **with** the `[inCheck][capture]` split: FN **+5.7** (50.83%, LLR +0.51 @1382g) —
+>   the split contextualizes them and they become a real ordering gain.
+> - complete port at **MOVETIME**: **−8.9 ±8.8, LLR −1.31 reject @1600g** (100 ms, coalla).
+>
+> So the FN ceiling (+5.7, below the +10–20 hope) is genuine but **does not convert** — the 5
+> split tables (`[2][2][12][64][12][64]`, +10 MB/Context) add cold plane touches per node that
+> cost ~−14 Elo of NPS at movetime, eating the +5.7 and then some. Same shape as
+> [[conthist-fn-to-mt]] but the FN gain is real (unlike LMRHIST). **The remaining work is NOT
+> more plies — it's the cold-first-touch fight**: table relayout for first-touch locality, or
+> scoring only a top slice of quiets before searching (changes ordering, not byte-identical).
+> Kept `CONTHISTPLIES` default-off as a re-test candidate if that read cost is ever cut. Do not
+> re-run "more plies" as an Elo lever until the read cost is addressed.
+
 **What.** Extend continuation history from zug's 1-ply + 2-ply to SF's deeper set.
 
 **Where.** SF reads plies 1,2,3,4,6 for ordering and updates plies 1–6
