@@ -1,5 +1,21 @@
 # SPSA margin re-tune (post SF-selectivity stack)
 
+> **LMR-CLUSTER JOINT SPSA — DONE 2026-07-17 → WASH, reverted (`60e3a4f` reverts `7bbe90e`).**
+> Exposed 6 LMR/ext constants (RootDeltaCoeff, CorrMarginDiv, AllNodeDiv, DblExtMargin,
+> LmrBase, LmrDiv) + a combined `LMRCLUSTER` flag enabling the 3 co-dependent fine-terms
+> (rootDeltaLmr+allNodeLmr+corrMargin) together. Key finding: the **bundle at default constants
+> beat base +3.9 @1600g** where each term washes SOLO — co-tuning is real. 3000-iter joint SPSA
+> drifted meaningfully off SF defaults (DblExtMargin 64→25, RootDeltaCoeff 608→480, LmrBase
+> +20%) — a "deepen the critical move, cut everything else harder" profile. BUT the tuned theta
+> **did not confirm as a win vs base:** final-theta vs base +8.0 ±8.7 @1600 (LB −0.66, under bar);
+> iter-2950 theta vs base −11.5 @574; final-vs-iter2950 head-to-head +2.8 ±9 (wash → the two
+> near-identical points are equal strength, so the +8/−11.5 straddle is pure noise on one quantity
+> ≈ 0). Verdict: **SPSA found a basin, not an edge.** Reverted. The 6 constants stay UCI-settable +
+> the `LMRCLUSTER` flag stays (default-off) for any future re-tune with larger batch/more games —
+> the per-iter noise (batch 8) likely too high to resolve a true ~+3 effect. Do NOT re-ship on a
+> single vs-base SPRT; require an A/B stability cross-check.
+
+
 **What.** Re-tune the search margins now that the SF-selectivity campaign landed
 five waves on top of the old tree: `RfpMargin`, `RazorMargin`, `FutBase`,
 `FutSlope`, `SeeQuietCoeff`, `CaptSeeCoeff`, `NmpEvalDiv`, `SingularMargin`
