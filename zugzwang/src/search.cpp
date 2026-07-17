@@ -209,7 +209,7 @@ struct Context {
                                      // SF's 331/2474 ratio of its opponentWorsening/improving futility_margin terms)
         bool improvingRelax  = true; // #B: improving |= staticEval >= beta, after NMP (env IMPROVERELAX=0)
         // ---- 4 independent SF-cross-referenced levers — default OFF, env-gated ----
-        bool corrMargin = false; // raw (pre-shift) correction magnitude discounts RFP margin + LMR reduction (env CORRMARGIN=1)
+        bool corrMargin = true;  // SHIPPED 2026-07-17 (LMR-cluster SPSA, +8 Elo MT): raw correction magnitude discounts LMR reduction (was env CORRMARGIN)
         bool rfpDeep    = false; // raise RFP depth cap 8 -> 13, matching SF's depth<14 (env RFPDEEP=1)
         bool razorQuad  = false; // quadratic razoring curve (SF-scaled consts), no depth cap (env RAZORQUAD=1)
         bool negExt3    = false; // negative-extension magnitude -2/-1 -> -3/-2 (env NEGEXT3=1)
@@ -217,8 +217,8 @@ struct Context {
         bool aspAdapt     = false; // adaptive aspiration initial delta (prevScore-scaled) + delta/3 widening, not delta/2 (env ASPADAPT=1; SF search.cpp:355,418)
         // ---- 3 independent SF-cross-referenced levers (2026-07-15) — default OFF, env-gated ----
         bool captHistMargin = false; // split of CAPTHISTPRUNE: captHist term in the capture-SEE prune margin ONLY, no LMR-capture-enable (env CAPTHISTMARGIN=1)
-        bool allNodeLmr    = false; // SF's allNode self-scaling LMR term: r += r/(depth+1) when !(PvNode||cutNode) (env ALLNODELMR=1; SF search.cpp:1227)
-        bool rootDeltaLmr  = false; // aspiration-window-relative LMR term: r -= delta/rootDelta (env ROOTDELTALMR=1; SF search.cpp delta*608/rootDelta)
+        bool allNodeLmr    = true;  // SHIPPED 2026-07-17: SF's allNode self-scaling LMR term: r += r/(depth+allNodeDiv) when !(PvNode||cutNode) (SF search.cpp:1227)
+        bool rootDeltaLmr  = true;  // SHIPPED 2026-07-17: aspiration-window-relative LMR term: r -= delta*rootDeltaCoeff/rootDelta (SF search.cpp:1737)
         // LMRCLUSTER (2026-07-16): corrMargin/allNodeLmr/rootDeltaLmr are a co-dependent
         // unit, not three independent levers — each washed SOLO in isolated SPRTs, but
         // allNodeLmr (r += r/(depth+1)) is a near-no-op until another term first breaks r
@@ -227,7 +227,7 @@ struct Context {
         // bundle SPRT/SPSA campaign; the three individual flags (CORRMARGIN/ALLNODELMR/
         // ROOTDELTALMR) still work standalone for isolated A/B. Default OFF — OFF must
         // stay byte-identical (none of the three terms fire).
-        bool lmrCluster    = false;
+        bool lmrCluster    = true;  // SHIPPED 2026-07-17: the 3 fine-terms above are now default-on together (LMR-cluster SPSA tune)
         // ---- 2 new SF-ported history ordering tables (2026-07-15) — default OFF, env-gated ----
         bool lowPlyHist   = false; // SF LowPlyHistory: ply<5 butterfly-shaped table, extra ordering weight near the root (env LOWPLYHIST=1; SF history.h/movepick.cpp)
         bool pawnOrderHist = false; // SF PawnHistory: pawn-structure-keyed quiet ordering table (env PAWNORDHIST=1; SF history.h/movepick.cpp)
@@ -260,18 +260,18 @@ struct Context {
         // Defaults reproduce the pre-tunable literals exactly; only read when the owning
         // flag (corrMargin/allNodeLmr/rootDeltaLmr, or the LMRCLUSTER bundle) is on, so
         // these are no-ops at their defaults on the OFF path regardless of value. ----
-        int rootDeltaCoeff = 608;   // ROOTDELTALMR: r -= delta*rootDeltaCoeff/max(1,rootDelta) (SF search.cpp:1737, 608)
-        int corrMarginDiv  = 30370; // CORRMARGIN (LMR term only): r -= abs(correction_raw)/corrMarginDiv (SF search.cpp:1197, 30370)
-        int allNodeDiv     = 1;     // ALLNODELMR: r += r/(depth+allNodeDiv) at allNodes (SF search.cpp:1228 uses depth+1 -> allNodeDiv=1)
-        int dblExtMargin   = 64;    // double-extension verification margin (search.cpp singular block; was a bare 64)
+        int rootDeltaCoeff = 480;   // LMR-cluster SPSA tuned 2026-07-17 (was SF 608). r -= delta*rootDeltaCoeff/max(1,rootDelta)
+        int corrMarginDiv  = 27994; // LMR-cluster SPSA tuned (was SF 30370). r -= abs(correction_raw)/corrMarginDiv
+        int allNodeDiv     = 2;     // LMR-cluster SPSA tuned (was SF 1). r += r/(depth+allNodeDiv) at allNodes
+        int dblExtMargin   = 25;    // LMR-cluster SPSA tuned (was 64). double-extension verification margin (singular block)
         // ---- D.1 gomachine structural constants — ACCEPTED, baked into defaults 2026-07-14 ----
         // (previously only applied via env GMCONST=1; not UCI-exposed)
         int captSeeMaxDepth  = 4;      // capture SEE pruning: only at depth <= this
         int singularMinDepth = 5;      // singular extension: only at depth >= this
         int aspInitDelta     = 25;     // aspiration window initial half-width
         int lmrMinMoves      = 4;      // LMR onset: reduce once moveCount > this (+1 at root)
-        double lmrBase       = 0.7844; // LMR table: base + log(d)*log(m)/div
-        double lmrDiv        = 2.4696;
+        double lmrBase       = 0.9384; // LMR-cluster SPSA tuned 2026-07-17 (was 0.7844). LMR table: base + log(d)*log(m)/div
+        double lmrDiv        = 2.2601; // LMR-cluster SPSA tuned (was 2.4696)
         // lmrBase/lmrDiv are UCI-exposed too (uci.cpp "LmrBase"/"LmrDiv"), but UCI `spin`
         // options are integers and these are sub-1-precision doubles: the wire value is
         // the double x10000 (LMRBASE_SCALE below), e.g. default 0.7844 <-> spin value 7844.
@@ -353,8 +353,8 @@ struct Context {
                 singularMinDepth = 5;
                 aspInitDelta     = 25;
                 lmrMinMoves      = 4;
-                lmrBase          = 0.7844;
-                lmrDiv           = 2.4696;
+                lmrBase          = 0.9384; // keep GMCONST a no-op re-assertion of the current (SPSA-tuned) defaults
+                lmrDiv           = 2.2601;
             }
         }
     };
