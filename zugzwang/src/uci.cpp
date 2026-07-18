@@ -7,6 +7,7 @@
 #include "bitboard.h"
 #include "zobrist.h"
 #include "book.h"
+#include "rating.h"
 #include <iostream>
 #include <sstream>
 #include <thread>
@@ -24,6 +25,14 @@ static int ttSizeMB = 128;
 static int engineThreads = 1; // UCI "Threads" option — Lazy SMP worker count (1 = single-thread)
 static Book::Book book;
 static bool ownBook = false;
+
+// UCI strength limiting (standard UCI_LimitStrength / UCI_Elo). Off by default so
+// the UCI/bench/golden path is byte-identical to full strength. When on, `go`
+// routes through the engine's rating ladder (Rating::best_move_for_rating_single)
+// instead of a full search — the same weakening the serve `limits.rating` path
+// uses, making strength a first-class, SPRT-testable engine param.
+static bool uciLimitStrength = false;
+static int uciElo = Rating::RatingMax;
 
 static void join_search() {
     if (searchThread.joinable()) searchThread.join();
@@ -120,6 +129,22 @@ static void go_cmd(std::istringstream& is) {
         else if (token == "nodes") is >> limits.nodes;
         else if (token == "movetime") is >> limits.movetime;
         else if (token == "infinite") limits.infinite = true;
+    }
+    if (uciLimitStrength) {
+        // Weakened play through the rating ladder. Runs on the search thread (so
+        // `stop` still joins cleanly) and prints its own bestmove — the ladder's
+        // clean branch searches with silent=true, so there is no double print.
+        Search::request_stop(false);
+        int elo = uciElo, gd = limits.depth, gmt = limits.movetime;
+        int64_t gn = limits.nodes;
+        searchThread = std::thread([elo, gd, gmt, gn]() {
+            std::vector<uint64_t> hist;
+            Rating::WeakResult wr = Rating::best_move_for_rating_single(
+                Search::default_context(), pos, elo, gd, gmt, gn, hist);
+            std::cout << "bestmove " << (wr.move != MOVE_NONE ? move_to_uci(wr.move) : "0000")
+                      << std::endl;
+        });
+        return;
     }
     if (try_book_move(pos)) return; // book hit: skip the search entirely
     Search::request_stop(false);
@@ -225,6 +250,9 @@ int uci_main() {
             std::cout << "option name LmrBase type spin default 7844 min 3000 max 15000\n";
             std::cout << "option name LmrDiv type spin default 24696 min 15000 max 40000\n";
             std::cout << "option name OwnBook type check default false\n";
+            std::cout << "option name UCI_LimitStrength type check default false\n";
+            std::cout << "option name UCI_Elo type spin default " << Rating::RatingMax
+                      << " min " << Rating::RatingMin << " max " << Rating::RatingMax << "\n";
             std::cout << "uciok" << std::endl;
         } else if (cmd == "isready") {
             std::cout << "readyok" << std::endl;
@@ -241,6 +269,10 @@ int uci_main() {
                 engineThreads = std::max(1, std::min(256, std::stoi(value)));
             } else if (name == "OwnBook") {
                 ownBook = (value == "true");
+            } else if (name == "UCI_LimitStrength") {
+                uciLimitStrength = (value == "true");
+            } else if (name == "UCI_Elo") {
+                uciElo = std::max(Rating::RatingMin, std::min(Rating::RatingMax, std::stoi(value)));
             } else {
                 Search::set_tune_option(name, std::stoi(value));
             }

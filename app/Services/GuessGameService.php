@@ -34,12 +34,6 @@ class GuessGameService
     /** Standard start position. */
     private const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
-    // Human/FIDE → engine CCRL ladder mapping (mirrors BotGameService so a
-    // generated game plays at the same strength a /bot game of that rating would).
-    private const HUMAN_FULL_STRENGTH = 2900;
-    private const ENGINE_CCRL_MAX = 3500;
-    private const ENGINE_MIN = 700;
-
     public function __construct(private readonly EngineSelector $engine)
     {
     }
@@ -53,7 +47,9 @@ class GuessGameService
     public function generate(?string $userId): GuessGame
     {
         $human = $this->randomRating();
-        $engineRating = $this->engineRatingForHuman($human);
+        // The engine owns the rating→strength relationship natively — pass the
+        // human/FIDE rating straight through (no client-side ladder remap).
+        $engineRating = $human;
 
         $fen = self::START_FEN;
         /** @var list<string> $history Prior-position FENs (repetition detection). */
@@ -150,15 +146,4 @@ class GuessGameService
         return self::RATING_MIN + random_int(0, $steps) * self::RATING_STEP;
     }
 
-    /**
-     * Map a human/FIDE-scale rating onto the engine's native CCRL ladder,
-     * preserving playing strength (mirrors engine.EngineRatingForHuman /
-     * BotGameService::engineRatingForHuman).
-     */
-    private function engineRatingForHuman(int $human): int
-    {
-        return (int) (self::ENGINE_MIN
-            + ($human - self::ENGINE_MIN) * (self::ENGINE_CCRL_MAX - self::ENGINE_MIN)
-                / (self::HUMAN_FULL_STRENGTH - self::ENGINE_MIN));
-    }
 }

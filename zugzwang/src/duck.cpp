@@ -1,6 +1,7 @@
 #include "duck.h"
 #include "rules.h" // Rules::parse_square only — no Position/legality dependency (see duck.h's file doc)
 #include "search.h" // Search::now_ms() only — no Search::Context/NNUE dependency (mirrors crazyhouse.cpp)
+#include "weakening.h"
 
 #include <algorithm>
 #include <cctype>
@@ -765,14 +766,17 @@ struct DuckSearchConfig {
     int depth = 3;
     int movetimeMs = 1000;
     uint64_t nodes = 0;
-    int noise = 0;
-    double blunder = 0.0;
+    double temperature = 0.0;
+    double capDelta = 1.0;
+    double winProbScale = 350.0; // 3.5 x pawn value (DUCK_PIECE_VALUE[PAWN] == 100)
     double duckRandom = 0.0;
 };
 
-// Same depth ladder / noise / blunder / duckRandom constants as gomachine's
-// applyRating (duckchess/search.go) — keeps bot difficulty feeling the same
-// per rating band after the engine swap.
+// Depth ladder and duckRandom (sloppy duck-placement noise) unchanged from
+// gomachine's applyRating (duckchess/search.go) — kept exactly as before. The
+// piece-move weakening (temperature/capDelta) now uses the shared softmax
+// model (Weakening::pick), same formulas as Rating::config_for_rating in
+// rating.cpp.
 void duck_apply_rating(DuckSearchConfig& cfg, int rating) {
     int r = clamp_int(rating, 700, 3500);
     if (r < 1600) cfg.depth = 1;
@@ -781,10 +785,21 @@ void duck_apply_rating(DuckSearchConfig& cfg, int rating) {
     else cfg.depth = 4;
     if (r < 2800) {
         double u = double(2800 - r) / double(2800 - 700);
-        cfg.noise = int(450.0 * u * u);
-        cfg.blunder = 0.82 * u * u;
         cfg.duckRandom = 0.92 * u * u;
     }
+
+    constexpr double RFULL = 2850.0, RMIN = 700.0;
+    int rc = clamp_int(rating, 700, 2900);
+    if (rc >= RFULL) {
+        cfg.temperature = 0.0;
+        cfg.capDelta = 1.0;
+        return;
+    }
+    double u2 = (RFULL - rc) / (RFULL - RMIN);
+    if (u2 < 0.0) u2 = 0.0;
+    if (u2 > 1.0) u2 = 1.0;
+    cfg.temperature = 0.40 * std::pow(u2, 1.35);
+    cfg.capDelta = 0.03 + 0.52 * std::pow(u2, 1.10);
 }
 
 DuckSearchConfig duck_resolve_config(const DuckLimits& lim) {
@@ -871,38 +886,32 @@ uint64_t duck_seed_for(const DuckState& s) {
     return h;
 }
 
-// Index of the root move to play. With no weakening it is always 0 (the
-// best). Otherwise adds bounded eval noise to re-rank candidates and, with
-// probability cfg.blunder, drops to a slightly weaker one — never noising
-// away a forced win/loss. Mirrors duckchess.weakenPick.
+// Index of the root move to play. With no weakening (temperature and
+// capDelta both at full-strength defaults) it is always 0 (the best).
+// Otherwise picks via the shared softmax weakening model (Weakening::pick) —
+// see weakening.h. The forced win/loss mate guard stays hand-rolled here
+// (rather than relying solely on SoftmaxConfig::protectWinningMate) because
+// duck mate scores use DUCK_MATE_SCORE=1e6, a different convention than the
+// standard engine's is_mate_score() threshold; duck_mate_distance() is the
+// reliable check for this engine's scores.
 size_t duck_weaken_pick(const std::vector<DuckScoredMove>& results, const DuckSearchConfig& cfg,
                          std::mt19937_64& rng) {
-    if (cfg.noise <= 0 && cfg.blunder <= 0) return 0;
+    if (results.empty()) return 0;
+    if (duck_mate_distance(results[0].score) > 0) return 0;
+    if (cfg.temperature <= 0.0 && cfg.capDelta >= 1.0) return 0;
 
-    struct Jittered { size_t idx; int score; };
-    std::vector<Jittered> js(results.size());
-    for (size_t i = 0; i < results.size(); i++) {
-        int noise = 0;
-        if (cfg.noise > 0) {
-            std::uniform_int_distribution<int> d(-cfg.noise, cfg.noise);
-            noise = d(rng);
-        }
-        js[i] = {i, results[i].score + noise};
-    }
-    std::stable_sort(js.begin(), js.end(), [](const Jittered& a, const Jittered& b) { return a.score > b.score; });
+    std::vector<Weakening::Candidate> cands;
+    cands.reserve(results.size());
+    for (size_t i = 0; i < results.size(); i++)
+        cands.push_back({static_cast<int>(i), results[i].score});
 
-    if (!results.empty() && duck_mate_distance(results[0].score) > 0) return 0;
+    Weakening::SoftmaxConfig sc;
+    sc.temperature = cfg.temperature;
+    sc.capDelta = cfg.capDelta;
+    sc.winProbScale = cfg.winProbScale;
+    sc.protectWinningMate = true;
 
-    size_t pick = js[0].idx;
-    if (cfg.blunder > 0 && js.size() > 1) {
-        std::uniform_real_distribution<double> ud(0.0, 1.0);
-        if (ud(rng) < cfg.blunder) {
-            int n = std::min<int>(3, static_cast<int>(js.size()) - 1);
-            std::uniform_int_distribution<int> pd(0, n - 1);
-            pick = js[1 + pd(rng)].idx;
-        }
-    }
-    return pick;
+    return Weakening::pick(cands, sc, rng);
 }
 
 } // namespace

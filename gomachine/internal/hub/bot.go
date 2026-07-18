@@ -196,9 +196,9 @@ func (h *Hub) scheduleBotMove(g *game) {
 		fen:        g.state.FEN(),
 		history:    append([]uint64(nil), g.state.History()...),
 		fenHistory: g.fenHistory(),
-		// Weaken to actual human strength (human scale), then lift onto the engine's
-		// native CCRL ladder so the search produces the same play as before the rescale.
-		rating:         engine.EngineRatingForHuman(humanizedEngineRating(bot.rating)),
+		// zugzwang's rating ladder is human/FIDE-scale end-to-end (RatingMin=700..
+		// RatingMax=2900, full strength at the top) — forward the display rating as-is.
+		rating:         bot.rating,
 		displayRating:  bot.rating,
 		moveTimeCap:    moveTimeCap,
 		searchDepthCap: depthCap,
@@ -543,47 +543,6 @@ func botDisplayRating(userRating int) int {
 		r = botRatingMax
 	}
 	return r
-}
-
-// The engine's rating ladder (engine.configForRating) plays meaningfully STRONGER
-// than it advertises through the lower/middle range — a nominal "1100" engine
-// outplays a real 1100 human (it feels closer to ~1500: it doesn't blunder like a
-// human does). For matchmaking fill-in bots that's a fairness problem: the bot is
-// matched to the human's Elo so the one-sided rated game is fair, which only holds
-// if the engine actually plays at that human strength. So before searching we remap
-// the bot's displayed rating DOWN to a weaker effective ENGINE rating — the human
-// still sees (and rates against) the displayed number; only the search is weakened.
-//
-// The handicap is largest at the weak end and tapers linearly to zero by
-// botHandicapFloor, above which the ladder is genuinely at-strength. This applies
-// ONLY to the hub's bots — the explicit /bot game picker goes straight through the
-// engine and keeps its honest "engine strength" ratings.
-//
-// Magnitude is a first-draft from play feel ("1100 played like 1500"), not yet
-// SPRT-calibrated against a human-anchored ladder — tune botMaxHandicap to taste.
-const (
-	botMaxHandicap   = 500            // max Elo shaved off the weakest fill-in bots
-	botHandicapFloor = ratingCleanTop // at/above this displayed rating, no handicap
-	// Human-scale floor above which the ladder is at-strength for a human of that
-	// rating. This is a FIDE/human-scale number (backfill matches human Glicko); it is
-	// deliberately NOT engine.ratingCleanFloor (which is on the CCRL scale, now 2600).
-	ratingCleanTop = 2200
-)
-
-// humanizedEngineRating maps a fill-in bot's displayed rating to the (weaker)
-// effective engine rating it should actually search at, so it plays like a human of
-// that rating rather than like the over-strong engine ladder.
-func humanizedEngineRating(displayed int) int {
-	if displayed >= botHandicapFloor {
-		return displayed
-	}
-	// Linear taper: full handicap at engine.RatingMin, zero at botHandicapFloor.
-	u := float64(botHandicapFloor-displayed) / float64(botHandicapFloor-engine.RatingMin) // 0..1
-	eff := displayed - int(float64(botMaxHandicap)*u+0.5)
-	if eff < engine.RatingMin {
-		eff = engine.RatingMin // configForRating clamps anyway; keep it explicit
-	}
-	return eff
 }
 
 // ratingForLevel converts the configured `-bot-level` flag (0..10, the anonymous

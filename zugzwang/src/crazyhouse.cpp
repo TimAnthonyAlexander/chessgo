@@ -3,6 +3,7 @@
 #include "movegen.h"
 #include "rules.h"
 #include "search.h" // Search::now_ms() only — no Search::Context/NNUE dependency
+#include "weakening.h"
 #include "zobrist.h"
 
 #include <algorithm>
@@ -468,26 +469,36 @@ struct ZHConfig {
     int depth = 4;
     int movetimeMs = 1000;
     uint64_t nodes = 0;
-    int noise = 0;
-    double blunder = 0.0;
+    double temperature = 0.0;
+    double capDelta = 1.0;
+    double winProbScale = 350.0; // 3.5 x pawn value (pieceValue[PAWN] == 100)
 };
 
 int clamp_int(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
-// Same depth ladder / noise / blunder constants as gomachine's applyRating
-// (search.go) — keeps bot difficulty feeling the same per rating band after
-// the engine swap.
+// Depth ladder unchanged from gomachine's applyRating (search.go) — this is the
+// bot's tactical "sight" and stays exactly as before. The move-selection
+// weakening (temperature/capDelta) now uses the shared softmax model
+// (Weakening::pick), same formulas as Rating::config_for_rating in rating.cpp.
 void apply_rating(ZHConfig& cfg, int rating) {
     int r = clamp_int(rating, 700, 3500);
     if (r < 1800) cfg.depth = 1;
     else if (r < 2400) cfg.depth = 2;
     else if (r < 3000) cfg.depth = 3;
     else cfg.depth = 4;
-    if (r < 3000) {
-        double u = double(3000 - r) / double(3000 - 700);
-        cfg.noise = int(420.0 * u * u);
-        cfg.blunder = 0.72 * u * u;
+
+    constexpr double RFULL = 2850.0, RMIN = 700.0;
+    int rc = clamp_int(rating, 700, 2900);
+    if (rc >= RFULL) {
+        cfg.temperature = 0.0;
+        cfg.capDelta = 1.0;
+        return;
     }
+    double u = (RFULL - rc) / (RFULL - RMIN);
+    if (u < 0.0) u = 0.0;
+    if (u > 1.0) u = 1.0;
+    cfg.temperature = 0.40 * std::pow(u, 1.35);
+    cfg.capDelta = 0.03 + 0.52 * std::pow(u, 1.10);
 }
 
 ZHConfig resolve_config(const ZHLimits& lim) {
@@ -658,39 +669,31 @@ uint64_t seed_for(const ZHPosition& z) {
     return h;
 }
 
-// Returns the index of the root move to play. With no weakening it is always
-// 0 (the best). Otherwise adds bounded eval noise to re-rank candidates and,
-// with probability cfg.blunder, drops to a slightly weaker one — never
-// noising away a forced mate. Mirrors gomachine's weakenPick (search.go).
+// Returns the index of the root move to play. With no weakening (temperature
+// and capDelta both at full-strength defaults) it is always 0 (the best).
+// Otherwise picks via the shared softmax weakening model (Weakening::pick) —
+// see weakening.h. The forced-mate guard stays hand-rolled here (rather than
+// relying solely on SoftmaxConfig::protectWinningMate) because crazyhouse mate
+// scores use MATE_SCORE=1e6, a different convention than the standard engine's
+// is_mate_score() threshold; mate_distance() is the reliable check for this
+// engine's scores.
 size_t weaken_pick(const std::vector<ScoredMove>& results, const ZHConfig& cfg, std::mt19937_64& rng) {
-    if (cfg.noise <= 0 && cfg.blunder <= 0) return 0;
-    if (!results.empty() && mate_distance(results[0].score) > 0) return 0;
+    if (results.empty()) return 0;
+    if (mate_distance(results[0].score) > 0) return 0;
+    if (cfg.temperature <= 0.0 && cfg.capDelta >= 1.0) return 0;
 
-    struct Jittered {
-        size_t idx;
-        int score;
-    };
-    std::vector<Jittered> js(results.size());
-    for (size_t i = 0; i < results.size(); i++) {
-        int noise = 0;
-        if (cfg.noise > 0) {
-            std::uniform_int_distribution<int> d(-cfg.noise, cfg.noise);
-            noise = d(rng);
-        }
-        js[i] = {i, results[i].score + noise};
-    }
-    std::stable_sort(js.begin(), js.end(), [](const Jittered& a, const Jittered& b) { return a.score > b.score; });
+    std::vector<Weakening::Candidate> cands;
+    cands.reserve(results.size());
+    for (size_t i = 0; i < results.size(); i++)
+        cands.push_back({static_cast<int>(i), results[i].score});
 
-    size_t pick = js[0].idx;
-    if (cfg.blunder > 0 && js.size() > 1) {
-        std::uniform_real_distribution<double> ud(0.0, 1.0);
-        if (ud(rng) < cfg.blunder) {
-            int n = std::min<int>(3, static_cast<int>(js.size()) - 1);
-            std::uniform_int_distribution<int> pd(0, n - 1);
-            pick = js[1 + pd(rng)].idx;
-        }
-    }
-    return pick;
+    Weakening::SoftmaxConfig sc;
+    sc.temperature = cfg.temperature;
+    sc.capDelta = cfg.capDelta;
+    sc.winProbScale = cfg.winProbScale;
+    sc.protectWinningMate = true;
+
+    return Weakening::pick(cands, sc, rng);
 }
 
 } // namespace

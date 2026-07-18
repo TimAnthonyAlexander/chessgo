@@ -53,15 +53,14 @@ const BOOK_ARROW_COLOR = '#4c8bf5'
 const sideToMoveOf = (fen: string): Color => (fen.split(' ')[1] === 'b' ? 'b' : 'w')
 
 // ---- Strength scales -----------------------------------------------------------
-// All three engines are shown on the truthful CCRL ruler (see docs/ENGINE_STRENGTH.md §20).
-//
-// gomachine / zugzwang: both speak the same rating ladder — RatingMin..RatingMax =
-// 700..3500, full strength at 3500 (gomachine internal/engine/rating.go; zugzwang mirrors
-// the same mapping). This admin page speaks raw CCRL: the slider value is sent straight
-// through as the engine rating, no conversion (the human-scale /bot picker + hub backfill
-// convert separately, engine-side). Bounds mirror the engine constants.
+// gomachine / zugzwang: the engine owns the rating→strength relationship end-to-end.
+// zugzwang's `limits.rating` ladder is human/FIDE-scale — RatingMin..RatingMax =
+// 700..2900, full strength at 2900 (zugzwang engine constants). This admin page sends
+// the raw slider value straight through as the engine rating, no client-side
+// conversion — the engine clamps anything above 2900 to full strength. Bounds mirror
+// the engine constants.
 const GOMA_RATING_MIN = 700
-const GOMA_RATING_MAX = 3500
+const GOMA_RATING_MAX = 2900
 
 // Stockfish: UCI_Elo runs FAR below CCRL and SATURATES at ~3100 on our prod build
 // (UCI_Elo 3100 == 3190 == full strength). We display a truthful CCRL-ish number instead
@@ -101,7 +100,7 @@ type LimitKind = 'movetime' | 'nodes' | 'depth' // stockfish uses movetime | dep
 // same way for forward-compat.
 interface SideConfig {
     engine: EngineKind
-    rating: number // gomachine/zugzwang target Elo (700..3500, display == engine rating)
+    rating: number // gomachine/zugzwang target Elo (700..2900, display == engine rating)
     aggr: number // gomachine/zugzwang aggression 0..100 (50 = neutral)
     book: boolean // gomachine/zugzwang: consult the opening book on the rating path
     sfElo: number // Stockfish UCI_Elo (1320..3100; 3100 = Unleashed/uncapped)

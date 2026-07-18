@@ -16,30 +16,12 @@ class BotGameService
 {
     /**
      * Human-facing bot strength bounds — the FIDE/human scale the picker + Glicko use.
-     * These are deliberately NOT the engine's CCRL ladder top (3500): the /bot picker
-     * stays human-scale, and playBot() lifts the chosen rating onto the engine's CCRL
-     * ladder via engineRatingForHuman() so play is identical to before the CCRL rescale.
-     * See gomachine internal/engine/rating.go (EngineRatingForHuman, humanFullStrength).
+     * The zugzwang engine's `limits.rating` ladder is calibrated on this same
+     * human/FIDE scale (RatingMin=700 .. RatingMax=2900, full strength at the top),
+     * so this rating is now forwarded to the engine as-is — no conversion.
      */
     public const RATING_MIN = 700;
     public const RATING_MAX = 2900;
-
-    /** Old human-scale full-strength label; = engine.humanFullStrength. */
-    private const HUMAN_FULL_STRENGTH = 2900;
-    /** Engine CCRL ladder top; = engine.RatingMax. */
-    private const ENGINE_CCRL_MAX = 3500;
-
-    /**
-     * Map a human/FIDE-scale rating onto the engine's native CCRL ladder, preserving
-     * playing strength (mirrors engine.EngineRatingForHuman). Keeps /bot games playing
-     * exactly as they did before the engine ladder was rescaled to CCRL.
-     */
-    private function engineRatingForHuman(int $human): int
-    {
-        return (int) (self::RATING_MIN
-            + ($human - self::RATING_MIN) * (self::ENGINE_CCRL_MAX - self::RATING_MIN)
-                / (self::HUMAN_FULL_STRENGTH - self::RATING_MIN));
-    }
 
     public function __construct(private readonly EngineSelector $engine)
     {
@@ -271,7 +253,7 @@ class BotGameService
             ? $this->engine->worstMove($game->fen, $game->getHistory())
             : $this->engine->bestMove(
                 $game->fen,
-                $this->engineRatingForHuman($game->rating),
+                $game->rating,
                 $game->getHistory(),
             );
         $uci = $best['bestmove'] ?? null;
@@ -286,10 +268,10 @@ class BotGameService
     }
 
     /**
-     * Compute and apply one Crazyhouse bot move. The Crazyhouse engine does its
-     * own weakening, so the RAW human rating is passed (no engineRatingForHuman
-     * remap, like Duck). The bestmove is already applied engine-side, so its
-     * response carries the resulting newFen/pocket/status/result.
+     * Compute and apply one Crazyhouse bot move. The RAW human rating is passed
+     * (the engine's rating ladder is human-scale, same as playBot() and Duck).
+     * The bestmove is already applied engine-side, so its response carries the
+     * resulting newFen/pocket/status/result.
      */
     private function playCrazyhouseBot(BotGame $game): void
     {
@@ -341,9 +323,9 @@ class BotGameService
 
     /**
      * Compute and apply one Duck Chess bot move on the given (ongoing) game.
-     * The duck engine does its own weakening, so the RAW human rating is passed
-     * (no engineRatingForHuman remap). The bestmove is already applied engine-side,
-     * so its response carries the resulting newFen/duck/status/result.
+     * The RAW human rating is passed (the engine's rating ladder is human-scale,
+     * same as playBot() and Crazyhouse). The bestmove is already applied
+     * engine-side, so its response carries the resulting newFen/duck/status/result.
      */
     private function playDuckBot(BotGame $game): void
     {

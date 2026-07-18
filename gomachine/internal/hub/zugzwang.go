@@ -62,8 +62,8 @@ type zugzwangBestMoveResponse struct {
 // BestMove asks zugzwang for a move at a target rating, with optional
 // movetime/depth caps and prior-position FEN history for repetition
 // awareness — the SAME rating/caps the hub already computes today
-// (humanizedEngineRating, fillerMoveTimeCap/fillerSearchDepth); zugzwang has
-// ported configForRating, so it does its own weakening from the rating alone.
+// (fillerMoveTimeCap/fillerSearchDepth); the rating is the human/FIDE-scale
+// display rating forwarded as-is — zugzwang's own ladder does the weakening.
 //
 // A nil error with a zero engine.BestResult.Move means "zugzwang answered,
 // there's genuinely no legal move" (e.g. the position is already terminal) —
