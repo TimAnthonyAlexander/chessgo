@@ -1,6 +1,9 @@
 #include "tt.h"
 #include <cstdlib>
 #include <cstring>
+#if defined(__linux__)
+#include <sys/mman.h>
+#endif
 
 TranspositionTable TT;
 
@@ -11,7 +14,22 @@ void TranspositionTable::resize(size_t mb) {
     size_t bytes = mb * 1024 * 1024;
     clusterCount = bytes / sizeof(Cluster);
     if (clusterCount == 0) clusterCount = 1;
-    table = (Cluster*)aligned_alloc(64, clusterCount * sizeof(Cluster));
+    size_t allocBytes = clusterCount * sizeof(Cluster);
+#if defined(__linux__)
+    // Back the TT with transparent huge pages: the TT is a large, cache-cold,
+    // random-access array, so 4 KB pages thrash the dTLB on every probe. 2 MB-align
+    // the allocation and MADV_HUGEPAGE-advise it so the kernel collapses it into huge
+    // pages (fewer dTLB misses on the search hot path). aligned_alloc requires size to
+    // be a multiple of the alignment. Bit-exact: TT contents/indexing are unchanged —
+    // this only changes the page size backing the same bytes (pure speed). NDEBUG-safe
+    // no-op on kernels with THP disabled/never.
+    const size_t hp = 2 * 1024 * 1024;
+    size_t rounded = ((allocBytes + hp - 1) / hp) * hp;
+    table = (Cluster*)aligned_alloc(hp, rounded);
+    if (table) madvise(table, rounded, MADV_HUGEPAGE);
+#else
+    table = (Cluster*)aligned_alloc(64, allocBytes);
+#endif
     clear();
 }
 
