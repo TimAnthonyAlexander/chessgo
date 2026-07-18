@@ -54,13 +54,13 @@ const sideToMoveOf = (fen: string): Color => (fen.split(' ')[1] === 'b' ? 'b' : 
 
 // ---- Strength scales -----------------------------------------------------------
 // gomachine / zugzwang: the engine owns the rating→strength relationship end-to-end.
-// zugzwang's `limits.rating` ladder is human/FIDE-scale — RatingMin..RatingMax =
-// 700..2900, full strength at 2900 (zugzwang engine constants). This admin page sends
-// the raw slider value straight through as the engine rating, no client-side
-// conversion — the engine clamps anything above 2900 to full strength. Bounds mirror
-// the engine constants.
+// zugzwang's `limits.rating` ladder runs on the engine's own scale — RatingMin..RatingMax
+// = 700..3500, where 3500 is the engine's TRUE full strength (~3500 CCRL) and plays with
+// NO weakening at all; below ~2850 play is human-like-weakened, and [2850,3500) is a
+// clean-search strength gradient. This admin page sends the raw slider value straight
+// through as the engine rating, no client-side conversion. Bounds mirror the engine constants.
 const GOMA_RATING_MIN = 700
-const GOMA_RATING_MAX = 2900
+const GOMA_RATING_MAX = 3500
 
 // Stockfish: UCI_Elo runs FAR below CCRL and SATURATES at ~3100 on our prod build
 // (UCI_Elo 3100 == 3190 == full strength). We display a truthful CCRL-ish number instead
@@ -100,7 +100,7 @@ type LimitKind = 'movetime' | 'nodes' | 'depth' // stockfish uses movetime | dep
 // same way for forward-compat.
 interface SideConfig {
     engine: EngineKind
-    rating: number // gomachine/zugzwang target Elo (700..2900, display == engine rating)
+    rating: number // gomachine/zugzwang target Elo (700..3500, display == engine rating)
     aggr: number // gomachine/zugzwang aggression 0..100 (50 = neutral)
     book: boolean // gomachine/zugzwang: consult the opening book on the rating path
     sfElo: number // Stockfish UCI_Elo (1320..3100; 3100 = Unleashed/uncapped)

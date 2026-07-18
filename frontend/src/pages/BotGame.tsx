@@ -1059,8 +1059,10 @@ function ratingHint(rating: number): string {
     if (rating < 1400) return 'Casual — a fair improver, the odd slip.'
     if (rating < 1800) return 'Club — punishes loose play.'
     if (rating < 2200) return 'Strong — accurate, hard to outplay.'
-    if (rating < 2600) return 'Expert — deep, precise search.'
-    return 'Master — the full engine, no mercy.'
+    if (rating < 2600) return 'Expert — sharp, rarely inaccurate.'
+    if (rating < 2900) return 'Master — near-flawless play.'
+    if (rating < 3500) return 'Grandmaster — superhuman, faint imperfections.'
+    return 'Maximum — the full engine at full strength, no weakening at all.'
 }
 
 const sliderSx = {

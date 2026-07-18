@@ -82,3 +82,58 @@ Tuning knobs if the feel-test wants adjustment: `temperature`/`capDelta`/`rankDe
 coefficients in `config_for_rating` (and the variant `apply_rating`s). Re-measure
 with `acpl.py` (GT is cached in `scratchpad/gt_cache.json`, independent of the
 weakening constants).
+
+## Update (v2, 2026-07-18) — Regan curve + difficulty-aware + phase-aware
+
+Feel-testing exposed two real flaws the first calibration missed, fixed in a
+second pass (research: Maia KDD'20 arXiv:2006.01855, Regan–Haworth intrinsic
+ratings, Guid–Bratko complexity, SF WDL model — see the research digest):
+
+1. **Errors were difficulty-INVERTED** — the bot nailed hard moves (its strong
+   deep search found subtle best moves) but blundered easy ones (uniform softmax
+   noise deviates as often on obvious positions as sharp ones). This is the exact
+   documented failure of Stockfish "Skill Level". Fix: selection now follows the
+   **Regan–Haworth curve `p ∝ exp(−(δ/s)^c)`** (δ = win-prob gap to best) with a
+   **consistency exponent `c > 1`** (`SoftmaxConfig::consistency`, weakening.cpp).
+   c>1 kills clearly-worse moves hard (no easy blunders) while keeping near-best
+   moves ~equiprobable (spread on genuinely hard positions) — so errors land on
+   hard positions like a human. c==1 is the old plain softmax.
+2. **Queen hangs** — `root_scores` scored moves with a capture-BLIND static eval
+   as the ordering/fallback; a hanging move looked fine and could be sampled. Now
+   the base score is a **depth-1 search (quiescence resolves captures)**.
+
+Also: the weakened branch is now **movetime-independent (depth-bound)** — rating
+alone sets rankDepth, so a bot plays its rating regardless of the think-time the
+caller grants (an explicit movetime/depth is only a cost cap, never a strength
+boost). And **phase-aware endgame weakening** (`apply_endgame_scaling`): eval-
+softmax barely bites with few pieces (strong eval + enough depth ⇒ engine-perfect
+technique), so as material comes off we raise sensitivity, lower consistency, and
+cut rankDepth — the bot calculates endgames shallowly like a human.
+
+Final ladder (`config_for_rating`, engine scale **700..3500**; 3500 = TRUE full
+strength ~3500 CCRL, plays with ZERO weakening — no depth cap, full time):
+weakened band [700, RatingFull=2850): `rankDepth = clamp(6 + 6·(1−u), 2, 10)`,
+`sensitivity = 0.10·u^1.9`, `consistency = 1.8 + 0.5·(1−u)`,
+`capDelta = 0.02 + 0.13·u^1.6`, where `u = (2850−rating)/(2850−700)`. Clean band
+[2850, 3500]: full-strength search whose depth/time budget scales with the rating
+(a real gradient, not a flat full-strength zone). Variants use the shared curve
+with c=1.8. **The weakened band is keyed off RatingFull, NOT RatingMax**, so the
+SF-anchored calibration is independent of the ceiling — restoring RatingMax to the
+true 3500 (a prior 2900 cap was a bug: 2900 is not max Elo) left it intact. All
+surfaces use 700..3500: `BotGameService`/`BotGameController` (PHP), `botSettings.ts`
+`RATING_MAX` + `ratingHint` tiers, `EngineVsEngine.tsx` `GOMA_RATING_MAX`, UCI_Elo.
+
+### Calibration methodology (two SEPARATE axes — do not conflate)
+- **Strength** (whole-game): `scratchpad/match.py` anchors zugzwang `UCI_Elo=R`
+  vs **Stockfish `UCI_Elo=R`** (SF's ladder is a human-Elo proxy). ~0 gap = honest.
+  Result: 1200 +39, 1500 −0, 1800 −19. NOTE: launch zugzwang with `cwd=zugzwang/`
+  or `net.nnue` won't load (silent HCE fallback = meaningless anchor).
+- **Error character**: `scratchpad/difficulty.py` — win-prob loss on ROUGHLY-EQUAL
+  positions only (|eval|<250cp; decided positions falsely inflate cp-loss because
+  win-prob weakening correctly relaxes when winning), bucketed easy vs hard by
+  shallow(d2)-vs-deep(d12) best-move disagreement. Want hard-loss >> easy-loss.
+  Result: 1500 easy 4.6% / hard 7.5% (1.6×); 1800 easy 3.8% / hard 7.4% (1.9×).
+- Positions from `scratchpad/genpos.py` (SF self-play → middlegame/tactical mix).
+- **Do NOT calibrate from ACPL** (R²≈0.05 vs rating; opening moves deflate it).
+- UCI weakening is testable via `UCI_LimitStrength`/`UCI_Elo` (default off →
+  byte-identical full strength). python-chess venv at `scratchpad/cchess/`.

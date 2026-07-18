@@ -17,11 +17,11 @@ class BotGameService
     /**
      * Human-facing bot strength bounds — the FIDE/human scale the picker + Glicko use.
      * The zugzwang engine's `limits.rating` ladder is calibrated on this same
-     * human/FIDE scale (RatingMin=700 .. RatingMax=2900, full strength at the top),
-     * so this rating is now forwarded to the engine as-is — no conversion.
+     * engine's own scale (RatingMin=700 .. RatingMax=3500 = full engine strength,
+     * ~3500 CCRL), so this rating is forwarded to the engine as-is — no conversion.
      */
     public const RATING_MIN = 700;
-    public const RATING_MAX = 2900;
+    public const RATING_MAX = 3500;
 
     public function __construct(private readonly EngineSelector $engine)
     {

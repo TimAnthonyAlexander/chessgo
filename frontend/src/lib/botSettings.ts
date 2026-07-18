@@ -11,7 +11,9 @@ export interface BotSettings {
 
 const KEY = 'botgame:settings'
 const RATING_MIN = 700
-const RATING_MAX = 2900
+// Full engine strength — the engine's own ceiling (~3500 CCRL; zugzwang RatingMax).
+// The engine owns the rating→strength curve; the top notch plays at full strength.
+const RATING_MAX = 3500
 const VARIANTS: readonly Variant[] = ['standard', 'chess960', 'duck', 'crazyhouse']
 const COLORS: readonly ColorChoice[] = ['w', 'b', 'random']
 

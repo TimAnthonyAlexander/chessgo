@@ -11,7 +11,7 @@ use App\Services\BotGameService;
  * Create and fetch human-vs-AI games (SPEC §6). Public/guest — no auth required
  * to play the bot.
  *
- *   POST /bot-games        { rating?: 700..2900, human_color?: "w"|"b", fen?: string,
+ *   POST /bot-games        { rating?: 0|700..3500, human_color?: "w"|"b", fen?: string,
  *                            variant?: "standard"|"chess960"|"duck" }
  *   GET  /bot-games/{id}
  *
@@ -54,8 +54,9 @@ class BotGameController extends Controller
     {
         $this->validate([
             // rating 0 = the "Unlosable" bot (Standard rules, engine plays the WORST
-            // move); real bot strengths are 700..2900. min:0 admits the sentinel.
-            'rating' => 'integer|min:0|max:2900',
+            // move); real bot strengths are 700..3500 (3500 = full engine strength).
+            // min:0 admits the sentinel.
+            'rating' => 'integer|min:0|max:3500',
             'human_color' => 'in:w,b',
             'fen' => 'string',
             'variant' => 'string|in:standard,chess960,duck,crazyhouse',

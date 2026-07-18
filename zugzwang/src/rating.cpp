@@ -156,6 +156,13 @@ LevelConfig config_for_rating(int rating) {
 
     if (rating >= RatingFull) {
         cfg.clean = true;
+        // At the very top (RatingMax) play ABSOLUTE full strength — no depth cap
+        // (a large, unreachable-in-budget bound so only movetime binds) and the
+        // full time budget. Nothing whatsoever weakens the maximum-rating engine.
+        if (rating >= RatingMax) {
+            cfg.cleanDepth = 64;
+            cfg.moveTimeMs = static_cast<int>(kMaxMoveTimeMs);
+        }
         return cfg;
     }
 

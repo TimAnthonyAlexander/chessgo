@@ -17,7 +17,7 @@ fixed-depth search tree is identical to base — so the entire gain is raw speed
 - **TT prefetch** (`tt.h`/`search.cpp`): `__builtin_prefetch` of the child cluster
   right after each `do_move` (both search sites).
 - **TT cache-line align** (`tt.h`/`tt.cpp`): `alignas(64) Cluster` (one per line) +
-  `aligned_alloc(64, …)`. (Did NOT add madvise/hugepages.)
+  `aligned_alloc(64, …)`. (Did NOT add madvise/hugepages — DONE LATER: see below.)
 - **VNNI / NEON L1 dot** (`nnue_eval.cpp`): scalar `dot_u8i8` kept as fallback;
   dispatches to `_mm512_dpbusd_epi32` (`__AVX512VNNI__`) / `vdotq_s32`
   (`__ARM_FEATURE_DOTPROD`). Provably bit-exact: activation ∈ [0,127], weights ∈
@@ -35,6 +35,13 @@ fixed-depth search tree is identical to base — so the entire gain is raw speed
 > (`uint16_t(key)`), independent of the index (this is why Stockfish keys its verify on
 > the low bits). Lesson: bit-exact eval does NOT imply strength-neutral search; a TT
 > change must clear a fixed-depth tree diff + a movetime SPRT.
+
+## SHIPPED — 2026-07-18 (TT transparent huge pages, +10.3 Elo movetime)
+
+`MADV_HUGEPAGE`-back the TT (2 MB-aligned). Bit-exact; ~10.8% NPS on coalla (64 MB
+random TT is heavily dTLB-bound). Movetime SPRT **+10.28 ± 6.77, LB +3.51 @2400g**.
+Full record: `docs/tasks/done/tt-hugepages.md`. (Also proved gcc-PGO REGRESSES ~14%
+on this engine — dead, don't retry.)
 
 ## REMAINING
 

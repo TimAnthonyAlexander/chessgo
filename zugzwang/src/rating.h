@@ -12,10 +12,15 @@
 // noise/blunder scheme (which is why this is no longer a "field-for-field port"
 // of rating.go — it is a deliberate redesign).
 //
-// SCALE: the rating is a human/FIDE-style Elo. RatingMin..RatingMax spans the
-// weakening ladder; at/above RatingFull the engine plays a clean full-strength
-// search (that ceiling maps to the engine's true strength, well above its Elo
-// label — see docs/ENGINE_STRENGTH.md on the CCRL/FIDE label gap).
+// SCALE: the rating spans RatingMin..RatingMax on the engine's own (CCRL-ish)
+// ruler, where RatingMax is the engine's TRUE full strength (~3500 CCRL, see
+// zugzwang/docs/CCRL.md). Two regimes:
+//   - [RatingMin, RatingFull): WEAKENED — human-like play, calibrated so a given
+//     rating plays ~at that strength (SF-UCI-anchored). This band is parameterized
+//     off RatingFull (see weak_frac), so it is INDEPENDENT of RatingMax.
+//   - [RatingFull, RatingMax]: CLEAN full-strength search, its depth/time budget
+//     scaling with the rating up to the engine's maximum at RatingMax. This is a
+//     real strength gradient — NOT a flat "everything is full strength" zone.
 #include "position.h"
 #include "move.h"
 #include "search.h"
@@ -25,8 +30,8 @@
 namespace Rating {
 
 constexpr int RatingMin = 700;   // weakest bot on the ladder (below this, clamp)
-constexpr int RatingMax = 2900;  // "Master" — full engine strength (clamp ceiling)
-constexpr int RatingFull = 2850; // at/above this, play a clean full-strength search
+constexpr int RatingMax = 3500;  // the engine's TRUE full strength (~3500 CCRL; clamp ceiling)
+constexpr int RatingFull = 2850; // at/above this, clean search (budget scales to full at RatingMax)
 
 struct LevelConfig {
     int moveTimeMs = 0;       // total wall-clock budget for the weakened ranking pass
