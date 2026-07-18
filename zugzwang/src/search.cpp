@@ -1958,6 +1958,12 @@ void print_smp_result(const Result& r, int64_t startTime) {
 // so the tree, the bestmove and the node count are byte-identical to a plain
 // start(*workers[0], pos, limits). This is what makes -search-threads 1 (and
 // UCI Threads=1, which never reaches here) behave exactly as before.
+// SMPVOTE env kill-switch, read once (Lazy-SMP best-thread vote weighting).
+static bool smp_vote_enabled() {
+    static const bool v = []{ const char* e = std::getenv("SMPVOTE"); return e && e[0] == '1'; }();
+    return v;
+}
+
 Result run_lazy_smp(std::vector<Context*>& workers, TranspositionTable& tt,
                     std::atomic<bool>& stop, Position& rootPos, const Limits& limits) {
     int threads = static_cast<int>(workers.size());
@@ -2005,16 +2011,52 @@ Result run_lazy_smp(std::vector<Context*>& workers, TranspositionTable& tt,
     stop = true;
     for (auto& t : helpers) t.join();
 
-    // Best-thread selection (SF-style, simplified): greatest depth, tie ->
-    // greatest score. Each Result is internally consistent (pv[0]==bestMove).
+    // Best-thread selection. Default: greatest depth, tie -> greatest score.
+    // SMPVOTE=1 (default off): SF-style vote-weighted selection
+    // (~sf18-arm/src/thread.cpp get_best_thread). Each thread votes for its own
+    // bestMove with weight (score - minScore + 14) * completedDepth; the move with
+    // the highest total vote wins, so a consensus move beats a lone thread that
+    // merely reached one ply deeper. Proven wins prefer the shortest mate; proven
+    // losses prefer the longest survival — same overrides as SF. Default-off path
+    // below is byte-identical to the prior depth/score pick.
     int best = 0;
-    for (int i = 1; i < threads; ++i) {
-        if (results[i].bestMove == MOVE_NONE) continue;
-        if (results[best].bestMove == MOVE_NONE
-            || results[i].depth > results[best].depth
-            || (results[i].depth == results[best].depth
-                && results[i].score > results[best].score))
-            best = i;
+    if (smp_vote_enabled()) {
+        auto is_win  = [](int s){ return s >=  VALUE_MATE_IN_MAX_PLY; };
+        auto is_loss = [](int s){ return s <= -VALUE_MATE_IN_MAX_PLY; };
+        int minScore = VALUE_INFINITE;
+        for (const Result& r : results)
+            if (r.bestMove != MOVE_NONE) minScore = std::min(minScore, r.score);
+        // O(threads^2) vote tally (threads is small); vote[i] = sum over threads j
+        // that also picked results[i].bestMove of (score_j - minScore + 14)*depth_j.
+        auto voteFor = [&](int i) -> int64_t {
+            int64_t v = 0;
+            for (int j = 0; j < threads; ++j)
+                if (results[j].bestMove != MOVE_NONE && results[j].bestMove == results[i].bestMove)
+                    v += int64_t(results[j].score - minScore + 14) * results[j].depth;
+            return v;
+        };
+        for (int i = 1; i < threads; ++i) {
+            const Result& ri = results[i];
+            const Result& rb = results[best];
+            if (ri.bestMove == MOVE_NONE) continue;
+            if (rb.bestMove == MOVE_NONE) { best = i; continue; }
+            bool take;
+            if (is_win(rb.score))        take = ri.score > rb.score;          // shorter mate
+            else if (is_loss(ri.score))  take = false;                        // don't pick a proven loss over a non-loss
+            else if (is_loss(rb.score))  take = true;                         // anything beats a proven loss
+            else if (is_win(ri.score))   take = true;                         // a proven win beats a non-win
+            else                         take = voteFor(i) > voteFor(best);   // otherwise: consensus
+            if (take) best = i;
+        }
+    } else {
+        for (int i = 1; i < threads; ++i) {
+            if (results[i].bestMove == MOVE_NONE) continue;
+            if (results[best].bestMove == MOVE_NONE
+                || results[i].depth > results[best].depth
+                || (results[i].depth == results[best].depth
+                    && results[i].score > results[best].score))
+                best = i;
+        }
     }
     Result chosen = results[best];
 
