@@ -95,6 +95,40 @@ WeakResult pick_weakened(const std::vector<RootMove>& roots, const LevelConfig& 
     return WeakResult{chosen.move, chosen.score, rankDepth, nodes, {chosen.move}};
 }
 
+// Game phase 0..24 (0 = bare kings, 24 = full material), the standard
+// PhaseInc weights {N,B=1, R=2, Q=4} (mirrors eval.cpp).
+int phase_of(const Position& pos) {
+    int p = pos.count(WHITE, KNIGHT) + pos.count(BLACK, KNIGHT)
+          + pos.count(WHITE, BISHOP) + pos.count(BLACK, BISHOP)
+          + 2 * (pos.count(WHITE, ROOK) + pos.count(BLACK, ROOK))
+          + 4 * (pos.count(WHITE, QUEEN) + pos.count(BLACK, QUEEN));
+    return p > 24 ? 24 : p;
+}
+
+// Endgame factor 0..1: 0 in the middlegame (phase >= kPhaseMid), ramping to 1 in
+// a deep endgame (phase <= kPhaseEnd).
+double endgame_factor(int phase) {
+    constexpr double kPhaseMid = 12.0, kPhaseEnd = 3.0;
+    double f = (kPhaseMid - phase) / (kPhaseMid - kPhaseEnd);
+    return f < 0.0 ? 0.0 : (f > 1.0 ? 1.0 : f);
+}
+
+// Phase-aware weakening: eval-softmax barely bites in the endgame (few moves,
+// small eval gaps, strong eval + enough depth => technically perfect moves that
+// read as "engine, not human"). Endgame skill is a SEPARATE, weaker human skill,
+// so as material comes off we calculate shallower (rankDepth down) and wander
+// more (temperature up, cap looser) — the capture-aware base pass still blocks
+// free hangs. Middlegame play (eg==0) is untouched.
+void apply_endgame_scaling(LevelConfig& cfg, const Position& pos) {
+    if (cfg.clean) return;
+    double eg = endgame_factor(phase_of(pos));
+    if (eg <= 0.0) return;
+    cfg.temperature *= (1.0 + 2.2 * eg);
+    cfg.capDelta = std::min(0.5, cfg.capDelta * (1.0 + 1.2 * eg));
+    cfg.rankDepth -= static_cast<int>(3.0 * eg + 0.5);
+    if (cfg.rankDepth < 2) cfg.rankDepth = 2;
+}
+
 // Smooth ramp helper: 0 at the weak end (rating==RatingMin) -> 1 at RatingFull.
 double weak_frac(int rating) {
     double u = double(RatingFull - rating) / double(RatingFull - RatingMin); // 0 at full, 1 at min
@@ -129,19 +163,19 @@ LevelConfig config_for_rating(int rating) {
     // Ranking depth (tactical sight): shallow at the weak end, deep near full.
     // This is the realistic BLUNDER source — a tactic beyond rankDepth is unseen,
     // so it can be played; its severity shrinks as depth grows with rating.
-    cfg.rankDepth = static_cast<int>(4.0 + 8.0 * (1.0 - u) + 0.5); // 4..12 (capped below)
+    cfg.rankDepth = static_cast<int>(6.0 + 6.0 * (1.0 - u) + 0.5); // 6..12 (capped below)
     if (cfg.rankDepth < 2) cfg.rankDepth = 2;
     if (cfg.rankDepth > 10) cfg.rankDepth = 10; // bound per-move ranking cost
 
     // Temperature (consistency): 0 at full, growing toward the weak end. Higher
     // temperature = more spread away from the best move. (Anchored against
     // Stockfish's UCI_Elo ladder — see docs/tasks/done/human-like-weakening.md.)
-    cfg.temperature = 0.14 * std::pow(u, 1.6);
+    cfg.temperature = 0.10 * std::pow(u, 1.9);
 
     // Severity cap (blunder bound, win-prob units): tight near full (only
     // near-best moves survive), wider at the weak end — but never so wide that an
     // obvious free-material move survives the (capture-aware) ranking.
-    cfg.capDelta = 0.02 + 0.20 * std::pow(u, 1.5);
+    cfg.capDelta = 0.02 + 0.13 * std::pow(u, 1.6);
 
     return cfg;
 }
@@ -203,6 +237,7 @@ WeakResult best_move_for_rating(Search::SearchGroup& group, Position& pos, int r
                                  int limitMoveTimeMs, int64_t limitNodes,
                                  const std::vector<uint64_t>& history) {
     LevelConfig cfg = config_for_rating(rating);
+    apply_endgame_scaling(cfg, pos);
     Budget b = resolve_budget(cfg, limitDepth, limitMoveTimeMs, limitNodes);
     Rules::seed_history(pos, history);
 
@@ -225,6 +260,7 @@ WeakResult best_move_for_rating_single(Search::Context& ctx, Position& pos, int 
                                         int limitMoveTimeMs, int64_t limitNodes,
                                         const std::vector<uint64_t>& history) {
     LevelConfig cfg = config_for_rating(rating);
+    apply_endgame_scaling(cfg, pos);
     Budget b = resolve_budget(cfg, limitDepth, limitMoveTimeMs, limitNodes);
     Rules::seed_history(pos, history);
 
