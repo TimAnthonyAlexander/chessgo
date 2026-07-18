@@ -30,8 +30,12 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
+#if defined(__linux__)
+#include <sys/mman.h>
+#endif
 
 namespace NNUE {
 
@@ -39,6 +43,39 @@ namespace NNUE {
 Net g_net;
 
 namespace {
+
+// Back a large read-only region with transparent huge pages — DEFAULT OFF, opt-in via
+// env NETHP=1 (byte-identical eval either way: only the page size backing the same bytes
+// changes). W0i (~90 MB feature transformer) is read at scattered 512-wide columns on
+// every feature change during search; 4 KB pages thrash the dTLB. MADV_HUGEPAGE marks the
+// region; MADV_COLLAPSE (Linux 6.1+) collapses the already-faulted small pages to 2 MB
+// pages synchronously. Kept dormant (movetime SPRT could not resolve its ~4-5% NPS above
+// the noise floor — real but sub-threshold; would likely help the single-shared-net prod
+// serve, unprovable via self-play). Best-effort: all failures ignored. See
+// docs/tasks/done/tt-hugepages.md.
+inline bool net_hugepages_enabled() {
+    const char* e = std::getenv("NETHP");
+    return e && e[0] == '1';
+}
+
+inline void advise_hugepages(const void* p, std::size_t bytes) {
+#if defined(__linux__)
+    const std::uintptr_t HP = 2u * 1024u * 1024u;
+    if (!p || bytes < HP) return;
+    std::uintptr_t a = reinterpret_cast<std::uintptr_t>(p);
+    std::uintptr_t start = (a + HP - 1) & ~(HP - 1);   // round up to 2 MB
+    std::uintptr_t end   = (a + bytes) & ~(HP - 1);    // round down to 2 MB
+    if (end <= start) return;
+    void* baseptr = reinterpret_cast<void*>(start);
+    std::size_t len = static_cast<std::size_t>(end - start);
+    madvise(baseptr, len, MADV_HUGEPAGE);
+#ifdef MADV_COLLAPSE
+    madvise(baseptr, len, MADV_COLLAPSE);   // synchronous collapse of the populated region
+#endif
+#else
+    (void)p; (void)bytes;
+#endif
+}
 
 // Little-endian float32 decode, mirroring Go's binary.LittleEndian.Uint32 +
 // math.Float32frombits. Explicit byte assembly keeps it correct on any host endianness.
@@ -171,6 +208,11 @@ bool load_net(const char* path) {
     for (long i = 0; i < nL3b; ++i)
         g_net.OB[static_cast<std::size_t>(i)] = le_f32(fptr(i));
     off += nL3b;
+
+    // Opt-in (NETHP=1): back the ~90 MB feature transformer with huge pages. Default off
+    // = no madvise = original 4 KB-page behavior (byte-identical eval).
+    if (net_hugepages_enabled())
+        advise_hugepages(g_net.W0i.data(), g_net.W0i.size() * sizeof(std::int16_t));
 
     g_net.ok = true;
     return true;
