@@ -906,7 +906,8 @@ size_t duck_weaken_pick(const std::vector<DuckScoredMove>& results, const DuckSe
         cands.push_back({static_cast<int>(i), results[i].score});
 
     Weakening::SoftmaxConfig sc;
-    sc.temperature = cfg.temperature;
+    sc.sensitivity = cfg.temperature;
+    sc.consistency = 1.8;
     sc.capDelta = cfg.capDelta;
     sc.winProbScale = cfg.winProbScale;
     sc.protectWinningMate = true;

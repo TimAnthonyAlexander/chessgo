@@ -42,8 +42,16 @@ struct Candidate {
 // The strength dial. temperature/capDelta are on the win-probability [0,1]
 // scale; winProbScale is in centipawns.
 struct SoftmaxConfig {
-    double temperature = 0.0;   // softmax T in win-prob units; <= 0 => deterministic best
-    double capDelta = 1.0;      // max win-prob a move may sit below best (>= 1 => no cap)
+    // Move selection follows the Regan–Haworth human move-probability curve:
+    //   p(move) ∝ exp(−(δ / sensitivity)^consistency),  δ = win-prob gap to best.
+    // `sensitivity` is the rating dial (smaller = sharper/stronger). `consistency`
+    // (c) > 1 sharpens the easy/hard split: near-best moves stay ~equiprobable (so
+    // the bot spreads on genuinely hard positions) while clearly-worse moves are
+    // killed harder (so it does NOT deviate on easy/obvious ones — the fix for
+    // "dumb blunders on easy positions"). c == 1 is a plain win-prob softmax.
+    double sensitivity = 0.0;   // in win-prob units; <= 0 => deterministic best
+    double consistency = 1.0;   // curve exponent c (>= 1)
+    double capDelta = 1.0;      // hard safety: max win-prob a move may sit below best (>= 1 => none)
     double winProbScale = 350.0; // logistic scale C in cp: w = 1 / (1 + 10^(-cp/C))
     bool protectWinningMate = true; // never pass up a forced mate the search found
 };

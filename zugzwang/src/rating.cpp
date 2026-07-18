@@ -85,7 +85,8 @@ WeakResult pick_weakened(const std::vector<RootMove>& roots, const LevelConfig& 
         cands.push_back({static_cast<int>(i), roots[i].score});
 
     Weakening::SoftmaxConfig sc;
-    sc.temperature = cfg.temperature;
+    sc.sensitivity = cfg.sensitivity;
+    sc.consistency = cfg.consistency;
     sc.capDelta = cfg.capDelta;
     sc.winProbScale = kWinProbScale;
     sc.protectWinningMate = true;
@@ -123,9 +124,10 @@ void apply_endgame_scaling(LevelConfig& cfg, const Position& pos) {
     if (cfg.clean) return;
     double eg = endgame_factor(phase_of(pos));
     if (eg <= 0.0) return;
-    cfg.temperature *= (1.0 + 2.2 * eg);
-    cfg.capDelta = std::min(0.5, cfg.capDelta * (1.0 + 1.2 * eg));
-    cfg.rankDepth -= static_cast<int>(3.0 * eg + 0.5);
+    cfg.sensitivity *= (1.0 + 2.0 * eg);        // wander more among endgame moves
+    cfg.consistency = std::max(1.3, cfg.consistency - 0.5 * eg); // less precise technique
+    cfg.capDelta = std::min(0.5, cfg.capDelta * (1.0 + 1.0 * eg));
+    cfg.rankDepth -= static_cast<int>(3.0 * eg + 0.5); // shallower endgame calculation
     if (cfg.rankDepth < 2) cfg.rankDepth = 2;
 }
 
@@ -163,18 +165,24 @@ LevelConfig config_for_rating(int rating) {
     // Ranking depth (tactical sight): shallow at the weak end, deep near full.
     // This is the realistic BLUNDER source — a tactic beyond rankDepth is unseen,
     // so it can be played; its severity shrinks as depth grows with rating.
+    // Ranking depth = the human "horizon" (also the whole-game strength lever;
+    // these values anchored ~honestly vs Stockfish's UCI_Elo ladder).
     cfg.rankDepth = static_cast<int>(6.0 + 6.0 * (1.0 - u) + 0.5); // 6..12 (capped below)
     if (cfg.rankDepth < 2) cfg.rankDepth = 2;
-    if (cfg.rankDepth > 10) cfg.rankDepth = 10; // bound per-move ranking cost
+    if (cfg.rankDepth > 10) cfg.rankDepth = 10;
 
-    // Temperature (consistency): 0 at full, growing toward the weak end. Higher
-    // temperature = more spread away from the best move. (Anchored against
-    // Stockfish's UCI_Elo ladder — see docs/tasks/done/human-like-weakening.md.)
-    cfg.temperature = 0.10 * std::pow(u, 1.9);
+    // Sensitivity `s` (Regan curve, win-prob units): the rating dial — smaller =
+    // sharper = stronger. Grows toward the weak end.
+    cfg.sensitivity = 0.10 * std::pow(u, 1.9);
 
-    // Severity cap (blunder bound, win-prob units): tight near full (only
-    // near-best moves survive), wider at the weak end — but never so wide that an
-    // obvious free-material move survives the (capture-aware) ranking.
+    // Consistency `c` (Regan curve exponent) > 1: concentrates play on the best in
+    // EASY positions (clearly-worse moves killed hard => no dumb easy blunders)
+    // while keeping near-best moves ~equiprobable in HARD ones (errors land on
+    // hard positions, like a human). Stronger players are more consistent.
+    cfg.consistency = 1.8 + 0.5 * (1.0 - u);
+
+    // Severity cap (hard safety, win-prob units): with the c-curve this rarely
+    // binds; it guarantees an obviously-losing move never leaks through.
     cfg.capDelta = 0.02 + 0.13 * std::pow(u, 1.6);
 
     return cfg;

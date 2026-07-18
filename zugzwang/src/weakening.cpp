@@ -49,22 +49,22 @@ size_t pick(const std::vector<Candidate>& cands, const SoftmaxConfig& cfg, std::
     }
     if (keep.size() == 1) return keep[0];
 
-    // Temperature off => deterministic best move.
-    if (cfg.temperature <= 1e-9) return bestPos;
+    // Sensitivity off => deterministic best move.
+    if (cfg.sensitivity <= 1e-9) return bestPos;
 
-    // Softmax over win-prob among survivors, numerically stabilized by
-    // subtracting the max logit.
-    const double invT = 1.0 / cfg.temperature;
-    std::vector<double> logit(keep.size());
-    double maxLogit = -1e300;
-    for (size_t k = 0; k < keep.size(); ++k) {
-        logit[k] = win_prob(cands[keep[k]].score, cfg.winProbScale) * invT;
-        if (logit[k] > maxLogit) maxLogit = logit[k];
-    }
-    double sum = 0.0;
+    // Regan–Haworth selection curve: weight = exp(−(δ/s)^c), δ = win-prob gap to
+    // best (>= 0). The best move (δ=0) has weight 1; c>1 keeps near-best moves
+    // ~equiprobable (spread on hard positions) while killing clearly-worse moves
+    // (no deviation on easy ones). No max-subtraction needed — exponents are <= 0.
+    const double s = cfg.sensitivity;
+    const double c = cfg.consistency > 0.0 ? cfg.consistency : 1.0;
     std::vector<double> p(keep.size());
+    double sum = 0.0;
     for (size_t k = 0; k < keep.size(); ++k) {
-        p[k] = std::exp(logit[k] - maxLogit);
+        double w = win_prob(cands[keep[k]].score, cfg.winProbScale);
+        double delta = bestW - w;
+        if (delta < 0.0) delta = 0.0;
+        p[k] = std::exp(-std::pow(delta / s, c));
         sum += p[k];
     }
     if (!(sum > 0.0)) return bestPos; // paranoia: degenerate weights

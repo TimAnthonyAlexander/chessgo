@@ -32,7 +32,8 @@ struct LevelConfig {
     int moveTimeMs = 0;       // total wall-clock budget for the weakened ranking pass
     int cleanDepth = 0;       // depth for the clean (full-strength) search branch
     int rankDepth = 0;        // per-move ranking search depth (weakened branch)
-    double temperature = 0.0; // softmax T (win-prob units) — consistency dial
+    double sensitivity = 0.0; // Regan curve `s` (win-prob units) — the rating dial
+    double consistency = 1.0; // Regan curve `c` (exponent) — easy/hard error split
     double capDelta = 1.0;    // severity cap (max win-prob below best) — blunder bound
     bool clean = false;       // true => full-strength group search, no weakening
 };
