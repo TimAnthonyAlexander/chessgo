@@ -40,7 +40,7 @@ import {
     playMove,
     undoMove,
 } from '../api/client'
-import { statusLabel } from '../lib/chess'
+import { statusLabel, type Square } from '../lib/chess'
 import { computeMaterial } from '../lib/material'
 import { buildFromMoves } from '../lib/analysisTree'
 import { useBoardInteraction } from '../lib/useBoardInteraction'
@@ -121,6 +121,9 @@ export default function BotGame() {
     // Guarded "New game" modal — only shown when a game is still ongoing (starting
     // a fresh one would silently throw the live game away).
     const [confirmNewGameOpen, setConfirmNewGameOpen] = useState(false)
+    // Admin best-move hint squares (from the AdminBestMove toggle in MovePanel),
+    // drawn as near-invisible pixel dots on the board. Null when off/off-turn.
+    const [bestHint, setBestHint] = useState<{ from: Square; to: Square } | null>(null)
 
     const { user } = useAuth()
     const isAdmin = user?.role === 'admin'
@@ -525,6 +528,7 @@ export default function BotGame() {
                         isAdmin={isAdmin}
                         bestFen={boardFen}
                         bestMyTurn={interactive && !isCrazyhouse}
+                        onBestHint={setBestHint}
                         gameStartFen={startFen ?? START_FEN}
                     />
                 ) : (
@@ -559,6 +563,7 @@ export default function BotGame() {
                 lastMove={lastMove}
                 inCheck={shownInCheck}
                 interactive={interactive}
+                hint={atLive ? bestHint : null}
                 onMove={isDuck ? duck.onMove : interaction.onMove}
                 premoveColor={ongoing && atLive && !isDuck && prefs.premoves ? humanColor : null}
                 premoves={atLive && !isDuck ? interaction.premoves : null}
@@ -628,6 +633,7 @@ function MovePanel({
     isAdmin,
     bestFen,
     bestMyTurn,
+    onBestHint,
     gameStartFen,
 }: {
     game: Game
@@ -656,6 +662,7 @@ function MovePanel({
     isAdmin: boolean
     bestFen: string
     bestMyTurn: boolean
+    onBestHint: (hint: { from: Square; to: Square } | null) => void
     gameStartFen: string
 }) {
     // Captured-material readout for the player rows, derived from the SHOWN board
@@ -806,7 +813,9 @@ function MovePanel({
                     </NavBtn>
                 </Box>
 
-                {isAdmin && <AdminBestMove fen={bestFen} myTurn={bestMyTurn} />}
+                {isAdmin && (
+                    <AdminBestMove fen={bestFen} myTurn={bestMyTurn} onHint={onBestHint} />
+                )}
 
                 <Box sx={{ display: 'flex', gap: 1 }}>
                     {ongoing && (

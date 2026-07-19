@@ -1,9 +1,23 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Box, Switch, Tooltip, Typography } from '@mui/material'
 import { Sparkles } from 'lucide-react'
 import { analyze, duckEval, type Analysis, type Color } from '../api/client'
+import type { Square } from '../lib/chess'
 import { pvToSan } from '../lib/analysisTree'
 import { MoveSan } from './MoveSan'
+
+// The from/to squares to whisper onto the board as pixel dots.
+type Hint = { from: Square; to: Square } | null
+
+// Extract the from/to squares from a best-move UCI. Duck's best move is a
+// composite "<pieceUci>:<duckSquare>" — we hint only the piece move (the duck
+// placement is a separate glyph, not a move a from→to dot pair can express).
+function hintFromUci(uci: string | null): Hint {
+    if (!uci) return null
+    const m = uci.split(':')[0]
+    if (m.length < 4) return null
+    return { from: m.slice(0, 2), to: m.slice(2, 4) }
+}
 
 // Convert the engine's UCI best move (e.g. "e2e4", "b1c3") into SAN piece
 // notation ("e4", "Nc3") for display. Falls back to the raw UCI if the move
@@ -19,6 +33,7 @@ interface BestDisplay {
     san: string
     eval: Analysis['eval']
     depth: number | null
+    hint: Hint
 }
 
 // The engine reports its eval from the side-to-move's perspective; convert to
@@ -68,16 +83,29 @@ export default function AdminBestMove({
     myTurn,
     isDuck = false,
     duck = null,
+    onHint,
 }: {
     fen: string
     myTurn: boolean
     isDuck?: boolean
     duck?: string | null
+    /** Report the current best-move squares so the page can draw board hint dots.
+     * Called with null whenever there's nothing to show (disabled, off-turn, error). */
+    onHint?: (hint: Hint) => void
 }) {
     const [enabled, setEnabled] = useState(loadEnabled)
     const [best, setBest] = useState<BestDisplay | null>(null)
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
+
+    // Keep the latest callback in a ref so the fetch effect doesn't re-run (and
+    // re-query the engine) just because the parent handed us a new function identity.
+    const onHintRef = useRef(onHint)
+    useEffect(() => {
+        onHintRef.current = onHint
+    }, [onHint])
+    // Clear the board hint when this control unmounts (e.g. admin leaves the page).
+    useEffect(() => () => onHintRef.current?.(null), [])
 
     useEffect(() => {
         // Only compute the best move for the player's own side — no point spending
@@ -85,6 +113,7 @@ export default function AdminBestMove({
         if (!enabled || !fen || !myTurn) {
             setBest(null)
             setError(null)
+            onHintRef.current?.(null)
             return
         }
         let cancelled = false
@@ -95,18 +124,24 @@ export default function AdminBestMove({
                   san: d.bestSan ?? d.bestmove ?? '—',
                   eval: d.eval,
                   depth: null,
+                  hint: hintFromUci(d.bestmove),
               }))
             : analyze(fen).then((a) => ({
                   san: bestMoveSan(fen, a.bestmove),
                   eval: a.eval,
                   depth: a.depth,
+                  hint: hintFromUci(a.bestmove),
               }))
         req
             .then((b) => {
-                if (!cancelled) setBest(b)
+                if (cancelled) return
+                setBest(b)
+                onHintRef.current?.(b.hint)
             })
             .catch((e) => {
-                if (!cancelled) setError(e instanceof Error ? e.message : 'Analysis failed')
+                if (cancelled) return
+                setError(e instanceof Error ? e.message : 'Analysis failed')
+                onHintRef.current?.(null)
             })
             .finally(() => {
                 if (!cancelled) setLoading(false)

@@ -219,6 +219,22 @@
     border-color: var(--dot-light);
 }
 
+/* Admin best-move hint: a single tiny square "pixel" dot in the TOP-RIGHT corner
+   of the from + to squares. Deliberately near-invisible — a whisper of the engine's
+   move, not an annotation. Sits ABOVE the pieces (z-index 4) so the from-square dot
+   isn't hidden behind the piece that's about to move. */
+.hint-dot {
+    position: absolute;
+    z-index: 4;
+    top: 8%;
+    right: 8%;
+    width: 5%;
+    height: 5%;
+    background: var(--accent);
+    opacity: 0.32;
+    pointer-events: none;
+}
+
 /* In-square coordinates (lichess-style) */
 .coord {
     position: absolute;

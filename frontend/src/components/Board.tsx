@@ -61,6 +61,10 @@ interface BoardProps {
      * engine's best DUCK placement (the second half of a composite best move, which
      * an arrow can't express). `color` defaults to the accent (gold) best-move hue. */
     circle?: { square: Square; color?: string } | null
+    /** Optional ultra-subtle best-move hint: tiny "pixel" dots on the from + to
+     * squares (no arrow). Used by the admin best-move toggle to whisper the engine's
+     * choice onto the board — intentionally near-invisible. */
+    hint?: { from: Square; to: Square } | null
     /** The local player's own color — enables premove input while it isn't their
      * turn (i.e. while `interactive` is false). Omit/null to disable premoves. */
     premoveColor?: Color | null
@@ -189,6 +193,7 @@ export default function Board({
     arrow,
     arrow2,
     circle,
+    hint,
     premoveColor,
     premoves,
     onCancelPremove,
@@ -537,6 +542,9 @@ export default function Board({
                                 {prefs.showLegalMoves && isTarget && piece && <span className="ring" />}
                                 {isDuckTarget && !piece && <span className="dot" />}
                                 {isDropTarget && !piece && <span className="dot" />}
+                                {hint && (hint.from === sq || hint.to === sq) && (
+                                    <span className="hint-dot" />
+                                )}
                                 {piece && (
                                     <PieceGlyph
                                         piece={piece}

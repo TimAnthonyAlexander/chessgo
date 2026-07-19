@@ -30,7 +30,7 @@ import { useCrazyhouseDrops } from '../lib/useCrazyhouseDrops'
 import PocketPanel from '../components/PocketPanel'
 import { parsePocket } from '../lib/variants'
 import { useMoveNavKeys } from '../lib/useMoveNavKeys'
-import { applyUciVisually, type BoardMap, parseFen } from '../lib/chess'
+import { applyUciVisually, type BoardMap, type Square, parseFen } from '../lib/chess'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { type Variant, VARIANT_LABEL } from '../lib/variants'
 import { authStore, useAuth } from '../lib/auth'
@@ -109,6 +109,9 @@ export default function LiveGame() {
     const [confirmResignOpen, setConfirmResignOpen] = useState(false)
     // Manual board flip — mirror the opponent's view. Independent of your color.
     const [flipped, setFlipped] = useState(false)
+    // Admin best-move hint squares (from the AdminBestMove toggle), drawn as
+    // near-invisible pixel dots on the board. Null when the toggle is off/off-turn.
+    const [bestHint, setBestHint] = useState<{ from: Square; to: Square } | null>(null)
     // The rating change once a rated game ends (new rating + signed delta), keyed to
     // the game it belongs to so a stale delta never bleeds into the next game.
     const [ratingDelta, setRatingDelta] = useState<{
@@ -551,6 +554,7 @@ export default function LiveGame() {
                                 myTurn={!g.ended && g.sideToMove === g.color}
                                 isDuck={isDuck}
                                 duck={g.duck ?? null}
+                                onHint={setBestHint}
                             />
                         </Box>
                     )}
@@ -748,6 +752,7 @@ export default function LiveGame() {
                 inCheck={!atLive || isDuck ? false : g.check}
                 interactive={boardInteractive}
                 onMove={isDuck ? duck.onMove : interaction.onMove}
+                hint={atLive ? bestHint : null}
                 premoveColor={g.ended || isDuck || !atLive || !prefs.premoves ? null : g.color}
                 premoves={isDuck || !atLive ? null : interaction.premoves}
                 onCancelPremove={interaction.cancelPremove}
