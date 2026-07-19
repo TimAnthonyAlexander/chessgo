@@ -1118,6 +1118,14 @@ int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta) {
     return bestValue;
 }
 
+// INCHKEVAL env kill-switch (default off), read once. When on, a node in check keeps a
+// real staticEval (propagated from (ss-2)) instead of VALUE_NONE, so the improving /
+// opponentWorsening chain survives across check sequences (SF search.cpp:716).
+static bool inchk_eval_enabled() {
+    static const bool v = []{ const char* e = std::getenv("INCHKEVAL"); return e && e[0] == '1'; }();
+    return v;
+}
+
 template <bool PvNode>
 int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth, bool cutNode) {
     bool rootNode = PvNode && ss->ply == 0;
@@ -1188,7 +1196,13 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
     int rawEval;
     if (ss->inCheck) {
         rawEval = VALUE_NONE;
-        eval = ss->staticEval = VALUE_NONE;
+        // INCHKEVAL: keep a real staticEval through checks by propagating (ss-2)'s, so
+        // improving/opponentWorsening don't reset to "unknown" for plies after a check
+        // (SF search.cpp:716). Default off → VALUE_NONE, byte-identical.
+        if (inchk_eval_enabled() && ss->ply >= 2 && (ss - 2)->staticEval != VALUE_NONE)
+            eval = ss->staticEval = (ss - 2)->staticEval;
+        else
+            eval = ss->staticEval = VALUE_NONE;
     } else {
         rawEval = (ttHit && tte->eval != VALUE_NONE) ? tte->eval : Eval::evaluate(pos);
         eval = ss->staticEval = corrected_eval(C, pos, ss, rawEval);
