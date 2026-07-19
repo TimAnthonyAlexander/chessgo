@@ -186,6 +186,10 @@ struct Context {
         // (pruned). This is the COMPLETE SF mechanism (bidirectional), not the incomplete
         // hard-prune-only HistPrune that washed in gomachine. Constants SPSA-tunable.
         bool histMargin = false;
+        // ADAPTCAPSEE (SF movepick.cpp:236): value-scaled good/bad capture SEE split
+        // threshold (-mvvlva/capSeeDiv) instead of the flat -50. Ordering only. env-tunable.
+        bool adaptCapSee = false;
+        int  capSeeDiv   = 32;
         bool doDeeper = true; // D.3: adaptive do-deeper/do-shallower LMR re-search depth
         // ---- PARITY_GOMACHINE.md D.5/D.7 — Wave C, default OFF, SPRT independently ----
         bool seeQuietLinear = false; // D.5: linear SEE-quiet shape -75*depth, depth<=6 (vs quadratic default)
@@ -322,6 +326,8 @@ struct Context {
             if (on("HISTMARGIN")) histMargin = true;
             if (const char* e = getenv("HISTPRUNECOEFF")) histPruneCoeff = atoi(e);
             if (const char* e = getenv("HISTMARGINDIV"))  histMarginDiv  = atoi(e);
+            if (on("ADAPTCAPSEE")) adaptCapSee = true;
+            if (const char* e = getenv("CAPSEEDIV")) capSeeDiv = atoi(e);
             if (on("DODEEPER")) doDeeper = true;
             if (on("SEEQUIETLINEAR")) seeQuietLinear = true;
             if (on("GMCHECKEXT")) gmCheckExt = true;
@@ -839,7 +845,14 @@ void score_moves_impl(Context& C, const Position& pos, ExtMove* begin, ExtMove* 
             if (C.tune.captHist && cap)
                 mvvlva += C.captHist[piece_dense(pos.moved_piece(mv))][to_sq(mv)][victim]
                           * C.tune.captHistWeight / 256;
-            bool good = pos.see_ge(mv, -50);
+            // ADAPTCAPSEE (SF movepick.cpp:236): good/bad-capture split threshold scales
+            // with the capture's own value (mvvlva incl. captHist) — a big/high-history
+            // capture may lose more SEE and still sort as "good" (speculative sac), a small
+            // one very little. zug default is a flat -50. Ordering only, no pruning change.
+            // Default off (env ADAPTCAPSEE=1); off-path byte-identical.
+            bool good = C.tune.adaptCapSee
+                ? pos.see_ge(mv, -std::max(mvvlva / C.tune.capSeeDiv, 20))
+                : pos.see_ge(mv, -50);
             m->score = (good ? GOOD_CAP_SCORE : BAD_CAP_SCORE) + mvvlva;
         } else if (mv == ss->killers[0]) {
             m->score = KILLER1_SCORE;
