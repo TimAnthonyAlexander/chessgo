@@ -177,6 +177,15 @@ struct Context {
         // — feed the same table into (a) the capture-SEE pruning margin and (b) the LMR
         // statScore for captures, not just ordering. Default OFF; env CAPTHISTPRUNE=1.
         bool captHistPrune = false;
+        // HISTMARGIN (SF search.cpp:1084-1115): a quiet's OWN history (butterfly+conthist,
+        // the cached histScore) drives its pruning, not just its LMR reduction. Two parts,
+        // both default-off behind env HISTMARGIN=1: (a) hard history prune — skip a quiet
+        // whose histScore < -histPruneCoeff*depth (SF: history < -4083*depth); (b) history
+        // shifts the futility + SEE-quiet margin depth (SF: lmrDepth += history/3208), so a
+        // good-history quiet gets a LOOSER margin (kept) and a bad-history one TIGHTER
+        // (pruned). This is the COMPLETE SF mechanism (bidirectional), not the incomplete
+        // hard-prune-only HistPrune that washed in gomachine. Constants SPSA-tunable.
+        bool histMargin = false;
         bool doDeeper = true; // D.3: adaptive do-deeper/do-shallower LMR re-search depth
         // ---- PARITY_GOMACHINE.md D.5/D.7 — Wave C, default OFF, SPRT independently ----
         bool seeQuietLinear = false; // D.5: linear SEE-quiet shape -75*depth, depth<=6 (vs quadratic default)
@@ -256,6 +265,12 @@ struct Context {
         int captSeeCoeff  = 23;   // capture SEE pruning: -captSeeCoeff*depth
         int nmpEvalDiv    = 200;  // null-move R eval term: min((eval-beta)/nmpEvalDiv, 3)
         int singularMargin = 32;  // singular beta: ttValue - singularMargin*depth/16 (32 -> 2*depth, exact)
+        // HISTMARGIN constants (only read when histMargin on; anchored to zug's history
+        // scale, where the LMR read treats hist/8000 as ~1 ply). histPruneCoeff: hard-prune
+        // a quiet whose histScore < -histPruneCoeff*depth. histMarginDiv: shift the
+        // futility/SEE margin depth by histScore/histMarginDiv (good hist -> looser).
+        int histPruneCoeff = 4000;
+        int histMarginDiv  = 4000;
         // ---- LMRCLUSTER fine-term constants (2026-07-16) — UCI-exposed for joint SPSA.
         // Defaults reproduce the pre-tunable literals exactly; only read when the owning
         // flag (corrMargin/allNodeLmr/rootDeltaLmr, or the LMRCLUSTER bundle) is on, so
@@ -304,6 +319,7 @@ struct Context {
             if (on("CONTHISTPLIES")) contHistPlies = true;
             if (off("CAPTHIST")) captHist = false; // default-on now; kill-switch for A/B
             if (on("CAPTHISTPRUNE")) captHistPrune = true;
+            if (on("HISTMARGIN")) histMargin = true;
             if (on("DODEEPER")) doDeeper = true;
             if (on("SEEQUIETLINEAR")) seeQuietLinear = true;
             if (on("GMCHECKEXT")) gmCheckExt = true;
@@ -1445,10 +1461,28 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             if (isQuiet) {
                 int lmpLimit = (3 + depth * depth) / (2 - improving);
                 if (C.tune.lmp && moveCount >= lmpLimit && !givesCheck) continue;
+                // HISTMARGIN (SF search.cpp:1084-1115): use THIS quiet's own history
+                // (cached histScore = butterfly+conthist; HIST_NONE for killers/counters,
+                // which are not history-pruned). (a) hard prune on very negative history;
+                // (b) shift the futility/SEE margin depth by history so good-history quiets
+                // get a looser margin (kept) and bad-history ones a tighter one (pruned).
+                int futDepth = C.tune.lmrDepthPrune ? lmrDepth : depth;
+                int seeDepth = depth;
+                if (C.tune.histMargin) {
+                    int hs = (cur - 1)->histScore;
+                    if (hs != HIST_NONE) {
+                        if (hs < -C.tune.histPruneCoeff * depth && !givesCheck) continue; // (a)
+                        int shift = hs / C.tune.histMarginDiv;                             // (b)
+                        futDepth = std::max(futDepth + shift, 0);
+                        seeDepth = std::max(seeDepth + shift, 0);
+                    }
+                }
                 // Futility pruning
                 bool futilityPrune = C.tune.lmrDepthPrune
-                    ? (lmrDepth < 13 && eval + C.tune.futBase + C.tune.futSlope * lmrDepth <= alpha)
-                    : (depth <= 6 && eval + C.tune.futBase + C.tune.futSlope * depth <= alpha);
+                    ? (futDepth < 13 && eval + C.tune.futBase + C.tune.futSlope * futDepth <= alpha)
+                    : (C.tune.histMargin
+                        ? (futDepth <= 6 && eval + C.tune.futBase + C.tune.futSlope * futDepth <= alpha)
+                        : (depth <= 6 && eval + C.tune.futBase + C.tune.futSlope * depth <= alpha));
                 if (C.tune.futility && !ss->inCheck && !givesCheck && futilityPrune)
                     continue;
                 // SEE pruning of quiets
@@ -1461,7 +1495,9 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                     ? (depth <= 6 && !pos.see_ge(m, -75 * depth))
                     : C.tune.lmrDepthPrune
                         ? !pos.see_ge(m, -C.tune.seeQuietCoeff * lmrDepth * lmrDepth)
-                        : (depth <= 8 && !pos.see_ge(m, -C.tune.seeQuietCoeff * depth * depth));
+                        : C.tune.histMargin
+                            ? (seeDepth <= 8 && !pos.see_ge(m, -C.tune.seeQuietCoeff * seeDepth * seeDepth))
+                            : (depth <= 8 && !pos.see_ge(m, -C.tune.seeQuietCoeff * depth * depth));
                 if (C.tune.quietSee && seeQuietPrune) continue;
             } else {
                 // SEE pruning of captures
