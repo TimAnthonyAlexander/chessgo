@@ -169,28 +169,44 @@ LevelConfig config_for_rating(int rating) {
     // Weakened branch. u: 0 at RatingFull, 1 at RatingMin.
     double u = weak_frac(rating);
 
-    // Ranking depth (tactical sight): shallow at the weak end, deep near full.
-    // This is the realistic BLUNDER source — a tactic beyond rankDepth is unseen,
-    // so it can be played; its severity shrinks as depth grows with rating.
-    // Ranking depth = the human "horizon" (also the whole-game strength lever;
-    // these values anchored ~honestly vs Stockfish's UCI_Elo ladder).
-    cfg.rankDepth = static_cast<int>(6.0 + 6.0 * (1.0 - u) + 0.5); // 6..12 (capped below)
+    // Ranking depth (tactical sight) — the DOMINANT strength lever and the realistic
+    // blunder source: a tactic/refutation beyond rankDepth is unseen at the root, so
+    // a move that looks fine shallow but loses deep gets played (exactly how humans
+    // err — and it lands on sharp/tactical positions, whose refutations are deep).
+    // CRITICAL: this must NOT saturate. The prior `6 + 6·(1-u)` pinned every rating
+    // above ~2000 to the depth-10 cap, so a "2021" bot ranked every move to the same
+    // depth as a 2849 bot (~2600+ CCRL sight) and only a vanishing softmax window
+    // separated them — it held quiet/equal positions flawlessly and never bled. The
+    // curve below spans 2 (700) .. 8 (near full) and stays de-saturated across the
+    // whole band, so rating actually buys tactical sight. (The old ladder's "honest
+    // vs Stockfish UCI_Elo" anchor was the miscalibration source: SF's UCI_Elo ruler
+    // is itself badly inflated at the top, which baked in a bot ~hundreds of Elo too
+    // strong at its label. Re-anchored self-contained instead — see the harness.)
+    cfg.rankDepth = static_cast<int>(2.0 + 6.0 * (1.0 - u) + 0.5); // 2..8
     if (cfg.rankDepth < 2) cfg.rankDepth = 2;
-    if (cfg.rankDepth > 10) cfg.rankDepth = 10;
+    if (cfg.rankDepth > 8) cfg.rankDepth = 8;
 
     // Sensitivity `s` (Regan curve, win-prob units): the rating dial — smaller =
-    // sharper = stronger. Grows toward the weak end.
-    cfg.sensitivity = 0.10 * std::pow(u, 1.9);
+    // sharper = stronger. The prior 0.10·u^1.9 collapsed to a ~10cp selection window
+    // by 2021 (order-of-magnitude too accurate: real ~2000 play loses ~30cp/move,
+    // the model lost ~1-2). ~3.5× wider at the top, still → 0 at RatingFull for a
+    // continuous handoff into the clean branch. ~25cp window at 2021, ~60cp at 1200.
+    cfg.sensitivity = 0.14 * std::pow(u, 1.3);
 
     // Consistency `c` (Regan curve exponent) > 1: concentrates play on the best in
-    // EASY positions (clearly-worse moves killed hard => no dumb easy blunders)
-    // while keeping near-best moves ~equiprobable in HARD ones (errors land on
-    // hard positions, like a human). Stronger players are more consistent.
-    cfg.consistency = 1.8 + 0.5 * (1.0 - u);
+    // EASY positions (clearly-worse moves killed hard => no dumb easy free-piece
+    // blunders) while keeping near-best moves ~equiprobable in HARD ones. Lowered
+    // vs the prior 1.8..2.3 — that band drove the ERROR INVERSION (it killed every
+    // alternative in sharp positions, so the bot played decisive moments perfectly
+    // and only wandered in quiet ones). Sharp-position error now comes primarily
+    // from the shallower rankDepth horizon; c stays modest so the softmax still
+    // deviates in complex spots without manufacturing dumb easy blunders.
+    cfg.consistency = 1.5 + 0.4 * (1.0 - u);
 
-    // Severity cap (hard safety, win-prob units): with the c-curve this rarely
-    // binds; it guarantees an obviously-losing move never leaks through.
-    cfg.capDelta = 0.02 + 0.13 * std::pow(u, 1.6);
+    // Severity cap (hard safety, win-prob units): widened to match the wider window
+    // so it doesn't clip legitimate human-scale inaccuracies; it still guarantees an
+    // obviously-losing move (far below best in win-prob) never leaks through.
+    cfg.capDelta = 0.05 + 0.25 * std::pow(u, 1.4);
 
     return cfg;
 }

@@ -6,6 +6,8 @@ import {
     useRef,
     useState,
 } from 'react'
+import { createPortal } from 'react-dom'
+import { Sparkles } from 'lucide-react'
 import './Board.css'
 import type { Color } from '../api/client'
 import {
@@ -61,10 +63,14 @@ interface BoardProps {
      * engine's best DUCK placement (the second half of a composite best move, which
      * an arrow can't express). `color` defaults to the accent (gold) best-move hue. */
     circle?: { square: Square; color?: string } | null
-    /** Optional ultra-subtle best-move hint: tiny "pixel" dots on the from + to
-     * squares (no arrow). Used by the admin best-move toggle to whisper the engine's
-     * choice onto the board — intentionally near-invisible. */
+    /** Optional best-move hint: a thin accent ring on the from + to squares. Used by
+     * the admin best-move toggle. Only ever DISPLAYED while the admin is actively
+     * peeking (see `hintReveal`) — so a spectator never sees a standing mark. */
     hint?: { from: Square; to: Square } | null
+    /** Enables the hold-to-reveal peek interaction for `hint` (admin-only): the
+     * keyboard 'H' hold on desktop and a floating press-and-hold pad on touch devices.
+     * When false, `hint` is never shown. */
+    hintReveal?: boolean
     /** The local player's own color — enables premove input while it isn't their
      * turn (i.e. while `interactive` is false). Omit/null to disable premoves. */
     premoveColor?: Color | null
@@ -161,10 +167,8 @@ function brushFor(
     // Slot 0 = no modifier (the default); 1 = shift, 2 = ctrl, 3 = shift+ctrl.
     const slot = e.shiftKey ? (ctrl ? 3 : 1) : ctrl ? 2 : 0
     if (slot === 0) {
-        // No modifier → the user's default. The built-in default ('green') maps to
-        // the site accent so the plain arrow feels native and stays legible on dark
-        // board themes; an explicitly-chosen color is honored as-is.
-        return base === 'green' ? 'accent' : base
+        // No modifier → the user's default color, honored as-is (green means green).
+        return base
     }
     // The remaining three colors, in canonical order, fill the modifier slots.
     return ARROW_COLORS.filter((c) => c !== base)[slot - 1]
@@ -194,6 +198,7 @@ export default function Board({
     arrow2,
     circle,
     hint,
+    hintReveal = false,
     premoveColor,
     premoves,
     onCancelPremove,
@@ -217,6 +222,9 @@ export default function Board({
     // Right-click drawn annotations + the one currently being dragged out.
     const [shapes, setShapes] = useState<Shape[]>([])
     const [drawing, setDrawing] = useState<Shape | null>(null)
+    // Admin best-move hint hold-to-reveal: `hint` (from the page) is only DISPLAYED
+    // while `peek` is true, so nothing stands on the board for a spectator to notice.
+    const [peek, setPeek] = useState(false)
 
     // Annotations are per-position: clear them whenever the position changes.
     useEffect(() => {
@@ -233,6 +241,43 @@ export default function Board({
         window.addEventListener('keydown', onKey)
         return () => window.removeEventListener('keydown', onKey)
     }, [promo])
+
+    // Desktop peek: press-and-hold 'H' to reveal the best-move hint, release to hide.
+    // Matched on `e.code` (PHYSICAL key — identical on QWERTZ and QWERTY); 'KeyH' is a
+    // home-row consonant that holds cleanly (macOS press-and-hold only pops the accent
+    // picker for vowels). Guarded against typing / key-repeat / modifiers, and
+    // force-released on blur or tab-hide so it can never get stuck on.
+    useEffect(() => {
+        if (!hintReveal) return
+        const isPeekKey = (e: KeyboardEvent) =>
+            e.code === 'KeyH' && !e.ctrlKey && !e.metaKey && !e.altKey
+        const typing = (t: EventTarget | null) => {
+            const el = t as HTMLElement | null
+            const tag = el?.tagName
+            return (
+                tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || !!el?.isContentEditable
+            )
+        }
+        const down = (e: KeyboardEvent) => {
+            if (e.repeat || typing(e.target) || !isPeekKey(e)) return
+            setPeek(true)
+        }
+        const up = (e: KeyboardEvent) => {
+            if (e.code === 'KeyH') setPeek(false)
+        }
+        const release = () => setPeek(false)
+        window.addEventListener('keydown', down)
+        window.addEventListener('keyup', up)
+        window.addEventListener('blur', release)
+        document.addEventListener('visibilitychange', release)
+        return () => {
+            window.removeEventListener('keydown', down)
+            window.removeEventListener('keyup', up)
+            window.removeEventListener('blur', release)
+            document.removeEventListener('visibilitychange', release)
+            setPeek(false)
+        }
+    }, [hintReveal])
 
     const board: BoardMap = useMemo(() => overrideBoard ?? parseFen(fen), [overrideBoard, fen])
 
@@ -542,8 +587,8 @@ export default function Board({
                                 {prefs.showLegalMoves && isTarget && piece && <span className="ring" />}
                                 {isDuckTarget && !piece && <span className="dot" />}
                                 {isDropTarget && !piece && <span className="dot" />}
-                                {hint && (hint.from === sq || hint.to === sq) && (
-                                    <span className="hint-dot" />
+                                {peek && hint && (hint.from === sq || hint.to === sq) && (
+                                    <span className="hint-mark" />
                                 )}
                                 {piece && (
                                     <PieceGlyph
@@ -825,6 +870,35 @@ export default function Board({
                     }}
                 />
             )}
+
+            {/* Touch peek pad (admin): the mobile counterpart to the desktop 'H' hold.
+                A floating press-and-hold button — held reveals the hint, released hides
+                it. PORTALED to <body> so no CSS container / transform / overflow ancestor
+                can break its `position: fixed` or clip it (the board's own wrapper is a
+                CSS container). Shown ONLY on touch devices via CSS (desktop uses 'H'). */}
+            {hintReveal &&
+                createPortal(
+                    <button
+                        type="button"
+                        className={`peek-pad${peek ? ' active' : ''}`}
+                        aria-label="Hold to reveal the engine best move"
+                        onPointerDown={(e) => {
+                            e.preventDefault()
+                            try {
+                                e.currentTarget.setPointerCapture(e.pointerId)
+                            } catch {
+                                /* ignore */
+                            }
+                            setPeek(true)
+                        }}
+                        onPointerUp={() => setPeek(false)}
+                        onPointerCancel={() => setPeek(false)}
+                        onContextMenu={(e) => e.preventDefault()}
+                    >
+                        <Sparkles size={20} />
+                    </button>,
+                    document.body,
+                )}
         </div>
     )
 }

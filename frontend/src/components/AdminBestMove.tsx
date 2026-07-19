@@ -107,13 +107,20 @@ export default function AdminBestMove({
     // Clear the board hint when this control unmounts (e.g. admin leaves the page).
     useEffect(() => () => onHintRef.current?.(null), [])
 
+    // Report the current best-move squares up to the page (which feeds them to the
+    // board). The board itself owns the hold-to-reveal gating — nothing is drawn until
+    // the admin peeks (keyboard on desktop, the touch pad on mobile). Never report a
+    // stale hint: cleared on error, and on off-turn/disabled via `best` below.
+    useEffect(() => {
+        onHintRef.current?.(error ? null : (best?.hint ?? null))
+    }, [best, error])
+
     useEffect(() => {
         // Only compute the best move for the player's own side — no point spending
         // engine time on the opponent's reply.
         if (!enabled || !fen || !myTurn) {
             setBest(null)
             setError(null)
-            onHintRef.current?.(null)
             return
         }
         let cancelled = false
@@ -136,12 +143,10 @@ export default function AdminBestMove({
             .then((b) => {
                 if (cancelled) return
                 setBest(b)
-                onHintRef.current?.(b.hint)
             })
             .catch((e) => {
                 if (cancelled) return
                 setError(e instanceof Error ? e.message : 'Analysis failed')
-                onHintRef.current?.(null)
             })
             .finally(() => {
                 if (!cancelled) setLoading(false)
@@ -153,7 +158,10 @@ export default function AdminBestMove({
 
     return (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
-            <Tooltip title="Engine best move (admin)" placement="top">
+            <Tooltip
+                title="Engine best move (admin) — hold H (or the peek button on touch) to reveal on the board"
+                placement="top"
+            >
                 <Box sx={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
                     <Sparkles size={14} color={enabled ? 'var(--accent)' : 'var(--text-dim)'} />
                 </Box>

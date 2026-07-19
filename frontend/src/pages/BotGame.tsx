@@ -564,6 +564,7 @@ export default function BotGame() {
                 inCheck={shownInCheck}
                 interactive={interactive}
                 hint={atLive ? bestHint : null}
+                hintReveal={isAdmin}
                 onMove={isDuck ? duck.onMove : interaction.onMove}
                 premoveColor={ongoing && atLive && !isDuck && prefs.premoves ? humanColor : null}
                 premoves={atLive && !isDuck ? interaction.premoves : null}
