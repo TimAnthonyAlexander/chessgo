@@ -12,6 +12,15 @@ namespace NNUE {
 
 namespace {
 
+// APPLYPREFETCH — software-prefetch upcoming FT weight columns in apply_diff's
+// hot loop. Default OFF; APPLYPREFETCH=1 to enable. Mirrors threat_delta_enabled's
+// env-read style: getenv runs exactly once per process via a lambda-initialized
+// `static const bool`. See apply_diff below for the design + bit-exactness note.
+bool apply_prefetch_enabled() {
+    static const bool on = [] { const char* e = getenv("APPLYPREFETCH"); return e && e[0] == '1'; }();
+    return on;
+}
+
 // ftAdd / ftSub — add or subtract feature f's int16 FT weight column into a half.
 // Mirrors gomachine ftAdd/ftSub (enriched.go): W0i is feature-major, W0i[f*H + i].
 // int16 wraparound add/sub, exactly as the from-scratch buildAccHalf.
@@ -61,8 +70,45 @@ void AccStack::apply_diff(int16_t* acc, const std::vector<int>& parent, const st
     for (int f : parent) --c[f];
     for (int f : child)  ++c[f];
 
+    // APPLYPREFETCH: apply_diff is measured at ~26% of node self-time, and it
+    // is memory-bandwidth-bound -- each ft_add/ft_sub streams a full H=512
+    // int16 (1 KB) weight column out of `g_net.W0i`, a net far larger than
+    // any cache, so essentially every column touch is a cold-cache miss. The
+    // hot loop below already knows the FULL feature index list up front
+    // (`list`), so before finishing the CURRENT feature's H-wide add/sub we
+    // can issue a hardware prefetch hint for the NEXT feature's column,
+    // overlapping that load's latency with the current column's arithmetic
+    // instead of stalling on it serially.
+    //
+    // `pf` is read into a local ONCE, outside the loop (a `static const bool`
+    // load is already cheap, but this removes even that from the per-feature
+    // hot path when the flag is off) -- so with APPLYPREFETCH unset, the loop
+    // body is exactly the pre-existing code: `if (pf && ...)` short-circuits
+    // to false at compile-visible-constant-per-call cost and NO prefetch
+    // instruction executes.
+    //
+    // Bit-exactness: __builtin_prefetch is a pure hint -- it touches cache
+    // occupancy only, never a register or memory value the algorithm reads.
+    // Whether the hinted next feature ends up applied (d != 0) or cancels to
+    // 0 and is skipped is irrelevant to correctness; a "wasted" prefetch on a
+    // feature that turns out to net to zero costs nothing but a little
+    // memory bandwidth. The result of apply_diff is therefore identical for
+    // every value of APPLYPREFETCH.
+    const bool pf = apply_prefetch_enabled();
+    const int16_t* W0 = g_net.W0i.data();
+
     auto apply = [&](const std::vector<int>& list) {
-        for (int f : list) {
+        const std::size_t n = list.size();
+        for (std::size_t k = 0; k < n; ++k) {
+            const int f = list[k];
+            if (pf && k + 1 < n) {
+                // Prefetch the next feature's column: first cache line
+                // explicitly, second line too (H=512 int16 = 1 KB = 16 lines;
+                // the HW stream prefetcher takes over extending past that).
+                const int16_t* nextCol = W0 + static_cast<std::size_t>(list[k + 1]) * H;
+                __builtin_prefetch(nextCol, /*rw=*/0, /*locality=*/3);
+                __builtin_prefetch(reinterpret_cast<const char*>(nextCol) + 64, 0, 3);
+            }
             int d = c[f];
             if (d == 0) continue;
             if (d > 0) { for (; d > 0; --d) ft_add(acc, f); }

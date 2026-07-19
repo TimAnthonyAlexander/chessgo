@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 
 // Bit-exact port of gomachine's prod full-threats forward pass — the multilayer
 // int8-L1 path (enriched_int8.go `evalFromHalvesInt8` + enriched.go `Eval`).
@@ -28,6 +29,32 @@
 
 namespace NNUE {
 namespace {
+
+// ---------------------------------------------------------------------------
+// Micro-opt env flags (default OFF). Both mirror threat_delta_enabled's style
+// exactly: a lambda-initialized `static const bool`, so getenv runs exactly
+// once per process regardless of how many times the eval path is hit inside
+// search. Each flag is independent, byte-identical when off, and documented
+// at its use site below (dot_u8i8 for DOTSPLIT, eval_from_halves for
+// ROUNDFAST).
+// ---------------------------------------------------------------------------
+
+// DOTSPLIT — 4-way accumulator split of the int8 L1 dot kernel (dot_u8i8).
+// Default OFF; DOTSPLIT=1 to enable. See dot_u8i8 below for the bit-exactness
+// argument (int32 addition is associative/non-overflowing on this data).
+static inline bool dotsplit_enabled() {
+    static const bool on = [] { const char* e = getenv("DOTSPLIT"); return e && e[0] == '1'; }();
+    return on;
+}
+
+// ROUNDFAST — branchless round-half-away-from-zero replacing std::round at
+// the tail of eval_from_halves (avoids a libm roundf32 call, measured ~1.4%
+// of node self-time). Default OFF; ROUNDFAST=1 to enable. See eval_from_halves
+// for the (rare, measured) float-boundary caveat.
+static inline bool roundfast_enabled() {
+    static const bool on = [] { const char* e = getenv("ROUNDFAST"); return e && e[0] == '1'; }();
+    return on;
+}
 
 // ---------------------------------------------------------------------------
 // Stage helpers — each mirrors exactly one gomachine kernel (file:line noted),
@@ -114,7 +141,61 @@ static inline int32_t dot_u8i8_scalar(const uint8_t* a, const int8_t* w, int n) 
 // or not (there's only one order: ascending i, matching the widening instructions).
 #if defined(__AVX512VNNI__)
 #include <immintrin.h>
+// DOTSPLIT (AVX512VNNI): the baseline loop below is ONE `__m512i` accumulator
+// read-and-written by every `_mm512_dpbusd_epi32` in strict sequence — a
+// single RAW dependency chain. `_mm512_dpbusd_epi32` has multi-cycle latency
+// but the port throughput allows more than one in flight per cycle on
+// VNNI-capable cores (Ice Lake/Zen4+), so a single chain leaves throughput on
+// the table waiting on latency. DOTSPLIT=1 uses 4 INDEPENDENT `__m512i`
+// accumulators, round-robin over 4 disjoint 64-lane sub-ranges of the same
+// 512-wide dot, combined via 3x `_mm512_add_epi32` (+ a scalar/tail merge)
+// only at the very end.
+//
+// Bit-exactness: int32 addition is exactly associative and commutative, and
+// per this file's own overflow proof above (max magnitude ~8.26M term, <=512
+// terms, far under 2^31), no partial sum here can overflow either. Summing
+// the same 512 per-lane products in 4 independent partial groups instead of
+// one long chain changes only the ORDER accumulation happens in, not the
+// terms or their values -- the final int32 total is bit-for-bit identical to
+// the single-chain loop. When DOTSPLIT is unset, this is exactly the
+// pre-existing single-chain code (the `else` branch below is untouched).
 static inline int32_t dot_u8i8(const uint8_t* a, const int8_t* w, int n) {
+    if (dotsplit_enabled()) {
+        __m512i vacc0 = _mm512_setzero_si512();
+        __m512i vacc1 = _mm512_setzero_si512();
+        __m512i vacc2 = _mm512_setzero_si512();
+        __m512i vacc3 = _mm512_setzero_si512();
+        int i = 0;
+        for (; i + 256 <= n; i += 256) {
+            __m512i va0 = _mm512_loadu_si512(reinterpret_cast<const void*>(a + i));
+            __m512i vw0 = _mm512_loadu_si512(reinterpret_cast<const void*>(w + i));
+            vacc0 = _mm512_dpbusd_epi32(vacc0, va0, vw0);
+            __m512i va1 = _mm512_loadu_si512(reinterpret_cast<const void*>(a + i + 64));
+            __m512i vw1 = _mm512_loadu_si512(reinterpret_cast<const void*>(w + i + 64));
+            vacc1 = _mm512_dpbusd_epi32(vacc1, va1, vw1);
+            __m512i va2 = _mm512_loadu_si512(reinterpret_cast<const void*>(a + i + 128));
+            __m512i vw2 = _mm512_loadu_si512(reinterpret_cast<const void*>(w + i + 128));
+            vacc2 = _mm512_dpbusd_epi32(vacc2, va2, vw2);
+            __m512i va3 = _mm512_loadu_si512(reinterpret_cast<const void*>(a + i + 192));
+            __m512i vw3 = _mm512_loadu_si512(reinterpret_cast<const void*>(w + i + 192));
+            vacc3 = _mm512_dpbusd_epi32(vacc3, va3, vw3);
+        }
+        // Tail: fewer than 256 elements remain (0 of them for H=512 since
+        // 512 % 256 == 0, but handled generally for any n) -- fold any
+        // remaining whole 64-lane blocks into a 5th single-chain accumulator.
+        __m512i vacc4 = _mm512_setzero_si512();
+        for (; i + 64 <= n; i += 64) {
+            __m512i va = _mm512_loadu_si512(reinterpret_cast<const void*>(a + i));
+            __m512i vw = _mm512_loadu_si512(reinterpret_cast<const void*>(w + i));
+            vacc4 = _mm512_dpbusd_epi32(vacc4, va, vw);
+        }
+        int32_t acc = _mm512_reduce_add_epi32(vacc0) + _mm512_reduce_add_epi32(vacc1)
+                    + _mm512_reduce_add_epi32(vacc2) + _mm512_reduce_add_epi32(vacc3)
+                    + _mm512_reduce_add_epi32(vacc4);
+        if (i < n)
+            acc += dot_u8i8_scalar(a + i, w + i, n - i);
+        return acc;
+    }
     __m512i vacc = _mm512_setzero_si512();
     int i = 0;
     for (; i + 64 <= n; i += 64) {
@@ -129,10 +210,52 @@ static inline int32_t dot_u8i8(const uint8_t* a, const int8_t* w, int n) {
 }
 #elif defined(__ARM_FEATURE_DOTPROD)
 #include <arm_neon.h>
+// DOTSPLIT (NEON/DOTPROD): same fix as the AVX512VNNI branch above, sized for
+// NEON's 16-lane `vdotq_s32` (32 iterations over H=512 at the baseline
+// 16-wide step vs. AVX512's 8 iterations at 64-wide) -- 4-way split groups
+// iterations into 64-element blocks (4x16), independent int32x4_t
+// accumulators, combined via vaddvq_s32 only at the end. Bit-exactness
+// argument is identical to the AVX512 branch's comment (int32 add is
+// associative/non-overflowing on this data) -- see there for the proof.
 static inline int32_t dot_u8i8(const uint8_t* a, const int8_t* w, int n) {
     // a[i] in [0,127] fits int8 without change of bit pattern or value, so
     // reinterpreting the u8 buffer as int8 and using the SIGNED dot (vdotq_s32,
     // s8 x s8 -> s32) computes the same products as the true u8 x i8 multiply.
+    if (dotsplit_enabled()) {
+        int32x4_t vacc0 = vdupq_n_s32(0);
+        int32x4_t vacc1 = vdupq_n_s32(0);
+        int32x4_t vacc2 = vdupq_n_s32(0);
+        int32x4_t vacc3 = vdupq_n_s32(0);
+        int i = 0;
+        for (; i + 64 <= n; i += 64) {
+            int8x16_t va0 = vreinterpretq_s8_u8(vld1q_u8(a + i));
+            int8x16_t vw0 = vld1q_s8(w + i);
+            vacc0 = vdotq_s32(vacc0, va0, vw0);
+            int8x16_t va1 = vreinterpretq_s8_u8(vld1q_u8(a + i + 16));
+            int8x16_t vw1 = vld1q_s8(w + i + 16);
+            vacc1 = vdotq_s32(vacc1, va1, vw1);
+            int8x16_t va2 = vreinterpretq_s8_u8(vld1q_u8(a + i + 32));
+            int8x16_t vw2 = vld1q_s8(w + i + 32);
+            vacc2 = vdotq_s32(vacc2, va2, vw2);
+            int8x16_t va3 = vreinterpretq_s8_u8(vld1q_u8(a + i + 48));
+            int8x16_t vw3 = vld1q_s8(w + i + 48);
+            vacc3 = vdotq_s32(vacc3, va3, vw3);
+        }
+        // Tail: fewer than 64 elements remain (0 for H=512 since 512%64==0,
+        // handled generally) -- fold remaining whole 16-lane blocks into a
+        // 5th single-chain accumulator.
+        int32x4_t vacc4 = vdupq_n_s32(0);
+        for (; i + 16 <= n; i += 16) {
+            int8x16_t va = vreinterpretq_s8_u8(vld1q_u8(a + i));
+            int8x16_t vw = vld1q_s8(w + i);
+            vacc4 = vdotq_s32(vacc4, va, vw);
+        }
+        int32_t acc = vaddvq_s32(vacc0) + vaddvq_s32(vacc1) + vaddvq_s32(vacc2)
+                    + vaddvq_s32(vacc3) + vaddvq_s32(vacc4);
+        if (i < n)
+            acc += dot_u8i8_scalar(a + i, w + i, n - i);
+        return acc;
+    }
     int32x4_t vacc = vdupq_n_s32(0);
     int i = 0;
     for (; i + 16 <= n; i += 16) {
@@ -237,6 +360,25 @@ int eval_from_halves(const int16_t* accW, const int16_t* accB, const Position& p
     gemv_f32(y1, 1, l2, D3, g_net.OW.data(), NB, bk);
     float y = g_net.OB[bk] + y1[0];
     float scaled = y * CpScale;  // float32 multiply, then widen for the round
+
+    // ROUNDFAST: std::round(double) lowers to a libm `roundf32`/`round` call
+    // (measured ~1.4% of node self-time -- a real cost for "round to nearest
+    // int" on a value whose fractional part we don't otherwise care about).
+    // The ROUNDFAST=1 path replaces it with the classic branchless
+    // round-half-away-from-zero trick: add +-0.5 then truncate-toward-zero
+    // via the int cast. Truncating (scaled + 0.5) toward zero is exactly
+    // round-half-away-from-zero for scaled>=0 (and symmetrically for <0 with
+    // -0.5), which is std::round's own rounding mode -- so the two agree on
+    // every value EXCEPT the rare float-boundary case where `scaled + 0.5f`
+    // itself rounds (in float32) to the next integer's boundary before the
+    // truncation happens (a floating-point representation artifact of the
+    // add, not a difference in rounding *rule*). That rate was measured
+    // empirically (see the batch-spec deliverable) and is negligible; kept
+    // default OFF regardless since the win is small (~1.4%) and a search
+    // that wants strict libm-`round` parity (e.g. cross-checking against a
+    // reference build) should leave it off.
+    if (roundfast_enabled())
+        return static_cast<int>(scaled + (scaled >= 0.0f ? 0.5f : -0.5f));
     return static_cast<int>(std::round(static_cast<double>(scaled)));
 }
 
