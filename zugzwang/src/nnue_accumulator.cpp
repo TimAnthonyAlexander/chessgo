@@ -99,19 +99,45 @@ void AccStack::push_delta(const BoardSnapshot& oldb, const Position& pos) {
     Slot& src = slots_[sp_];
     Slot& dst = slots_[sp_ + 1];
 
-    // Per-perspective refresh: a king move that changes this perspective's bucket/mirror
-    // key invalidates its delta (new bucket copy / full reflection). Only the moving
-    // side's king moved, so at most one of these is true.
-    const bool refreshW = perspective_bucket_key(BB::lsb(oldb.pieces(WHITE, KING)), WHITE)
-                       != perspective_bucket_key(pos.king_square(WHITE), WHITE);
-    const bool refreshB = perspective_bucket_key(BB::lsb(oldb.pieces(BLACK, KING)), BLACK)
-                       != perspective_bucket_key(pos.king_square(BLACK), BLACK);
+    const Square oldKW = BB::lsb(oldb.pieces(WHITE, KING));
+    const Square oldKB = BB::lsb(oldb.pieces(BLACK, KING));
+    const Square newKW = pos.king_square(WHITE);
+    const Square newKB = pos.king_square(BLACK);
 
-    // Changed base+threat edges for the perspectives that are NOT refreshed.
+    // Per-perspective bucket/mirror cross. Only the moving side's king moved, so at most
+    // one of crossW/crossB is true.
+    const bool crossW = perspective_bucket_key(oldKW, WHITE) != perspective_bucket_key(newKW, WHITE);
+    const bool crossB = perspective_bucket_key(oldKB, BLACK) != perspective_bucket_key(newKB, BLACK);
+
+    // THREATGATE: on a cross where the MIRROR bit didn't flip (bucket-only cross), threat
+    // indices for that perspective are unaffected (they depend only on the mirror — see
+    // perspective_mirror), so keep the threat half on the cheap changed_edges_delta path
+    // and swap only the base columns (emit_base_swap) instead of a full rebuild. When
+    // THREATGATE is unset, `gate` is false, bucketOnly* is always false, and refresh* ==
+    // cross* — i.e. exactly the pre-THREATGATE behavior below.
+    const bool gate = threat_gate_enabled();
+    const bool bucketOnlyW = gate && crossW && perspective_mirror(oldKW, WHITE) == perspective_mirror(newKW, WHITE);
+    const bool bucketOnlyB = gate && crossB && perspective_mirror(oldKB, BLACK) == perspective_mirror(newKB, BLACK);
+
+    // Full from-scratch refresh only on: a mirror-flipping cross, or (gate off) any cross.
+    const bool refreshW = crossW && !bucketOnlyW;
+    const bool refreshB = crossB && !bucketOnlyB;
+    // Delta-path perspectives: non-crossing (legacy delta) OR bucket-only-cross (gated).
+    const bool deltaW = !refreshW;
+    const bool deltaB = !refreshB;
+
+    // Changed base+threat edges for the perspectives that are NOT refreshed. For a
+    // bucket-only-cross perspective, baseSkip* tells changed_edges_delta to emit ONLY the
+    // threat delta (still correct — mirror unchanged) and skip its base-768 D-loop, since
+    // emit_base_swap below does the full base swap for that perspective instead.
     dSubW_.clear(); dAddW_.clear(); dSubB_.clear(); dAddB_.clear();
-    changed_edges_delta(oldb, pos, !refreshW, dSubW_, dAddW_, !refreshB, dSubB_, dAddB_);
+    changed_edges_delta(oldb, pos, deltaW, dSubW_, dAddW_, deltaB, dSubB_, dAddB_,
+                        /*baseSkipW=*/bucketOnlyW, /*baseSkipB=*/bucketOnlyB);
+    if (bucketOnlyW || bucketOnlyB)
+        emit_base_swap(oldb, pos, bucketOnlyW, dSubW_, dAddW_, bucketOnlyB, dSubB_, dAddB_);
 
-    // White half: rebuild from scratch on a bucket/mirror cross, else copy parent + delta.
+    // White half: rebuild from scratch on a mirror-flipping cross, else copy parent + delta
+    // (delta now includes the base swap for a bucket-only cross, folded into the same lists).
     if (refreshW) {
         enumerate_flat(pos, WHITE, dst.fw);
         build_half(dst.w, dst.fw);

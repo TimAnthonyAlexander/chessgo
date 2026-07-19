@@ -340,7 +340,8 @@ void active_features(const Position& pos, Color persp, Features& out) {
 //   apply_diff. Hence (parent half) + delta == (child half) as int16-column multisets.
 void changed_edges_delta(const BoardSnapshot& oldb, const Position& child,
                          bool doW, std::vector<int>& subW, std::vector<int>& addW,
-                         bool doB, std::vector<int>& subB, std::vector<int>& addB) {
+                         bool doB, std::vector<int>& subB, std::vector<int>& addB,
+                         bool baseSkipW, bool baseSkipB) {
     const SFTables& T = tables();
     const U64 oldOcc = oldb.occ();
     const U64 newOcc = child.pieces();
@@ -366,10 +367,10 @@ void changed_edges_delta(const BoardSnapshot& oldb, const Position& child,
     auto oldPieceAt = [&oldb](Square t)  { return oldb.piece_on(t); };
     auto newPieceAt = [&child](Square t) { return child.piece_on(t); };
 
-    struct PerspReq { bool on; Color color; std::vector<int>* sub; std::vector<int>* add; };
+    struct PerspReq { bool on; Color color; std::vector<int>* sub; std::vector<int>* add; bool baseSkip; };
     const PerspReq reqs[2] = {
-        { doW, WHITE, &subW, &addW },
-        { doB, BLACK, &subB, &addB },
+        { doW, WHITE, &subW, &addW, baseSkipW },
+        { doB, BLACK, &subB, &addB, baseSkipB },
     };
     for (const PerspReq& p : reqs) {
         if (!p.on) continue;
@@ -379,16 +380,24 @@ void changed_edges_delta(const BoardSnapshot& oldb, const Position& child,
         const PerspXform x = make_xform(child.king_square(p.color), p.color);
 
         // Base-768: changes only on D squares (piece left / arrived / changed identity).
-        for (U64 d = D; d;) {
-            const Square s = BB::pop_lsb(d);
-            const Piece op = oldb.piece_on(s);
-            const Piece np = child.piece_on(s);
-            if (op != NO_PIECE)
-                p.sub->push_back(base_index(x, (color_of(op) != p.color) ? 1 : 0,
-                                            int(type_of(op)) - 1, s));
-            if (np != NO_PIECE)
-                p.add->push_back(base_index(x, (color_of(np) != p.color) ? 1 : 0,
-                                            int(type_of(np)) - 1, s));
+        // Skipped when baseSkip is set (THREATGATE bucket-cross-same-mirror case): base
+        // there shifts by the bucket offset for EVERY piece, not just D, so the caller
+        // does a full base swap via emit_base_swap instead. The threat loops below are
+        // UNCHANGED and still run in that case — they remain correct because the
+        // caller guarantees baseSkip is only set when this perspective's MIRROR (the
+        // only thing threat indices depend on) did not flip.
+        if (!p.baseSkip) {
+            for (U64 d = D; d;) {
+                const Square s = BB::pop_lsb(d);
+                const Piece op = oldb.piece_on(s);
+                const Piece np = child.piece_on(s);
+                if (op != NO_PIECE)
+                    p.sub->push_back(base_index(x, (color_of(op) != p.color) ? 1 : 0,
+                                                int(type_of(op)) - 1, s));
+                if (np != NO_PIECE)
+                    p.add->push_back(base_index(x, (color_of(np) != p.color) ? 1 : 0,
+                                                int(type_of(np)) - 1, s));
+            }
         }
 
         if (!fast) {
@@ -443,6 +452,52 @@ void changed_edges_delta(const BoardSnapshot& oldb, const Position& child,
 int perspective_bucket_key(Square ksq, Color persp) {
     const PerspXform x = make_xform(ksq, persp);
     return x.off | x.mir; // off is a multiple of InputDim (768, div by 8); mir ∈ {0,7}
+}
+
+int perspective_mirror(Square ksq, Color persp) {
+    return make_xform(ksq, persp).mir;
+}
+
+bool threat_gate_enabled() {
+    // Default OFF: only THREATGATE=1 enables the bucket-cross-same-mirror shortcut.
+    // Mirrors threat_delta_enabled's env-read style (parsed once, cached).
+    static const bool on = [] { const char* e = getenv("THREATGATE"); return e && e[0] == '1'; }();
+    return on;
+}
+
+// emit_base_swap — the THREATGATE base-column swap for a king move that crosses a
+// bucket but keeps the same mirror. Correctness: base_index = x.off + (aRel*6+pt0)*64 +
+// x.orient(sq); x.off is the ONLY term that changes when the bucket crosses (mirror and
+// hence x.orient are unchanged for every square), and x.off is added identically to
+// EVERY piece's index — so swapping the bucket means every single piece's base column
+// moves, not just the D squares touched by the king move itself. We therefore subtract
+// every piece's base index under the OLD transform (built from the pre-move snapshot,
+// so it reflects the parent's actual active columns) and add every piece's base index
+// under the NEW transform (built from the child) — a full from-scratch base swap.
+// apply_diff's count-array cancellation makes this exact even though every piece is
+// touched: a piece whose old and new base index coincide (impossible here since x.off
+// differs, but the mechanism is general) would simply net to zero.
+void emit_base_swap(const BoardSnapshot& oldb, const Position& child,
+                    bool doW, std::vector<int>& subW, std::vector<int>& addW,
+                    bool doB, std::vector<int>& subB, std::vector<int>& addB) {
+    struct Req { bool on; Color color; std::vector<int>* sub; std::vector<int>* add; };
+    const Req reqs[2] = { { doW, WHITE, &subW, &addW }, { doB, BLACK, &subB, &addB } };
+    for (const Req& p : reqs) {
+        if (!p.on) continue;
+        const Square oldK = BB::lsb(oldb.pieces(p.color, KING));
+        const PerspXform xo = make_xform(oldK, p.color);
+        const PerspXform xn = make_xform(child.king_square(p.color), p.color);
+        for (int c = WHITE; c <= BLACK; ++c) {
+            const int aRel = (Color(c) != p.color) ? 1 : 0;
+            for (int pt = PAWN; pt <= KING; ++pt) {
+                const int t0 = pt - 1;
+                U64 bo = oldb.pieces(Color(c), PieceType(pt));
+                while (bo) { const Square sq = BB::pop_lsb(bo); p.sub->push_back(base_index(xo, aRel, t0, sq)); }
+                U64 bn = child.pieces(Color(c), PieceType(pt));
+                while (bn) { const Square sq = BB::pop_lsb(bn); p.add->push_back(base_index(xn, aRel, t0, sq)); }
+            }
+        }
+    }
 }
 
 bool threat_delta_enabled() {

@@ -46,14 +46,52 @@ struct BoardSnapshot {
 // perspective's king MUST NOT have crossed a bucket/mirror boundary (callers rebuild
 // such halves from scratch instead). Index encoding is byte-identical to
 // active_features (both route threats through the same emit path).
+// `baseSkip*` = true means: for that perspective, emit ONLY threat deltas — skip the
+// base-768 D-loop entirely — because the caller is instead doing a full base-column
+// swap via `emit_base_swap` (a bucket-cross-same-mirror king move: base shifts by the
+// bucket offset for EVERY piece, not just the D squares, so the cheap D-loop diff would
+// be wrong; the threat loops stay correct because this perspective's mirror — and hence
+// every threat feature index — did not change). Default false = current behavior
+// (base D-loop always runs alongside the threat delta).
 void changed_edges_delta(const BoardSnapshot& oldb, const Position& child,
                          bool doW, std::vector<int>& subW, std::vector<int>& addW,
-                         bool doB, std::vector<int>& subB, std::vector<int>& addB);
+                         bool doB, std::vector<int>& subB, std::vector<int>& addB,
+                         bool baseSkipW = false, bool baseSkipB = false);
 
 // perspective_bucket_key packs (bucket, mirror) for `persp`'s king square into a small
 // int — a king move that changes this key invalidates that perspective's incremental
 // delta (new bucket copy or every square reflected) and forces a from-scratch refresh.
 int perspective_bucket_key(Square ksq, Color persp);
+
+// THREATGATE (default OFF): on a king move that changes the base bucket but NOT the
+// mirror, keep the threat half on the delta path (threat indices are mirror-only — see
+// `perspective_mirror`) and swap only the base columns via `emit_base_swap`. This is
+// byte-identical to a full refresh (see `emit_base_swap`'s comment for the proof) and
+// targets the dominant (≤128-feature threat rebuild) cost on the common case where a
+// king move crosses a rank-bucket boundary without crossing the d/e mirror line. SF18
+// takes exactly this shortcut: `FullThreats::requires_refresh` gates on the mirror bit
+// only (`& 0b100`), not the finer PSQ bucket — this is the same optimization applied to
+// our king-bucketed (not just mirrored) base block. THREATGATE=0/unset => legacy full
+// refresh on ANY bucket-or-mirror cross, i.e. byte-identical to the pre-THREATGATE code.
+bool threat_gate_enabled();
+
+// perspective_mirror — just the mirror bit (0 or 7) of persp's king transform, i.e. the
+// `PerspXform::mir` half of `perspective_bucket_key` without the bucket term. A king
+// move that leaves this unchanged keeps every threat feature index stable for `persp`
+// (threat indices are built from `x.orient(sq)` = `^56`(black)`^mir` — no bucket term —
+// so the mirror bit is the ONLY part of the king transform threats depend on).
+int perspective_mirror(Square ksq, Color persp);
+
+// emit_base_swap — for each requested perspective, append the FULL base-768 swap for a
+// bucket-cross-same-mirror king move: subtract every piece's base index under the OLD
+// king transform (from `oldb`), add every piece's base index under the NEW king
+// transform (from `child`). Threats are handled separately (by `changed_edges_delta`
+// with `baseSkip*` set) since the mirror — and hence every threat index — is unchanged.
+// Appends to the same sub/add lists `changed_edges_delta` uses, so a single `apply_diff`
+// call applies both the threat delta and the base swap together.
+void emit_base_swap(const BoardSnapshot& oldb, const Position& child,
+                    bool doW, std::vector<int>& subW, std::vector<int>& addW,
+                    bool doB, std::vector<int>& subB, std::vector<int>& addB);
 
 // threat_delta_enabled reads the THREATDELTA env once (default ON, banked +43 Elo):
 // THREATDELTA=0 is the parity/debug kill-switch back to the full-enumerate push().
