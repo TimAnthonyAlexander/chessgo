@@ -320,6 +320,8 @@ struct Context {
             if (off("CAPTHIST")) captHist = false; // default-on now; kill-switch for A/B
             if (on("CAPTHISTPRUNE")) captHistPrune = true;
             if (on("HISTMARGIN")) histMargin = true;
+            if (const char* e = getenv("HISTPRUNECOEFF")) histPruneCoeff = atoi(e);
+            if (const char* e = getenv("HISTMARGINDIV"))  histMarginDiv  = atoi(e);
             if (on("DODEEPER")) doDeeper = true;
             if (on("SEEQUIETLINEAR")) seeQuietLinear = true;
             if (on("GMCHECKEXT")) gmCheckExt = true;
