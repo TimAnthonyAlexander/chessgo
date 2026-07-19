@@ -56,6 +56,17 @@ static inline bool roundfast_enabled() {
     return on;
 }
 
+// PAIRSIMD — SIMD the pairwise_u8 FT activation loop in eval_from_halves
+// (~10.9% of node self-time; the dot itself is only ~1.5%, so pairwise + tail
+// dominate eval). Default OFF; PAIRSIMD=1 to enable. See pairwise_u8_block
+// below for the bit-exactness argument (the whole computation fits exactly
+// in unsigned 16-bit lanes, so the vector path is provably byte-identical
+// to the scalar path -- not an approximation).
+static inline bool pairsimd_enabled() {
+    static const bool on = [] { const char* e = getenv("PAIRSIMD"); return e && e[0] == '1'; }();
+    return on;
+}
+
 // ---------------------------------------------------------------------------
 // Stage helpers — each mirrors exactly one gomachine kernel (file:line noted),
 // kept tiny + static so they can be unit-tested against the Go formulas.
@@ -95,6 +106,86 @@ static inline uint8_t pairwise_u8(int16_t lo, int16_t hi) {
     if (b < 0) b = 0; else if (b > ftQA) b = ftQA;
     return static_cast<uint8_t>((a * b + ftRound) >> ftShift);
 }
+
+// pairwise_u8_block: SIMD dispatch that is PROVABLY bit-exact with pairwise_u8
+// above -- not "close enough", exact -- because the entire computation fits in
+// unsigned 16-bit lanes with no overflow at any step:
+//
+//   * a,b are clamped to [0,255] (ftQA=255), so a,b in [0,255].
+//   * a*b in [0, 255*255] = [0, 65025], which is < 2^16 = 65536, so the
+//     product fits EXACTLY in a 16-bit lane -- unsigned multiply low-half
+//     (vpmullw / vmulq_*16) never loses a bit here, regardless of whether the
+//     lane type used to hold it is signed or unsigned.
+//   * a*b + 256 (ftRound) is in [256, 65281], STILL < 2^16, so the add cannot
+//     overflow the 16-bit lane either.
+//   * (a*b + 256) >> 9 (ftShift) is a shift of a value that is provably
+//     non-negative, so a LOGICAL right shift (treating the lane as unsigned)
+//     gives the identical result C++'s `>>` gives when operating on the `int`
+//     values in pairwise_u8 above (which are also non-negative there).
+//   * The final result is in [0, (65025+256)>>9] = [0,127], which fits u8 --
+//     matching pairwise_u8's return type exactly.
+//
+// So "clamp -> unsigned 16-bit multiply -> +256 -> logical >>9 -> narrow to
+// u8" is not an approximation of pairwise_u8, it IS pairwise_u8, lane for
+// lane, with no rounding or saturation difference at any intermediate step.
+// half = H/2 = 256 is a compile-time constant divisible by every SIMD step
+// width used below (32 for AVX512, 8 for NEON), so there is no tail to handle.
+#if defined(__AVX512VNNI__)
+#include <immintrin.h>
+// AVX512 (32 lanes/step, matching dot_u8i8's __AVX512VNNI__ gate above -- VNNI
+// implies the BW subset _mm512_cvtepi16_epi8 needs on the targets that define
+// it, e.g. coalla).
+static inline void pairwise_u8_block(const int16_t* src, uint8_t* dst) {
+    constexpr int half = H / 2;  // 256
+    static_assert(half % 32 == 0, "AVX512 pairwise step must divide half");
+    const __m512i zero = _mm512_setzero_si512();
+    const __m512i c255 = _mm512_set1_epi16(255);
+    const __m512i r256 = _mm512_set1_epi16(256);
+    for (int i = 0; i < half; i += 32) {
+        __m512i lo = _mm512_loadu_si512(reinterpret_cast<const void*>(src + i));
+        __m512i hi = _mm512_loadu_si512(reinterpret_cast<const void*>(src + i + half));
+        lo = _mm512_min_epi16(_mm512_max_epi16(lo, zero), c255);   // clamp [0,255]
+        hi = _mm512_min_epi16(_mm512_max_epi16(hi, zero), c255);
+        __m512i prod = _mm512_mullo_epi16(lo, hi);                 // exact: product < 2^16
+        prod = _mm512_add_epi16(prod, r256);                       // exact: still < 2^16
+        prod = _mm512_srli_epi16(prod, 9);                         // logical >>9 -> [0,127]
+        __m256i packed = _mm512_cvtepi16_epi8(prod);               // narrow 32x u16 -> 32x u8
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + i), packed);
+    }
+}
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+#include <arm_neon.h>
+// NEON (8 lanes/step). The product must be treated as UNSIGNED for the +256
+// and >>9: vmulq_s16's low-16 result bit pattern is identical to the true
+// unsigned product (proved above to be < 2^16, so it never sets the sign bit
+// in the first place), and vreinterpretq_u16_s16 relabels that bit pattern as
+// unsigned with zero cost and zero value change, after which vaddq_u16 /
+// vshrq_n_u16 are exact unsigned add / logical shift.
+static inline void pairwise_u8_block(const int16_t* src, uint8_t* dst) {
+    constexpr int half = H / 2;  // 256
+    static_assert(half % 8 == 0, "NEON pairwise step must divide half");
+    const int16x8_t z = vdupq_n_s16(0);
+    const int16x8_t c = vdupq_n_s16(255);
+    const uint16x8_t r = vdupq_n_u16(256);
+    for (int i = 0; i < half; i += 8) {
+        int16x8_t lo = vminq_s16(vmaxq_s16(vld1q_s16(src + i), z), c);         // clamp [0,255]
+        int16x8_t hi = vminq_s16(vmaxq_s16(vld1q_s16(src + i + half), z), c);
+        int16x8_t prod = vmulq_s16(lo, hi);                                    // exact low16
+        uint16x8_t p = vaddq_u16(vreinterpretq_u16_s16(prod), r);              // exact unsigned add
+        p = vshrq_n_u16(p, 9);                                                 // logical >>9 -> [0,127]
+        uint8x8_t packed = vmovn_u16(p);                                       // narrow to u8
+        vst1_u8(dst + i, packed);
+    }
+}
+#else
+// No SIMD target recognized: fall back to the scalar formula, element by
+// element. Still correct and still used only when PAIRSIMD=1 is requested.
+static inline void pairwise_u8_block(const int16_t* src, uint8_t* dst) {
+    constexpr int half = H / 2;  // 256
+    for (int i = 0; i < half; ++i)
+        dst[i] = pairwise_u8(src[i], src[i + half]);
+}
+#endif
 
 // dotU8I8Scalar (kernels.go:279-296): models VPMADDUBSW+VPMADDWD EXACTLY. For each
 // adjacent (u8,i8) pair form the int16 sum a[i]*w[i]+a[i+1]*w[i+1], SATURATE it to
@@ -331,11 +422,19 @@ int eval_from_halves(const int16_t* accW, const int16_t* accB, const Position& p
     const int bk = material_bucket(pos);
 
     // (1) pairwise-u8 activation -> aq[H] = [ stm_pair(256) | opp_pair(256) ].
+    // PAIRSIMD=1 replaces this scalar loop with pairwise_u8_block (see its
+    // definition above for the full bit-exactness proof); both paths compute
+    // the IDENTICAL u8 lane for lane, so the branch below changes only speed.
     constexpr int half = H / 2;  // 256
     uint8_t aq[H];
-    for (int i = 0; i < half; ++i) {
-        aq[i]        = pairwise_u8(stm[i], stm[i + half]);
-        aq[half + i] = pairwise_u8(opp[i], opp[i + half]);
+    if (pairsimd_enabled()) {
+        pairwise_u8_block(stm, aq);
+        pairwise_u8_block(opp, aq + half);
+    } else {
+        for (int i = 0; i < half; ++i) {
+            aq[i]        = pairwise_u8(stm[i], stm[i + half]);
+            aq[half + i] = pairwise_u8(opp[i], opp[i + half]);
+        }
     }
 
     // (2) L1 int8: u8·i8 saturating dot -> descale (constant L1Inv=1/8128) -> +bias
