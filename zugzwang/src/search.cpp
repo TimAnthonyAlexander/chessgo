@@ -553,6 +553,9 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     else if (name == "NmpEvalDiv")     tune.nmpEvalDiv     = clamp(value, 80, 400);
     else if (name == "SingularMargin") tune.singularMargin = clamp(value, 16, 80);
     else if (name == "CaptHistWeight") tune.captHistWeight = clamp(value, 16, 512);
+    // ---- HISTMARGIN constants (only read when histMargin on) ----
+    else if (name == "HistPruneCoeff") tune.histPruneCoeff = clamp(value, 1000, 40000);
+    else if (name == "HistMarginDiv")  tune.histMarginDiv  = clamp(value, 1000, 40000);
     // ---- LMRCLUSTER fine-term tunables (2026-07-16) ----
     else if (name == "RootDeltaCoeff") tune.rootDeltaCoeff = clamp(value, 200, 1200);
     else if (name == "CorrMarginDiv")  tune.corrMarginDiv  = clamp(value, 10000, 100000);

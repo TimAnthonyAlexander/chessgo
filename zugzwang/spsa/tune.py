@@ -77,8 +77,22 @@ LMRCLUSTER_PARAMS = [
     ("LmrBase",         7844,  3000,  15000,   600),
     ("LmrDiv",         24696, 15000,  40000,  1250),
 ]
+HISTMARGIN_PARAMS = [
+    # name              start   min    max    c_end     (SPSA_SET=histmargin)
+    # Co-tune HISTMARGIN's own constants WITH the futility/SEE margins it feeds. Run with
+    # ZUGZWANG_ENGINE=./cand_histmargin.sh so BOTH arms have HISTMARGIN=1 (the lever active)
+    # while SPSA drives the constants. HISTMARGIN-on solo washed ~-3.6; this tests whether
+    # co-tuning the interacting margins recovers it into a positive basin (the "works in
+    # combination" hypothesis). Confirm the tuned theta vs HISTMARGIN-OFF base with an SPRT.
+    ("HistPruneCoeff", 8000, 2000, 40000, 2000),
+    ("HistMarginDiv",  8000, 2000, 40000, 2000),
+    ("RfpMargin",        75,   40,   130,    5),
+    ("FutSlope",        100,   40,   150,    6),
+    ("SeeQuietCoeff",    25,   10,    45,    2),
+]
 _SPSA_SET = os.environ.get("SPSA_SET", "capthist")
-PARAMS = {"margins": MARGIN_PARAMS, "lmrcluster": LMRCLUSTER_PARAMS}.get(_SPSA_SET, CAPTHIST_PARAMS)
+PARAMS = {"margins": MARGIN_PARAMS, "lmrcluster": LMRCLUSTER_PARAMS,
+          "histmargin": HISTMARGIN_PARAMS}.get(_SPSA_SET, CAPTHIST_PARAMS)
 NAMES = [p[0] for p in PARAMS]
 START = {p[0]: float(p[1]) for p in PARAMS}
 LO = {p[0]: p[2] for p in PARAMS}

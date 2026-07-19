@@ -237,6 +237,10 @@ int uci_main() {
             std::cout << "option name CaptSeeCoeff type spin default 23 min 0 max 180\n";
             std::cout << "option name NmpEvalDiv type spin default 200 min 80 max 400\n";
             std::cout << "option name SingularMargin type spin default 32 min 16 max 80\n";
+            // HISTMARGIN constants (only read when env HISTMARGIN=1) — exposed for a
+            // co-tuned SPSA (both arms run HISTMARGIN=1 while SPSA drives these + margins).
+            std::cout << "option name HistPruneCoeff type spin default 8000 min 1000 max 40000\n";
+            std::cout << "option name HistMarginDiv type spin default 8000 min 1000 max 40000\n";
             // LMRCLUSTER fine-term tunables (2026-07-16, search.cpp Tune struct) — the
             // co-dependent corrMargin/allNodeLmr/rootDeltaLmr trio's constants, exposed
             // for a joint SPSA campaign (env LMRCLUSTER=1 turns the trio on; these
