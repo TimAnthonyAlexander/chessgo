@@ -62,7 +62,11 @@ export default function DailyPuzzleWidget() {
         }
     }, [])
 
-    const goSolve = () => navigate('/puzzles')
+    // Hand the already-fetched puzzle to the trainer so it opens THIS position
+    // directly, rather than dropping the solver on the generic setup screen.
+    const goSolve = () => {
+        if (puzzle) navigate('/puzzles', { state: { dailyPuzzle: puzzle } })
+    }
     const interactive = Boolean(puzzle) && !error
 
     const head = <PanelHead title="Daily puzzle" sub="Find the best move" />

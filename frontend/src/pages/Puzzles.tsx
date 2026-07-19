@@ -1,4 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { Box, CircularProgress, MenuItem, Select, Typography } from '@mui/material'
 import {
     Check,
@@ -171,44 +172,60 @@ export default function Puzzles() {
         runningRef.current = mode === 'running'
     }, [mode])
 
-    const load = useCallback(async (forTheme: string) => {
+    // Seed the solving state from a puzzle (freshly fetched or handed in, e.g. the
+    // daily puzzle) and run the intro animation.
+    const beginPuzzle = useCallback((p: PuzzleNext) => {
         clearTimers()
         setError(null)
         setResult(null)
         setOverride(null)
+        setData(p)
+        setFen(p.fen)
+        setLegal(p.legal_moves)
+        setPly(p.ply)
         setLastMove(null)
-        setPhase('loading')
-        try {
-            const p = await nextPuzzle(forTheme || undefined)
-            setData(p)
-            setFen(p.fen)
-            setLegal(p.legal_moves)
-            setPly(p.ply)
-            setLastMove(null)
-            setPhase('intro')
-            // Show the pre-move position briefly, then "play" the opponent's setup move.
-            later(() => {
-                setLastMove(splitUci(p.opponent_move))
-                sounds.move()
-                setPhase('solving')
-            }, 480)
-        } catch (e) {
-            setData(null)
-            setPhase('empty')
-            setError(e instanceof Error ? e.message : 'Could not load a puzzle.')
-        }
+        setPhase('intro')
+        // Show the pre-move position briefly, then "play" the opponent's setup move.
+        later(() => {
+            setLastMove(splitUci(p.opponent_move))
+            sounds.move()
+            setPhase('solving')
+        }, 480)
     }, [])
 
+    const load = useCallback(
+        async (forTheme: string) => {
+            clearTimers()
+            setError(null)
+            setResult(null)
+            setOverride(null)
+            setLastMove(null)
+            setPhase('loading')
+            try {
+                beginPuzzle(await nextPuzzle(forTheme || undefined))
+            } catch (e) {
+                setData(null)
+                setPhase('empty')
+                setError(e instanceof Error ? e.message : 'Could not load a puzzle.')
+            }
+        },
+        [beginPuzzle],
+    )
+
     const startSession = useCallback(
-        (limit: number | null, forTheme: string) => {
+        // `seed` opens a specific puzzle (the daily) instead of fetching a fresh one;
+        // seeded sessions don't overwrite the persisted theme/time preferences.
+        (limit: number | null, forTheme: string, seed?: PuzzleNext) => {
             clearTimers()
             lowTimeFiredRef.current = false
             setHistory([])
             setError(null)
             setLimitSec(limit)
             setTheme(forTheme)
-            storeLimit(limit)
-            storeTheme(forTheme)
+            if (!seed) {
+                storeLimit(limit)
+                storeTheme(forTheme)
+            }
             if (limit != null) {
                 setDeadline(Date.now() + limit * 1000)
                 setRemainingMs(limit * 1000)
@@ -217,9 +234,10 @@ export default function Puzzles() {
                 setRemainingMs(0)
             }
             setMode('running')
-            void load(forTheme)
+            if (seed) beginPuzzle(seed)
+            else void load(forTheme)
         },
-        [load],
+        [load, beginPuzzle],
     )
 
     const endSession = useCallback(() => {
@@ -227,6 +245,22 @@ export default function Puzzles() {
         setDeadline(null)
         setMode('over')
     }, [])
+
+    // The homepage "Puzzle of the day" widget navigates here with the puzzle in
+    // router state so we open THAT position directly (untimed, all-themes) rather
+    // than the setup screen. Consume it once, then clear the state so a refresh or
+    // back-nav doesn't replay it.
+    const location = useLocation()
+    const navigate = useNavigate()
+    const dailyConsumedRef = useRef(false)
+    useEffect(() => {
+        if (dailyConsumedRef.current) return
+        const seed = (location.state as { dailyPuzzle?: PuzzleNext } | null)?.dailyPuzzle
+        if (!seed) return
+        dailyConsumedRef.current = true
+        navigate(location.pathname, { replace: true, state: null })
+        startSession(null, '', seed)
+    }, [location, navigate, startSession])
 
     // Countdown: tick the displayed clock, warn at 10s, end the session at 0.
     useEffect(() => {
