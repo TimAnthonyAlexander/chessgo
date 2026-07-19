@@ -2368,10 +2368,19 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
     if (useAcc) pos.set_nnue_acc(nullptr); // detach: eval reverts to from-scratch off-search
 
     Move best = lastBest != MOVE_NONE ? lastBest : C.rootBestMove;
-    if (best == MOVE_NONE) {
-        // Fallback: pick any legal move (no iteration ever completed — e.g. an
-        // absurdly small movetime). lastResult wasn't populated above; do it here
-        // so callers always see a consistent result.
+    // `best == MOVE_NONE` has TWO distinct causes, and only one wants the fallback:
+    //   1. No iteration ever completed (e.g. an absurdly small movetime) — depth
+    //      stayed at its 0 default, lastResult was never populated. Pick any legal
+    //      move and synthesize a consistent (score 0) result.
+    //   2. The root is genuinely TERMINAL (checkmate/stalemate): depth-1 completed
+    //      and returned a real mated_in()/VALUE_DRAW score, but no move was ever
+    //      searched at the root so rootBestMove is legitimately MOVE_NONE. Here
+    //      lastResult.depth >= 1 and its score is load-bearing — clobbering it to 0
+    //      would erase a checkmate. That mis-scored a mate-delivering move (searched
+    //      as do_move → start on the now-terminal child) as 0 instead of +MATE,
+    //      which flipped the "Unlosable" worst-move picker into playing mate-in-one.
+    // Only case 1 takes the fallback: gate on "no iteration completed", not on best.
+    if (best == MOVE_NONE && lastResult.depth == 0) {
         MoveList list; generate<ALL>(pos, list);
         for (auto& m : list) if (pos.legal(m)) { best = m; break; }
         lastResult.bestMove = best;

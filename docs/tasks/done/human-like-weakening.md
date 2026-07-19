@@ -83,6 +83,46 @@ coefficients in `config_for_rating` (and the variant `apply_rating`s). Re-measur
 with `acpl.py` (GT is cached in `scratchpad/gt_cache.json`, independent of the
 weakening constants).
 
+## Update (v3, 2026-07-19) — de-saturated ladder (the v2 anchor was wrong)
+
+Feel-test: a "2021" filler bot, played engine-perfect from a slightly-worse
+position, clawed back to +0.0 and held it for 50 moves — far too strong. Root
+cause, found by reading the v2 constants (`config_for_rating`) directly, no SF:
+
+1. **`rankDepth` saturated at the depth-10 cap by rating ~2000.** `6 + 6·(1−u)`
+   hit 10 at ~2100, so *every* rating from ~2000 to 2849 ranked every move to the
+   same depth 10 (~2600+ CCRL tactical sight). The softmax could only add cosmetic
+   noise on top of that floor; it never made the upper band tactically weaker.
+   Confirmed: **2400-vs-2021 self-play = 50%** (identical strength).
+2. **The selection window collapsed too fast** — ~10cp at 2021, so ~91% best-move
+   in a normal middlegame (≈2800 play; real ~2000 loses ~30cp/move).
+3. **Error profile inverted the wrong way for the RIGHT reason** — with `c`≈2.1 the
+   Regan curve killed every alternative in sharp positions, so the bot played
+   decisive moments *perfectly* and only wandered in quiet ones (why it held
+   equality). v2's `difficulty.py` measured a different axis (shallow-vs-deep move
+   disagreement) and missed this.
+4. **The v2 "honest vs Stockfish `UCI_Elo`" anchor was the miscalibration source.**
+   SF's `UCI_Elo` ruler is itself badly inflated at the top, so anchoring to it
+   baked in a bot hundreds of Elo too strong at its label.
+
+**Fix (weakened branch of `config_for_rating`; clean branch untouched → full
+strength byte-identical, golden 37/37):** `rankDepth = clamp(2 + 6·(1−u), 2, 8)`
+(de-saturated — rating now *buys tactical sight* across the whole band, and sharp-
+position error comes from the shallower horizon, not the softmax);
+`sensitivity = 0.14·u^1.3` (~3.5× wider, ~25cp window at 2021, →0 at RatingFull);
+`consistency = 1.5 + 0.4·(1−u)` (lowered so the softmax still deviates in complex
+spots without manufacturing dumb easy blunders); `capDelta = 0.05 + 0.25·u^1.4`.
+
+**Verified self-contained (NO Stockfish)** with a python-chess harness driving the
+UCI binary (`scratchpad/harness.py`: self-play + engine-as-analyzer ACPL):
+- Monotonicity R_hi-vs-R_lo: OLD 1500/1800/2021/2400 rungs = 100/75/75/**50**%
+  (top flat); NEW = 100/100/100/**75**% (every rung a real gap).
+- Eval bleed, weak-2021 vs strong clean at ply20: OLD **−49** (held equality);
+  NEW **−610** (bleeds like a human).
+- 2021 median move cp-loss: **8.5 → 30**.
+Absolute FIDE calibration can't be nailed self-contained (no human anchor); rung
+*spacing* may still want a longer run, but the relative structure is fixed.
+
 ## Update (v2, 2026-07-18) — Regan curve + difficulty-aware + phase-aware
 
 Feel-testing exposed two real flaws the first calibration missed, fixed in a
