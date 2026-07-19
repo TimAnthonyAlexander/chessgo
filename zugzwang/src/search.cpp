@@ -419,6 +419,11 @@ struct Context {
     int64_t timeLimitSoft = 0, timeLimitHard = 0;
     int64_t nodeCount = 0;
     int     rootDepthGlobal = 0;
+    // Lazy-SMP worker index (0 for the main/UCI/single-thread path; set per worker by
+    // run_lazy_smp). SMPDIV=1 staggers each worker's initial aspiration delta by
+    // threadIdx%8 so the threads diverge into different parts of the tree (SF
+    // search.cpp:355). Default 0 → no diversity → byte-identical when the flag is off.
+    int     threadIdx = 0;
     Move    rootBestMove = MOVE_NONE;
     int     rootBestScore = 0;
     int     rootDelta = 0; // ROOTDELTALMR: root aspiration window width (beta-alpha), reset
@@ -1964,6 +1969,14 @@ static bool smp_vote_enabled() {
     return v;
 }
 
+// SMPDIV env kill-switch, read once (per-worker aspiration-window diversity — the
+// co-designed partner of SMPVOTE: it makes the Lazy-SMP threads diverge so the vote
+// has genuinely different results to weigh).
+static bool smp_div_enabled() {
+    static const bool v = []{ const char* e = std::getenv("SMPDIV"); return e && e[0] == '1'; }();
+    return v;
+}
+
 Result run_lazy_smp(std::vector<Context*>& workers, TranspositionTable& tt,
                     std::atomic<bool>& stop, Position& rootPos, const Limits& limits) {
     int threads = static_cast<int>(workers.size());
@@ -1994,6 +2007,10 @@ Result run_lazy_smp(std::vector<Context*>& workers, TranspositionTable& tt,
     std::vector<Result>   results(threads);
     std::vector<std::thread> helpers;
     helpers.reserve(threads - 1);
+
+    // Tag each worker with its index (SMPDIV reads it for per-thread aspiration
+    // diversity; harmless no-op when SMPDIV is off).
+    for (int i = 0; i < threads; ++i) workers[i]->threadIdx = i;
 
     // Helpers: workers 1..threads-1. resetShared=false — they must NOT touch
     // the shared stop/generation (that would race the driver's one-time reset).
@@ -2229,6 +2246,11 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
             int delta = C.tune.aspAdapt
                 ? C.tune.aspInitDelta + std::abs(prevScore) / 12
                 : C.tune.aspInitDelta;
+            // SMPDIV: stagger each Lazy-SMP worker's initial window width by its index
+            // (SF search.cpp:355 `delta = 5 + threadIdx%8 + …`) so threads search
+            // slightly different windows and diverge. threadIdx==0 on the main/single
+            // thread path → no change; whole block is a no-op unless SMPDIV=1.
+            if (smp_div_enabled()) delta += C.threadIdx % 8;
             int alpha = std::max(prevScore - delta, -VALUE_INFINITE);
             int beta  = std::min(prevScore + delta, VALUE_INFINITE);
             while (true) {
