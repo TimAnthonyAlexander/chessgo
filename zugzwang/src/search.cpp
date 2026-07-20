@@ -268,6 +268,29 @@ struct Context {
         // proxy). Default OFF; env CAPFUT=1. OFF path adds zero cost: the whole
         // block is skipped, capture branch stays byte-identical to today.
         bool capFut = false;
+        // ---- HISTDECAY (2026-07-20, sf-sp-search-backlog.md #2): per-search decay
+        // of the main butterfly history[] table. PORT-FIDELITY NOTE (verified
+        // directly against both trees, not from the backlog doc's summary — see
+        // CLAUDE.md "cross-reference Stockfish 18 before implementing"): SF18
+        // (~sf18-arm/src/search.cpp:316-319) and Stormphrax (~stormphrax/src/
+        // search.cpp:418 `thread.history.age()`, history.h:108-134) both decay
+        // mainHistory/butterfly exactly ONCE per iterative_deepening()/searchRoot()
+        // call — i.e. once per `go`, aging the history carried over from the
+        // PREVIOUS move's search in the same game — NOT once per rootDepth
+        // iteration inside the ID loop (an earlier revision of this flag
+        // mis-cadenced it per-iteration off the backlog doc's inaccurate framing;
+        // corrected 2026-07-20 to match the real SF/SP call site, which sits
+        // BEFORE the `for(depth=1;;++depth)`/`while(++rootDepth...)` loop).
+        // VERIFIED zug's history[] actually persists across moves within a game
+        // (the gap this targets): reset_tables() — the only site that zeroes
+        // history[] — is called from `Search::clear()`, which is wired ONLY to
+        // the UCI `ucinewgame` command (src/uci.cpp); the `position` and `go`
+        // command handlers never touch it. So across a game's sequence of
+        // `position ... moves ...` + `go` calls, history[] accumulates fully
+        // undecayed today — this flag is not a no-op. Default OFF; env
+        // HISTDECAY=1. OFF path: `if (C.tune.histDecay)` guard in start() skips
+        // the whole sweep, byte-identical to today.
+        bool histDecay = false;
         // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
         // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
         // callers in uci.cpp for the option table incl. min/max).
@@ -311,6 +334,28 @@ struct Context {
         int capFutBase      = 112;
         int capFutSlope     = 104;
         int capFutHistCoeff = 41;   // read as captHist * capFutHistCoeff / 1024
+        // ---- HISTDECAY constants (only read when histDecay on) ----
+        // zug's history[] self-ages only on a touched entry via update_history's
+        // gravity term (h += 32*bonus - h*|bonus|/512, bonus clamped +-400) and
+        // self-limits to ~+-16384 in steady state (see update_cont_entry comment
+        // above, same formula/scale). That gravity does nothing to UNTOUCHED
+        // entries, which is exactly what this flag targets. SF's per-slot analog
+        // is (h-68)*3/4+68 in SF's +-7183-clamped scale (floor ratio 68/7183 ~=
+        // 0.0095, decay factor 0.75); Stormphrax ages butterfly by 977/1024 ~=
+        // 0.954 (gentler, no floor). Both apply their decay ONCE per search --
+        // this flag now matches that cadence exactly (moved out of the ID loop
+        // and into start(), before it; see start()'s HISTDECAY comment), so an
+        // SF/SP-like rate is the right default rather than the much-gentler
+        // rate an earlier per-iteration revision of this flag needed. Floor:
+        // zug's scale is symmetric about 0 (unlike SF's mainHistoryDefault=68
+        // asymmetric floor), so a proportional floor is ~0 -- pure geometric
+        // decay toward 0 (no separate floor constant; add one only if SPRT
+        // wants it). Num/den: default 3/4, directly SF's decay factor (0.75) --
+        // now that the cadence matches SF's exactly, SF's own constant is the
+        // natural starting point (Stormphrax's gentler 977/1024 ~= 0.954 is the
+        // other reference; both UCI-tunable for SPSA regardless).
+        int histDecayNum = 3;
+        int histDecayDen = 4;
         // ---- D.1 gomachine structural constants — ACCEPTED, baked into defaults 2026-07-14 ----
         // (previously only applied via env GMCONST=1; not UCI-exposed)
         int captSeeMaxDepth  = 4;      // capture SEE pruning: only at depth <= this
@@ -391,6 +436,9 @@ struct Context {
             if (on("TTMOVEHIST")) ttMoveHist = true;
             if (on("NMPSF")) nmpSf = true;
             if (on("CAPFUT")) capFut = true;
+            if (on("HISTDECAY")) histDecay = true;
+            if (const char* e = getenv("HISTDECAYNUM")) { int v = atoi(e); if (v > 0) histDecayNum = v; }
+            if (const char* e = getenv("HISTDECAYDEN")) { int v = atoi(e); if (v > 0) histDecayDen = v; }
             if (on("GMCONST")) {
                 // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
                 // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
@@ -594,6 +642,9 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     else if (name == "CapFutBase")      tune.capFutBase      = clamp(value, 0, 220);
     else if (name == "CapFutSlope")     tune.capFutSlope     = clamp(value, 20, 200);
     else if (name == "CapFutHistCoeff") tune.capFutHistCoeff = clamp(value, 0, 120);
+    // ---- HISTDECAY constants (2026-07-20, only read when histDecay on) ----
+    else if (name == "HistDecayNum") tune.histDecayNum = clamp(value, 1, 32);
+    else if (name == "HistDecayDen") tune.histDecayDen = clamp(value, 2, 64);
     // LmrBase/LmrDiv: wire value is the double x LMR_DOUBLE_SCALE (search.h) — see the
     // Tune::lmrBase/lmrDiv comment. Clamp in wire units, convert on the way in.
     else if (name == "LmrBase")        tune.lmrBase        = clamp(value, 3000, 15000) / double(LMR_DOUBLE_SCALE);
@@ -978,6 +1029,28 @@ void update_history(Context& C, Color us, Move m, int bonus) {
     int& h = C.history[us][from_sq(m)][to_sq(m)];
     bonus = std::max(-400, std::min(400, bonus));
     h += 32 * bonus - h * std::abs(bonus) / 512;
+}
+
+// HISTDECAY (sf-sp-search-backlog.md #2; see Tune::histDecay for the full
+// rationale + verified port-fidelity note): sweep the ENTIRE main butterfly
+// history[] table toward 0, called exactly ONCE per start() call (before the
+// ID loop begins -- see the call site in start()) when C.tune.histDecay is
+// on. This ages whatever this Context's history[] carried over from its
+// previous search (the previous move in the same game), matching SF18
+// (search.cpp:316-319) and Stormphrax (search.cpp:418 `history.age()`) both
+// in cadence (once per search, not per depth) and in scope (main/butterfly
+// history only -- conthist/capthist/corrhist untouched, same as both
+// references). Pure geometric decay (num/den); integer division truncates
+// toward zero so repeated application converges to exactly 0 rather than
+// oscillating or getting stuck off-zero.
+void decay_history_table(Context& C) {
+    const int num = C.tune.histDecayNum, den = C.tune.histDecayDen;
+    for (int c = 0; c < COLOR_NB; ++c)
+        for (int f = 0; f < 64; ++f)
+            for (int t = 0; t < 64; ++t) {
+                int& h = C.history[c][f][t];
+                h = (h * num) / den;
+            }
 }
 
 // update_cont_entry: same gravity formula/scale as update_history above (bonus
@@ -2343,6 +2416,25 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
 
     C.rootBestMove = MOVE_NONE;
     int maxDepth = C.limits.depth ? C.limits.depth : MAX_PLY - 1;
+
+    // HISTDECAY (sf-sp-search-backlog.md #2): faithful SF18/Stormphrax port —
+    // decay the main history[] table exactly ONCE per start() call, here,
+    // before the ID loop begins, NOT per depth iteration. This ages whatever
+    // history[] CARRIED OVER from this Context's previous search (the
+    // previous move in the same game — zug's history[] persists across moves,
+    // cleared only by reset_tables() at ucinewgame/new-game; see the
+    // Tune::histDecay comment for the verification). Matches SF
+    // (~sf18-arm/src/search.cpp:316-319, before its `while(++rootDepth...)`)
+    // and Stormphrax (~stormphrax/src/search.cpp:418 `thread.history.age()`,
+    // before its `for(depth=1;;++depth)`) in both cadence and target table
+    // (main/butterfly only). Runs once per worker's own start() call in SMP
+    // too (each Context in the pool owns its own history[] — see
+    // SearchGroup::contexts, "own the storage" — so this is never a shared-
+    // state race). Not gated on resetShared: that flag guards ONE-TIME
+    // cross-worker side effects (stop flag, TT generation bump); this decay
+    // is per-Context private state and must run for every worker's own call.
+    // OFF path: single bool check, function never runs -- byte-identical.
+    if (C.tune.histDecay) decay_history_table(C);
 
     Result lastResult;
     int prevScore = 0;

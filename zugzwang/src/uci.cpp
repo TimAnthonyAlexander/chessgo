@@ -258,6 +258,15 @@ int uci_main() {
             std::cout << "option name CapFutBase type spin default 112 min 0 max 220\n";
             std::cout << "option name CapFutSlope type spin default 104 min 20 max 200\n";
             std::cout << "option name CapFutHistCoeff type spin default 41 min 0 max 120\n";
+            // HISTDECAY constants (2026-07-20, only read when env HISTDECAY=1) —
+            // per-search main-history decay (once per go, before the ID loop),
+            // search.cpp Tune::histDecay* (sf-sp-search-backlog.md #2; faithful
+            // cadence match to SF search.cpp:316-319 and Stormphrax
+            // history.h:108-134 -- see the Tune::histDecay comment). Wire
+            // values ARE the fraction's numerator/denominator directly (not
+            // x-scaled), default 3/4 = SF's own decay factor.
+            std::cout << "option name HistDecayNum type spin default 3 min 1 max 32\n";
+            std::cout << "option name HistDecayDen type spin default 4 min 2 max 64\n";
             std::cout << "option name OwnBook type check default false\n";
             std::cout << "option name UCI_LimitStrength type check default false\n";
             std::cout << "option name UCI_Elo type spin default " << Rating::RatingMax
