@@ -466,12 +466,16 @@ struct Context {
         // already in scope at the NMP gate. Default OFF (veto never fires); env NMPTTVETO=1.
         bool nmpTtVeto = false;
         // ---- SYZYGY (2026-07-20): Syzygy tablebase probing — WDL at internal nodes +
-        // DTZ at the root. Ported from gomachine (measured +18.8 root-DTZ + +30.5
-        // WDL-in-search Elo). Both hooks also require TB::loaded() (a TB dir resolved at
-        // startup). Default OFF for a clean first SPRT; env SYZYGY=1. Flip default-on once
-        // it clears SPRT (gomachine's history: SPRT-accepted, shipped default-on). NOT for
-        // weakened bots (gate on !weakened at the call site, like gomachine).
-        bool syzygy = false;
+        // DTZ at the root. Ported from gomachine. SHIPPED default-ON, path-presence gated:
+        // every hook also requires TB::loaded(), so a box WITHOUT a resolvable `syzygy/`
+        // dir is byte-identical (no-op) — safe everywhere. Kill-switch: env SYZYGY=0.
+        // Evidence: on the 1305 <=5-man Lichess puzzles it's 100% correct (== search, which
+        // already solves simple endgames) but ~55x FASTER (4s vs 221s) — banks clock time
+        // in real games + instant perfect endgames on the website. Movetime SPRT is flat
+        // (+1.1@621g) precisely because fixed-time ignores the speedup and search already
+        // plays these perfectly; the value is real-clock / long-TC / vs-non-TB-opponents,
+        // exactly gomachine's rationale for shipping it default-on.
+        bool syzygy = true;
         // NOTE (2026-07-20): CUTNODEEXT (SP search.cpp:1131 `cutnode |= extension<0`)
         // researched + DEFERRED — SP modifies function-scope cutnode, which in zug leaks
         // into the next move iteration + the fail-low PCM/allNode reads. A safe port needs
@@ -646,7 +650,7 @@ struct Context {
             if (off("RULE50DAMP")) rule50Damp = false; // shipped default-on; kill-switch
             if (const char* e = getenv("RULE50DAMPDIV")) { int v = atoi(e); if (v > 0) rule50DampDiv = v; }
             if (on("NMPTTVETO")) nmpTtVeto = true;
-            if (on("SYZYGY")) syzygy = true;
+            if (off("SYZYGY")) syzygy = false; // shipped default-on; kill-switch (path-gated by TB::loaded())
             if (on("PCM")) pcm = true;
             if (const char* e = getenv("PCMBASE"))        pcmBase        = atoi(e);
             if (const char* e = getenv("PCMDEPTHW"))       pcmDepthW      = atoi(e);
