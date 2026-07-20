@@ -46,23 +46,37 @@ bool lazy_acc_enabled() {
 // chain instead of overlapping their memory latency.
 //
 // The fused path instead TILES over H (AccFuseTile-wide chunks, matching SF18's/
-// Stormphrax's SIMD-tile approach ported to our int16 scalar/auto-vec layout): for
-// each tile, every column's contribution at index i is folded into a single running
-// sum held in a local before it is written back -- one read of acc[i], one write,
-// per tile-row, with all K column loads for that i independent of each other so the
-// compiler/CPU can issue them back-to-back rather than serially.
+// Stormphrax's SIMD-tile approach ported to our int16 layout): for each tile it reads
+// acc[] ONCE into a small int16 stack buffer, folds EVERY column's contribution into
+// that buffer with a plain contiguous per-column add/sub loop, then writes acc[] back
+// ONCE -- the RAW dependency between successive columns is against the tiny buffer
+// (register/L1-resident for the whole tile) instead of against acc[] sitting behind
+// each column's cold-cache-miss load, so the K column streams can issue back-to-back.
 //
-// Bit-exactness: two's-complement int16 wraparound add/sub is exactly modular
-// arithmetic mod 2^16, which is a ring homomorphism from int -- so d sequential
-// wrapping +=col[i] steps (the current ft_add/ft_sub loop) produce the IDENTICAL
-// int16 result to one 32-bit-int accumulation of d*col[i] followed by a single
-// narrowing store (wrap(wrap(x)+y) == wrap(x+y) for all integer x,y). d is tiny
-// (typically +/-1, occasionally +/-2 from duplicate feature touches) and col[i] is
-// int16, so d*col[i] and its accumulation into `a` never overflow a 32-bit int --
-// no intermediate ever approaches int32 range. Folding the SAME K (col,delta) pairs
-// in tiled-by-index order instead of sequential-by-feature order is likewise exact:
-// int16 add is commutative/associative under wraparound, so the order features are
-// folded in cannot change the result, only which loop nests over which axis.
+// int16-only, no multiply (amd64 regression fix, 2026-07-20): an earlier revision of
+// this code accumulated in an `int32 buf` via `buf[i] += delta*(int)col[i]` -- correct,
+// but on amd64 the compiler widens int16->int32 and uses a real 32-bit multiply
+// (vpmulld) per element even though delta is a tiny signed count, ~6x the instructions
+// of the original's plain int16 add (vpaddw/vpsubw); it went compute-bound and
+// REGRESSED -64% NPS on amd64 (coalla) despite winning +25% on arm64 (whose NEON
+// backend apparently ate the widen/multiply more cheaply). SF's SIMDTiling never
+// multiplies -- it fuses via native-width int16 add/sub lanes only. Fixed here the
+// same way: `delta` is expanded ONCE, at collect time, into |delta| repeated pointer
+// copies in an ADD list (d>0) or a SUB list (d<0) -- d is tiny (usually +/-1, rarely
+// +/-2), so this is a handful of extra pointers, never a hot-path cost -- and the tile
+// loop is then pure `buf[i] += col[i]` / `buf[i] -= col[i]`, i.e. exactly ft_add's/
+// ft_sub's own int16 body, just reordered to fold into a small buffer instead of
+// acc[] directly. This auto-vectorizes to native int16 SIMD (vpaddw/vpsubw / NEON) on
+// both architectures, with no widen and no multiply anywhere in the loop.
+//
+// Bit-exactness: this is now, index-for-index, the SAME sequence of int16 wraparound
+// adds/subs the eager path performs (one add per ADD-list copy, one sub per SUB-list
+// copy of the same columns, same total count as the eager d-iteration loop) -- just
+// accumulated into a buffer instead of acc[] directly, and grouped by tile instead of
+// by feature. int16 add/sub under wraparound is commutative and associative (two's-
+// complement wraparound is a ring homomorphism from int, so regrouping/reordering the
+// same additions/subtractions cannot change the result), so tiled-by-index order via a
+// buffer is bit-identical to sequential-by-feature order applied straight to acc[].
 bool acc_fuse_enabled() {
     static const bool on = [] { const char* e = getenv("ACCFUSE"); return e && e[0] == '1'; }();
     return on;
@@ -93,9 +107,10 @@ AccStack::AccStack() : slots_(NumSlots), counts_(static_cast<std::size_t>(InputT
     dAddW_.reserve(MaxActive);
     dSubB_.reserve(MaxActive);
     dAddB_.reserve(MaxActive);
-    // ACCFUSE: bounded by parent.size()+child.size() (each call site's two lists
-    // together never exceed 2*MaxActive distinct features).
-    fuseScratch_.reserve(static_cast<std::size_t>(2 * MaxActive));
+    // ACCFUSE: bounded by parent.size()+child.size() expanded by |delta| copies each
+    // (delta is tiny -- usually +/-1, rarely +/-2 -- so 4*MaxActive is generous slack).
+    fuseAdd_.reserve(static_cast<std::size_t>(4 * MaxActive));
+    fuseSub_.reserve(static_cast<std::size_t>(4 * MaxActive));
     // LAZYACC: per-slot pending delta lists, reserved like the scratch above.
     for (Slot& s : slots_) {
         s.subW.reserve(MaxActive);
@@ -128,50 +143,58 @@ void AccStack::apply_diff(int16_t* acc, const std::vector<int>& parent, const st
     for (int f : child)  ++c[f];
 
     if (acc_fuse_enabled()) {
-        // ACCFUSE: collect the net-nonzero (column, delta) pairs first -- same
-        // clearing discipline as the eager `apply` lambda below (c[f] = 0 once
-        // handled, so counts_ is left all-zero for the next call), just gathered
-        // into a list instead of applied immediately.
+        // ACCFUSE: collect the net-nonzero features first -- same clearing discipline
+        // as the eager `apply` lambda below (c[f] = 0 once handled, so counts_ is left
+        // all-zero for the next call) -- but instead of an (col,delta) pair, expand
+        // delta HERE into |delta| repeated pointer copies of the column: d>0 pushes d
+        // copies into fuseAdd_, d<0 pushes |d| copies into fuseSub_. delta is tiny
+        // (usually +/-1, rarely +/-2), so this is a handful of extra pointers, not a
+        // hot-path cost -- and it lets the tile loop below be PURE int16 add/sub with
+        // no multiply (see acc_fuse_enabled's comment for why that matters on amd64).
         const int16_t* W0 = g_net.W0i.data();
-        fuseScratch_.clear();
+        fuseAdd_.clear();
+        fuseSub_.clear();
         auto collect = [&](const std::vector<int>& list) {
             for (int f : list) {
                 const int d = c[f];
                 if (d == 0) continue;
-                fuseScratch_.push_back({ W0 + static_cast<std::size_t>(f) * H, d });
+                const int16_t* col = W0 + static_cast<std::size_t>(f) * H;
+                if (d > 0) { for (int k = 0; k < d; ++k)  fuseAdd_.push_back(col); }
+                else       { for (int k = 0; k < -d; ++k) fuseSub_.push_back(col); }
                 c[f] = 0;
             }
         };
         collect(parent);
         collect(child);
 
-        // Tile over H: for each tile, read acc[] ONCE into a small int32 register/
-        // L1-resident buffer, fold every (col,delta) pair's contribution into that
-        // buffer with a plain contiguous per-column loop (auto-vectorizes -- fixed
-        // trip count AccFuseTile, unit stride, no gather), then write acc[] back
-        // ONCE. This is what actually de-serializes the column loads: the RAW
-        // dependency between successive columns is now against a tiny stack buffer
-        // (stays in registers/L1 across the whole tile) instead of against acc[]
-        // itself sitting behind each column's full cold-cache-miss load -- so the
-        // K column streams can issue back-to-back rather than waiting turn for a
-        // shared memory location. (A naive tile+i-outer/column-inner nest still
-        // reads/writes acc[i] once per row, which is correct, but its innermost
-        // loop strides across K unrelated column pointers -- a gather the compiler
-        // cannot auto-vectorize -- so it does not recover the de-serialization win;
-        // column-outer/i-inner is both correct AND vectorizable.)
-        const std::size_t n = fuseScratch_.size();
-        const FuseEntry* list = fuseScratch_.data();
-        int32_t buf[AccFuseTile];
+        // Tile over H: for each tile, read acc[] ONCE into a small int16 stack buffer,
+        // fold every ADD column in with plain `buf[i] += col[i]` then every SUB column
+        // with `buf[i] -= col[i]` (both contiguous, fixed trip count AccFuseTile, unit
+        // stride -- auto-vectorizes to native int16 SIMD, vpaddw/vpsubw on amd64, NEON
+        // on arm64, no widen and no multiply anywhere), then write acc[] back ONCE.
+        // This is what de-serializes the column loads: the RAW dependency between
+        // successive columns is now against the tiny buffer (register/L1-resident for
+        // the whole tile) instead of against acc[] sitting behind each column's cold-
+        // cache-miss load, so the column streams can issue back-to-back instead of
+        // waiting turn for a shared memory location.
+        const std::size_t nAdd = fuseAdd_.size();
+        const std::size_t nSub = fuseSub_.size();
+        const int16_t* const* addList = fuseAdd_.data();
+        const int16_t* const* subList = fuseSub_.data();
+        int16_t buf[AccFuseTile];
         for (int t = 0; t < H; t += AccFuseTile) {
             const int tend = t + AccFuseTile < H ? t + AccFuseTile : H;
             const int tw = tend - t;
             for (int i = 0; i < tw; ++i) buf[i] = acc[t + i];
-            for (std::size_t k = 0; k < n; ++k) {
-                const int16_t* col = list[k].col + t;
-                const int delta = list[k].delta;
-                for (int i = 0; i < tw; ++i) buf[i] += delta * static_cast<int>(col[i]);
+            for (std::size_t k = 0; k < nAdd; ++k) {
+                const int16_t* col = addList[k] + t;
+                for (int i = 0; i < tw; ++i) buf[i] += col[i];
             }
-            for (int i = 0; i < tw; ++i) acc[t + i] = static_cast<int16_t>(buf[i]);
+            for (std::size_t k = 0; k < nSub; ++k) {
+                const int16_t* col = subList[k] + t;
+                for (int i = 0; i < tw; ++i) buf[i] -= col[i];
+            }
+            for (int i = 0; i < tw; ++i) acc[t + i] = buf[i];
         }
         return;
     }

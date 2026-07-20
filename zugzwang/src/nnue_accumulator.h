@@ -117,14 +117,15 @@ private:
     void apply_diff(int16_t* acc, const std::vector<int>& parent, const std::vector<int>& child);
 
     // ACCFUSE (default OFF, see nnue_accumulator.cpp acc_fuse_enabled): a fused/tiled
-    // apply_diff. Each net-nonzero feature's (column, delta) is collected once into
-    // fuseScratch_, then the H-wide accumulator is walked in TILE-sized chunks; within a
-    // tile, all K columns are folded into a register-held running sum with ONE read and
-    // ONE write of acc[i] per index, instead of K separate full-H read-modify-write
-    // passes. See apply_diff's ACCFUSE branch for the bit-exactness argument.
-    struct FuseEntry { const int16_t* col; int delta; };
+    // apply_diff. Each net-nonzero feature's column is expanded (by |delta| copies of
+    // its pointer) into fuseAdd_ (delta>0) or fuseSub_ (delta<0) once, then the H-wide
+    // accumulator is walked in TILE-sized chunks; within a tile, every column in both
+    // lists is folded via pure int16 add/sub into a small stack buffer (ONE read and
+    // ONE write of acc[i] per index, native int16 SIMD in the inner loop -- no int32
+    // widen, no multiply). See apply_diff's ACCFUSE branch for the bit-exactness
+    // argument and the amd64 int32-multiply regression this design avoids.
     static constexpr int AccFuseTile = 32;
-    std::vector<FuseEntry> fuseScratch_;
+    std::vector<const int16_t*> fuseAdd_, fuseSub_;
 
     // materialize (LAZYACC only) brings slots_[k] up to date: walks up from k to the
     // deepest already-clean ancestor c (slot 0 is always clean after reset — the walk
