@@ -418,6 +418,9 @@ struct Context {
         // clamped in update_history); scaled = bonus*weight/pcmDiv. All SPSA-tunable;
         // thresholds in zug cp (~pawn=100), so SF's 107/65 → ~100/60. Default OFF; env
         // PCM=1. Off path skips the whole block → byte-identical.
+        // ---- QSMOVECAP (2026-07-20, sf-sp-search-backlog.md #7): cap qsearch captures.
+        bool qsMoveCap  = false;
+        int  qsMoveCapN = 2;   // SF's threshold (moveCount > 2 → skip)
         bool pcm            = false;
         int  pcmBase        = 260;   // SP pcmBaseWeight
         int  pcmDepthW      = 400;   // SP pcmDepthWeight
@@ -592,6 +595,8 @@ struct Context {
             if (on("LMREXT")) lmrExt = true;
             if (const char* e = getenv("LMREXTCAP")) { int v = atoi(e); if (v >= 0) lmrExtCap = v; }
             if (on("SHUFFLEGUARD")) shuffleGuard = true;
+            if (on("QSMOVECAP")) qsMoveCap = true;
+            if (const char* e = getenv("QSMOVECAPN")) { int v = atoi(e); if (v >= 1) qsMoveCapN = v; }
             if (on("PCM")) pcm = true;
             if (const char* e = getenv("PCMBASE"))        pcmBase        = atoi(e);
             if (const char* e = getenv("PCMDEPTHW"))       pcmDepthW      = atoi(e);
@@ -845,6 +850,7 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     else if (name == "PcmSeThresh")    tune.pcmSeThresh    = clamp(value, 40, 240);
     else if (name == "PcmParentSeThr") tune.pcmParentSeThr = clamp(value, 40, 240);
     else if (name == "PcmDiv")         tune.pcmDiv         = clamp(value, 512, 16384);
+    else if (name == "QsMoveCapN")     tune.qsMoveCapN     = clamp(value, 1, 8);
     // LmrBase/LmrDiv: wire value is the double x LMR_DOUBLE_SCALE (search.h) — see the
     // Tune::lmrBase/lmrDiv comment. Clamp in wire units, convert on the way in.
     else if (name == "LmrBase")        tune.lmrBase        = clamp(value, 3000, 15000) / double(LMR_DOUBLE_SCALE);
@@ -1420,6 +1426,13 @@ int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta) {
         }
         // SEE pruning: skip clearly losing captures
         if (!inCheck && isCapture && !pos.see_ge(m, -50)) continue;
+        // #7 qsearch move-count cap (SF search.cpp:1638 `if (moveCount > 2) continue`;
+        // SP search.cpp:1579 `if (legalMoves >= 2) break`). zug searches EVERY legal
+        // capture; both reference engines cap after the first few (captures are ordered
+        // MVV-LVA/SEE-first, so late ones rarely matter). Gated !inCheck — evasions must
+        // never be capped or we'd miss the only escape and mis-score mate. Default OFF
+        // (never fires) → byte-identical. env QSMOVECAP=1, QSMOVECAPN (SF=2).
+        if (C.tune.qsMoveCap && !inCheck && moveCount > C.tune.qsMoveCapN) continue;
 
         pos.do_move(m, st);
         C.tt.prefetch(pos.key());
