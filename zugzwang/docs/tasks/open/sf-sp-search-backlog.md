@@ -81,6 +81,30 @@ singular ttPv-dependence, #17 SP optimism.
 
 ---
 
+## FRESH MINE 2026-07-20 (round 2 — SF/SP levers NOT in the original 27)
+
+Subagent re-mined SF18+SP for techniques not in items #1-27. New finds + disposition:
+
+- **RULE50DAMP** (SF evaluate.cpp:83 `v-=v*rule50/199`, SP eval.cpp:54): linear eval
+  damping by 50-move counter. **IMPLEMENTED** (env RULE50DAMP=1, Rule50DampDiv). This is
+  rule50-ALONE — distinct from washed W12 (rule50+material combo). Larger effect than
+  expected (rule50 climbs deep in tree → −32% nodes at d12). **QUEUED for SPRT.**
+- **Corrhist-MAGNITUDE into more margins** (SF: `|corrValue|` into futility /174665, LMR
+  /30370, singular /230673; SP complexity into RFP/LMR/singular): zug has the LMR term
+  (CORRMARGIN) but NOT the futility/singular-margin sites. Partial → extend to the two
+  untested sites. Tracked in corrhist-expand-and-into-margins.md. **TODO.**
+- **CUTNODEEXT** (SP search.cpp:1131 `cutnode |= extension<0`): **DEFERRED** — SP mutates
+  function-scope cutnode, leaks into next move iter + fail-low/allNode reads in zug; safe
+  port needs a per-move local threaded through LMR r-bump + full-search arg. Not worth
+  the bug risk yet.
+- **NMP TT-upper-bound veto** (SP search.cpp:872 `!(ttFlag==Upper && ttScore<beta)`): zug's
+  NMP has the cutNode gate (shipped) but not this veto. Cheap. **TODO.**
+- Already-shipped/washed (subagent flagged, verified against zug — do NOT re-propose):
+  hindsight depth-readjust (#1, SHIPPED), NMP cutNode-gate (#4, WASHED −27 W1),
+  threatOrder (#6, WASHED W9), raw history-threshold prune (#8, WASHED W2).
+
+---
+
 ## TIER 1 — fresh, cheap, both-engines-carry-it, zug genuinely lacks (do first)
 
 ### 1. Capture futility pruning  [SPRT +3.8+-11 @920g — leaning positive, UNCONFIRMED; SPSA-tune capFutBase/Slope/HistCoeff then re-SPRT]
