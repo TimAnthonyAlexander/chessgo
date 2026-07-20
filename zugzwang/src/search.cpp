@@ -450,8 +450,13 @@ struct Context {
         // over-trusting an eval in a position drifting toward a 50-move/rep draw. This is
         // the rule50-ALONE mechanism; the WASHED item (ledger W12, −7.6) was rule50 folded
         // WITH material-output-scaling, a different combo. Single-scalar-compatible (no
-        // psqt split needed → works with zug's net). Default OFF; env RULE50DAMP=1.
-        bool rule50Damp    = false;
+        // psqt split needed → works with zug's net).
+        // SHIPPED default-ON 2026-07-20: movetime SPRT +7.45±8.7 @1406g, nElo +15.5, LLR
+        // 0.75 and RISING (0.17→0.24→0.49→0.75) — monotonically climbing, never-negative,
+        // the OPPOSITE of the session's washes (which all decayed from a phantom +15). The
+        // one retrain-free win of the batch. Kill-switch: env RULE50DAMP=0. Byte-identical
+        // to the old engine only at rule50=0 (early game); damps eval as the shuffle climbs.
+        bool rule50Damp    = true;
         int  rule50DampDiv = 199;    // SF's divisor (SP uses 200); higher = gentler
         // ---- NMPTTVETO (2026-07-20, fresh, SP search.cpp:872): skip the null-move probe
         // entirely when the TT already says this node fails LOW below beta (upper-bound
@@ -630,7 +635,7 @@ struct Context {
             if (on("SHUFFLEGUARD")) shuffleGuard = true;
             if (on("QSMOVECAP")) qsMoveCap = true;
             if (const char* e = getenv("QSMOVECAPN")) { int v = atoi(e); if (v >= 1) qsMoveCapN = v; }
-            if (on("RULE50DAMP")) rule50Damp = true;
+            if (off("RULE50DAMP")) rule50Damp = false; // shipped default-on; kill-switch
             if (const char* e = getenv("RULE50DAMPDIV")) { int v = atoi(e); if (v > 0) rule50DampDiv = v; }
             if (on("NMPTTVETO")) nmpTtVeto = true;
             if (on("PCM")) pcm = true;
