@@ -502,12 +502,12 @@ struct Context {
         int  contempt = 0;
         // ---- TIMEMAN (2026-07-20): dynamic time management — Stormphrax-style base
         // allocation (usable/mtg + inc*0.94, soft/hard scales) PLUS per-iteration soft-limit
-        // scaling by best-move stability and eval trend (limit.cpp:34-102). Default OFF: the
-        // OFF path keeps zug's exact current set_time_limits formula and unscaled soft break,
-        // so movetime/depth/nodes searches are byte-identical. Only affects the clock
-        // (wtime/btime) path — invisible to the movetime SPRT; gated behind env TIMEMAN=1 and
-        // validated with a real-clock (TC) fastchess SPRT before any default flip.
-        bool timeMan = false;
+        // scaling by best-move stability and eval trend (limit.cpp:34-102). SHIPPED default-ON:
+        // real-clock (TC 8+0.08) SPRT +28.15 ±8.61 Elo, nElo +64.53, LLR 2.95 ACCEPT @1200g.
+        // Only affects the clock (wtime/btime) path — movetime/depth/nodes/infinite stay
+        // byte-identical (movetime returns before tmScaled is set), so the movetime SPRT and
+        // golden/bench are unchanged. Kill-switch: env TIMEMAN=0.
+        bool timeMan = true;
         // NOTE (2026-07-20): CUTNODEEXT (SP search.cpp:1131 `cutnode |= extension<0`)
         // researched + DEFERRED — SP modifies function-scope cutnode, which in zug leaks
         // into the next move iteration + the fail-low PCM/allNode reads. A safe port needs
@@ -685,7 +685,7 @@ struct Context {
             if (off("SYZYGY")) syzygy = false; // shipped default-on; kill-switch (path-gated by TB::loaded())
             if (const char* e = getenv("MOVEOVERHEAD")) { int v = atoi(e); if (v >= 0) moveOverhead = v; }
             if (const char* e = getenv("CONTEMPT")) contempt = atoi(e); // cp; 0 = off
-            if (on("TIMEMAN")) timeMan = true; // dynamic clock-mode time management (default off, TC-SPRT gated)
+            if (off("TIMEMAN")) timeMan = false; // shipped default-on (+28 Elo TC-SPRT); kill-switch
             if (on("PCM")) pcm = true;
             if (const char* e = getenv("PCMBASE"))        pcmBase        = atoi(e);
             if (const char* e = getenv("PCMDEPTHW"))       pcmDepthW      = atoi(e);
