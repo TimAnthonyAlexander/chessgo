@@ -9,6 +9,14 @@ W=46; LO=-2.94; HI=2.94              # LLR bounds for alpha=beta=0.05
 cleanup(){ printf '\033[?25h\n'; exit 0; }
 trap cleanup INT TERM
 printf '\033[?25l'                   # hide cursor
+# Real time control, read from the log's START line (don't hardcode). sprt_tc.sh writes
+# "TC=8+0.08", sprt_flag.sh writes "MT=0.1s"; sprt.sh (fixed movetime) has neither → 100ms.
+tclabel=$(grep -am1 -oE 'TC=[0-9+.]+|MT=[0-9.]+s' "$LOG" 2>/dev/null | head -1)
+case "$tclabel" in
+  TC=*) tclabel="${tclabel#TC=} clock" ;;   # e.g. "8+0.08 clock"
+  MT=*) tclabel="${tclabel#MT=}/move" ;;     # e.g. "0.1s/move"
+  *)    tclabel="100 ms/move" ;;             # sprt.sh legacy default
+esac
 while :; do
   el=$(grep -a 'Elo:'    "$LOG" 2>/dev/null | tail -1 | sed 's/^Elo: //; s/, *nElo:.*//')
   ll=$(grep -a 'LLR:'    "$LOG" 2>/dev/null | tail -1)
@@ -23,7 +31,7 @@ while :; do
     for(i=0;i<w;i++) printf (i==p?"\033[1;33m●\033[0m":(i==c?"\033[2m┃\033[0m":"\033[2m─\033[0m")); }')
   col=36; [ "$run" = DONE ] && col=32
   printf '\033[H\033[J'
-  printf '  \033[1;%dmZugzwang SPRT\033[0m  \033[1m%s\033[0m vs base   ·   100 ms/move   ·   %s\n\n' "$col" "$NAME" "$run"
+  printf '  \033[1;%dmZugzwang SPRT\033[0m  \033[1m%s\033[0m vs base   ·   %s   ·   %s\n\n' "$col" "$NAME" "$tclabel" "$run"
   printf '  \033[2mGames\033[0m  %s\n'   "${ga:-— (warming up · ${fin} finished)}"
   printf '  \033[2mElo\033[0m    %s\n'   "${el:-—}"
   printf '  \033[2mPtnml\033[0m  %s\n\n' "${pt:-—}"
