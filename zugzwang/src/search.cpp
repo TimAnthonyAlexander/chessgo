@@ -556,6 +556,14 @@ struct Context {
         // futility/SEE margin depth by histScore/histMarginDiv (good hist -> looser).
         int histPruneCoeff = 4000;
         int histMarginDiv  = 4000;
+        // ---- LMPHIST (2026-07-21, Stormphrax search.cpp:1032 `lmpHistoryScale`): scale the
+        // LMP move-count limit by THIS quiet's own history — a surprisingly-good-history late
+        // move gets more room before LMP prunes it, a bad-history one less. Pruning-class
+        // lever (distinct from ordering). lmpLimit += histScore/lmpHistDiv, floored so the
+        // first moves are never pruned. div anchored to zug's hist scale (histPruneCoeff=4000
+        // ≈ 1 unit), so a ~±8000 histScore shifts the count by ~±2. Default OFF; env LMPHIST=1.
+        bool lmpHist    = false;
+        int  lmpHistDiv = 4000;
         // ---- LMRCLUSTER fine-term constants (2026-07-16) — UCI-exposed for joint SPSA.
         // Defaults reproduce the pre-tunable literals exactly; only read when the owning
         // flag (corrMargin/allNodeLmr/rootDeltaLmr, or the LMRCLUSTER bundle) is on, so
@@ -713,6 +721,8 @@ struct Context {
             if (const char* e = getenv("CONTEMPT")) contempt = atoi(e); // cp; 0 = off
             if (off("TIMEMAN")) timeMan = false; // shipped default-on (+28 Elo TC-SPRT); kill-switch
             if (on("TTCUTBONUS")) ttCutBonus = true;
+            if (on("LMPHIST")) lmpHist = true;
+            if (const char* e = getenv("LMPHISTDIV")) { int v = atoi(e); if (v > 0) lmpHistDiv = v; }
             if (const char* e = getenv("TTCUTBONUSNUM")) { int v = atoi(e); if (v >= 0) ttCutBonusNum = v; }
             if (const char* e = getenv("TTCUTBONUSDEN")) { int v = atoi(e); if (v >= 1) ttCutBonusDen = v; }
             if (const char* e = getenv("TTCUTMALUSNUM")) { int v = atoi(e); if (v >= 0) ttCutMalusNum = v; }
@@ -986,6 +996,7 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     else if (name == "TtCutBonusDen")  tune.ttCutBonusDen  = clamp(value, 1, 8);
     else if (name == "TtCutMalusNum")  tune.ttCutMalusNum  = clamp(value, 0, 8);
     else if (name == "TtCutMalusDen")  tune.ttCutMalusDen  = clamp(value, 1, 8);
+    else if (name == "LmpHistDiv")     tune.lmpHistDiv     = clamp(value, 500, 40000);
     // LmrBase/LmrDiv: wire value is the double x LMR_DOUBLE_SCALE (search.h) — see the
     // Tune::lmrBase/lmrDiv comment. Clamp in wire units, convert on the way in.
     else if (name == "LmrBase")        tune.lmrBase        = clamp(value, 3000, 15000) / double(LMR_DOUBLE_SCALE);
@@ -2031,6 +2042,12 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         if (!rootNode && !(C.tune.pvGuard && PvNode) && bestValue > -VALUE_MATE_IN_MAX_PLY && pos.non_pawn_material(us)) {
             if (isQuiet) {
                 int lmpLimit = (3 + depth * depth) / (2 - improving);
+                // LMPHIST: widen/narrow the limit by this move's cached history (SP
+                // search.cpp:1032). Floored at 2 so moveCount 1 is never LMP-pruned.
+                if (C.tune.lmpHist) {
+                    int hs = (cur - 1)->histScore;
+                    if (hs != HIST_NONE) lmpLimit = std::max(2, lmpLimit + hs / C.tune.lmpHistDiv);
+                }
                 if (C.tune.lmp && moveCount >= lmpLimit && !givesCheck) continue;
                 // HISTMARGIN (SF search.cpp:1084-1115): use THIS quiet's own history
                 // (cached histScore = butterfly+conthist; HIST_NONE for killers/counters,
