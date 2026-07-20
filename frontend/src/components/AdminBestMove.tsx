@@ -54,6 +54,12 @@ function fenSideToMove(fen: string): Color {
 
 const LS_KEY = 'admin-best-move'
 
+// Progressive movetime ladder (ms): show a near-instant guess, then refine it twice.
+// The engine keeps its transposition table warm across these stateless calls, so
+// each deeper rung is cheap — and every rung calls setBest, so the board hint (fed
+// off `best.hint`) updates in lockstep as the opinion sharpens.
+const LADDER = [20, 100, 1000]
+
 function loadEnabled(): boolean {
     try {
         return localStorage.getItem(LS_KEY) === '1'
@@ -124,35 +130,54 @@ export default function AdminBestMove({
             return
         }
         let cancelled = false
+        const controller = new AbortController()
         setLoading(true)
         setError(null)
-        const req: Promise<BestDisplay> = isDuck
-            ? duckEval(fen, duck ?? '').then((d) => ({
-                  san: d.bestSan ?? d.bestmove ?? '—',
-                  eval: d.eval,
-                  depth: null,
-                  hint: hintFromUci(d.bestmove),
-              }))
-            : analyze(fen).then((a) => ({
-                  san: bestMoveSan(fen, a.bestmove),
-                  eval: a.eval,
-                  depth: a.depth,
-                  hint: hintFromUci(a.bestmove),
-              }))
-        req
-            .then((b) => {
-                if (cancelled) return
-                setBest(b)
-            })
-            .catch((e) => {
-                if (cancelled) return
-                setError(e instanceof Error ? e.message : 'Analysis failed')
-            })
-            .finally(() => {
-                if (!cancelled) setLoading(false)
-            })
+
+        // One rung of the ladder: a fixed-movetime best move, normalized to BestDisplay.
+        const fetchAt = (movetime: number): Promise<BestDisplay> =>
+            isDuck
+                ? duckEval(fen, duck ?? '', { movetime, signal: controller.signal }).then((d) => ({
+                      san: d.bestSan ?? d.bestmove ?? '—',
+                      eval: d.eval,
+                      depth: null,
+                      hint: hintFromUci(d.bestmove),
+                  }))
+                : analyze(fen, { movetime, signal: controller.signal }).then((a) => ({
+                      san: bestMoveSan(fen, a.bestmove),
+                      eval: a.eval,
+                      depth: a.depth,
+                      hint: hintFromUci(a.bestmove),
+                  }))
+
+        // Climb the ladder in sequence, publishing each rung as it lands so the readout
+        // (and the board hint) refine from a 20ms guess to a 1000ms verdict. A deeper
+        // rung failing never wipes a good shallower result — we only surface an error
+        // when nothing has landed yet, and stop climbing.
+        void (async () => {
+            let haveResult = false
+            for (const movetime of LADDER) {
+                try {
+                    const b = await fetchAt(movetime)
+                    if (cancelled) return
+                    haveResult = true
+                    setBest(b)
+                    setError(null)
+                    setLoading(false)
+                } catch (e) {
+                    if (cancelled || controller.signal.aborted) return
+                    if (!haveResult) {
+                        setError(e instanceof Error ? e.message : 'Analysis failed')
+                        setLoading(false)
+                    }
+                    return
+                }
+            }
+        })()
+
         return () => {
             cancelled = true
+            controller.abort()
         }
     }, [enabled, fen, myTurn, isDuck, duck])
 

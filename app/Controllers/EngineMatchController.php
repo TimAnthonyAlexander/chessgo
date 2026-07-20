@@ -99,20 +99,29 @@ class EngineMatchController extends Controller
             // gomachine and zugzwang share the identical bestMove()/move() request
             // shape — only which client is called differs.
             $engine = $this->side === 'zugzwang' ? $this->zugzwang : $this->gomachine;
-            $aggr = max(0, min(100, $this->aggr)); // clamp; 50 = neutral (engine is byte-identical)
-            // Send only the active budget dimension (the engine applies
-            // depth→nodes→movetime precedence, but keep it unambiguous).
-            $mt = ($depth > 0 || $nodes > 0) ? 0 : $movetime;
-            $best = $engine->bestMove(
-                $this->fen,
-                $this->rating,
-                [],
-                $mt,
-                $aggr,
-                $nodes,
-                $depth,
-                $this->book,
-            );
+            if ($this->rating <= 0) {
+                // "Unlosable" sentinel (rating 0, the slider's lowest stop) — route to
+                // the worst-move engine, exactly as BotGameService does for the /bot
+                // Unlosable bot. The engine plays the WORST legal move it can find
+                // (ignoring aggression / book / search budget), so an Unlosable-vs-
+                // Unlosable pairing is two engines racing to hang everything.
+                $best = $engine->worstMove($this->fen, []);
+            } else {
+                $aggr = max(0, min(100, $this->aggr)); // clamp; 50 = neutral (engine is byte-identical)
+                // Send only the active budget dimension (the engine applies
+                // depth→nodes→movetime precedence, but keep it unambiguous).
+                $mt = ($depth > 0 || $nodes > 0) ? 0 : $movetime;
+                $best = $engine->bestMove(
+                    $this->fen,
+                    $this->rating,
+                    [],
+                    $mt,
+                    $aggr,
+                    $nodes,
+                    $depth,
+                    $this->book,
+                );
+            }
         }
 
         $uci = $best['bestmove'] ?? null;

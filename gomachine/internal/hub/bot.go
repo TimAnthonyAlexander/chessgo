@@ -40,6 +40,8 @@ type botSnapshot struct {
 	tc             timeControl   // pacing scales with the time control
 	remainingMs    int64
 	legalCount     int
+	pieceCount     int    // pieces left on the board — fewer ⇒ faster moves (endgame pace)
+	lastMoveTo     string // dest square of the opponent's last move ("" if none) — for recapture snap
 }
 
 // EnableBotFill turns on bot backfill: a player waiting longer than `delay` with
@@ -205,6 +207,8 @@ func (h *Hub) scheduleBotMove(g *game) {
 		tc:             g.tc,
 		remainingMs:    g.remainingMs(botColor),
 		legalCount:     len(g.state.LegalMoves()),
+		pieceCount:     boardPieceCount(g.state.FEN()),
+		lastMoveTo:     uciDest(g.lastUci()),
 	}, engines)
 }
 
@@ -228,6 +232,8 @@ func (h *Hub) scheduleSelfSearchBotMove(g *game) {
 	tc := g.tc
 	remainingMs := g.remainingMs(botColor)
 	legalCount := len(g.state.LegalMoves())
+	pieceCount := boardPieceCount(fen)
+	lastMoveTo := uciDest(g.lastUci())
 
 	go func() {
 		start := time.Now()
@@ -237,7 +243,8 @@ func (h *Hub) scheduleSelfSearchBotMove(g *game) {
 		}
 		// Pace with the same variant-agnostic delay as standard bots (real time, so it
 		// comes off the bot's clock).
-		delay := botThinkDelay(tc, remainingMs, legalCount, ply, rating)
+		obvious := isObviousMove(uci, lastMoveTo, legalCount)
+		delay := botThinkDelay(tc, remainingMs, legalCount, ply, rating, pieceCount, obvious)
 		if elapsed := time.Since(start); elapsed < delay {
 			time.Sleep(delay - elapsed)
 		}
@@ -343,7 +350,8 @@ func (h *Hub) computeBotMove(s botSnapshot, engines chan *engineHandle) {
 		return
 	}
 
-	delay := botThinkDelay(s.tc, s.remainingMs, s.legalCount, s.ply, s.displayRating)
+	obvious := isObviousMove(res.Move.String(), s.lastMoveTo, s.legalCount)
+	delay := botThinkDelay(s.tc, s.remainingMs, s.legalCount, s.ply, s.displayRating, s.pieceCount, obvious)
 	if elapsed := time.Since(start); elapsed < delay {
 		time.Sleep(delay - elapsed)
 	}
@@ -428,22 +436,24 @@ const (
 // to the time control AND to the live state of the game: a slow control thinks
 // longer than a fast one, the opening is rattled off quickly, and the bot speeds
 // up sharply as its own clock runs low so it can actually win on time rather than
-// flag. The pause comes off the bot's clock (it's real time), so it's bounded:
-// never more than ~30% of the remaining clock (won't flag), never more than
-// maxThinkMs absolute (keeps slow controls sane and the untimed first move safely
-// under the 30s first-move abort), and never below a human floor (which itself
-// drops in real time trouble so the bot can blitz).
-func botThinkDelay(tc timeControl, remainingMs int64, legalCount, ply, displayRating int) time.Duration {
+// flag. It also speeds up as material comes off — an eight-piece endgame is
+// rattled out far quicker than a full-board middlegame, like a real player — and
+// SNAPS out `obvious` moves (forced or a recapture) near-instantly. Every move
+// gets an independent, fat-tailed tempo jitter (occasional near-instant snaps and
+// occasional long tanks) so the cadence looks hand-played rather than a smooth
+// function of the state. The pause comes off the bot's clock (it's real time), so
+// it's bounded: never more than ~30% of the remaining clock (won't flag), never
+// more than maxThinkMs absolute (keeps slow controls sane and the untimed first
+// move safely under the 30s first-move abort), and never below a human floor
+// (which itself drops in real time trouble so the bot can blitz).
+func botThinkDelay(tc timeControl, remainingMs int64, legalCount, ply, displayRating, pieceCount int, obvious bool) time.Duration {
 	// Rough per-move time budget: assume ~30 moves a side, plus the increment you
 	// get back each move. e.g. 1+0 → 2s, 3+0 → 6s, 5+0 → 10s, 10+0 → 20s, 3+2 → 8s.
 	perMove := float64(tc.Base)/30.0 + float64(tc.Inc)
 
-	// A typical move spends a varying fraction of that budget.
-	ms := perMove * (0.12 + mrand.Float64()*0.40) // ~12%–52%
-	// A few moves get a noticeably longer think.
-	if mrand.Float64() < 0.12 {
-		ms += perMove * (0.3 + mrand.Float64()*0.7)
-	}
+	// A central per-move budget; the irregularity comes from the fat-tailed tempo
+	// jitter applied below, not from this base.
+	ms := perMove * 0.30
 	// Busier positions take a touch longer.
 	if legalCount > 30 {
 		ms += perMove * 0.15
@@ -453,6 +463,23 @@ func botThinkDelay(tc timeControl, remainingMs int64, legalCount, ply, displayRa
 	// time per move; weaker players deliberate more. Scale the whole think from
 	// ~1.25x at the low end down to ~0.70x at the top of the ladder.
 	ms *= ratingSpeedFactor(displayRating)
+
+	// Material → speed: fewer pieces means fewer candidate lines and more known
+	// technique, so a sparse endgame is played much faster than a full board — the
+	// "the less pieces, the faster they get" pacing. ~1.0x at a full board down to
+	// ~0.40x once it's a bare-bones endgame.
+	ms *= materialSpeedFactor(pieceCount)
+
+	// Human irregularity: an independent per-move tempo multiplier so no two moves
+	// take a similar time even in the same kind of position — mostly a moderate
+	// spread, but deliberately fat-tailed with the odd near-instant snap and the odd
+	// long tank. An `obvious` move (forced or a recapture) instead gets a dedicated
+	// snap band — fast, but still varied so it isn't robotically identical.
+	if obvious {
+		ms *= 0.15 + mrand.Float64()*0.25 // 0.15–0.40x: played almost at once
+	} else {
+		ms *= humanTempoJitter()
+	}
 
 	inOpening := ply/2 < openingFastMoves
 	// Opening: rattle off known theory. Move MUCH faster for the first several full
@@ -508,6 +535,88 @@ func ratingSpeedFactor(displayRating int) float64 {
 		f = 1
 	}
 	return 1.25 - 0.55*f // 1.25 → 0.70
+}
+
+// materialSpeedFactor maps the number of pieces left on the board to a pace
+// multiplier: a full board deliberates, a sparse endgame flies. ~1.0x at 32
+// pieces (game start), tapering linearly to ~0.40x at 8-or-fewer pieces (a
+// bare-bones endgame). Combined with the low-clock speed-up this makes a bot rip
+// through K+P and R+P endings the way a human does, instead of pondering a
+// three-piece position as long as the opening middlegame.
+func materialSpeedFactor(pieceCount int) float64 {
+	const full, sparse = 32.0, 8.0
+	f := (float64(pieceCount) - sparse) / (full - sparse) // 0 at ≤8, 1 at ≥32
+	if f < 0 {
+		f = 0
+	}
+	if f > 1 {
+		f = 1
+	}
+	return 0.40 + 0.60*f // 0.40 → 1.0
+}
+
+// boardPieceCount counts the pieces standing on the board in a FEN — the first
+// (piece-placement) field — so bots can speed up as material comes off. Empty-run
+// digits and rank separators are skipped; a Crazyhouse pocket suffix ("[...]") and
+// the trailing FEN fields are cut off at the first '[' or space, so only real
+// on-board pieces are counted. Variant-agnostic: standard/960/Duck place no extra
+// glyphs in this field (the duck rides in Extras), and Crazyhouse's pocket is
+// excluded by design — a full board is what should slow a bot down.
+func boardPieceCount(fen string) int {
+	n := 0
+	for _, r := range fen {
+		if r == ' ' || r == '[' {
+			break // end of the placement field (space) or start of the pocket ('[')
+		}
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			n++
+		}
+	}
+	return n
+}
+
+// humanTempoJitter returns a per-move tempo multiplier that breaks the "smooth
+// gradient" feel: even two moves in the same kind of position take visibly
+// different times. It's fat-tailed on purpose — ~12% of moves are near-instant
+// "snaps" (a move seen at a glance), ~10% are long "tanks" (a deep think), and the
+// rest spread moderately around 1x — which reads as hand-played rather than a
+// function of the game state.
+func humanTempoJitter() float64 {
+	switch r := mrand.Float64(); {
+	case r < 0.12:
+		return 0.20 + mrand.Float64()*0.35 // snap: 0.20–0.55x
+	case r < 0.22:
+		return 1.7 + mrand.Float64()*1.6 // tank: 1.7–3.3x
+	default:
+		return 0.55 + mrand.Float64()*0.95 // normal spread: 0.55–1.50x
+	}
+}
+
+// isObviousMove reports whether a move is the kind a human plays almost without
+// thinking, so the bot should snap it out: a forced move (only one legal reply) or
+// a recapture (landing on the very square the opponent just moved to, i.e. taking
+// the piece they just placed there). Both are computed from state the hub already
+// has — no extra engine work — and hold for standard and self-search variants
+// alike. A true eval-based "only one good move" would need a per-move candidates
+// pass, deliberately not paid for here.
+func isObviousMove(moveUCI, lastMoveTo string, legalCount int) bool {
+	if legalCount <= 1 {
+		return true // forced: nothing to think about
+	}
+	if lastMoveTo != "" && uciDest(moveUCI) == lastMoveTo {
+		return true // recapture on the opponent's last-touched square
+	}
+	return false
+}
+
+// uciDest returns the destination square of a UCI move ("e2e4" → "e4", "e7e8q" →
+// "e8"), or "" if the string is too short to carry one. Duck's composite move
+// encodes the piece UCI first, so its primary destination reads the same way.
+func uciDest(uci string) string {
+	if len(uci) < 4 {
+		return ""
+	}
+	return uci[2:4]
 }
 
 // --- fake identity ---

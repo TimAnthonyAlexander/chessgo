@@ -43,6 +43,13 @@ import { useAuth } from '../lib/auth'
 import { statusLabel } from '../lib/chess'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { useMoveNavKeys } from '../lib/useMoveNavKeys'
+import {
+    coordToRating,
+    ratingLabel,
+    ratingToCoord,
+    UNLOSABLE_RATING,
+    UNLOSABLE_SLOT,
+} from '../lib/botSettings'
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 const MAX_PLIES = 400 // hard stop so two shuffling engines can't loop forever
@@ -147,7 +154,9 @@ function coerceSide(p: Partial<SideConfig> | undefined, def: SideConfig): SideCo
                   : 'gomachine',
         rating:
             typeof p.rating === 'number'
-                ? clamp(p.rating, GOMA_RATING_MIN, GOMA_RATING_MAX)
+                ? p.rating <= UNLOSABLE_RATING
+                    ? UNLOSABLE_RATING // preserve the "Unlosable" sentinel (rating 0)
+                    : clamp(p.rating, GOMA_RATING_MIN, GOMA_RATING_MAX)
                 : def.rating,
         aggr: typeof p.aggr === 'number' ? clamp(p.aggr, 0, 100) : def.aggr,
         book: typeof p.book === 'boolean' ? p.book : def.book,
@@ -205,7 +214,7 @@ function paramsForSide(cfg: SideConfig, fen: string): MoveParams {
 // engines, so it names them literally.
 const engineName = (k: EngineKind) => (k === 'stockfish' ? 'Stockfish' : k)
 function sideDetail(cfg: SideConfig): string {
-    return cfg.engine === 'stockfish' ? sfLabel(cfg.sfElo) : `~${cfg.rating} Elo`
+    return cfg.engine === 'stockfish' ? sfLabel(cfg.sfElo) : ratingLabel(cfg.rating)
 }
 function engineIcon(k: EngineKind) {
     if (k === 'gomachine') return <Cpu size={16} />
@@ -559,7 +568,22 @@ export default function EngineVsEngine() {
                             fullWidth
                             size="small"
                             value={duckMode ? 'duck' : 'standard'}
-                            onChange={(_, v) => v && setDuckMode(v === 'duck')}
+                            onChange={(_, v) => {
+                                if (!v) return
+                                const toDuck = v === 'duck'
+                                // Duck Chess has no worst-move path; lift any "Unlosable"
+                                // side (rating 0) to a real rating so the duck engine
+                                // gets a valid target.
+                                if (toDuck) {
+                                    setWhite((s) =>
+                                        s.rating <= UNLOSABLE_RATING ? { ...s, rating: 1500 } : s,
+                                    )
+                                    setBlack((s) =>
+                                        s.rating <= UNLOSABLE_RATING ? { ...s, rating: 1500 } : s,
+                                    )
+                                }
+                                setDuckMode(toDuck)
+                            }}
                             disabled={running}
                             sx={toggleSx}
                         >
@@ -780,6 +804,11 @@ function SideControls({
     // gomachine and zugzwang share identical controls (rating/aggr/book/search-
     // limit incl. nodes) — only Stockfish's controls differ.
     const isRatingEngine = duckMode || cfg.engine !== 'stockfish'
+    // The "Unlosable" stop (worst-move engine, stored as rating 0) is offered on
+    // gomachine/zugzwang in Standard mode only — Duck has no worst-move path, and
+    // Stockfish uses its own UCI_Elo scale. The slider then works in coordinate
+    // space so its lowest notch is the sentinel (one step below the 700 floor).
+    const allowUnlosable = isRatingEngine && !duckMode
     // Stockfish offers only movetime | depth; if the stored kind is 'nodes' (carried
     // over from gomachine/zugzwang), treat it as movetime for the toggle + sending.
     const effKind: LimitKind =
@@ -827,13 +856,13 @@ function SideControls({
                 <>
                     <SliderRow
                         label={`${duckMode ? 'gomachine' : engineName(cfg.engine)} rating`}
-                        value={`~${cfg.rating} Elo`}
-                        sliderValue={cfg.rating}
-                        min={GOMA_RATING_MIN}
+                        value={ratingLabel(cfg.rating)}
+                        sliderValue={allowUnlosable ? ratingToCoord(cfg.rating) : cfg.rating}
+                        min={allowUnlosable ? UNLOSABLE_SLOT : GOMA_RATING_MIN}
                         max={GOMA_RATING_MAX}
                         step={50}
                         disabled={disabled}
-                        onChange={(n) => onChange({ rating: n })}
+                        onChange={(n) => onChange({ rating: allowUnlosable ? coordToRating(n) : n })}
                     />
                     {/* Aggression + opening book are gomachine/zugzwang-only knobs,
                         hidden in Duck mode (the duck engine ignores them). */}
