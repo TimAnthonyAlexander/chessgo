@@ -22,7 +22,7 @@
         "enabled": false
     },
     "opening": {
-        "file": "book.epd",
+        "file": "/Users/tim.alexander/chessgo/gomachine/data/opening_suite.epd",
         "format": 0,
         "order": 0,
         "plies": -1,
@@ -32,7 +32,7 @@
         "additional_lines_rgx": [],
         "event_name": "Fastchess Tournament",
         "site": "?",
-        "file": "out_mt2.pgn",
+        "file": "/Users/tim.alexander/sebchess/match.pgn",
         "notation": 0,
         "append_file": true,
         "track_nodes": false,
@@ -60,7 +60,7 @@
     },
     "config_name": "config.json",
     "output": 0,
-    "seed": 7869212414176039212,
+    "seed": 10847620092254310539,
     "variant": 0,
     "type": 0,
     "gauntlet_seeds": 1,
@@ -69,7 +69,7 @@
     "wait": 0,
     "autosaveinterval": 20,
     "games": 2,
-    "rounds": 150,
+    "rounds": 100,
     "concurrency": 4,
     "force_concurrency": false,
     "recover": false,
@@ -89,15 +89,19 @@
     },
     "engines": [
         {
-            "name": "MyHCE",
-            "dir": "",
-            "cmd": "./hce",
+            "name": "zugzwang",
+            "dir": "/Users/tim.alexander/chessgo/zugzwang",
+            "cmd": "./zugzwang",
             "args": "",
             "restart": false,
             "options": [
                 [
                     "Hash",
                     "128"
+                ],
+                [
+                    "Threads",
+                    "1"
                 ]
             ],
             "limit": {
@@ -106,7 +110,7 @@
                     "fixed_time": 100,
                     "time": 0,
                     "moves": 0,
-                    "timemargin": 50
+                    "timemargin": 300
                 },
                 "nodes": 0,
                 "plies": 0
@@ -114,15 +118,19 @@
             "variant": 0
         },
         {
-            "name": "gomachine",
-            "dir": "/Users/tim.alexander/chessgo/gomachine",
-            "cmd": "/Users/tim.alexander/chessgo/gomachine/bin/gomachine",
-            "args": "uci",
+            "name": "SebLague-v2",
+            "dir": "",
+            "cmd": "/Users/tim.alexander/sebchess/publish/Chess-Coding-Adventure",
+            "args": "",
             "restart": false,
             "options": [
                 [
                     "Hash",
                     "128"
+                ],
+                [
+                    "Threads",
+                    "1"
                 ]
             ],
             "limit": {
@@ -131,7 +139,7 @@
                     "fixed_time": 100,
                     "time": 0,
                     "moves": 0,
-                    "timemargin": 50
+                    "timemargin": 300
                 },
                 "nodes": 0,
                 "plies": 0
@@ -140,16 +148,16 @@
         }
     ],
     "stats": {
-        "MyHCE vs gomachine": {
-            "wins": 33,
-            "losses": 115,
-            "draws": 70,
-            "penta_WW": 1,
-            "penta_WD": 10,
-            "penta_WL": 21,
-            "penta_DD": 12,
-            "penta_LD": 36,
-            "penta_LL": 29
+        "zugzwang vs SebLague-v2": {
+            "wins": 192,
+            "losses": 1,
+            "draws": 7,
+            "penta_WW": 92,
+            "penta_WD": 7,
+            "penta_WL": 1,
+            "penta_DD": 0,
+            "penta_LD": 0,
+            "penta_LL": 0
         }
     }
 }
