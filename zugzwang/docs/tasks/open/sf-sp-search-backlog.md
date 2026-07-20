@@ -86,9 +86,13 @@ singular ttPv-dependence, #17 SP optimism.
 Subagent re-mined SF18+SP for techniques not in items #1-27. New finds + disposition:
 
 - **RULE50DAMP** (SF evaluate.cpp:83 `v-=v*rule50/199`, SP eval.cpp:54): linear eval
-  damping by 50-move counter. **IMPLEMENTED** (env RULE50DAMP=1, Rule50DampDiv). This is
-  rule50-ALONE — distinct from washed W12 (rule50+material combo). Larger effect than
-  expected (rule50 climbs deep in tree → −32% nodes at d12). **QUEUED for SPRT.**
+  damping by 50-move counter. **SHIPPED default-on 2026-07-20 — +7.45±8.7 @1406g, nElo
+  +15.5, LLR RISING 0.17→0.24→0.49→0.75.** THE win of the batch. Kill-switch RULE50DAMP=0.
+  Distinct from washed W12 (rule50+material combo) — this is rule50-ALONE. Why it worked
+  when the search tweaks washed: it's a DIFFERENT mechanism class (eval draw-awareness,
+  not search selectivity, which is saturated in zug). In corrected_eval only → raw eval
+  oracle unaffected. The RISING (not decaying) SPRT trend is what distinguished it from
+  the phantom-+15 washes.
 - **Corrhist-MAGNITUDE into more margins** (SF: `|corrValue|` into futility /174665, LMR
   /30370, singular /230673; SP complexity into RFP/LMR/singular): zug has the LMR term
   (CORRMARGIN) but NOT the futility/singular-margin sites. Partial → extend to the two
