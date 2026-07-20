@@ -289,6 +289,17 @@ int uci_main() {
             // LMREXT (2026-07-20, only read when env LMREXT=1) — sf-sp-search-backlog.md
             // #11, SF search.cpp:1231. lmrExtCap = extra plies LMR may extend past newDepth.
             std::cout << "option name LmrExtCap type spin default 2 min 0 max 4\n";
+            // PCM constants (2026-07-20, only read when env PCM=1) — fail-low parent-move
+            // credit, sf-sp-search-backlog.md #10, SF search.cpp:1423 / SP search.cpp:1398.
+            std::cout << "option name PcmBase type spin default 260 min -1024 max 1024\n";
+            std::cout << "option name PcmDepthW type spin default 400 min 0 max 768\n";
+            std::cout << "option name PcmDepthMax type spin default 4018 min 2048 max 8192\n";
+            std::cout << "option name PcmParentMcW type spin default 976 min 0 max 2048\n";
+            std::cout << "option name PcmSeW type spin default 1047 min 0 max 2048\n";
+            std::cout << "option name PcmParentSeW type spin default 1023 min 0 max 2048\n";
+            std::cout << "option name PcmSeThresh type spin default 100 min 40 max 240\n";
+            std::cout << "option name PcmParentSeThr type spin default 60 min 40 max 240\n";
+            std::cout << "option name PcmDiv type spin default 4096 min 512 max 16384\n";
             std::cout << "option name OwnBook type check default false\n";
             std::cout << "option name UCI_LimitStrength type check default false\n";
             std::cout << "option name UCI_Elo type spin default " << Rating::RatingMax

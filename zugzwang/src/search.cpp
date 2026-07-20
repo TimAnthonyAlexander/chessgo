@@ -404,6 +404,30 @@ struct Context {
         // singular-extending a ttMove in a repeating drawn position. Default OFF
         // (gate unchanged → byte-identical); env SHUFFLEGUARD=1.
         bool shuffleGuard = false;
+        // ---- PCM (2026-07-20, sf-sp-search-backlog.md #10): parent-continuation credit
+        // on a FAIL-LOW. SF18 search.cpp:1423-1444 + Stormphrax search.cpp:1398-1424
+        // (both VERIFIED directly). Today zug learns ONLY on a beta cutoff; a node that
+        // fails low teaches nothing. When THIS node fails low (no bestMove) and the move
+        // that led into it (the opponent's (ss-1)->currentMove) was QUIET, that move just
+        // refuted our whole subtree — credit it positively in the opponent's (~us)
+        // butterfly history, scaled by how *surprising* the refutation was. Minimal
+        // faithful port (SP-shaped, no statScore term — zug lacks that field): weight =
+        // base + min(depth*depthW, depthMax) + [parent tried this move late] +
+        // [our fail-low badly undershot our own static eval] + [ ... undershot the
+        // negated parent static eval]. bonus = depth*depth (zug's native shape, ±400
+        // clamped in update_history); scaled = bonus*weight/pcmDiv. All SPSA-tunable;
+        // thresholds in zug cp (~pawn=100), so SF's 107/65 → ~100/60. Default OFF; env
+        // PCM=1. Off path skips the whole block → byte-identical.
+        bool pcm            = false;
+        int  pcmBase        = 260;   // SP pcmBaseWeight
+        int  pcmDepthW      = 400;   // SP pcmDepthWeight
+        int  pcmDepthMax    = 4018;  // SP pcmDepthMax
+        int  pcmParentMcW   = 976;   // SP pcmParentMoveCountWeight (parent moveCount>=8)
+        int  pcmSeW         = 1047;  // SP pcmStaticEvalWeight (our static-eval surprise)
+        int  pcmParentSeW   = 1023;  // SP pcmParentStaticEvalWeight (parent static-eval surprise)
+        int  pcmSeThresh    = 100;   // our-surprise threshold (zug cp)
+        int  pcmParentSeThr = 60;    // parent-surprise threshold (zug cp)
+        int  pcmDiv         = 4096;  // overall strength divisor (bonus*weight/pcmDiv)
         // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
         // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
         // callers in uci.cpp for the option table incl. min/max).
@@ -568,6 +592,16 @@ struct Context {
             if (on("LMREXT")) lmrExt = true;
             if (const char* e = getenv("LMREXTCAP")) { int v = atoi(e); if (v >= 0) lmrExtCap = v; }
             if (on("SHUFFLEGUARD")) shuffleGuard = true;
+            if (on("PCM")) pcm = true;
+            if (const char* e = getenv("PCMBASE"))        pcmBase        = atoi(e);
+            if (const char* e = getenv("PCMDEPTHW"))       pcmDepthW      = atoi(e);
+            if (const char* e = getenv("PCMDEPTHMAX"))     pcmDepthMax    = atoi(e);
+            if (const char* e = getenv("PCMPARENTMCW"))    pcmParentMcW   = atoi(e);
+            if (const char* e = getenv("PCMSEW"))          pcmSeW         = atoi(e);
+            if (const char* e = getenv("PCMPARENTSEW"))    pcmParentSeW   = atoi(e);
+            if (const char* e = getenv("PCMSETHRESH"))     pcmSeThresh    = atoi(e);
+            if (const char* e = getenv("PCMPARENTSETHR"))  pcmParentSeThr = atoi(e);
+            if (const char* e = getenv("PCMDIV"))          { int v = atoi(e); if (v > 0) pcmDiv = v; }
             if (on("GMCONST")) {
                 // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
                 // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
@@ -718,6 +752,7 @@ struct Stack {
     int   reduction; // #8: how much the move leading OUT of this node was LMR-reduced (SF ss->reduction)
     bool  didCapture; // #12: was currentMove a capture? (read one ply down)
     bool  ttPv;       // #5: this node is (or descends from) a PV — gates RFP, de-reduces LMR
+    int   moveCount;  // #10 PCM: this node's live move-loop counter, read one ply down
 };
 
 // #13 is_shuffling (SF18 search.cpp:145-152, VERIFIED): a dead 4-ply single-piece
@@ -800,6 +835,16 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     else if (name == "HistTaperK")     tune.histTaperK     = clamp(value, 0, 32);
     else if (name == "HistTtBonusVal") tune.histTtBonusVal = clamp(value, 0, 400);
     else if (name == "LmrExtCap")      tune.lmrExtCap      = clamp(value, 0, 4);
+    // ---- PCM constants (2026-07-20, only read when pcm on) ----
+    else if (name == "PcmBase")        tune.pcmBase        = clamp(value, -1024, 1024);
+    else if (name == "PcmDepthW")      tune.pcmDepthW      = clamp(value, 0, 768);
+    else if (name == "PcmDepthMax")    tune.pcmDepthMax    = clamp(value, 2048, 8192);
+    else if (name == "PcmParentMcW")   tune.pcmParentMcW   = clamp(value, 0, 2048);
+    else if (name == "PcmSeW")         tune.pcmSeW         = clamp(value, 0, 2048);
+    else if (name == "PcmParentSeW")   tune.pcmParentSeW   = clamp(value, 0, 2048);
+    else if (name == "PcmSeThresh")    tune.pcmSeThresh    = clamp(value, 40, 240);
+    else if (name == "PcmParentSeThr") tune.pcmParentSeThr = clamp(value, 40, 240);
+    else if (name == "PcmDiv")         tune.pcmDiv         = clamp(value, 512, 16384);
     // LmrBase/LmrDiv: wire value is the double x LMR_DOUBLE_SCALE (search.h) — see the
     // Tune::lmrBase/lmrDiv comment. Clamp in wire units, convert on the way in.
     else if (name == "LmrBase")        tune.lmrBase        = clamp(value, 3000, 15000) / double(LMR_DOUBLE_SCALE);
@@ -1754,6 +1799,8 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         if (m == excluded) continue;
         if (!pos.legal(m)) continue;
         moveCount++;
+        ss->moveCount = moveCount; // #10 PCM: a child reads (ss-1)->moveCount to learn
+                                   // how late its parent tried the move that led into it.
 
         bool isCapture = pos.is_capture(m);
         bool givesCheck = pos.gives_check(m);
@@ -2218,6 +2265,24 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                                                                  : type_of(pos.piece_on(to_sq(cm)));
                 update_capt_hist(C, pos.moved_piece(cm), to_sq(cm), vic, -bonus);
             }
+        }
+    }
+
+    // #10 PCM (see Tune::pcm): fail-low parent-move credit. Fires when THIS node failed
+    // low (no bestMove) after searching >=1 move, the parent move exists and was quiet,
+    // and we're not inside a singular verification (!excluded). Credits the opponent's
+    // refuting move in ~us butterfly history, weighted by the surprise of the refutation.
+    if (C.tune.pcm && bestMove == MOVE_NONE && moveCount > 0 && ss->ply > 0 && !excluded) {
+        Move pm = (ss - 1)->currentMove;
+        if (pm != MOVE_NONE && pm != MOVE_NULL && !(ss - 1)->didCapture) {
+            int weight = C.tune.pcmBase
+                + std::min(depth * C.tune.pcmDepthW, C.tune.pcmDepthMax)
+                + ((ss - 1)->moveCount >= 8 ? C.tune.pcmParentMcW : 0)
+                + ((!ss->inCheck && bestValue <= ss->staticEval - C.tune.pcmSeThresh) ? C.tune.pcmSeW : 0)
+                + (((ss - 1)->staticEval != VALUE_NONE
+                    && bestValue <= -(ss - 1)->staticEval - C.tune.pcmParentSeThr) ? C.tune.pcmParentSeW : 0);
+            if (weight > 0)
+                update_history(C, ~us, pm, depth * depth * weight / C.tune.pcmDiv);
         }
     }
 
