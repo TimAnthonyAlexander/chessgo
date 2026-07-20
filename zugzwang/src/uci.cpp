@@ -302,6 +302,8 @@ int uci_main() {
             std::cout << "option name PcmDiv type spin default 4096 min 512 max 16384\n";
             // QSMOVECAP (2026-07-20, only read when env QSMOVECAP=1) — sf-sp #7.
             std::cout << "option name QsMoveCapN type spin default 2 min 1 max 8\n";
+            // RULE50DAMP (2026-07-20, only read when env RULE50DAMP=1) — SF evaluate.cpp:83.
+            std::cout << "option name Rule50DampDiv type spin default 199 min 80 max 400\n";
             std::cout << "option name OwnBook type check default false\n";
             std::cout << "option name UCI_LimitStrength type check default false\n";
             std::cout << "option name UCI_Elo type spin default " << Rating::RatingMax

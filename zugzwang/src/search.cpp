@@ -443,6 +443,21 @@ struct Context {
         int  pcmSeThresh    = 100;   // our-surprise threshold (zug cp)
         int  pcmParentSeThr = 60;    // parent-surprise threshold (zug cp)
         int  pcmDiv         = 4096;  // overall strength divisor (bonus*weight/pcmDiv)
+        // ---- RULE50DAMP (2026-07-20, fresh from SF/SP mine): linear eval damping by the
+        // 50-move counter. SF evaluate.cpp:83 `v -= v * rule50_count() / 199`; SP
+        // eval/eval.cpp:54 `eval = eval*(200 - halfmove)/200` (both VERIFIED). Shrinks the
+        // static eval toward 0 as the shuffle counter climbs — the engine stops
+        // over-trusting an eval in a position drifting toward a 50-move/rep draw. This is
+        // the rule50-ALONE mechanism; the WASHED item (ledger W12, −7.6) was rule50 folded
+        // WITH material-output-scaling, a different combo. Single-scalar-compatible (no
+        // psqt split needed → works with zug's net). Default OFF; env RULE50DAMP=1.
+        bool rule50Damp    = false;
+        int  rule50DampDiv = 199;    // SF's divisor (SP uses 200); higher = gentler
+        // NOTE (2026-07-20): CUTNODEEXT (SP search.cpp:1131 `cutnode |= extension<0`)
+        // researched + DEFERRED — SP modifies function-scope cutnode, which in zug leaks
+        // into the next move iteration + the fail-low PCM/allNode reads. A safe port needs
+        // a per-move local threaded through the LMR r-bump + full-search cutNode arg; not
+        // worth the bug risk for a speculative SP-only one-liner right now. See backlog.
         // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
         // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
         // callers in uci.cpp for the option table incl. min/max).
@@ -609,6 +624,8 @@ struct Context {
             if (on("SHUFFLEGUARD")) shuffleGuard = true;
             if (on("QSMOVECAP")) qsMoveCap = true;
             if (const char* e = getenv("QSMOVECAPN")) { int v = atoi(e); if (v >= 1) qsMoveCapN = v; }
+            if (on("RULE50DAMP")) rule50Damp = true;
+            if (const char* e = getenv("RULE50DAMPDIV")) { int v = atoi(e); if (v > 0) rule50DampDiv = v; }
             if (on("PCM")) pcm = true;
             if (const char* e = getenv("PCMBASE"))        pcmBase        = atoi(e);
             if (const char* e = getenv("PCMDEPTHW"))       pcmDepthW      = atoi(e);
@@ -863,6 +880,7 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     else if (name == "PcmParentSeThr") tune.pcmParentSeThr = clamp(value, 40, 240);
     else if (name == "PcmDiv")         tune.pcmDiv         = clamp(value, 512, 16384);
     else if (name == "QsMoveCapN")     tune.qsMoveCapN     = clamp(value, 1, 8);
+    else if (name == "Rule50DampDiv")  tune.rule50DampDiv  = clamp(value, 80, 400);
     // LmrBase/LmrDiv: wire value is the double x LMR_DOUBLE_SCALE (search.h) — see the
     // Tune::lmrBase/lmrDiv comment. Clamp in wire units, convert on the way in.
     else if (name == "LmrBase")        tune.lmrBase        = clamp(value, 3000, 15000) / double(LMR_DOUBLE_SCALE);
@@ -946,6 +964,8 @@ long long correction_raw(const Context& C, const Position& pos, const Stack* ss)
 int corrected_eval(const Context& C, const Position& pos, const Stack* ss, int rawEval) {
     if (!C.tune.corrHist) return rawEval;
     int v = rawEval + correction(C, pos, ss);
+    // #3 RULE50DAMP (see Tune::rule50Damp): shrink eval as the shuffle counter climbs.
+    if (C.tune.rule50Damp) v -= v * pos.rule50_count() / C.tune.rule50DampDiv;
     if (v >= VALUE_MATE_IN_MAX_PLY) v = VALUE_MATE_IN_MAX_PLY - 1;
     else if (v <= -VALUE_MATE_IN_MAX_PLY) v = -VALUE_MATE_IN_MAX_PLY + 1;
     return v;
