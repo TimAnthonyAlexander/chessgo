@@ -35,6 +35,34 @@
 
 ---
 
+## SESSION LOG — 2026-07-20 (implemented + SPRT queue)
+
+All default-off env flags, byte-identical when off (verified: startpos d12 == 34220 nodes
+across every addition). Committed to main. SPRT queue drains one-at-a-time on coalla
+(movetime 0.1s, conc=5, elo0=0 elo1=5). Verdicts appended here as they land.
+
+| # | flag | env | status |
+|---|---|---|---|
+| 1 | CAPFUT | `CAPFUT=1` | SPRT +3.8±11 @920g (leaning +, unconfirmed) — SPSA candidate |
+| 3 | CUTOFFGRADE | `CUTOFFGRADE=1` | **in lmrpair SPRT** (paired w/ #4): +15.6±18.6 @408g, trending accept |
+| 4 | POSTLMRCH | `POSTLMRCH=1` | **in lmrpair SPRT** (see #3) |
+| 5 | DRAWJITTER | `DRAWJITTER=1` | bundle5 washed (−7 as part of 4-tweak drag); solo re-SPRT TBD |
+| 6 | CHECKORDER | `CHECKORDER=1` | bundle5 washed (in the drag); solo re-SPRT TBD |
+| 7 | QSMOVECAP | `QSMOVECAP=1` | **queued** (nodes 34220→19143, faithful SF cap=2) |
+| 8b | HISTTTBONUS | `HISTTTBONUS=1` | **queued** (ttMove-is-best extra bonus) |
+| 8c | HISTTAPER | `HISTTAPER=1` | **queued (lead)** — scale-free late-quiet malus taper |
+| 10 | PCM | `PCM=1` | **queued** — fail-low parent-move credit (biggest novel item) |
+| 11 | LMREXT | `LMREXT=1` | **queued** — LMR extend past newDepth + PvNode |
+| 13 | SHUFFLEGUARD | `SHUFFLEGUARD=1` | **queued** — suppress singular ext in rule50 shuffle |
+| 2 | HISTDECAY | `HISTDECAY=1` | washed −10.7 @380g; gentler-rate SPSA candidate (dormant) |
+
+Enablers landed this session: `Stack::moveCount` (#10, unblocks #9 statScore later),
+`Position::plies_from_null()` (#13). Next fresh to implement when queue drains: #15
+cuckoo upcoming-repetition, #16 RFP ttHit-mult, #12 non-LMR fallback reduction, #14
+singular ttPv-dependence, #17 SP optimism.
+
+---
+
 ## TIER 1 — fresh, cheap, both-engines-carry-it, zug genuinely lacks (do first)
 
 ### 1. Capture futility pruning  [SPRT +3.8+-11 @920g — leaning positive, UNCONFIRMED; SPSA-tune capFutBase/Slope/HistCoeff then re-SPRT]
