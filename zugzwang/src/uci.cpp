@@ -286,6 +286,9 @@ int uci_main() {
             // env flag is on) — sf-sp-search-backlog.md #8b/#8c, SF search.cpp:1833/1841.
             std::cout << "option name HistTaperK type spin default 5 min 0 max 32\n";
             std::cout << "option name HistTtBonusVal type spin default 90 min 0 max 400\n";
+            // LMREXT (2026-07-20, only read when env LMREXT=1) — sf-sp-search-backlog.md
+            // #11, SF search.cpp:1231. lmrExtCap = extra plies LMR may extend past newDepth.
+            std::cout << "option name LmrExtCap type spin default 2 min 0 max 4\n";
             std::cout << "option name OwnBook type check default false\n";
             std::cout << "option name UCI_LimitStrength type check default false\n";
             std::cout << "option name UCI_Elo type spin default " << Rating::RatingMax

@@ -381,6 +381,20 @@ struct Context {
         // malus. Default OFF (adds 0 → byte-identical); env HISTTTBONUS=1.
         bool histTtBonus    = false;
         int  histTtBonusVal = 90;
+        // ---- LMREXT (2026-07-20, sf-sp-search-backlog.md #11): let a strongly-negative
+        // accumulated r search DEEPER than newDepth, and give PV nodes +1. SF18
+        // search.cpp:1231 (VERIFIED): d = max(1, min(newDepth - r/1024, newDepth+2)) +
+        // PvNode; SP search.cpp:1181-1184 mirrors it. zug's clamp
+        // `min(newDepth-red, newDepth)` HARD-caps at newDepth, discarding the negative-r
+        // signal its own fine terms produce (givesCheck -1024, ttPv -1024, rootDeltaLmr,
+        // mcLinR). Safe here: line 2045 re-searches every PV move at full window/newDepth
+        // regardless, so PV value is unaffected; when d>=newDepth, doFullSearch is false
+        // (no shallow re-search) and doDeeper can't fire (needs d<newDepth) → no
+        // double-extend; ss->reduction goes negative but its only reader (hindsight,
+        // line ~1498) just fails its >=2/>=3 gates. lmrExtCap = SF's +2 head-room.
+        // Default OFF (clamp reverts to min(...,newDepth), no PvNode add → byte-identical).
+        bool lmrExt    = false;
+        int  lmrExtCap = 2;
         // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
         // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
         // callers in uci.cpp for the option table incl. min/max).
@@ -542,6 +556,8 @@ struct Context {
             if (const char* e = getenv("HISTTAPERK")) { int v = atoi(e); if (v >= 0) histTaperK = v; }
             if (on("HISTTTBONUS")) histTtBonus = true;
             if (const char* e = getenv("HISTTTBONUSVAL")) histTtBonusVal = atoi(e);
+            if (on("LMREXT")) lmrExt = true;
+            if (const char* e = getenv("LMREXTCAP")) { int v = atoi(e); if (v >= 0) lmrExtCap = v; }
             if (on("GMCONST")) {
                 // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
                 // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
@@ -759,6 +775,7 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     // ---- HISTTAPER / HISTTTBONUS constants (2026-07-20) ----
     else if (name == "HistTaperK")     tune.histTaperK     = clamp(value, 0, 32);
     else if (name == "HistTtBonusVal") tune.histTtBonusVal = clamp(value, 0, 400);
+    else if (name == "LmrExtCap")      tune.lmrExtCap      = clamp(value, 0, 4);
     // LmrBase/LmrDiv: wire value is the double x LMR_DOUBLE_SCALE (search.h) — see the
     // Tune::lmrBase/lmrDiv comment. Clamp in wire units, convert on the way in.
     else if (name == "LmrBase")        tune.lmrBase        = clamp(value, 3000, 15000) / double(LMR_DOUBLE_SCALE);
@@ -2004,7 +2021,11 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                 r -= delta * C.tune.rootDeltaCoeff / std::max(1, C.rootDelta);
             }
             int red = r / 1024;
-            int d = std::max(1, std::min(newDepth - red, newDepth));
+            int d;
+            if (C.tune.lmrExt)
+                d = std::max(1, std::min(newDepth - red, newDepth + C.tune.lmrExtCap)) + (PvNode ? 1 : 0);
+            else
+                d = std::max(1, std::min(newDepth - red, newDepth));
             ss->reduction = newDepth - d;
             score = -negamax<false>(C, pos, ss + 1, -alpha - 1, -alpha, d, true);
             ss->reduction = 0;
