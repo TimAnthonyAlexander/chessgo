@@ -227,6 +227,11 @@ struct Context {
         // gates RFP + de-reduces LMR on tactically-live nodes. Default ON; env TTPV=0. ----
         bool ttPvOn      = true;
         // ---- SF parity micro-pair (SF search.cpp:883/927) — default ON; independent env kill-switches ----
+        // RFPTTHIT (2026-07-21, SF search.cpp:880 `futilityMult = 76 - 23*!ss->ttHit`): drop
+        // the RFP margin coefficient by rfpTtHitCoeff on a TT MISS (prune more aggressively
+        // when the static eval is not TT-corroborated). Pruning-class. Default OFF; env RFPTTHIT=1.
+        bool rfpTtHit      = false;
+        int  rfpTtHitCoeff = 23;    // SF's 23 (its mult 76->53); zug rfpMargin=75 so same delta
         bool rfpOppWorsening = true; // #A: fold opponentWorsening into the RFP/static-null margin (env RFPOW=0)
         int  rfpOwCoeff      = 10;   // flat extra margin when opponentWorsening (~13% of rfpMargin=75, matching
                                      // SF's 331/2474 ratio of its opponentWorsening/improving futility_margin terms)
@@ -723,6 +728,8 @@ struct Context {
             if (on("TTCUTBONUS")) ttCutBonus = true;
             if (on("LMPHIST")) lmpHist = true;
             if (const char* e = getenv("LMPHISTDIV")) { int v = atoi(e); if (v > 0) lmpHistDiv = v; }
+            if (on("RFPTTHIT")) rfpTtHit = true;
+            if (const char* e = getenv("RFPTTHITCOEFF")) { int v = atoi(e); if (v >= 0) rfpTtHitCoeff = v; }
             if (const char* e = getenv("TTCUTBONUSNUM")) { int v = atoi(e); if (v >= 0) ttCutBonusNum = v; }
             if (const char* e = getenv("TTCUTBONUSDEN")) { int v = atoi(e); if (v >= 1) ttCutBonusDen = v; }
             if (const char* e = getenv("TTCUTMALUSNUM")) { int v = atoi(e); if (v >= 0) ttCutMalusNum = v; }
@@ -997,6 +1004,7 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     else if (name == "TtCutMalusNum")  tune.ttCutMalusNum  = clamp(value, 0, 8);
     else if (name == "TtCutMalusDen")  tune.ttCutMalusDen  = clamp(value, 1, 8);
     else if (name == "LmpHistDiv")     tune.lmpHistDiv     = clamp(value, 500, 40000);
+    else if (name == "RfpTtHitCoeff")  tune.rfpTtHitCoeff  = clamp(value, 0, 60);
     // LmrBase/LmrDiv: wire value is the double x LMR_DOUBLE_SCALE (search.h) — see the
     // Tune::lmrBase/lmrDiv comment. Clamp in wire units, convert on the way in.
     else if (name == "LmrBase")        tune.lmrBase        = clamp(value, 3000, 15000) / double(LMR_DOUBLE_SCALE);
@@ -1833,8 +1841,11 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         int corrMarginTerm = C.tune.corrMargin
             ? (int)(std::abs(correction_raw(C, pos, ss)) / 174665) : 0;
         int rfpDepthCap = C.tune.rfpDeep ? 13 : 8; // RFPDEEP: SF's depth<14 vs zug's depth<=8
+        // RFPTTHIT: SF drops futilityMult by 23 on a TT miss (!ttHit) → prune more when the
+        // eval is uncorroborated. Off → rfpCoeff == rfpMargin → byte-identical.
+        int rfpCoeff = C.tune.rfpMargin - ((C.tune.rfpTtHit && !ttHit) ? C.tune.rfpTtHitCoeff : 0);
         if (depth <= rfpDepthCap && !(C.tune.rfpSoft && quietTT) && !(C.tune.ttPvOn && ss->ttPv)
-            && eval - C.tune.rfpMargin * (depth - improving) - rfpOwTerm - corrMarginTerm >= beta
+            && eval - rfpCoeff * (depth - improving) - rfpOwTerm - corrMarginTerm >= beta
             && eval < VALUE_MATE_IN_MAX_PLY)
             return C.tune.rfpSoft ? (2 * beta + eval) / 3 : eval;
 

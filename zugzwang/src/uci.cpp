@@ -340,6 +340,8 @@ int uci_main() {
             std::cout << "option name TtCutMalusDen type spin default 1 min 1 max 8\n";
             // LMPHIST divisor (2026-07-21, only read when env LMPHIST=1) — SP history-scaled LMP.
             std::cout << "option name LmpHistDiv type spin default 4000 min 500 max 40000\n";
+            // RFPTTHIT coeff (2026-07-21, only read when env RFPTTHIT=1) — SF ttHit RFP multiplier.
+            std::cout << "option name RfpTtHitCoeff type spin default 23 min 0 max 60\n";
             // Ponder (2026-07-20): advertises pondering support so a GUI/CCRL will send
             // `go ponder`. Not read by the engine — pondering is honored unconditionally on
             // `go ponder`; this flag only tells the GUI the feature exists.
