@@ -425,6 +425,11 @@ struct Context {
         // clamped in update_history); scaled = bonus*weight/pcmDiv. All SPSA-tunable;
         // thresholds in zug cp (~pawn=100), so SF's 107/65 → ~100/60. Default OFF; env
         // PCM=1. Off path skips the whole block → byte-identical.
+        // SPRT VERDICT 2026-07-20: REJECT −8.25±11.6 @811g (LLR −0.65). Real negative.
+        // Likely compounding: (a) +36% nodes at fixed movetime → less depth; (b) the
+        // weights/pcmDiv are HAND-SET, not SPSA-tuned to zug's history scale, so the
+        // fail-low credit magnitude is miscalibrated (over-crediting parents distorts
+        // ordering). SPSA of the 9 Pcm* knobs MIGHT rescue it, but −8 is deep — deprioritized.
         // ---- QSMOVECAP (2026-07-20, sf-sp-search-backlog.md #7): cap qsearch captures.
         bool qsMoveCap  = false;
         int  qsMoveCapN = 2;   // SF's threshold (moveCount > 2 → skip)

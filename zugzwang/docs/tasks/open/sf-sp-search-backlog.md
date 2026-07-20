@@ -51,7 +51,7 @@ across every addition). Committed to main. SPRT queue drains one-at-a-time on co
 | 7 | QSMOVECAP | `QSMOVECAP=1` | **leaning +4.7±11 @902g** (was +14 @462g then regressed; mechanistically sound — speeds search; SF+SP ship it; never-negative). Stream-ship candidate. |
 | 8b | HISTTTBONUS | `HISTTTBONUS=1` | **queued** (ttMove-is-best extra bonus) |
 | 8c | HISTTAPER | `HISTTAPER=1` | **WASHED** 0.00±14.9 @551g (dead flat; confirms zug ordering/history saturation). Default-off. |
-| 10 | PCM | `PCM=1` | **queued** — fail-low parent-move credit (biggest novel item) |
+| 10 | PCM | `PCM=1` | **REJECT −8.25±11.6 @811g** (real negative). +36% nodes → less movetime depth; hand-set weights miscalibrated to zug history scale. SPSA of 9 Pcm* knobs might rescue but −8 deep → deprioritized. Default-off. |
 | 11 | LMREXT | `LMREXT=1` | **REJECT −10.4±12 @805g** (real negative). zug's negative-r terms over-extend under SF's +2 cap → tree bloat, lost movetime depth. SF r-calibration doesn't transfer. Default-off. |
 | 13 | SHUFFLEGUARD | `SHUFFLEGUARD=1` | **queued** — suppress singular ext in rule50 shuffle |
 | 2 | HISTDECAY | `HISTDECAY=1` | washed −10.7 @380g; gentler-rate SPSA candidate (dormant) |
