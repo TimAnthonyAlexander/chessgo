@@ -48,7 +48,7 @@ across every addition). Committed to main. SPRT queue drains one-at-a-time on co
 | 4 | POSTLMRCH | `POSTLMRCH=1` | **WASHED** (lmrpair pair, see #3) |
 | 5 | DRAWJITTER | `DRAWJITTER=1` | bundle5 washed (−7 as part of 4-tweak drag); solo re-SPRT TBD |
 | 6 | CHECKORDER | `CHECKORDER=1` | bundle5 washed (in the drag); solo re-SPRT TBD |
-| 7 | QSMOVECAP | `QSMOVECAP=1` | **leaning +4.7±11 @902g** (was +14 @462g then regressed; mechanistically sound — speeds search; SF+SP ship it; never-negative). Stream-ship candidate. |
+| 7 | QSMOVECAP | `QSMOVECAP=1` | **WASH** — run1 +4.7@902g looked promising but a FRESH solo run (elo1=3) went −8@276g and the QSMOVECAP+CAPFUT stack went −4.3@1215g. Weight of evidence: ~0 (the +4.7 was favorable noise). Default-off. |
 | 8b | HISTTTBONUS | `HISTTTBONUS=1` | **queued** (ttMove-is-best extra bonus) |
 | 8c | HISTTAPER | `HISTTAPER=1` | **WASHED** 0.00±14.9 @551g (dead flat; confirms zug ordering/history saturation). Default-off. |
 | 10 | PCM | `PCM=1` | **REJECT −8.25±11.6 @811g** (real negative). +36% nodes → less movetime depth; hand-set weights miscalibrated to zug history scale. SPSA of 9 Pcm* knobs might rescue but −8 deep → deprioritized. Default-off. |
