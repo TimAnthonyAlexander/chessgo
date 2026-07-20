@@ -267,6 +267,21 @@ int uci_main() {
             // x-scaled), default 3/4 = SF's own decay factor.
             std::cout << "option name HistDecayNum type spin default 3 min 1 max 32\n";
             std::cout << "option name HistDecayDen type spin default 4 min 2 max 64\n";
+            // CUTOFFGRADE constants (2026-07-20, only read when env CUTOFFGRADE=1) —
+            // graded cutoffCnt->LMR reduction, search.cpp Tune::cutoffGrade*
+            // (sf-sp-search-backlog.md #3; SF search.cpp:1208-1209). Wire values are
+            // already in zug's native r x1024 fixed-point units — no rescale.
+            std::cout << "option name CutoffGradeBase type spin default 256 min 0 max 2048\n";
+            std::cout << "option name CutoffGradeStep type spin default 1024 min 0 max 2048\n";
+            // POSTLMRCH constant (2026-07-20, only read when env POSTLMRCH=1) —
+            // post-LMR continuation-history bonus, search.cpp Tune::postLmrCh*
+            // (sf-sp-search-backlog.md #4; SF search.cpp:1259).
+            std::cout << "option name PostLmrChBonus type spin default 43 min 0 max 400\n";
+            // CHECKORDER constants (2026-07-20, only read when env CHECKORDER=1) —
+            // givesCheck quiet-ordering bonus, search.cpp Tune::checkOrder*
+            // (sf-sp-search-backlog.md #6; SF movepick.cpp:170).
+            std::cout << "option name CheckOrderBonus type spin default 4096 min 0 max 20000\n";
+            std::cout << "option name CheckOrderSeeMargin type spin default -36 min -100 max 0\n";
             std::cout << "option name OwnBook type check default false\n";
             std::cout << "option name UCI_LimitStrength type check default false\n";
             std::cout << "option name UCI_Elo type spin default " << Rating::RatingMax

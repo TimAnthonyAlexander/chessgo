@@ -291,6 +291,72 @@ struct Context {
         // HISTDECAY=1. OFF path: `if (C.tune.histDecay)` guard in start() skips
         // the whole sweep, byte-identical to today.
         bool histDecay = false;
+        // ---- CUTOFFGRADE (2026-07-20, sf-sp-search-backlog.md #3): graded
+        // cutoffCnt->LMR reduction bump. zug's shipped cutoffCnt mechanism
+        // (Tune::cutoffCnt, default ON) fires a single binary +1024 (whole
+        // extra ply) when (ss+1)->cutoffCnt > 3. SF18 (~sf18-arm/src/
+        // search.cpp:1208-1209, VERIFIED directly against source, not the
+        // backlog summary) is graded and fires much earlier: `if
+        // ((ss+1)->cutoffCnt > 1) r += 256 + 1024*((ss+1)->cutoffCnt > 2) +
+        // 1024*allNode`. This flag ports the graded >1/>2 shape ONLY — the
+        // `+1024*allNode` sub-term is deliberately OMITTED, not just gated
+        // separately: it's the same allNode angle already explored as part of
+        // the LMRCLUSTER bundle (Tune::allNodeLmr/lmrCluster above), which
+        // washed as a co-dependent bundle (WASHED W3) and stays tracked
+        // there, not duplicated here. Default OFF; env CUTOFFGRADE=1. OFF
+        // path: cutoffCnt's existing single `if` branch is untouched,
+        // byte-identical.
+        bool cutoffGrade = false;
+        int  cutoffGradeBase = 256;  // SF's flat >1 term — already in zug's native r
+                                      // x1024 fixed-point units (see the LMR r-assembly
+                                      // comment), no unit rescale needed.
+        int  cutoffGradeStep = 1024; // additional bump at >2 (SF's second x1024 term)
+        // ---- POSTLMRCH (2026-07-20, sf-sp-search-backlog.md #4): post-LMR
+        // continuation-history bonus. SF18 (~sf18-arm/src/search.cpp:1259,
+        // VERIFIED directly) credits update_continuation_histories(ss,
+        // movedPiece, to, 1365) once a move's LMR-reduced scout has beaten
+        // alpha — fired inside the `value > alpha` branch, AFTER the optional
+        // do-deeper/do-shallower re-search, using the ORIGINAL reduced
+        // scout's alpha-beating as the trigger regardless of what that
+        // re-search finds. zug has nothing that credits a move mid-loop for
+        // surviving its own reduction; the `wasLMRReduced` bookkeeping this
+        // needs already exists. Bonus scale: zug's update_cont_entry
+        // multiplies the incoming `bonus` parameter by 32 before applying it
+        // to the int16 entry (whose hard clamp +-32000 sits within ~7% of
+        // SF's own ContinuationHistory D=30000), so matching SF's raw
+        // entry-level increment of 1365 means passing an incoming bonus of
+        // 1365/32 ~= 42.7 -> 43. Default OFF; env POSTLMRCH=1. OFF path: the
+        // call site is skipped entirely.
+        bool postLmrCh = false;
+        int  postLmrChBonus = 43;
+        // ---- DRAWJITTER (2026-07-20, sf-sp-search-backlog.md #5): draw-score
+        // jitter. See draw_value()'s comment (just above negamax) for the
+        // full port-fidelity note, including a backlog correction verified
+        // directly against ~sf18-arm/src/search.cpp: SF jitters ONLY the
+        // main-search is_draw()/upcoming-repetition sites, NOT qsearch's
+        // is_draw() and NOT the stalemate return — both of those stay flat
+        // VALUE_DRAW in real SF. Default OFF; env DRAWJITTER=1.
+        bool drawJitter = false;
+        // ---- CHECKORDER (2026-07-20, sf-sp-search-backlog.md #6): givesCheck
+        // quiet-ordering bonus. SF18 movepick.cpp:170 (VERIFIED directly):
+        // quiet score += (check_squares(pt) & to && see_ge(m,-75)) * 16384 —
+        // SF uses the cheap check_squares bitboard test (direct checks only,
+        // no discovered-check detection); zug instead reuses its own
+        // pos.gives_check(mv) (already called per move in the search loop,
+        // but not during ordering — this flag pays that cost again inside
+        // score_moves_impl, gated off by default). SEE margin rescaled from
+        // SF's eval scale (pawn=208) to zug's (pawn=100), the same 0.4808
+        // ratio CAPFUT uses: -75*0.4808 ~= -36. Bonus magnitude: SF's 16384 is
+        // roughly half its own ContinuationHistory D=30000 ceiling; zug's
+        // per-table entries self-limit near the same order (~16384, see the
+        // HISTDECAY/CAPFUT comments), but zug's quiet score can already sum
+        // several such tables (butterfly + up to 5 conthist planes under
+        // CONTHISTPLIES) — start conservative, well under a single table's
+        // own ceiling, and let SPSA find the level. Default OFF; env
+        // CHECKORDER=1.
+        bool checkOrder = false;
+        int  checkOrderBonus = 4096;
+        int  checkOrderSeeMargin = -36;
         // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
         // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
         // callers in uci.cpp for the option table incl. min/max).
@@ -439,6 +505,15 @@ struct Context {
             if (on("HISTDECAY")) histDecay = true;
             if (const char* e = getenv("HISTDECAYNUM")) { int v = atoi(e); if (v > 0) histDecayNum = v; }
             if (const char* e = getenv("HISTDECAYDEN")) { int v = atoi(e); if (v > 0) histDecayDen = v; }
+            if (on("CUTOFFGRADE")) cutoffGrade = true;
+            if (const char* e = getenv("CUTOFFGRADEBASE")) cutoffGradeBase = atoi(e);
+            if (const char* e = getenv("CUTOFFGRADESTEP")) cutoffGradeStep = atoi(e);
+            if (on("POSTLMRCH")) postLmrCh = true;
+            if (const char* e = getenv("POSTLMRCHBONUS")) postLmrChBonus = atoi(e);
+            if (on("DRAWJITTER")) drawJitter = true;
+            if (on("CHECKORDER")) checkOrder = true;
+            if (const char* e = getenv("CHECKORDERBONUS")) checkOrderBonus = atoi(e);
+            if (const char* e = getenv("CHECKORDERSEEMARGIN")) checkOrderSeeMargin = atoi(e);
             if (on("GMCONST")) {
                 // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
                 // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
@@ -645,6 +720,14 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     // ---- HISTDECAY constants (2026-07-20, only read when histDecay on) ----
     else if (name == "HistDecayNum") tune.histDecayNum = clamp(value, 1, 32);
     else if (name == "HistDecayDen") tune.histDecayDen = clamp(value, 2, 64);
+    // ---- CUTOFFGRADE constants (2026-07-20, only read when cutoffGrade on) ----
+    else if (name == "CutoffGradeBase") tune.cutoffGradeBase = clamp(value, 0, 2048);
+    else if (name == "CutoffGradeStep") tune.cutoffGradeStep = clamp(value, 0, 2048);
+    // ---- POSTLMRCH constant (2026-07-20, only read when postLmrCh on) ----
+    else if (name == "PostLmrChBonus") tune.postLmrChBonus = clamp(value, 0, 400);
+    // ---- CHECKORDER constants (2026-07-20, only read when checkOrder on) ----
+    else if (name == "CheckOrderBonus")     tune.checkOrderBonus     = clamp(value, 0, 20000);
+    else if (name == "CheckOrderSeeMargin") tune.checkOrderSeeMargin = clamp(value, -100, 0);
     // LmrBase/LmrDiv: wire value is the double x LMR_DOUBLE_SCALE (search.h) — see the
     // Tune::lmrBase/lmrDiv comment. Clamp in wire units, convert on the way in.
     else if (name == "LmrBase")        tune.lmrBase        = clamp(value, 3000, 15000) / double(LMR_DOUBLE_SCALE);
@@ -997,6 +1080,13 @@ void score_moves_impl(Context& C, const Position& pos, ExtMove* begin, ExtMove* 
             // unweighted (matches zug's unweighted butterfly read).
             if (C.tune.pawnOrderHist)
                 h += C.pawnOrderHist[pos.pawn_key() & 8191][piece_dense(pos.moved_piece(mv))][to_sq(mv)];
+            // CHECKORDER (SF movepick.cpp:170, sf-sp-search-backlog.md #6): bonus
+            // for a quiet move that gives check and doesn't lose material outright
+            // (light SEE test). pos.gives_check(mv) is a real (not cheap-bitboard)
+            // check test — see Tune::checkOrder for the SF-vs-zug cost note. Ordering
+            // only, no pruning change. Default off; env CHECKORDER=1.
+            if (C.tune.checkOrder && pos.gives_check(mv) && pos.see_ge(mv, C.tune.checkOrderSeeMargin))
+                h += C.tune.checkOrderBonus;
             m->score = h;
         }
     }
@@ -1240,6 +1330,26 @@ int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta) {
     return bestValue;
 }
 
+// DRAWJITTER (SF search.cpp:127, sf-sp-search-backlog.md #5): value_draw(nodes) =
+// VALUE_DRAW-1+(nodes&2) cycles {-1,+1} on a node-count parity bit, avoiding a flat
+// draw score so move-ordering/TT ties around draws break deterministically-but-not-
+// flatly, dodging some 3-fold search instability. VERIFIED against ~sf18-arm/src/
+// search.cpp directly (not the backlog's summary): SF applies this ONLY at the
+// main-search is_draw()/upcoming_repetition sites (search.cpp:630-635,676-678) —
+// qsearch's OWN is_draw() return (search.cpp:1538: `... : VALUE_DRAW`) and the
+// stalemate/no-legal-moves return (search.cpp:1411: `... : VALUE_DRAW`) are BOTH
+// flat, unjittered VALUE_DRAW in real SF; only the repetition-draw path (and the
+// upcoming-repetition cuckoo short-circuit, which zug doesn't have — backlog #15,
+// separate/unimplemented) gets the jitter. So the single faithful port site is
+// zug's main-negamax non-root is_draw() return below — zug's qsearch is_draw
+// (search.cpp ~1218) and the stalemate return are intentionally left untouched.
+// (An earlier reading of the backlog implied qsearch should jitter too; that is
+// not what SF's source actually does — a backlog correction.) Default OFF; env
+// DRAWJITTER=1. OFF path: returns the same flat VALUE_DRAW as before.
+inline int draw_value(Context& C) {
+    return C.tune.drawJitter ? (VALUE_DRAW - 1 + int(C.nodeCount & 2)) : VALUE_DRAW;
+}
+
 // INCHKEVAL env kill-switch (default off), read once. When on, a node in check keeps a
 // real staticEval (propagated from (ss-2)) instead of VALUE_NONE, so the improving /
 // opponentWorsening chain survives across check sequences (SF search.cpp:716).
@@ -1279,7 +1389,7 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
     ss->inCheck = pos.in_check();
 
     if (!rootNode) {
-        if (pos.is_draw(ss->ply)) return VALUE_DRAW;
+        if (pos.is_draw(ss->ply)) return draw_value(C); // DRAWJITTER — see draw_value() comment
         if (ss->ply >= MAX_PLY) return ss->inCheck ? VALUE_DRAW : Eval::evaluate(pos);
         // Mate distance pruning
         alpha = std::max(mated_in(ss->ply), alpha);
@@ -1777,7 +1887,18 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             if (C.tune.ttPvOn && ss->ttPv) r -= 1024;
             // #6 (SF): a child that fails high a lot means siblings here are unlikely
             // to matter — reduce them harder.
-            if (C.tune.cutoffCnt && (ss + 1)->cutoffCnt > 3) r += 1024;
+            if (C.tune.cutoffCnt) {
+                if (C.tune.cutoffGrade) {
+                    // CUTOFFGRADE (SF search.cpp:1208-1209, VERIFIED): graded form,
+                    // fires at >1, escalates at >2. allNode sub-term deliberately
+                    // omitted — see Tune::cutoffGrade for why. SF's literal 256/1024
+                    // are already in zug's native r x1024 convention (straight port).
+                    if ((ss + 1)->cutoffCnt > 1)
+                        r += C.tune.cutoffGradeBase + C.tune.cutoffGradeStep * ((ss + 1)->cutoffCnt > 2);
+                } else if ((ss + 1)->cutoffCnt > 3) {
+                    r += 1024;
+                }
+            }
             // cur was post-incremented by pick_next, so (cur-1) is THIS move's ExtMove.
             // With LMRHIST on, reuse the ordering-time butterfly+conthist sum for general
             // quiets instead of re-reading the conthist tables (NOT byte-identical: this
@@ -1876,6 +1997,18 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                 else if (score < bestValue + newDepth) rd = std::max(1, newDepth - 1);
             }
             score = -negamax<false>(C, pos, ss + 1, -alpha - 1, -alpha, rd, !cutNode);
+            // POSTLMRCH (SF search.cpp:1259, VERIFIED — see Tune::postLmrCh for the
+            // full port-fidelity note): credit this move's continuation history for
+            // surviving its LMR reduction. Gated on wasLMRReduced ALONE, matching SF
+            // exactly — wasLMRReduced already encodes "the original reduced scout's
+            // score beat alpha" (set above, before `score` was just reassigned by the
+            // re-search on this line), so re-checking `score > alpha` here would
+            // wrongly test the POST-re-search value instead. ch1..ch6 are the same
+            // plane pointers hoisted once for this node (nullptr, hence a no-op, when
+            // contHist is off — update_cont_hist already null-checks each). Default
+            // off; env POSTLMRCH=1.
+            if (C.tune.postLmrCh && wasLMRReduced)
+                update_cont_hist(ch1, ch2, ch3, ch4, ch6, mover, to_sq(m), C.tune.postLmrChBonus);
         }
 
         if (PvNode && (moveCount == 1 || score > alpha))

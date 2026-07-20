@@ -37,7 +37,7 @@
 
 ## TIER 1 — fresh, cheap, both-engines-carry-it, zug genuinely lacks (do first)
 
-### 1. Capture futility pruning (parent-node, capthist-scaled)
+### 1. Capture futility pruning  [SPRT +3.8+-11 @920g — leaning positive, UNCONFIRMED; SPSA-tune capFutBase/Slope/HistCoeff then re-SPRT]
 **STATUS: proposed** · Elo ~+4–10 · Effort **S** · fresh
 - **SF** `search.cpp:1066-1073`: for a capture, gated `!givesCheck && lmrDepth < 7`,
   `futilityValue = ss->staticEval + 232 + 217*lmrDepth + PieceValue[captured] + 131*captHist/1024`;
