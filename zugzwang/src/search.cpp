@@ -516,10 +516,15 @@ struct Context {
         // from zug's post-search cutoff credit (fresh cutoffs) and PCM (fail-low credit). Both
         // SF18 and Stormphrax independently do this; genuinely un-ported in zug. Default OFF;
         // env TTCUTBONUS=1, movetime-SPRT gated.
-        bool ttCutBonus       = false;
-        int  ttCutBonusScale  = 132; // SF: bonus = min(132*depth - 72, 985)
-        int  ttCutBonusMax    = 985;
-        int  ttCutMalus       = 2060; // SF: prev-ply continuation-history malus
+        //
+        // SCALE (critical): SF's raw constants (132*depth-72 bonus, 2060 malus) are for SF's
+        // history clamp (~±7000). zug clamps the BONUS ITSELF to ±400 in update_history/
+        // update_cont_entry, so SF magnitudes saturate every update on the most-frequent path
+        // (TT cutoffs) and swamp the real-search signal — a v1 that used them lost -28 Elo.
+        // The faithful port matches the RELATIONSHIP SF has (TT-cutoff bonus == real-cutoff
+        // bonus == stat_bonus): use zug's OWN native cutoff scale here, depth*depth (the exact
+        // value zug's real-cutoff block at ~search.cpp:2331 uses), and a depth-scaled malus.
+        bool ttCutBonus = false;
         // NOTE (2026-07-20): CUTNODEEXT (SP search.cpp:1131 `cutnode |= extension<0`)
         // researched + DEFERRED — SP modifies function-scope cutnode, which in zug leaks
         // into the next move iteration + the fail-low PCM/allNode reads. A safe port needs
@@ -699,9 +704,6 @@ struct Context {
             if (const char* e = getenv("CONTEMPT")) contempt = atoi(e); // cp; 0 = off
             if (off("TIMEMAN")) timeMan = false; // shipped default-on (+28 Elo TC-SPRT); kill-switch
             if (on("TTCUTBONUS")) ttCutBonus = true;
-            if (const char* e = getenv("TTCUTBONUSSCALE")) { int v = atoi(e); if (v > 0) ttCutBonusScale = v; }
-            if (const char* e = getenv("TTCUTBONUSMAX"))   { int v = atoi(e); if (v > 0) ttCutBonusMax = v; }
-            if (const char* e = getenv("TTCUTMALUS"))      { int v = atoi(e); if (v >= 0) ttCutMalus = v; }
             if (on("PCM")) pcm = true;
             if (const char* e = getenv("PCMBASE"))        pcmBase        = atoi(e);
             if (const char* e = getenv("PCMDEPTHW"))       pcmDepthW      = atoi(e);
@@ -1675,24 +1677,27 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             // pseudo_legal() guards against a colliding TT move indexing tables out of range.
             if (C.tune.ttCutBonus && ttValue >= beta && ttMove != MOVE_NONE && !ttCapture
                 && type_of_move(ttMove) != PROMOTION && pos.pseudo_legal(ttMove)) {
-                int bonus = std::min(C.tune.ttCutBonusScale * depth - 72, C.tune.ttCutBonusMax);
-                if (bonus > 0) {
-                    update_history(C, pos.side_to_move(), ttMove, bonus);
-                    if (C.tune.contHist) {
-                        int16_t *ch1, *ch2, *ch3, *ch4, *ch6;
-                        cont_hist_planes(C, ss, ch1, ch2, ch3, ch4, ch6);
-                        update_cont_hist(ch1, ch2, ch3, ch4, ch6,
-                                         pos.moved_piece(ttMove), to_sq(ttMove), bonus);
-                    }
+                // zug-native scale (see Tune::ttCutBonus): depth*depth, matching zug's
+                // real-cutoff bonus — NOT SF's raw magnitudes (which saturate zug's ±400
+                // per-update clamp). update_history/update_cont_entry clamp internally, so
+                // large depths degrade gracefully exactly as the real-cutoff block does.
+                int bonus = depth * depth;
+                update_history(C, pos.side_to_move(), ttMove, bonus);
+                if (C.tune.contHist) {
+                    int16_t *ch1, *ch2, *ch3, *ch4, *ch6;
+                    cont_hist_planes(C, ss, ch1, ch2, ch3, ch4, ch6);
+                    update_cont_hist(ch1, ch2, ch3, ch4, ch6,
+                                     pos.moved_piece(ttMove), to_sq(ttMove), bonus);
                 }
-                // Prev-ply early-quiet penalty (SF: (ss-1)->moveCount < 4 && !priorCapture).
+                // Prev-ply early-quiet penalty (SF: (ss-1)->moveCount < 4 && !priorCapture),
+                // depth-scaled like zug's own quiet malus (-(depth+1)^2), not SF's flat 2060.
                 if (C.tune.contHist && (ss - 1)->currentMove != MOVE_NONE
                     && (ss - 1)->currentMove != MOVE_NULL && (ss - 1)->moveCount < 4
                     && !(ss - 1)->didCapture) {
                     int16_t *p1, *p2, *p3, *p4, *p6;
                     cont_hist_planes(C, ss - 1, p1, p2, p3, p4, p6);
                     update_cont_hist(p1, p2, p3, p4, p6, (ss - 1)->currentPiece,
-                                     to_sq((ss - 1)->currentMove), -C.tune.ttCutMalus);
+                                     to_sq((ss - 1)->currentMove), -(depth + 1) * (depth + 1));
                 }
             }
             return ttValue;
