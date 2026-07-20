@@ -282,6 +282,10 @@ int uci_main() {
             // (sf-sp-search-backlog.md #6; SF movepick.cpp:170).
             std::cout << "option name CheckOrderBonus type spin default 4096 min 0 max 20000\n";
             std::cout << "option name CheckOrderSeeMargin type spin default -36 min -100 max 0\n";
+            // HISTTAPER / HISTTTBONUS constants (2026-07-20, only read when the owning
+            // env flag is on) — sf-sp-search-backlog.md #8b/#8c, SF search.cpp:1833/1841.
+            std::cout << "option name HistTaperK type spin default 5 min 0 max 32\n";
+            std::cout << "option name HistTtBonusVal type spin default 90 min 0 max 400\n";
             std::cout << "option name OwnBook type check default false\n";
             std::cout << "option name UCI_LimitStrength type check default false\n";
             std::cout << "option name UCI_Elo type spin default " << Rating::RatingMax

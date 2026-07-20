@@ -357,6 +357,30 @@ struct Context {
         bool checkOrder = false;
         int  checkOrderBonus = 4096;
         int  checkOrderSeeMargin = -36;
+        // ---- HISTTAPER (2026-07-20, sf-sp-search-backlog.md #8c): late-quiet malus
+        // taper. SF18 search.cpp:1841-1850 (VERIFIED directly): the malus applied to
+        // each searched-not-best quiet is reduced for moves tried late — with `i` the
+        // 1-indexed rank among non-best searched quiets, `if (i>5) actualMalus -=
+        // actualMalus*(i-5)/i`. Rationale: a quiet tried very late was never a real
+        // best-move candidate, so hammering its history is mostly noise. This is the
+        // one #8 sub-part that is FULLY SCALE-INDEPENDENT (a relative shrink of the
+        // existing -bonus malus), so zug's ±400 update_history clamp / different
+        // history scale don't matter — no SPSA rescale needed to try it faithfully.
+        // zug's quietsSearched INCLUDES bestMove (skipped in the loop), so the rank
+        // must count non-best quiets, NOT the array index. Default OFF (tMalus == -bonus
+        // → byte-identical); env HISTTAPER=1. histTaperK = the SF threshold (5).
+        bool histTaper  = false;
+        int  histTaperK = 5;
+        // ---- HISTTTBONUS (2026-07-20, sf-sp-search-backlog.md #8b): a ttMove-is-best
+        // extra history bonus. SF18 search.cpp:1833 (VERIFIED): bonus += 347*(bestMove
+        // ==ttMove) on a base bonus whose cap is 1515 (~23%). zug's bonus is depth*depth
+        // clamped to ±400 inside update_history, a different scale, so the literal 347
+        // does NOT transfer — histTtBonusVal is in zug's pre-clamp bonus units, SPSA to
+        // find the level (a large value just saturates at the ±400 clamp, harmless).
+        // Applied ONLY to the bestMove's +bonus updates (main/cont/capt), never to the
+        // malus. Default OFF (adds 0 → byte-identical); env HISTTTBONUS=1.
+        bool histTtBonus    = false;
+        int  histTtBonusVal = 90;
         // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
         // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
         // callers in uci.cpp for the option table incl. min/max).
@@ -514,6 +538,10 @@ struct Context {
             if (on("CHECKORDER")) checkOrder = true;
             if (const char* e = getenv("CHECKORDERBONUS")) checkOrderBonus = atoi(e);
             if (const char* e = getenv("CHECKORDERSEEMARGIN")) checkOrderSeeMargin = atoi(e);
+            if (on("HISTTAPER")) histTaper = true;
+            if (const char* e = getenv("HISTTAPERK")) { int v = atoi(e); if (v >= 0) histTaperK = v; }
+            if (on("HISTTTBONUS")) histTtBonus = true;
+            if (const char* e = getenv("HISTTTBONUSVAL")) histTtBonusVal = atoi(e);
             if (on("GMCONST")) {
                 // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
                 // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
@@ -728,6 +756,9 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     // ---- CHECKORDER constants (2026-07-20, only read when checkOrder on) ----
     else if (name == "CheckOrderBonus")     tune.checkOrderBonus     = clamp(value, 0, 20000);
     else if (name == "CheckOrderSeeMargin") tune.checkOrderSeeMargin = clamp(value, -100, 0);
+    // ---- HISTTAPER / HISTTTBONUS constants (2026-07-20) ----
+    else if (name == "HistTaperK")     tune.histTaperK     = clamp(value, 0, 32);
+    else if (name == "HistTtBonusVal") tune.histTtBonusVal = clamp(value, 0, 400);
     // LmrBase/LmrDiv: wire value is the double x LMR_DOUBLE_SCALE (search.h) — see the
     // Tune::lmrBase/lmrDiv comment. Clamp in wire units, convert on the way in.
     else if (name == "LmrBase")        tune.lmrBase        = clamp(value, 3000, 15000) / double(LMR_DOUBLE_SCALE);
@@ -2068,39 +2099,59 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         if (C.tune.ttMoveHist && !PvNode)
             ttmovehist_update(C.ttMoveHistory, bestMove == ttMove ? 809 : -865);
         int bonus = depth * depth;
+        // HISTTTBONUS (#8b): a ttMove-that-held-up gets an extra positive history bonus.
+        // Applied ONLY to bestMove's +bonus writes below, never to the malus. Off → +0.
+        int bestBonus = bonus;
+        if (C.tune.histTtBonus && bestMove == ttMove) bestBonus = bonus + C.tune.histTtBonusVal;
+        // HISTTAPER (#8c): precompute the per-quiet malus, tapering late tries exactly
+        // as SF search.cpp:1841-1850 does. `rank` counts non-best searched quiets
+        // (1-indexed) — NOT the array slot, since zug's quietsSearched includes bestMove.
+        // Off (or rank<=K) → tMalus[i] == -bonus, so every write is byte-identical.
+        int tMalus[64];
+        {
+            int rank = 0;
+            for (int i = 0; i < quietCount; ++i) {
+                if (quietsSearched[i] == bestMove) { tMalus[i] = 0; continue; }
+                ++rank;
+                int mal = -bonus;
+                if (C.tune.histTaper && rank > C.tune.histTaperK)
+                    mal -= mal * (rank - C.tune.histTaperK) / rank;
+                tMalus[i] = mal;
+            }
+        }
         if (!pos.is_capture(bestMove) && type_of_move(bestMove) != PROMOTION) {
             if (ss->killers[0] != bestMove) {
                 ss->killers[1] = ss->killers[0];
                 ss->killers[0] = bestMove;
             }
-            update_history(C, us, bestMove, bonus);
+            update_history(C, us, bestMove, bestBonus);
             for (int i = 0; i < quietCount; ++i)
                 if (quietsSearched[i] != bestMove)
-                    update_history(C, us, quietsSearched[i], -bonus);
+                    update_history(C, us, quietsSearched[i], tMalus[i]);
             if (C.tune.lowPlyHist && ss->ply < 5) {
-                update_low_ply_hist(C, ss->ply, bestMove, bonus);
+                update_low_ply_hist(C, ss->ply, bestMove, bestBonus);
                 for (int i = 0; i < quietCount; ++i)
                     if (quietsSearched[i] != bestMove)
-                        update_low_ply_hist(C, ss->ply, quietsSearched[i], -bonus);
+                        update_low_ply_hist(C, ss->ply, quietsSearched[i], tMalus[i]);
             }
             if (C.tune.pawnOrderHist) {
                 // pos is back at the pre-move-loop position here (same guard
                 // update_cont_hist/update_capt_hist above rely on), so
                 // moved_piece() is valid for bestMove and every searched quiet.
-                update_pawn_order_hist(C, pos, pos.moved_piece(bestMove), to_sq(bestMove), bonus);
+                update_pawn_order_hist(C, pos, pos.moved_piece(bestMove), to_sq(bestMove), bestBonus);
                 for (int i = 0; i < quietCount; ++i)
                     if (quietsSearched[i] != bestMove)
-                        update_pawn_order_hist(C, pos, pos.moved_piece(quietsSearched[i]), to_sq(quietsSearched[i]), -bonus);
+                        update_pawn_order_hist(C, pos, pos.moved_piece(quietsSearched[i]), to_sq(quietsSearched[i]), tMalus[i]);
             }
             if (C.tune.contHist) {
                 // pos is back at the pre-move-loop position here (every iteration
                 // above paired do_move with undo_move), so moved_piece() is valid.
                 // ch1/ch2 were hoisted once for this node above the move loop —
                 // reuse them here instead of re-deriving the parent key.
-                update_cont_hist(ch1, ch2, ch3, ch4, ch6, pos.moved_piece(bestMove), to_sq(bestMove), bonus);
+                update_cont_hist(ch1, ch2, ch3, ch4, ch6, pos.moved_piece(bestMove), to_sq(bestMove), bestBonus);
                 for (int i = 0; i < quietCount; ++i)
                     if (quietsSearched[i] != bestMove)
-                        update_cont_hist(ch1, ch2, ch3, ch4, ch6, pos.moved_piece(quietsSearched[i]), to_sq(quietsSearched[i]), -bonus);
+                        update_cont_hist(ch1, ch2, ch3, ch4, ch6, pos.moved_piece(quietsSearched[i]), to_sq(quietsSearched[i]), tMalus[i]);
             }
             if ((ss - 1)->currentMove)
                 C.counterMoves[pos.piece_on(to_sq((ss - 1)->currentMove))][to_sq((ss - 1)->currentMove)] = bestMove;
@@ -2108,7 +2159,7 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             // Best move was a capture: reward it in capture history.
             PieceType vic = (type_of_move(bestMove) == EN_PASSANT) ? PAWN
                                                                    : type_of(pos.piece_on(to_sq(bestMove)));
-            update_capt_hist(C, pos.moved_piece(bestMove), to_sq(bestMove), vic, bonus);
+            update_capt_hist(C, pos.moved_piece(bestMove), to_sq(bestMove), vic, bestBonus);
         }
         // Penalize every searched-but-not-best capture (on ANY cutoff — a capture tried
         // that didn't cut is bad ordering). pos is back at the node position here, so
