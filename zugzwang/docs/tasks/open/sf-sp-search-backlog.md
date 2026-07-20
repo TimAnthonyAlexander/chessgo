@@ -48,13 +48,22 @@ across every addition). Committed to main. SPRT queue drains one-at-a-time on co
 | 4 | POSTLMRCH | `POSTLMRCH=1` | **WASHED** (lmrpair pair, see #3) |
 | 5 | DRAWJITTER | `DRAWJITTER=1` | bundle5 washed (−7 as part of 4-tweak drag); solo re-SPRT TBD |
 | 6 | CHECKORDER | `CHECKORDER=1` | bundle5 washed (in the drag); solo re-SPRT TBD |
-| 7 | QSMOVECAP | `QSMOVECAP=1` | **queued** (nodes 34220→19143, faithful SF cap=2) |
+| 7 | QSMOVECAP | `QSMOVECAP=1` | **leaning +4.7±11 @902g** (was +14 @462g then regressed; mechanistically sound — speeds search; SF+SP ship it; never-negative). Stream-ship candidate. |
 | 8b | HISTTTBONUS | `HISTTTBONUS=1` | **queued** (ttMove-is-best extra bonus) |
 | 8c | HISTTAPER | `HISTTAPER=1` | **WASHED** 0.00±14.9 @551g (dead flat; confirms zug ordering/history saturation). Default-off. |
 | 10 | PCM | `PCM=1` | **queued** — fail-low parent-move credit (biggest novel item) |
 | 11 | LMREXT | `LMREXT=1` | **queued** — LMR extend past newDepth + PvNode |
 | 13 | SHUFFLEGUARD | `SHUFFLEGUARD=1` | **queued** — suppress singular ext in rule50 shuffle |
 | 2 | HISTDECAY | `HISTDECAY=1` | washed −10.7 @380g; gentler-rate SPSA candidate (dormant) |
+
+**MOVETIME NOISE-FLOOR LESSON (2026-07-20, important):** at conc=5 movetime 0.1s, reads
+before ~800g are noise-dominated and REPEATEDLY show a phantom +14/+15 Elo that then
+regresses to ~0-5. Observed on lmrpair (+15.6@408 → +3.3@760) AND qsmovecap (+14.4@462
+→ +4.7@902). Do NOT trend-accept before ~800g. Confirming a *true* +5 effect to CI-excludes-0
+needs ~3000 games (~2h/candidate) — infeasible per-candidate. Consequence: genuine small
+wins (mechanistically-sound, SF-faithful, never-negative leaning-positives like CAPFUT
++3.8 / QSMOVECAP +4.7) can't be individually SPRT-confirmed here; they must be shipped
+as a *stream* (SF's own model — fishtest uses 10k+ games per patch) or batch-SPSA'd.
 
 Enablers landed this session: `Stack::moveCount` (#10, unblocks #9 statScore later),
 `Position::plies_from_null()` (#13). Next fresh to implement when queue drains: #15
