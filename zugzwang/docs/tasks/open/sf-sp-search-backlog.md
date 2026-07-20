@@ -50,7 +50,7 @@ across every addition). Committed to main. SPRT queue drains one-at-a-time on co
 | 6 | CHECKORDER | `CHECKORDER=1` | bundle5 washed (in the drag); solo re-SPRT TBD |
 | 7 | QSMOVECAP | `QSMOVECAP=1` | **queued** (nodes 34220→19143, faithful SF cap=2) |
 | 8b | HISTTTBONUS | `HISTTTBONUS=1` | **queued** (ttMove-is-best extra bonus) |
-| 8c | HISTTAPER | `HISTTAPER=1` | **queued (lead)** — scale-free late-quiet malus taper |
+| 8c | HISTTAPER | `HISTTAPER=1` | **WASHED** 0.00±14.9 @551g (dead flat; confirms zug ordering/history saturation). Default-off. |
 | 10 | PCM | `PCM=1` | **queued** — fail-low parent-move credit (biggest novel item) |
 | 11 | LMREXT | `LMREXT=1` | **queued** — LMR extend past newDepth + PvNode |
 | 13 | SHUFFLEGUARD | `SHUFFLEGUARD=1` | **queued** — suppress singular ext in rule50 shuffle |
