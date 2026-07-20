@@ -258,6 +258,16 @@ struct Context {
         // Default OFF; env NMPSF=1. OFF path must stay byte-identical to today's
         // nullMove/nmpCutGate/nmpEvalDiv mechanism.
         bool nmpSf = false;
+        // ---- CAPFUT (2026-07-20, sf-sp-search-backlog.md #1): SF18 capture
+        // futility pruning (search.cpp:1064-1072). zug's capture pruning was
+        // SEE-only (below); this adds an eval-based futility test — a capture
+        // that can't possibly raise alpha even with the captured piece's value
+        // added is pruned before the SEE check runs. Gated !givesCheck &&
+        // lmrDepth < 7 (SF's exact gate; zug's `lmrDepth` local, already
+        // computed above regardless of lmrDepthPrune, is the equivalent depth
+        // proxy). Default OFF; env CAPFUT=1. OFF path adds zero cost: the whole
+        // block is skipped, capture branch stays byte-identical to today.
+        bool capFut = false;
         // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
         // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
         // callers in uci.cpp for the option table incl. min/max).
@@ -283,6 +293,24 @@ struct Context {
         int corrMarginDiv  = 30370; // CORRMARGIN (LMR term only): r -= abs(correction_raw)/corrMarginDiv (SF search.cpp:1197, 30370)
         int allNodeDiv     = 1;     // ALLNODELMR: r += r/(depth+allNodeDiv) at allNodes (SF search.cpp:1228 uses depth+1 -> allNodeDiv=1)
         int dblExtMargin   = 64;    // double-extension verification margin (search.cpp singular block; was a bare 64)
+        // ---- CAPFUT constants (only read when capFut on) — scaled from SF search.cpp:1071
+        // `staticEval + 232 + 217*lmrDepth + PieceValue[captured] + 131*captHist/1024`.
+        // BASE/SLOPE: SF's additive/per-lmrDepth terms are in SF's eval scale (PawnValue=208,
+        // types.h:185); zug's eval/PieceVal scale is pawn=100, ratio 100/208 ~= 0.4808:
+        // 232*0.4808 ~= 111.5 -> 112, 217*0.4808 ~= 104.3 -> 104. PieceVal[victim] is used
+        // directly (zug's own material table, already pawn=100 — no rescale needed).
+        // HistCoeff/divisor: SF's captHist term is captHist/1024 against
+        // CapturePieceToHistory's hard clamp (history.h:142, D=10692); zug's captHist
+        // (search.cpp captHist[] table) has no hard clamp but self-limits to ~16384 in
+        // steady state (same steady-state figure used by CAPTHISTPRUNE's margin/320
+        // derivation above) — ratio 16384/10692 ~= 1.532. Keeping SF's /1024 divisor,
+        // solve the coefficient so the term's max swing scales the same way BASE/SLOPE
+        // did: K = 131 * 0.4808 / 1.532 ~= 41. (Sanity: term maxes at 16384*41/1024 ~=
+        // 656, vs the ratio-consistent target 1367.8[SF max]*0.4808/1.532 ~= 655.6 —
+        // matches to within rounding.)
+        int capFutBase      = 112;
+        int capFutSlope     = 104;
+        int capFutHistCoeff = 41;   // read as captHist * capFutHistCoeff / 1024
         // ---- D.1 gomachine structural constants — ACCEPTED, baked into defaults 2026-07-14 ----
         // (previously only applied via env GMCONST=1; not UCI-exposed)
         int captSeeMaxDepth  = 4;      // capture SEE pruning: only at depth <= this
@@ -362,6 +390,7 @@ struct Context {
             if (on("PAWNORDHIST")) pawnOrderHist = true;
             if (on("TTMOVEHIST")) ttMoveHist = true;
             if (on("NMPSF")) nmpSf = true;
+            if (on("CAPFUT")) capFut = true;
             if (on("GMCONST")) {
                 // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
                 // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
@@ -561,6 +590,10 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     else if (name == "CorrMarginDiv")  tune.corrMarginDiv  = clamp(value, 10000, 100000);
     else if (name == "AllNodeDiv")     tune.allNodeDiv     = clamp(value, 1, 6);
     else if (name == "DblExtMargin")   tune.dblExtMargin   = clamp(value, 20, 130);
+    // ---- CAPFUT constants (2026-07-20, only read when capFut on) ----
+    else if (name == "CapFutBase")      tune.capFutBase      = clamp(value, 0, 220);
+    else if (name == "CapFutSlope")     tune.capFutSlope     = clamp(value, 20, 200);
+    else if (name == "CapFutHistCoeff") tune.capFutHistCoeff = clamp(value, 0, 120);
     // LmrBase/LmrDiv: wire value is the double x LMR_DOUBLE_SCALE (search.h) — see the
     // Tune::lmrBase/lmrDiv comment. Clamp in wire units, convert on the way in.
     else if (name == "LmrBase")        tune.lmrBase        = clamp(value, 3000, 15000) / double(LMR_DOUBLE_SCALE);
@@ -1532,6 +1565,27 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                             : (depth <= 8 && !pos.see_ge(m, -C.tune.seeQuietCoeff * depth * depth));
                 if (C.tune.quietSee && seeQuietPrune) continue;
             } else {
+                // CAPFUT (SF search.cpp:1064-1072, sf-sp-search-backlog.md #1):
+                // eval-based futility pruning for captures — a capture that can't
+                // raise alpha even after adding the captured piece's value (plus a
+                // capHist-scaled adjustment) is pruned before the SEE check below
+                // ever runs. SF's exact gate: !givesCheck && lmrDepth < 7. `lmrDepth`
+                // here is the same local computed above (raw `depth` unless
+                // lmrDepthPrune is also on). Constants: see Tune::capFutBase/
+                // capFutSlope/capFutHistCoeff comment for the pawn=100 / captHist
+                // steady-state derivation. Default OFF; env CAPFUT=1 — OFF, this
+                // whole block is skipped and the capture branch is byte-identical
+                // to before.
+                if (C.tune.capFut && !givesCheck && lmrDepth < 7) {
+                    PieceType capFutVictim = (type_of_move(m) == EN_PASSANT)
+                        ? PAWN : type_of(pos.piece_on(to_sq(m)));
+                    int futilityValue = eval + C.tune.capFutBase
+                        + C.tune.capFutSlope * lmrDepth + PieceVal[capFutVictim]
+                        + C.tune.capFutHistCoeff
+                          * C.captHist[piece_dense(mover)][to_sq(m)][capFutVictim] / 1024;
+                    if (futilityValue <= alpha) continue;
+                }
+
                 // SEE pruning of captures
                 // captHistPrune (build-on captHist, SF search.cpp:1077: margin =
                 // max(166*depth + captHist/29, 0)): add a captHist-scaled term to zug's

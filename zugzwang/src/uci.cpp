@@ -253,6 +253,11 @@ int uci_main() {
             std::cout << "option name DblExtMargin type spin default 64 min 20 max 130\n";
             std::cout << "option name LmrBase type spin default 7844 min 3000 max 15000\n";
             std::cout << "option name LmrDiv type spin default 24696 min 15000 max 40000\n";
+            // CAPFUT constants (2026-07-20, only read when env CAPFUT=1) — capture
+            // futility pruning, search.cpp Tune::capFut* (SF search.cpp:1064-1072).
+            std::cout << "option name CapFutBase type spin default 112 min 0 max 220\n";
+            std::cout << "option name CapFutSlope type spin default 104 min 20 max 200\n";
+            std::cout << "option name CapFutHistCoeff type spin default 41 min 0 max 120\n";
             std::cout << "option name OwnBook type check default false\n";
             std::cout << "option name UCI_LimitStrength type check default false\n";
             std::cout << "option name UCI_Elo type spin default " << Rating::RatingMax
