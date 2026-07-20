@@ -395,6 +395,15 @@ struct Context {
         // Default OFF (clamp reverts to min(...,newDepth), no PvNode add → byte-identical).
         bool lmrExt    = false;
         int  lmrExtCap = 2;
+        // ---- SHUFFLEGUARD (2026-07-20, sf-sp-search-backlog.md #13): suppress the
+        // singular extension in a dead rule50 shuffle. SF18 search.cpp:145-152 + gate
+        // at 1131 (VERIFIED directly): is_shuffling := !capture && rule50>=10 &&
+        // pliesFromNull>6 && ply>=20 && move.from==(ss-2)->cur.to &&
+        // (ss-2)->cur.from==(ss-4)->cur.to (a 4-ply single-piece round-trip). zug's
+        // singular gate has no shuffle detector, so it burns verification searches
+        // singular-extending a ttMove in a repeating drawn position. Default OFF
+        // (gate unchanged → byte-identical); env SHUFFLEGUARD=1.
+        bool shuffleGuard = false;
         // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
         // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
         // callers in uci.cpp for the option table incl. min/max).
@@ -558,6 +567,7 @@ struct Context {
             if (const char* e = getenv("HISTTTBONUSVAL")) histTtBonusVal = atoi(e);
             if (on("LMREXT")) lmrExt = true;
             if (const char* e = getenv("LMREXTCAP")) { int v = atoi(e); if (v >= 0) lmrExtCap = v; }
+            if (on("SHUFFLEGUARD")) shuffleGuard = true;
             if (on("GMCONST")) {
                 // PARITY_GOMACHINE.md §D.1 — the structural constants below are now the
                 // field DEFAULTS (baked in 2026-07-14), so this block is a redundant
@@ -709,6 +719,20 @@ struct Stack {
     bool  didCapture; // #12: was currentMove a capture? (read one ply down)
     bool  ttPv;       // #5: this node is (or descends from) a PV — gates RFP, de-reduces LMR
 };
+
+// #13 is_shuffling (SF18 search.cpp:145-152, VERIFIED): a dead 4-ply single-piece
+// round-trip in a rule50 shuffle, where singular-extending the ttMove is wasted
+// depth. Guards on ply>=20 so (ss-2)/(ss-4) are always valid frames; also rejects
+// null-move ancestors (a null currentMove's from/to are meaningless) — SF relies on
+// its Move::null()==(0,0) making the square-equality naturally false, zug guards
+// explicitly for the same effect.
+static inline bool is_shuffling(Move m, Stack* ss, const Position& pos) {
+    if (pos.is_capture(m) || pos.rule50_count() < 10) return false;
+    if (pos.plies_from_null() <= 6 || ss->ply < 20) return false;
+    Move c2 = (ss - 2)->currentMove, c4 = (ss - 4)->currentMove;
+    if (c2 == MOVE_NONE || c2 == MOVE_NULL || c4 == MOVE_NONE || c4 == MOVE_NULL) return false;
+    return from_sq(m) == to_sq(c2) && from_sq(c2) == to_sq(c4);
+}
 
 void build_reductions(Context& C) {
     for (int d = 1; d < 64; ++d)
@@ -1845,7 +1869,8 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         // Singular extension
         if (!rootNode && depth >= C.tune.singularMinDepth && m == ttMove && !excluded
             && tte->depth >= depth - 3 && (tte->bound() & BOUND_LOWER)
-            && std::abs(ttValue) < VALUE_MATE_IN_MAX_PLY) {
+            && std::abs(ttValue) < VALUE_MATE_IN_MAX_PLY
+            && !(C.tune.shuffleGuard && is_shuffling(m, ss, pos))) {
             int singularBeta = ttValue - C.tune.singularMargin * depth / 16; // default 32 -> exactly 2*depth
             ss->excludedMove = m;
             int s = negamax<false>(C, pos, ss, singularBeta - 1, singularBeta, (depth - 1) / 2, cutNode);

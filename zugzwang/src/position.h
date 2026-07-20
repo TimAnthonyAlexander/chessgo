@@ -63,6 +63,7 @@ public:
     Square castling_rook_square(int right) const { return castlingRookFrom[castling_right_index(right)]; }
     Square ep_square() const { return st->epSquare; }
     int rule50_count() const { return st->rule50; }
+    int plies_from_null() const { return st->pliesFromNull; }
     // Display-only FEN fullmove counter (see the `fullmove` field doc below) —
     // Crazyhouse's move-cap draw safety valve reads this (mirrors gomachine's
     // drawMoveCap check on chess.Position.FullmoveNumber).
