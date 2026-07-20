@@ -332,6 +332,12 @@ int uci_main() {
             // Contempt (2026-07-20): cp draw-avoidance bias added to static eval from the root
             // side's POV (Stormphrax). Default 0 = OFF. Positive avoids draws vs weaker fields.
             std::cout << "option name Contempt type spin default 0 min -1000 max 1000\n";
+            // TTCUTBONUS margin knobs (2026-07-21, only read when env TTCUTBONUS=1) — bonus =
+            // depth*depth * Num/Den, prev-ply malus = (depth+1)^2 * Num/Den. For A/B + SPSA.
+            std::cout << "option name TtCutBonusNum type spin default 1 min 0 max 8\n";
+            std::cout << "option name TtCutBonusDen type spin default 1 min 1 max 8\n";
+            std::cout << "option name TtCutMalusNum type spin default 1 min 0 max 8\n";
+            std::cout << "option name TtCutMalusDen type spin default 1 min 1 max 8\n";
             // Ponder (2026-07-20): advertises pondering support so a GUI/CCRL will send
             // `go ponder`. Not read by the engine — pondering is honored unconditionally on
             // `go ponder`; this flag only tells the GUI the feature exists.

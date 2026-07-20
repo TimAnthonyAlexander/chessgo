@@ -524,7 +524,16 @@ struct Context {
         // The faithful port matches the RELATIONSHIP SF has (TT-cutoff bonus == real-cutoff
         // bonus == stat_bonus): use zug's OWN native cutoff scale here, depth*depth (the exact
         // value zug's real-cutoff block at ~search.cpp:2331 uses), and a depth-scaled malus.
-        bool ttCutBonus = false;
+        //
+        // MARGIN SWEEP: bonus = depth*depth * bonusNum/bonusDen; prev-ply malus =
+        // (depth+1)^2 * malusNum/malusDen. Defaults 1/1 reproduce the plain depth*depth form
+        // that measured -2.3 (neutral). malusNum=0 → bonus-only (isolate whether the malus is
+        // the drag); bonusDen>1 → gentler bonus (a cheap cache-hit signal may deserve less
+        // weight than an earned real-search cutoff). Exposed as env + UCI spin so the sweet
+        // spot can be A/B'd + SPSA'd — the -28→-2 swing on scale alone proves it's live.
+        bool ttCutBonus     = false;
+        int  ttCutBonusNum  = 1, ttCutBonusDen = 1;
+        int  ttCutMalusNum  = 1, ttCutMalusDen = 1;
         // NOTE (2026-07-20): CUTNODEEXT (SP search.cpp:1131 `cutnode |= extension<0`)
         // researched + DEFERRED — SP modifies function-scope cutnode, which in zug leaks
         // into the next move iteration + the fail-low PCM/allNode reads. A safe port needs
@@ -704,6 +713,10 @@ struct Context {
             if (const char* e = getenv("CONTEMPT")) contempt = atoi(e); // cp; 0 = off
             if (off("TIMEMAN")) timeMan = false; // shipped default-on (+28 Elo TC-SPRT); kill-switch
             if (on("TTCUTBONUS")) ttCutBonus = true;
+            if (const char* e = getenv("TTCUTBONUSNUM")) { int v = atoi(e); if (v >= 0) ttCutBonusNum = v; }
+            if (const char* e = getenv("TTCUTBONUSDEN")) { int v = atoi(e); if (v >= 1) ttCutBonusDen = v; }
+            if (const char* e = getenv("TTCUTMALUSNUM")) { int v = atoi(e); if (v >= 0) ttCutMalusNum = v; }
+            if (const char* e = getenv("TTCUTMALUSDEN")) { int v = atoi(e); if (v >= 1) ttCutMalusDen = v; }
             if (on("PCM")) pcm = true;
             if (const char* e = getenv("PCMBASE"))        pcmBase        = atoi(e);
             if (const char* e = getenv("PCMDEPTHW"))       pcmDepthW      = atoi(e);
@@ -969,6 +982,10 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     else if (name == "Rule50DampDiv")  tune.rule50DampDiv  = clamp(value, 80, 400);
     else if (name == "MoveOverhead")   tune.moveOverhead   = clamp(value, 0, 5000);
     else if (name == "Contempt")       tune.contempt       = clamp(value, -1000, 1000);
+    else if (name == "TtCutBonusNum")  tune.ttCutBonusNum  = clamp(value, 0, 8);
+    else if (name == "TtCutBonusDen")  tune.ttCutBonusDen  = clamp(value, 1, 8);
+    else if (name == "TtCutMalusNum")  tune.ttCutMalusNum  = clamp(value, 0, 8);
+    else if (name == "TtCutMalusDen")  tune.ttCutMalusDen  = clamp(value, 1, 8);
     // LmrBase/LmrDiv: wire value is the double x LMR_DOUBLE_SCALE (search.h) — see the
     // Tune::lmrBase/lmrDiv comment. Clamp in wire units, convert on the way in.
     else if (name == "LmrBase")        tune.lmrBase        = clamp(value, 3000, 15000) / double(LMR_DOUBLE_SCALE);
@@ -1681,9 +1698,9 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                 // real-cutoff bonus — NOT SF's raw magnitudes (which saturate zug's ±400
                 // per-update clamp). update_history/update_cont_entry clamp internally, so
                 // large depths degrade gracefully exactly as the real-cutoff block does.
-                int bonus = depth * depth;
-                update_history(C, pos.side_to_move(), ttMove, bonus);
-                if (C.tune.contHist) {
+                int bonus = depth * depth * C.tune.ttCutBonusNum / C.tune.ttCutBonusDen;
+                if (bonus > 0) update_history(C, pos.side_to_move(), ttMove, bonus);
+                if (C.tune.contHist && bonus > 0) {
                     int16_t *ch1, *ch2, *ch3, *ch4, *ch6;
                     cont_hist_planes(C, ss, ch1, ch2, ch3, ch4, ch6);
                     update_cont_hist(ch1, ch2, ch3, ch4, ch6,
@@ -1691,13 +1708,15 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                 }
                 // Prev-ply early-quiet penalty (SF: (ss-1)->moveCount < 4 && !priorCapture),
                 // depth-scaled like zug's own quiet malus (-(depth+1)^2), not SF's flat 2060.
-                if (C.tune.contHist && (ss - 1)->currentMove != MOVE_NONE
+                // malusNum=0 disables it (bonus-only variant).
+                int malus = (depth + 1) * (depth + 1) * C.tune.ttCutMalusNum / C.tune.ttCutMalusDen;
+                if (C.tune.contHist && malus > 0 && (ss - 1)->currentMove != MOVE_NONE
                     && (ss - 1)->currentMove != MOVE_NULL && (ss - 1)->moveCount < 4
                     && !(ss - 1)->didCapture) {
                     int16_t *p1, *p2, *p3, *p4, *p6;
                     cont_hist_planes(C, ss - 1, p1, p2, p3, p4, p6);
                     update_cont_hist(p1, p2, p3, p4, p6, (ss - 1)->currentPiece,
-                                     to_sq((ss - 1)->currentMove), -(depth + 1) * (depth + 1));
+                                     to_sq((ss - 1)->currentMove), -malus);
                 }
             }
             return ttValue;
