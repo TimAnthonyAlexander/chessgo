@@ -32,6 +32,16 @@ namespace NNUE {
 // do_move/undo_move/do_null_move/undo_null_move then drive push/pushNull/pop in lockstep,
 // so the top slot always corresponds to the current position. Outside search the
 // Position carries no stack and every eval takes the from-scratch path (nnue_eval.cpp).
+//
+// LAZYACC (default OFF, env-gated — see nnue_accumulator.cpp lazy_acc_enabled): the
+// eager scheme above pays apply_diff (~26% of node self-time) on EVERY do_move, but
+// most children are cut (TT hit / terminal / beta cutoff) before their accumulator is
+// ever read by eval() — measured eval/do_move ratio is 0.74 midgame, 0.12 endgame. When
+// LAZYACC=1, push/push_delta/pushNull only RECORD the pending refresh-or-delta into the
+// new top Slot and mark it dirty (clean=false); eval() materializes on demand, walking
+// up from the deepest clean ancestor and replaying the recorded deltas in order. This is
+// byte-identical to the eager result (same delta lists, same int16 adds, just applied
+// later) — see the bit-exactness comment above materialize() in the .cpp.
 class AccStack {
 public:
     AccStack();
@@ -77,6 +87,21 @@ private:
         alignas(64) int16_t w[H];      // White-perspective half (== B0i + Σ ftAdd(fw))
         alignas(64) int16_t b[H];      // Black-perspective half
         std::vector<int>    fw, fb;    // active (base++threat) features, UNSORTED, distinct
+
+        // --- LAZYACC (default-off, see nnue_accumulator.cpp lazy_acc_enabled) ---
+        // When lazy materialization is enabled, push/push_delta/pushNull no longer
+        // populate w[]/b[] eagerly -- they only RECORD what would need to happen,
+        // and `clean` tracks whether w[]/b[] currently hold that recorded result.
+        // `materialize(k)` is the only place that ever turns a dirty slot clean.
+        bool clean = false;                 // true iff w[]/b[] are up to date for this slot
+        bool refW = false, refB = false;    // true => this half is a from-scratch refresh
+                                             // (fw/fb hold the enumerated child features,
+                                             // built via build_half); false => this half is
+                                             // a delta from the parent (sub*/add* below,
+                                             // applied via apply_diff on top of the parent's
+                                             // materialized half).
+        std::vector<int>    subW, addW;     // pending White delta lists (when !refW)
+        std::vector<int>    subB, addB;     // pending Black delta lists (when !refB)
     };
 
     // enumerate_flat fills `out` with persp's active features as a single flat list
@@ -90,6 +115,13 @@ private:
     // apply_diff applies the multiset symmetric difference (child − parent) to acc via
     // the count-array scratch (O(|parent|+|child|)); leaves counts_ all-zero for reuse.
     void apply_diff(int16_t* acc, const std::vector<int>& parent, const std::vector<int>& child);
+
+    // materialize (LAZYACC only) brings slots_[k] up to date: walks up from k to the
+    // deepest already-clean ancestor c (slot 0 is always clean after reset — the walk
+    // always terminates), then replays the recorded refresh/delta at each depth c+1..k
+    // in order, marking each slot clean as it goes. See nnue_accumulator.cpp for the
+    // full correctness argument (bit-exactness vs the eager path).
+    void materialize(int k);
 
     std::vector<Slot>    slots_;
     std::vector<int16_t> counts_;   // len InputTotal, kept all-zero between apply_diff calls

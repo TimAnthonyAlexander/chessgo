@@ -21,6 +21,16 @@ bool apply_prefetch_enabled() {
     return on;
 }
 
+// LAZYACC (default OFF): gates the deferred-apply accumulator scheme documented on
+// AccStack in nnue_accumulator.h. When off, every function below keeps EXACTLY its
+// pre-LAZYACC body (the `else` branch of each `if (lazy_acc_enabled())`), so default
+// behavior — including byte-for-byte search — is provably unchanged by this feature's
+// existence. Same getenv-once-via-static-lambda style as the other env flags here.
+bool lazy_acc_enabled() {
+    static const bool on = [] { const char* e = getenv("LAZYACC"); return e && e[0] == '1'; }();
+    return on;
+}
+
 // ftAdd / ftSub — add or subtract feature f's int16 FT weight column into a half.
 // Mirrors gomachine ftAdd/ftSub (enriched.go): W0i is feature-major, W0i[f*H + i].
 // int16 wraparound add/sub, exactly as the from-scratch buildAccHalf.
@@ -46,6 +56,13 @@ AccStack::AccStack() : slots_(NumSlots), counts_(static_cast<std::size_t>(InputT
     dAddW_.reserve(MaxActive);
     dSubB_.reserve(MaxActive);
     dAddB_.reserve(MaxActive);
+    // LAZYACC: per-slot pending delta lists, reserved like the scratch above.
+    for (Slot& s : slots_) {
+        s.subW.reserve(MaxActive);
+        s.addW.reserve(MaxActive);
+        s.subB.reserve(MaxActive);
+        s.addB.reserve(MaxActive);
+    }
 }
 
 void AccStack::enumerate_flat(const Position& pos, Color persp, std::vector<int>& out) {
@@ -127,11 +144,34 @@ void AccStack::reset(const Position& pos) {
     enumerate_flat(pos, BLACK, s.fb);
     build_half(s.w, s.fw);
     build_half(s.b, s.fb);
+    // LAZYACC: slot 0 is materialized right here (eager, always — the root is read
+    // immediately by the caller in practice, and reset() is cheap relative to search),
+    // so mark it clean. materialize()'s walk-to-clean-ancestor loop terminates on slot 0
+    // unconditionally because of this — it is the base case, on or off.
+    s.clean = true;
 }
 
 void AccStack::push(const Position& pos) {
-    Slot& src = slots_[sp_];
     Slot& dst = slots_[sp_ + 1];
+
+    if (lazy_acc_enabled()) {
+        // LAZYACC: push() is the full-enumerate (THREATDELTA=0) path — record it as a
+        // full refresh of BOTH halves from the child's own feature set. This is exactly
+        // what the eager body below computes (build_half from dst.fw/fb), just deferred
+        // until materialize() actually needs this slot's w[]/b[]. The enumerate itself
+        // (attack-gen, not the bottleneck) still happens now, since fw/fb must reflect
+        // the position AS IT IS NOW (the child) — only the expensive build_half apply is
+        // deferred.
+        dst.refW = true;
+        dst.refB = true;
+        enumerate_flat(pos, WHITE, dst.fw);
+        enumerate_flat(pos, BLACK, dst.fb);
+        dst.clean = false;
+        ++sp_;
+        return;
+    }
+
+    Slot& src = slots_[sp_];
     enumerate_flat(pos, WHITE, dst.fw);
     enumerate_flat(pos, BLACK, dst.fb);
     std::memcpy(dst.w, src.w, sizeof(dst.w));
@@ -142,8 +182,50 @@ void AccStack::push(const Position& pos) {
 }
 
 void AccStack::push_delta(const BoardSnapshot& oldb, const Position& pos) {
-    Slot& src = slots_[sp_];
     Slot& dst = slots_[sp_ + 1];
+
+    if (lazy_acc_enabled()) {
+        // LAZYACC lazy push_delta: RECORD what apply would do, don't do it. The delta
+        // lists computed by changed_edges_delta are a pure function of (oldb, pos) —
+        // both boards are live RIGHT NOW (oldb is a snapshot taken before this move,
+        // pos is the fully-formed child) — so computing them here and applying them
+        // later (in materialize) yields the identical int16 result as computing AND
+        // applying them here (int16 column add/sub commute & associate; see the class
+        // comment / materialize below for the full argument). Only the expensive part
+        // (memcpy + apply_diff's weight-column streaming) is deferred.
+        //
+        // LAZYACC and THREATGATE are mutually exclusive: THREATGATE's bucket-only-cross
+        // fast path (bucketOnlyW/B, emit_base_swap) is a separate default-off experiment
+        // layered on top of the refresh/delta split, and folding it into the lazy record
+        // format would mean also deferring emit_base_swap's board reads correctly, which
+        // is unnecessary complexity for a washed experiment. So when LAZYACC is on, we
+        // always use the PLAIN refresh test (any bucket/mirror cross => full refresh),
+        // never the bucket-only fast path — i.e. exactly the THREATGATE-unset behavior.
+        const bool refreshW = perspective_bucket_key(BB::lsb(oldb.pieces(WHITE, KING)), WHITE)
+                            != perspective_bucket_key(pos.king_square(WHITE), WHITE);
+        const bool refreshB = perspective_bucket_key(BB::lsb(oldb.pieces(BLACK, KING)), BLACK)
+                            != perspective_bucket_key(pos.king_square(BLACK), BLACK);
+
+        dst.refW = refreshW;
+        dst.refB = refreshB;
+        dst.clean = false;
+        dst.subW.clear(); dst.addW.clear();
+        dst.subB.clear(); dst.addB.clear();
+
+        // Non-refreshed halves: compute the delta NOW (boards are live), store it —
+        // apply_diff runs later, in materialize(), on top of whatever the parent slot's
+        // half turns out to be at that time.
+        changed_edges_delta(oldb, pos, !refreshW, dst.subW, dst.addW, !refreshB, dst.subB, dst.addB);
+        // Refreshed halves: enumerate the child's feature set NOW (pos is live) but defer
+        // the actual build_half (bias + Σ ftAdd) to materialize().
+        if (refreshW) enumerate_flat(pos, WHITE, dst.fw);
+        if (refreshB) enumerate_flat(pos, BLACK, dst.fb);
+
+        ++sp_;
+        return;
+    }
+
+    Slot& src = slots_[sp_];
 
     const Square oldKW = BB::lsb(oldb.pieces(WHITE, KING));
     const Square oldKB = BB::lsb(oldb.pieces(BLACK, KING));
@@ -207,8 +289,24 @@ void AccStack::push_delta(const BoardSnapshot& oldb, const Position& pos) {
 }
 
 void AccStack::pushNull() {
-    Slot& src = slots_[sp_];
     Slot& dst = slots_[sp_ + 1];
+
+    if (lazy_acc_enabled()) {
+        // LAZYACC: a null move changes no piece placement, so both halves are exactly
+        // the parent's halves unchanged. Record that as an EMPTY delta (refW=refB=false,
+        // empty sub/add) rather than copying anything now; materialize() will memcpy the
+        // (by-then-materialized) parent half and apply a no-op diff — i.e. a copy,
+        // performed lazily. Byte-identical to the eager memcpy below, just deferred.
+        dst.refW = false;
+        dst.refB = false;
+        dst.subW.clear(); dst.addW.clear();
+        dst.subB.clear(); dst.addB.clear();
+        dst.clean = false;
+        ++sp_;
+        return;
+    }
+
+    Slot& src = slots_[sp_];
     std::memcpy(dst.w, src.w, sizeof(dst.w));
     std::memcpy(dst.b, src.b, sizeof(dst.b));
     dst.fw = src.fw; // child of a null node diffs against these (== parent's set)
@@ -216,7 +314,55 @@ void AccStack::pushNull() {
     ++sp_;
 }
 
+// materialize (LAZYACC only): brings slots_[k].w[]/b[] up to date by replaying every
+// recorded-but-not-yet-applied refresh/delta from the deepest clean ancestor down to k.
+//
+// Bit-exactness argument: each slot j's refW/refB + subW/addW/subB/addB (or fw/fb, for a
+// refresh) were captured back in push/push_delta/pushNull at the moment that slot was
+// pushed, from the SAME (oldb, child) board pair the eager path would have used at that
+// exact call site — changed_edges_delta and enumerate_flat are pure functions of those
+// boards, and boards don't change after the fact (do_move/undo_move keep the stack in
+// lockstep, so a slot's boards are gone by the time we get here, but the recorded lists
+// already captured everything the boards could tell us). Applying a slot's recorded
+// delta on top of slot j-1's materialized half — whenever that ends up happening — is
+// therefore identical to applying it immediately: apply_diff's int16 column add/sub
+// commute and associate, so the RESULT depends only on the delta lists and the parent
+// half's values, never on wall-clock timing of when apply_diff runs. Chaining that
+// argument from the clean ancestor c up through k gives slots_[k] byte-identical to what
+// eager push/push_delta/pushNull would have produced at each step along the way.
+//
+// Slot 0 is always clean (reset() sets it), so the `while` below always terminates.
+void AccStack::materialize(int k) {
+    int c = k;
+    while (c > 0 && !slots_[c].clean) --c;
+
+    for (int j = c + 1; j <= k; ++j) {
+        Slot& s = slots_[j];
+        Slot& p = slots_[j - 1];
+
+        if (s.refW) {
+            build_half(s.w, s.fw);
+        } else {
+            std::memcpy(s.w, p.w, sizeof(s.w));
+            apply_diff(s.w, s.subW, s.addW);
+        }
+        if (s.refB) {
+            build_half(s.b, s.fb);
+        } else {
+            std::memcpy(s.b, p.b, sizeof(s.b));
+            apply_diff(s.b, s.subB, s.addB);
+        }
+        s.clean = true;
+    }
+}
+
 int AccStack::eval(const Position& pos) {
+    // LAZYACC: materialize the top slot on demand -- this is the ONLY place a dirty
+    // slot's w[]/b[] are ever actually needed, so it's the only place we pay for the
+    // deferred apply_diff work. Every wasted push (TT/terminal-cut child whose eval is
+    // never read) never reaches here and never pays for it.
+    if (lazy_acc_enabled()) materialize(sp_);
+
     Slot& top = slots_[sp_];
 
 #ifdef NNUE_ASSERT
