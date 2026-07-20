@@ -42,6 +42,16 @@ namespace NNUE {
 // up from the deepest clean ancestor and replaying the recorded deltas in order. This is
 // byte-identical to the eager result (same delta lists, same int16 adds, just applied
 // later) — see the bit-exactness comment above materialize() in the .cpp.
+//
+// LAZYACC2 (default OFF, env-gated — see nnue_accumulator.cpp lazy_acc2_enabled;
+// implies LAZYACC): LAZYACC still pays changed_edges_delta's ENUMERATION (~12.5% of
+// node self-time) eagerly on every do_move, even for the majority of children cut
+// before eval. LAZYACC2 defers that too: push_delta stores only the post-move board
+// (Slot::childBoard) plus the (cheap, king-squares-only) refresh decision; the delta
+// itself is recomputed in materialize() — only for slots an eval actually reaches —
+// from the two stored boards via the BoardSnapshot overload of changed_edges_delta.
+// Byte-identical to LAZYACC v1 (same two boards, same pure function, just called
+// later instead of at push time) — see materialize()'s LAZYACC2 branch in the .cpp.
 class AccStack {
 public:
     AccStack();
@@ -87,6 +97,14 @@ private:
         alignas(64) int16_t w[H];      // White-perspective half (== B0i + Σ ftAdd(fw))
         alignas(64) int16_t b[H];      // Black-perspective half
         std::vector<int>    fw, fb;    // active (base++threat) features, UNSORTED, distinct
+
+        // --- LAZYACC2 (default-off, see nnue_accumulator.cpp lazy_acc2_enabled) ---
+        // The board AFTER this slot's move (== the next slot's pre-move `oldb`). Only
+        // populated when LAZYACC2 is on: push/push_delta/pushNull store it instead of
+        // eagerly enumerating changed_edges_delta; materialize() recomputes a dirty
+        // slot's delta from (parent.childBoard, this.childBoard) on demand. ~136 bytes;
+        // unused (never read) when LAZYACC2 is off.
+        BoardSnapshot        childBoard;
 
         // --- LAZYACC (default-off, see nnue_accumulator.cpp lazy_acc_enabled) ---
         // When lazy materialization is enabled, push/push_delta/pushNull no longer

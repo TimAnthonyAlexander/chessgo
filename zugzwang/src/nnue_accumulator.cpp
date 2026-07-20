@@ -32,9 +32,21 @@ bool apply_prefetch_enabled() {
 // and +17.8 +/- 13.0 Elo movetime SPRT @ 802 games (LLR climbing). Deferring the ~26%-of-
 // node-time apply_diff for the majority of do_moves whose children are cut before eval
 // (measured eval/do_move ratio 0.74 midgame, 0.12 endgame). LAZYACC=0 reverts to eager.
+// LAZYACC2 (default OFF): extends LAZYACC by ALSO deferring changed_edges_delta's
+// ENUMERATION (not just apply_diff) for a push_delta'd slot until materialize() reaches
+// it. See nnue_accumulator.h's class-comment addendum + materialize()'s LAZYACC2 branch
+// below for the full design/bit-exactness argument. LAZYACC2 requires LAZYACC — it is
+// declared BEFORE lazy_acc_enabled() below so that function can fold it in (LAZYACC2=1
+// implies lazy_acc_enabled()==true even if LAZYACC=0 was also set; LAZYACC2=0, the
+// default, leaves lazy_acc_enabled() completely unaffected).
+bool lazy_acc2_enabled() {
+    static const bool on = [] { const char* e = getenv("LAZYACC2"); return e && e[0] == '1'; }();
+    return on;
+}
+
 bool lazy_acc_enabled() {
     static const bool on = [] { const char* e = getenv("LAZYACC"); return !(e && e[0] == '0'); }();
-    return on;
+    return on || lazy_acc2_enabled();
 }
 
 // ACCFUSE (default OFF): fused/tiled apply_diff. Profiling shows apply_diff at ~26.9%
@@ -271,6 +283,10 @@ void AccStack::reset(const Position& pos) {
     // so mark it clean. materialize()'s walk-to-clean-ancestor loop terminates on slot 0
     // unconditionally because of this — it is the base case, on or off.
     s.clean = true;
+    // LAZYACC2: slot 0's childBoard is the "parent" board the first push/push_delta's
+    // materialize recompute will read; only meaningful (and only ever read) when
+    // LAZYACC2 is on, so skip the fill otherwise.
+    if (lazy_acc2_enabled()) pos.fill_board_snapshot(s.childBoard);
 }
 
 void AccStack::push(const Position& pos) {
@@ -284,11 +300,21 @@ void AccStack::push(const Position& pos) {
         // (attack-gen, not the bottleneck) still happens now, since fw/fb must reflect
         // the position AS IT IS NOW (the child) — only the expensive build_half apply is
         // deferred.
+        //
+        // LAZYACC2: nothing to defer here beyond what LAZYACC v1 already defers — push()
+        // has no changed_edges_delta call to postpone (THREATDELTA=0 never enumerates a
+        // delta at all), so this branch is IDENTICAL under v1 and v2. Still snapshot
+        // childBoard when LAZYACC2 is on, purely so the invariant "every slot's
+        // childBoard is valid whenever LAZYACC2 is on" holds even in this rare
+        // THREATDELTA=0 combination (defensive; push_delta is the only caller under the
+        // default THREATDELTA=1, and process-wide THREATDELTA is a single cached flag,
+        // so push()/push_delta() are never actually interleaved within one run).
         dst.refW = true;
         dst.refB = true;
         enumerate_flat(pos, WHITE, dst.fw);
         enumerate_flat(pos, BLACK, dst.fb);
         dst.clean = false;
+        if (lazy_acc2_enabled()) pos.fill_board_snapshot(dst.childBoard);
         ++sp_;
         return;
     }
@@ -307,6 +333,35 @@ void AccStack::push_delta(const BoardSnapshot& oldb, const Position& pos) {
     Slot& dst = slots_[sp_ + 1];
 
     if (lazy_acc_enabled()) {
+        if (lazy_acc2_enabled()) {
+            // LAZYACC2: defer the ENUMERATION too, not just the apply. Store the
+            // post-move board (dst.childBoard) and the refresh decision (cheap —
+            // king squares only, identical test to LAZYACC v1 below) now; the delta
+            // itself (changed_edges_delta) is NOT computed here — it's recomputed in
+            // materialize() from the stored (parent.childBoard, this.childBoard) pair,
+            // only for a slot an eval actually reaches. Same mutual-exclusivity with
+            // THREATGATE as v1 (plain refresh test, never the bucket-only fast path).
+            pos.fill_board_snapshot(dst.childBoard);
+
+            const bool refreshW = perspective_bucket_key(BB::lsb(oldb.pieces(WHITE, KING)), WHITE)
+                                != perspective_bucket_key(pos.king_square(WHITE), WHITE);
+            const bool refreshB = perspective_bucket_key(BB::lsb(oldb.pieces(BLACK, KING)), BLACK)
+                                != perspective_bucket_key(pos.king_square(BLACK), BLACK);
+
+            dst.refW = refreshW;
+            dst.refB = refreshB;
+            dst.clean = false;
+
+            // Refreshed halves: enumerate the child's feature set NOW (pos is live) but
+            // defer build_half to materialize() — same as v1. Non-refreshed halves: do
+            // NOTHING now (not even the delta lists) — materialize() computes them.
+            if (refreshW) enumerate_flat(pos, WHITE, dst.fw);
+            if (refreshB) enumerate_flat(pos, BLACK, dst.fb);
+
+            ++sp_;
+            return;
+        }
+
         // LAZYACC lazy push_delta: RECORD what apply would do, don't do it. The delta
         // lists computed by changed_edges_delta are a pure function of (oldb, pos) —
         // both boards are live RIGHT NOW (oldb is a snapshot taken before this move,
@@ -414,6 +469,23 @@ void AccStack::pushNull() {
     Slot& dst = slots_[sp_ + 1];
 
     if (lazy_acc_enabled()) {
+        if (lazy_acc2_enabled()) {
+            // LAZYACC2: a null move changes no piece placement, so the child's board is
+            // literally the parent's board — copy the stored childBoard across (not the
+            // live Position; pos isn't even passed to pushNull). materialize() will call
+            // changed_edges_delta(parent.childBoard, this.childBoard, ...) on two IDENTICAL
+            // boards: D (the per-piece-type XOR) is 0, so affected==D==0 and both the
+            // base-768 loop and every threat loop (enumerate/fast/sf alike — all gated on
+            // D/affected) iterate zero times => empty sub/add lists => apply_diff is a
+            // pure memcpy(parent->this), byte-identical to the eager memcpy below.
+            dst.childBoard = slots_[sp_].childBoard;
+            dst.refW = false;
+            dst.refB = false;
+            dst.clean = false;
+            ++sp_;
+            return;
+        }
+
         // LAZYACC: a null move changes no piece placement, so both halves are exactly
         // the parent's halves unchanged. Record that as an EMPTY delta (refW=refB=false,
         // empty sub/add) rather than copying anything now; materialize() will memcpy the
@@ -454,25 +526,61 @@ void AccStack::pushNull() {
 // eager push/push_delta/pushNull would have produced at each step along the way.
 //
 // Slot 0 is always clean (reset() sets it), so the `while` below always terminates.
+//
+// LAZYACC2 addendum: under LAZYACC2, a dirty non-refresh half has NO recorded subW/
+// addW/subB/addB — push_delta deferred the enumeration itself, storing only
+// s.childBoard (+ p.childBoard, already valid regardless of p.clean — childBoard is
+// populated unconditionally at push time, unlike w[]/b[]). This loop recomputes that
+// half's delta HERE, via the BoardSnapshot overload of changed_edges_delta(p.childBoard,
+// s.childBoard, ...), into the shared dSubW_/dAddW_/dSubB_/dAddB_ scratch (same members
+// push_delta's v1 branch already reuses per-call), then applies it exactly like v1.
+// Bit-exactness: (p.childBoard, s.childBoard) is the SAME board pair push_delta's v1
+// branch would have called changed_edges_delta on immediately, at push time — the
+// function is pure, so computing it now vs then yields identical sub/add lists, and
+// apply_diff's int16 adds commute/associate regardless of when they run (same argument
+// as the class-comment / v1 doc above, one level further deferred).
 void AccStack::materialize(int k) {
     int c = k;
     while (c > 0 && !slots_[c].clean) --c;
 
+    const bool v2 = lazy_acc2_enabled();
     for (int j = c + 1; j <= k; ++j) {
         Slot& s = slots_[j];
         Slot& p = slots_[j - 1];
 
-        if (s.refW) {
-            build_half(s.w, s.fw);
+        if (v2) {
+            if (!s.refW || !s.refB) {
+                dSubW_.clear(); dAddW_.clear();
+                dSubB_.clear(); dAddB_.clear();
+                changed_edges_delta(p.childBoard, s.childBoard,
+                                    /*doW=*/!s.refW, dSubW_, dAddW_,
+                                    /*doB=*/!s.refB, dSubB_, dAddB_);
+            }
+            if (s.refW) {
+                build_half(s.w, s.fw);
+            } else {
+                std::memcpy(s.w, p.w, sizeof(s.w));
+                apply_diff(s.w, dSubW_, dAddW_);
+            }
+            if (s.refB) {
+                build_half(s.b, s.fb);
+            } else {
+                std::memcpy(s.b, p.b, sizeof(s.b));
+                apply_diff(s.b, dSubB_, dAddB_);
+            }
         } else {
-            std::memcpy(s.w, p.w, sizeof(s.w));
-            apply_diff(s.w, s.subW, s.addW);
-        }
-        if (s.refB) {
-            build_half(s.b, s.fb);
-        } else {
-            std::memcpy(s.b, p.b, sizeof(s.b));
-            apply_diff(s.b, s.subB, s.addB);
+            if (s.refW) {
+                build_half(s.w, s.fw);
+            } else {
+                std::memcpy(s.w, p.w, sizeof(s.w));
+                apply_diff(s.w, s.subW, s.addW);
+            }
+            if (s.refB) {
+                build_half(s.b, s.fb);
+            } else {
+                std::memcpy(s.b, p.b, sizeof(s.b));
+                apply_diff(s.b, s.subB, s.addB);
+            }
         }
         s.clean = true;
     }

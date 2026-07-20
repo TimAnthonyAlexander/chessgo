@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace NNUE { class AccStack; }
+namespace NNUE { class AccStack; struct BoardSnapshot; }
 
 struct StateInfo {
     // Copied/updated on make_move
@@ -80,6 +80,14 @@ public:
     // path). When set, do_move/undo_move/do_null_move/undo_null_move drive it in lockstep.
     NNUE::AccStack* nnue_acc() const { return nnueAcc; }
     void set_nnue_acc(NNUE::AccStack* a) { nnueAcc = a; }
+
+    // LAZYACC2: fills `out` with this position's CURRENT piece placement + the
+    // (game-fixed) castling-rook-origin squares — the byte-exact equivalent of
+    // do_move's pre-move `snap` capture, but usable post-move too (AccStack's
+    // Slot::childBoard). Needs private-member access (byTypeBB/byColorBB/board), so
+    // it's a Position method rather than a free function built off the public
+    // accessors. Defined in position.cpp (needs NNUE::BoardSnapshot's full definition).
+    void fill_board_snapshot(NNUE::BoardSnapshot& out) const;
 
     // Attacks
     U64 attackers_to(Square s, U64 occ) const;

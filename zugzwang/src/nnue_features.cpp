@@ -436,7 +436,8 @@ struct TouchOp {
 // identity at the D squares (no move-flag decoding, spec §2.3) into an
 // ordered touch-list. Returns the touch count (2, 3, or 4; `plan` must have
 // capacity >= 4).
-inline int build_touch_plan_sf(const BoardSnapshot& oldb, const Position& child, U64 D,
+template <class Board>
+inline int build_touch_plan_sf(const BoardSnapshot& oldb, const Board& child, U64 D,
                                TouchOp* plan) {
     // Castling, tried first. Geometry match (king/rook sit at the fixed FRC
     // destination squares) PLUS a same-move-diff proof: the historical
@@ -621,10 +622,19 @@ void active_features(const Position& pos, Color persp, Features& out) {
 //   edge set and add its FULL new set; an attacker whose edges did NOT change is either
 //   outside affected (untouched) or emits identical old/new edges that cancel in
 //   apply_diff. Hence (parent half) + delta == (child half) as int16-column multisets.
-void changed_edges_delta(const BoardSnapshot& oldb, const Position& child,
-                         bool doW, std::vector<int>& subW, std::vector<int>& addW,
-                         bool doB, std::vector<int>& subB, std::vector<int>& addB,
-                         bool baseSkipW, bool baseSkipB) {
+//
+// Templatized on the CHILD board type (LAZYACC2): `child` is a live Position at push
+// time, or a stored BoardSnapshot when materialize() recomputes a deferred delta from
+// two saved boards. `oldb` is always a BoardSnapshot (the pre-move snapshot do_move
+// captures, or a slot's stored childBoard playing the "parent" role). The body below
+// is verbatim from the pre-LAZYACC2 Position-only version — Position and BoardSnapshot
+// now share the exact interface it needs (pieces()/pieces(c,pt)/piece_on/king_square/
+// attackers_to/castling_rook_square).
+template <class Board>
+void changed_edges_delta_impl(const BoardSnapshot& oldb, const Board& child,
+                              bool doW, std::vector<int>& subW, std::vector<int>& addW,
+                              bool doB, std::vector<int>& subB, std::vector<int>& addB,
+                              bool baseSkipW, bool baseSkipB) {
     const SFTables& T = tables();
     const U64 oldOcc = oldb.occ();
     const U64 newOcc = child.pieces();
@@ -750,6 +760,20 @@ void changed_edges_delta(const BoardSnapshot& oldb, const Position& child,
             }
         }
     }
+}
+
+void changed_edges_delta(const BoardSnapshot& oldb, const Position& child,
+                         bool doW, std::vector<int>& subW, std::vector<int>& addW,
+                         bool doB, std::vector<int>& subB, std::vector<int>& addB,
+                         bool baseSkipW, bool baseSkipB) {
+    changed_edges_delta_impl(oldb, child, doW, subW, addW, doB, subB, addB, baseSkipW, baseSkipB);
+}
+
+void changed_edges_delta(const BoardSnapshot& oldb, const BoardSnapshot& child,
+                         bool doW, std::vector<int>& subW, std::vector<int>& addW,
+                         bool doB, std::vector<int>& subB, std::vector<int>& addB,
+                         bool baseSkipW, bool baseSkipB) {
+    changed_edges_delta_impl(oldb, child, doW, subW, addW, doB, subB, addB, baseSkipW, baseSkipB);
 }
 
 int perspective_bucket_key(Square ksq, Color persp) {

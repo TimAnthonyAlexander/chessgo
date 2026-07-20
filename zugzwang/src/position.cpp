@@ -313,6 +313,24 @@ bool Position::is_capture(Move m) const {
     return (!empty(to_sq(m)) && type_of_move(m) != CASTLING) || type_of_move(m) == EN_PASSANT;
 }
 
+// LAZYACC2 (see nnue_accumulator.h/.cpp): fills `out` with this position's CURRENT
+// piece placement + castling-rook-origin squares. Same memcpy discipline do_move's
+// pre-move `snap` already uses for byType/byColor/board (kept as its own inline copy
+// below — it's on the hot do_move path for every mode, incl. the always-on default
+// THREATDELTA=1, so it stays untouched rather than routed through this method); this
+// is the one call site AccStack's LAZYACC2 childBoard captures use, post-move, where
+// castlingRookFrom is actually read (THREATDELTA_SF's build_touch_plan_sf, composed
+// with LAZYACC2 — see nnue_features.cpp).
+void Position::fill_board_snapshot(NNUE::BoardSnapshot& out) const {
+    std::memcpy(out.byType, byTypeBB, sizeof(byTypeBB));
+    std::memcpy(out.byColor, byColorBB, sizeof(byColorBB));
+    std::memcpy(out.board, board, sizeof(board));
+    out.castlingRookFrom[0] = castling_rook_square(WHITE_OO);
+    out.castlingRookFrom[1] = castling_rook_square(WHITE_OOO);
+    out.castlingRookFrom[2] = castling_rook_square(BLACK_OO);
+    out.castlingRookFrom[3] = castling_rook_square(BLACK_OOO);
+}
+
 void Position::do_move(Move m, StateInfo& newSt) {
     U64 k = st->key ^ Zobrist::side;
 

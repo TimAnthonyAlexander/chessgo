@@ -28,14 +28,31 @@ void active_features(const Position& pos, Color persp, Features& out);
 // mailbox) of a position taken BEFORE a move. do_move mutates Position in place, so
 // the move-aware threat delta captures this at the top of do_move to still be able to
 // query the OLD board once the child is formed. ~136 bytes; cheap to memcpy per node.
+//
+// LAZYACC2 (see nnue_accumulator.h): changed_edges_delta is templatized on the CHILD
+// board type so materialize() can recompute a slot's delta from two stored
+// BoardSnapshots (parent.childBoard, this.childBoard) instead of a live Position.
+// That requires a BoardSnapshot to answer every query the delta machinery makes of
+// `child` — king_square/pieces()/castling_rook_square, alongside the pre-existing
+// occ/piece_on/pieces(c,pt)/attackers_to. castlingRookFrom mirrors Position's (fixed
+// for the whole game — see Position::castling_rook_square), needed only by
+// THREATDELTA_SF's build_touch_plan_sf when Board=BoardSnapshot; filled by
+// Position::fill_board_snapshot alongside the piece-placement arrays.
 struct BoardSnapshot {
-    U64   byType[PIECE_TYPE_NB];
-    U64   byColor[COLOR_NB];
-    Piece board[SQUARE_NB];
-    U64   occ()                          const { return byType[0]; }
-    Piece piece_on(Square s)             const { return board[s]; }
-    U64   pieces(Color c, PieceType pt)  const { return byColor[c] & byType[pt]; }
-    U64   attackers_to(Square s, U64 o)  const { return Position::attackers_to(byType, byColor, s, o); }
+    U64    byType[PIECE_TYPE_NB];
+    U64    byColor[COLOR_NB];
+    Piece  board[SQUARE_NB];
+    Square castlingRookFrom[4]; // indexed WHITE_OO=0,WHITE_OOO=1,BLACK_OO=2,BLACK_OOO=3 (Position::castling_right_index order)
+    U64    occ()                          const { return byType[0]; }
+    U64    pieces()                       const { return occ(); }   // all-occupancy, matches Position::pieces()
+    Piece  piece_on(Square s)             const { return board[s]; }
+    U64    pieces(Color c, PieceType pt)  const { return byColor[c] & byType[pt]; }
+    U64    attackers_to(Square s, U64 o)  const { return Position::attackers_to(byType, byColor, s, o); }
+    Square king_square(Color c)           const { return BB::lsb(pieces(c, KING)); }
+    Square castling_rook_square(int right) const {
+        const int idx = (right == WHITE_OO) ? 0 : (right == WHITE_OOO) ? 1 : (right == BLACK_OO) ? 2 : 3;
+        return castlingRookFrom[idx];
+    }
 };
 
 // changed_edges_delta — the move-aware threat delta (cut-1 "correct-by-construction
@@ -54,6 +71,15 @@ struct BoardSnapshot {
 // every threat feature index — did not change). Default false = current behavior
 // (base D-loop always runs alongside the threat delta).
 void changed_edges_delta(const BoardSnapshot& oldb, const Position& child,
+                         bool doW, std::vector<int>& subW, std::vector<int>& addW,
+                         bool doB, std::vector<int>& subB, std::vector<int>& addB,
+                         bool baseSkipW = false, bool baseSkipB = false);
+
+// LAZYACC2 overload — identical semantics, `child` is a stored BoardSnapshot instead of
+// a live Position (materialize() recomputing a deferred delta from two saved boards).
+// Both share one templated implementation (changed_edges_delta_impl in the .cpp); this
+// is just the second concrete instantiation exposed to callers outside the .cpp.
+void changed_edges_delta(const BoardSnapshot& oldb, const BoardSnapshot& child,
                          bool doW, std::vector<int>& subW, std::vector<int>& addW,
                          bool doB, std::vector<int>& subB, std::vector<int>& addB,
                          bool baseSkipW = false, bool baseSkipB = false);
