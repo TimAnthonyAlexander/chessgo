@@ -133,8 +133,17 @@ static void go_cmd(std::istringstream& is) {
         else if (token == "nodes") is >> limits.nodes;
         else if (token == "movetime") is >> limits.movetime;
         else if (token == "infinite") limits.infinite = true;
+        else if (token == "ponder") limits.ponderMode = true;
     }
-    if (uciLimitStrength) {
+    // Set the process-wide ponder flag for THIS search (true only for `go ponder`), so a
+    // prior ponder can never leak into an ordinary `go`. Must precede the search launch and
+    // the early-return shortcuts below. startTime was stamped above at the `go` moment, so a
+    // later `ponderhit` measures elapsed() from here — pondering time counts (SF semantics).
+    Search::set_ponder(limits.ponderMode);
+    // During ponder we must NOT emit a bestmove immediately: skip both the weakening ladder
+    // and the opening book (which print+return instantly) and fall through to a real search
+    // that holds until `ponderhit`/`stop`. (Full-strength CCRL play never hits these anyway.)
+    if (uciLimitStrength && !limits.ponderMode) {
         // Weakened play through the rating ladder. Runs on the search thread (so
         // `stop` still joins cleanly) and prints its own bestmove — the ladder's
         // clean branch searches with silent=true, so there is no double print.
@@ -150,7 +159,7 @@ static void go_cmd(std::istringstream& is) {
         });
         return;
     }
-    if (try_book_move(pos)) return; // book hit: skip the search entirely
+    if (!limits.ponderMode && try_book_move(pos)) return; // book hit: skip the search entirely (never while pondering)
     Search::request_stop(false);
     // Lazy SMP: start_smp runs engineThreads Contexts sharing the global TT +
     // one stop flag. engineThreads==1 delegates to the byte-identical single-
@@ -316,6 +325,17 @@ int uci_main() {
             std::cout << "option name QsMoveCapN type spin default 2 min 1 max 8\n";
             // RULE50DAMP (2026-07-20, only read when env RULE50DAMP=1) — SF evaluate.cpp:83.
             std::cout << "option name Rule50DampDiv type spin default 199 min 80 max 400\n";
+            // MoveOverhead (2026-07-20): per-move latency slack (ms), clock-mode TM only.
+            // Default 40 = zug's old hardcoded literal → byte-identical. Lower (e.g. 10, SF's
+            // default) for low-latency local CCRL; raise for networked play to never flag.
+            std::cout << "option name MoveOverhead type spin default 40 min 0 max 5000\n";
+            // Contempt (2026-07-20): cp draw-avoidance bias added to static eval from the root
+            // side's POV (Stormphrax). Default 0 = OFF. Positive avoids draws vs weaker fields.
+            std::cout << "option name Contempt type spin default 0 min -1000 max 1000\n";
+            // Ponder (2026-07-20): advertises pondering support so a GUI/CCRL will send
+            // `go ponder`. Not read by the engine — pondering is honored unconditionally on
+            // `go ponder`; this flag only tells the GUI the feature exists.
+            std::cout << "option name Ponder type check default false\n";
             std::cout << "option name OwnBook type check default true\n";
             std::cout << "option name UCI_LimitStrength type check default false\n";
             std::cout << "option name UCI_Elo type spin default " << Rating::RatingMax
@@ -340,6 +360,10 @@ int uci_main() {
                 uciLimitStrength = (value == "true");
             } else if (name == "UCI_Elo") {
                 uciElo = std::max(Rating::RatingMin, std::min(Rating::RatingMax, std::stoi(value)));
+            } else if (name == "Ponder") {
+                // Advertise-only (see the option decl): pondering is honored unconditionally
+                // on `go ponder`. Swallow here so the "true"/"false" value never hits the
+                // std::stoi fallthrough below (which would throw on a non-numeric string).
             } else {
                 Search::set_tune_option(name, std::stoi(value));
             }
@@ -352,6 +376,11 @@ int uci_main() {
             position_cmd(is);
         } else if (cmd == "go") {
             go_cmd(is);
+        } else if (cmd == "ponderhit") {
+            // Opponent played the predicted move: convert the running ponder search to timed.
+            // The search thread keeps running; clearing the flag makes its next time check bite
+            // (clock measured from the original `go ponder`, so ponder time already counts).
+            Search::ponderhit();
         } else if (cmd == "stop") {
             stop_search();
         } else if (cmd == "quit") {

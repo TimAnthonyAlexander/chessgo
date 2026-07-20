@@ -23,6 +23,15 @@ using namespace BB;
 
 namespace Search {
 
+// ---- Pondering (SF thread.cpp:294 / search.cpp:210-216) ----
+// One process-wide flag: `go ponder` sets it, `ponderhit` / a new `go` clears it. During
+// pondering, check_time() and the ID-loop soft break both early-out on it, so the search
+// ignores all time limits and keeps deepening until the GUI sends `ponderhit` (convert to a
+// timed search, clock measured from the original `go ponder` startTime) or `stop` (abort).
+// A single global is safe: only ONE UCI search runs at a time (uci.cpp's searchThread), and
+// the HTTP serve path never ponders (no ponder field in its request contract).
+std::atomic<bool> ponderFlag{false};
+
 // Small constants sizing Context's tables — internal linkage is fine here
 // (they're only ever used as constant-expression array bounds / values, never
 // as a TYPE embedded in Context, so there's no linkage mismatch with
@@ -476,6 +485,29 @@ struct Context {
         // plays these perfectly; the value is real-clock / long-TC / vs-non-TB-opponents,
         // exactly gomachine's rationale for shipping it default-on.
         bool syzygy = true;
+        // ---- Move Overhead (2026-07-20): reserved per-move slack (ms) for GUI/OS/network
+        // latency, subtracted from remaining time in set_time_limits' clock branch. UCI
+        // spin option "Move Overhead" (SF/SP default 10; zug ships 40 = the old hardcoded
+        // literal, so DEFAULT is byte-identical). Only read on the clock path (wtime/btime),
+        // which the UCI/CCRL path uses; the website's rating-only requests never reach it.
+        int  moveOverhead = 40;
+        // ---- Contempt (2026-07-20, Stormphrax opts.h:40 / eval.cpp:25): a cp bias added to
+        // the (corrected) static eval from the ROOT side's perspective, so the engine avoids
+        // simplifying into equal/drawish lines when it believes it's the stronger side. UCI
+        // spin option "Contempt" (default 0 = OFF = byte-identical; SF18 has NO contempt, only
+        // the anti-blindness draw jitter zug already has as DRAWJITTER). Applied via the
+        // per-Context contempt[] array set once at start(); NOT an SPRT/self-play strength
+        // lever (net-neutral-to-slightly-negative in symmetric self-play) — it's a knob for
+        // asymmetric-strength play (CCRL below-peer, vs weaker fields).
+        int  contempt = 0;
+        // ---- TIMEMAN (2026-07-20): dynamic time management — Stormphrax-style base
+        // allocation (usable/mtg + inc*0.94, soft/hard scales) PLUS per-iteration soft-limit
+        // scaling by best-move stability and eval trend (limit.cpp:34-102). Default OFF: the
+        // OFF path keeps zug's exact current set_time_limits formula and unscaled soft break,
+        // so movetime/depth/nodes searches are byte-identical. Only affects the clock
+        // (wtime/btime) path — invisible to the movetime SPRT; gated behind env TIMEMAN=1 and
+        // validated with a real-clock (TC) fastchess SPRT before any default flip.
+        bool timeMan = false;
         // NOTE (2026-07-20): CUTNODEEXT (SP search.cpp:1131 `cutnode |= extension<0`)
         // researched + DEFERRED — SP modifies function-scope cutnode, which in zug leaks
         // into the next move iteration + the fail-low PCM/allNode reads. A safe port needs
@@ -651,6 +683,9 @@ struct Context {
             if (const char* e = getenv("RULE50DAMPDIV")) { int v = atoi(e); if (v > 0) rule50DampDiv = v; }
             if (on("NMPTTVETO")) nmpTtVeto = true;
             if (off("SYZYGY")) syzygy = false; // shipped default-on; kill-switch (path-gated by TB::loaded())
+            if (const char* e = getenv("MOVEOVERHEAD")) { int v = atoi(e); if (v >= 0) moveOverhead = v; }
+            if (const char* e = getenv("CONTEMPT")) contempt = atoi(e); // cp; 0 = off
+            if (on("TIMEMAN")) timeMan = true; // dynamic clock-mode time management (default off, TC-SPRT gated)
             if (on("PCM")) pcm = true;
             if (const char* e = getenv("PCMBASE"))        pcmBase        = atoi(e);
             if (const char* e = getenv("PCMDEPTHW"))       pcmDepthW      = atoi(e);
@@ -740,6 +775,14 @@ struct Context {
 
     Limits  limits;
     int64_t timeLimitSoft = 0, timeLimitHard = 0;
+    // TIMEMAN: true only for a real clock-mode (wtime/btime) search with time management on,
+    // i.e. the one case where start()'s ID loop dynamically scales timeLimitSoft by best-move
+    // stability + eval trend. False for movetime/depth/nodes/infinite (soft break stays exact).
+    bool    tmScaled = false;
+    int     contempt[COLOR_NB] = {0, 0}; // Contempt bias (raw cp) per color, set once at start()
+                                          // from Tune::contempt: +C for the root side, -C for the
+                                          // opponent, so indexing by pos.side_to_move() flips the
+                                          // sign correctly down the negamax tree (Stormphrax).
     int64_t nodeCount = 0;
     int     rootDepthGlobal = 0;
     // Lazy-SMP worker index (0 for the main/UCI/single-thread path; set per worker by
@@ -906,6 +949,8 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     else if (name == "PcmDiv")         tune.pcmDiv         = clamp(value, 512, 16384);
     else if (name == "QsMoveCapN")     tune.qsMoveCapN     = clamp(value, 1, 8);
     else if (name == "Rule50DampDiv")  tune.rule50DampDiv  = clamp(value, 80, 400);
+    else if (name == "MoveOverhead")   tune.moveOverhead   = clamp(value, 0, 5000);
+    else if (name == "Contempt")       tune.contempt       = clamp(value, -1000, 1000);
     // LmrBase/LmrDiv: wire value is the double x LMR_DOUBLE_SCALE (search.h) — see the
     // Tune::lmrBase/lmrDiv comment. Clamp in wire units, convert on the way in.
     else if (name == "LmrBase")        tune.lmrBase        = clamp(value, 3000, 15000) / double(LMR_DOUBLE_SCALE);
@@ -1042,6 +1087,7 @@ int64_t elapsed(const Context& C) { return now_ms() - C.limits.startTime; }
 
 void check_time(Context& C) {
     if (C.limits.infinite) return;
+    if (ponderFlag.load(std::memory_order_relaxed)) return; // never stop while pondering (SF search.cpp:1961)
     if (C.limits.nodes && C.nodeCount >= C.limits.nodes) C.stop = true;
     if (C.timeLimitHard && elapsed(C) >= C.timeLimitHard) C.stop = true;
 }
@@ -1427,7 +1473,11 @@ int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta) {
         bestValue = futilityBase = -VALUE_INFINITE;
     } else {
         rawEval = (ttHit && tte->eval != VALUE_NONE) ? tte->eval : Eval::evaluate(pos);
-        int staticEval = ss->staticEval = corrected_eval(C, pos, ss, rawEval);
+        // Contempt (Stormphrax eval.cpp:25): bias the corrected static eval from the root
+        // side's POV. C.contempt[stm] is +C for the root color, -C for the opponent, so
+        // indexing by the current side-to-move flips the sign correctly at every ply.
+        // Default 0 → +0 → byte-identical. (Terminal draws/mates below bypass this, as in SP.)
+        int staticEval = ss->staticEval = corrected_eval(C, pos, ss, rawEval) + C.contempt[pos.side_to_move()];
         bestValue = staticEval;
         if (ttHit && (tte->bound() & (ttValue > staticEval ? BOUND_LOWER : BOUND_UPPER)))
             bestValue = ttValue;
@@ -1640,7 +1690,7 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             eval = ss->staticEval = VALUE_NONE;
     } else {
         rawEval = (ttHit && tte->eval != VALUE_NONE) ? tte->eval : Eval::evaluate(pos);
-        eval = ss->staticEval = corrected_eval(C, pos, ss, rawEval);
+        eval = ss->staticEval = corrected_eval(C, pos, ss, rawEval) + C.contempt[pos.side_to_move()]; // Contempt (see qsearch site)
         if (ttHit && ttValue != VALUE_NONE && (tte->bound() & (ttValue > eval ? BOUND_LOWER : BOUND_UPPER)))
             eval = ttValue;
     }
@@ -2415,6 +2465,7 @@ void print_pv(Context& C, Position& pos, Stack* ss, int depth, int score, int64_
 
 void set_time_limits(Context& C, const Position& pos) {
     C.timeLimitSoft = C.timeLimitHard = 0;
+    C.tmScaled = false;
     if (C.limits.movetime) {
         // std::max(1, ...): `movetime - 5` hits exactly 0 whenever movetime==5
         // (a real, common value — e.g. multi_pv()'s per-move time budget floors
@@ -2432,10 +2483,31 @@ void set_time_limits(Context& C, const Position& pos) {
     int t = C.limits.time[us];
     int inc = C.limits.inc[us];
     if (t <= 0 && inc <= 0) return; // depth/nodes/infinite mode
-    int mtg = C.limits.movestogo ? C.limits.movestogo : 30;
-    // Reserve a healthy overhead for GUI communication + OS scheduling jitter.
-    int overhead = 40;
+    // Reserve overhead for GUI communication + OS scheduling jitter (+ network latency in
+    // online play). Configurable via the "MoveOverhead" UCI option (Tune::moveOverhead,
+    // default 40 = the old hardcoded literal → byte-identical default behaviour).
+    int overhead = C.tune.moveOverhead;
     int usable = std::max(1, t - overhead);
+
+    if (C.tune.timeMan) {
+        // TIMEMAN base allocation (Stormphrax limit.cpp:34-44): a cleaner soft/hard split.
+        //   base = usable/mtg + inc*0.94 ;  hard = usable*0.65 ;  soft = min(base*0.68, hard)
+        // The per-iteration soft-limit SCALING (best-move stability + eval trend) is applied
+        // in start()'s ID loop against C.timeLimitSoft, not here. mtg defaults to 19 (SP's
+        // defaultMovesToGo) rather than zug's old 30 — a shorter horizon spends more per move.
+        int mtg = C.limits.movestogo ? C.limits.movestogo : 19;
+        int base = std::max(1, usable / mtg + inc * 94 / 100);
+        C.timeLimitHard = std::max(1, usable * 65 / 100);
+        C.timeLimitSoft = std::min<int64_t>(base * 68 / 100, C.timeLimitHard);
+        if (C.timeLimitSoft < 1) C.timeLimitSoft = 1;
+        C.tmScaled = true; // enable start()'s per-iteration soft-limit scaling
+        return;
+    }
+
+    // Legacy (default) allocation — unchanged from before MoveOverhead/TIMEMAN, except the
+    // overhead literal is now the (default-40) UCI knob above, so this is byte-identical
+    // whenever MoveOverhead is left at its default.
+    int mtg = C.limits.movestogo ? C.limits.movestogo : 30;
     // Use most of the increment plus a slice of remaining time.
     int budget = std::max(1, usable / mtg + inc * 3 / 4);
     C.timeLimitSoft = std::min(budget, usable);
@@ -2522,7 +2594,10 @@ void print_smp_result(const Result& r, int64_t startTime) {
               << " hashfull " << TT.hashfull() << " pv";
     for (Move m : r.pv) std::cout << " " << move_to_uci(m);
     std::cout << std::endl;
-    std::cout << "bestmove " << move_to_uci(r.bestMove) << std::endl;
+    std::cout << "bestmove " << move_to_uci(r.bestMove);
+    if (r.pv.size() > 1 && r.pv[0] == r.bestMove) // ponder move = 2nd PV move (SF search.cpp:246)
+        std::cout << " ponder " << move_to_uci(r.pv[1]);
+    std::cout << std::endl;
 }
 
 // ---- Lazy SMP core (shared by the UCI start_smp path and the serve
@@ -2673,6 +2748,16 @@ void request_stop(bool value) {
     smpStop = value;
 }
 
+// UCI `ponderhit`: the opponent played the predicted move, so convert the in-flight ponder
+// search into a normal timed one. Just clears the global ponder flag — the running search's
+// next check_time()/soft-break stops early-returning, and elapsed() is measured from the
+// original `go ponder` startTime, so time already spent pondering counts (SF engine.cpp:258).
+void ponderhit() { ponderFlag.store(false, std::memory_order_relaxed); }
+
+// Set/clear the ponder flag from the UCI layer. `go ponder` sets it true before launching the
+// search thread; every non-ponder `go` sets it false so a prior ponder can't leak in.
+void set_ponder(bool value) { ponderFlag.store(value, std::memory_order_relaxed); }
+
 bool set_tune_option(const std::string& name, int value) {
     return set_tune_option_impl(default_ctx_ref(), name, value);
 }
@@ -2771,6 +2856,14 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
     if (resetShared) C.stop = false;
     C.nodeCount = 0;
     set_time_limits(C, pos);
+    // Contempt: fix the sign once at the root — +C for the side to move at the root (the
+    // engine's side), -C for the opponent — so negamax's per-ply `C.contempt[side_to_move]`
+    // read biases every static eval toward the root side. Default Tune::contempt 0 → {0,0}.
+    {
+        Color rootSide = pos.side_to_move();
+        C.contempt[rootSide]  = C.tune.contempt;
+        C.contempt[~rootSide] = -C.tune.contempt;
+    }
     if (resetShared) C.tt.new_search();
 
     // Attach the incremental NNUE accumulator for the duration of the search.
@@ -2821,6 +2914,14 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
     Result lastResult;
     int prevScore = 0;
     Move lastBest = MOVE_NONE;
+    // TIMEMAN per-iteration scaling state (only used when C.tmScaled). Stormphrax limit.cpp:
+    // a best-move-stability counter and an 8-sample EMA of the root score drive a multiplier
+    // applied to timeLimitSoft each iteration: a long-stable best move shrinks the budget, a
+    // falling eval extends it.
+    int    tmStability = 0;
+    Move   tmPrevBest  = MOVE_NONE;
+    double tmAvgScore  = 0.0;
+    bool   tmHaveAvg   = false;
     for (int depth = 1; depth <= maxDepth; ++depth) {
         C.rootDepthGlobal = depth;
 
@@ -2888,8 +2989,37 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
         lastResult.nodes = C.nodeCount;
         lastResult.pv.assign(ss->pv, ss->pv + ss->pvLen);
 
-        // Soft time check between iterations
-        if (!C.limits.infinite && C.timeLimitSoft && elapsed(C) >= C.timeLimitSoft) break;
+        // Soft time check between iterations. In the default (legacy) time scheme the soft
+        // limit is a flat wall. When TIMEMAN clock-mode is active (C.tmScaled), scale it per
+        // iteration by best-move stability and eval trend (Stormphrax limit.cpp:46-102).
+        int64_t softLimit = C.timeLimitSoft;
+        if (C.tmScaled && C.timeLimitSoft) {
+            // Best-move stability: consecutive iterations with the same root PV move.
+            if (C.rootBestMove == tmPrevBest) ++tmStability;
+            else { tmStability = 1; tmPrevBest = C.rootBestMove; }
+            // Stability scale (from depth>=6): monotonically falling in stability toward ~0.78,
+            // capped at 2.36 when freshly unstable. SP bmStability{Min 0.78, Scale 8.59,
+            // Offset 0.9, Power -2.57, Max 2.36}.
+            double stabScale = 1.0;
+            if (depth >= 6)
+                stabScale = std::min(2.36, 0.78 + 8.59 * std::pow(tmStability + 0.9, -2.57));
+            // Eval-trend scale off an 8-sample EMA: a rising score shrinks the budget, a
+            // falling one extends it (up to 2.48x). SP scoreTrend{Score 4.94, Scale 0.36,
+            // Stretch 0.94, Pos 0.94, Neg 1.1, Min 0.63, Max 2.48}, EMA weight 1/8.
+            double evalScale = 1.0;
+            if (tmHaveAvg) {
+                double chg = (score - tmAvgScore) / 4.94;
+                double inv = chg * 0.36 / (std::abs(chg) + 0.94) * (chg > 0 ? 0.94 : 1.1);
+                evalScale = std::min(2.48, std::max(0.63, 1.0 - inv));
+                tmAvgScore += (score - tmAvgScore) / 8.0;
+            } else { tmAvgScore = score; tmHaveAvg = true; }
+            double scale = std::max(0.09, stabScale * evalScale);
+            softLimit = std::max<int64_t>(1, int64_t(C.timeLimitSoft * scale));
+            // Never let the scaled soft limit exceed the hard cap.
+            if (C.timeLimitHard && softLimit > C.timeLimitHard) softLimit = C.timeLimitHard;
+        }
+        if (!C.limits.infinite && !ponderFlag.load(std::memory_order_relaxed)
+            && softLimit && elapsed(C) >= softLimit) break;
         if (C.limits.nodes && C.nodeCount >= C.limits.nodes) break;
     }
 
@@ -2917,7 +3047,26 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
         lastResult.nodes = C.nodeCount;
         lastResult.pv.assign(1, best);
     }
-    if (!C.limits.silent) std::cout << "bestmove " << move_to_uci(best) << std::endl;
+    // Ponder/infinite hold (SF search.cpp:210-216): the UCI protocol forbids emitting
+    // bestmove while pondering or in an `infinite` search until the GUI sends `stop`/
+    // `ponderhit`. If the ID loop exhausted all depths before either arrived (rare — depth
+    // ceiling is MAX_PLY), wait here. Only the emitting (non-silent) path waits; SMP workers
+    // are silent and simply keep searching until stopped, and the driver joins them. A 1ms
+    // sleep instead of SF's hard spin keeps a core free without hurting stop responsiveness.
+    if (!C.limits.silent) {
+        while (!C.stop && (ponderFlag.load(std::memory_order_relaxed) || C.limits.infinite))
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    if (!C.limits.silent) {
+        std::cout << "bestmove " << move_to_uci(best);
+        // Ponder move = 2nd PV move, so a GUI can think on the opponent's clock (SF
+        // search.cpp:246-253). Only when it matches the reported bestmove and the PV is long
+        // enough; no TT-probe fallback (SF's extract_ponder_from_tt) — omit if unavailable.
+        if (lastResult.pv.size() > 1 && lastResult.pv[0] == best)
+            std::cout << " ponder " << move_to_uci(lastResult.pv[1]);
+        std::cout << std::endl;
+    }
 
     return lastResult;
 }
@@ -2934,7 +3083,9 @@ Result start_smp(Position& rootPos, const Limits& limits, int threads) {
     // flat across winning moves, so without this the engine can shuffle a won ending into a
     // 50-move draw). Runs here on the driver thread, single-threaded BEFORE workers spawn, so
     // Fathom's non-thread-safe DTZ path is safe. Gated: C.tune.syzygy + TB::loaded().
-    {
+    // Skipped while pondering: an instant DTZ bestmove would break the UCI ponder hold (the
+    // search must not emit until ponderhit/stop). WDL-in-search still guides the ponder search.
+    if (!limits.ponderMode) {
         Context& C0 = default_ctx_ref();
         if (C0.tune.syzygy && TB::loaded() && rootPos.castling_rights() == 0
             && (unsigned) BB::popcount(rootPos.pieces()) <= TB::max_pieces()) {

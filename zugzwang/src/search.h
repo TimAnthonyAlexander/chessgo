@@ -16,6 +16,11 @@ struct Limits {
     int movetime = 0;
     int64_t nodes = 0;
     bool infinite = false;
+    // Pondering: set by `go ponder`. The search ignores all time limits until the GUI sends
+    // `ponderhit` (→ Search::ponderhit(), start the clock) or `stop` (abort). startTime is
+    // still stamped at the `go ponder` moment, so post-ponderhit elapsed() includes ponder
+    // time — matching SF's "budget spans pondering + real thinking" semantics.
+    bool ponderMode = false;
     int64_t startTime = 0;
     // HTTP serve layer only: suppress the UCI "info"/"bestmove" stdout lines
     // (start() is reused verbatim by serve.cpp — the UCI loop still wants them,
@@ -123,6 +128,14 @@ void clear(); // clear history/killers/TT for a new game, on default_context()
 // interrupt it). Context is opaque here, hence a free function rather than
 // letting callers touch default_context().stop directly.
 void request_stop(bool value);
+
+// Pondering (UCI). set_ponder(true) is called by the UCI layer right before launching a
+// `go ponder` search; set_ponder(false) resets it on every ordinary `go`. ponderhit() is the
+// `ponderhit` command handler — clears the flag so the running search starts honouring its
+// time limits (clock measured from the original `go ponder` startTime). Both drive one
+// process-wide atomic; only one UCI search runs at a time so no per-Context wiring is needed.
+void set_ponder(bool value);
+void ponderhit();
 
 // Runs one search over `group` and returns the completed Result. This is the
 // serve-path counterpart of start_smp(): K==1 is the exact single-thread
