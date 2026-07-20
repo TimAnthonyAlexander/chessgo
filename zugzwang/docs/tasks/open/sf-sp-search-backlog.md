@@ -65,6 +65,15 @@ wins (mechanistically-sound, SF-faithful, never-negative leaning-positives like 
 +3.8 / QSMOVECAP +4.7) can't be individually SPRT-confirmed here; they must be shipped
 as a *stream* (SF's own model — fishtest uses 10k+ games per patch) or batch-SPSA'd.
 
+**STACK RESULT (QSMOVECAP+CAPFUT):** +6@526g → **−4.3±9.9 @1215g** (LLR −0.55). The two
+leaning-positives do NOT stack — likely a negative interaction (both REDUCE search:
+qsearch cap + capture futility → stacking two prunes over-prunes), or both individual
++4s were noise. Net: **no confirmable retrain-free search win this session.** Top ~10
+backlog items all wash/reject/decay. This is evidence zug search is well-tuned, not
+proof the well is dry — but confirmable wins need bigger effects, SPSA, or the net
+retrain. QSMOVECAP-ALONE (never-negative +4.7, SF/SP-shipped, speed mechanism) remains
+the least-implausible solo candidate if ever confirmed at ~3000g.
+
 Enablers landed this session: `Stack::moveCount` (#10, unblocks #9 statScore later),
 `Position::plies_from_null()` (#13). Next fresh to implement when queue drains: #15
 cuckoo upcoming-repetition, #16 RFP ttHit-mult, #12 non-LMR fallback reduction, #14
