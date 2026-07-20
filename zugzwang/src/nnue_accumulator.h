@@ -116,6 +116,16 @@ private:
     // the count-array scratch (O(|parent|+|child|)); leaves counts_ all-zero for reuse.
     void apply_diff(int16_t* acc, const std::vector<int>& parent, const std::vector<int>& child);
 
+    // ACCFUSE (default OFF, see nnue_accumulator.cpp acc_fuse_enabled): a fused/tiled
+    // apply_diff. Each net-nonzero feature's (column, delta) is collected once into
+    // fuseScratch_, then the H-wide accumulator is walked in TILE-sized chunks; within a
+    // tile, all K columns are folded into a register-held running sum with ONE read and
+    // ONE write of acc[i] per index, instead of K separate full-H read-modify-write
+    // passes. See apply_diff's ACCFUSE branch for the bit-exactness argument.
+    struct FuseEntry { const int16_t* col; int delta; };
+    static constexpr int AccFuseTile = 32;
+    std::vector<FuseEntry> fuseScratch_;
+
     // materialize (LAZYACC only) brings slots_[k] up to date: walks up from k to the
     // deepest already-clean ancestor c (slot 0 is always clean after reset — the walk
     // always terminates), then replays the recorded refresh/delta at each depth c+1..k

@@ -37,6 +37,37 @@ bool lazy_acc_enabled() {
     return on;
 }
 
+// ACCFUSE (default OFF): fused/tiled apply_diff. Profiling shows apply_diff at ~26.9%
+// of node self-time and memory-bandwidth-bound: ft_add/ft_sub each stream an entire
+// H=512 int16 (1 KB) weight column, but the current `apply` lambda does so as K
+// SEPARATE full-H passes, one per net-nonzero feature -- every pass both reads AND
+// writes the SAME acc[] array, so pass k+1 has a true RAW dependency on pass k's
+// stores and the K cold column loads are forced to serialize behind that dependency
+// chain instead of overlapping their memory latency.
+//
+// The fused path instead TILES over H (AccFuseTile-wide chunks, matching SF18's/
+// Stormphrax's SIMD-tile approach ported to our int16 scalar/auto-vec layout): for
+// each tile, every column's contribution at index i is folded into a single running
+// sum held in a local before it is written back -- one read of acc[i], one write,
+// per tile-row, with all K column loads for that i independent of each other so the
+// compiler/CPU can issue them back-to-back rather than serially.
+//
+// Bit-exactness: two's-complement int16 wraparound add/sub is exactly modular
+// arithmetic mod 2^16, which is a ring homomorphism from int -- so d sequential
+// wrapping +=col[i] steps (the current ft_add/ft_sub loop) produce the IDENTICAL
+// int16 result to one 32-bit-int accumulation of d*col[i] followed by a single
+// narrowing store (wrap(wrap(x)+y) == wrap(x+y) for all integer x,y). d is tiny
+// (typically +/-1, occasionally +/-2 from duplicate feature touches) and col[i] is
+// int16, so d*col[i] and its accumulation into `a` never overflow a 32-bit int --
+// no intermediate ever approaches int32 range. Folding the SAME K (col,delta) pairs
+// in tiled-by-index order instead of sequential-by-feature order is likewise exact:
+// int16 add is commutative/associative under wraparound, so the order features are
+// folded in cannot change the result, only which loop nests over which axis.
+bool acc_fuse_enabled() {
+    static const bool on = [] { const char* e = getenv("ACCFUSE"); return e && e[0] == '1'; }();
+    return on;
+}
+
 // ftAdd / ftSub — add or subtract feature f's int16 FT weight column into a half.
 // Mirrors gomachine ftAdd/ftSub (enriched.go): W0i is feature-major, W0i[f*H + i].
 // int16 wraparound add/sub, exactly as the from-scratch buildAccHalf.
@@ -62,6 +93,9 @@ AccStack::AccStack() : slots_(NumSlots), counts_(static_cast<std::size_t>(InputT
     dAddW_.reserve(MaxActive);
     dSubB_.reserve(MaxActive);
     dAddB_.reserve(MaxActive);
+    // ACCFUSE: bounded by parent.size()+child.size() (each call site's two lists
+    // together never exceed 2*MaxActive distinct features).
+    fuseScratch_.reserve(static_cast<std::size_t>(2 * MaxActive));
     // LAZYACC: per-slot pending delta lists, reserved like the scratch above.
     for (Slot& s : slots_) {
         s.subW.reserve(MaxActive);
@@ -92,6 +126,55 @@ void AccStack::apply_diff(int16_t* acc, const std::vector<int>& parent, const st
     int16_t* c = counts_.data();
     for (int f : parent) --c[f];
     for (int f : child)  ++c[f];
+
+    if (acc_fuse_enabled()) {
+        // ACCFUSE: collect the net-nonzero (column, delta) pairs first -- same
+        // clearing discipline as the eager `apply` lambda below (c[f] = 0 once
+        // handled, so counts_ is left all-zero for the next call), just gathered
+        // into a list instead of applied immediately.
+        const int16_t* W0 = g_net.W0i.data();
+        fuseScratch_.clear();
+        auto collect = [&](const std::vector<int>& list) {
+            for (int f : list) {
+                const int d = c[f];
+                if (d == 0) continue;
+                fuseScratch_.push_back({ W0 + static_cast<std::size_t>(f) * H, d });
+                c[f] = 0;
+            }
+        };
+        collect(parent);
+        collect(child);
+
+        // Tile over H: for each tile, read acc[] ONCE into a small int32 register/
+        // L1-resident buffer, fold every (col,delta) pair's contribution into that
+        // buffer with a plain contiguous per-column loop (auto-vectorizes -- fixed
+        // trip count AccFuseTile, unit stride, no gather), then write acc[] back
+        // ONCE. This is what actually de-serializes the column loads: the RAW
+        // dependency between successive columns is now against a tiny stack buffer
+        // (stays in registers/L1 across the whole tile) instead of against acc[]
+        // itself sitting behind each column's full cold-cache-miss load -- so the
+        // K column streams can issue back-to-back rather than waiting turn for a
+        // shared memory location. (A naive tile+i-outer/column-inner nest still
+        // reads/writes acc[i] once per row, which is correct, but its innermost
+        // loop strides across K unrelated column pointers -- a gather the compiler
+        // cannot auto-vectorize -- so it does not recover the de-serialization win;
+        // column-outer/i-inner is both correct AND vectorizable.)
+        const std::size_t n = fuseScratch_.size();
+        const FuseEntry* list = fuseScratch_.data();
+        int32_t buf[AccFuseTile];
+        for (int t = 0; t < H; t += AccFuseTile) {
+            const int tend = t + AccFuseTile < H ? t + AccFuseTile : H;
+            const int tw = tend - t;
+            for (int i = 0; i < tw; ++i) buf[i] = acc[t + i];
+            for (std::size_t k = 0; k < n; ++k) {
+                const int16_t* col = list[k].col + t;
+                const int delta = list[k].delta;
+                for (int i = 0; i < tw; ++i) buf[i] += delta * static_cast<int>(col[i]);
+            }
+            for (int i = 0; i < tw; ++i) acc[t + i] = static_cast<int16_t>(buf[i]);
+        }
+        return;
+    }
 
     // APPLYPREFETCH: apply_diff is measured at ~26% of node self-time, and it
     // is memory-bandwidth-bound -- each ft_add/ft_sub streams a full H=512
