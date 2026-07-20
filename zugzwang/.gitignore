@@ -15,6 +15,11 @@ net.nnue
 #   ln -sf ../gomachine/data/book.bin book.bin
 book.bin
 
+# Syzygy 3-4-5-man tablebases (939 MB, ../gomachine/data/syzygy). Recreate with:
+#   ln -sf ../gomachine/data/syzygy syzygy
+# Anchored to top-level only — must NOT match src/syzygy/ (the vendored Fathom source).
+/syzygy
+
 # match / test outputs
 *.log
 *.pgn

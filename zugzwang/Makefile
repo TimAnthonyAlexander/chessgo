@@ -1,5 +1,5 @@
 CXX      ?= clang++
-CXXFLAGS ?= -std=c++17 -O3 -flto=auto -DNDEBUG -Wall -Wno-unused -ffp-contract=off
+CXXFLAGS ?= -std=c++17 -O3 -flto=auto -DNDEBUG -Wall -Wno-unused -ffp-contract=off -Isrc/syzygy
 LDFLAGS  ?= -flto=auto -pthread
 TARGET    = zugzwang
 
@@ -11,7 +11,8 @@ SRC = src/main.cpp src/uci.cpp src/search.cpp src/eval.cpp src/position.cpp \
       src/nnue_net.cpp src/nnue_features.cpp src/nnue_eval.cpp \
       src/nnue_accumulator.cpp \
       src/rules.cpp src/rating.cpp src/weakening.cpp src/serve.cpp src/serve_handlers.cpp \
-      src/sf_uci.cpp src/crazyhouse.cpp src/duck.cpp src/book.cpp src/openings.cpp
+      src/sf_uci.cpp src/crazyhouse.cpp src/duck.cpp src/book.cpp src/openings.cpp \
+      src/zug_tb.cpp src/syzygy/tbprobe.cpp
 OBJ = $(SRC:.cpp=.o)
 DEP = $(OBJ:.o=.d)
 

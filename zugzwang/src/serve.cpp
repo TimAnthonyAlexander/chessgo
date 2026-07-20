@@ -10,6 +10,7 @@
 
 #include "bitboard.h"
 #include "book.h"
+#include "zug_tb.h"
 #include "eval.h"
 #include "nnue.h"
 #include "openings.h"
@@ -129,6 +130,14 @@ int serve_main(int argc, char** argv) {
         std::cerr << "Book: loaded book.bin\n";
     } else {
         std::cerr << "Book: book.bin absent/unusable — full-strength /bestmove will search instead\n";
+    }
+    {
+        const char* p = getenv("SYZYGY_PATH");
+        std::string tbPath = (p && *p) ? p : "syzygy";  // cwd-relative symlink, like net.nnue
+        if (TB::init(tbPath.c_str()))
+            std::cerr << "Syzygy: loaded " << tbPath << " (max " << TB::max_pieces() << "-man)\n";
+        else
+            std::cerr << "Syzygy: none at " << tbPath << " — TB probing off\n";
     }
     // Opening NAME/ECO classifier (gomachine parity): absent/unusable is
     // non-fatal — /bestmove and /candidates just always report `opening: null`.

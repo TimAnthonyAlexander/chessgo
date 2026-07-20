@@ -71,6 +71,9 @@ constexpr int VALUE_INFINITE = 32001;
 constexpr int VALUE_NONE = 32002;
 constexpr int VALUE_MATE_IN_MAX_PLY = VALUE_MATE - 256;
 constexpr int MAX_PLY = 246;
+// Syzygy TB win/loss: decisive, above any eval, but BELOW mate-in-max-ply so TB scores
+// never masquerade as forced mates. `VALUE_TB_WIN - ply` stays < VALUE_MATE_IN_MAX_PLY.
+constexpr int VALUE_TB_WIN = VALUE_MATE_IN_MAX_PLY - MAX_PLY - 1;
 
 constexpr int mate_in(int ply) { return VALUE_MATE - ply; }
 constexpr int mated_in(int ply) { return -VALUE_MATE + ply; }

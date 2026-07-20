@@ -1,5 +1,6 @@
 #include "search.h"
 #include "movegen.h"
+#include "zug_tb.h"
 #include "eval.h"
 #include "nnue.h"
 #include "nnue_accumulator.h"
@@ -464,6 +465,13 @@ struct Context {
         // NMP has the cutNode gate (shipped) but no TT-bound veto. Cheap, ttHit/tte/ttValue
         // already in scope at the NMP gate. Default OFF (veto never fires); env NMPTTVETO=1.
         bool nmpTtVeto = false;
+        // ---- SYZYGY (2026-07-20): Syzygy tablebase probing — WDL at internal nodes +
+        // DTZ at the root. Ported from gomachine (measured +18.8 root-DTZ + +30.5
+        // WDL-in-search Elo). Both hooks also require TB::loaded() (a TB dir resolved at
+        // startup). Default OFF for a clean first SPRT; env SYZYGY=1. Flip default-on once
+        // it clears SPRT (gomachine's history: SPRT-accepted, shipped default-on). NOT for
+        // weakened bots (gate on !weakened at the call site, like gomachine).
+        bool syzygy = false;
         // NOTE (2026-07-20): CUTNODEEXT (SP search.cpp:1131 `cutnode |= extension<0`)
         // researched + DEFERRED — SP modifies function-scope cutnode, which in zug leaks
         // into the next move iteration + the fail-low PCM/allNode reads. A safe port needs
@@ -638,6 +646,7 @@ struct Context {
             if (off("RULE50DAMP")) rule50Damp = false; // shipped default-on; kill-switch
             if (const char* e = getenv("RULE50DAMPDIV")) { int v = atoi(e); if (v > 0) rule50DampDiv = v; }
             if (on("NMPTTVETO")) nmpTtVeto = true;
+            if (on("SYZYGY")) syzygy = true;
             if (on("PCM")) pcm = true;
             if (const char* e = getenv("PCMBASE"))        pcmBase        = atoi(e);
             if (const char* e = getenv("PCMDEPTHW"))       pcmDepthW      = atoi(e);
@@ -1591,6 +1600,22 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             || (b == BOUND_LOWER && ttValue >= beta)
             || (b == BOUND_UPPER && ttValue <= alpha))
             return ttValue;
+    }
+
+    // Syzygy WDL-in-search (gomachine internal/search/search.go:1312): in a TB-cardinality
+    // position with no castling, trust the tablebase verdict directly and return. Gated:
+    // not root (ply>0 — the root is owned by DTZ), not in check, not a singular probe, no
+    // castling rights, and piece count within the loaded tables. Draw/blessed/cursed all
+    // return VALUE_DRAW. Default-off (C.tune.syzygy) + requires TB::loaded().
+    if (C.tune.syzygy && TB::loaded() && ss->ply > 0 && !ss->inCheck && !excluded
+        && pos.castling_rights() == 0
+        && (unsigned) BB::popcount(pos.pieces()) <= TB::max_pieces()) {
+        int wdl;
+        if (TB::probe_wdl(pos, wdl)) {
+            if (wdl > 0)  return VALUE_TB_WIN - ss->ply;
+            if (wdl < 0)  return -VALUE_TB_WIN + ss->ply;
+            return VALUE_DRAW;
+        }
     }
 
     // Static eval (corrected — §CorrHist). rawEval is the uncorrected value,
