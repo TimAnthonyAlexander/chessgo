@@ -586,6 +586,13 @@ struct Context {
         int corrMarginDiv  = 30370; // CORRMARGIN (LMR term only): r -= abs(correction_raw)/corrMarginDiv (SF search.cpp:1197, 30370)
         int allNodeDiv     = 1;     // ALLNODELMR: r += r/(depth+allNodeDiv) at allNodes (SF search.cpp:1228 uses depth+1 -> allNodeDiv=1)
         int dblExtMargin   = 64;    // double-extension verification margin (search.cpp singular block; was a bare 64)
+        // SINGCORRMARGIN (2026-07-21, SF search.cpp:1140 / SP search.cpp:1097): high
+        // |correctionValue| (an uncertain static eval) SHRINKS the double-extension margin, so
+        // the engine double-extends a singular move more readily when its eval is untrustworthy.
+        // Both SF and SP corroborate. Reuses correction_raw() (same scale as the shipped
+        // corrMargin /174665). dblMargin -= |corr|/singCorrDiv. Default OFF; env SINGCORRMARGIN=1.
+        bool singCorrMargin = false;
+        int  singCorrDiv    = 230673; // SF's divisor (its correctionValue scale == zug's)
         // ---- CAPFUT constants (only read when capFut on) — scaled from SF search.cpp:1071
         // `staticEval + 232 + 217*lmrDepth + PieceValue[captured] + 131*captHist/1024`.
         // BASE/SLOPE: SF's additive/per-lmrDepth terms are in SF's eval scale (PawnValue=208,
@@ -692,6 +699,8 @@ struct Context {
             if (on("RFPDEEP")) rfpDeep = true;
             if (on("RAZORQUAD")) razorQuad = true;
             if (on("RAZORTTGATE")) razorTtGate = true;
+            if (on("SINGCORRMARGIN")) singCorrMargin = true;
+            if (const char* e = getenv("SINGCORRDIV")) { int v = atoi(e); if (v > 0) singCorrDiv = v; }
             if (on("NEGEXT3")) negExt3 = true;
             if (on("SINGRETSCORE")) singRetScore = true;
             if (on("ASPADAPT")) aspAdapt = true;
@@ -1015,6 +1024,7 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     else if (name == "TtCutMalusDen")  tune.ttCutMalusDen  = clamp(value, 1, 8);
     else if (name == "LmpHistDiv")     tune.lmpHistDiv     = clamp(value, 500, 40000);
     else if (name == "RfpTtHitCoeff")  tune.rfpTtHitCoeff  = clamp(value, 0, 60);
+    else if (name == "SingCorrDiv")    tune.singCorrDiv    = clamp(value, 40000, 800000);
     // LmrBase/LmrDiv: wire value is the double x LMR_DOUBLE_SCALE (search.h) — see the
     // Tune::lmrBase/lmrDiv comment. Clamp in wire units, convert on the way in.
     else if (name == "LmrBase")        tune.lmrBase        = clamp(value, 3000, 15000) / double(LMR_DOUBLE_SCALE);
@@ -2180,6 +2190,9 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                 // the base margin (default 64, DblExtMargin) by +-12 (~19%). Off -> plain
                 // dblExtMargin, byte-identical to the old bare-64 literal at the default.
                 int dblMargin = C.tune.ttMoveHist ? (C.tune.dblExtMargin - C.ttMoveHistory * 12 / TTMOVEHIST_D) : C.tune.dblExtMargin;
+                // SINGCORRMARGIN: shrink the margin when the eval is uncertain (SF/SP).
+                if (C.tune.singCorrMargin)
+                    dblMargin -= (int)(std::abs(correction_raw(C, pos, ss)) / C.tune.singCorrDiv);
                 if (C.tune.dblExt && !PvNode && s < singularBeta - dblMargin) {
                     extension = 2;
                     // Wave 6: a 3rd ply only when the move fails verification by a very

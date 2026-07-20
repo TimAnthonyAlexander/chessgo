@@ -342,6 +342,8 @@ int uci_main() {
             std::cout << "option name LmpHistDiv type spin default 4000 min 500 max 40000\n";
             // RFPTTHIT coeff (2026-07-21, only read when env RFPTTHIT=1) — SF ttHit RFP multiplier.
             std::cout << "option name RfpTtHitCoeff type spin default 23 min 0 max 60\n";
+            // SINGCORRMARGIN div (2026-07-21, only read when env SINGCORRMARGIN=1) — SF singular corrValue term.
+            std::cout << "option name SingCorrDiv type spin default 230673 min 40000 max 800000\n";
             // Ponder (2026-07-20): advertises pondering support so a GUI/CCRL will send
             // `go ponder`. Not read by the engine — pondering is honored unconditionally on
             // `go ponder`; this flag only tells the GUI the feature exists.
