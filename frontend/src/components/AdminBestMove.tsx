@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
-import { Box, Switch, Tooltip, Typography } from '@mui/material'
-import { Sparkles } from 'lucide-react'
+import { Fragment, useEffect, useRef, useState } from 'react'
+import { Box, Switch, Typography } from '@mui/material'
 import { analyze, duckEval, type Analysis, type Color } from '../api/client'
 import type { Square } from '../lib/chess'
 import { pvToSan } from '../lib/analysisTree'
@@ -34,6 +33,9 @@ interface BestDisplay {
     eval: Analysis['eval']
     depth: number | null
     hint: Hint
+    // The next couple of PV moves (SAN) AFTER the best move — the continuation the
+    // engine expects. Shown only when the row has room; [] for Duck (no PV line).
+    pv: string[]
 }
 
 // The engine reports its eval from the side-to-move's perspective; convert to
@@ -43,8 +45,9 @@ function formatEval(e: Analysis['eval'], stm: Color): string {
     if (!e) return '—'
     const white = stm === 'w' ? e.value : -e.value
     if (e.type === 'mate') return `${white < 0 ? '-' : ''}#${Math.abs(white)}`
-    const pawns = white / 100
-    return `${pawns >= 0 ? '+' : ''}${pawns.toFixed(2)}`
+    // Rounded to the nearest half-pawn — this is a quick admin glance, not analysis.
+    const pawns = Math.round((white / 100) * 2) / 2
+    return `${pawns >= 0 ? '+' : ''}${pawns.toFixed(1)}`
 }
 
 // The active-color field of a FEN ('w' unless it's explicitly Black to move).
@@ -142,12 +145,18 @@ export default function AdminBestMove({
                       eval: d.eval,
                       depth: null,
                       hint: hintFromUci(d.bestmove),
+                      pv: [],
                   }))
                 : analyze(fen, { movetime, signal: controller.signal }).then((a) => ({
                       san: bestMoveSan(fen, a.bestmove),
                       eval: a.eval,
                       depth: a.depth,
                       hint: hintFromUci(a.bestmove),
+                      // pvToSan yields the whole line best-move-first; the next two
+                      // moves are the continuation after it.
+                      pv: pvToSan(fen, a.pv ?? [])
+                          .slice(1, 3)
+                          .map((m) => m.san),
                   }))
 
         // Climb the ladder in sequence, publishing each rung as it lands so the readout
@@ -183,14 +192,6 @@ export default function AdminBestMove({
 
     return (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
-            <Tooltip
-                title="Engine best move (admin) — hold H (or the peek button on touch) to reveal on the board"
-                placement="top"
-            >
-                <Box sx={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
-                    <Sparkles size={14} color={enabled ? 'var(--accent)' : 'var(--text-dim)'} />
-                </Box>
-            </Tooltip>
             <Switch
                 size="small"
                 checked={enabled}
@@ -230,16 +231,44 @@ export default function AdminBestMove({
                                     fontSize: 13.5,
                                     fontWeight: 700,
                                     color: 'var(--accent)',
+                                    flexShrink: 0,
                                 }}
                                 noWrap
                             >
                                 <MoveSan san={best.san} />
                             </Typography>
+                            {/* Continuation (next two PV moves), between the move and its
+                                eval. Lowest priority in the row: flexShrink lets it
+                                clip/vanish FIRST when space is tight, so the move + eval
+                                are never crowded out. */}
+                            {best.pv.length > 0 && (
+                                <Typography
+                                    component="span"
+                                    sx={{
+                                        fontFamily: 'var(--font-mono)',
+                                        fontSize: 11.5,
+                                        color: 'var(--muted)',
+                                        flexShrink: 1,
+                                        minWidth: 0,
+                                        overflow: 'hidden',
+                                        whiteSpace: 'nowrap',
+                                    }}
+                                    noWrap
+                                >
+                                    {best.pv.map((san, i) => (
+                                        <Fragment key={i}>
+                                            {i > 0 ? ' ' : ''}
+                                            <MoveSan san={san} />
+                                        </Fragment>
+                                    ))}
+                                </Typography>
+                            )}
                             <Typography
                                 sx={{
                                     fontFamily: 'var(--font-mono)',
                                     fontSize: 11.5,
                                     color: 'var(--text-dim)',
+                                    flexShrink: 0,
                                 }}
                                 noWrap
                             >
