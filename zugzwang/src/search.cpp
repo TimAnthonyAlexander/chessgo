@@ -571,8 +571,12 @@ struct Context {
         // move gets more room before LMP prunes it, a bad-history one less. Pruning-class
         // lever (distinct from ordering). lmpLimit += histScore/lmpHistDiv, floored so the
         // first moves are never pruned. div anchored to zug's hist scale (histPruneCoeff=4000
-        // ≈ 1 unit), so a ~±8000 histScore shifts the count by ~±2. Default OFF; env LMPHIST=1.
-        bool lmpHist    = false;
+        // ≈ 1 unit), so a ~±8000 histScore shifts the count by ~±2.
+        // SHIPPED default-ON 2026-07-21: movetime SPRT consistently positive across the whole
+        // run (+22@142g → +13.7@1240g → +6.7@2124g; decaying off the phantom but never crossing
+        // 0, pentanomial wins-favored). Kill-switch env LMPHIST=0. lmpHistDiv (4000, untuned) is
+        // an SPSA target. default-on CHANGES the search; LMPHIST=0 reproduces the old baseline.
+        bool lmpHist    = true;
         int  lmpHistDiv = 4000;
         // ---- LMRCLUSTER fine-term constants (2026-07-16) — UCI-exposed for joint SPSA.
         // Defaults reproduce the pre-tunable literals exactly; only read when the owning
@@ -732,7 +736,7 @@ struct Context {
             if (const char* e = getenv("CONTEMPT")) contempt = atoi(e); // cp; 0 = off
             if (off("TIMEMAN")) timeMan = false; // shipped default-on (+28 Elo TC-SPRT); kill-switch
             if (on("TTCUTBONUS")) ttCutBonus = true;
-            if (on("LMPHIST")) lmpHist = true;
+            if (off("LMPHIST")) lmpHist = false; // shipped default-on (movetime SPRT positive); kill-switch
             if (const char* e = getenv("LMPHISTDIV")) { int v = atoi(e); if (v > 0) lmpHistDiv = v; }
             if (on("RFPTTHIT")) rfpTtHit = true;
             if (const char* e = getenv("RFPTTHITCOEFF")) { int v = atoi(e); if (v >= 0) rfpTtHitCoeff = v; }
