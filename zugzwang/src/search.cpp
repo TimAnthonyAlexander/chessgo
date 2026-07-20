@@ -453,6 +453,12 @@ struct Context {
         // psqt split needed → works with zug's net). Default OFF; env RULE50DAMP=1.
         bool rule50Damp    = false;
         int  rule50DampDiv = 199;    // SF's divisor (SP uses 200); higher = gentler
+        // ---- NMPTTVETO (2026-07-20, fresh, SP search.cpp:872): skip the null-move probe
+        // entirely when the TT already says this node fails LOW below beta (upper-bound
+        // entry with score < beta) — the probe is doomed, don't spend a search on it. zug's
+        // NMP has the cutNode gate (shipped) but no TT-bound veto. Cheap, ttHit/tte/ttValue
+        // already in scope at the NMP gate. Default OFF (veto never fires); env NMPTTVETO=1.
+        bool nmpTtVeto = false;
         // NOTE (2026-07-20): CUTNODEEXT (SP search.cpp:1131 `cutnode |= extension<0`)
         // researched + DEFERRED — SP modifies function-scope cutnode, which in zug leaks
         // into the next move iteration + the fail-low PCM/allNode reads. A safe port needs
@@ -626,6 +632,7 @@ struct Context {
             if (const char* e = getenv("QSMOVECAPN")) { int v = atoi(e); if (v >= 1) qsMoveCapN = v; }
             if (on("RULE50DAMP")) rule50Damp = true;
             if (const char* e = getenv("RULE50DAMPDIV")) { int v = atoi(e); if (v > 0) rule50DampDiv = v; }
+            if (on("NMPTTVETO")) nmpTtVeto = true;
             if (on("PCM")) pcm = true;
             if (const char* e = getenv("PCMBASE"))        pcmBase        = atoi(e);
             if (const char* e = getenv("PCMDEPTHW"))       pcmDepthW      = atoi(e);
@@ -1696,7 +1703,8 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             // whole block already sits inside the enclosing `!PvNode` guard.
             if (C.tune.nullMove && cutNode && ss->staticEval >= beta - 9 * depth + 168
                 && !excluded && pos.non_pawn_material(pos.side_to_move())
-                && ss->ply >= C.nmpMinPly && beta > -VALUE_MATE_IN_MAX_PLY) {
+                && ss->ply >= C.nmpMinPly && beta > -VALUE_MATE_IN_MAX_PLY
+                && !(C.tune.nmpTtVeto && ttHit && tte->bound() == BOUND_UPPER && ttValue < beta)) {
                 // R (SF search.cpp:899): depth-only dynamic reduction, no eval term.
                 int R = 7 + depth / 3;
                 StateInfo st;
