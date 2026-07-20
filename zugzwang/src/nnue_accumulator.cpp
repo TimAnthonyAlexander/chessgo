@@ -53,32 +53,42 @@ bool lazy_acc_enabled() {
 // (register/L1-resident for the whole tile) instead of against acc[] sitting behind
 // each column's cold-cache-miss load, so the K column streams can issue back-to-back.
 //
-// int16-only, no multiply (amd64 regression fix, 2026-07-20): an earlier revision of
-// this code accumulated in an `int32 buf` via `buf[i] += delta*(int)col[i]` -- correct,
-// but on amd64 the compiler widens int16->int32 and uses a real 32-bit multiply
-// (vpmulld) per element even though delta is a tiny signed count, ~6x the instructions
-// of the original's plain int16 add (vpaddw/vpsubw); it went compute-bound and
-// REGRESSED -64% NPS on amd64 (coalla) despite winning +25% on arm64 (whose NEON
-// backend apparently ate the widen/multiply more cheaply). SF's SIMDTiling never
-// multiplies -- it fuses via native-width int16 add/sub lanes only. Fixed here the
-// same way: `delta` is expanded ONCE, at collect time, into |delta| repeated pointer
-// copies in an ADD list (d>0) or a SUB list (d<0) -- d is tiny (usually +/-1, rarely
-// +/-2), so this is a handful of extra pointers, never a hot-path cost -- and the tile
-// loop is then pure `buf[i] += col[i]` / `buf[i] -= col[i]`, i.e. exactly ft_add's/
-// ft_sub's own int16 body, just reordered to fold into a small buffer instead of
-// acc[] directly. This auto-vectorizes to native int16 SIMD (vpaddw/vpsubw / NEON) on
-// both architectures, with no widen and no multiply anywhere in the loop.
+// int16-only, no multiply: an earlier revision accumulated in an `int32 buf` via
+// `buf[i] += delta*(int)col[i]` -- correct, but on amd64 the compiler widens
+// int16->int32 + vpmulld per element (~6x the instructions of the original's plain
+// int16 vpaddw/vpsubw), went compute-bound, REGRESSED -64% NPS. This int16 version
+// (delta expanded once at collect time into |delta| pointer copies in an ADD list or a
+// SUB list, tile loop then pure `buf[i]+=col[i]` / `-=col[i]` = ft_add's/ft_sub's own
+// int16 body) removes the multiply -- but STILL regressed -48% on amd64.
 //
-// Bit-exactness: this is now, index-for-index, the SAME sequence of int16 wraparound
-// adds/subs the eager path performs (one add per ADD-list copy, one sub per SUB-list
-// copy of the same columns, same total count as the eager d-iteration loop) -- just
-// accumulated into a buffer instead of acc[] directly, and grouped by tile instead of
-// by feature. int16 add/sub under wraparound is commutative and associative (two's-
-// complement wraparound is a ring homomorphism from int, so regrouping/reordering the
-// same additions/subtractions cannot change the result), so tiled-by-index order via a
-// buffer is bit-identical to sequential-by-feature order applied straight to acc[].
+// ARCH-GATED TO ARM64 (2026-07-20, measured): the fusion is a genuine +30% NPS win on
+// arm64 (M3, best-of-5: startpos 654k->869k, midgame 683k->888k) but a LOSS on amd64
+// (coalla: int32 -64%, int16 -48%). Root cause is architectural, not an impl bug: on
+// amd64 the original per-feature `for(i<H) acc[i]+=col[i]` already lowers to optimal
+// vpaddw %zmm, and the server core's out-of-order engine + hardware prefetchers already
+// hide the acc[] RAW round-trips -- there is simply no serialization latency left to
+// recover, so the fused buffer's extra load/store layer only adds overhead. On M-series
+// arm the memory latency is high enough that de-serializing the cold column loads pays.
+// (SF's SIMDTiling helps SF because it register-tiles a MULTI-accumulator update -- acc
+// + psqt + Finny -- a different, register-pressure-bound pattern than our single int16
+// half's simple add loop; it does not imply a win for our shape on amd64.) So we compile
+// the fused path in and default it ON only on arm64; on amd64/other it is a no-op and
+// apply_diff always takes the original path. Byte-identical either way (identical node
+// counts + bestmoves, ASSERT-clean incl. with LAZYACC). Set ACCFUSE=0 to force off on
+// arm (debug/oracle).
+//
+// Bit-exactness: index-for-index the SAME sequence of int16 wraparound adds/subs the
+// eager path performs, just accumulated into a tile buffer and grouped by index instead
+// of by feature. int16 add/sub under two's-complement wraparound is a ring homomorphism
+// from int, so regrouping/reordering cannot change the result.
 bool acc_fuse_enabled() {
-    static const bool on = [] { const char* e = getenv("ACCFUSE"); return e && e[0] == '1'; }();
+#if defined(__aarch64__) || defined(__ARM_NEON)
+    // arm64: default ON (proven +30% NPS, byte-identical). ACCFUSE=0 disables.
+    static const bool on = [] { const char* e = getenv("ACCFUSE"); return !(e && e[0] == '0'); }();
+#else
+    // amd64/other: always OFF -- the fused path regresses here (see comment above).
+    static const bool on = false;
+#endif
     return on;
 }
 
