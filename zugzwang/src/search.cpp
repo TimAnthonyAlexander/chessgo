@@ -508,6 +508,18 @@ struct Context {
         // byte-identical (movetime returns before tmScaled is set), so the movetime SPRT and
         // golden/bench are unchanged. Kill-switch: env TIMEMAN=0.
         bool timeMan = true;
+        // ---- TTCUTBONUS (2026-07-20, SF search.cpp:759-776 + Stormphrax search.cpp:682-698):
+        // on the non-PV TT-cutoff fast path (where no move loop runs at this node), credit a
+        // quiet ttMove that fails high (ttValue>=beta) with a depth-scaled history+conthist
+        // bonus, and penalize the previous ply's early quiet (SF: (ss-1) moveCount<4, not a
+        // capture). Learns ordering from repeated transpositions — a signal class distinct
+        // from zug's post-search cutoff credit (fresh cutoffs) and PCM (fail-low credit). Both
+        // SF18 and Stormphrax independently do this; genuinely un-ported in zug. Default OFF;
+        // env TTCUTBONUS=1, movetime-SPRT gated.
+        bool ttCutBonus       = false;
+        int  ttCutBonusScale  = 132; // SF: bonus = min(132*depth - 72, 985)
+        int  ttCutBonusMax    = 985;
+        int  ttCutMalus       = 2060; // SF: prev-ply continuation-history malus
         // NOTE (2026-07-20): CUTNODEEXT (SP search.cpp:1131 `cutnode |= extension<0`)
         // researched + DEFERRED — SP modifies function-scope cutnode, which in zug leaks
         // into the next move iteration + the fail-low PCM/allNode reads. A safe port needs
@@ -686,6 +698,10 @@ struct Context {
             if (const char* e = getenv("MOVEOVERHEAD")) { int v = atoi(e); if (v >= 0) moveOverhead = v; }
             if (const char* e = getenv("CONTEMPT")) contempt = atoi(e); // cp; 0 = off
             if (off("TIMEMAN")) timeMan = false; // shipped default-on (+28 Elo TC-SPRT); kill-switch
+            if (on("TTCUTBONUS")) ttCutBonus = true;
+            if (const char* e = getenv("TTCUTBONUSSCALE")) { int v = atoi(e); if (v > 0) ttCutBonusScale = v; }
+            if (const char* e = getenv("TTCUTBONUSMAX"))   { int v = atoi(e); if (v > 0) ttCutBonusMax = v; }
+            if (const char* e = getenv("TTCUTMALUS"))      { int v = atoi(e); if (v >= 0) ttCutMalus = v; }
             if (on("PCM")) pcm = true;
             if (const char* e = getenv("PCMBASE"))        pcmBase        = atoi(e);
             if (const char* e = getenv("PCMDEPTHW"))       pcmDepthW      = atoi(e);
@@ -1652,8 +1668,35 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         Bound b = tte->bound();
         if (b == BOUND_EXACT
             || (b == BOUND_LOWER && ttValue >= beta)
-            || (b == BOUND_UPPER && ttValue <= alpha))
+            || (b == BOUND_UPPER && ttValue <= alpha)) {
+            // TTCUTBONUS (SF search.cpp:759-776 / SP search.cpp:682-698): credit history on
+            // this cache-hit fast path (no move loop runs here). A quiet ttMove that fails
+            // high gets a depth-scaled bonus; the previous ply's early quiet gets a malus.
+            // pseudo_legal() guards against a colliding TT move indexing tables out of range.
+            if (C.tune.ttCutBonus && ttValue >= beta && ttMove != MOVE_NONE && !ttCapture
+                && type_of_move(ttMove) != PROMOTION && pos.pseudo_legal(ttMove)) {
+                int bonus = std::min(C.tune.ttCutBonusScale * depth - 72, C.tune.ttCutBonusMax);
+                if (bonus > 0) {
+                    update_history(C, pos.side_to_move(), ttMove, bonus);
+                    if (C.tune.contHist) {
+                        int16_t *ch1, *ch2, *ch3, *ch4, *ch6;
+                        cont_hist_planes(C, ss, ch1, ch2, ch3, ch4, ch6);
+                        update_cont_hist(ch1, ch2, ch3, ch4, ch6,
+                                         pos.moved_piece(ttMove), to_sq(ttMove), bonus);
+                    }
+                }
+                // Prev-ply early-quiet penalty (SF: (ss-1)->moveCount < 4 && !priorCapture).
+                if (C.tune.contHist && (ss - 1)->currentMove != MOVE_NONE
+                    && (ss - 1)->currentMove != MOVE_NULL && (ss - 1)->moveCount < 4
+                    && !(ss - 1)->didCapture) {
+                    int16_t *p1, *p2, *p3, *p4, *p6;
+                    cont_hist_planes(C, ss - 1, p1, p2, p3, p4, p6);
+                    update_cont_hist(p1, p2, p3, p4, p6, (ss - 1)->currentPiece,
+                                     to_sq((ss - 1)->currentMove), -C.tune.ttCutMalus);
+                }
+            }
             return ttValue;
+        }
     }
 
     // Syzygy WDL-in-search (gomachine internal/search/search.go:1312): in a TB-cardinality
