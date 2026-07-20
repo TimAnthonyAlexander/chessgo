@@ -44,8 +44,8 @@ across every addition). Committed to main. SPRT queue drains one-at-a-time on co
 | # | flag | env | status |
 |---|---|---|---|
 | 1 | CAPFUT | `CAPFUT=1` | SPRT +3.8±11 @920g (leaning +, unconfirmed) — SPSA candidate |
-| 3 | CUTOFFGRADE | `CUTOFFGRADE=1` | **in lmrpair SPRT** (paired w/ #4): +15.6±18.6 @408g, trending accept |
-| 4 | POSTLMRCH | `POSTLMRCH=1` | **in lmrpair SPRT** (see #3) |
+| 3 | CUTOFFGRADE | `CUTOFFGRADE=1` | **WASHED** as lmrpair pair (w/ #4): +3.3±13 @760g (early +15.6 was noise, regressed to ~0). Keep default-off. |
+| 4 | POSTLMRCH | `POSTLMRCH=1` | **WASHED** (lmrpair pair, see #3) |
 | 5 | DRAWJITTER | `DRAWJITTER=1` | bundle5 washed (−7 as part of 4-tweak drag); solo re-SPRT TBD |
 | 6 | CHECKORDER | `CHECKORDER=1` | bundle5 washed (in the drag); solo re-SPRT TBD |
 | 7 | QSMOVECAP | `QSMOVECAP=1` | **queued** (nodes 34220→19143, faithful SF cap=2) |
