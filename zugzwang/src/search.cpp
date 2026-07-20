@@ -2924,6 +2924,37 @@ void start(Position& pos, const Limits& lim) {
 
 // ---- Lazy SMP driver ----
 Result start_smp(Position& rootPos, const Limits& limits, int threads) {
+    // Syzygy root DTZ (gomachine internal/engine/tablebase.go): before ANY search, if the
+    // root is a TB-cardinality position with no castling, probe DTZ for the DTZ-OPTIMAL
+    // converting move and return it directly — this is the half WDL-in-search lacks (WDL is
+    // flat across winning moves, so without this the engine can shuffle a won ending into a
+    // 50-move draw). Runs here on the driver thread, single-threaded BEFORE workers spawn, so
+    // Fathom's non-thread-safe DTZ path is safe. Gated: C.tune.syzygy + TB::loaded().
+    {
+        Context& C0 = default_ctx_ref();
+        if (C0.tune.syzygy && TB::loaded() && rootPos.castling_rights() == 0
+            && (unsigned) BB::popcount(rootPos.pieces()) <= TB::max_pieces()) {
+            Move tbMove = TB::probe_root(rootPos);
+            if (tbMove != MOVE_NONE) {
+                int wdl = 0;
+                TB::probe_wdl(rootPos, wdl);
+                int score = wdl > 0 ? VALUE_TB_WIN : (wdl < 0 ? -VALUE_TB_WIN : VALUE_DRAW);
+                Result r;
+                r.bestMove = tbMove;
+                r.score = score;
+                r.depth = 0;
+                r.nodes = 0;
+                r.pv.assign(1, tbMove);
+                if (!limits.silent) {
+                    std::cout << "info depth 0 score cp " << score << " nodes 0 pv "
+                              << move_to_uci(tbMove) << "\n";
+                    std::cout << "bestmove " << move_to_uci(tbMove) << std::endl;
+                }
+                return r;
+            }
+        }
+    }
+
     // Threads<=1: the exact pre-SMP single-thread path. default_context() is
     // bound to the global TT + defaultStop, resetShared defaults to true, and
     // limits.silent is untouched — so the tree, the bestmove, and every
