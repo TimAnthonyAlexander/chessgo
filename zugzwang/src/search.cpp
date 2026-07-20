@@ -240,6 +240,11 @@ struct Context {
         bool corrMargin = false; // raw (pre-shift) correction magnitude discounts RFP margin + LMR reduction (env CORRMARGIN=1)
         bool rfpDeep    = false; // raise RFP depth cap 8 -> 13, matching SF's depth<14 (env RFPDEEP=1)
         bool razorQuad  = false; // quadratic razoring curve (SF-scaled consts), no depth cap (env RAZORQUAD=1)
+        // RAZORTTGATE (2026-07-21, Stormphrax search.cpp:855): don't razor when there's a good
+        // QUIET TT move — a stored quiet best hints at real play the static eval is missing, so
+        // dropping straight to qsearch is unsafe. Same intuition as RFP's quiet-ttMove gate.
+        // Default OFF; env RAZORTTGATE=1. Off → gate always passes → byte-identical.
+        bool razorTtGate = false;
         bool negExt3    = false; // negative-extension magnitude -2/-1 -> -3/-2 (env NEGEXT3=1)
         bool singRetScore = false; // singular multi-cut returns verification score, not singularBeta (env SINGRETSCORE=1; SF search.cpp:1160)
         bool aspAdapt     = false; // adaptive aspiration initial delta (prevScore-scaled) + delta/3 widening, not delta/2 (env ASPADAPT=1; SF search.cpp:355,418)
@@ -682,6 +687,7 @@ struct Context {
             if (on("CORRMARGIN")) corrMargin = true;
             if (on("RFPDEEP")) rfpDeep = true;
             if (on("RAZORQUAD")) razorQuad = true;
+            if (on("RAZORTTGATE")) razorTtGate = true;
             if (on("NEGEXT3")) negExt3 = true;
             if (on("SINGRETSCORE")) singRetScore = true;
             if (on("ASPADAPT")) aspAdapt = true;
@@ -1947,7 +1953,10 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         bool razorCond = C.tune.razorQuad
             ? (eval < alpha - 233 - 135 * depth * depth)
             : (depth <= 3 && eval + C.tune.razorMargin * depth <= alpha);
-        if (C.tune.razor && razorCond) {
+        // RAZORTTGATE: skip razoring when the TT move is a quiet (non-capture, non-promotion).
+        bool razorTtOk = !C.tune.razorTtGate || ttMove == MOVE_NONE || ttCapture
+                         || type_of_move(ttMove) == PROMOTION;
+        if (C.tune.razor && razorCond && razorTtOk) {
             int v = qsearch(C, pos, ss, alpha, alpha + 1);
             if (v <= alpha) return v;
         }
