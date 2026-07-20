@@ -24,7 +24,10 @@ static std::thread searchThread;
 static int ttSizeMB = 128;
 static int engineThreads = 1; // UCI "Threads" option — Lazy SMP worker count (1 = single-thread)
 static Book::Book book;
-static bool ownBook = false;
+static bool ownBook = true;  // default-ON (2026-07-20): the +150-Elo GMBK book
+                             // (book.bin → ../gomachine/data/book.bin) is used in EVERY
+                             // UCI entrypoint — SPRTs, fastchess-vs-Stockfish, GUI play.
+                             // Kill with `setoption name OwnBook value false`.
 
 // UCI strength limiting (standard UCI_LimitStrength / UCI_Elo). Off by default so
 // the UCI/bench/golden path is byte-identical to full strength. When on, `go`
@@ -304,7 +307,7 @@ int uci_main() {
             std::cout << "option name QsMoveCapN type spin default 2 min 1 max 8\n";
             // RULE50DAMP (2026-07-20, only read when env RULE50DAMP=1) — SF evaluate.cpp:83.
             std::cout << "option name Rule50DampDiv type spin default 199 min 80 max 400\n";
-            std::cout << "option name OwnBook type check default false\n";
+            std::cout << "option name OwnBook type check default true\n";
             std::cout << "option name UCI_LimitStrength type check default false\n";
             std::cout << "option name UCI_Elo type spin default " << Rating::RatingMax
                       << " min " << Rating::RatingMin << " max " << Rating::RatingMax << "\n";
