@@ -105,4 +105,18 @@ bool threat_delta_enabled();
 // threat_delta_enabled() is true.
 bool threat_delta_fast_enabled();
 
+// threat_delta_sf_enabled reads THREATDELTA_SF once (default OFF): =1 switches
+// changed_edges_delta's per-perspective threat loop to the SF18-ported "touch-only-D"
+// path (docs/tasks — SF18 touch-only-D port spec): rather than building an `affected`
+// set (D plus every attacker of a D square under old/new occupancy) and re-emitting
+// each affected attacker's FULL edge set, it touches ONLY the <=4 D squares directly,
+// emitting each touched piece's own outgoing edges, the touched square's incoming edges
+// (one threatIndex call per attacker), and one discovered/blocked edge per slider found
+// while computing incoming edges. Byte-identical resulting edge multiset to the
+// enumerate path (ASSERT-checked) — a third, mutually-exclusive alternative to
+// threat_delta_fast_enabled()'s masked-line diff, not a replacement for it. The
+// enumerate path remains the default/oracle; THREATDELTA_SF=0/unset leaves behavior
+// byte-for-byte unchanged. Only meaningful when threat_delta_enabled() is true.
+bool threat_delta_sf_enabled();
+
 } // namespace NNUE

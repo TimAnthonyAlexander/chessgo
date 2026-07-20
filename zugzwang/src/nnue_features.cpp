@@ -24,6 +24,7 @@ namespace {
 using NNUE::InputDim;   // 768
 using NNUE::PsqSize;    // 12288
 using NNUE::ThreatBlock;// 79856
+using NNUE::BoardSnapshot;
 
 // attacks0 returns the empty/occ-blocked attack set of a piece given a 0-indexed type
 // (0=Pawn..5=King). Mirrors gomachine chess.attacksFrom: sliders honour occ, leapers
@@ -284,6 +285,288 @@ inline void emit_changed_edges(const SFTables& T, const PerspXform& x, int aRel,
     }
 }
 
+// ============================================================================
+// THREATDELTA_SF — SF18 "touch-only-D" threat delta (default OFF).
+//
+// Port of Stockfish 18's Position::update_piece_threats: touches ONLY the ≤4
+// squares in D (never builds an `affected` set, never calls attackers_to as a
+// seed for re-enumerating a full attacker's edge set). At each touched square
+// it emits the touched piece's own outgoing edges, the touched square's
+// incoming edges (one `threatIndex` call per attacker, no re-walk of the
+// attacker's other edges), and — for every SLIDER found while computing
+// incoming edges — exactly one discovered/blocked edge at the square beyond.
+// See the porting spec (nnue_features.h's doc comment references it) for the
+// full derivation/proof; this is a byte-identical-multiset alternate
+// implementation of the same threat delta the enumerate path computes.
+// ============================================================================
+
+// LiveBoard — a small mutable piece-placement snapshot (byType/byColor
+// bitboards + mailbox), seeded from `oldb` and progressively mutated, in the
+// exact order and discipline SF's remove_piece/put_piece/swap_piece use, as
+// each touch in a move's ordered touch-list is processed. This is what lets a
+// touch at square `s` see the CORRECT intermediate occupancy/identity of the
+// other ≤3 D squares already processed earlier in the same move's sequence
+// (load-bearing for castling — see the spec's worked counterexample).
+struct LiveBoard {
+    U64   byType[PIECE_TYPE_NB];
+    U64   byColor[COLOR_NB];
+    Piece board[SQUARE_NB];
+
+    void init(const BoardSnapshot& snap) {
+        for (int i = 0; i < PIECE_TYPE_NB; ++i) byType[i] = snap.byType[i];
+        for (int i = 0; i < COLOR_NB; ++i)      byColor[i] = snap.byColor[i];
+        for (int i = 0; i < SQUARE_NB; ++i)     board[i] = snap.board[i];
+    }
+    U64   occ()               const { return byType[0]; }
+    Piece piece_on(Square s)  const { return board[s]; }
+    U64   attackers_to(Square s) const { return Position::attackers_to(byType, byColor, s, byType[0]); }
+
+    // VACATE-shaped mutation: mirrors Position::remove_piece exactly (reads
+    // board[s] for the piece identity being removed).
+    void remove_piece(Square s) {
+        const Piece pc = board[s];
+        const U64   b  = BB::square_bb(s);
+        byType[0] ^= b;
+        byType[type_of(pc)] ^= b;
+        byColor[color_of(pc)] ^= b;
+        board[s] = NO_PIECE;
+    }
+    // PLACE-shaped mutation: mirrors Position::put_piece exactly.
+    void put_piece(Piece pc, Square s) {
+        const U64 b = BB::square_bb(s);
+        byType[0] |= b;
+        byType[type_of(pc)] |= b;
+        byColor[color_of(pc)] |= b;
+        board[s] = pc;
+    }
+};
+
+// ray_pass_minus_between — literal transcription of SF's `RayPassBB[s1][s2] &
+// ~BetweenBB[s1][s2]` (spec §2.1/§1.4): the squares strictly beyond s2, away
+// from s1, out to the board edge. Squares-only (no occupancy filtering) —
+// used only for the noRaysMask suppression test, mirroring SF's
+// `(RayPassBB[sliderSq][s] & noRaysContaining) != noRaysContaining`.
+inline U64 ray_pass_minus_between(Square s1, Square s2, bool rookLine) {
+    const U64 fullLineFromS1 = rookLine ? BB::rook_attacks(s1, 0) : BB::bishop_attacks(s1, 0);
+    const U64 fromS2StoppedAtS1 =
+        (rookLine ? BB::rook_attacks(s2, BB::square_bb(s1))
+                  : BB::bishop_attacks(s2, BB::square_bb(s1)))
+        | BB::square_bb(s2);
+    return fullLineFromS1 & fromS2StoppedAtS1 & ~BB::between_bb(s1, s2);
+}
+
+// touch_sf — the per-square SF touch primitive (spec §2.2). Appends the
+// touched piece `pc`'s own outgoing edges + the touched square's incoming
+// edges into `out` (sub for a VACATE, add for a PLACE/SWAP-add), and, when
+// `computeRay`, at most one discovered edge PER SLIDER found in the incoming
+// step into `oppositeOut` (the opposite-sign list — VACATE's discovered edge
+// is an add, PLACE's is a sub). `live` is read at exactly the point in the
+// move's touch sequence this call represents (already mutated for every
+// earlier touch, not yet mutated for this one or any later touch).
+inline void touch_sf(const SFTables& T, const PerspXform& x, Color persp,
+                     Square s, Piece pc, const LiveBoard& live,
+                     bool computeRay, U64 noRaysMask,
+                     std::vector<int>& out, std::vector<int>& oppositeOut) {
+    const int   pt0  = int(type_of(pc)) - 1;
+    const Color c    = color_of(pc);
+    const int   aRel = (c != persp) ? 1 : 0;
+    const U64   occ  = live.occ();
+    const int   rfrom = x.orient(int(s));
+    auto pieceAt = [&live](Square t) { return live.piece_on(t); };
+
+    // (1) OUTGOING — identical machinery to today's per-D-square emission.
+    emit_piece_threats(T, x, aRel, pt0, c, s, occ, pieceAt, out);
+
+    // (2) INCOMING — one edge per attacker of `s`, no re-walk of the
+    // attacker's other edges. Also collect the slider subset for (3).
+    const U64 attackers = live.attackers_to(s);
+    const U64 sliders    = attackers & (live.byType[ROOK] | live.byType[BISHOP] | live.byType[QUEEN]);
+    U64 att = attackers;
+    while (att) {
+        const Square y    = BB::pop_lsb(att);
+        const Piece  apc  = live.piece_on(y);
+        const int    ypt0 = int(type_of(apc)) - 1;
+        const int    yRel = (color_of(apc) != persp) ? 1 : 0;
+        int idx;
+        if (T.threatIndex(yRel, ypt0, aRel, pt0, x.orient(int(y)), rfrom, idx))
+            out.push_back(int(PsqSize) + idx);
+    }
+
+    // (3) DISCOVERED — only sliders found in (2), only if computeRay (never
+    // for a SWAP touch — a continuously-occupied square can't discover or
+    // block a ray through itself).
+    if (computeRay) {
+        U64 sl = sliders;
+        while (sl) {
+            const Square y = BB::pop_lsb(sl);
+            const bool rookLine = (rank_of(y) == rank_of(s)) || (file_of(y) == file_of(s));
+            const U64 farSet = (rookLine ? BB::rook_attacks(s, occ) : BB::bishop_attacks(s, occ))
+                              & occ & BB::line_bb(y, s) & ~BB::square_bb(y);
+            if (!farSet) continue; // no far-side occupant on this ray -> nothing discovered
+            if ((ray_pass_minus_between(y, s, rookLine) & noRaysMask) == noRaysMask)
+                continue; // suppressed: this ray is the moving piece's own line
+            const Square f    = BB::lsb(farSet);
+            const Piece  ypc  = live.piece_on(y);
+            const Piece  fpc  = live.piece_on(f);
+            const int    ypt0 = int(type_of(ypc)) - 1;
+            const int    yRel = (color_of(ypc) != persp) ? 1 : 0;
+            const int    fpt0 = int(type_of(fpc)) - 1;
+            const int    fRel = (color_of(fpc) != persp) ? 1 : 0;
+            int idx;
+            if (T.threatIndex(yRel, ypt0, fRel, fpt0, x.orient(int(y)), x.orient(int(f)), idx))
+                oppositeOut.push_back(int(PsqSize) + idx);
+        }
+    }
+}
+
+// TouchOp — one entry of a move's ordered touch-list (spec §2.3). `swap` (SWAP,
+// continuously-occupied square: captures/promotions) always runs with
+// computeRay=false; otherwise `place` selects VACATE (false) vs PLACE (true).
+struct TouchOp {
+    Square sq;
+    Piece  oldPc;      // meaningful for VACATE and SWAP
+    Piece  newPc;      // meaningful for PLACE and SWAP
+    bool   swap;
+    bool   place;      // ignored when swap
+    bool   computeRay; // ignored when swap (always false there)
+    U64    noRaysMask;
+};
+
+// build_touch_plan_sf — classifies the move PURELY from oldb/child piece
+// identity at the D squares (no move-flag decoding, spec §2.3) into an
+// ordered touch-list. Returns the touch count (2, 3, or 4; `plan` must have
+// capacity >= 4).
+inline int build_touch_plan_sf(const BoardSnapshot& oldb, const Position& child, U64 D,
+                               TouchOp* plan) {
+    // Castling, tried first. Geometry match (king/rook sit at the fixed FRC
+    // destination squares) PLUS a same-move-diff proof: the historical
+    // castling-rook origin square (`child.castling_rook_square(flag)` — set
+    // once at game start, valid even after the right is later lost) must
+    // itself be a member of D, i.e. it actually changed on THIS move. That
+    // combination can only be produced by an actual castling move: a
+    // non-castling do_move touches exactly one piece's own from/to (plus, for
+    // EN_PASSANT, one pure removal) — it can never simultaneously land a king
+    // on the fixed castling square AND change the specific historical
+    // castling-rook square to a same-color rook at the fixed rook-destination
+    // square, unless that piece-pair move WAS the castling move.
+    static const int kFlags[4] = { WHITE_OO, WHITE_OOO, BLACK_OO, BLACK_OOO };
+    for (int flag : kFlags) {
+        const Color  c        = (flag == WHITE_OO || flag == WHITE_OOO) ? WHITE : BLACK;
+        const bool   kingside = (flag == WHITE_OO || flag == BLACK_OO);
+        const int    rank     = (c == WHITE) ? 0 : 7;
+        const Square kto      = make_square(kingside ? 6 : 2, rank);
+        const Square rto      = make_square(kingside ? 5 : 3, rank);
+        const Square rfrom    = child.castling_rook_square(flag);
+        if (rfrom == SQ_NONE) continue;
+        if (oldb.piece_on(rfrom) != make_piece(c, ROOK)) continue;
+        if (!(D & BB::square_bb(rfrom))) continue;
+        if (child.king_square(c) != kto) continue;
+        if (child.piece_on(rto) != make_piece(c, ROOK)) continue;
+        const Square kfrom = BB::lsb(oldb.pieces(c, KING));
+        // D-subset closure — REQUIRED, not redundant: without it, any ordinary quiet
+        // move played AFTER this side has already castled can false-positive here,
+        // because castling_rook_square/kto/rto are immutable game history that stays
+        // "true" long after the right is spent (e.g. king permanently sits at kto, the
+        // castled rook still sits at rto) — an unrelated later move that merely walks
+        // some OTHER piece off the historical rfrom square (kfrom==kto already, so D
+        // wouldn't include any king-square change at all) would otherwise pass every
+        // check above. A genuine castling move can only ever touch these <=4 squares —
+        // D must not contain anything outside {kfrom,rfrom,kto,rto}.
+        if (D & ~(BB::square_bb(kfrom) | BB::square_bb(rfrom) | BB::square_bb(kto) | BB::square_bb(rto)))
+            continue;
+        const Piece king = make_piece(c, KING);
+        const Piece rook = make_piece(c, ROOK);
+        // Both removes before either place (Chess960 square-aliasing safety —
+        // exactly do_castling's own discipline), all 4 unsuppressed (noRaysMask
+        // = ~0ULL), all computeRay=true (remove_piece/put_piece-shaped, never
+        // swap_piece-shaped) — still 4 touches even when kto==rfrom or
+        // rto==kfrom collapse them to <=3 distinct squares.
+        plan[0] = TouchOp{ kfrom, king,     NO_PIECE, false, false, true, ~0ULL };
+        plan[1] = TouchOp{ rfrom, rook,     NO_PIECE, false, false, true, ~0ULL };
+        plan[2] = TouchOp{ kto,   NO_PIECE, king,     false, true,  true, ~0ULL };
+        plan[3] = TouchOp{ rto,   NO_PIECE, rook,     false, true,  true, ~0ULL };
+        return 4;
+    }
+
+    Square dsq[4]; int nd = 0;
+    for (U64 d = D; d; ) dsq[nd++] = BB::pop_lsb(d);
+
+    if (nd == 2) {
+        const Square a = dsq[0], b = dsq[1];
+        const bool aVacates = (oldb.piece_on(a) != NO_PIECE && child.piece_on(a) == NO_PIECE);
+        const Square vac   = aVacates ? a : b;
+        const Square other = aVacates ? b : a;
+        const U64   fromTo = BB::square_bb(vac) | BB::square_bb(other);
+        const Piece op = oldb.piece_on(vac);
+        const Piece ov = oldb.piece_on(other);
+        const Piece nv = child.piece_on(other);
+        if (ov == NO_PIECE) {
+            // Quiet move or non-capture promotion (child.piece_on(other) is
+            // already the promoted piece directly — no pawn intermediate, §3.3).
+            plan[0] = TouchOp{ vac,   op,       NO_PIECE, false, false, true, fromTo };
+            plan[1] = TouchOp{ other, NO_PIECE, nv,       false, true,  true, fromTo };
+        } else {
+            // Capture, possibly + promotion: `from` VACATE (unsuppressed —
+            // do_move's plain remove_piece, not move_piece), `to` SWAP
+            // (continuously occupied, no ray).
+            plan[0] = TouchOp{ vac,   op, NO_PIECE, false, false, true,  ~0ULL };
+            plan[1] = TouchOp{ other, ov, nv,       true,  false, false, ~0ULL };
+        }
+        return 2;
+    }
+
+    if (nd == 3) {
+        // En passant: exactly one PLACE square (`to`); of the other two
+        // VACATE squares, `from` is the one whose old piece equals the mover
+        // that landed at `to` (same piece — a pawn); the other is `capsq`,
+        // processed FIRST and unsuppressed (do_move removes it before
+        // move_piece(from,to) runs).
+        int placeIdx = 0;
+        for (int i = 0; i < 3; ++i)
+            if (oldb.piece_on(dsq[i]) == NO_PIECE) { placeIdx = i; break; }
+        const Square to = dsq[placeIdx];
+        const Square v0 = dsq[(placeIdx + 1) % 3];
+        const Square v1 = dsq[(placeIdx + 2) % 3];
+        const Piece  moved    = child.piece_on(to);
+        const bool   v0IsFrom = (oldb.piece_on(v0) == moved);
+        const Square from  = v0IsFrom ? v0 : v1;
+        const Square capsq = v0IsFrom ? v1 : v0;
+        const U64 fromTo = BB::square_bb(from) | BB::square_bb(to);
+        plan[0] = TouchOp{ capsq, oldb.piece_on(capsq), NO_PIECE, false, false, true, ~0ULL };
+        plan[1] = TouchOp{ from,  oldb.piece_on(from),  NO_PIECE, false, false, true, fromTo };
+        plan[2] = TouchOp{ to,    NO_PIECE, moved,       false, true,  true, fromTo };
+        return 3;
+    }
+
+    return 0; // no actual board diff (e.g. a fully-aliased no-op castle) -> nothing to touch
+}
+
+// apply_touch_plan_sf — replays an already-built touch plan against a fresh
+// LiveBoard for ONE perspective, mutating `live` in the general rule stated
+// once in the spec: VACATE touches read-then-clear their own square, PLACE
+// touches set-then-read theirs, in exactly the plan's listed order. A SWAP
+// runs its sub-touch (old identity), transitions the square (remove+put), then
+// its add-touch (new identity) — both with computeRay=false.
+inline void apply_touch_plan_sf(const TouchOp* plan, int n, const SFTables& T,
+                                const PerspXform& x, Color persp, LiveBoard& live,
+                                std::vector<int>& sub, std::vector<int>& add) {
+    for (int i = 0; i < n; ++i) {
+        const TouchOp& op = plan[i];
+        if (op.swap) {
+            touch_sf(T, x, persp, op.sq, op.oldPc, live, false, op.noRaysMask, sub, add);
+            live.remove_piece(op.sq);
+            live.put_piece(op.newPc, op.sq);
+            touch_sf(T, x, persp, op.sq, op.newPc, live, false, op.noRaysMask, add, sub);
+        } else if (op.place) {
+            live.put_piece(op.newPc, op.sq);
+            touch_sf(T, x, persp, op.sq, op.newPc, live, op.computeRay, op.noRaysMask, add, sub);
+        } else {
+            touch_sf(T, x, persp, op.sq, op.oldPc, live, op.computeRay, op.noRaysMask, sub, add);
+            live.remove_piece(op.sq);
+        }
+    }
+}
+
 } // namespace
 
 namespace NNUE {
@@ -346,6 +629,7 @@ void changed_edges_delta(const BoardSnapshot& oldb, const Position& child,
     const U64 oldOcc = oldb.occ();
     const U64 newOcc = child.pieces();
     const bool fast = threat_delta_fast_enabled();
+    const bool sf = threat_delta_sf_enabled();
 
     // D = squares whose occupant changed (per-piece bitboard XOR) — robust to castling /
     // en passant / promotion without decoding move flags (a promotion shows as pawn-left
@@ -355,13 +639,23 @@ void changed_edges_delta(const BoardSnapshot& oldb, const Position& child,
         for (int pt = PAWN; pt <= KING; ++pt)
             D |= oldb.pieces(Color(c), PieceType(pt)) ^ child.pieces(Color(c), PieceType(pt));
 
+    // THREATDELTA_SF: build the ordered touch-list ONCE (perspective-independent —
+    // it depends only on oldb/child/D, not on which perspective's threat indices are
+    // being emitted). Replayed per-perspective below against a fresh LiveBoard.
+    TouchOp sfPlan[4];
+    int sfPlanN = sf ? build_touch_plan_sf(oldb, child, D, sfPlan) : 0;
+
     // affected — the both-occupancy seeding is what catches discovered AND retracted
-    // slider threats (case 3 above).
+    // slider threats (case 3 above). Only needed by the enumerate/fast branches below —
+    // skipped entirely under THREATDELTA_SF, which is the whole point of that path (it
+    // never builds an affected set, touching only the O(1) D squares instead).
     U64 affected = D;
-    for (U64 d = D; d;) {
-        const Square s = BB::pop_lsb(d);
-        affected |= oldb.attackers_to(s, oldOcc);
-        affected |= child.attackers_to(s, newOcc);
+    if (!sf) {
+        for (U64 d = D; d;) {
+            const Square s = BB::pop_lsb(d);
+            affected |= oldb.attackers_to(s, oldOcc);
+            affected |= child.attackers_to(s, newOcc);
+        }
     }
 
     auto oldPieceAt = [&oldb](Square t)  { return oldb.piece_on(t); };
@@ -400,7 +694,16 @@ void changed_edges_delta(const BoardSnapshot& oldb, const Position& child,
             }
         }
 
-        if (!fast) {
+        if (sf) {
+            // THREATDELTA_SF: SF18 touch-only-D path (see the block comment above
+            // build_touch_plan_sf). Replay the precomputed plan against a fresh
+            // LiveBoard for this perspective — the plan itself is perspective-
+            // independent, only the emitted indices (x.orient/threatIndex reads)
+            // differ per perspective.
+            LiveBoard live;
+            live.init(oldb);
+            apply_touch_plan_sf(sfPlan, sfPlanN, T, x, p.color, live, *p.sub, *p.add);
+        } else if (!fast) {
             // Enumerate variant (shipped cut-1, default): subtract each affected
             // attacker's FULL old edge set, add its FULL new set. Unchanged edges
             // cancel in apply_diff's count array.
@@ -514,6 +817,18 @@ bool threat_delta_fast_enabled() {
     // THREATDELTA_FAST=0 is the parity/debug kill-switch back to the full-enumerate diff.
     // Only consulted when threat_delta_enabled() is already true (push_delta's caller).
     static const bool on = [] { const char* e = getenv("THREATDELTA_FAST"); return !(e && e[0] == '0'); }();
+    return on;
+}
+
+bool threat_delta_sf_enabled() {
+    // Default OFF (design-only, cut-1 port of SF18's touch-only-D update_piece_threats —
+    // see build_touch_plan_sf/touch_sf above): THREATDELTA_SF=1 switches
+    // changed_edges_delta's per-perspective threat loop to the SF-shaped path, which never
+    // builds an `affected` set and touches only the <=4 D squares directly. The enumerate
+    // path (threat_delta_fast_enabled()==false) remains the correctness oracle/default;
+    // THREATDELTA_FAST is unaffected by (and independent of) this flag — only one of the
+    // three branches runs per call. Only consulted when threat_delta_enabled() is true.
+    static const bool on = [] { const char* e = getenv("THREATDELTA_SF"); return e && e[0] == '1'; }();
     return on;
 }
 
