@@ -393,6 +393,13 @@ struct Context {
         // double-extend; ss->reduction goes negative but its only reader (hindsight,
         // line ~1498) just fails its >=2/>=3 gates. lmrExtCap = SF's +2 head-room.
         // Default OFF (clamp reverts to min(...,newDepth), no PvNode add → byte-identical).
+        // SPRT VERDICT 2026-07-20: REJECT −10.4±12 @805g (LLR −0.77). NOT a wash — a real
+        // negative. WHY: zug's fine-resolution negative-r terms (givesCheck −1024, ttPv
+        // −1024, rootDeltaLmr, mcLinR) drive r far below 0, and under SF's newDepth+2 cap
+        // + PvNode this over-extends late moves, bloating the tree and losing effective
+        // depth at fixed movetime. SF's r-magnitudes/damping are calibrated for its own
+        // extension cap; they don't transfer to zug's r scale. Kept default-off. A gentler
+        // cap (lmrExtCap=1, no PvNode) MIGHT be neutral but isn't worth tuning a loser.
         bool lmrExt    = false;
         int  lmrExtCap = 2;
         // ---- SHUFFLEGUARD (2026-07-20, sf-sp-search-backlog.md #13): suppress the

@@ -52,7 +52,7 @@ across every addition). Committed to main. SPRT queue drains one-at-a-time on co
 | 8b | HISTTTBONUS | `HISTTTBONUS=1` | **queued** (ttMove-is-best extra bonus) |
 | 8c | HISTTAPER | `HISTTAPER=1` | **WASHED** 0.00±14.9 @551g (dead flat; confirms zug ordering/history saturation). Default-off. |
 | 10 | PCM | `PCM=1` | **queued** — fail-low parent-move credit (biggest novel item) |
-| 11 | LMREXT | `LMREXT=1` | **queued** — LMR extend past newDepth + PvNode |
+| 11 | LMREXT | `LMREXT=1` | **REJECT −10.4±12 @805g** (real negative). zug's negative-r terms over-extend under SF's +2 cap → tree bloat, lost movetime depth. SF r-calibration doesn't transfer. Default-off. |
 | 13 | SHUFFLEGUARD | `SHUFFLEGUARD=1` | **queued** — suppress singular ext in rule50 shuffle |
 | 2 | HISTDECAY | `HISTDECAY=1` | washed −10.7 @380g; gentler-rate SPSA candidate (dormant) |
 
