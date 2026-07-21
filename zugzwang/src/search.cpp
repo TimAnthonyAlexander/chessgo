@@ -800,6 +800,10 @@ struct Context {
                 lmrBase          = 0.7844;
                 lmrDiv           = 2.4696;
             }
+            // A4 (2026-07-21, formula audit): SF/SP have no small-depth cap on capture-SEE
+            // pruning; zug caps at depth<=4. Env override to test raising/removing it (the
+            // margin captSeeCoeff*depth self-limits). Applied last so it wins over GMCONST.
+            if (const char* e = getenv("CAPTSEEMAXDEPTH")) { int v = atoi(e); if (v >= 1) captSeeMaxDepth = v; }
         }
     };
 
