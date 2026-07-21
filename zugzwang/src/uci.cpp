@@ -347,6 +347,8 @@ int uci_main() {
             // FUTSFTERMS bonuses (2026-07-21, only read when env FUTSFTERMS=1) — SF futility-value terms.
             std::cout << "option name FutNoMoveBonus type spin default 77 min 0 max 200\n";
             std::cout << "option name FutAlphaBonus type spin default 41 min 0 max 200\n";
+            // TTPVFAILLOW r (2026-07-21, only read when env TTPVFAILLOW=1) — SP ttpv-fail-low LMR term.
+            std::cout << "option name TtPvFailLowR type spin default 1024 min 0 max 2048\n";
             // Ponder (2026-07-20): advertises pondering support so a GUI/CCRL will send
             // `go ponder`. Not read by the engine — pondering is honored unconditionally on
             // `go ponder`; this flag only tells the GUI the feature exists.

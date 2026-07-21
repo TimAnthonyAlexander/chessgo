@@ -226,6 +226,12 @@ struct Context {
         // ---- SF selectivity Wave 4 — ttPv (#5): former-PV bit persisted in the TT,
         // gates RFP + de-reduces LMR on tactically-live nodes. Default ON; env TTPV=0. ----
         bool ttPvOn      = true;
+        // TTPVFAILLOW (2026-07-21, Stormphrax search.cpp:1174): counter zug's flat ttPv LMR
+        // de-reduction (r -= 1024) when the position's OWN TT entry already says it fails low
+        // (ttHit && ttValue <= alpha) — don't over-trust the blanket ttPv de-reduction on a
+        // line the TT calls bad. r += ttPvFailLowR. Default OFF; env TTPVFAILLOW=1.
+        bool ttPvFailLow  = false;
+        int  ttPvFailLowR = 1024;   // ~1 ply (SP's 1054 in zug's r*1024 units)
         // ---- SF parity micro-pair (SF search.cpp:883/927) — default ON; independent env kill-switches ----
         // RFPTTHIT (2026-07-21, SF search.cpp:880 `futilityMult = 76 - 23*!ss->ttHit`): drop
         // the RFP margin coefficient by rfpTtHitCoeff on a TT MISS (prune more aggressively
@@ -709,6 +715,8 @@ struct Context {
             if (on("RAZORTTGATE")) razorTtGate = true;
             if (on("SINGCORRMARGIN")) singCorrMargin = true;
             if (const char* e = getenv("SINGCORRDIV")) { int v = atoi(e); if (v > 0) singCorrDiv = v; }
+            if (on("TTPVFAILLOW")) ttPvFailLow = true;
+            if (const char* e = getenv("TTPVFAILLOWR")) { int v = atoi(e); if (v >= 0) ttPvFailLowR = v; }
             if (on("FUTSFTERMS")) futSfTerms = true;
             if (const char* e = getenv("FUTNOMOVEBONUS")) { int v = atoi(e); if (v >= 0) futNoMoveBonus = v; }
             if (const char* e = getenv("FUTALPHABONUS"))  { int v = atoi(e); if (v >= 0) futAlphaBonus = v; }
@@ -1038,6 +1046,7 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     else if (name == "SingCorrDiv")    tune.singCorrDiv    = clamp(value, 40000, 800000);
     else if (name == "FutNoMoveBonus") tune.futNoMoveBonus = clamp(value, 0, 200);
     else if (name == "FutAlphaBonus")  tune.futAlphaBonus  = clamp(value, 0, 200);
+    else if (name == "TtPvFailLowR")   tune.ttPvFailLowR   = clamp(value, 0, 2048);
     // LmrBase/LmrDiv: wire value is the double x LMR_DOUBLE_SCALE (search.h) — see the
     // Tune::lmrBase/lmrDiv comment. Clamp in wire units, convert on the way in.
     else if (name == "LmrBase")        tune.lmrBase        = clamp(value, 3000, 15000) / double(LMR_DOUBLE_SCALE);
@@ -2280,6 +2289,8 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             // #5 ttPv (SF): a former-PV node is tactically live — search its late
             // moves a little more carefully (reduce one ply less).
             if (C.tune.ttPvOn && ss->ttPv) r -= 1024;
+            // TTPVFAILLOW: undo part of that de-reduction when this node's TT says it fails low.
+            if (C.tune.ttPvFailLow && ss->ttPv && ttHit && ttValue <= alpha) r += C.tune.ttPvFailLowR;
             // #6 (SF): a child that fails high a lot means siblings here are unlikely
             // to matter — reduce them harder.
             if (C.tune.cutoffCnt) {
