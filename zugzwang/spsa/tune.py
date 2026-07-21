@@ -90,9 +90,18 @@ HISTMARGIN_PARAMS = [
     ("FutSlope",        100,   40,   150,    6),
     ("SeeQuietCoeff",    25,   10,    45,    2),
 ]
+NEWPARAMS = [
+    # name             start    min     max    c_end     (SPSA_SET=newparams, 2026-07-21)
+    # Tune the 3 newly-SHIPPED-but-untuned lever params (all now default-on): LMPHIST's div,
+    # RFPTTHIT's coeff, SINGCORRMARGIN's div. These are live in the base engine, so no wrap
+    # needed. Confirm tuned theta vs current base defaults with an SPRT before baking.
+    ("LmpHistDiv",    4000,   1000,  12000,   700),
+    ("RfpTtHitCoeff",   23,      5,     50,     4),
+    ("SingCorrDiv", 230673,  80000, 500000, 30000),
+]
 _SPSA_SET = os.environ.get("SPSA_SET", "capthist")
 PARAMS = {"margins": MARGIN_PARAMS, "lmrcluster": LMRCLUSTER_PARAMS,
-          "histmargin": HISTMARGIN_PARAMS}.get(_SPSA_SET, CAPTHIST_PARAMS)
+          "histmargin": HISTMARGIN_PARAMS, "newparams": NEWPARAMS}.get(_SPSA_SET, CAPTHIST_PARAMS)
 NAMES = [p[0] for p in PARAMS]
 START = {p[0]: float(p[1]) for p in PARAMS}
 LO = {p[0]: p[2] for p in PARAMS}
