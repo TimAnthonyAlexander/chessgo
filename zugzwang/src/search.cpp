@@ -236,7 +236,7 @@ struct Context {
         // RFPTTHIT (2026-07-21, SF search.cpp:880 `futilityMult = 76 - 23*!ss->ttHit`): drop
         // the RFP margin coefficient by rfpTtHitCoeff on a TT MISS (prune more aggressively
         // when the static eval is not TT-corroborated). Pruning-class. Default OFF; env RFPTTHIT=1.
-        bool rfpTtHit      = false;
+        bool rfpTtHit      = true;  // SHIPPED default-on 2026-07-21 (combo SPRT +4.6, consistent); env RFPTTHIT=0 kill-switch
         int  rfpTtHitCoeff = 23;    // SF's 23 (its mult 76->53); zug rfpMargin=75 so same delta
         bool rfpOppWorsening = true; // #A: fold opponentWorsening into the RFP/static-null margin (env RFPOW=0)
         int  rfpOwCoeff      = 10;   // flat extra margin when opponentWorsening (~13% of rfpMargin=75, matching
@@ -605,7 +605,7 @@ struct Context {
         // the engine double-extends a singular move more readily when its eval is untrustworthy.
         // Both SF and SP corroborate. Reuses correction_raw() (same scale as the shipped
         // corrMargin /174665). dblMargin -= |corr|/singCorrDiv. Default OFF; env SINGCORRMARGIN=1.
-        bool singCorrMargin = false;
+        bool singCorrMargin = true;  // SHIPPED default-on 2026-07-21 (combo SPRT +4.6, consistent); env SINGCORRMARGIN=0 kill-switch
         int  singCorrDiv    = 230673; // SF's divisor (its correctionValue scale == zug's)
         // ---- CAPFUT constants (only read when capFut on) — scaled from SF search.cpp:1071
         // `staticEval + 232 + 217*lmrDepth + PieceValue[captured] + 131*captHist/1024`.
@@ -713,7 +713,7 @@ struct Context {
             if (on("RFPDEEP")) rfpDeep = true;
             if (on("RAZORQUAD")) razorQuad = true;
             if (on("RAZORTTGATE")) razorTtGate = true;
-            if (on("SINGCORRMARGIN")) singCorrMargin = true;
+            if (off("SINGCORRMARGIN")) singCorrMargin = false; // shipped default-on; kill-switch
             if (const char* e = getenv("SINGCORRDIV")) { int v = atoi(e); if (v > 0) singCorrDiv = v; }
             if (on("TTPVFAILLOW")) ttPvFailLow = true;
             if (const char* e = getenv("TTPVFAILLOWR")) { int v = atoi(e); if (v >= 0) ttPvFailLowR = v; }
@@ -766,7 +766,7 @@ struct Context {
             if (on("TTCUTBONUS")) ttCutBonus = true;
             if (off("LMPHIST")) lmpHist = false; // shipped default-on (movetime SPRT positive); kill-switch
             if (const char* e = getenv("LMPHISTDIV")) { int v = atoi(e); if (v > 0) lmpHistDiv = v; }
-            if (on("RFPTTHIT")) rfpTtHit = true;
+            if (off("RFPTTHIT")) rfpTtHit = false; // shipped default-on; kill-switch
             if (const char* e = getenv("RFPTTHITCOEFF")) { int v = atoi(e); if (v >= 0) rfpTtHitCoeff = v; }
             if (const char* e = getenv("TTCUTBONUSNUM")) { int v = atoi(e); if (v >= 0) ttCutBonusNum = v; }
             if (const char* e = getenv("TTCUTBONUSDEN")) { int v = atoi(e); if (v >= 1) ttCutBonusDen = v; }
