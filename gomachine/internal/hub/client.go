@@ -35,6 +35,7 @@ type Client struct {
 	game          *game
 	pool          string    // current queue pool, "" if not queued
 	queuedAt      time.Time // when the client entered its current pool (for bot backfill)
+	botFillDelay  time.Duration // per-queue randomized wait before bot backfill (realism jitter)
 	watching      *game     // the game this client is spectating, if any
 	challengeCode string    // code of a pending private challenge this client created, "" if none
 }

@@ -40,7 +40,8 @@ type Hub struct {
 	challenges  map[string]*challenge // pending private invites, keyed by short code
 	onFinish    func(FinishedGame)
 
-	// Bot backfill: if a player waits longer than botDelay with no human match,
+	// Bot backfill: if a player waits longer than a randomized per-player delay
+	// (see randomBotFillDelay; botDelay is now only a legacy on/off default) with no human match,
 	// pair them with an engine-driven opponent. Moves are computed off the Run
 	// goroutine by a pool of engines and applied back via botMoves.
 	botFill  bool
@@ -321,6 +322,7 @@ func (h *Hub) queue(c *Client, pool, variant string) {
 	h.dequeue(c)
 	now := time.Now()
 	c.queuedAt = now
+	c.botFillDelay = randomBotFillDelay()
 	// Key the queue by (pool, variant): standard keeps the bare pool key, so
 	// standard matchmaking is byte-identical; a variant only ever pairs within its
 	// own key. The tc/category are derived from the pool part (splitQueueKey).

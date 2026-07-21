@@ -44,8 +44,26 @@ type botSnapshot struct {
 	lastMoveTo     string // dest square of the opponent's last move ("" if none) — for recapture snap
 }
 
-// EnableBotFill turns on bot backfill: a player waiting longer than `delay` with
-// no human match is paired with an engine opponent at `level`. `workers` pooled
+// Bot-backfill wait is randomized per queued player (rather than a fixed delay)
+// so fill-in bots don't always appear at the same beat — it reads as a real
+// opponent happening to be found sooner or later.
+const (
+	botFillDelayMin = 2 * time.Second
+	botFillDelayMax = 10 * time.Second
+)
+
+// randomBotFillDelay returns a uniformly random backfill wait in
+// [botFillDelayMin, botFillDelayMax], assigned when a client enters a pool.
+func randomBotFillDelay() time.Duration {
+	span := botFillDelayMax - botFillDelayMin
+	return botFillDelayMin + time.Duration(mrand.Int64N(int64(span)+1))
+}
+
+// EnableBotFill turns on bot backfill: a lone waiting player with no human match
+// is paired with an engine opponent at `level`. The wait before backfill is
+// randomized per player (see randomBotFillDelay) for realism, so `delay` is
+// retained only as an on/off signal and a legacy default — it no longer sets the
+// threshold. `workers` pooled
 // engines (each `ttMB` of transposition table) bound concurrent bot thinking;
 // each engine runs `searchThreads` Lazy SMP workers per move (only the top,
 // full-strength levels are time-bounded, so SMP helps there — weakened levels
@@ -77,7 +95,7 @@ func (h *Hub) checkBotFill() {
 	for key := range h.pools {
 		var kept, promote []*Client
 		for _, c := range h.pools[key] {
-			if now.Sub(c.queuedAt) >= h.botDelay {
+			if now.Sub(c.queuedAt) >= c.botFillDelay {
 				promote = append(promote, c)
 			} else {
 				kept = append(kept, c)
