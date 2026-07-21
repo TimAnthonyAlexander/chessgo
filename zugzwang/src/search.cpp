@@ -556,6 +556,14 @@ struct Context {
         int razorMargin   = 200;  // razoring: eval + razorMargin*depth <= alpha
         int futBase       = 0;    // quiet futility base: eval + futBase + futSlope*depth <= alpha
         int futSlope      = 100;  // quiet futility per-depth slope
+        // FUTSFTERMS (2026-07-21, SF search.cpp:1097 futilityValue): two extra terms added to
+        // the futility value → prune LESS when (a) no move has raised alpha yet at this node
+        // (futNoMoveBonus, SF's 161→77 at zug's 0.4808 pawn scale) and (b) the raw static eval
+        // already clears alpha (futAlphaBonus, SF's 85→41). Both are cheap in-scope reads
+        // (bestMove, alpha). Default OFF; env FUTSFTERMS=1, UCI Fut{NoMove,Alpha}Bonus for SPSA.
+        bool futSfTerms     = false;
+        int  futNoMoveBonus = 77;
+        int  futAlphaBonus  = 41;
         int seeQuietCoeff = 25;   // SEE-quiet pruning: -seeQuietCoeff*depth*depth
         int captSeeCoeff  = 23;   // capture SEE pruning: -captSeeCoeff*depth
         int nmpEvalDiv    = 200;  // null-move R eval term: min((eval-beta)/nmpEvalDiv, 3)
@@ -701,6 +709,9 @@ struct Context {
             if (on("RAZORTTGATE")) razorTtGate = true;
             if (on("SINGCORRMARGIN")) singCorrMargin = true;
             if (const char* e = getenv("SINGCORRDIV")) { int v = atoi(e); if (v > 0) singCorrDiv = v; }
+            if (on("FUTSFTERMS")) futSfTerms = true;
+            if (const char* e = getenv("FUTNOMOVEBONUS")) { int v = atoi(e); if (v >= 0) futNoMoveBonus = v; }
+            if (const char* e = getenv("FUTALPHABONUS"))  { int v = atoi(e); if (v >= 0) futAlphaBonus = v; }
             if (on("NEGEXT3")) negExt3 = true;
             if (on("SINGRETSCORE")) singRetScore = true;
             if (on("ASPADAPT")) aspAdapt = true;
@@ -1025,6 +1036,8 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     else if (name == "LmpHistDiv")     tune.lmpHistDiv     = clamp(value, 500, 40000);
     else if (name == "RfpTtHitCoeff")  tune.rfpTtHitCoeff  = clamp(value, 0, 60);
     else if (name == "SingCorrDiv")    tune.singCorrDiv    = clamp(value, 40000, 800000);
+    else if (name == "FutNoMoveBonus") tune.futNoMoveBonus = clamp(value, 0, 200);
+    else if (name == "FutAlphaBonus")  tune.futAlphaBonus  = clamp(value, 0, 200);
     // LmrBase/LmrDiv: wire value is the double x LMR_DOUBLE_SCALE (search.h) — see the
     // Tune::lmrBase/lmrDiv comment. Clamp in wire units, convert on the way in.
     else if (name == "LmrBase")        tune.lmrBase        = clamp(value, 3000, 15000) / double(LMR_DOUBLE_SCALE);
@@ -2099,12 +2112,16 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                         seeDepth = std::max(seeDepth + shift, 0);
                     }
                 }
-                // Futility pruning
+                // Futility pruning. FUTSFTERMS adds SF's two futility-value terms (prune less
+                // with no bestMove yet / when staticEval already clears alpha). Off → 0 → identical.
+                int futSfAdj = C.tune.futSfTerms
+                    ? (C.tune.futNoMoveBonus * (bestMove == MOVE_NONE) + C.tune.futAlphaBonus * (eval > alpha))
+                    : 0;
                 bool futilityPrune = C.tune.lmrDepthPrune
-                    ? (futDepth < 13 && eval + C.tune.futBase + C.tune.futSlope * futDepth <= alpha)
+                    ? (futDepth < 13 && eval + C.tune.futBase + C.tune.futSlope * futDepth + futSfAdj <= alpha)
                     : (C.tune.histMargin
-                        ? (futDepth <= 6 && eval + C.tune.futBase + C.tune.futSlope * futDepth <= alpha)
-                        : (depth <= 6 && eval + C.tune.futBase + C.tune.futSlope * depth <= alpha));
+                        ? (futDepth <= 6 && eval + C.tune.futBase + C.tune.futSlope * futDepth + futSfAdj <= alpha)
+                        : (depth <= 6 && eval + C.tune.futBase + C.tune.futSlope * depth + futSfAdj <= alpha));
                 if (C.tune.futility && !ss->inCheck && !givesCheck && futilityPrune)
                     continue;
                 // SEE pruning of quiets

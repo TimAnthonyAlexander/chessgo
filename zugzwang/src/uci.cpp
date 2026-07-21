@@ -344,6 +344,9 @@ int uci_main() {
             std::cout << "option name RfpTtHitCoeff type spin default 23 min 0 max 60\n";
             // SINGCORRMARGIN div (2026-07-21, only read when env SINGCORRMARGIN=1) — SF singular corrValue term.
             std::cout << "option name SingCorrDiv type spin default 230673 min 40000 max 800000\n";
+            // FUTSFTERMS bonuses (2026-07-21, only read when env FUTSFTERMS=1) — SF futility-value terms.
+            std::cout << "option name FutNoMoveBonus type spin default 77 min 0 max 200\n";
+            std::cout << "option name FutAlphaBonus type spin default 41 min 0 max 200\n";
             // Ponder (2026-07-20): advertises pondering support so a GUI/CCRL will send
             // `go ponder`. Not read by the engine — pondering is honored unconditionally on
             // `go ponder`; this flag only tells the GUI the feature exists.
