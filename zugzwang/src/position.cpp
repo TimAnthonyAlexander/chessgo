@@ -464,6 +464,30 @@ void Position::do_move(Move m, StateInfo& newSt) {
 
     sideToMove = them;
     newSt.key = k;
+
+    // Cuckoo upcoming-repetition (SF #15 port, position.cpp:967-984 in ~/sf18-arm):
+    // ply distance back to the previous occurrence of this exact key (negative if
+    // THAT occurrence was itself already a repeat), else 0. Gated behind
+    // cuckoo_enabled() so the default-off path never even walks the chain — zero
+    // cost, byte-identical search/perft when CUCKOO is unset. rend bounds the walk
+    // to newSt.pliesFromNull, which exactly matches the available st->previous
+    // chain depth from the root/last-null-move, so the walk never null-derefs
+    // (a fresh set()/do_null_move has pliesFromNull=0 → rend<4 → no walk at all).
+    newSt.repetition = 0;
+    if (Zobrist::cuckoo_enabled()) {
+        int rend = std::min(newSt.rule50, newSt.pliesFromNull);
+        if (rend >= 4) {
+            StateInfo* stp = newSt.previous->previous;
+            for (int i = 4; i <= rend; i += 2) {
+                stp = stp->previous->previous;
+                if (stp->key == newSt.key) {
+                    newSt.repetition = stp->repetition ? -i : i;
+                    break;
+                }
+            }
+        }
+    }
+
     set_check_info();
 
     game_key_history[history_count++] = k;
@@ -530,6 +554,10 @@ void Position::do_drop(Piece pc, Square s, StateInfo& newSt) {
     newSt.nonPawnKey[WHITE] = st->nonPawnKey[WHITE];
     newSt.nonPawnKey[BLACK] = st->nonPawnKey[BLACK];
     newSt.minorKey = st->minorKey;
+    // Cuckoo: a drop is never a cuckoo-reversible move (it's not in the piece-
+    // square-pair table at all — a piece appears from the pocket, not from
+    // another square), so it can't be part of a cuckoo-detected repetition chain.
+    newSt.repetition = 0;
 
     Color us = sideToMove;
     if (st->epSquare != SQ_NONE)
@@ -578,6 +606,9 @@ void Position::do_null_move(StateInfo& newSt) {
     newSt.key = k;
     newSt.rule50 = st->rule50 + 1;
     newSt.pliesFromNull = 0;
+    // Cuckoo: the memcpy above copied the OLD state's repetition value in —
+    // must explicitly zero it (mirrors SF position.cpp:1276 do_null_move).
+    newSt.repetition = 0;
     st = &newSt;
     sideToMove = ~sideToMove;
     set_check_info();
@@ -756,6 +787,51 @@ bool Position::has_repeated() const {
     U64 k = st->key;
     for (int i = history_count - 3; i >= history_count - 1 - end && i >= 0; i -= 2)
         if (game_key_history[i] == k) return true;
+    return false;
+}
+
+// Cuckoo upcoming-repetition (SF #15 port, ~sf18-arm/src/position.cpp:1432-1474):
+// true if the side to move has a REVERSIBLE move available that lands on a
+// position already seen earlier in the game (i.e. one move from now, a 3-fold
+// repetition becomes claimable) — lets the search short-circuit to a draw score
+// a full ply before is_draw()/the TT would ever see the repeat. Only ever called
+// (via the two search.cpp call sites) when Zobrist::cuckoo_enabled() is true.
+//
+// zug-specific translation notes (verified against SF18, see
+// docs/tasks/open/cuckoo-upcoming-repetition.md):
+//  - zug's st->key is the RAW Zobrist key (no 50-move fuzzing the way SF's
+//    Position::key() applies), so st->key is used directly — no adjust_key50.
+//  - zug's between_bb(s1,s2) is ALREADY "strictly-between PLUS s2" (see
+//    bitboard.h:63/89), so SF's `(between_bb(s1,s2) ^ s2) & pieces()` — which
+//    XORs s2 back OUT before testing — becomes plain `between_bb(s1,s2) & pieces()`.
+bool Position::upcoming_repetition(int ply) const {
+    int end = std::min(st->rule50, st->pliesFromNull);
+    if (end < 3) return false;
+
+    U64 originalKey = st->key;
+    StateInfo* stp = st->previous;
+    U64 other = originalKey ^ stp->key ^ Zobrist::side;
+
+    for (int i = 3; i <= end; i += 2) {
+        stp = stp->previous;
+        other ^= stp->key ^ stp->previous->key ^ Zobrist::side;
+        stp = stp->previous;
+
+        if (other != 0) continue;
+
+        U64 moveKey = originalKey ^ stp->key;
+        int j;
+        if ((j = Zobrist::H1(moveKey), Zobrist::cuckoo[j] == moveKey)
+            || (j = Zobrist::H2(moveKey), Zobrist::cuckoo[j] == moveKey)) {
+            Square s1 = from_sq(Zobrist::cuckooMove[j]), s2 = to_sq(Zobrist::cuckooMove[j]);
+            if (!(between_bb(s1, s2) & pieces())) { // zug between_bb already includes s2
+                if (ply > i) return true;
+                // For nodes before or at the root, check that the move is a
+                // repetition rather than a move to the current position.
+                if (stp->repetition) return true;
+            }
+        }
+    }
     return false;
 }
 

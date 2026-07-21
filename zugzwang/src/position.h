@@ -31,6 +31,12 @@ struct StateInfo {
     U64      checkers;                 // pieces giving check to side-to-move
     U64      blockersForKing[COLOR_NB];// pinned-ish pieces blocking check on own king
     U64      pinners[COLOR_NB];
+    // Cuckoo upcoming-repetition (SF #15, default 0 / OFF-path never written):
+    // ply distance back to the previous occurrence of this exact key, negative
+    // once that occurrence was itself a repeat (3-fold), 0 if never repeated.
+    // Computed in do_move, gated behind Zobrist::cuckoo_enabled(); reset to 0 in
+    // do_null_move and do_drop. Only ever read by Position::upcoming_repetition.
+    int      repetition;
     StateInfo* previous;
 };
 

@@ -6,6 +6,7 @@
 #include "nnue_accumulator.h"
 #include "tt.h"
 #include "bitboard.h"
+#include "zobrist.h"
 #include <cassert>
 #include <chrono>
 #include <cstring>
@@ -1565,6 +1566,14 @@ int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta) {
             return ttValue;
     }
 
+    // Cuckoo upcoming-repetition (SF #15, ~sf18-arm/src/search.cpp:1504-1510):
+    // qsearch has no rootNode (SF's static_assert(nodeType != Root) — zug's
+    // qsearch is likewise never called at the root). Default-off (CUCKOO=1).
+    if (Zobrist::cuckoo_enabled() && alpha < VALUE_DRAW && pos.upcoming_repetition(ss->ply)) {
+        alpha = VALUE_DRAW;
+        if (alpha >= beta) return alpha;
+    }
+
     // rawEval is the uncorrected eval we persist to TT (tte->eval is always raw —
     // see negamax for the same invariant — so a later hit can re-apply a possibly
     // updated correction rather than replaying a stale corrected value).
@@ -1786,6 +1795,15 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             }
             return ttValue;
         }
+    }
+
+    // Cuckoo upcoming-repetition (SF #15, ~sf18-arm/src/search.cpp:629-634): one
+    // move away from a claimable 3-fold repetition — short-circuit to a draw
+    // score before the move loop, same as SF. Default-off (CUCKOO=1).
+    if (Zobrist::cuckoo_enabled() && !rootNode && alpha < VALUE_DRAW
+        && pos.upcoming_repetition(ss->ply)) {
+        alpha = VALUE_DRAW; // or draw_value(C) if DRAWJITTER's node-parity jitter is ever extended here
+        if (alpha >= beta) return alpha;
     }
 
     // Syzygy WDL-in-search (gomachine internal/search/search.go:1312): in a TB-cardinality
