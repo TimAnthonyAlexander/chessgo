@@ -558,10 +558,10 @@ struct Context {
         // ---- SPSA-tunable search margins (UCI spin options, search.cpp <-> uci.cpp) ----
         // Defaults reproduce the pre-tunable literals exactly (see set_tune_option's
         // callers in uci.cpp for the option table incl. min/max).
-        int rfpMargin     = 75;   // reverse futility: eval - rfpMargin*(depth-improving) >= beta
-        int razorMargin   = 200;  // razoring: eval + razorMargin*depth <= alpha
+        int rfpMargin     = 84;   // reverse futility: eval - rfpMargin*(depth-improving) >= beta (SPSA 2026-07-21: 75→84)
+        int razorMargin   = 222;  // razoring: eval + razorMargin*depth <= alpha (SPSA 2026-07-21: 200→222)
         int futBase       = 0;    // quiet futility base: eval + futBase + futSlope*depth <= alpha
-        int futSlope      = 100;  // quiet futility per-depth slope
+        int futSlope      = 107;  // quiet futility per-depth slope (SPSA 2026-07-21: 100→107)
         // FUTSFTERMS (2026-07-21, SF search.cpp:1097 futilityValue): two extra terms added to
         // the futility value → prune LESS when (a) no move has raised alpha yet at this node
         // (futNoMoveBonus, SF's 161→77 at zug's 0.4808 pawn scale) and (b) the raw static eval
@@ -570,10 +570,10 @@ struct Context {
         bool futSfTerms     = false;
         int  futNoMoveBonus = 77;
         int  futAlphaBonus  = 41;
-        int seeQuietCoeff = 25;   // SEE-quiet pruning: -seeQuietCoeff*depth*depth
+        int seeQuietCoeff = 17;   // SEE-quiet pruning: -seeQuietCoeff*depth*depth (SPSA 2026-07-21: 25→17)
         int captSeeCoeff  = 23;   // capture SEE pruning: -captSeeCoeff*depth
-        int nmpEvalDiv    = 200;  // null-move R eval term: min((eval-beta)/nmpEvalDiv, 3)
-        int singularMargin = 32;  // singular beta: ttValue - singularMargin*depth/16 (32 -> 2*depth, exact)
+        int nmpEvalDiv    = 120;  // null-move R eval term: min((eval-beta)/nmpEvalDiv, 3) (SPSA 2026-07-21: 200→120)
+        int singularMargin = 35;  // singular beta: ttValue - singularMargin*depth/16 (SPSA 2026-07-21: 32→35)
         // HISTMARGIN constants (only read when histMargin on; anchored to zug's history
         // scale, where the LMR read treats hist/8000 as ~1 ply). histPruneCoeff: hard-prune
         // a quiet whose histScore < -histPruneCoeff*depth. histMarginDiv: shift the

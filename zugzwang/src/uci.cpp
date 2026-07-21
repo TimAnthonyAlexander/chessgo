@@ -250,14 +250,14 @@ int uci_main() {
             std::cout << "option name Threads type spin default 1 min 1 max 256\n";
             // SPSA-tunable search margins (search.cpp Tune struct; Search::set_tune_option
             // applies these on setoption). Defaults reproduce the pre-tunable literals exactly.
-            std::cout << "option name RfpMargin type spin default 75 min 40 max 130\n";
-            std::cout << "option name RazorMargin type spin default 200 min 100 max 350\n";
+            std::cout << "option name RfpMargin type spin default 84 min 40 max 130\n";
+            std::cout << "option name RazorMargin type spin default 222 min 100 max 350\n";
             std::cout << "option name FutBase type spin default 0 min 0 max 220\n";
-            std::cout << "option name FutSlope type spin default 100 min 40 max 150\n";
-            std::cout << "option name SeeQuietCoeff type spin default 25 min 10 max 45\n";
+            std::cout << "option name FutSlope type spin default 107 min 40 max 150\n";
+            std::cout << "option name SeeQuietCoeff type spin default 17 min 10 max 45\n";
             std::cout << "option name CaptSeeCoeff type spin default 23 min 0 max 180\n";
-            std::cout << "option name NmpEvalDiv type spin default 200 min 80 max 400\n";
-            std::cout << "option name SingularMargin type spin default 32 min 16 max 80\n";
+            std::cout << "option name NmpEvalDiv type spin default 120 min 80 max 400\n";
+            std::cout << "option name SingularMargin type spin default 35 min 16 max 80\n";
             // HISTMARGIN constants (only read when env HISTMARGIN=1) — exposed for a
             // co-tuned SPSA (both arms run HISTMARGIN=1 while SPSA drives these + margins).
             std::cout << "option name HistPruneCoeff type spin default 8000 min 1000 max 40000\n";
