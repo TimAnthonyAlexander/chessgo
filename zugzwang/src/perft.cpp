@@ -2,10 +2,15 @@
 #include "movegen.h"
 #include "bitboard.h"
 #include "zobrist.h"
+#include "antichess.h"
 #include <iostream>
 #include <chrono>
 #include <vector>
 #include <algorithm>
+#include <random>
+#include <cmath>
+#include <cstdlib>
+#include <limits>
 
 static bool ref_legal(Position& pos, Move m) {
     // Reference: make the move, check the mover's king is not attacked, unmake.
@@ -282,6 +287,289 @@ int main(int argc, char** argv) {
         }
         std::cout << (frcPass ? "\nALL FRC PERFT TESTS PASSED\n" : "\nSOME FRC TESTS FAILED\n");
         return frcPass ? 0 : 1;
+    }
+
+    // Authoritative Antichess (Losing/Suicide Chess) perft positions — an
+    // INDEPENDENT oracle (python-chess's chess.variant.AntichessBoard, a real
+    // antichess ruleset implementation incl. forced capture, king-promotion,
+    // and stalemate-as-a-win), computed by a throwaway script and hardcoded
+    // here. Run via `./perft_test antichess [depth]`.
+    struct AcTest { const char* name; const char* fen; int maxDepth; uint64_t nodes[5]; };
+    AcTest acTests[] = {
+        // Standard start position.
+        {"start", "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", 5,
+            {20, 400, 8067, 153299, 2732672}},
+        // A lone-pawn promotion race — exercises every promotion piece
+        // (including KING) on a quiet (non-forced) push to the last rank.
+        {"promo-race", "4k3/P7/8/8/8/8/8/4K3 w - - 0 1", 4, {10, 50, 569, 3853, 0}},
+        // En-passant is the ONLY legal capture here -> forced (depth-1 == 1).
+        {"ep-forced", "4k3/8/8/8/pP6/8/8/4K3 b - b3 0 1", 4, {1, 5, 30, 204, 0}},
+        // A busy middlegame-ish position with several forced-capture lines.
+        {"busy", "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR b - - 0 2", 4,
+            {29, 644, 10484, 166043, 0}},
+        // A forced pawn capture onto the last rank -> must promote, incl. to
+        // KING (python-chess includes king-promotion in AntichessBoard; a
+        // depth-1 count of 5 here proves this engine generates it too: one
+        // capture destination x five promotion choices Q/R/B/N/K).
+        {"king-promo", "1n2k3/P7/8/8/8/8/8/4K3 w - - 0 1", 4, {5, 25, 282, 1831, 0}},
+    };
+
+    if (argc >= 2 && std::string(argv[1]) == "antichess") {
+        bool acPass = true;
+        for (auto& t : acTests) {
+            AntichessState st;
+            std::string err;
+            if (!antichess_parse(t.fen, st, err)) {
+                std::cout << "FAIL " << t.name << " (fen parse: " << err << ")\n";
+                acPass = false;
+                continue;
+            }
+            for (int depth = 1; depth <= t.maxDepth; ++depth) {
+                auto start = std::chrono::high_resolution_clock::now();
+                uint64_t got = antichess_perft(st, depth);
+                auto end = std::chrono::high_resolution_clock::now();
+                double ms = std::chrono::duration<double, std::milli>(end - start).count();
+                uint64_t want = t.nodes[depth - 1];
+                bool ok = got == want;
+                acPass &= ok;
+                std::cout << (ok ? "PASS" : "FAIL")
+                          << " " << t.name << " depth " << depth
+                          << " got " << got << " expected " << want
+                          << "  (" << (ms > 0 ? (uint64_t)(got / (ms / 1000.0) / 1e6) : 0) << " Mnps)  "
+                          << t.fen << "\n";
+            }
+        }
+        std::cout << (acPass ? "\nALL ANTICHESS PERFT TESTS PASSED\n" : "\nSOME ANTICHESS PERFT TESTS FAILED\n");
+        return acPass ? 0 : 1;
+    }
+
+    // Search smoke check: proves antichess_best_move is actually wired up —
+    // returns a LEGAL move from the start position, and from a position with
+    // a forced capture, the returned move IS that capture.
+    if (argc >= 2 && std::string(argv[1]) == "antichess-search") {
+        bool smokePass = true;
+
+        AntichessState start;
+        std::string err;
+        antichess_parse(ANTICHESS_START_FEN, start, err);
+
+        AntichessLimits lim = antichess_default_limits();
+        lim.movetimeMs = 1000;
+        auto t0 = std::chrono::high_resolution_clock::now();
+        AntichessResult res = antichess_best_move(start, lim);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+        std::vector<std::string> legal = antichess_legal_moves(start);
+        bool isLegal = res.hasMove &&
+                       std::find(legal.begin(), legal.end(), res.move.uci()) != legal.end();
+        smokePass &= isLegal;
+        std::cout << (isLegal ? "PASS" : "FAIL") << " start: bestmove=" << (res.hasMove ? res.move.uci() : "none")
+                  << " depth=" << res.depth << " nodes=" << res.nodes << " score=" << res.score
+                  << " (" << ms << " ms)\n";
+
+        AntichessState kingPromo;
+        antichess_parse("1n2k3/P7/8/8/8/8/8/4K3 w - - 0 1", kingPromo, err);
+        AntichessLimits lim2 = antichess_default_limits();
+        lim2.movetimeMs = 200;
+        AntichessResult res2 = antichess_best_move(kingPromo, lim2);
+        bool isForcedCapture = res2.hasMove && antichess_is_capture(kingPromo, res2.move);
+        smokePass &= isForcedCapture;
+        std::cout << (isForcedCapture ? "PASS" : "FAIL")
+                  << " forced-capture position: bestmove=" << (res2.hasMove ? res2.move.uci() : "none")
+                  << " (must capture a7xb8)\n";
+
+        std::cout << (smokePass ? "\nANTICHESS SEARCH SMOKE PASSED\n" : "\nANTICHESS SEARCH SMOKE FAILED\n");
+        return smokePass ? 0 : 1;
+    }
+
+    // ============ Antichess strength measurement harness ============
+    //
+    // The engine-strength wave's evidence-gathering tool (see antichess.cpp's
+    // file doc for what "candidate" vs "legacy/baseline" means: candidate is
+    // the live search — opening book + corrected/extended eval + quiet-node
+    // LMR; baseline/legacy is the exact pre-improvement code path, reproduced
+    // byte-for-byte in-process via antichess_best_move_ex's candidateMode
+    // flag, NOT a separately compiled binary). Two subcommands:
+    //
+    //   ./perft_test antichess-bench [movetimeMs]
+    //     Prints the candidate's chosen move + top root-move scores + depth
+    //     reached at three sample positions (opening / mid-capture / sparse
+    //     endgame), plus a book-coverage sanity check.
+    //
+    //   ./perft_test antichess-selfplay <P1vP2> [games] [movetimeMs]
+    //     Plays <games> full self-play games between two choosers, colors
+    //     alternating every game, and reports W/D/L + a rough Elo delta from
+    //     P1's perspective. P in {C=candidate engine, B=legacy/baseline
+    //     engine, R=uniform random legal mover, G=1-ply-static-eval greedy
+    //     mover (fixed legacy eval — an unchanging yardstick both profiles
+    //     are measured against)}.
+    if (std::string(argv[1] ? argv[1] : "") == "antichess-bench" ||
+        std::string(argv[1] ? argv[1] : "") == "antichess-selfplay") {
+
+        enum class AcPlayerKind { Candidate, Baseline, Random, Greedy };
+
+        auto playerKind = [](char c) {
+            switch (c) {
+                case 'C': return AcPlayerKind::Candidate;
+                case 'B': return AcPlayerKind::Baseline;
+                case 'G': return AcPlayerKind::Greedy;
+                default:  return AcPlayerKind::Random; // 'R' or anything unrecognized
+            }
+        };
+        auto playerName = [](AcPlayerKind k) -> const char* {
+            switch (k) {
+                case AcPlayerKind::Candidate: return "candidate";
+                case AcPlayerKind::Baseline:  return "baseline";
+                case AcPlayerKind::Random:    return "random";
+                case AcPlayerKind::Greedy:    return "greedy";
+            }
+            return "?";
+        };
+        // moves is guaranteed non-empty: callers only ask a chooser to act on
+        // an Ongoing (antichess_status) position.
+        auto chooseMove = [](AcPlayerKind kind, const AntichessState& s, const std::vector<uint64_t>& history,
+                              int movetimeMs, std::mt19937_64& rng) -> AntichessMove {
+            std::vector<AntichessMove> moves = antichess_legal_moves_struct(s);
+            switch (kind) {
+                case AcPlayerKind::Candidate:
+                case AcPlayerKind::Baseline: {
+                    AntichessLimits lim = antichess_default_limits();
+                    lim.movetimeMs = movetimeMs;
+                    AntichessResult r = antichess_best_move_ex(s, lim, history, kind == AcPlayerKind::Candidate);
+                    return r.hasMove ? r.move : moves[0];
+                }
+                case AcPlayerKind::Random: {
+                    std::uniform_int_distribution<size_t> dist(0, moves.size() - 1);
+                    return moves[dist(rng)];
+                }
+                case AcPlayerKind::Greedy: {
+                    // 1-ply static eval, no search — a fixed reference
+                    // opponent using the UNCHANGING legacy eval (independent
+                    // of whatever this run's candidate eval looks like), so
+                    // G is a stable yardstick across the whole experiment.
+                    AntichessMove best = moves[0];
+                    int bestScore = std::numeric_limits<int>::min();
+                    for (const AntichessMove& m : moves) {
+                        AntichessState child = antichess_do_move(s, m);
+                        int score = -antichess_evaluate_legacy(child);
+                        if (score > bestScore) { bestScore = score; best = m; }
+                    }
+                    return best;
+                }
+            }
+            return moves[0];
+        };
+
+        struct AcMatchResult { int p1Wins = 0, p2Wins = 0, draws = 0, games = 0; };
+
+        auto eloDiff = [](double scoreFrac) {
+            double p = std::min(0.999, std::max(0.001, scoreFrac));
+            return -400.0 * std::log10(1.0 / p - 1.0);
+        };
+
+        auto playMatch = [&](AcPlayerKind p1, AcPlayerKind p2, int games, int movetimeMs) {
+            AcMatchResult res;
+            AntichessState start;
+            std::string err;
+            antichess_parse(ANTICHESS_START_FEN, start, err);
+            constexpr int MAX_PLY = 240; // adjudicated draw past this (antichess games are normally MUCH shorter)
+
+            for (int g = 0; g < games; ++g) {
+                bool p1IsWhite = (g % 2 == 0); // alternate colors every game
+                std::mt19937_64 rng(0x9E3779B97F4A7C15ULL ^ (uint64_t(g) * 0x2545F4914F6CDD1DULL));
+
+                AntichessState state = start;
+                std::vector<uint64_t> history;
+                AntichessStatus st = antichess_status(state, history);
+                int ply = 0;
+                while (st == AntichessStatus::Ongoing && ply < MAX_PLY) {
+                    bool whiteToMove = (state.side == WHITE);
+                    AcPlayerKind mover = (whiteToMove == p1IsWhite) ? p1 : p2;
+                    AntichessMove mv = chooseMove(mover, state, history, movetimeMs, rng);
+                    history.push_back(state.key());
+                    state = antichess_do_move(state, mv);
+                    ply++;
+                    st = antichess_status(state, history);
+                }
+
+                res.games++;
+                if (st == AntichessStatus::Draw || st == AntichessStatus::Ongoing) { res.draws++; continue; }
+                bool whiteWon = (st == AntichessStatus::WhiteWin);
+                if (whiteWon == p1IsWhite) res.p1Wins++; else res.p2Wins++;
+            }
+            return res;
+        };
+
+        if (std::string(argv[1]) == "antichess-bench") {
+            int movetimeMs = argc >= 3 ? atoi(argv[2]) : 500;
+
+            struct BenchPos { const char* label; const char* fen; };
+            BenchPos positions[] = {
+                {"opening (start)", ANTICHESS_START_FEN},
+                {"mid-capture-rich", "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR b - - 0 2"},
+                {"sparse endgame (K+P vs K promo race)", "4k3/P7/8/8/8/8/8/4K3 w - - 0 1"},
+            };
+
+            for (auto& bp : positions) {
+                AntichessState st;
+                std::string err;
+                if (!antichess_parse(bp.fen, st, err)) { std::cout << "parse error: " << err << "\n"; continue; }
+
+                std::cout << "\n== " << bp.label << " (" << bp.fen << ") ==\n";
+
+                for (bool cand : {true, false}) {
+                    AntichessLimits lim = antichess_default_limits();
+                    lim.movetimeMs = movetimeMs;
+                    auto t0 = std::chrono::high_resolution_clock::now();
+                    AntichessResult r = antichess_best_move_ex(st, lim, {}, cand);
+                    auto t1 = std::chrono::high_resolution_clock::now();
+                    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+                    std::cout << "  [" << (cand ? "candidate" : "baseline ") << "] bestmove="
+                              << (r.hasMove ? r.move.uci() : "none") << (r.fromBook ? " [BOOK]" : "")
+                              << " depth=" << r.depth << " nodes=" << r.nodes << " score=" << r.score
+                              << " mate=" << r.mate << "  (" << ms << " ms)\n";
+                }
+
+                std::vector<AntichessRootScore> roots = antichess_root_scores_for_test(st, movetimeMs, true);
+                std::cout << "  [candidate] top root moves:";
+                for (size_t i = 0; i < roots.size() && i < 5; ++i)
+                    std::cout << " " << roots[i].move.uci() << "(" << roots[i].score << ")";
+                std::cout << "\n";
+            }
+
+            AntichessState startPos;
+            std::string err;
+            antichess_parse(ANTICHESS_START_FEN, startPos, err);
+            std::cout << "\nbook covers the standard start: "
+                      << (antichess_is_standard_start_for_test(startPos) ? "yes" : "no") << "\n";
+            return 0;
+        }
+
+        // antichess-selfplay
+        std::string matchup = argc >= 3 ? argv[2] : "CvR";
+        int games = argc >= 4 ? atoi(argv[3]) : 40;
+        int movetimeMs = argc >= 5 ? atoi(argv[4]) : 300;
+        if (matchup.size() != 3 || matchup[1] != 'v') {
+            std::cout << "usage: antichess-selfplay <P1vP2> [games] [movetimeMs]  (P in {C,B,R,G})\n";
+            return 1;
+        }
+        AcPlayerKind p1 = playerKind(matchup[0]);
+        AcPlayerKind p2 = playerKind(matchup[2]);
+
+        auto t0 = std::chrono::high_resolution_clock::now();
+        AcMatchResult res = playMatch(p1, p2, games, movetimeMs);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        double sec = std::chrono::duration<double>(t1 - t0).count();
+
+        double p1Score = (res.p1Wins + 0.5 * res.draws) / double(res.games);
+        std::cout << matchup << ": " << playerName(p1) << " " << res.p1Wins << "W " << res.draws << "D "
+                  << res.p2Wins << "L vs " << playerName(p2) << "  (" << res.games << " games, "
+                  << playerName(p1) << " score " << (p1Score * 100.0) << "%, Elo diff " << eloDiff(p1Score)
+                  << ")\n";
+        std::cout << "  (" << sec << "s wall, movetime=" << movetimeMs << "ms/move, colors alternated)\n";
+        return 0;
     }
 
     Test tests[] = {

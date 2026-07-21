@@ -62,4 +62,22 @@ json duck_move(const json& body);
 json duck_bestmove(const json& body);
 json duck_analyze_game(const json& body);
 
+// Antichess: a self-contained variant (src/antichess.h) with its own rules
+// (forced-capture, inverted win condition, king-promotion) + its own real
+// iterative-deepening search; it never touches the standard Search::Context
+// pool (no NNUE, no Position) so these never lease a pool context either.
+// Every request is stateless: the antichess FEN is fully self-describing (no
+// pockets, no separate duck-square field, unlike Crazyhouse/Duck) — mirrors
+// gomachine's forthcoming internal/server/antichess.go handlers field-for-field.
+// Unlike duck_bestmove (renamed to dodge a collision), antichess.h's own
+// antichess_legal_moves/antichess_best_move free functions are called from
+// inside these handlers with an explicit leading `::` (global-scope
+// qualifier) rather than renaming the handlers themselves — same problem
+// (unqualified lookup from inside Handlers::antichess_legal_moves would
+// otherwise resolve to itself), different fix.
+json antichess_legal_moves(const json& body);
+json antichess_move(const json& body);
+json antichess_bestmove(const json& body);
+json antichess_analyze_game(const json& body);
+
 } // namespace Handlers

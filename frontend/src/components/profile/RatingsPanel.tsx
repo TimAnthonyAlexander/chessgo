@@ -1,6 +1,6 @@
 import { Box, Typography } from '@mui/material'
 import type { ReactNode } from 'react'
-import { Zap } from 'lucide-react'
+import { Skull, Zap } from 'lucide-react'
 import type { Profile, RatingCategory } from '../../api/client'
 import { CATEGORY_META } from '../../lib/timeControl'
 import { DuckGlyph } from '../DuckGlyph'
@@ -60,6 +60,15 @@ export default function RatingsPanel({
                     rating={profile.duck.rating}
                     provisional={profile.duck.provisional}
                     sub={`${profile.duck.games} ${profile.duck.games === 1 ? 'game' : 'games'}`}
+                    accent
+                />
+                <RatingRow
+                    icon={<Skull size={14} />}
+                    color="var(--accent)"
+                    label="Antichess"
+                    rating={profile.antichess.rating}
+                    provisional={profile.antichess.provisional}
+                    sub={`${profile.antichess.games} ${profile.antichess.games === 1 ? 'game' : 'games'}`}
                     accent
                 />
             </Box>

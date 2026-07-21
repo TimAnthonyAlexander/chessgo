@@ -1,5 +1,5 @@
 import { Box, Typography } from '@mui/material'
-import { Bot, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Bot, ChevronLeft, ChevronRight, Skull } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import type { ProfileGame } from '../../api/client'
 import { DuckGlyph } from '../DuckGlyph'
@@ -18,6 +18,7 @@ const CAT_LABEL: Record<Exclude<CatFilter, 'all'>, string> = {
     rapid: 'Rapid',
     classical: 'Classical',
     duck: 'Duck',
+    antichess: 'Antichess',
 }
 
 /** The player's game history: numbered pages (10/page) of rows, each a link into
@@ -368,6 +369,33 @@ function GameRow({
                             sx={{ display: 'inline-flex', fontSize: 16, flexShrink: 0 }}
                         >
                             <DuckGlyph />
+                        </Box>
+                    )}
+                    {game.variant === 'crazyhouse' && (
+                        <Box
+                            component="span"
+                            title="Crazyhouse"
+                            sx={{
+                                display: 'inline-flex',
+                                fontSize: 15,
+                                flexShrink: 0,
+                                color: 'var(--accent)',
+                            }}
+                        >
+                            ⇄
+                        </Box>
+                    )}
+                    {game.variant === 'antichess' && (
+                        <Box
+                            component="span"
+                            title="Antichess"
+                            sx={{
+                                display: 'inline-flex',
+                                flexShrink: 0,
+                                color: 'var(--text-dim)',
+                            }}
+                        >
+                            <Skull size={14} />
                         </Box>
                     )}
                     {game.variant === 'chess960' && (

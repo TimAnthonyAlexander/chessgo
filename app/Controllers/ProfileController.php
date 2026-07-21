@@ -82,6 +82,15 @@ class ProfileController extends Controller
                 'provisional' => ((float) $user->rd_duck) > Glicko2Service::PROVISIONAL_RD,
                 'rated_at' => $user->rated_at_duck,
             ],
+            // Antichess is likewise its own isolated pool, surfaced separately from
+            // the time-control rating tiles.
+            'antichess' => [
+                'rating' => $user->rating_antichess,
+                'rd' => $user->rd_antichess,
+                'games' => $user->games_antichess,
+                'provisional' => ((float) $user->rd_antichess) > Glicko2Service::PROVISIONAL_RD,
+                'rated_at' => $user->rated_at_antichess,
+            ],
             'record' => $this->record($id),
             'games' => $rows,
             'gamesTotal' => $paged->total,

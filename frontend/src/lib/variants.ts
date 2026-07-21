@@ -5,7 +5,7 @@
 
 import { applyUciVisually, type BoardMap, type Square } from './chess'
 
-export type Variant = 'standard' | 'chess960' | 'duck' | 'crazyhouse'
+export type Variant = 'standard' | 'chess960' | 'duck' | 'crazyhouse' | 'antichess'
 
 /** The standard chess start position. */
 export const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
@@ -15,6 +15,7 @@ export const VARIANT_LABEL: Record<Variant, string> = {
     chess960: 'Chess960',
     duck: 'Duck Chess',
     crazyhouse: 'Crazyhouse',
+    antichess: 'Antichess',
 }
 
 export const VARIANT_BLURB: Record<Variant, string> = {
@@ -22,6 +23,8 @@ export const VARIANT_BLURB: Record<Variant, string> = {
     chess960: 'Fischer Random — the back rank is shuffled at the start.',
     duck: 'Move a piece, then drop the duck. Capture the king to win.',
     crazyhouse: 'Captured pieces switch sides — drop them back on the board.',
+    antichess:
+        'Räuberschach — captures are compulsory and the king is just a piece. Lose all your men (or get stalemated) to win.',
 }
 
 /** Pocket piece letters (always uppercase; color is by context). */
@@ -71,7 +74,7 @@ export function stripCrazyhouseFen(fen: string): string {
  */
 export function dropTargets(legalMoves: string[], piece: PocketPiece): Set<Square> {
     const out = new Set<Square>()
-    const prefix = piece + '@'
+    const prefix = `${piece}@`
     for (const mv of legalMoves) {
         if (mv.startsWith(prefix)) out.add(mv.slice(2) as Square)
     }

@@ -94,13 +94,18 @@ interface BoardProps {
     onDropCancel?: () => void
 }
 
-const PROMO_ORDER = ['q', 'r', 'b', 'n']
+// Antichess uniquely allows promoting to a KING ('k') — the server only ever
+// includes 'k' in a position's legal moves there, so listing it here is safe for
+// every other variant: `promo.options` (below) is filtered from the real legal
+// moves, so the button simply never appears when 'k' isn't actually legal.
+const PROMO_ORDER = ['q', 'r', 'b', 'n', 'k']
 // Full piece names for the promotion picker's accessible labels ("Promote to Queen").
 const PROMO_NAMES: Record<string, string> = {
     q: 'Queen',
     r: 'Rook',
     b: 'Bishop',
     n: 'Knight',
+    k: 'King',
 }
 
 // Build an arrow as a SINGLE filled polygon (shaft + head) from a→b in the 80×80
@@ -359,7 +364,7 @@ export default function Board({
                 // directly (matching the premove behavior below).
                 if (prefs.autoQueen) {
                     setSelected(null)
-                    onMove(from + to + 'q')
+                    onMove(`${from}${to}q`)
                     return
                 }
                 setPromo({ from, to, options })

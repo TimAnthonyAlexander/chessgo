@@ -864,6 +864,51 @@
             "table": "guess_game",
             "operation": "add_fk",
             "warning": null
+        },
+        {
+            "id": "mig_7b70a24e1481",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rating_antichess` INT NOT NULL DEFAULT 1500",
+            "destructive": false,
+            "generated_at": "2026-07-21T16:41:28+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_e5ddad493a8d",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rd_antichess` DOUBLE NOT NULL DEFAULT 350",
+            "destructive": false,
+            "generated_at": "2026-07-21T16:41:28+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_da1ea4a5dca3",
+            "sql": "ALTER TABLE `user` ADD COLUMN `vol_antichess` DOUBLE NOT NULL DEFAULT 0.06",
+            "destructive": false,
+            "generated_at": "2026-07-21T16:41:28+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_02b46597e58c",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rated_at_antichess` TEXT",
+            "destructive": false,
+            "generated_at": "2026-07-21T16:41:28+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_5ca39c57265e",
+            "sql": "ALTER TABLE `user` ADD COLUMN `games_antichess` INT NOT NULL DEFAULT 0",
+            "destructive": false,
+            "generated_at": "2026-07-21T16:41:28+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
         }
     ]
 }

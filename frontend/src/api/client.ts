@@ -636,6 +636,9 @@ export interface User {
     // Crazyhouse — its own isolated rating pool (no time-control split).
     rating_crazyhouse: number
     games_crazyhouse: number
+    // Antichess — its own isolated rating pool (no time-control split).
+    rating_antichess: number
+    games_antichess: number
     // Per-category Glicko-2 provisional flag (RD > 110): the rating is still
     // settling and is shown with a "?". Keyed by category, incl. 'puzzle' + 'duck'.
     provisional: Record<string, boolean>
@@ -703,7 +706,7 @@ export interface ProfileGame {
     created_at: string
     category: string
     pool: string
-    variant: Variant // 'standard' | 'chess960' | 'duck'
+    variant: Variant // 'standard' | 'chess960' | 'duck' | 'crazyhouse' | 'antichess'
     rated: boolean
     result: string // '1-0' | '0-1' | '1/2-1/2'
     reason: string
@@ -729,6 +732,8 @@ export interface Profile {
     puzzle: PuzzleProfile
     // Duck Chess rating tile (isolated pool, surfaced separately from time controls).
     duck: RatingTile
+    // Antichess rating tile — likewise its own isolated pool.
+    antichess: RatingTile
     record: ProfileRecord
     // First page of game history + the total count, so the paginator can render
     // page numbers without a second request on load.
@@ -778,13 +783,13 @@ export interface LeaderboardEntry {
 }
 
 export interface LeaderboardResult {
-    category: RatingCategory | 'puzzle' | 'duck'
+    category: RatingCategory | 'puzzle' | 'duck' | 'antichess'
     entries: LeaderboardEntry[]
 }
 
-/** Top players for a single rating category (bullet/blitz/rapid/classical/puzzle/duck). */
+/** Top players for a single rating category (bullet/blitz/rapid/classical/puzzle/duck/antichess). */
 export function getLeaderboard(
-    category: RatingCategory | 'puzzle' | 'duck',
+    category: RatingCategory | 'puzzle' | 'duck' | 'antichess',
 ): Promise<LeaderboardResult> {
     return request<LeaderboardResult>(`/leaderboard?category=${encodeURIComponent(category)}`)
 }

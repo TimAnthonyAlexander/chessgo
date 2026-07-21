@@ -25,7 +25,7 @@ use App\Services\Glicko2Service;
 class LeaderboardController extends Controller
 {
     /** Whitelisted rating pools — the ONLY values allowed into the column names. */
-    private const CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'puzzle', 'duck'];
+    private const CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'puzzle', 'duck', 'antichess'];
 
     /** Bound from ?category= ; one of CATEGORIES. */
     public string $category = 'blitz';

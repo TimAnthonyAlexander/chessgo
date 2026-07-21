@@ -27,9 +27,9 @@ import type { RatingCategory, User } from '../api/client'
 interface Leaf {
     label: string
     to: string
-    // Router state carried on navigation — e.g. Play → Duck Chess/Crazyhouse land on
-    // Home ("/") and start quick pairing instantly via useHome's quickPair intent.
-    state?: { quickPair: 'duck' | 'crazyhouse' }
+    // Router state carried on navigation — e.g. Play → Duck Chess/Crazyhouse/Antichess
+    // land on Home ("/") and start quick pairing instantly via useHome's quickPair intent.
+    state?: { quickPair: 'duck' | 'crazyhouse' | 'antichess' }
 }
 type NavItem =
     | { kind: 'link'; label: string; to: string }
@@ -51,6 +51,7 @@ function navItems(isAdmin: boolean): NavItem[] {
                 { label: 'Computer', to: '/bot' },
                 { label: 'Duck Chess', to: '/', state: { quickPair: 'duck' } },
                 { label: 'Crazyhouse', to: '/', state: { quickPair: 'crazyhouse' } },
+                { label: 'Antichess', to: '/', state: { quickPair: 'antichess' } },
                 { label: 'Guess the Elo', to: '/guess-the-elo' },
             ],
         },
@@ -450,6 +451,11 @@ function UserMenu({ user }: { user: User }) {
                             label="Crazyhouse"
                             value={`${user.rating_crazyhouse}${user.provisional?.crazyhouse ? '?' : ''}`}
                             games={user.games_crazyhouse}
+                        />
+                        <RatingLine
+                            label="Antichess"
+                            value={`${user.rating_antichess}${user.provisional?.antichess ? '?' : ''}`}
+                            games={user.games_antichess}
                         />
                         <Divider sx={{ borderColor: 'var(--line-soft)', my: 0.5 }} />
                         <MenuAction

@@ -2,6 +2,9 @@ package hub
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -196,6 +199,156 @@ func TestSelfSearchMove_Crazyhouse_EmergencyFallbackFires(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("emergency in-process fallback never produced a crazyhouse move")
+	}
+}
+
+// TestAntichessBestMoveRequestShape stubs zugzwang's /antichess/bestmove with
+// a local httptest server (no real engine required, deterministic in CI) to
+// pin down the exact wire contract AntichessBestMove sends and parses: the
+// request is just {"fen":..., "limits":{"rating":...}} — no pockets, no duck
+// field, unlike Duck/Crazyhouse's own endpoints — and the response's
+// "bestmove" is returned as-is.
+func TestAntichessBestMoveRequestShape(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/antichess/bestmove" {
+			t.Errorf("request path = %q, want /antichess/bestmove", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"bestmove":   "e2e4",
+			"san":        "e4",
+			"eval":       map[string]any{"type": "cp", "value": 12},
+			"newFen":     "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b - - 0 1",
+			"sideToMove": "b",
+			"status":     "ongoing",
+			"result":     "",
+		})
+	}))
+	defer srv.Close()
+
+	z := newZugzwangClient(srv.URL, 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	move, err := z.AntichessBestMove(ctx, chess.StartFEN, 1500)
+	if err != nil {
+		t.Fatalf("AntichessBestMove: %v", err)
+	}
+	if move != "e2e4" {
+		t.Errorf("move = %q, want e2e4", move)
+	}
+
+	if gotBody["fen"] != chess.StartFEN {
+		t.Errorf("request fen = %v, want %v", gotBody["fen"], chess.StartFEN)
+	}
+	if _, hasPocket := gotBody["pocket"]; hasPocket {
+		t.Error("antichess request must not carry a pocket field")
+	}
+	if _, hasDuck := gotBody["duck"]; hasDuck {
+		t.Error("antichess request must not carry a duck field")
+	}
+	limits, ok := gotBody["limits"].(map[string]any)
+	if !ok {
+		t.Fatalf("request limits = %v, want an object", gotBody["limits"])
+	}
+	if rating, _ := limits["rating"].(float64); int(rating) != 1500 {
+		t.Errorf("request limits.rating = %v, want 1500", limits["rating"])
+	}
+}
+
+// A nil error with an empty move string means "genuinely no legal move" (the
+// position is already terminal — the side to move has WON by Antichess's
+// inverted rule) — not a transport failure, mirroring CrazyhouseBestMove's own
+// terminal-position contract.
+func TestAntichessBestMoveNoLegalMove(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"bestmove": nil, "reason": "no-legal-move"})
+	}))
+	defer srv.Close()
+
+	z := newZugzwangClient(srv.URL, 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	move, err := z.AntichessBestMove(ctx, "4k3/8/8/8/8/8/8/8 w - - 0 1", 1500)
+	if err != nil {
+		t.Fatalf("expected a nil error for a genuinely terminal position, got %v", err)
+	}
+	if move != "" {
+		t.Errorf("move = %q, want empty (no legal move)", move)
+	}
+}
+
+// End-to-end: an Antichess bot-fill game's self-search move comes from
+// zugzwang's /antichess/bestmove (scheduleBotMove -> scheduleSelfSearchBotMove
+// -> selfSearchMove -> zugzwang.AntichessBestMove) when zugzwang is reachable —
+// a live-only integration check, skipping cleanly when nothing is listening.
+func TestScheduleSelfSearchBotMove_Antichess_ViaZugzwang_Live(t *testing.T) {
+	skipUnlessZugzwangUp(t)
+
+	h := New(testSecret)
+	h.SetZugzwangClient(testZugzwangURL(), 4*time.Second, true)
+
+	g := newTestAntichessBotGame(t)
+	h.games[g.id] = g
+	h.scheduleBotMove(g)
+
+	select {
+	case r := <-h.botMoves:
+		if r.gameID != g.id {
+			t.Fatalf("botMoves result for wrong game: %q", r.gameID)
+		}
+		if _, _, ok := g.state.Apply(r.uci); !ok {
+			t.Fatalf("zugzwang-sourced antichess move %q is illegal on the game position", r.uci)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("no antichess bot move arrived via zugzwang within 15s")
+	}
+}
+
+// When zugzwang is unreachable, an Antichess self-search bot move still
+// arrives via the emergency in-process fallback (variant.SelfSearchMove) —
+// the same safety net Duck/Crazyhouse bot-fill already has.
+func TestSelfSearchMove_Antichess_EmergencyFallbackFires(t *testing.T) {
+	h := New(testSecret)
+	h.SetZugzwangClient("http://127.0.0.1:1", 300*time.Millisecond, true)
+
+	g := newTestAntichessBotGame(t)
+	h.games[g.id] = g
+	h.scheduleBotMove(g)
+
+	select {
+	case r := <-h.botMoves:
+		if _, _, ok := g.state.Apply(r.uci); !ok {
+			t.Fatalf("emergency in-process antichess move %q is illegal on the game position", r.uci)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("emergency in-process fallback never produced an antichess move")
+	}
+}
+
+// newTestAntichessBotGame builds a minimal Antichess human-vs-bot game (White
+// bot, Black human) from the opening, mirroring newTestCrazyhouseBotGame.
+func newTestAntichessBotGame(t *testing.T) *game {
+	t.Helper()
+	st, err := variant.New(variantAntichess, chess.StartFEN)
+	if err != nil {
+		t.Fatalf("variant.New(antichess): %v", err)
+	}
+	return &game{
+		id:        newID(),
+		state:     st,
+		tc:        timeControl{Base: 300_000, Inc: 0},
+		white:     &player{id: newBotIdentity(1500), isBot: true, rating: 1500},
+		black:     &player{id: auth.Identity{UserID: "human-test"}, isBot: false},
+		startFen:  chess.StartFEN,
+		variant:   variantAntichess,
+		clockMs:   [2]int64{300_000, 300_000},
+		turnStart: time.Now(),
+		online:    [2]bool{true, true},
 	}
 }
 

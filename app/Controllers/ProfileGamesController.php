@@ -24,7 +24,7 @@ class ProfileGamesController extends Controller
     /** Page size — also the hard cap on what one request can return. */
     private const PER_PAGE = 10;
 
-    private const CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'duck'];
+    private const CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'duck', 'antichess'];
 
     /** Bound from path {name}. */
     public string $name = '';

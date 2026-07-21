@@ -49,6 +49,8 @@ class WsTicketController extends Controller
                 'duck' => (int)($user['rating_duck'] ?? 1500),
                 // Crazyhouse is likewise its own isolated pool (categoryFor → "crazyhouse").
                 'crazyhouse' => (int)($user['rating_crazyhouse'] ?? 1500),
+                // Antichess is likewise its own isolated pool (categoryFor → "antichess").
+                'antichess' => (int)($user['rating_antichess'] ?? 1500),
             ];
             $identity = [
                 'sub' => (string)$user['id'],

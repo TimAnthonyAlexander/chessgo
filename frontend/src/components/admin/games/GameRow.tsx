@@ -1,5 +1,5 @@
 import { Box, TableCell, TableRow, Tooltip, Typography } from '@mui/material'
-import { Cpu } from 'lucide-react'
+import { Cpu, Skull } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import type { AdminGameRow } from '../../../api/client'
 import { fmtRelative } from '../../profile/shared'
@@ -43,6 +43,29 @@ export default function GameRow({ game }: { game: AdminGameRow }) {
                             sx={{ display: 'inline-flex', fontSize: 15, flexShrink: 0 }}
                         >
                             <DuckGlyph />
+                        </Box>
+                    )}
+                    {game.variant === 'crazyhouse' && (
+                        <Box
+                            component="span"
+                            title="Crazyhouse"
+                            sx={{
+                                display: 'inline-flex',
+                                fontSize: 14,
+                                flexShrink: 0,
+                                color: 'var(--accent)',
+                            }}
+                        >
+                            ⇄
+                        </Box>
+                    )}
+                    {game.variant === 'antichess' && (
+                        <Box
+                            component="span"
+                            title="Antichess"
+                            sx={{ display: 'inline-flex', flexShrink: 0, color: 'var(--text-dim)' }}
+                        >
+                            <Skull size={13} />
                         </Box>
                     )}
                     {game.variant === 'chess960' && (

@@ -149,9 +149,11 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variantID string
 		pool:  pool,
 		// A matchmaking bot fill-in is rated for a logged-in human (one-sided Elo
 		// vs the bot), mirroring startGameWith: standard feeds the time-control pools
-		// and Duck feeds its own isolated "duck" pool, but Chess960 stays unrated.
-		// Anonymous players can't be rated. Explicit /bot games never reach the hub.
-		rated:     !human.id.Anon && (variantID == variantStandard || variantID == variantDuck || variantID == variantCrazyhouse),
+		// and Duck/Crazyhouse/Antichess each feed their own isolated pool, but
+		// Chess960 stays unrated. Anonymous players can't be rated. Explicit /bot
+		// games never reach the hub.
+		rated: !human.id.Anon && (variantID == variantStandard || variantID == variantDuck ||
+			variantID == variantCrazyhouse || variantID == variantAntichess),
 		clockMs:   [2]int64{tc.Base, tc.Base},
 		turnStart: time.Now(),
 		online:    [2]bool{true, true},
@@ -276,16 +278,37 @@ func (h *Hub) scheduleSelfSearchBotMove(g *game) {
 
 // selfSearchMove computes a bot move for a Tier-2 (self-search) variant,
 // called off the Run goroutine by scheduleSelfSearchBotMove's goroutine.
-// Both Crazyhouse and Duck routinely ask zugzwang's self-contained engines
-// (Crazyhouse: pockets/drops/pocket-aware eval, zugzwang/src/crazyhouse.h;
-// Duck: its own board/hand-eval/search, zugzwang/src/duck.h), mirroring the
-// standard-chess zugzwangBestMove retry + emergency-fallback pattern
-// (computeBotMove's doc) so a live game never freezes if zugzwang is down.
+// Crazyhouse, Duck and Antichess all routinely ask zugzwang's self-contained
+// engines (Crazyhouse: pockets/drops/pocket-aware eval,
+// zugzwang/src/crazyhouse.h; Duck: its own board/hand-eval/search,
+// zugzwang/src/duck.h; Antichess: forced-capture rules/eval/search,
+// zugzwang/src/antichess.h), mirroring the standard-chess zugzwangBestMove
+// retry + emergency-fallback pattern (computeBotMove's doc) so a live game
+// never freezes if zugzwang is down.
 //
 // ok=false means "no legal move" (mirrors variant.SelfSearchMove's own
 // contract) OR "zugzwang unreachable and the emergency fallback is
 // disabled" — either way the caller just skips posting a botMoveResult.
 func (h *Hub) selfSearchMove(variantID, fen string, extras map[string]string, rating int) (string, bool) {
+	if variantID == variant.Antichess && h.zugzwang != nil {
+		const retries = 1
+		var lastErr error
+		for attempt := 0; attempt <= retries; attempt++ {
+			ctx, cancel := context.WithTimeout(context.Background(), h.zugzwang.Timeout())
+			uci, err := h.zugzwang.AntichessBestMove(ctx, fen, rating)
+			cancel()
+			if err == nil {
+				return uci, uci != "" // "" + nil error = genuinely no legal move
+			}
+			lastErr = err
+		}
+		if !h.emergencyInProc {
+			fmt.Fprintf(os.Stderr, "hub: zugzwang antichess unreachable (%v) — emergency in-process fallback disabled, dropping bot move\n", lastErr)
+			return "", false
+		}
+		fmt.Fprintf(os.Stderr, "hub: zugzwang antichess unreachable — emergency in-process move (%v)\n", lastErr)
+		// fall through to the in-process path below
+	}
 	if variantID == variant.Crazyhouse && h.zugzwang != nil {
 		const retries = 1
 		var lastErr error

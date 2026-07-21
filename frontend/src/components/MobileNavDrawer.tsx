@@ -10,8 +10,8 @@ import { Menu, X, LogOut, UserRound } from 'lucide-react'
 export interface MobileNavLink {
     label: string
     to: string
-    // Router state carried on tap (e.g. Duck Chess/Crazyhouse → Home quick pairing).
-    state?: { quickPair: 'duck' | 'crazyhouse' }
+    // Router state carried on tap (e.g. Duck Chess/Crazyhouse/Antichess → Home quick pairing).
+    state?: { quickPair: 'duck' | 'crazyhouse' | 'antichess' }
 }
 
 export interface MobileNavSection {

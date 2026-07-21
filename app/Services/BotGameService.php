@@ -33,17 +33,19 @@ class BotGameService
      * start, or picks the side that is not to move in a custom `$startFen`.
      *
      * @param string|null $startFen Optional custom starting position (e.g. carried
-     *   over from the analysis board). Null = standard start. Ignored for Duck Chess,
-     *   which always starts from the standard position with no duck placed.
-     * @param string $variant 'standard' | 'chess960' | 'duck'. Chess960 uses the
-     *   standard engine flow (the engine parses 960 FENs); Duck Chess uses the
-     *   dedicated /duck/* endpoints.
+     *   over from the analysis board). Null = standard start. Ignored for Duck
+     *   Chess, Crazyhouse, and Antichess, which always start from the standard
+     *   position (Duck with no duck placed, Crazyhouse with empty pockets).
+     * @param string $variant 'standard' | 'chess960' | 'duck' | 'crazyhouse' |
+     *   'antichess'. Chess960 uses the standard engine flow (the engine parses
+     *   960 FENs); Duck Chess, Crazyhouse, and Antichess each use their own
+     *   dedicated /duck/*, /crazyhouse/*, /antichess/* endpoints.
      * @throws \InvalidArgumentException if the custom FEN is invalid or already finished.
      */
     public function create(int $rating, string $humanColor, ?string $startFen = null, string $variant = 'standard'): BotGame
     {
         $game = new BotGame();
-        $game->variant = in_array($variant, ['standard', 'chess960', 'duck', 'crazyhouse'], true) ? $variant : 'standard';
+        $game->variant = in_array($variant, ['standard', 'chess960', 'duck', 'crazyhouse', 'antichess'], true) ? $variant : 'standard';
         // rating<=0 is the "Unlosable" sentinel — kept verbatim (0), NOT clamped up to
         // RATING_MIN, so playBot() routes it to the worst-move engine. Real ratings
         // clamp to the human ladder [RATING_MIN, RATING_MAX].
@@ -67,6 +69,13 @@ class BotGameService
             $game->fen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR[] w KQkq - 0 1';
             if ($game->status === 'ongoing' && $game->side_to_move !== $game->human_color) {
                 $this->playCrazyhouseBot($game);
+            }
+        } elseif ($game->variant === 'antichess') {
+            // Antichess (Losing Chess) always starts from the standard chess start
+            // position — no pockets, no duck square, so the model's default `fen`
+            // is already correct. Open with a bot move if the human is Black.
+            if ($game->status === 'ongoing' && $game->side_to_move !== $game->human_color) {
+                $this->playAntichessBot($game);
             }
         } else {
             // Standard and Chess960 share the same flow: applyStartFen validates
@@ -151,6 +160,30 @@ class BotGameService
 
             if ($game->status === 'ongoing') {
                 $this->playCrazyhouseBot($game);
+            }
+
+            $game->save();
+
+            return ['ok' => true];
+        }
+
+        if ($game->variant === 'antichess') {
+            // Antichess move ("e2e4" / "e7e8q" / king-promotion "e7e8k"); the FEN
+            // is self-describing (no pockets, no duck), so this reuses the
+            // standard apply() like crazyhouse. Unlike the other variants'
+            // /move endpoints, the engine reports an illegal move as an HTTP 400
+            // (GomachineClient::antichessMove() throws) rather than `legal:false`
+            // in a 200 body — catch it and surface the same rejected-move shape.
+            try {
+                $result = $this->engine->antichessMove($game->fen, $move);
+            } catch (\RuntimeException) {
+                return ['ok' => false, 'error' => 'illegal move'];
+            }
+
+            $this->apply($game, $move, $result, 'human');
+
+            if ($game->status === 'ongoing') {
+                $this->playAntichessBot($game);
             }
 
             $game->save();
@@ -287,6 +320,25 @@ class BotGameService
     }
 
     /**
+     * Compute and apply one Antichess bot move. The RAW human rating is passed
+     * (the engine's rating ladder is human-scale, same as playBot(), Duck, and
+     * Crazyhouse). The bestmove is already applied engine-side, so its response
+     * carries the resulting newFen/sideToMove/status/result.
+     */
+    private function playAntichessBot(BotGame $game): void
+    {
+        if ($game->status !== 'ongoing') {
+            return;
+        }
+        $best = $this->engine->antichessBestMove($game->fen, $game->rating);
+        $uci = $best['bestmove'] ?? null;
+        if (!is_string($uci) || $uci === '') {
+            return;
+        }
+        $this->apply($game, $uci, $best, 'bot', $best);
+    }
+
+    /**
      * Mutate the game with one applied move's result.
      *
      * @param array<string, mixed> $result Engine /move response.
@@ -390,6 +442,7 @@ class BotGameService
             $legal = match ($game->variant) {
                 'duck' => $this->engine->duckLegalMoves($game->fen, $game->duck ?? ''),
                 'crazyhouse' => $this->engine->crazyhouseLegalMoves($game->fen),
+                'antichess' => $this->engine->antichessLegalMoves($game->fen),
                 default => $this->engine->legalMoves($game->fen),
             };
             $data['legal_moves'] = $legal['moves'] ?? [];

@@ -1,4 +1,5 @@
 #include "serve_handlers.h"
+#include "antichess.h"
 #include "book.h"
 #include "crazyhouse.h"
 #include "duck.h"
@@ -926,6 +927,201 @@ json duck_analyze_game(const json& body) {
             }
         }
         positions.push_back(out);
+    }
+
+    return json{{"positions", positions}, {"count", positions.size()}};
+}
+
+// ==================== Antichess ====================
+// Self-contained variant (src/antichess.{h,cpp}) — its own rules
+// (forced-capture, inverted win condition, king-promotion), no pockets, no
+// separate duck-square field: the FEN alone fully describes a position, so
+// every handler below just parses `fen` fresh (STATELESS, no history kept
+// between requests, mirrors Duck/Crazyhouse). Never touches Search::Context
+// (no NNUE — antichess has its own real iterative-deepening negamax, see
+// antichess.h's file doc).
+
+namespace {
+
+// Parses+validates `fen`, throwing the shared 400 ApiError on failure —
+// mirrors duck_parse_or_throw/crazyhouse's zh_parse-plus-throw call sites.
+AntichessState antichess_parse_or_throw(const std::string& fen) {
+    AntichessState s;
+    std::string err;
+    if (!antichess_parse(fen, s, err)) throw ApiError{400, err};
+    return s;
+}
+
+// Parses a UCI move string and validates it against `s`'s legal moves,
+// recovering the ep flag — mirrors zh_parse_and_validate/duck's analogous
+// two-step (parse, then match against the generated legal list).
+bool antichess_parse_and_validate(const AntichessState& s, const std::string& moveStr, AntichessMove& out) {
+    AntichessMove parsed;
+    if (!antichess_parse_uci(moveStr, parsed)) return false;
+    return antichess_find_legal(s, parsed, out);
+}
+
+// Merges position/status fields into a response object — stamps newFen,
+// sideToMove, status and result. Mirrors duck_result_json/zh_result_json;
+// antichess has no pocket/duck-square field to add on top.
+json antichess_result_json(json base, const AntichessState& s) {
+    AntichessStatus st = antichess_status(s);
+    base["newFen"] = s.fen();
+    base["sideToMove"] = s.side == WHITE ? "w" : "b";
+    base["status"] = antichess_status_name(st);
+    std::string res = antichess_status_result(st);
+    base["result"] = res.empty() ? json(nullptr) : json(res);
+    return base;
+}
+
+AntichessLimits antichess_limits_from_json(const json& limits) {
+    AntichessLimits lim = antichess_default_limits();
+    if (jhas(limits, "rating")) lim.rating = limits["rating"].get<int>();
+    if (jhas(limits, "level")) lim.level = limits["level"].get<int>();
+    lim.depth = limits.value("depth", 0);
+    lim.nodes = static_cast<uint64_t>(limits.value("nodes", static_cast<int64_t>(0)));
+    lim.movetimeMs = limits.value("movetime", 0);
+    return lim;
+}
+
+constexpr int kAntichessAnalyzeDefaultMoveTime = 250;
+constexpr int kAntichessAnalyzeMaxMoveTime = 3000;
+constexpr int kAntichessAnalyzeMaxMoves = 600;
+
+} // namespace
+
+// Legal moves (UCI, incl. king-promotion "k") for the side to move — the
+// compulsory-capture filter already applied inside ::antichess_legal_moves
+// (called via an explicit `::` qualifier: antichess.h's free function has the
+// exact same name as this handler, so an unqualified call from inside this
+// function's own body would otherwise resolve to itself — see
+// serve_handlers.h's doc comment on this handler).
+json antichess_legal_moves(const json& body) {
+    std::string fen = body.value("fen", "");
+    AntichessState s = antichess_parse_or_throw(fen);
+    return json{{"moves", ::antichess_legal_moves(s)}};
+}
+
+// Validates and applies a single move, returning the resulting position and
+// its terminal status. An illegal or malformed move throws a 400 ApiError
+// (caught centrally by serve.cpp's wrap()) rather than returning a
+// legal:false 200 — antichess.h's own antichess_apply documents exactly this
+// "throws ApiError on illegal" contract; this handler reimplements it in two
+// steps (rather than calling antichess_apply directly) purely to get the SAN
+// string from the PRE-move state.
+json antichess_move(const json& body) {
+    std::string fen = body.value("fen", "");
+    std::string moveStr = body.value("move", "");
+    AntichessState s = antichess_parse_or_throw(fen);
+
+    AntichessMove m;
+    if (!antichess_parse_and_validate(s, moveStr, m)) {
+        throw ApiError{400, "illegal move: " + moveStr};
+    }
+    std::string sanStr = antichess_san(s, m); // computed BEFORE mutating s
+    AntichessState ns = antichess_do_move(s, m);
+    return antichess_result_json(json{{"legal", true}, {"san", sanStr}}, ns);
+}
+
+// Searches for and APPLIES the bot's best move, honoring rating/level
+// weakening exactly like duck_bestmove/crazyhouse_best_move. No `history` in
+// the request (mirrors those two endpoints) — a single-shot call has no game
+// history to thread through repetition detection.
+json antichess_bestmove(const json& body) {
+    std::string fen = body.value("fen", "");
+    AntichessState s = antichess_parse_or_throw(fen);
+    AntichessLimits lim = antichess_limits_from_json(body.value("limits", json::object()));
+
+    AntichessResult res = ::antichess_best_move(s, lim);
+    if (!res.hasMove) {
+        return antichess_result_json(
+            json{{"bestmove", nullptr}, {"san", nullptr}, {"eval", nullptr}, {"reason", "no legal moves"}}, s);
+    }
+
+    std::string sanStr = antichess_san(s, res.move); // computed BEFORE mutating s
+    AntichessState ns = antichess_do_move(s, res.move);
+
+    json evalObj = (res.mate != 0) ? json{{"type", "mate"}, {"value", res.mate}}
+                                    : json{{"type", "cp"}, {"value", res.score}};
+    return antichess_result_json(json{{"bestmove", res.move.uci()}, {"san", sanStr}, {"eval", evalObj}}, ns);
+}
+
+// Replays `moves` from the standard antichess start (games always start
+// there — no [startFen] field, mirrors duck_analyze_game's no-startFen
+// rationale) and evaluates every resulting position at FULL strength
+// (ignores rating — antichess_default_limits() leaves level at -1/unset),
+// bounded by `movetime` ms per position. Sequential, single-threaded per
+// request; same JSON shape convention as duck_analyze_game, but antichess has
+// its own {white_win,black_win,draw,ongoing} status/result vocabulary instead
+// of duck's checkmate/stalemate split (see antichess_status_name's doc), so
+// each entry reports `result` directly instead of separate checkmate/
+// stalemate booleans.
+//
+// Response: { positions: [ {ply, fen, sideToMove, eval|null, bestmove|null,
+// bestSan|null, terminal, result|null} ], count }
+json antichess_analyze_game(const json& body) {
+    std::vector<std::string> moves = json_str_vec(body.value("moves", json::array()));
+    if (moves.size() > static_cast<size_t>(kAntichessAnalyzeMaxMoves)) throw ApiError{400, "too many moves"};
+
+    int movetimeMs = body.value("movetime", 0);
+    if (movetimeMs <= 0) movetimeMs = kAntichessAnalyzeDefaultMoveTime;
+    if (movetimeMs > kAntichessAnalyzeMaxMoveTime) movetimeMs = kAntichessAnalyzeMaxMoveTime;
+
+    // Replay sequentially, snapshotting one AntichessState per position
+    // (moves.size()+1): index i is the position after i moves (index 0 is
+    // the start).
+    AntichessState s = antichess_parse_or_throw(ANTICHESS_START_FEN);
+    std::vector<AntichessState> states;
+    states.reserve(moves.size() + 1);
+    states.push_back(s);
+    for (const std::string& uci : moves) {
+        AntichessMove m;
+        if (!antichess_parse_and_validate(s, uci, m)) {
+            throw ApiError{400, "illegal move in sequence: " + uci};
+        }
+        s = antichess_do_move(s, m);
+        states.push_back(s);
+    }
+
+    // `history` accumulates PRIOR position keys only (never the current
+    // state's own key — antichess_status/antichess_best_move already count
+    // `s.key()` itself internally, see antichess.h's doc on both), appended
+    // AFTER each position is analyzed so it's correct for the next ply.
+    std::vector<uint64_t> history;
+    history.reserve(states.size());
+
+    json positions = json::array();
+    for (size_t i = 0; i < states.size(); i++) {
+        const AntichessState& sp = states[i];
+        AntichessStatus status = antichess_status(sp, history);
+        bool terminal = status != AntichessStatus::Ongoing;
+        std::string res = antichess_status_result(status);
+
+        json out = {
+            {"ply", i},
+            {"fen", sp.fen()},
+            {"sideToMove", sp.side == WHITE ? "w" : "b"},
+            {"eval", nullptr},
+            {"bestmove", nullptr},
+            {"bestSan", nullptr},
+            {"terminal", terminal},
+            {"result", res.empty() ? json(nullptr) : json(res)},
+        };
+
+        if (!terminal) {
+            AntichessLimits lim = antichess_default_limits(); // level -1 => no rating/level => full strength
+            lim.movetimeMs = movetimeMs;
+            AntichessResult r = ::antichess_best_move(sp, lim, history);
+            if (r.hasMove) {
+                json evalObj = (r.mate != 0) ? json{{"type", "mate"}, {"value", r.mate}}
+                                              : json{{"type", "cp"}, {"value", r.score}};
+                out["eval"] = evalObj;
+                out["bestmove"] = r.move.uci();
+                out["bestSan"] = antichess_san(sp, r.move);
+            }
+        }
+        positions.push_back(out);
+        history.push_back(sp.key());
     }
 
     return json{{"positions", positions}, {"count", positions.size()}};

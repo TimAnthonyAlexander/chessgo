@@ -27,6 +27,13 @@ use Override;
  * pocket-aware hand eval, NOT the shared NNUE; `zugzwang/src/crazyhouse.h`)
  * behind `/crazyhouse/{legal-moves,move,bestmove}`.
  *
+ * Antichess (Losing Chess) calls likewise go through `primaryOnly` — zugzwang
+ * ships its own self-contained Antichess engine (forced-capture rules + an
+ * inverted-objective eval, NOT the shared NNUE; `zugzwang/src/antichess.h`)
+ * behind `/antichess/{legal-moves,move,bestmove,analyze-game}`. Unlike every
+ * other variant's /move, an illegal antichess move surfaces as an HTTP 400
+ * (GomachineClient::antichessMove() throws) rather than `legal:false`.
+ *
  * gomachine has zero engine-call paths left through this class — every
  * variant + standard chess + Stockfish now goes to zugzwang (`primaryOnly`
  * or `zugzwangOnly`); `gomachineOnly` is retained only as machinery
@@ -207,6 +214,37 @@ class EngineSelector extends GomachineClient
         return $this->primaryOnly(
             static fn (GomachineClient $c): array => $c->crazyhouseBestMove($fen, $rating, $movetimeMs, $depth, $nodes),
         );
+    }
+
+    #[Override]
+    public function antichessLegalMoves(string $fen): array
+    {
+        return $this->primaryOnly(static fn (GomachineClient $c): array => $c->antichessLegalMoves($fen));
+    }
+
+    #[Override]
+    public function antichessMove(string $fen, string $move): array
+    {
+        return $this->primaryOnly(static fn (GomachineClient $c): array => $c->antichessMove($fen, $move));
+    }
+
+    #[Override]
+    public function antichessBestMove(
+        string $fen,
+        int $rating,
+        int $movetimeMs = 0,
+        int $depth = 0,
+        int $nodes = 0,
+    ): array {
+        return $this->primaryOnly(
+            static fn (GomachineClient $c): array => $c->antichessBestMove($fen, $rating, $movetimeMs, $depth, $nodes),
+        );
+    }
+
+    #[Override]
+    public function antichessAnalyzeGame(array $moves, int $movetimeMs = 250): array
+    {
+        return $this->primaryOnly(static fn (GomachineClient $c): array => $c->antichessAnalyzeGame($moves, $movetimeMs));
     }
 
     #[Override]

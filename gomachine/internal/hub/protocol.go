@@ -20,8 +20,9 @@ type inMsg struct {
 	Color  string `json:"color,omitempty"`  // "w"|"b"|"random" creator side (createChallenge)
 	Rated  bool   `json:"rated,omitempty"`  // creator's rated preference (createChallenge)
 	Code   string `json:"code,omitempty"`   // private invite code (joinChallenge)
-	// Variant is "standard" (default), "chess960" or "duck" (createChallenge).
-	// Anything else is normalized to "standard" on the hub.
+	// Variant is "standard" (default), "chess960", "duck", "crazyhouse" or
+	// "antichess" (createChallenge). Anything else is normalized to "standard"
+	// on the hub.
 	Variant string `json:"variant,omitempty"`
 }
 
@@ -50,16 +51,19 @@ func parseTimeControl(pool string) (timeControl, bool) {
 }
 
 // categoryFor picks the rating category for a game from BOTH its pool and its
-// variant. Duck Chess and Crazyhouse are each their own isolated pool (no
-// time-control split — every game of that variant, whatever its clock, is one
-// rating), mirroring how BaseAPI routes them in GameResultController.
-// Standard/Chess960 fall back to the duration-derived time-control category.
+// variant. Duck Chess, Crazyhouse and Antichess are each their own isolated
+// pool (no time-control split — every game of that variant, whatever its
+// clock, is one rating), mirroring how BaseAPI routes them in
+// GameResultController. Standard/Chess960 fall back to the duration-derived
+// time-control category.
 func categoryFor(pool, variant string) string {
 	switch variant {
 	case variantDuck:
 		return "duck"
 	case variantCrazyhouse:
 		return "crazyhouse"
+	case variantAntichess:
+		return "antichess"
 	}
 	return categoryForPool(pool)
 }
@@ -94,6 +98,7 @@ const (
 	variantChess960   = variant.Chess960
 	variantDuck       = variant.Duck
 	variantCrazyhouse = variant.Crazyhouse
+	variantAntichess  = variant.Antichess
 )
 
 // normalizeVariant clamps any client-supplied variant to a known value. Anything
@@ -106,6 +111,8 @@ func normalizeVariant(v string) string {
 		return variantDuck
 	case variantCrazyhouse:
 		return variantCrazyhouse
+	case variantAntichess:
+		return variantAntichess
 	default:
 		return variantStandard
 	}

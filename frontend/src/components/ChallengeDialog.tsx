@@ -239,7 +239,7 @@ export default function ChallengeDialog({ open, onClose }: { open: boolean; onCl
                         <VariantPicker
                             value={variant}
                             onChange={setVariant}
-                            only={['standard', 'chess960', 'duck', 'crazyhouse']}
+                            only={['standard', 'chess960', 'duck', 'crazyhouse', 'antichess']}
                         />
 
                         {/* Rated */}

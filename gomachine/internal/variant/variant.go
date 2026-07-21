@@ -6,8 +6,9 @@
 //
 // Execution is tiered. Tier 1 variants (standard, Chess960) reuse the engine
 // core's Position and the hub's shared engine pool for bot search. Tier 2
-// variants (Duck) carry their own rules and search; SelfSearches reports which,
-// and SelfSearchMove produces their bot moves without leasing the engine pool.
+// variants (Duck, Crazyhouse, Antichess) carry their own rules and search;
+// SelfSearches reports which, and SelfSearchMove produces their bot moves
+// without leasing the engine pool.
 package variant
 
 import (
@@ -22,6 +23,7 @@ const (
 	Chess960   = "chess960"
 	Duck       = "duck"
 	Crazyhouse = "crazyhouse"
+	Antichess  = "antichess"
 )
 
 // State is one live variant position. It is immutable: Apply returns the next
@@ -65,6 +67,8 @@ func New(id, fen string) (State, error) {
 		return newDuckState(fen)
 	case Crazyhouse:
 		return newCrazyhouseState(fen)
+	case Antichess:
+		return newAntichessState(fen)
 	default: // Standard, Chess960, and anything unknown → standard rules.
 		return newStandardState(fen)
 	}
@@ -72,7 +76,7 @@ func New(id, fen string) (State, error) {
 
 // SelfSearches reports whether a variant provides its own bot search (Tier 2)
 // rather than playing through the hub's shared engine pool (Tier 1).
-func SelfSearches(id string) bool { return id == Duck || id == Crazyhouse }
+func SelfSearches(id string) bool { return id == Duck || id == Crazyhouse || id == Antichess }
 
 // SelfSearchMove computes a bot move for a self-searching (Tier 2) variant from a
 // position snapshot: the canonical FEN plus the wire extras (the auxiliary fields
@@ -84,6 +88,8 @@ func SelfSearchMove(id, fen string, extras map[string]string, rating int) (uci s
 		return duckSelfSearchMove(fen, extras["duck"], rating)
 	case Crazyhouse:
 		return crazyhouseSelfSearchMove(fen, rating)
+	case Antichess:
+		return antichessSelfSearchMove(fen, rating)
 	default:
 		return "", false
 	}

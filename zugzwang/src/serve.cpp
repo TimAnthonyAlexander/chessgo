@@ -228,6 +228,15 @@ int serve_main(int argc, char** argv) {
     svr.Post("/crazyhouse/move", wrap(Handlers::crazyhouse_move));
     svr.Post("/crazyhouse/bestmove", wrap(Handlers::crazyhouse_best_move));
 
+    // Antichess: a self-contained variant module (src/antichess.{h,cpp}) —
+    // its own rules (forced-capture, inverted win condition, king-promotion),
+    // eval, and real iterative-deepening search, no Search::Context pool
+    // involvement (fully self-describing FEN, no pockets/duck-square).
+    svr.Post("/antichess/legal-moves", wrap(Handlers::antichess_legal_moves));
+    svr.Post("/antichess/move", wrap(Handlers::antichess_move));
+    svr.Post("/antichess/bestmove", wrap(Handlers::antichess_bestmove));
+    svr.Post("/antichess/analyze-game", wrap(Handlers::antichess_analyze_game));
+
     std::cerr << "zugzwang serve: listening on " << host << ":" << port
               << " (TT " << ttSizeMB << "MB, search-pool " << searchPoolSize
               << "x" << searchThreads << " groupsxthreads, " << ttPerGroupMB

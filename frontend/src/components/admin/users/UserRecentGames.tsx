@@ -1,5 +1,5 @@
 import { Box, Typography } from '@mui/material'
-import { Bot } from 'lucide-react'
+import { Bot, Skull } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import type { GameSummaryRow } from '../../../api/client'
 import { Panel, PanelHead } from '../../home/Panel'
@@ -129,6 +129,29 @@ function GameRow({
                             sx={{ display: 'inline-flex', fontSize: 15, flexShrink: 0 }}
                         >
                             <DuckGlyph />
+                        </Box>
+                    )}
+                    {game.variant === 'crazyhouse' && (
+                        <Box
+                            component="span"
+                            title="Crazyhouse"
+                            sx={{
+                                display: 'inline-flex',
+                                fontSize: 14,
+                                flexShrink: 0,
+                                color: 'var(--accent)',
+                            }}
+                        >
+                            ⇄
+                        </Box>
+                    )}
+                    {game.variant === 'antichess' && (
+                        <Box
+                            component="span"
+                            title="Antichess"
+                            sx={{ display: 'inline-flex', flexShrink: 0, color: 'var(--text-dim)' }}
+                        >
+                            <Skull size={13} />
                         </Box>
                     )}
                     {game.variant === 'chess960' && (

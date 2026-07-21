@@ -61,14 +61,15 @@ class GameResultController extends Controller
             return JsonResponse::ok(['id' => $existing->id, 'duplicate' => true]);
         }
 
-        // Duck Chess is its own isolated rating pool (no time-control split): every
-        // duck game maps to the "duck" category regardless of its clock. Standard /
-        // Chess960 fall back to the duration-derived time-control category. This
-        // mirrors the hub's categoryFor().
+        // Duck Chess, Crazyhouse, and Antichess are each their own isolated rating
+        // pool (no time-control split): every game of that variant maps to its own
+        // category regardless of its clock. Standard / Chess960 fall back to the
+        // duration-derived time-control category. This mirrors the hub's categoryFor().
         $variant = $this->normalizeVariant($b['variant'] ?? null);
         $category = match ($variant) {
             'duck' => 'duck',
             'crazyhouse' => 'crazyhouse',
+            'antichess' => 'antichess',
             default => $this->glicko->categoryForPool($pool),
         };
         $rated = (bool)($b['rated'] ?? false);
@@ -158,13 +159,14 @@ class GameResultController extends Controller
     /**
      * Coerce the hub's optional `variant` field into a known value. Older hubs
      * (and all standard games) omit it, so absent/unknown falls back to
-     * 'standard'. A 'duck' game is routed to its own isolated rating category.
+     * 'standard'. A 'duck'/'crazyhouse'/'antichess' game is routed to its own
+     * isolated rating category.
      */
     private function normalizeVariant(mixed $variant): string
     {
         $v = is_string($variant) ? $variant : '';
 
-        return in_array($v, ['standard', 'chess960', 'duck', 'crazyhouse'], true) ? $v : 'standard';
+        return in_array($v, ['standard', 'chess960', 'duck', 'crazyhouse', 'antichess'], true) ? $v : 'standard';
     }
 
     private function authorized(): bool

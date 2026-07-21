@@ -103,6 +103,19 @@ class User extends BaseModel
 
     public int $games_crazyhouse = 0;
 
+    // Antichess (Losing Chess) is likewise a separate, isolated category (its own
+    // game, no time-control split — every antichess game, whatever its clock, is
+    // one "antichess" rating). Fed only by antichess games. See GameResultController.
+    public int $rating_antichess = 1500;
+
+    public float $rd_antichess = 350.0;
+
+    public float $vol_antichess = 0.06;
+
+    public ?string $rated_at_antichess = null;
+
+    public int $games_antichess = 0;
+
     // "The Flame" — a daily-activity streak (SPEC dashboard). A day qualifies when
     // the user solves a puzzle OR plays a rated game; consecutive qualifying UTC
     // days grow current_streak, a miss resets it to 1 (unless a freeze token
@@ -141,6 +154,7 @@ class User extends BaseModel
         'rated_at_puzzle' => ['type' => 'TEXT', 'nullable' => true],
         'rated_at_duck' => ['type' => 'TEXT', 'nullable' => true],
         'rated_at_crazyhouse' => ['type' => 'TEXT', 'nullable' => true],
+        'rated_at_antichess' => ['type' => 'TEXT', 'nullable' => true],
         // The Flame streak's last-qualifying UTC day, stored as 'YYYY-MM-DD' text.
         'last_active_date' => ['type' => 'TEXT', 'nullable' => true],
     ];
@@ -150,8 +164,8 @@ class User extends BaseModel
         return password_verify($password, $this->password);
     }
 
-    /** Categories carrying a Glicko-2 rating, including the isolated puzzle + duck + crazyhouse pools. */
-    private const RATING_CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'puzzle', 'duck', 'crazyhouse'];
+    /** Categories carrying a Glicko-2 rating, including the isolated puzzle + duck + crazyhouse + antichess pools. */
+    private const RATING_CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'puzzle', 'duck', 'crazyhouse', 'antichess'];
 
     /**
      * Serialize for API output. Overrides BaseModel::jsonSerialize() to strip

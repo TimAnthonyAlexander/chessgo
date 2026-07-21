@@ -263,6 +263,78 @@ func (z *zugzwangClient) DuckBestMove(ctx context.Context, fen, duck string, rat
 	return *out.BestMove, nil
 }
 
+// antichessBestMoveResponse is zugzwang's /antichess/bestmove response shape
+// (zugzwang/src/serve_handlers.cpp antichess_best_move): bestmove is null
+// (with reason set) when there's no legal move. The response also carries the
+// resulting position for parity with the other self-contained variants'
+// endpoints, but the hub only needs bestmove — game.applyMove/
+// variant.antichessState.Apply replays the move itself.
+type antichessBestMoveResponse struct {
+	BestMove *string `json:"bestmove"`
+	San      string  `json:"san"`
+	Eval     struct {
+		Type  string `json:"type"`
+		Value int    `json:"value"`
+	} `json:"eval"`
+	NewFen     string `json:"newFen"`
+	SideToMove string `json:"sideToMove"`
+	Status     string `json:"status"`
+	Result     string `json:"result"`
+	Reason     string `json:"reason"`
+	Error      string `json:"error"`
+}
+
+// AntichessBestMove asks zugzwang's self-contained Antichess engine (its own
+// forced-capture rules/eval/search — NOT the shared standard-chess NNUE
+// search, see zugzwang/src/antichess.h) for a move at a target rating. fen is
+// the CANONICAL Antichess FEN — standard-shape and self-describing (no
+// pockets, no duck square), so the request is just {fen, limits}, simpler
+// than Duck's (which needs the separate duck square) and identical in shape
+// to Crazyhouse's.
+//
+// A nil error with an empty move string means "zugzwang answered, there's
+// genuinely no legal move" (position already terminal — the side to move has
+// won by Antichess's inverted rule) — not a transport failure, mirroring
+// CrazyhouseBestMove/DuckBestMove's doc — so the caller must not retry or
+// fall back to the emergency in-process path for that case.
+func (z *zugzwangClient) AntichessBestMove(ctx context.Context, fen string, rating int) (string, error) {
+	body, err := json.Marshal(map[string]any{
+		"fen":    fen,
+		"limits": map[string]any{"rating": rating},
+	})
+	if err != nil {
+		return "", fmt.Errorf("zugzwang: marshal antichess request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, z.baseURL+"/antichess/bestmove", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("zugzwang: build antichess request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := z.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("zugzwang: antichess request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var out antichessBestMoveResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("zugzwang: decode antichess response: %w", err)
+	}
+	if resp.StatusCode >= 300 {
+		msg := out.Error
+		if msg == "" {
+			msg = fmt.Sprintf("status %d", resp.StatusCode)
+		}
+		return "", fmt.Errorf("zugzwang: antichess: %s", msg)
+	}
+	if out.BestMove == nil || *out.BestMove == "" {
+		return "", nil // genuinely no legal move
+	}
+	return *out.BestMove, nil
+}
+
 // Healthy reports whether zugzwang answers GET /healthz within a short
 // timeout. Best-effort, safe to call from any goroutine (a fresh request,
 // no shared state).

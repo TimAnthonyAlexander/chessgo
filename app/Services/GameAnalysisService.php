@@ -50,11 +50,17 @@ class GameAnalysisService
             return $this->analyzeDuck($game);
         }
 
+        // Antichess (Losing Chess) is analyzable too — plain UCI moves through its
+        // own dedicated engine endpoint (no pockets, no duck square).
+        if ($game->variant === 'antichess') {
+            return $this->analyzeAntichess($game);
+        }
+
         // The standard full-game analyzer replays the moves through the standard
-        // engine and streams standard evals. Chess960 moves would replay from the
-        // wrong start (silently wrong or illegal), so those stay unsupported —
-        // rather than 502, return an explicit "unsupported" payload the client
-        // renders as a friendly notice.
+        // engine and streams standard evals. Chess960 and Crazyhouse moves would
+        // replay from the wrong start / rules (silently wrong or illegal), so
+        // those stay unsupported — rather than 502, return an explicit
+        // "unsupported" payload the client renders as a friendly notice.
         if ($game->variant !== '' && $game->variant !== 'standard') {
             return $this->unsupported($game);
         }
@@ -101,6 +107,41 @@ class GameAnalysisService
         $sans = array_map('strval', $game->getSans());
 
         $res = $this->engine->duckAnalyzeGame($moves);
+        $positions = is_array($res['positions'] ?? null) ? $res['positions'] : [];
+        if ($positions === []) {
+            throw new RuntimeException('engine returned no positions');
+        }
+
+        $payload = $this->build($game, $moves, $sans, $positions);
+
+        $game->setAnalysis($payload);
+        $game->save();
+
+        return $payload;
+    }
+
+    /**
+     * Return the Antichess (Losing Chess) analysis payload, computing + caching
+     * it on first call. Mirrors {@see analyzeDuck()} but replays the game's plain
+     * UCI moves through the antichess engine's full-game endpoint; {@see build()}
+     * then turns the positions into the same per-ply payload. The antichess
+     * engine's eval is on its own inverted-objective scale, but that's opaque
+     * here — cpLoss/judgment only ever compares position k against k+1 from the
+     * SAME engine, so the generic build() logic applies unchanged.
+     *
+     * @return array<string, mixed>
+     */
+    private function analyzeAntichess(Game $game): array
+    {
+        $cached = $game->getAnalysis();
+        if ($cached !== null && ($cached['version'] ?? null) === self::VERSION) {
+            return $cached;
+        }
+
+        $moves = array_map('strval', $game->getMoves());
+        $sans = array_map('strval', $game->getSans());
+
+        $res = $this->engine->antichessAnalyzeGame($moves);
         $positions = is_array($res['positions'] ?? null) ? $res['positions'] : [];
         if ($positions === []) {
             throw new RuntimeException('engine returned no positions');

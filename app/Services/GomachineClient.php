@@ -409,6 +409,90 @@ class GomachineClient
         ]);
     }
 
+    /**
+     * Antichess (Losing Chess): list the legal moves (UCI long algebraic; a
+     * king-promotion suffix "k" may appear alongside q/r/b/n, since the king can
+     * be forced to promote-capture like any other piece). The FEN is
+     * self-describing — no pockets, no duck square.
+     *
+     * @return array<string, mixed> {moves}
+     */
+    public function antichessLegalMoves(string $fen): array
+    {
+        return $this->post('/antichess/legal-moves', ['fen' => $fen]);
+    }
+
+    /**
+     * Antichess: validate and apply a move ("e2e4", "e7e8q", or the
+     * king-promotion suffix "e7e8k"). Unlike every other variant's /move
+     * endpoint, an illegal move here is reported as an HTTP 400 `{error}`
+     * response rather than `legal:false` in a 200 body — post() throws a
+     * RuntimeException in that case; callers needing a soft failure (e.g.
+     * BotGameService::humanMove) must catch it.
+     *
+     * @return array<string, mixed> {legal, san, newFen, sideToMove, status, result}
+     */
+    public function antichessMove(string $fen, string $move): array
+    {
+        return $this->post('/antichess/move', [
+            'fen' => $fen,
+            'move' => $move,
+        ]);
+    }
+
+    /**
+     * Antichess: compute the AI's move at a target Elo rating. The Antichess
+     * engine does its own weakening, so pass the raw human rating (same
+     * human-scale semantics as bestMove()/crazyhouseBestMove()). The returned
+     * move is ALREADY APPLIED — newFen/sideToMove reflect the position after it.
+     *
+     * @return array<string, mixed> {bestmove, san, eval, newFen, sideToMove, status, result}
+     */
+    public function antichessBestMove(
+        string $fen,
+        int $rating,
+        int $movetimeMs = 0,
+        int $depth = 0,
+        int $nodes = 0,
+    ): array {
+        $limits = [];
+        if ($rating > 0) {
+            $limits['rating'] = $rating; // >0 caps strength; omit for full power
+        }
+        if ($depth > 0) {
+            $limits['depth'] = $depth;
+        } elseif ($nodes > 0) {
+            $limits['nodes'] = $nodes;
+        } elseif ($movetimeMs > 0) {
+            $limits['movetime'] = $movetimeMs;
+        }
+
+        return $this->post('/antichess/bestmove', [
+            'fen' => $fen,
+            'limits' => $limits,
+        ]);
+    }
+
+    /**
+     * Antichess full-game analysis: replay UCI `moves` from the standard start
+     * and evaluate every resulting position with the antichess engine at full
+     * strength. Mirrors {@see duckAnalyzeGame()} — one HTTP call fanned across
+     * the pool, so it can take many seconds for a long game (hence the generous
+     * timeout).
+     *
+     * @param string[] $moves UCI moves in order
+     * @return array<string, mixed> {positions: list<position>, count} where each
+     *   position is {ply, fen, sideToMove, eval|null, bestmove|null, bestSan|null,
+     *   terminal, result}
+     */
+    public function antichessAnalyzeGame(array $moves, int $movetimeMs = 250): array
+    {
+        return $this->post('/antichess/analyze-game', [
+            'moves' => array_values($moves),
+            'movetime' => $movetimeMs,
+        ], 120_000);
+    }
+
     /** Liveness check against the engine. */
     public function healthy(): bool
     {

@@ -50,6 +50,7 @@ function userRatingFor(user: AuthUser | null, variant: Variant, pool: string): n
     if (!user) return null
     if (variant === 'duck') return user.rating_duck
     if (variant === 'crazyhouse') return user.rating_crazyhouse
+    if (variant === 'antichess') return user.rating_antichess
     switch (categoryFor(pool)) {
         case 'Bullet':
             return user.rating_bullet
@@ -131,6 +132,9 @@ export default function LiveGame() {
     const myTurn = !!g && !g.ended && g.sideToMove === g.color && s.conn === 'open'
     const isDuck = g?.variant === 'duck'
     const isCrazyhouse = g?.variant === 'crazyhouse'
+    // Antichess plays on a normal board — no pockets, no duck placement, and (like
+    // Duck) no check concept, so it's excluded from the check highlight below.
+    const isAntichess = g?.variant === 'antichess'
 
     // Board orientation: your own color at the bottom, flipped on demand.
     const orientation: Color = g ? (flipped ? other(g.color) : g.color) : 'w'
@@ -749,7 +753,7 @@ export default function LiveGame() {
                 sideToMove={g.sideToMove}
                 legalMoves={boardInteractive ? g.legalMoves : []}
                 lastMove={atLive ? (activeOptimisticLast ?? g.lastMove) : historyLast}
-                inCheck={!atLive || isDuck ? false : g.check}
+                inCheck={!atLive || isDuck || isAntichess ? false : g.check}
                 interactive={boardInteractive}
                 onMove={isDuck ? duck.onMove : interaction.onMove}
                 hint={atLive ? bestHint : null}

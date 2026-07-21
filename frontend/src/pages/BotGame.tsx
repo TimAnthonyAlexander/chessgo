@@ -135,6 +135,10 @@ export default function BotGame() {
 
     const isDuck = game?.variant === 'duck'
     const isCrazyhouse = game?.variant === 'crazyhouse'
+    // Antichess plays on a normal board (no pockets, no duck placement) — it needs
+    // none of the special interaction wiring below, only the standard controller
+    // and a couple of display-only exclusions (eval bar, check highlight).
+    const isAntichess = game?.variant === 'antichess'
 
     // Persist the setup whenever it changes, so it survives a refresh.
     useEffect(() => {
@@ -287,9 +291,10 @@ export default function BotGame() {
             setAnalyzedEval(null)
             return
         }
-        if (!game || game.variant === 'duck' || game.variant === 'crazyhouse') {
-            // Duck Chess and Crazyhouse aren't understood by the standard /analyze
-            // engine (the duck, and pockets/drops) — no meaningful eval bar to show.
+        if (!game || isDuck || isCrazyhouse || isAntichess) {
+            // Duck Chess, Crazyhouse, and Antichess aren't understood by the standard
+            // /analyze engine (the duck, pockets/drops, and compulsory-capture rules
+            // respectively) — no meaningful eval bar to show.
             setAnalyzedEval(null)
             return
         }
@@ -934,9 +939,13 @@ function Setup({
             ? 'Play a random Chess960 (Fischer Random) position.'
             : variant === 'duck'
               ? 'Play Duck Chess — capture the king; the duck blocks every square.'
-              : customStart
-                ? 'Play the Zugzwang engine from this position.'
-                : 'Play the Zugzwang engine.'
+              : variant === 'crazyhouse'
+                ? 'Play Crazyhouse — captured pieces switch sides and can be dropped back in.'
+                : variant === 'antichess'
+                  ? 'Play Antichess — captures are compulsory; lose every piece (or get stalemated) to win.'
+                  : customStart
+                    ? 'Play the Zugzwang engine from this position.'
+                    : 'Play the Zugzwang engine.'
     return (
         <Box
             sx={{

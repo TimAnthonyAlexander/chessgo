@@ -104,8 +104,54 @@ func TestCrazyhouseRuleset(t *testing.T) {
 	}
 }
 
+// Antichess plugs in as a Tier-2 variant: no auxiliary wire state (Extras is
+// nil like standard), no repetition history exposed (threefold is internal to
+// its own Status), plain UCI (including the Antichess-only king-promotion
+// suffix), and it self-searches.
+func TestAntichessRuleset(t *testing.T) {
+	st, err := New(Antichess, chess.StartFEN)
+	if err != nil {
+		t.Fatalf("New(antichess): %v", err)
+	}
+	if st.Extras() != nil {
+		t.Errorf("Extras() = %v, want nil (no pockets, no duck square)", st.Extras())
+	}
+	if st.BoardFEN() != st.FEN() {
+		t.Error("Antichess BoardFEN should equal FEN (standard-shape, self-describing)")
+	}
+	if len(st.LegalMoves()) != 20 {
+		t.Errorf("%d opening moves, want 20 (no captures available yet)", len(st.LegalMoves()))
+	}
+	next, san, ok := st.Apply("e2e4")
+	if !ok || san != "e4" {
+		t.Fatalf("Apply(e2e4) = (%q, %v), want (e4, true)", san, ok)
+	}
+	if next.Side() != chess.Black {
+		t.Errorf("side after e4 = %v, want Black", next.Side())
+	}
+	if next.PrimaryUCI("e2e4") != "e2e4" {
+		t.Error("PrimaryUCI should be identity for plain UCI")
+	}
+	if next.History() != nil {
+		t.Error("antichess carries no exposed repetition history (internal to its own Status)")
+	}
+	if !next.CanMate(chess.White) || !next.CanMate(chess.Black) {
+		t.Error("CanMate must always be true for antichess")
+	}
+
+	// A pawn one step from queening onto an empty square may also promote to
+	// a KING — the Antichess-only promotion choice.
+	kp, err := New(Antichess, "4k3/P7/8/8/8/8/8/4K3 w - - 0 1")
+	if err != nil {
+		t.Fatalf("New(antichess, king-promo fen): %v", err)
+	}
+	if _, _, ok := kp.Apply("a7a8k"); !ok {
+		t.Error("king promotion a7a8k must be a legal Apply")
+	}
+}
+
 func TestSelfSearches(t *testing.T) {
-	for _, id := range []string{Duck, Crazyhouse} {
+	for _, id := range []string{Duck, Crazyhouse, Antichess} {
 		if !SelfSearches(id) {
 			t.Errorf("%q must self-search (Tier 2)", id)
 		}
@@ -123,5 +169,8 @@ func TestNewRejectsBadFEN(t *testing.T) {
 	}
 	if _, err := New(Duck, "not a fen"); err == nil {
 		t.Error("New(duck) with a bad FEN must error")
+	}
+	if _, err := New(Antichess, "not a fen"); err == nil {
+		t.Error("New(antichess) with a bad FEN must error")
 	}
 }

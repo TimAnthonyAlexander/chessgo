@@ -2,24 +2,26 @@ import { useEffect, useState } from 'react'
 import { Box, Typography } from '@mui/material'
 import type { SxProps, Theme } from '@mui/material'
 import { useNavigate } from 'react-router-dom'
-import { Rocket, Zap, Rabbit, Turtle } from 'lucide-react'
+import { Rocket, Zap, Rabbit, Turtle, Skull } from 'lucide-react'
 import { Panel, PanelHead } from './Panel'
 import SkeletonBar from './SkeletonBar'
 import { DuckGlyph } from '../DuckGlyph'
 import { getLeaderboard, type LeaderboardEntry } from '../../api/client'
 import type { Category } from '../../lib/timeControl'
 
-// Duck Chess is an isolated rating pool, not a time control — its own tab here.
-type Tab = Category | 'Duck'
-const CATEGORIES: Tab[] = ['Bullet', 'Blitz', 'Rapid', 'Classical', 'Duck']
+// Duck Chess and Antichess are isolated rating pools, not time controls — each
+// gets its own tab here.
+type Tab = Category | 'Duck' | 'Antichess'
+const CATEGORIES: Tab[] = ['Bullet', 'Blitz', 'Rapid', 'Classical', 'Duck', 'Antichess']
 const DEFAULT_CATEGORY: Tab = 'Blitz'
 
-// Five text labels no longer fit beside the title, so the toggle collapses each
+// Six text labels no longer fit beside the title, so the toggle collapses each
 // category to an icon. The four time controls use Lucide icons in a descending-
 // speed register (rocket → lightning → rabbit → turtle) — one stroke weight and
 // grid, so they read as a single set rather than emoji. Duck reuses the same
 // hand-drawn duck SVG that sits on the board (in `mono` — a currentColor
 // silhouette — so it tints with its neighbours instead of being the lone colour).
+// Antichess reuses the Skull glyph used elsewhere for the variant.
 // Only the active tab expands to a labelled pill; full names live on `title`/`aria-label`.
 const ICON_PX = 15
 const GLYPH: Record<Tab, React.ReactNode> = {
@@ -32,11 +34,12 @@ const GLYPH: Record<Tab, React.ReactNode> = {
             <DuckGlyph mono />
         </Box>
     ),
+    Antichess: <Skull size={ICON_PX} strokeWidth={2} />,
 }
 
 /** The lowercase wire value the API expects ('blitz'), derived from the display tab. */
-function apiKey(cat: Tab): 'bullet' | 'blitz' | 'rapid' | 'classical' | 'duck' {
-    return cat.toLowerCase() as 'bullet' | 'blitz' | 'rapid' | 'classical' | 'duck'
+function apiKey(cat: Tab): 'bullet' | 'blitz' | 'rapid' | 'classical' | 'duck' | 'antichess' {
+    return cat.toLowerCase() as 'bullet' | 'blitz' | 'rapid' | 'classical' | 'duck' | 'antichess'
 }
 
 type LoadState =

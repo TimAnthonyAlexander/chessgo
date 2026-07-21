@@ -12,14 +12,15 @@ use App\Services\BotGameService;
  * to play the bot.
  *
  *   POST /bot-games        { rating?: 0|700..3500, human_color?: "w"|"b", fen?: string,
- *                            variant?: "standard"|"chess960"|"duck" }
+ *                            variant?: "standard"|"chess960"|"duck"|"crazyhouse"|"antichess" }
  *   GET  /bot-games/{id}
  *
  * `rating` is the bot's target Elo (the engine maps it to a weakening config).
  * An optional `fen` starts the game from a custom position (carried over from
  * the analysis board); omitted = the standard start position. `variant` selects
  * the ruleset (default "standard"); Chess960 passes a 960 start FEN through the
- * standard flow, while "duck" ignores `fen` and starts from the standard position.
+ * standard flow, while "duck", "crazyhouse", and "antichess" ignore `fen` and
+ * start from the standard position.
  */
 class BotGameController extends Controller
 {
@@ -59,7 +60,7 @@ class BotGameController extends Controller
             'rating' => 'integer|min:0|max:3500',
             'human_color' => 'in:w,b',
             'fen' => 'string',
-            'variant' => 'string|in:standard,chess960,duck,crazyhouse',
+            'variant' => 'string|in:standard,chess960,duck,crazyhouse,antichess',
         ]);
 
         try {
