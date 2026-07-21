@@ -11,6 +11,16 @@ Resumable: writes spsa/state.json after every iteration ({k, theta, rng_state});
 Logs one line per iteration to ~/spsa_zug.log (tail -f friendly, same convention
 as the SPRT harness's ~/sprt_<name>.log).
 
+READING THE LOG (do not misread the `score` column):
+  The per-iter `score` = (2*points_plus - games)/games from an 8-GAME match between
+  theta+ and theta-. It is ~95% NOISE (8-game score std ~= 0.25; the signal from the
+  small perturbation between theta+/theta- is ~0.01), so it oscillates around ~0 for
+  the ENTIRE run, iter 1 -> iter N. A near-0 score is NOT a convergence/midpoint
+  signal and NEVER was (it's ~0 from iter 1); a score of exactly 0.000 is just a tied
+  8-game batch and zeroes that iter's theta update. Convergence = the `theta:` values
+  settling + aF/cF decaying toward their end values. The score also says NOTHING about
+  the eventual Elo gain -- only the confirmation SPRT does.
+
 Usage:
     python3 spsa/tune.py --iters 20000 --batch 8
     python3 spsa/tune.py --iters 20000 --batch 8 --resume
