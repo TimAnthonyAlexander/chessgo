@@ -2,6 +2,8 @@
 #include "bitboard.h"
 #include "nnue.h"
 #include "nnue_accumulator.h"
+#include <cstdlib>
+#include <cmath>
 
 using namespace BB;
 
@@ -326,12 +328,58 @@ static int hce_evaluate(const Position& pos) {
     return (pos.side_to_move() == WHITE) ? score : -score;
 }
 
+// ---- Interim material-gradient term (MATGRAD, default OFF) --------------------
+// Our single-output NNUE saturates in clearly-won/lost positions: past ~a rook the
+// per-move material gradient collapses (a 2nd rook adds ~0 cp), so the search can't
+// tell "down a queen" from "down a queen + a rook" and shuffles material away. SF
+// avoids this with a linear psqt head (~half its eval) that never saturates; we have
+// no such head until the two-head retrain. This is the cheap hand-coded stand-in:
+// once |net eval| enters the saturating zone, blend in a small explicit material term
+// so more material always evaluates strictly higher. Inert in normal play (weight 0
+// below T_LO) to avoid double-counting material the net already handles correctly.
+// Constants hand-set; promote to UCI options for SPSA if the SPRT rewards it.
+namespace {
+
+static inline bool matgrad_enabled() {
+    static const bool on = [] { const char* e = getenv("MATGRAD"); return e && e[0] == '1'; }();
+    return on;
+}
+
+// Small per-piece weights (NOT full material values): just enough to order moves the
+// saturated net scores identically (a knight = 24 cp >> the ~12 cp residual flat-noise),
+// while staying negligible next to the net's ~300 cp/piece where the net is still live.
+constexpr int MatGradVal[7] = {0, 8, 24, 24, 40, 72, 0}; // -,P,N,B,R,Q,K
+constexpr int MatGradTLo = 800;   // below this |net|, term is off (net gradient is fine)
+constexpr int MatGradTHi = 1600;  // at/above this |net|, term at full weight (net is flat)
+constexpr int MatGradCap = 400;   // clamp the raw material delta (guards pathological
+                                  // multi-queen imbalances; won't bind in normal decisive play)
+
+// stm-relative gated material term to add onto the net eval.
+int material_gradient(const Position& pos, int netEval) {
+    int a = std::abs(netEval);
+    if (a <= MatGradTLo) return 0;
+    Color us = pos.side_to_move(), them = ~us;
+    int diff = 0;
+    for (int pt = PAWN; pt <= QUEEN; ++pt)
+        diff += MatGradVal[pt] * (pos.count(us, PieceType(pt)) - pos.count(them, PieceType(pt)));
+    if (diff >  MatGradCap) diff =  MatGradCap;
+    if (diff < -MatGradCap) diff = -MatGradCap;
+    const int span = MatGradTHi - MatGradTLo;
+    int wnum = a - MatGradTLo;
+    if (wnum > span) wnum = span;          // linear ramp weight = wnum/span in [0,1]
+    return diff * wnum / span;
+}
+
+} // namespace
+
 // NNUE dispatch: route the static eval through the loaded net when present,
 // else fall back to the hand-crafted eval. Both return stm-relative centipawns.
 int Eval::evaluate(const Position& pos) {
     if (!NNUE::loaded()) return hce_evaluate(pos);
     // In-search: read the incremental accumulator the search maintains on the position.
     // Outside search (no stack attached): the from-scratch net eval.
-    if (NNUE::AccStack* a = pos.nnue_acc()) return a->eval(pos);
-    return NNUE::evaluate(pos);
+    NNUE::AccStack* a = pos.nnue_acc();
+    int v = a ? a->eval(pos) : NNUE::evaluate(pos);
+    if (matgrad_enabled()) v += material_gradient(pos, v);
+    return v;
 }
