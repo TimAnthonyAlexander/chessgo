@@ -390,6 +390,14 @@ constexpr int HceTLo = 800;    // below this |net|, no blend (net resolution is 
 constexpr int HceTHi = 1600;   // at/above, full blend weight
 constexpr int HceNum = 1, HceDen = 3;  // blend ~1/3 of the HCE eval in the saturated zone
 constexpr int HceCap = 300;    // clamp the blend contribution (bounds extreme HCE swings)
+constexpr int HceRootLostThresh = 700; // root net below this (stm losing) arms the blend
+
+// Root-gate flag (per-search, thread-local for Lazy-SMP). Set once at the root by
+// Eval::begin_search: the blend engages ONLY when the ROOT is clearly losing — not at
+// the many transiently-losing NODES a normal search tree contains. A non-lost search
+// thus stays byte-identical to no-blend (that was the source of the standard-play dip:
+// firing at internal losing nodes). Reset every search, so a stale value can't leak.
+thread_local bool g_hceblend_active = false;
 
 // stm-relative gated HCE-resolution term to add onto the net eval. LOSING-SIDE ONLY:
 // the net is strong and trustworthy when clearly WINNING (it converts fine), so we
@@ -398,6 +406,7 @@ constexpr int HceCap = 300;    // clamp the blend contribution (bounds extreme H
 // gives material away. (Blending on the winning side just injected weaker-HCE noise;
 // that was the small standard-play regression.)
 int hce_blend(const Position& pos, int netEval) {
+    if (!g_hceblend_active) return 0;                    // root not lost → never blend (byte-identical)
     if (netEval >= -HceTLo) return 0;                    // not clearly losing → pure net
     int a = -netEval;                                    // depth into the losing zone
     int contrib = hce_evaluate(pos) * HceNum / HceDen;   // full-resolution hand eval, scaled
@@ -423,4 +432,16 @@ int Eval::evaluate(const Position& pos) {
     if (matgrad_enabled())  v += material_gradient(pos, raw);
     if (hceblend_enabled()) v += hce_blend(pos, raw);
     return v;
+}
+
+// HCEBLEND root-gate (see eval.h): arm the blend for this search iff the ROOT is clearly
+// losing. Uses the RAW root eval (no blend). Thread-local, so each Lazy-SMP worker gates
+// independently from its own root copy; disarms when HCEBLEND is off.
+void Eval::begin_search(const Position& rootPos) {
+    if (!hceblend_enabled()) { g_hceblend_active = false; return; }
+    int raw;
+    if (!NNUE::loaded())                              raw = hce_evaluate(rootPos);
+    else if (NNUE::AccStack* a = rootPos.nnue_acc())  raw = a->eval(rootPos);
+    else                                              raw = NNUE::evaluate(rootPos);
+    g_hceblend_active = (raw < -HceRootLostThresh);
 }

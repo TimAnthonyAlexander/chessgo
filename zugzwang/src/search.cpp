@@ -3045,6 +3045,12 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
     bool useAcc = NNUE::loaded();
     if (useAcc) { C.accStack.reset(pos); pos.set_nnue_acc(&C.accStack); }
 
+    // HCEBLEND root-gate: arm the HCE-resolution blend for THIS search only if the root
+    // position is clearly losing (see Eval::begin_search). Keeps non-lost searches — i.e.
+    // all of normal play — byte-identical to no-blend; the blend engages solely when the
+    // actual position we're moving in is lost. Thread-local, so per-worker under Lazy SMP.
+    Eval::begin_search(pos);
+
     // Leading pad is 7 (not just 4) so CONTHISTPLIES can safely dereference
     // (ss - 6) at ply 0..5 without underflowing the array — mirrors SF's own
     // reasoning for a 7-slot pad (~sf18-arm/src/search.cpp:275-279: "(ss - 7)
