@@ -382,7 +382,10 @@ int material_gradient(const Position& pos, int netEval) {
 // MATGRAD; inert (byte-identical) in normal play. hce_evaluate needs Eval::init(),
 // which runs unconditionally at startup, so it is safe to call with NNUE loaded.
 static inline bool hceblend_enabled() {
-    static const bool on = [] { const char* e = getenv("HCEBLEND"); return e && e[0] == '1'; }();
+    // Default ON (kill-switch, like LAZYACC/THREATDELTA). Root-gated: byte-identical in
+    // normal play (SPRT +0.5 +/- 9 @1372g), engages HCE resistance only when the actual
+    // position is lost. HCEBLEND=0 disables.
+    static const bool on = [] { const char* e = getenv("HCEBLEND"); return !(e && e[0] == '0'); }();
     return on;
 }
 
