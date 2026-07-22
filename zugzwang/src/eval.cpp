@@ -391,10 +391,15 @@ constexpr int HceTHi = 1600;   // at/above, full blend weight
 constexpr int HceNum = 1, HceDen = 3;  // blend ~1/3 of the HCE eval in the saturated zone
 constexpr int HceCap = 300;    // clamp the blend contribution (bounds extreme HCE swings)
 
-// stm-relative gated HCE-resolution term to add onto the net eval.
+// stm-relative gated HCE-resolution term to add onto the net eval. LOSING-SIDE ONLY:
+// the net is strong and trustworthy when clearly WINNING (it converts fine), so we
+// leave winning-side play to the pure net and blend HCE resolution in only when the
+// side to move is clearly LOSING — that's the sole regime where the net flails and
+// gives material away. (Blending on the winning side just injected weaker-HCE noise;
+// that was the small standard-play regression.)
 int hce_blend(const Position& pos, int netEval) {
-    int a = std::abs(netEval);
-    if (a <= HceTLo) return 0;
+    if (netEval >= -HceTLo) return 0;                    // not clearly losing → pure net
+    int a = -netEval;                                    // depth into the losing zone
     int contrib = hce_evaluate(pos) * HceNum / HceDen;   // full-resolution hand eval, scaled
     if (contrib >  HceCap) contrib =  HceCap;
     if (contrib < -HceCap) contrib = -HceCap;
