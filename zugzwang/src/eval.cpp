@@ -370,6 +370,40 @@ int material_gradient(const Position& pos, int netEval) {
     return diff * wnum / span;
 }
 
+// ---- HCE-resolution blend (HCEBLEND, default OFF) -----------------------------
+// MATGRAD only restores a *material* gradient, but the net loses ALL resolution when
+// saturated — including positional (e.g. a knight on a2 (dying) vs a6 (passive) is
+// equal material, yet HCE rates a2 ~41 cp worse via PST+mobility while the net calls
+// them identical). So when the net saturates, blend in a fraction of the full
+// hand-crafted eval (material + PST + mobility + king-safety) — which, being a linear
+// sum, never saturates and keeps full resolution. This is the "route to HCE when the
+// NNUE is in a known-weak regime" idea (cf. SF's smallnet routing on material
+// imbalance), instance #1 = the clearly-won/lost regime. Same saturation ramp as
+// MATGRAD; inert (byte-identical) in normal play. hce_evaluate needs Eval::init(),
+// which runs unconditionally at startup, so it is safe to call with NNUE loaded.
+static inline bool hceblend_enabled() {
+    static const bool on = [] { const char* e = getenv("HCEBLEND"); return e && e[0] == '1'; }();
+    return on;
+}
+
+constexpr int HceTLo = 800;    // below this |net|, no blend (net resolution is fine)
+constexpr int HceTHi = 1600;   // at/above, full blend weight
+constexpr int HceNum = 1, HceDen = 3;  // blend ~1/3 of the HCE eval in the saturated zone
+constexpr int HceCap = 300;    // clamp the blend contribution (bounds extreme HCE swings)
+
+// stm-relative gated HCE-resolution term to add onto the net eval.
+int hce_blend(const Position& pos, int netEval) {
+    int a = std::abs(netEval);
+    if (a <= HceTLo) return 0;
+    int contrib = hce_evaluate(pos) * HceNum / HceDen;   // full-resolution hand eval, scaled
+    if (contrib >  HceCap) contrib =  HceCap;
+    if (contrib < -HceCap) contrib = -HceCap;
+    const int span = HceTHi - HceTLo;
+    int wnum = a - HceTLo;
+    if (wnum > span) wnum = span;
+    return contrib * wnum / span;
+}
+
 } // namespace
 
 // NNUE dispatch: route the static eval through the loaded net when present,
@@ -380,6 +414,8 @@ int Eval::evaluate(const Position& pos) {
     // Outside search (no stack attached): the from-scratch net eval.
     NNUE::AccStack* a = pos.nnue_acc();
     int v = a ? a->eval(pos) : NNUE::evaluate(pos);
-    if (matgrad_enabled()) v += material_gradient(pos, v);
+    const int raw = v;   // gate both correction terms on the raw net eval
+    if (matgrad_enabled())  v += material_gradient(pos, raw);
+    if (hceblend_enabled()) v += hce_blend(pos, raw);
     return v;
 }
