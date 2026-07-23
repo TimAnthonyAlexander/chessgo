@@ -485,12 +485,89 @@ struct Context {
         // to the old engine only at rule50=0 (early game); damps eval as the shuffle climbs.
         bool rule50Damp    = true;
         int  rule50DampDiv = 199;    // SF's divisor (SP uses 200); higher = gentler
+        // ---- EVALCOMPLEXITY (2026-07-24, eval-mine): SF evaluate.cpp:76-78 shrinks the eval
+        // toward 0 by nnueComplexity=|psqt-positional| (v -= v*complexity/18236) — a "distrust
+        // the static read when the two heads disagree" term. zug's single-scalar net has no
+        // psqt/positional split, but |correction()| (the corrhist residual, already computed
+        // in corrected_eval) is a cheap always-available proxy for that same uncertainty. Off
+        // -> no shrink, byte-identical. env EVALCOMPLEXITY=1. Div in zug's cp corr-scale
+        // (|correction| maxes ~263 cp): 2600 -> ~10% max shrink; SPSA-tunable. NOT the washed
+        // rule50+material combo (W12) nor RFP #20 (that's a search margin) — this changes the
+        // returned static eval value itself, a distinct site/mechanism.
+        bool evalComplexity    = false;
+        int  evalComplexityDiv = 2600;
         // ---- NMPTTVETO (2026-07-20, fresh, SP search.cpp:872): skip the null-move probe
         // entirely when the TT already says this node fails LOW below beta (upper-bound
         // entry with score < beta) — the probe is doomed, don't spend a search on it. zug's
         // NMP has the cutNode gate (shipped) but no TT-bound veto. Cheap, ttHit/tte/ttValue
         // already in scope at the NMP gate. Default OFF (veto never fires); env NMPTTVETO=1.
         bool nmpTtVeto = false;
+        // ---- SINGTTPV (2026-07-23, sf-sp-search-backlog.md #14, SF search.cpp:1119,1127 /
+        // SP search.cpp:1081,1097): singular gate/margin ttPv-dependence. SF requires
+        // depth >= 6 + ss->ttPv (one ply deeper on a former-PV node) and widens singularBeta
+        // by an extra (75*(ttPv && !PvNode))*depth/60 term on top of its base coefficient 53
+        // (~1.42x). zug's singular gate is flat `depth >= singularMinDepth` and its margin is
+        // `singularMargin*depth/16` (default 35, giving ~2*depth) — no ttPv term in either.
+        // Port: +1 to the min-depth gate on a former-PV node, and subtract an extra
+        // singTtPvCoeff*depth/16 from singularBeta under the same ttPv&&!PvNode condition.
+        // singTtPvCoeff ~= singularMargin*1.42 ~= 35*1.42 ~= 50, matching SF's own
+        // base/ttPv-term ratio. Default OFF; env SINGTTPV=1. OFF path: gate and margin
+        // exactly as today (the +0/-0 terms vanish).
+        bool singTtPv      = false;
+        int  singTtPvCoeff = 50;
+        // ---- RFPQUAD (2026-07-23, sf-sp-search-backlog.md #20, Stormphrax search.cpp:
+        // 838-853): RFP quadratic depth term. SP's RFP margin is `rfpLinear(85)*depth +
+        // rfpQuad(7)*depth² - ...` — zug's is purely linear (rfpMargin*(depth-improving),
+        // search.cpp ~1912). Port: add rfpQuadCoeff*depth*depth on top. SP's quad/linear
+        // ratio is 7/85 ~= 0.082; applied to zug's rfpMargin default (84) gives
+        // ~84*0.082 ~= 6.9 -> a conservative first-cut rfpQuadCoeff of 4 (the term grows as
+        // depth², so even a modest coefficient compounds fast toward zug's RFP depth cap of
+        // 8-13). Default OFF; env RFPQUAD=1. OFF path: term is 0, margin unchanged.
+        bool rfpQuad      = false;
+        int  rfpQuadCoeff = 4;
+        // ---- NONLMRRED (2026-07-23, sf-sp-search-backlog.md #12, SF search.cpp:1263-1273):
+        // non-LMR fallback reduction. SF computes a single accumulated `r` (x1024 units) for
+        // EVERY move regardless of whether it takes the LMR branch or the plain full-depth
+        // "Step 18" branch; moves that skip LMR still get `newDepth -= (r>3957) +
+        // (r>5654 && newDepth>2)` shaved off (plus `r += 1140` first when there's no ttMove).
+        // zug's non-LMR else-branch (search.cpp ~2414, `doFullSearch = !PvNode ||
+        // moveCount>1`) searches at plain newDepth — it never computes `r` outside the LMR
+        // gate. Port: when a move takes the non-LMR path, compute a LOCAL duplicate of the
+        // same r formula the LMR branch uses (same fine terms, same tables — see the
+        // r-assembly at search.cpp ~2304-2402) and shave newDepth by the same two coarse
+        // thresholds. Implemented as a self-contained duplicate, NOT a hoist, per the task's
+        // risk guidance: the existing LMR branch's r computation is completely untouched, so
+        // its byte-identical behavior can't regress from this change. Thresholds start at
+        // SF's own values (already x1024-scale-compatible with zug's r convention). Default
+        // OFF; env NONLMRRED=1. OFF path: the non-LMR full-search call is unchanged (rd
+        // stays newDepth).
+        bool nonLmrRed    = false;
+        int  nonLmrNoTtR  = 1140;
+        int  nonLmrT1     = 3957;
+        int  nonLmrT2     = 5654;
+        // ---- OPTIMISM (2026-07-23, sf-sp-search-backlog.md #17, Stormphrax search.cpp:
+        // 463-468 + eval/eval.cpp:32-67): single-scalar root-score-driven optimism, blended
+        // additively into corrected_eval. SP tracks a running averageScore per root iteration
+        // and derives a saturating scalar `optimismScale*avg/(|avg|+optimismStretch)`, applied
+        // +side-to-move at the root / -other; SP then blends
+        // `optimism*(optBase + npMat*optMatScale/1024)` into the eval — crucially no
+        // psqt/positional split needed (unlike SF's version, the reason optimism was shelved
+        // before — see eval-postproc-optimism-rule50.md). zug's net is exactly SP's
+        // single-scalar shape, so this reopens that door.
+        // Calibration (conservative, first cut — SPSA later): optimismScale=120,
+        // optimismStretch=100 saturate the raw optimism term at +-120 as |avg| grows large
+        // (SP's own 147/101). optBase=64 plus a material-proportional optMatScale=20 (read as
+        // npMat*optMatScale/1024) and optDiv=800 together cap the additive eval nudge at
+        // ~9.6cp (near-zero non-pawn material) to ~19cp (full non-pawn material) at
+        // optimism's own saturation point — a modest tilt, not a rewrite of the eval. Default
+        // OFF; env OPTIMISM=1. OFF path: corrected_eval is unchanged (optimism_term is never
+        // called), and the running-average update in the ID loop is skipped entirely.
+        bool optimism        = false;
+        int  optimismScale   = 120;
+        int  optimismStretch = 100;
+        int  optBase         = 64;
+        int  optMatScale     = 20;
+        int  optDiv          = 800;
         // ---- SYZYGY (2026-07-20): Syzygy tablebase probing — WDL at internal nodes +
         // DTZ at the root. Ported from gomachine. SHIPPED default-ON, path-presence gated:
         // every hook also requires TB::loaded(), so a box WITHOUT a resolvable `syzygy/`
@@ -759,7 +836,23 @@ struct Context {
             if (const char* e = getenv("QSMOVECAPN")) { int v = atoi(e); if (v >= 1) qsMoveCapN = v; }
             if (off("RULE50DAMP")) rule50Damp = false; // shipped default-on; kill-switch
             if (const char* e = getenv("RULE50DAMPDIV")) { int v = atoi(e); if (v > 0) rule50DampDiv = v; }
+            if (on("EVALCOMPLEXITY")) evalComplexity = true;
+            if (const char* e = getenv("EVALCOMPLEXITYDIV")) { int v = atoi(e); if (v > 0) evalComplexityDiv = v; }
             if (on("NMPTTVETO")) nmpTtVeto = true;
+            if (on("SINGTTPV")) singTtPv = true;
+            if (const char* e = getenv("SINGTTPVCOEFF")) { int v = atoi(e); if (v >= 0) singTtPvCoeff = v; }
+            if (on("RFPQUAD")) rfpQuad = true;
+            if (const char* e = getenv("RFPQUADCOEFF")) { int v = atoi(e); if (v >= 0) rfpQuadCoeff = v; }
+            if (on("NONLMRRED")) nonLmrRed = true;
+            if (const char* e = getenv("NONLMRNOTTR")) { int v = atoi(e); if (v >= 0) nonLmrNoTtR = v; }
+            if (const char* e = getenv("NONLMRT1")) { int v = atoi(e); if (v >= 0) nonLmrT1 = v; }
+            if (const char* e = getenv("NONLMRT2")) { int v = atoi(e); if (v >= 0) nonLmrT2 = v; }
+            if (on("OPTIMISM")) optimism = true;
+            if (const char* e = getenv("OPTIMISMSCALE"))   { int v = atoi(e); if (v >= 0) optimismScale = v; }
+            if (const char* e = getenv("OPTIMISMSTRETCH")) { int v = atoi(e); if (v >= 1) optimismStretch = v; }
+            if (const char* e = getenv("OPTBASE"))         { int v = atoi(e); if (v >= 0) optBase = v; }
+            if (const char* e = getenv("OPTMATSCALE"))     { int v = atoi(e); if (v >= 0) optMatScale = v; }
+            if (const char* e = getenv("OPTDIV"))          { int v = atoi(e); if (v > 0) optDiv = v; }
             if (off("SYZYGY")) syzygy = false; // shipped default-on; kill-switch (path-gated by TB::loaded())
             if (const char* e = getenv("MOVEOVERHEAD")) { int v = atoi(e); if (v >= 0) moveOverhead = v; }
             if (const char* e = getenv("CONTEMPT")) contempt = atoi(e); // cp; 0 = off
@@ -883,6 +976,13 @@ struct Context {
     int     threadIdx = 0;
     Move    rootBestMove = MOVE_NONE;
     int     rootBestScore = 0;
+    // OPTIMISM (backlog #17): root side-to-move + a running EMA of the completed root
+    // score across ID iterations, both reset in start() and consumed only by
+    // optimism_term()/corrected_eval() when Tune::optimism is on. Harmless (never read,
+    // and the ID-loop update is skipped) when the flag is off.
+    Color   rootStm = WHITE;
+    int     rootAvgScore = 0;
+    bool    rootAvgInit = false;
     int     rootDelta = 0; // ROOTDELTALMR: root aspiration window width (beta-alpha), reset
                             // immediately before every root negamax<true> call, including each
                             // aspiration re-search after widening (SF search.cpp:374, inside the
@@ -1040,6 +1140,7 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     else if (name == "PcmDiv")         tune.pcmDiv         = clamp(value, 512, 16384);
     else if (name == "QsMoveCapN")     tune.qsMoveCapN     = clamp(value, 1, 8);
     else if (name == "Rule50DampDiv")  tune.rule50DampDiv  = clamp(value, 80, 400);
+    else if (name == "EvalComplexityDiv") tune.evalComplexityDiv = clamp(value, 400, 20000);
     else if (name == "MoveOverhead")   tune.moveOverhead   = clamp(value, 0, 5000);
     else if (name == "Contempt")       tune.contempt       = clamp(value, -1000, 1000);
     else if (name == "TtCutBonusNum")  tune.ttCutBonusNum  = clamp(value, 0, 8);
@@ -1052,6 +1153,18 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     else if (name == "FutNoMoveBonus") tune.futNoMoveBonus = clamp(value, 0, 200);
     else if (name == "FutAlphaBonus")  tune.futAlphaBonus  = clamp(value, 0, 200);
     else if (name == "TtPvFailLowR")   tune.ttPvFailLowR   = clamp(value, 0, 2048);
+    // ---- SINGTTPV / RFPQUAD / NONLMRRED / OPTIMISM constants (2026-07-23, sf-sp-search-
+    // backlog.md #14/#20/#12/#17) — only read when the owning flag is on. ----
+    else if (name == "SingTtPvCoeff")  tune.singTtPvCoeff  = clamp(value, 0, 200);
+    else if (name == "RfpQuadCoeff")   tune.rfpQuadCoeff   = clamp(value, 0, 30);
+    else if (name == "NonLmrNoTtR")    tune.nonLmrNoTtR    = clamp(value, 0, 4096);
+    else if (name == "NonLmrT1")       tune.nonLmrT1       = clamp(value, 0, 12288);
+    else if (name == "NonLmrT2")       tune.nonLmrT2       = clamp(value, 0, 12288);
+    else if (name == "OptimismScale")    tune.optimismScale    = clamp(value, 0, 400);
+    else if (name == "OptimismStretch")  tune.optimismStretch  = clamp(value, 1, 400);
+    else if (name == "OptBase")          tune.optBase          = clamp(value, 0, 400);
+    else if (name == "OptMatScale")      tune.optMatScale      = clamp(value, 0, 200);
+    else if (name == "OptDiv")           tune.optDiv           = clamp(value, 100, 4000);
     // LmrBase/LmrDiv: wire value is the double x LMR_DOUBLE_SCALE (search.h) — see the
     // Tune::lmrBase/lmrDiv comment. Clamp in wire units, convert on the way in.
     else if (name == "LmrBase")        tune.lmrBase        = clamp(value, 3000, 15000) / double(LMR_DOUBLE_SCALE);
@@ -1129,14 +1242,51 @@ long long correction_raw(const Context& C, const Position& pos, const Stack* ss)
     return cv;
 }
 
+// OPTIMISM (backlog #17, Stormphrax search.cpp:463-468 + eval/eval.cpp:32-67): a small
+// per-side non-pawn-material figure feeding the material-proportional half of the
+// optimism blend (SP's npMat). Values mirror the PieceVal[7] table defined later in this
+// file (search.cpp: N=320,B=330,R=500,Q=900) — duplicated here as a tiny local helper so
+// optimism_term can sit next to corrected_eval, ahead of PieceVal's own declaration.
+static inline int optimism_non_pawn_material(const Position& pos, Color c) {
+    return 320 * pos.count(c, KNIGHT) + 330 * pos.count(c, BISHOP)
+         + 500 * pos.count(c, ROOK)   + 900 * pos.count(c, QUEEN);
+}
+
+// SP's saturating single-scalar optimism, additively blended: `optimism =
+// optimismScale*avg/(|avg|+optimismStretch)` (avg = C.rootAvgScore, a running EMA of the
+// completed root score across ID iterations — see the ID loop's update, only maintained
+// when Tune::optimism is on), then `term = optimism*(optBase + npMat*optMatScale/1024) /
+// optDiv`, signed + for the root side to move, - for the opponent (SP: +side-to-move at
+// the root / -other). Only called from corrected_eval when Tune::optimism is on.
+int optimism_term(const Context& C, const Position& pos) {
+    int avg = C.rootAvgScore;
+    if (avg == 0) return 0;
+    int optimism = C.tune.optimismScale * avg / (std::abs(avg) + C.tune.optimismStretch);
+    Color us = pos.side_to_move();
+    int npMat = optimism_non_pawn_material(pos, us);
+    int factor = C.tune.optBase + npMat * C.tune.optMatScale / 1024;
+    int term = optimism * factor / C.tune.optDiv;
+    return (us == C.rootStm) ? term : -term;
+}
+
 // Applies the learned correction to a raw static eval and clamps well clear of
 // mate scores (SF's to_corrected_static_eval). With CorrHist off, returns
 // rawEval untouched — CORRHIST=0 must reproduce the pre-CorrHist search exactly.
+// NOTE: OPTIMISM (below) is applied inside this same corrHist-gated block — like
+// RULE50DAMP above it, it is a no-op whenever CorrHist is off (an existing, documented
+// interaction of this function's early-return shape, not a new gap).
 int corrected_eval(const Context& C, const Position& pos, const Stack* ss, int rawEval) {
     if (!C.tune.corrHist) return rawEval;
-    int v = rawEval + correction(C, pos, ss);
+    int corr = correction(C, pos, ss);
+    int v = rawEval + corr;
+    // EVALCOMPLEXITY (see Tune::evalComplexity): distrust the static read when the corrhist
+    // residual is large — shrink v toward 0 by |corr| (proxy for SF's nnueComplexity). Off
+    // -> no change (v == rawEval + correction(...), byte-identical to before this edit).
+    if (C.tune.evalComplexity) v -= v * std::abs(corr) / C.tune.evalComplexityDiv;
     // #3 RULE50DAMP (see Tune::rule50Damp): shrink eval as the shuffle counter climbs.
     if (C.tune.rule50Damp) v -= v * pos.rule50_count() / C.tune.rule50DampDiv;
+    // OPTIMISM: off -> optimism_term is never called, byte-identical.
+    if (C.tune.optimism) v += optimism_term(C, pos);
     if (v >= VALUE_MATE_IN_MAX_PLY) v = VALUE_MATE_IN_MAX_PLY - 1;
     else if (v <= -VALUE_MATE_IN_MAX_PLY) v = -VALUE_MATE_IN_MAX_PLY + 1;
     return v;
@@ -1908,8 +2058,11 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         // RFPTTHIT: SF drops futilityMult by 23 on a TT miss (!ttHit) → prune more when the
         // eval is uncorroborated. Off → rfpCoeff == rfpMargin → byte-identical.
         int rfpCoeff = C.tune.rfpMargin - ((C.tune.rfpTtHit && !ttHit) ? C.tune.rfpTtHitCoeff : 0);
+        // RFPQUAD (backlog #20): Stormphrax-shape quadratic depth term on top of the linear
+        // margin. Off -> 0, byte-identical.
+        int rfpQuadTerm = C.tune.rfpQuad ? C.tune.rfpQuadCoeff * depth * depth : 0;
         if (depth <= rfpDepthCap && !(C.tune.rfpSoft && quietTT) && !(C.tune.ttPvOn && ss->ttPv)
-            && eval - rfpCoeff * (depth - improving) - rfpOwTerm - corrMarginTerm >= beta
+            && eval - rfpCoeff * (depth - improving) - rfpQuadTerm - rfpOwTerm - corrMarginTerm >= beta
             && eval < VALUE_MATE_IN_MAX_PLY)
             return C.tune.rfpSoft ? (2 * beta + eval) / 3 : eval;
 
@@ -2217,11 +2370,18 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         }
 
         // Singular extension
-        if (!rootNode && depth >= C.tune.singularMinDepth && m == ttMove && !excluded
+        // SINGTTPV (backlog #14): a former-PV node needs one more ply of depth before the
+        // gate opens (SF: depth >= 6 + ss->ttPv). Off -> +0, byte-identical gate.
+        if (!rootNode && depth >= C.tune.singularMinDepth + ((C.tune.singTtPv && ss->ttPv) ? 1 : 0)
+            && m == ttMove && !excluded
             && tte->depth >= depth - 3 && (tte->bound() & BOUND_LOWER)
             && std::abs(ttValue) < VALUE_MATE_IN_MAX_PLY
             && !(C.tune.shuffleGuard && is_shuffling(m, ss, pos))) {
             int singularBeta = ttValue - C.tune.singularMargin * depth / 16; // default 32 -> exactly 2*depth
+            // SINGTTPV margin term (SF search.cpp:1127 / SP search.cpp:1097): widen the
+            // margin further on a former-PV, non-PV node. Off -> no-op, byte-identical.
+            if (C.tune.singTtPv && ss->ttPv && !PvNode)
+                singularBeta -= C.tune.singTtPvCoeff * depth / 16;
             ss->excludedMove = m;
             int s = negamax<false>(C, pos, ss, singularBeta - 1, singularBeta, (depth - 1) / 2, cutNode);
             ss->excludedMove = MOVE_NONE;
@@ -2291,6 +2451,10 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         // below — every capture/promotion, low-depth move, or early move count),
         // `score` has not been assigned yet, so doDeeper must NOT read it.
         bool wasLMRReduced = false;
+        // NONLMRRED (backlog #12): 0/1/2-ply coarse reduction applied to the non-LMR
+        // full-search depth below, computed inside the `else` branch. 0 (no-op) unless
+        // Tune::nonLmrRed is on AND this move actually took the non-LMR path.
+        int nonLmrRedPlies = 0;
 
         // Late Move Reductions
         // captHistPrune extends LMR to captures too (SF applies the same reduction
@@ -2413,6 +2577,64 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             wasLMRReduced = doFullSearch;
         } else {
             doFullSearch = !PvNode || moveCount > 1;
+            // NONLMRRED (backlog #12, SF search.cpp:1263-1273): moves that skip the LMR
+            // branch above still get a coarse reduction from a LOCALLY re-derived `r` —
+            // SF computes ONE `r` per move and reads it in both branches, but this is
+            // implemented as a self-contained duplicate (not a hoist out of the LMR `if`
+            // above) so the LMR branch's own byte-identical-off behavior can't regress.
+            // Every term here mirrors the LMR branch's r-assembly exactly (same tables,
+            // same flags); only the final step differs — SF thresholds r into a 0/1/2-ply
+            // depth cut instead of a per-ply `r/1024` reduction. Off, or when this move
+            // didn't reach the non-LMR path, nonLmrRedPlies stays 0 (no-op).
+            if (C.tune.nonLmrRed && doFullSearch) {
+                int r2 = C.Reductions[std::min(depth, 63)][std::min(moveCount, 63)] * 1024;
+                if (!PvNode) r2 += 1024;
+                if (!improving) r2 += 1024;
+                if (cutNode) r2 += 1024;
+                if (C.tune.ttCapR && ttCapture) r2 += 1024;
+                if (C.tune.mcLinR) r2 -= (moveCount * 73 / 1024) * 1024;
+                if (givesCheck) r2 -= 1024;
+                if (C.tune.ttPvOn && ss->ttPv) r2 -= 1024;
+                if (C.tune.ttPvFailLow && ss->ttPv && ttHit && ttValue <= alpha) r2 += C.tune.ttPvFailLowR;
+                if (C.tune.cutoffCnt) {
+                    if (C.tune.cutoffGrade) {
+                        if ((ss + 1)->cutoffCnt > 1)
+                            r2 += C.tune.cutoffGradeBase + C.tune.cutoffGradeStep * ((ss + 1)->cutoffCnt > 2);
+                    } else if ((ss + 1)->cutoffCnt > 3) {
+                        r2 += 1024;
+                    }
+                }
+                int hist2;
+                if (!isQuiet) {
+                    PieceType victim = (type_of_move(m) == EN_PASSANT)
+                        ? PAWN : type_of(pos.piece_on(to_sq(m)));
+                    hist2 = PieceVal[victim] * 29 + C.captHist[piece_dense(mover)][to_sq(m)][victim];
+                } else if (C.tune.lmrHistCache && C.tune.contHist && (cur - 1)->histScore != HIST_NONE) {
+                    hist2 = (cur - 1)->histScore;
+                } else {
+                    hist2 = C.history[us][from_sq(m)][to_sq(m)];
+                    if (C.tune.contHist) {
+                        int off = piece_dense(mover) * SQUARE_NB + to_sq(m);
+                        if (ch1) hist2 += ch1[off];
+                        if (ch2) hist2 += ch2[off];
+                        if (ch3) hist2 += ch3[off];
+                        if (ch4) hist2 += ch4[off];
+                        if (ch6) hist2 += ch6[off];
+                    }
+                }
+                r2 -= (hist2 / 8000) * 1024;
+                if (C.tune.corrMargin)
+                    r2 -= (int)(std::abs(correction_raw(C, pos, ss)) / C.tune.corrMarginDiv);
+                if (C.tune.allNodeLmr && allNode) r2 += r2 / (depth + C.tune.allNodeDiv);
+                if (C.tune.rootDeltaLmr) {
+                    int delta = beta - alpha;
+                    r2 -= delta * C.tune.rootDeltaCoeff / std::max(1, C.rootDelta);
+                }
+                // SF search.cpp:1265: bump r when there's no ttMove, then (1273) threshold
+                // it into the 0/1/2-ply cut applied to the plain full-depth search below.
+                if (!ttMove) r2 += C.tune.nonLmrNoTtR;
+                nonLmrRedPlies = (r2 > C.tune.nonLmrT1) + (r2 > C.tune.nonLmrT2 && newDepth > 2);
+            }
         }
 
         if (doFullSearch) {
@@ -2427,6 +2649,14 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             if (C.tune.doDeeper && wasLMRReduced) {
                 if (score > bestValue + 44 + 4 * newDepth) rd = newDepth + 1;
                 else if (score < bestValue + newDepth) rd = std::max(1, newDepth - 1);
+            } else if (C.tune.nonLmrRed && !wasLMRReduced) {
+                // NONLMRRED: apply the coarse 0/1/2-ply cut computed in the else branch
+                // above. wasLMRReduced is false here by construction (mutually exclusive
+                // with the doDeeper branch, which requires wasLMRReduced), and
+                // nonLmrRedPlies is 0 unless the flag is on — SF doesn't floor this at 1
+                // either (its Depth is signed; a negative/zero result falls straight into
+                // qsearch, exactly zug's `depth <= 0` entry check), so no clamp here.
+                rd = newDepth - nonLmrRedPlies;
             }
             score = -negamax<false>(C, pos, ss + 1, -alpha - 1, -alpha, rd, !cutNode);
             // POSTLMRCH (SF search.cpp:1259, VERIFIED — see Tune::postLmrCh for the
@@ -3034,6 +3264,12 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
         Color rootSide = pos.side_to_move();
         C.contempt[rootSide]  = C.tune.contempt;
         C.contempt[~rootSide] = -C.tune.contempt;
+        // OPTIMISM: capture the root side + reset the running score average for THIS
+        // search. Cheap to always set (mirrors contempt's own precedent above); the
+        // average itself is only ever read/updated when Tune::optimism is on.
+        C.rootStm = rootSide;
+        C.rootAvgScore = 0;
+        C.rootAvgInit = false;
     }
     if (resetShared) C.tt.new_search();
 
@@ -3153,6 +3389,14 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
         if (C.stop && depth > 1) break;
 
         prevScore = score;
+        // OPTIMISM: maintain a running EMA of the completed root score, consumed by
+        // optimism_term() inside corrected_eval(). Off -> this update is skipped
+        // entirely (Context::rootAvgScore/rootAvgInit stay at their start()-reset
+        // values, never read).
+        if (C.tune.optimism) {
+            if (!C.rootAvgInit) { C.rootAvgScore = score; C.rootAvgInit = true; }
+            else C.rootAvgScore += (score - C.rootAvgScore) / 8;
+        }
         lastBest = C.rootBestMove;
         if (!C.limits.silent) print_pv(C, pos, ss, depth, score, C.nodeCount);
 

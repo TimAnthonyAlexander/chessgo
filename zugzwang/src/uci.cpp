@@ -325,6 +325,7 @@ int uci_main() {
             std::cout << "option name QsMoveCapN type spin default 2 min 1 max 8\n";
             // RULE50DAMP (2026-07-20, only read when env RULE50DAMP=1) — SF evaluate.cpp:83.
             std::cout << "option name Rule50DampDiv type spin default 199 min 80 max 400\n";
+            std::cout << "option name EvalComplexityDiv type spin default 2600 min 400 max 20000\n";
             // MoveOverhead (2026-07-20): per-move latency slack (ms), clock-mode TM only.
             // Default 40 = zug's old hardcoded literal → byte-identical. Lower (e.g. 10, SF's
             // default) for low-latency local CCRL; raise for networked play to never flag.
@@ -349,6 +350,24 @@ int uci_main() {
             std::cout << "option name FutAlphaBonus type spin default 41 min 0 max 200\n";
             // TTPVFAILLOW r (2026-07-21, only read when env TTPVFAILLOW=1) — SP ttpv-fail-low LMR term.
             std::cout << "option name TtPvFailLowR type spin default 1024 min 0 max 2048\n";
+            // SINGTTPV coeff (2026-07-23, only read when env SINGTTPV=1) — sf-sp-search-
+            // backlog.md #14, SF search.cpp:1119,1127 singular ttPv margin widening.
+            std::cout << "option name SingTtPvCoeff type spin default 50 min 0 max 200\n";
+            // RFPQUAD coeff (2026-07-23, only read when env RFPQUAD=1) — sf-sp-search-
+            // backlog.md #20, Stormphrax search.cpp:838-853 RFP quadratic depth term.
+            std::cout << "option name RfpQuadCoeff type spin default 4 min 0 max 30\n";
+            // NONLMRRED constants (2026-07-23, only read when env NONLMRRED=1) — sf-sp-
+            // search-backlog.md #12, SF search.cpp:1263-1273 non-LMR fallback reduction.
+            std::cout << "option name NonLmrNoTtR type spin default 1140 min 0 max 4096\n";
+            std::cout << "option name NonLmrT1 type spin default 3957 min 0 max 12288\n";
+            std::cout << "option name NonLmrT2 type spin default 5654 min 0 max 12288\n";
+            // OPTIMISM constants (2026-07-23, only read when env OPTIMISM=1) — sf-sp-search-
+            // backlog.md #17, Stormphrax search.cpp:463-468 single-scalar root optimism.
+            std::cout << "option name OptimismScale type spin default 120 min 0 max 400\n";
+            std::cout << "option name OptimismStretch type spin default 100 min 1 max 400\n";
+            std::cout << "option name OptBase type spin default 64 min 0 max 400\n";
+            std::cout << "option name OptMatScale type spin default 20 min 0 max 200\n";
+            std::cout << "option name OptDiv type spin default 800 min 100 max 4000\n";
             // Ponder (2026-07-20): advertises pondering support so a GUI/CCRL will send
             // `go ponder`. Not read by the engine — pondering is honored unconditionally on
             // `go ponder`; this flag only tells the GUI the feature exists.
