@@ -557,6 +557,7 @@ export default function LiveGame() {
                                 fen={g.fen}
                                 myTurn={!g.ended && g.sideToMove === g.color}
                                 isDuck={isDuck}
+                                isAntichess={isAntichess}
                                 duck={g.duck ?? null}
                                 onHint={setBestHint}
                             />

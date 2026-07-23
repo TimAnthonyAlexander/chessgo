@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { Box, Switch, Typography } from '@mui/material'
-import { analyze, duckEval, type Analysis, type Color } from '../api/client'
+import { analyze, duckEval, antichessEval, type Analysis, type Color } from '../api/client'
 import type { Square } from '../lib/chess'
 import { pvToSan } from '../lib/analysisTree'
 import { MoveSan } from './MoveSan'
@@ -87,16 +87,23 @@ function saveEnabled(on: boolean): void {
 // exactly the square the duck now blocks — so in duck mode we query the DUCK engine
 // (`/duck/analyze`) instead. Its composite best move's SAN already carries the duck
 // glyph (e.g. "Nf6 🦆e2"), so the readout surfaces the best duck placement too.
+//
+// Antichess: captures are compulsory and material is inverted, so the standard
+// engine's "best move" is frequently ILLEGAL here (and points the wrong way). In
+// antichess mode we query the ANTICHESS engine (`/antichess/analyze`) instead, which
+// returns a full-strength best LEGAL move + eval.
 export default function AdminBestMove({
     fen,
     myTurn,
     isDuck = false,
+    isAntichess = false,
     duck = null,
     onHint,
 }: {
     fen: string
     myTurn: boolean
     isDuck?: boolean
+    isAntichess?: boolean
     duck?: string | null
     /** Report the current best-move squares so the page can draw board hint dots.
      * Called with null whenever there's nothing to show (disabled, off-turn, error). */
@@ -147,6 +154,16 @@ export default function AdminBestMove({
                       hint: hintFromUci(d.bestmove),
                       pv: [],
                   }))
+                : isAntichess
+                ? antichessEval(fen, { movetime, signal: controller.signal }).then((a) => ({
+                      san: a.bestSan ?? a.bestmove ?? '—',
+                      eval: a.eval,
+                      depth: null,
+                      // Antichess best move is a plain UCI (with a `k` king-promo suffix);
+                      // hintFromUci reads from/to off the first 4 chars either way.
+                      hint: hintFromUci(a.bestmove),
+                      pv: [],
+                  }))
                 : analyze(fen, { movetime, signal: controller.signal }).then((a) => ({
                       san: bestMoveSan(fen, a.bestmove),
                       eval: a.eval,
@@ -188,7 +205,7 @@ export default function AdminBestMove({
             cancelled = true
             controller.abort()
         }
-    }, [enabled, fen, myTurn, isDuck, duck])
+    }, [enabled, fen, myTurn, isDuck, isAntichess, duck])
 
     return (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>

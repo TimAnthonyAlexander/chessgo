@@ -463,7 +463,7 @@ export default function BotGame() {
         : over
           ? resigned
               ? `You resigned · ${resultScore}`
-              : `${game ? statusLabel(game.status) : ''}${resultScore ? ` · ${resultScore}` : ''}`
+              : `${game ? statusLabel(game.status, { variant: game.variant, fen: game.fen }) : ''}${resultScore ? ` · ${resultScore}` : ''}`
           : thinking
             ? 'Bot is thinking…'
             : game
@@ -820,7 +820,12 @@ function MovePanel({
                 </Box>
 
                 {isAdmin && (
-                    <AdminBestMove fen={bestFen} myTurn={bestMyTurn} onHint={onBestHint} />
+                    <AdminBestMove
+                        fen={bestFen}
+                        myTurn={bestMyTurn}
+                        isAntichess={game.variant === 'antichess'}
+                        onHint={onBestHint}
+                    />
                 )}
 
                 <Box sx={{ display: 'flex', gap: 1 }}>

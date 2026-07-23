@@ -274,10 +274,40 @@ const STATUS_LABEL: Record<string, string> = {
     'draw-fivefold': 'Draw — fivefold repetition',
     'draw-insufficient-material': 'Draw — insufficient material',
     'draw-dead-position': 'Draw — dead position',
+    // Duck Chess flavor by default (king capture is Duck's win condition). Antichess
+    // reuses these same statuses but wins the opposite way — see statusLabel below.
     white_win: 'White wins — king captured',
     black_win: 'Black wins — king captured',
     draw: 'Draw',
 }
-export function statusLabel(status: string): string {
+
+// Does `color` ('w'|'b') still have any piece on the board? White pieces are the
+// uppercase letters in the board field of a FEN, black the lowercase ones.
+function fenSideHasPieces(fen: string, color: 'w' | 'b'): boolean {
+    const board = fen.split(' ')[0] ?? ''
+    return (color === 'w' ? /[A-Z]/ : /[a-z]/).test(board)
+}
+
+// Antichess reuses the generic white_win/black_win statuses, but you WIN by
+// shedding all your pieces (or being stalemated), NOT by capturing a king — so the
+// Duck-flavored "king captured" copy is wrong. Derive the real reason from the final
+// position: the winner has either no pieces left (the common ending — e.g. you were
+// forced to capture their last piece) or is stalemated (has pieces but no move).
+function antichessWinLabel(status: 'white_win' | 'black_win', fen?: string): string {
+    const winner = status === 'white_win' ? 'White' : 'Black'
+    const winnerColor = status === 'white_win' ? 'w' : 'b'
+    // Without the FEN we can't tell no-pieces from stalemate; "lost all pieces" is the
+    // overwhelmingly common antichess ending, so it's the safe default.
+    const reason = fen && fenSideHasPieces(fen, winnerColor) ? 'stalemate' : 'lost all pieces'
+    return `${winner} wins — ${reason}`
+}
+
+/** Human-readable label for a game status. Pass `variant`/`fen` so antichess (which
+ * reuses white_win/black_win but wins by losing material) renders correctly instead
+ * of Duck's "king captured". */
+export function statusLabel(status: string, opts?: { variant?: string; fen?: string }): string {
+    if (opts?.variant === 'antichess' && (status === 'white_win' || status === 'black_win')) {
+        return antichessWinLabel(status, opts.fen)
+    }
     return STATUS_LABEL[status] ?? status
 }

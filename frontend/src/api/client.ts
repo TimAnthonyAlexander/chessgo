@@ -335,6 +335,38 @@ export function duckEval(
     })
 }
 
+// --- Antichess (best-move readout + free-mode analysis) ---
+// The standard /analyze plays by standard rules, so for an antichess position it
+// returns moves that ignore the compulsory-capture rule (frequently illegal) and
+// scored the wrong way (antichess material is inverted). These go to the antichess
+// engine instead, which returns a full-strength best LEGAL move + eval.
+
+/** Engine evaluation of an antichess position. `eval` is from the side-to-move's
+ *  perspective (positive = side to move is winning, i.e. on track to shed its
+ *  pieces); `bestmove` is a plain UCI (with a `k` suffix for a king promotion). */
+export interface AntichessEval {
+    eval: { type: 'cp' | 'mate'; value: number } | null
+    bestmove: string | null
+    bestSan: string | null
+    sideToMove: Color
+}
+
+export function antichessEval(
+    fen: string,
+    opts?: { movetime?: number; rating?: number; depth?: number; nodes?: number; signal?: AbortSignal },
+): Promise<AntichessEval> {
+    const body: { fen: string; movetime?: number; rating?: number; depth?: number; nodes?: number } = { fen }
+    if (opts?.movetime) body.movetime = opts.movetime
+    if (opts?.rating) body.rating = opts.rating
+    if (opts?.depth) body.depth = opts.depth
+    if (opts?.nodes) body.nodes = opts.nodes
+    return request<AntichessEval>('/antichess/analyze', {
+        method: 'POST',
+        body: JSON.stringify(body),
+        signal: opts?.signal,
+    })
+}
+
 /** The opening of a line: ECO code + full name (e.g. "B90", "Sicilian … Najdorf"). */
 export interface Opening {
     eco: string

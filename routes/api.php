@@ -20,6 +20,7 @@ use App\Controllers\AnalyzeController;
 use App\Controllers\DuckLegalMovesController;
 use App\Controllers\DuckMoveController;
 use App\Controllers\DuckAnalyzeController;
+use App\Controllers\AntichessAnalyzeController;
 use App\Controllers\SfAnalyzeController;
 use App\Controllers\CandidatesController;
 use App\Controllers\EngineMatchController;
@@ -136,6 +137,14 @@ $router->post('/duck/move', [
 $router->post('/duck/analyze', [
     RateLimitMiddleware::class => ['limit' => '1200/1m'],
     DuckAnalyzeController::class,
+]);
+
+// Full-strength Antichess engine analysis (eval bar + best LEGAL move): { fen,
+// movetime? }. The standard /analyze can't serve antichess — it plays by standard
+// rules, so its "best move" is often illegal here (ignores compulsory capture).
+$router->post('/antichess/analyze', [
+    RateLimitMiddleware::class => ['limit' => '1200/1m'],
+    AntichessAnalyzeController::class,
 ]);
 
 // Full-strength Stockfish best move for the analysis board's optional
