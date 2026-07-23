@@ -12,7 +12,8 @@ use App\Services\BotGameService;
  * to play the bot.
  *
  *   POST /bot-games        { rating?: 0|700..3500, human_color?: "w"|"b", fen?: string,
- *                            variant?: "standard"|"chess960"|"duck"|"crazyhouse"|"antichess" }
+ *                            variant?: "standard"|"chess960"|"duck"|"crazyhouse"|"antichess"|
+ *                                      "fading"|"glassjaw"|"doublemove" }
  *   GET  /bot-games/{id}
  *
  * `rating` is the bot's target Elo (the engine maps it to a weakening config).
@@ -20,7 +21,9 @@ use App\Services\BotGameService;
  * the analysis board); omitted = the standard start position. `variant` selects
  * the ruleset (default "standard"); Chess960 passes a 960 start FEN through the
  * standard flow, while "duck", "crazyhouse", and "antichess" ignore `fen` and
- * start from the standard position.
+ * start from the standard position. "fading", "glassjaw", and "doublemove" are
+ * standard-rules handicap modes (see BotGameService) that also share the
+ * standard flow.
  */
 class BotGameController extends Controller
 {
@@ -60,7 +63,7 @@ class BotGameController extends Controller
             'rating' => 'integer|min:0|max:3500',
             'human_color' => 'in:w,b',
             'fen' => 'string',
-            'variant' => 'string|in:standard,chess960,duck,crazyhouse,antichess',
+            'variant' => 'string|in:standard,chess960,duck,crazyhouse,antichess,fading,glassjaw,doublemove',
         ]);
 
         try {

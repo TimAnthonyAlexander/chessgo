@@ -89,6 +89,26 @@ const DUCK_REVEAL_MS = 550
 // The side to move encoded in a FEN's active-color field (defaults to White).
 const sideToMoveOf = (fen: string): Color => (fen.split(' ')[1] === 'b' ? 'b' : 'w')
 
+// Fading and Glass Jaw run the engine at a strength the BACKEND computes per move
+// (fading Elo / check-triggered Elo loss) — the setup slider has nothing to set,
+// so it's hidden for these two.
+const FIXED_STRENGTH_VARIANTS: Variant[] = ['fading', 'glassjaw']
+
+// Whether `v` is played on the standard rules engine (movegen, checkmate, opening
+// book) — true for everything here except Duck, Crazyhouse, and Antichess, which
+// each have their own rules surface.
+const usesStandardRules = (v: Variant): boolean =>
+    v === 'standard' ||
+    v === 'chess960' ||
+    v === 'fading' ||
+    v === 'glassjaw' ||
+    v === 'doublemove'
+
+// Whether `v` alternates one ply per side per turn. Double Move is the only
+// exception (two human plies per Zugzwang reply), which breaks ply-indexed
+// opening lookup and standard-game replay/analysis.
+const isAlternating = (v: Variant): boolean => v !== 'doublemove'
+
 export default function BotGame() {
     // A FEN carried over from the analysis board ("Play bot from this position").
     const navFen = (useLocation().state as { fen?: string } | null)?.fen ?? null
@@ -384,8 +404,14 @@ export default function BotGame() {
 
     // Take back the human's last move (plus any bot reply since). Available once
     // the human has actually moved, while the game is live and nothing's in flight.
-    // Duck Chess undo isn't supported (the duck-move engine is stateless).
-    const canUndo = ongoing && !thinking && !isDuck && !!game?.moves.some((m) => m.by === 'human')
+    // Duck Chess and Double Move undo aren't supported (stateless duck-move engine;
+    // Double Move's non-alternating plies, server-side).
+    const canUndo =
+        ongoing &&
+        !thinking &&
+        !isDuck &&
+        game?.variant !== 'doublemove' &&
+        !!game?.moves.some((m) => m.by === 'human')
     async function undo() {
         if (!game || thinking) return
         setError(null)
@@ -549,9 +575,15 @@ export default function BotGame() {
                             onVariant={(v) => {
                                 setVariant(v)
                                 // "Unlosable" (worst-move) is a Standard-only strength;
-                                // the Duck/Crazyhouse bots ignore rating 0, so leaving
-                                // Standard at that stop must snap to a real rating.
+                                // every other bot ignores rating 0 (Double Move forwards
+                                // it to the engine, where 0 would mean worst-move), so
+                                // leaving Standard at that stop must snap to a real rating.
                                 if (v !== 'standard' && rating <= UNLOSABLE_RATING) setRating(1500)
+                                // Fading/Glass Jaw are always full-force — the backend
+                                // overrides strength per move regardless of the stored
+                                // rating, but keep it a real (full-strength) value so
+                                // GameModeCard's rating readout reads sensibly.
+                                if (FIXED_STRENGTH_VARIANTS.includes(v)) setRating(3500)
                             }}
                             onStart={newGame}
                         />
@@ -756,10 +788,11 @@ function MovePanel({
                 <Box sx={{ flex: 1, minHeight: 0 }} />
             )}
 
-            {/* Opening name (+ candidate lines) for the live position. Standard-only
-                (the explorer/engine only understand standard chess); hidden in zen
-                mode, like the eval bar. Self-fetches and swaps without layout shift. */}
-            {game.variant === 'standard' && (
+            {/* Opening name (+ candidate lines) for the live position. Standard-rules
+                AND alternating only (the explorer/engine only understand standard,
+                one-ply-per-side chess — Fading/Glass Jaw qualify, Double Move doesn't);
+                hidden in zen mode, like the eval bar. Self-fetches, no layout shift. */}
+            {usesStandardRules(game.variant) && isAlternating(game.variant) && (
                 <OpeningPanel
                     tree={book.tree}
                     currentId={book.lastId}
@@ -857,12 +890,14 @@ function MovePanel({
                 {/* Once the game is over, offer to carry the position elsewhere —
                     never mid-game (no engine crutch while playing). Duck Chess has
                     no analysable standard position; Chess960 can't replay from the
-                    standard start, so it gets position-level actions only. */}
+                    standard start, so it gets position-level actions only. Fading and
+                    Glass Jaw alternate normally and replay as standard games; Double
+                    Move's non-alternating plies don't. */}
                 {!ongoing && game.variant !== 'duck' && (
                     <BoardActions
                         fen={game.fen}
                         analyzeGame={
-                            game.variant === 'standard'
+                            isAlternating(game.variant) && usesStandardRules(game.variant)
                                 ? { moves: game.moves.map((m) => m.uci), startFen: gameStartFen }
                                 : null
                         }
@@ -948,9 +983,15 @@ function Setup({
                 ? 'Play Crazyhouse — captured pieces switch sides and can be dropped back in.'
                 : variant === 'antichess'
                   ? 'Play Antichess — captures are compulsory; lose every piece (or get stalemated) to win.'
-                  : customStart
-                    ? 'Play the Zugzwang engine from this position.'
-                    : 'Play the Zugzwang engine.'
+                  : variant === 'fading'
+                    ? 'Play Fading — Zugzwang starts at full strength and loses 100 Elo with every move it makes.'
+                    : variant === 'glassjaw'
+                      ? 'Play Glass Jaw — full strength, but every check you land costs Zugzwang 300 Elo for good.'
+                      : variant === 'doublemove'
+                        ? "Play Double Move — two moves for every one of Zugzwang's; a check on your first move takes the king and wins."
+                        : customStart
+                          ? 'Play the Zugzwang engine from this position.'
+                          : 'Play the Zugzwang engine.'
     return (
         <Box
             sx={{
@@ -987,48 +1028,62 @@ function Setup({
                 </Box>
             </Box>
 
-            <Box>
-                <Box
-                    sx={{
-                        display: 'flex',
-                        alignItems: 'baseline',
-                        justifyContent: 'space-between',
-                        mb: 0.5,
-                    }}
-                >
+            {FIXED_STRENGTH_VARIANTS.includes(variant) ? (
+                // Fading and Glass Jaw are always full-force — the backend computes
+                // their per-move strength itself, so the rating slider has nothing
+                // to set.
+                <Box>
                     <Label>Opponent rating</Label>
-                    <Typography
-                        sx={{
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: 15,
-                            fontWeight: 700,
-                            color: 'var(--accent)',
-                        }}
-                    >
-                        {ratingLabel(rating)}
+                    <Typography sx={{ fontSize: 12.5, color: 'var(--muted)', mt: 0.5 }}>
+                        {variant === 'fading'
+                            ? 'Full strength — Zugzwang weakens as the game goes on.'
+                            : 'Full strength — until you start checking it.'}
                     </Typography>
                 </Box>
-                <Box sx={{ px: 0.5 }}>
-                    {/* The slider works in "coordinate" space so its lowest stop can be
-                        the Unlosable sentinel (stored as rating 0, one notch below the
-                        700 floor) without a dead 0..700 gap in the track. */}
-                    <Slider
-                        value={ratingToCoord(rating)}
-                        onChange={(_, v) => onRating(coordToRating(v as number))}
-                        // The Unlosable stop (below the 700 floor) is Standard-only;
-                        // other variants start the track at the real-rating floor.
-                        min={variant === 'standard' ? RATING_SLIDER_MIN : 700}
-                        max={RATING_SLIDER_MAX}
-                        step={50}
-                        valueLabelDisplay="auto"
-                        valueLabelFormat={(v) => ratingLabel(coordToRating(v))}
-                        sx={sliderSx}
-                    />
+            ) : (
+                <Box>
+                    <Box
+                        sx={{
+                            display: 'flex',
+                            alignItems: 'baseline',
+                            justifyContent: 'space-between',
+                            mb: 0.5,
+                        }}
+                    >
+                        <Label>Opponent rating</Label>
+                        <Typography
+                            sx={{
+                                fontFamily: 'var(--font-mono)',
+                                fontSize: 15,
+                                fontWeight: 700,
+                                color: 'var(--accent)',
+                            }}
+                        >
+                            {ratingLabel(rating)}
+                        </Typography>
+                    </Box>
+                    <Box sx={{ px: 0.5 }}>
+                        {/* The slider works in "coordinate" space so its lowest stop can
+                            be the Unlosable sentinel (stored as rating 0, one notch below
+                            the 700 floor) without a dead 0..700 gap in the track. */}
+                        <Slider
+                            value={ratingToCoord(rating)}
+                            onChange={(_, v) => onRating(coordToRating(v as number))}
+                            // The Unlosable stop (below the 700 floor) is Standard-only;
+                            // other variants start the track at the real-rating floor.
+                            min={variant === 'standard' ? RATING_SLIDER_MIN : 700}
+                            max={RATING_SLIDER_MAX}
+                            step={50}
+                            valueLabelDisplay="auto"
+                            valueLabelFormat={(v) => ratingLabel(coordToRating(v))}
+                            sx={sliderSx}
+                        />
+                    </Box>
+                    <Typography sx={{ fontSize: 12.5, color: 'var(--muted)', mt: 0.25 }}>
+                        {ratingHint(rating)}
+                    </Typography>
                 </Box>
-                <Typography sx={{ fontSize: 12.5, color: 'var(--muted)', mt: 0.25 }}>
-                    {ratingHint(rating)}
-                </Typography>
-            </Box>
+            )}
 
             <Box>
                 <Label>Play as</Label>

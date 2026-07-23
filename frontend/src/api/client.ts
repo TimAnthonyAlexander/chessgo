@@ -738,7 +738,7 @@ export interface ProfileGame {
     created_at: string
     category: string
     pool: string
-    variant: Variant // 'standard' | 'chess960' | 'duck' | 'crazyhouse' | 'antichess'
+    variant: Variant // 'standard' | 'chess960' | 'duck' | 'crazyhouse' | 'antichess' | 'fading' | 'glassjaw' | 'doublemove'
     rated: boolean
     result: string // '1-0' | '0-1' | '1/2-1/2'
     reason: string

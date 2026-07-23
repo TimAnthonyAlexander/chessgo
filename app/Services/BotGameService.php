@@ -37,15 +37,23 @@ class BotGameService
      *   Chess, Crazyhouse, and Antichess, which always start from the standard
      *   position (Duck with no duck placed, Crazyhouse with empty pockets).
      * @param string $variant 'standard' | 'chess960' | 'duck' | 'crazyhouse' |
-     *   'antichess'. Chess960 uses the standard engine flow (the engine parses
-     *   960 FENs); Duck Chess, Crazyhouse, and Antichess each use their own
-     *   dedicated /duck/*, /crazyhouse/*, /antichess/* endpoints.
+     *   'antichess' | 'fading' | 'glassjaw' | 'doublemove'. Chess960 uses the
+     *   standard engine flow (the engine parses 960 FENs); Duck Chess,
+     *   Crazyhouse, and Antichess each use their own dedicated /duck/*,
+     *   /crazyhouse/*, /antichess/* endpoints. "fading", "glassjaw", and
+     *   "doublemove" are standard-rules handicap modes — they use the plain
+     *   engine /move + /bestmove flow like Chess960, just with a per-move
+     *   effective rating (fading/glassjaw) or an altered turn order
+     *   (doublemove); see effectiveBotRating() and humanMove().
      * @throws \InvalidArgumentException if the custom FEN is invalid or already finished.
      */
     public function create(int $rating, string $humanColor, ?string $startFen = null, string $variant = 'standard'): BotGame
     {
         $game = new BotGame();
-        $game->variant = in_array($variant, ['standard', 'chess960', 'duck', 'crazyhouse', 'antichess'], true) ? $variant : 'standard';
+        $game->variant = in_array($variant, [
+            'standard', 'chess960', 'duck', 'crazyhouse', 'antichess',
+            'fading', 'glassjaw', 'doublemove',
+        ], true) ? $variant : 'standard';
         // rating<=0 is the "Unlosable" sentinel — kept verbatim (0), NOT clamped up to
         // RATING_MIN, so playBot() routes it to the worst-move engine. Real ratings
         // clamp to the human ladder [RATING_MIN, RATING_MAX].
@@ -78,8 +86,9 @@ class BotGameService
                 $this->playAntichessBot($game);
             }
         } else {
-            // Standard and Chess960 share the same flow: applyStartFen validates
-            // any provided FEN via the engine (which now understands 960 castling).
+            // Standard, Chess960, and the three handicap modes (fading, glassjaw,
+            // doublemove) share the same flow: applyStartFen validates any provided
+            // FEN via the engine (which now understands 960 castling).
             if ($startFen !== null && $startFen !== '') {
                 $this->applyStartFen($game, $startFen);
             }
@@ -198,6 +207,50 @@ class BotGameService
 
         $this->apply($game, $move, $result, 'human');
 
+        // Double Move: the human plays two plies per bot reply, under king-capture
+        // rules (the win is taking the king, not delivering mate). After the FIRST
+        // ply of the pair, the bot does not reply yet:
+        if ($game->variant === 'doublemove'
+            && $game->status === 'ongoing'
+            && $this->isFirstDoubleMove($game)
+        ) {
+            if (!empty($result['check'])) {
+                // The first ply gave check. The bot does NOT move between the human's
+                // two plies, so the checking piece captures the bot's king on the
+                // second ply, unstoppably — the human simply wins now. (This also
+                // sidesteps the illegal "enemy king in check on your move" FEN that a
+                // flip would otherwise produce.) Recorded as a checkmate result so the
+                // eval bar / caption / result all read as a win; side_to_move is left
+                // as the bot's color (its king is the one that falls).
+                $game->status = 'checkmate';
+                $game->result = $game->human_color === 'w' ? '1-0' : '0-1';
+                $game->save();
+
+                return ['ok' => true];
+            }
+
+            // Quiet first ply: the bot "passes" by flipping the side to move back to
+            // the human for their second ply.
+            $flipped = $this->flipSideToMove($game->fen);
+            $game->fen = $flipped;
+            $parts = explode(' ', $flipped);
+            $game->side_to_move = (($parts[1] ?? 'w') === 'b') ? 'b' : 'w';
+
+            // Stalemate probe: the human's own move was legal, so they were not in
+            // check before it — if the flipped position now has zero legal moves
+            // for them, that can only be stalemate (not "in check with no moves"),
+            // so it must be resolved here rather than leaving your_turn=true stuck.
+            $legal = $this->engine->legalMoves($flipped);
+            if (empty($legal['moves'])) {
+                $game->status = 'stalemate';
+                $game->result = '1/2-1/2';
+            }
+
+            $game->save();
+
+            return ['ok' => true];
+        }
+
         if ($game->status === 'ongoing') {
             $this->playBot($game);
         }
@@ -222,6 +275,12 @@ class BotGameService
         // Duck Chess undo is out of scope (the duck endpoints carry no history).
         if ($game->variant === 'duck') {
             return ['ok' => false, 'error' => 'undo is not available in Duck Chess'];
+        }
+        // Double Move's turn order (1-2 human plies per bot reply, with a passed
+        // "flip" ply that isn't recorded in moves/history) doesn't map cleanly onto
+        // the trailing-bot-then-human pop below, so undo is out of scope here too.
+        if ($game->variant === 'doublemove') {
+            return ['ok' => false, 'error' => 'undo is not available in Double Move'];
         }
 
         $moves = $game->getMoves();
@@ -281,12 +340,16 @@ class BotGameService
         }
         // The "Unlosable" bot (sentinel rating 0, the /bot slider's lowest stop) is
         // Standard rules with the engine playing the WORST move it can find; every
-        // real rating (>=RATING_MIN) plays its advertised strength.
-        $best = $game->rating <= 0
+        // real rating (>=RATING_MIN) plays its advertised strength. fading and
+        // glassjaw always clamp to >=RATING_MIN (see effectiveBotRating()), so they
+        // never take the worst-move path — only a stored sentinel rating of 0 on a
+        // standard/chess960/doublemove game does.
+        $rating = $this->effectiveBotRating($game);
+        $best = $rating <= 0
             ? $this->engine->worstMove($game->fen, $game->getHistory())
             : $this->engine->bestMove(
                 $game->fen,
-                $game->rating,
+                $rating,
                 $game->getHistory(),
             );
         $uci = $best['bestmove'] ?? null;
@@ -298,6 +361,90 @@ class BotGameService
             return;
         }
         $this->apply($game, $uci, $result, 'bot', $best);
+    }
+
+    /**
+     * The rating the bot plays this move at. Standard, Chess960, and Double Move
+     * forward the game's stored `rating` unchanged (Double Move's handicap is the
+     * turn order, not strength). fading and glassjaw instead derive a per-move
+     * rating from the move history, both floored at RATING_MIN so they always take
+     * the bestMove path (never the rating<=0 worst-move sentinel):
+     *
+     *  - fading: full strength (RATING_MAX) on the bot's first move, decaying 100
+     *    Elo per bot move already played.
+     *  - glassjaw: full strength, decaying 300 Elo (cumulative, permanent) per
+     *    check the human has delivered so far — including one just delivered on
+     *    the move the bot is now replying to.
+     */
+    private function effectiveBotRating(BotGame $game): int
+    {
+        return match ($game->variant) {
+            'fading' => max(self::RATING_MIN, self::RATING_MAX - 100 * $this->botMovesPlayed($game)),
+            'glassjaw' => max(self::RATING_MIN, self::RATING_MAX - 300 * $this->humanCheckingMovesCount($game)),
+            default => $game->rating,
+        };
+    }
+
+    /** Count of bot moves already recorded in the game's move history. */
+    private function botMovesPlayed(BotGame $game): int
+    {
+        return count(array_filter(
+            $game->getMoves(),
+            static fn (array $move): bool => ($move['by'] ?? null) === 'bot',
+        ));
+    }
+
+    /** Count of human moves in the history whose SAN gave check ('+') or mate ('#'). */
+    private function humanCheckingMovesCount(BotGame $game): int
+    {
+        return count(array_filter($game->getMoves(), static function (array $move): bool {
+            if (($move['by'] ?? null) !== 'human') {
+                return false;
+            }
+            $san = is_string($move['san'] ?? null) ? $move['san'] : '';
+
+            return $san !== '' && (str_ends_with($san, '+') || str_ends_with($san, '#'));
+        }));
+    }
+
+    /**
+     * True when the human move just applied was the FIRST of a Double Move pair —
+     * i.e. the number of trailing consecutive human moves at the end of the move
+     * list (after applying this move) is odd. A bot-opened game's first human
+     * reply is trailing-count 1 (odd = first), matching the spec.
+     */
+    private function isFirstDoubleMove(BotGame $game): bool
+    {
+        $moves = $game->getMoves();
+        $trailingHuman = 0;
+        for ($i = count($moves) - 1; $i >= 0; $i--) {
+            if (($moves[$i]['by'] ?? null) !== 'human') {
+                break;
+            }
+            $trailingHuman++;
+        }
+
+        return $trailingHuman % 2 === 1;
+    }
+
+    /**
+     * Flip the side to move in a FEN without changing the position — used by
+     * Double Move's "pass" (the bot skips its reply after the human's first ply).
+     * Clears the en-passant field (field 3), since a passed move means no pawn
+     * just double-stepped for the flipped side to capture. Castling rights and
+     * clocks are left untouched. Malformed FENs (fewer than 4 space-separated
+     * fields) are returned unchanged rather than guessed at.
+     */
+    private function flipSideToMove(string $fen): string
+    {
+        $parts = explode(' ', $fen);
+        if (count($parts) < 4) {
+            return $fen;
+        }
+        $parts[1] = $parts[1] === 'w' ? 'b' : 'w';
+        $parts[3] = '-';
+
+        return implode(' ', $parts);
     }
 
     /**

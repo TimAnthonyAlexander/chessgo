@@ -5,7 +5,15 @@
 
 import { applyUciVisually, type BoardMap, type Square } from './chess'
 
-export type Variant = 'standard' | 'chess960' | 'duck' | 'crazyhouse' | 'antichess'
+export type Variant =
+    | 'standard'
+    | 'chess960'
+    | 'duck'
+    | 'crazyhouse'
+    | 'antichess'
+    | 'fading'
+    | 'glassjaw'
+    | 'doublemove'
 
 /** The standard chess start position. */
 export const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
@@ -16,6 +24,9 @@ export const VARIANT_LABEL: Record<Variant, string> = {
     duck: 'Duck Chess',
     crazyhouse: 'Crazyhouse',
     antichess: 'Antichess',
+    fading: 'Fading',
+    glassjaw: 'Glass Jaw',
+    doublemove: 'Double Move',
 }
 
 export const VARIANT_BLURB: Record<Variant, string> = {
@@ -25,6 +36,9 @@ export const VARIANT_BLURB: Record<Variant, string> = {
     crazyhouse: 'Captured pieces switch sides — drop them back on the board.',
     antichess:
         'Räuberschach — captures are compulsory and the king is just a piece. Lose all your men (or get stalemated) to win.',
+    fading: 'Full strength to start — Zugzwang loses 100 Elo with every move it makes.',
+    glassjaw: 'Full strength — but every check you give it costs Zugzwang 300 Elo for good.',
+    doublemove: "You play two moves for every one of Zugzwang's. Set its strength with the slider.",
 }
 
 /** Pocket piece letters (always uppercase; color is by context). */

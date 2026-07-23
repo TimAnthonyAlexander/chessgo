@@ -4,6 +4,11 @@ import { type Variant, VARIANT_LABEL } from '../lib/variants'
 import { ratingLabel, UNLOSABLE_RATING } from '../lib/botSettings'
 import NewBadge from './NewBadge'
 
+// Fading/Glass Jaw strength varies per move (backend-computed), so the setup
+// rating stored for them is meaningless — show a mode descriptor instead of
+// "~N Elo".
+const FIXED_STRENGTH_VARIANTS: Variant[] = ['fading', 'glassjaw']
+
 /** Left-side game-mode card. Untimed, casual play vs the engine; the headline
  * reflects the chosen variant (Standard → "Casual", otherwise the variant name). */
 export default function GameModeCard({
@@ -76,7 +81,10 @@ export default function GameModeCard({
                     <NewBadge />
                 </Box>
                 <Typography sx={{ color: 'var(--text-dim)', fontSize: 13.5 }}>
-                    Engine · {ratingLabel(rating)}
+                    Engine ·{' '}
+                    {FIXED_STRENGTH_VARIANTS.includes(variant)
+                        ? 'Full strength'
+                        : ratingLabel(rating)}
                 </Typography>
             </Box>
         </Box>
