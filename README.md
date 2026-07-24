@@ -10,7 +10,7 @@ move generator, the evaluation, and the search written from scratch. It serves a
 of the site's rules and all of its AI over a stateless HTTP API, and speaks UCI
 for any chess GUI.
 
-![chessgo homepage](homepage.png)
+![chessgo homepage](home.png)
 
 ## The engine: zugzwang
 
