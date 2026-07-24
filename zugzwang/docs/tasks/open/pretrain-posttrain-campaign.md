@@ -93,17 +93,22 @@ mirror-side flip (`FullThreats::requires_refresh`, `SF/full_threats.cpp:331-333`
 `(int8_t(diff.ksq) & 0b100) != (int8_t(diff.prevKsq) & 0b100)`). SF's own reference **does not
 extend Finny to threat features.**
 
-**Consequence `[INF]` (corrected cost model):** Finny caches only the base (PSQ) half; threats
-stay a full recompute exactly as SF does. But "threat-dominated" by **index-space** (79856 vs
-12288) is the **wrong model** — refresh cost is `#active_features × H`, and active threats
-(~128–256) vs active PSQ (~piece count, ~32) is ~4–8× **per event**; the dimension ratio agreeing
-at ~6.5× is coincidence. Crucially the two halves fire at **different frequencies, cutting the
-opposite way from per-event cost**: the half Finny **can** cache (PSQ) refreshes on **any own-king
-move**, while the half it **can't** (threats) refreshes only on a **mirror-flip** (a subset of
-king moves). So the cacheable event is the *more frequent* one — Finny is **less** capped than
-"threat-dominated" implies. → **Respecified follow-up:** don't estimate "share of cost" — **count
-refresh events by type (PSQ vs threat) and time each** on coalla; the product (PSQ-event frequency
-× per-event base cost) is Finny's actual ceiling, and it gates whether P1 is worth the code.
+**Consequence — MEASURED (2026-07-24)** `[OBS]`, 187,807 refreshes over a 10-position depth-16 mix:
+- refresh work is **51.6% base / 48.4% threat** (avg 10.48 base vs 9.85 threat features per
+  refresh) — **NOT threat-dominated.** My earlier per-event estimate (threats 4–8× base, assuming
+  ~128–256 active threats) was **wrong**: active threat *features* per refresh are ~10, comparable
+  to piece count, because a refresh re-sums the position's actual threat edges, not the 79856-dim
+  index space. Measurement beats estimate.
+- crosses split **12.6% mirror-flip / 87.4% same-mirror**.
+- Derived, against `build_half`'s 6.24% profile share:
+  - **Finny ceiling ≈ base-frac × 6.24% = 0.516 × 6.24% ≈ 3.22% NPS** (Finny caches the base half).
+  - **THREATGATE ceiling ≈ same-mirror × threat-frac × 6.24% = 0.874 × 0.484 × 6.24% ≈ 2.64% NPS**
+    (already-coded default-off lever — keeps threats on the delta path across same-mirror crosses).
+
+So **both are real ~3% NPS levers** (~5–7 Elo at LAZYACC's ~2.3 Elo/%), not the sub-noise scraps
+the stale profile implied. **THREATGATE goes first** — it's coded, byte-identical (confirmed: cp 44,
+1,072,443 nodes on/off), and needs only a clean NPS bench. Finny needs implementation + a
+correctness gate but has the higher ceiling.
 
 ### zug current state `[OBS]`: **LACK.**
 From-scratch rebuild on bucket/mirror crossing — `zug/nnue_accumulator.cpp:416-464`
@@ -677,6 +682,7 @@ whole gap.
 |---|---|---|---|
 | PRE-CHECK #2 | Does SF Finny cover FullThreats? | **DONE — NO** `[OBS]` (§P1) | reprices P1 to base-half-only |
 | PRE-CHECK #1 | 4-wide-block all-zero fraction of `aq[]` at H=512, in-search mix | **DONE (2026-07-24):** block-zero **49.9%**, scalar-zero **83.9%** (1.58M eval calls, depth-16 mix, net loaded) | ~50% of L1 blocks skippable as-is → marginal at H=512; permutation could lift toward ~96% |
-| PROFILE freshness | re-profile at current main (20Jul profile is stale: built at `93e4f56`, **pre-LAZYACC2**) | **IN PROGRESS** — fresh amd64 profile on coalla | decides P1 (`build_half` share) + P2 (`eval_from_halves`/L1 share) |
-| P1-followup | count refresh events by type (PSQ/threat) + time each on coalla | **PENDING** | (PSQ-event freq × per-event cost) = Finny's ceiling |
+| PROFILE freshness | re-profile at current main (20Jul was stale: `93e4f56`, pre-LAZYACC2) | **DONE (2026-07-24):** `docs/PROFILING/amd/24Jul2026.md` — `build_half` **6.24%** (not <0.8%), retracts the P1 kill | P1/P2 both live |
+| P1-followup | refresh-event breakdown (deterministic counts, 10-pos depth-16 mix, 187,807 refreshes) | **DONE (2026-07-24):** 119.5 refresh/1000-eval; crosses **12.6% mirror-flip / 87.4% same-mirror**; refresh work **51.6% base / 48.4% threat** | **Finny ceiling ≈ 3.22% NPS; THREATGATE ceiling ≈ 2.64% NPS** |
+| THREATGATE | byte-identity + interleaved NPS bench (already-coded lever) | **SHIPPED default-on (2026-07-24):** ASSERT-clean + 5-pos full-search match (byte-identical); NPS +1.9% (n=21 interleaved under load; mechanistic ceiling +2.64%) | first pre-train win banked |
 | P2-fallback | if pre-check #1 weak: compute our own block-sparsity permutation (retrain-free) | **CONDITIONAL** | makes P2 pay without a retrain |
