@@ -657,3 +657,44 @@ redundant with zug's bucketing (another reason W12 washed).
 **Biggest structural gaps zug will NOT close retrain-free:** SF's psqt/positional split (enables
 its optimism+complexity blend cleanly — but see #17 for SP's split-free optimism), and the
 small-net/big-net two-tier eval. Those are net-architecture, out of scope here.
+
+---
+
+## SESSION LOG — 2026-07-24 (overnight movetime campaign)
+
+Method: movetime 0.1s, conc=6, book.epd, elo0=0 elo1=5, pentanomial, on coalla (clean git
+worktrees zug_w1/w2/w3 at pushed commits; base = same binary flags-off, byte-identical verified
+by back-to-back node counts). All candidates default-off env flags. Self-driving sequential SPRT
+queue (`~/wq.sh`/`wq2.sh`) + foreground heartbeat polling (background ssh watchdogs get culled and
+their cmdlines poison `pgrep -f "x86-64/fastchess"` matchers — use `pgrep -x fastchess` and kill by PID).
+
+**Headline: NO confirmable movetime win. Every single retrain-free lever tested sits within the
+±3 noise floor (wash) or is negative/buggy.** The two "leaning +3" candidates (capfut, nonlmrred)
+were shown to be favorable NOISE by re-tests — do not ship on a single leaning run.
+
+| candidate | flag | commit | verdict |
+|---|---|---|---|
+| SHUFFLEGUARD | SHUFFLEGUARD=1 | (main) | WASH (230g, 48.9%, LLR -0.17) |
+| EVALCOMPLEXITY | EVALCOMPLEXITY=1 | 64e2601 | WASH (1600g cap, 50.19%, LLR 0.01) — eval-class, |corr| shrink, zero effect |
+| OPTIMISM | OPTIMISM=1 | 64e2601 | WASH (1118g, 50.18%) — SP root-score optimism; +49% nodes offsets any eval tilt |
+| NONLMRRED | NONLMRRED=1 | 64e2601 | NOISE — r1 +3.65 (1142g) → r2 (nonlmrred2, high-N) see below. -54% nodes |
+| CAPFUT | CAPFUT=1 | (main, f88266d) | **NOISE, not a win**: +3.8(Jul)/+3.07(r1 1020g)/-4.19(r2 580g). Do NOT ship. |
+| capfut+nonlmrred | both | — | -8.69 (two prunes over-prune, DON'T stack even on different move-sets) |
+| PIECETOHIST v1 | PIECETOHIST=1 | 7d04c8a | -25.7 (298g) — folds pieceTo additively into zug's UN-normalized LMR hist sum → inflates hist → LMR under-reduces → tree bloat. SP normalizes ÷1024; zug doesn't. |
+| PIECETOHIST v2 (ordering-only) | PIECETOHIST=1 (LMR gated behind PIECETOLMR) | cf77719 | WASH (542g, -5.77) — fixes the -25 but ordering is saturated in zug (as prior evalHist/threatOrder). |
+| CONTHISTBASE | CONTHISTBASE=1 | 7d04c8a | WASH (620g, +2.24) — SP cross-table blended-base conthist gravity; no effect. |
+| QSTTQUIET | QSTTQUIET=1 | 7d04c8a | **BUGGY** — engine STALLED/disconnected @game120 (likely infinite qsearch recursion on the TT quiet move). Invalid; needs a recursion/legality fix before any retest. |
+| SINGTTPV, RFPQUAD | (flags) | 64e2601 | not fully screened (deprioritized after the pattern was clear). |
+
+**Actionable leads left (for a future, better-resourced attempt):**
+- **pieceToHist done right** = fold into BOTH ordering AND LMR but RENORMALIZE zug's LMR history
+  composite (÷total weight, SP-style) so adding pieceTo doesn't inflate the sum. Invasive (re-tunes
+  r for all moves) → needs SPSA; ordering-only alone washes (saturated), so the LMR half is where
+  any gain would be — but only with renormalization.
+- **QSTTQUIET** has the right idea (SP ships it) but the port hangs — fix the qsearch recursion guard
+  (don't re-search the same TT quiet; cap/guard depth) then retest.
+- **The real lesson**: confirming a <+5 Elo movetime effect needs fishtest-scale games (~10k+), infeasible
+  on one 12-core box/night. Single-box overnight can only catch >+8 effects or clear negatives. The
+  retrain-free single-lever well, at 100ms/1-box confirmation resolution, appears genuinely dry for the
+  SF/SP-derived candidates mined so far — the remaining movetime Elo is likely in (a) bigger structural
+  ideas, (b) the net retrain, or (c) fishtest-scale confirmation infra, NOT more single-flag SPRTs.
