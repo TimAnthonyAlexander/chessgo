@@ -105,10 +105,22 @@ extend Finny to threat features.**
   - **THREATGATE ceiling ≈ same-mirror × threat-frac × 6.24% = 0.874 × 0.484 × 6.24% ≈ 2.64% NPS**
     (already-coded default-off lever — keeps threats on the delta path across same-mirror crosses).
 
-So **both are real ~3% NPS levers** (~5–7 Elo at LAZYACC's ~2.3 Elo/%), not the sub-noise scraps
-the stale profile implied. **THREATGATE goes first** — it's coded, byte-identical (confirmed: cp 44,
-1,072,443 nodes on/off), and needs only a clean NPS bench. Finny needs implementation + a
-correctness gate but has the higher ceiling.
+So **both looked like ~3% NPS levers** on paper. Outcomes (2026-07-24):
+- **THREATGATE → SHIPPED** (`662b601`): byte-identical, +1.9% amd64 NPS. Win #1.
+- **Finny → SHIPPED arch-gated** (`3a8fffb` + arch-gate): byte-identical (ASSERT-clean + node/score
+  match), so it ships on NPS per-arch like ACCFUSE — **arm64 default-ON** (+1–2%, M3), **amd64
+  default-OFF** (−1.25% on coalla: the per-refresh feature-list diff + 131 KB/context cache costs
+  more than fast-SIMD base re-enum, and LAZYACC2 already thinned refreshes). env `FINNY=1/0`
+  overrides either arch. "Fast on any machine" — the arm64 win is banked, not thrown away because
+  prod is amd64. Textbook [arm64-vs-amd64-divergence]; measuring the authoritative arch is what set
+  the amd64 default correctly.
+
+**Takeaway:** the retrain-free *NPS* well yielded exactly one win (THREATGATE). The big NPS prize
+(`apply_diff` 19.3%, threat-column bandwidth) genuinely needs **int8-QAT (Post-Train)** — the
+profile's verdict holds. P2 (sparse-affine) is now **de-prioritized**: same amd64-overhead risk as
+Finny, and block-sparsity is only 49.9% at H=512 (gather overhead over half SF's width). It's only
+worth revisiting *after* a block-sparsity weight permutation lifts that toward ~96% — a separate
+retrain-free task, not a quick port.
 
 ### zug current state `[OBS]`: **LACK.**
 From-scratch rebuild on bucket/mirror crossing — `zug/nnue_accumulator.cpp:416-464`

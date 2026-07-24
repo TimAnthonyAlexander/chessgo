@@ -108,12 +108,24 @@ bool acc_fuse_enabled() {
     return on;
 }
 
-// FINNY (default OFF): accumulator refresh cache ("Finny tables") for the BASE
-// (non-threat) half only. See AccStack::build_half_finny's doc comment (nnue_accumulator.h)
-// for the full design + bit-exactness argument. FINNY=1 to enable; default OFF leaves
-// every base-refresh call site's build_half exactly as before.
+// FINNY: accumulator refresh cache ("Finny tables") for the BASE (non-threat) half only.
+// See AccStack::build_half_finny's doc comment (nnue_accumulator.h) for the full design +
+// bit-exactness argument. Byte-identical either way (ASSERT-clean + node/score match).
+// ARCH-GATED like ACCFUSE (2026-07-25): the base-refresh cache pays on arm64 but not amd64.
+//   arm64: default ON  — measured +1-2% NPS (M3), byte-identical.
+//   amd64: default OFF — measured -1.25% NPS on coalla (the per-refresh feature-list diff +
+//          131 KB/context cache costs more than the fast-SIMD base re-enum it replaces, and
+//          LAZYACC2 already thins refreshes). env FINNY=1/0 forces on/off on either arch.
 bool finny_enabled() {
-    static const bool on = [] { const char* e = getenv("FINNY"); return e && e[0] == '1'; }();
+    static const bool on = [] {
+        const char* e = getenv("FINNY");
+        if (e) return e[0] == '1';            // explicit override on any arch
+#if defined(__aarch64__) || defined(__ARM_NEON)
+        return true;                          // arm64: default ON
+#else
+        return false;                         // amd64/other: default OFF
+#endif
+    }();
     return on;
 }
 
