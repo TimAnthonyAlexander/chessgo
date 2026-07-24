@@ -1959,7 +1959,7 @@ int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta, int qdept
     bool qsTtQuietCutoff = false;
     if (qdepth == 0 && !inCheck && C.tune.qsTtQuiet && ttHit && ttMove != MOVE_NONE
         && !pos.is_capture(ttMove) && type_of_move(ttMove) != PROMOTION
-        && tte->bound() != BOUND_UPPER && pos.legal(ttMove)) {
+        && tte->bound() != BOUND_UPPER && pos.pseudo_legal(ttMove) && pos.legal(ttMove)) {
         pos.do_move(ttMove, st);
         C.tt.prefetch(pos.key());
         int score = -qsearch(C, pos, ss + 1, -beta, -alpha, qdepth + 1);
