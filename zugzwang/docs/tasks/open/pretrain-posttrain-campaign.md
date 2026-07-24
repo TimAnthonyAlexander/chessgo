@@ -115,12 +115,24 @@ So **both looked like ~3% NPS levers** on paper. Outcomes (2026-07-24):
   prod is amd64. Textbook [arm64-vs-amd64-divergence]; measuring the authoritative arch is what set
   the amd64 default correctly.
 
-**Takeaway:** the retrain-free *NPS* well yielded exactly one win (THREATGATE). The big NPS prize
-(`apply_diff` 19.3%, threat-column bandwidth) genuinely needs **int8-QAT (Post-Train)** — the
-profile's verdict holds. P2 (sparse-affine) is now **de-prioritized**: same amd64-overhead risk as
-Finny, and block-sparsity is only 49.9% at H=512 (gather overhead over half SF's width). It's only
-worth revisiting *after* a block-sparsity weight permutation lifts that toward ~96% — a separate
-retrain-free task, not a quick port.
+**Takeaway:** the retrain-free *NPS* well is now fully mapped — THREATGATE (win, all arches),
+Finny (arm64-only), and P2 dead. The big NPS prize (`apply_diff` 19.3%, threat-column bandwidth)
+genuinely needs **int8-QAT (Post-Train)** — the profile's verdict holds.
+
+**P2 (sparse-affine) → NO-GO, measured (2026-07-25)** `[OBS]`: the retrain-free permutation lifts
+the 4-wide-block all-zero fraction only **52% → 64.5%** (1.19M eval samples; there IS real
+positive correlation among low-freq pairs — naive-independence predicts no lift — but it caps
+here). Per-pair nonzero-frequency is a **smooth continuum** (mean 23%, median 13%, only 9/256
+always-zero), so there's no separable "dead" cluster to isolate — only ~28% of blocks reach ≥90%
+zero-rate. SF gets 85-96% by *co-training* sparsity-aware weights; ours never was. Sparse kernel
+not worth building without a block-sparsity **retrain** (→ Post-Train). Killed on evidence.
+
+**P3 (output-layer SPSA) → tooling VALIDATED (2026-07-25)** `[OBS]`: `.nnue` is flat float32 (8
+sections + "bullet" trailer, no header); the 648-param output surface (l1b/l2b/l3w/l3b, all
+float32, no requant) is directly tunable. `tools/nnue_spsa/` round-trip test is **byte-identical
+PASS**; perturbing one output bias changes exactly that param and the engine loads it. → the
+retrain-free output-layer SPSA is the flagship long run; driver being built, launches on coalla
+after the SPRT sweep.
 
 ### zug current state `[OBS]`: **LACK.**
 From-scratch rebuild on bucket/mirror crossing — `zug/nnue_accumulator.cpp:416-464`
