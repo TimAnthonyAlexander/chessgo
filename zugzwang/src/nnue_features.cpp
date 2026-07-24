@@ -855,7 +855,11 @@ bool threat_delta_sf_enabled() {
     // path (threat_delta_fast_enabled()==false) remains the correctness oracle/default;
     // THREATDELTA_FAST is unaffected by (and independent of) this flag — only one of the
     // three branches runs per call. Only consulted when threat_delta_enabled() is true.
-    static const bool on = [] { const char* e = getenv("THREATDELTA_SF"); return e && e[0] == '1'; }();
+    // SHIPPED default-on 2026-07-25: +2.82% NPS amd64 (se 0.58%, 20/24), byte-identical
+    // (ASSERT-clean + node/score match) — SF touch-only-D threat delta, fewer threatIndex
+    // calls than the base enumerate path (targets changed_edges_delta, the #2 hotspot).
+    // Algorithmic (not ISA-specific) so all-arch. Kill-switch THREATDELTA_SF=0.
+    static const bool on = [] { const char* e = getenv("THREATDELTA_SF"); return !(e && e[0] == '0'); }();
     return on;
 }
 

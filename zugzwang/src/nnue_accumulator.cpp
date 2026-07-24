@@ -17,7 +17,19 @@ namespace {
 // env-read style: getenv runs exactly once per process via a lambda-initialized
 // `static const bool`. See apply_diff below for the design + bit-exactness note.
 bool apply_prefetch_enabled() {
-    static const bool on = [] { const char* e = getenv("APPLYPREFETCH"); return e && e[0] == '1'; }();
+    // SHIPPED arch-gated 2026-07-25: +1.44% NPS amd64 (se 0.65%, 17/24), byte-identical
+    // (ASSERT-clean). The prefetch hint is x86-tuned — FT-column indices are feature-scattered,
+    // not a stream the HW prefetcher already covers; arm64 benefit is unproven and the win is
+    // marginal, so default-ON amd64 only. env APPLYPREFETCH=1/0 forces either arch.
+    static const bool on = [] {
+        const char* e = getenv("APPLYPREFETCH");
+        if (e) return e[0] == '1';
+#if defined(__aarch64__) || defined(__ARM_NEON)
+        return false;   // arm64: unproven, default OFF
+#else
+        return true;    // amd64/x86: +1.44% NPS, default ON
+#endif
+    }();
     return on;
 }
 
