@@ -658,6 +658,35 @@ struct Context {
         // env QSTTQUIET=1. OFF path: the whole block is skipped, qsearch is
         // byte-identical to today.
         bool qsTtQuiet = false;
+        // ---- FULLPROBCUT (2026-07-25, SF18 search.cpp:935-981, VERIFIED directly against
+        // ~sf18-arm/src, tag sf_18): the REAL capture-loop ProbCut, separate from and
+        // additional to the cheap TT-only variant above (Tune::probCut) — both are
+        // independently switchable and neither depends on the other being on. For every
+        // capture whose SEE clears probCutBeta-eval: verify with a zero-window qsearch at
+        // [probCutBeta-1,probCutBeta]; if that holds, confirm with a reduced-depth
+        // search<NonPV>(probCutDepth) at the same window; a move that clears probCutBeta
+        // there lets this node return early (a previous move up the tree is refuted) and
+        // stores a LOWER-bound TT entry at probCutDepth+1.
+        //
+        // GATE (search.cpp:939-943, read from source — the real gate has NO explicit
+        // !PvNode, since IIR just above it (`!allNode`, i.e. PvNode||cutNode) already
+        // fires at PV nodes too in this SF version): `depth>=3 && !is_decisive(beta) &&
+        // !(ttValue valid && ttValue < probCutBeta)`. zug adds !PvNode anyway (matching the
+        // cheap variant's own convention just below) — returning early here skips this
+        // node's ss->pv/pvLen bookkeeping, which SF's own PV machinery tolerates via
+        // update_pv but zug's simpler fixed pv[] array does not; not worth the risk for an
+        // opt-in test flag. depth>=3 (NOT the task brief's "depth>=5" paraphrase — the
+        // verified source is unambiguous and structural/depth terms port as-is).
+        //
+        // SCALE (critical — NOT a blanket x0.4808): probCutBeta's additive terms are
+        // VALUE-scale constants added to a cp value, so they shrink by the usual ratio
+        // (SF pawn=208, zug pawn=100): 235*0.4808~=113, 63*0.4808~=30. probCutDepth's
+        // divisor (315, SF search.cpp:948, dividing the cp-scale (staticEval-beta)) shrinks
+        // the SAME way — 315*0.4808~=151 — because a divisor of a cp difference must shrink
+        // together with the smaller cp values it divides to preserve the same ply-reduction
+        // for an equivalent chess-meaningful swing. depth structural constants (5, clamp
+        // 0..depth) port as-is.
+        bool fullProbCut = false;
         // ---- SYZYGY (2026-07-20): Syzygy tablebase probing — WDL at internal nodes +
         // DTZ at the root. Ported from gomachine. SHIPPED default-ON, path-presence gated:
         // every hook also requires TB::loaded(), so a box WITHOUT a resolvable `syzygy/`
@@ -704,11 +733,34 @@ struct Context {
         // Requires TIMEMAN (nested inside its C.tmScaled per-iteration block below) —
         // real-clock only, matching TIMEMAN's own scope. SF's third factor, fallingEval
         // (bestPreviousAverageScore across MOVES in the game + a 4-iteration score
-        // ring-buffer), is NOT ported: zug has neither piece of state, and fabricating
-        // it isn't "sound, minimal plumbing" (see the NODEEFFORT comment in start()'s
-        // ID loop for the full list of what's deferred and why). Default OFF; env
-        // NODEEFFORT=1.
+        // ring-buffer) was NOT ported here (fabricating that state wasn't "sound, minimal
+        // plumbing" at the time) — it is now ported separately as Tune::tmFalling below,
+        // once the minimal state (Context::bestPreviousAverageScore + a start()-local
+        // ring buffer) was worked out. Default OFF; env NODEEFFORT=1.
         bool nodeEffort = false;
+        // ---- TMFALLING (2026-07-25, SF18 search.cpp:487-508/240/296-299, VERIFIED directly
+        // against ~sf18-arm/src, tag sf_18): the two deferred TIMEMAN pieces (see the
+        // Tune::timeMan comment above — this note also used to live on Tune::nodeEffort,
+        // moved here now that both parts are actually ported):
+        //   (a) fallingEval — a further multiplicative per-iteration soft-limit factor,
+        //   independent of and layered alongside the Stormphrax stability/eval-trend scale
+        //   and NODEEFFORT's two factors: a falling score (vs. both the PREVIOUS search's
+        //   blended root average AND this search's own score 4 iterations back) EXTENDS the
+        //   budget. Needs two pieces of state: Context::bestPreviousAverageScore (persisted
+        //   across searches within one game — a fast /2 EMA of the root score, SF's
+        //   mainThread->bestPreviousAverageScore, reset only at ucinewgame like
+        //   ttMoveHistory) and a start()-local 4-slot ring buffer (SF's iterValue[4], pure
+        //   per-search state, never needs to persist across `go` calls). See the exact
+        //   formula + scale derivation at the start() call site.
+        //   (b) ply-growth base allocation — SF timeman.cpp:106-134 grows the base time
+        //   allocation with game ply (pow(ply+2.95,0.46)) and damps it by banked time
+        //   (log10 scale). SF's own optScale/maxScale/timeLeft machinery is a different time
+        //   model built around per-move-horizon percentages zug doesn't compute, so only the
+        //   ply/log-time SHAPE is ported, as a bounded multiplier on zug's existing flat
+        //   usable/mtg+inc*0.94 base — see set_time_limits() for the exact formula.
+        // Both real-clock only (nested inside timeMan/tmScaled — TIMEMAN must also be on).
+        // Default OFF; env TMFALLING=1.
+        bool tmFalling = false;
         // ---- TTCUTBONUS (2026-07-20, SF search.cpp:759-776 + Stormphrax search.cpp:682-698):
         // on the non-PV TT-cutoff fast path (where no move loop runs at this node), credit a
         // quiet ttMove that fails high (ttValue>=beta) with a depth-scaled history+conthist
@@ -971,11 +1023,13 @@ struct Context {
             if (const char* e = getenv("CONTHISTBASECONT4W"))     { int v = atoi(e); if (v >= 0) conthistBaseCont4W     = v; }
             if (const char* e = getenv("CONTHISTBASECONT6W"))     { int v = atoi(e); if (v >= 0) conthistBaseCont6W     = v; }
             if (on("QSTTQUIET")) qsTtQuiet = true;
+            if (on("FULLPROBCUT")) fullProbCut = true;
             if (off("SYZYGY")) syzygy = false; // shipped default-on; kill-switch (path-gated by TB::loaded())
             if (const char* e = getenv("MOVEOVERHEAD")) { int v = atoi(e); if (v >= 0) moveOverhead = v; }
             if (const char* e = getenv("CONTEMPT")) contempt = atoi(e); // cp; 0 = off
             if (off("TIMEMAN")) timeMan = false; // shipped default-on (+28 Elo TC-SPRT); kill-switch
             if (on("NODEEFFORT")) nodeEffort = true; // opt-in: node-effort/instability TIMEMAN scaling
+            if (on("TMFALLING")) tmFalling = true; // opt-in: fallingEval + ply-growth TIMEMAN pieces
             if (on("TTCUTBONUS")) ttCutBonus = true;
             if (off("LMPHIST")) lmpHist = false; // shipped default-on (movetime SPRT positive); kill-switch
             if (const char* e = getenv("LMPHISTDIV")) { int v = atoi(e); if (v > 0) lmpHistDiv = v; }
@@ -1130,6 +1184,16 @@ struct Context {
     // that's where SF actually resets it too (Search::Worker::clear(), search.cpp:594
     // — "usually before a new game", not per-iteration).
     int     ttMoveHistory = 0;
+    // TMFALLING (a): SF's mainThread->bestPreviousAverageScore (search.h:252,
+    // search.cpp:240) — a fast /2 EMA of the root's completed score, carried from the
+    // END of one start() call into the START of the next (same cross-search lifetime
+    // as ttMoveHistory just above — reset only in reset_tables(), at ucinewgame).
+    // VALUE_INFINITE sentinel (matches SF's own "never searched yet" marker,
+    // thread.cpp:262): on first use the fallingEval formula naturally saturates to its
+    // own ceiling clamp, exactly like SF's, so no special-case branch is needed at the
+    // read site. Only ever written/read when Tune::tmFalling is on; harmless dead field
+    // otherwise.
+    int     bestPreviousAverageScore = VALUE_INFINITE;
     // NMPSF: SF's Worker::nmpMinPly (search.h:335) — the null-move verification
     // recursion guard. 0 = verification not in progress (NMP allowed everywhere);
     // while a verification search is running it holds ss->ply + 3*(depth-R)/4 so
@@ -1223,6 +1287,7 @@ void reset_tables(Context& C) {
     std::memset(C.lowPly, 0, sizeof(C.lowPly));
     std::memset(C.pawnOrderHist, 0, sizeof(C.pawnOrderHist));
     C.ttMoveHistory = 0;
+    C.bestPreviousAverageScore = VALUE_INFINITE; // TMFALLING (a): same reset scope as ttMoveHistory
     C.nmpMinPly = 0;
     C.tt.clear();
 }
@@ -2429,6 +2494,44 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
     if (C.tune.iir && depth >= 4 && !ttMove && !rootNode)
         depth--;
 
+    // FULLPROBCUT (see Tune::fullProbCut for the full gate/scale citation): the real
+    // capture-loop ProbCut (SF search.cpp:935-981, Step 11), ported ahead of the cheap
+    // TT-only variant below, matching SF's own order (Step 11 before Step 12's "small
+    // ProbCut idea"). Independent flag — works whether the cheap variant is on or off.
+    if (C.tune.fullProbCut && !PvNode && !ss->inCheck && !excluded && depth >= 3
+        && std::abs(beta) < VALUE_MATE_IN_MAX_PLY
+        && !(ttHit && ttValue != VALUE_NONE && ttValue < beta + 113 - 30 * improving)) {
+        int probCutBeta  = beta + 113 - 30 * improving;
+        int probCutDepth = std::clamp(depth - 5 - (eval - beta) / 151, 0, depth);
+
+        MoveList pcList;
+        generate<CAPTURES>(pos, pcList);
+        score_moves(C, pos, pcList.begin(), pcList.end(), ttMove, ss, MOVE_NONE, 0, 0, 0);
+        ExtMove* pcCur = pcList.begin();
+        StateInfo pcSt;
+        while (pcCur != pcList.end()) {
+            Move m = pick_next(pcCur, pcList.end());
+            if (m == excluded || !pos.legal(m)) continue;
+            if (!pos.see_ge(m, probCutBeta - eval)) continue;
+
+            pos.do_move(m, pcSt);
+            C.tt.prefetch(pos.key());
+            int value = -qsearch(C, pos, ss + 1, -probCutBeta, -probCutBeta + 1);
+            if (value >= probCutBeta && probCutDepth > 0)
+                value = -negamax<false>(C, pos, ss + 1, -probCutBeta, -probCutBeta + 1,
+                                         probCutDepth, !cutNode);
+            pos.undo_move(m);
+            if (C.stop) return 0;
+
+            if (value >= probCutBeta) {
+                C.tt.store(tte, pos.key(), C.tt.value_to_tt(value, ss->ply), ss->ttPv,
+                           BOUND_LOWER, probCutDepth + 1, m, rawEval);
+                if (std::abs(value) < VALUE_MATE_IN_MAX_PLY)
+                    return value - (probCutBeta - beta);
+            }
+        }
+    }
+
     // #2a ProbCut, cheap TT-only variant (SF search.cpp:985-989): a stored LOWER
     // bound already far above beta at near-equal depth is enough to fail high here
     // without a move loop. Fires where the exact-depth TT cutoff above (which needs
@@ -3220,6 +3323,34 @@ void set_time_limits(Context& C, const Position& pos) {
         int mtg = C.limits.movestogo ? C.limits.movestogo : 19;
         int base = std::max(1, usable / mtg + inc * 94 / 100);
         C.timeLimitHard = std::max(1, usable * 65 / 100);
+
+        // TMFALLING (b) (SF timeman.cpp:106-134, VERIFIED directly against
+        // ~sf18-arm/src, tag sf_18): ply-growth base-allocation shape. SF's real
+        // formula (`optScale = min(0.0121431 + pow(ply+2.94693,0.461073)*optConstant,
+        // 0.213035*limits.time[us]/timeLeft) * originalTimeAdjust`, with optConstant
+        // itself a small log10(time)-dependent term) is built entirely around a
+        // `timeLeft`/per-move-horizon percentage model zug doesn't have — reimplementing
+        // that wholesale isn't "sound, minimal plumbing" for an opt-in flag, so only the
+        // ply/log-time SHAPE is carried over: a bounded multiplier on the existing flat
+        // `base` above, 1.0 (no-op) at the game's first move, growing gently with game
+        // ply and damped when little time is banked. `ply` here is SF's game_ply (moves
+        // played so far in the GAME, not search depth) — SF passes pos.game_ply() into
+        // TimeManagement::init once per search; zug derives the equivalent from the FEN
+        // fullmove counter + side to move (structural/ply term, ported as-is, no
+        // value-scale rescale — it's a move count, not a cp value).
+        if (C.tune.tmFalling) {
+            int gamePly = 2 * (pos.fullmove_number() - 1) + (pos.side_to_move() == BLACK ? 1 : 0);
+            double plyShape = std::pow(gamePly + 2.94693, 0.461073) / std::pow(2.94693, 0.461073);
+            double logTimeSec = std::log10(std::max(1, usable) / 1000.0);
+            // Damp the ply growth's reach when little time is banked (qualitatively
+            // mirrors SF's own timeLeft-coupled cap on optScale — a short clock caps how
+            // far the multiplier can run away): clamp so the factor is 1.0 (no growth) at
+            // ply 0 and never more than doubles the base allocation.
+            double damp   = std::clamp(1.0 + 0.15 * logTimeSec, 0.4, 1.0);
+            double factor = std::clamp(1.0 + (plyShape - 1.0) * damp, 1.0, 2.0);
+            base = std::max(1, (int) std::llround(base * factor));
+        }
+
         C.timeLimitSoft = std::min<int64_t>(base * 68 / 100, C.timeLimitHard);
         if (C.timeLimitSoft < 1) C.timeLimitSoft = 1;
         C.tmScaled = true; // enable start()'s per-iteration soft-limit scaling
@@ -3665,6 +3796,22 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
     // alpha this iteration, accumulated across the whole search. Only used/updated
     // when Tune::nodeEffort is on.
     double tmTotBestMoveChanges = 0.0;
+    // TMFALLING (a) (SF search.cpp:487-508/240/296-299, VERIFIED sf_18): fallingEval
+    // state. tmIterValue/tmIterIdx mirror SF's mainThread->iterValue[4] ring buffer —
+    // pure per-start()-call local state (never needs to persist across `go` calls, unlike
+    // Context::bestPreviousAverageScore below). tmRootAvg/tmRootAvgInit mirror SF's
+    // per-root-move averageScore blend (search.cpp:1310-1311, `(value+avg)/2`), reduced to
+    // a single scalar since zug's single-PV ID loop only ever has ONE "current root" slot
+    // per iteration (SF's per-RootMove map only matters under MultiPV). Seeded from
+    // Context::bestPreviousAverageScore exactly like SF seeds iterValue from
+    // bestPreviousScore at iterative_deepening entry (search.cpp:296-299). Harmless when
+    // Tune::tmFalling is off (never read/written).
+    int  tmIterValue[4] = {0, 0, 0, 0};
+    int  tmIterIdx      = 0;
+    int  tmRootAvg      = 0;
+    bool tmRootAvgInit  = false;
+    if (C.tune.tmFalling)
+        for (int& v : tmIterValue) v = C.bestPreviousAverageScore;
     for (int depth = 1; depth <= maxDepth; ++depth) {
         C.rootDepthGlobal = depth;
         // NODEEFFORT: SF search.cpp:327 ages the running instability EMA at the top of
@@ -3799,6 +3946,33 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
                 double bestMoveInstability = 1.02 + 2.14 * tmTotBestMoveChanges;
                 scale *= highBestMoveEffort * bestMoveInstability;
             }
+            // TMFALLING (a) (SF search.cpp:487-494, VERIFIED sf_18): fallingEval — a
+            // falling score (vs. the PREVIOUS search's blended root average AND this
+            // search's own score 4 iterations back) extends the budget.
+            //
+            // SCALE (critical — NOT a blind x0.4808): 2.24/0.93 are COEFFICIENTS of a
+            // cp-scale VALUE DIFFERENCE, not additive value-scale constants added to a cp
+            // value — to reproduce the same chess-equivalent swing under zug's smaller cp
+            // scale (pawn=100 vs SF's 208, ratio 0.4808), the coefficient must scale by the
+            // INVERSE ratio (x1/0.4808 ~= x2.08), not x0.4808. Verified numerically: SF's
+            // formula saturates its own ceiling clamp (1.70) at roughly a 70cp SF-scale
+            // swing (~0.336 pawns) — 11.85+2.24*70~=168.6. Reproducing that SAME
+            // pawn-fraction swing at zug's scale (~33.6 zug-cp) needs
+            // 11.85+coeff*33.6~=170 => coeff~=4.71, matching 2.24*2.08~=4.66 to within
+            // rounding (NOT 2.24*0.48~=1.08, which would need an eval swing over 2x larger
+            // to saturate, silently gutting the effect). Same derivation for 0.93*2.08~=1.93.
+            // The additive 11.85 baseline is dimensionless (sets where the un-clamped ratio
+            // sits before the value terms shift it, not a cp value) — ported unchanged.
+            if (C.tune.tmFalling) {
+                double fallingEval = (11.85 + 4.66 * (C.bestPreviousAverageScore - score)
+                                             + 1.93 * (tmIterValue[tmIterIdx] - score)) / 100.0;
+                fallingEval = std::clamp(fallingEval, 0.57, 1.70);
+                scale *= fallingEval;
+                tmIterValue[tmIterIdx] = score;
+                tmIterIdx = (tmIterIdx + 1) & 3;
+                tmRootAvg = tmRootAvgInit ? (score + tmRootAvg) / 2 : score;
+                tmRootAvgInit = true;
+            }
             softLimit = std::max<int64_t>(1, int64_t(C.timeLimitSoft * scale));
             // Never let the scaled soft limit exceed the hard cap.
             if (C.timeLimitHard && softLimit > C.timeLimitHard) softLimit = C.timeLimitHard;
@@ -3807,6 +3981,13 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
             && softLimit && elapsed(C) >= softLimit) break;
         if (C.limits.nodes && C.nodeCount >= C.limits.nodes) break;
     }
+
+    // TMFALLING (a): persist this search's fast root-score EMA as the "previous average"
+    // baseline the NEXT start() call on this Context reads (SF search.cpp:240,
+    // `bestPreviousAverageScore = bestThread->rootMoves[0].averageScore`, assigned once
+    // per completed `go`). Only written when at least one iteration actually completed.
+    if (C.tune.tmFalling && tmRootAvgInit)
+        C.bestPreviousAverageScore = tmRootAvg;
 
     if (useAcc) pos.set_nnue_acc(nullptr); // detach: eval reverts to from-scratch off-search
 
