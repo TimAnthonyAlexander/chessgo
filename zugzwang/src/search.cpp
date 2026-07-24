@@ -598,6 +598,13 @@ struct Context {
         // reset_tables) -> byte-identical.
         bool pieceToHist   = false;
         int  pieceToWeight = 256;
+        // PIECETOLMR: fold pieceToHist into the LMR reduction reads too (not just
+        // ordering). v1 did this unconditionally and lost -25 Elo: adding pieceTo to
+        // zug's UN-normalized history sum inflates `hist`, so LMR under-reduces good-
+        // history quiets -> tree bloat -> lost movetime depth (SP normalizes ÷1024;
+        // zug does not). Default OFF -> PIECETOHIST=1 is now ORDERING-ONLY, which
+        // can't inflate LMR. env PIECETOLMR=1 to also feed LMR (v1 behavior).
+        bool pieceToLmr    = false;
         // ---- CONTHISTBASE (2026-07-24, Stormphrax history.h:151-177 updateConthist /
         // 58-60 updateWithBase): blended-base gravity for continuation-history updates.
         // zug's update_cont_entry (and hence every ch1/ch2/ch3/ch4/ch6 write via
@@ -937,6 +944,7 @@ struct Context {
             if (const char* e = getenv("OPTDIV"))          { int v = atoi(e); if (v > 0) optDiv = v; }
             if (on("PIECETOHIST")) pieceToHist = true;
             if (const char* e = getenv("PIECETOWEIGHT")) { int v = atoi(e); if (v >= 0) pieceToWeight = v; }
+            if (on("PIECETOLMR")) pieceToLmr = true;
             if (on("CONTHISTBASE")) conthistBase = true;
             if (const char* e = getenv("CONTHISTBASEBUTTERFLYW")) { int v = atoi(e); if (v >= 0) conthistBaseButterflyW = v; }
             if (const char* e = getenv("CONTHISTBASEPIECETOW"))   { int v = atoi(e); if (v >= 0) conthistBasePieceToW   = v; }
@@ -2722,7 +2730,7 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                 hist = C.history[us][from_sq(m)][to_sq(m)];
                 // PIECETOHIST: same term score_moves_impl folds into its ordering/
                 // histScore composite — see Tune::pieceToHist. Default off -> no-op.
-                if (C.tune.pieceToHist)
+                if (C.tune.pieceToHist && C.tune.pieceToLmr)
                     hist += C.pieceToHist[piece_dense(mover)][to_sq(m)] * C.tune.pieceToWeight / 256;
                 if (C.tune.contHist) {
                     int off = piece_dense(mover) * SQUARE_NB + to_sq(m);
@@ -2826,7 +2834,7 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                 } else {
                     hist2 = C.history[us][from_sq(m)][to_sq(m)];
                     // PIECETOHIST: same term as the LMR-branch hist assembly above.
-                    if (C.tune.pieceToHist)
+                    if (C.tune.pieceToHist && C.tune.pieceToLmr)
                         hist2 += C.pieceToHist[piece_dense(mover)][to_sq(m)] * C.tune.pieceToWeight / 256;
                     if (C.tune.contHist) {
                         int off = piece_dense(mover) * SQUARE_NB + to_sq(m);
