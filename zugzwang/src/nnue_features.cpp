@@ -786,9 +786,12 @@ int perspective_mirror(Square ksq, Color persp) {
 }
 
 bool threat_gate_enabled() {
-    // Default OFF: only THREATGATE=1 enables the bucket-cross-same-mirror shortcut.
-    // Mirrors threat_delta_enabled's env-read style (parsed once, cached).
-    static const bool on = [] { const char* e = getenv("THREATGATE"); return e && e[0] == '1'; }();
+    // SHIPPED default-ON (2026-07-24): keep threats on the delta path across a bucket
+    // cross that keeps the same mirror, refreshing only the base columns. Byte-identical
+    // (ASSERT-clean + 5-position full-search node/score/bestmove match) and NPS-positive
+    // (~+1.9% interleaved, mechanistic ceiling +2.64%: 87.4% of king-crosses are
+    // same-mirror). Kill-switch THREATGATE=0. Mirrors threat_delta_enabled's env style.
+    static const bool on = [] { const char* e = getenv("THREATGATE"); return !(e && e[0] == '0'); }();
     return on;
 }
 
