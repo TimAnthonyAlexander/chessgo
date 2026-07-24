@@ -108,6 +108,15 @@ bool acc_fuse_enabled() {
     return on;
 }
 
+// FINNY (default OFF): accumulator refresh cache ("Finny tables") for the BASE
+// (non-threat) half only. See AccStack::build_half_finny's doc comment (nnue_accumulator.h)
+// for the full design + bit-exactness argument. FINNY=1 to enable; default OFF leaves
+// every base-refresh call site's build_half exactly as before.
+bool finny_enabled() {
+    static const bool on = [] { const char* e = getenv("FINNY"); return e && e[0] == '1'; }();
+    return on;
+}
+
 // ftAdd / ftSub — add or subtract feature f's int16 FT weight column into a half.
 // Mirrors gomachine ftAdd/ftSub (enriched.go): W0i is feature-major, W0i[f*H + i].
 // int16 wraparound add/sub, exactly as the from-scratch buildAccHalf.
@@ -144,6 +153,19 @@ AccStack::AccStack() : slots_(NumSlots), counts_(static_cast<std::size_t>(InputT
         s.subB.reserve(MaxActive);
         s.addB.reserve(MaxActive);
     }
+    // FINNY: base sublists are at most MaxActive (== the full base ++ threat bound);
+    // reserve generously since the exact base-only bound (<=32 pieces) is smaller. NOTE:
+    // clear_finny() (which reads g_net.B0i) is deliberately NOT called here -- a Context
+    // (and this AccStack) can be constructed before NNUE::load() has run/succeeded (e.g.
+    // the HCE-fallback case), at which point g_net.B0i is empty. clear_finny() is instead
+    // called from reset(), which is only ever invoked when useAcc (== NNUE::loaded()) is
+    // true (search.cpp: `if (useAcc) { C.accStack.reset(pos); ... }`), so g_net is
+    // guaranteed fully populated by the time it runs.
+    finnyBase_.reserve(MaxActive);
+    finnyThreat_.reserve(MaxActive);
+    for (auto& row : finny_)
+        for (FinnyEntry& e : row)
+            e.feats.reserve(MaxActive);
 }
 
 void AccStack::enumerate_flat(const Position& pos, Color persp, std::vector<int>& out) {
@@ -157,6 +179,42 @@ void AccStack::build_half(int16_t* acc, const std::vector<int>& feats) const {
     const int16_t* B0 = g_net.B0i.data();
     for (int i = 0; i < H; ++i) acc[i] = B0[i];
     for (int f : feats) ft_add(acc, f);
+}
+
+// build_half_finny — see the doc comment on the declaration (nnue_accumulator.h) for the
+// full design/bit-exactness argument. Partitions `feats` (the exact list build_half would
+// consume) into base ([0, PsqSize)) and threat ([PsqSize, InputTotal)) sublists using the
+// disjoint-range invariant active_features/nnue_arch.h guarantee, diffs the base sublist
+// against the (ksq, persp) cache entry's remembered base list via the shared apply_diff
+// multiset-symmetric-difference primitive, then adds this call's threat sublist on top of
+// the (now up-to-date) cached base contribution via a plain ft_add sum.
+void AccStack::build_half_finny(int16_t* acc, const std::vector<int>& feats, Square ksq, Color persp) {
+    finnyBase_.clear();
+    finnyThreat_.clear();
+    for (int f : feats) {
+        if (f < PsqSize) finnyBase_.push_back(f);
+        else             finnyThreat_.push_back(f);
+    }
+
+    FinnyEntry& e = finny_[ksq][persp];
+    apply_diff(e.acc, e.feats, finnyBase_); // cached base feature set -> current base set
+    e.feats = finnyBase_;                   // remember what e.acc now reflects
+
+    std::memcpy(acc, e.acc, sizeof(int16_t) * H);
+    for (int f : finnyThreat_) ft_add(acc, f); // threats are never cached (see doc comment)
+}
+
+// clear_finny — reset every FinnyEntry to the "empty board" state (bias only, empty base
+// feature list), so no cache entry survives across a new search root. Called from reset().
+void AccStack::clear_finny() {
+    const int16_t* B0 = g_net.B0i.data();
+    for (int s = 0; s < SQUARE_NB; ++s) {
+        for (int c = 0; c < COLOR_NB; ++c) {
+            FinnyEntry& e = finny_[s][c];
+            std::memcpy(e.acc, B0, sizeof(int16_t) * H);
+            e.feats.clear();
+        }
+    }
 }
 
 // apply_diff: count-array multiset symmetric difference, byte-identical in RESULT to a
@@ -277,11 +335,24 @@ void AccStack::apply_diff(int16_t* acc, const std::vector<int>& parent, const st
 
 void AccStack::reset(const Position& pos) {
     sp_ = 0;
+    // FINNY: a new search root starts a fresh cache lifetime — no entry may survive
+    // across searches (see clear_finny()'s doc comment / build_half_finny's design note
+    // in the header). Gated on finny_enabled() purely to keep reset() a zero-overhead
+    // no-op for the default-off path (128 entries' worth of memcpy otherwise); harmless
+    // either way since finny_ is only ever read/written when finny_enabled() is true.
+    if (finny_enabled()) clear_finny();
     Slot& s = slots_[0];
+    s.kingW = pos.king_square(WHITE);
+    s.kingB = pos.king_square(BLACK);
     enumerate_flat(pos, WHITE, s.fw);
     enumerate_flat(pos, BLACK, s.fb);
-    build_half(s.w, s.fw);
-    build_half(s.b, s.fb);
+    if (finny_enabled()) {
+        build_half_finny(s.w, s.fw, s.kingW, WHITE);
+        build_half_finny(s.b, s.fb, s.kingB, BLACK);
+    } else {
+        build_half(s.w, s.fw);
+        build_half(s.b, s.fb);
+    }
     // LAZYACC: slot 0 is materialized right here (eager, always — the root is read
     // immediately by the caller in practice, and reset() is cheap relative to search),
     // so mark it clean. materialize()'s walk-to-clean-ancestor loop terminates on slot 0
@@ -295,6 +366,11 @@ void AccStack::reset(const Position& pos) {
 
 void AccStack::push(const Position& pos) {
     Slot& dst = slots_[sp_ + 1];
+    // FINNY: always record the child's own king squares (cheap — two lsb reads) so
+    // materialize()'s later build_half_finny call (LAZYACC path) has a live-Position-free
+    // way to know which cache entry to use for this slot's eventual refresh.
+    dst.kingW = pos.king_square(WHITE);
+    dst.kingB = pos.king_square(BLACK);
 
     if (lazy_acc_enabled()) {
         // LAZYACC: push() is the full-enumerate (THREATDELTA=0) path — record it as a
@@ -335,6 +411,11 @@ void AccStack::push(const Position& pos) {
 
 void AccStack::push_delta(const BoardSnapshot& oldb, const Position& pos) {
     Slot& dst = slots_[sp_ + 1];
+    // FINNY: always record the child's own king squares up front — needed by
+    // materialize()'s later build_half_finny call on a refreshed half (LAZYACC/LAZYACC2
+    // paths defer the actual build_half that far, by which point `pos` is long gone).
+    dst.kingW = pos.king_square(WHITE);
+    dst.kingB = pos.king_square(BLACK);
 
     if (lazy_acc_enabled()) {
         if (lazy_acc2_enabled()) {
@@ -449,7 +530,8 @@ void AccStack::push_delta(const BoardSnapshot& oldb, const Position& pos) {
     // (delta now includes the base swap for a bucket-only cross, folded into the same lists).
     if (refreshW) {
         enumerate_flat(pos, WHITE, dst.fw);
-        build_half(dst.w, dst.fw);
+        if (finny_enabled()) build_half_finny(dst.w, dst.fw, dst.kingW, WHITE);
+        else                 build_half(dst.w, dst.fw);
     } else {
         std::memcpy(dst.w, src.w, sizeof(dst.w));
         apply_diff(dst.w, dSubW_, dAddW_); // sub decremented, add incremented
@@ -457,7 +539,8 @@ void AccStack::push_delta(const BoardSnapshot& oldb, const Position& pos) {
     // Black half: same.
     if (refreshB) {
         enumerate_flat(pos, BLACK, dst.fb);
-        build_half(dst.b, dst.fb);
+        if (finny_enabled()) build_half_finny(dst.b, dst.fb, dst.kingB, BLACK);
+        else                 build_half(dst.b, dst.fb);
     } else {
         std::memcpy(dst.b, src.b, sizeof(dst.b));
         apply_diff(dst.b, dSubB_, dAddB_);
@@ -471,6 +554,9 @@ void AccStack::push_delta(const BoardSnapshot& oldb, const Position& pos) {
 
 void AccStack::pushNull() {
     Slot& dst = slots_[sp_ + 1];
+    // A null move changes no piece placement, so both king squares are unchanged.
+    dst.kingW = slots_[sp_].kingW;
+    dst.kingB = slots_[sp_].kingB;
 
     if (lazy_acc_enabled()) {
         if (lazy_acc2_enabled()) {
@@ -561,26 +647,30 @@ void AccStack::materialize(int k) {
                                     /*doB=*/!s.refB, dSubB_, dAddB_);
             }
             if (s.refW) {
-                build_half(s.w, s.fw);
+                if (finny_enabled()) build_half_finny(s.w, s.fw, s.kingW, WHITE);
+                else                 build_half(s.w, s.fw);
             } else {
                 std::memcpy(s.w, p.w, sizeof(s.w));
                 apply_diff(s.w, dSubW_, dAddW_);
             }
             if (s.refB) {
-                build_half(s.b, s.fb);
+                if (finny_enabled()) build_half_finny(s.b, s.fb, s.kingB, BLACK);
+                else                 build_half(s.b, s.fb);
             } else {
                 std::memcpy(s.b, p.b, sizeof(s.b));
                 apply_diff(s.b, dSubB_, dAddB_);
             }
         } else {
             if (s.refW) {
-                build_half(s.w, s.fw);
+                if (finny_enabled()) build_half_finny(s.w, s.fw, s.kingW, WHITE);
+                else                 build_half(s.w, s.fw);
             } else {
                 std::memcpy(s.w, p.w, sizeof(s.w));
                 apply_diff(s.w, s.subW, s.addW);
             }
             if (s.refB) {
-                build_half(s.b, s.fb);
+                if (finny_enabled()) build_half_finny(s.b, s.fb, s.kingB, BLACK);
+                else                 build_half(s.b, s.fb);
             } else {
                 std::memcpy(s.b, p.b, sizeof(s.b));
                 apply_diff(s.b, s.subB, s.addB);

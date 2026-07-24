@@ -120,6 +120,14 @@ private:
                                              // materialized half).
         std::vector<int>    subW, addW;     // pending White delta lists (when !refW)
         std::vector<int>    subB, addB;     // pending Black delta lists (when !refB)
+
+        // --- FINNY (default-off, see nnue_accumulator.cpp finny_enabled) ---
+        // Each perspective's own king square AT this slot, always populated (regardless
+        // of FINNY) by push/push_delta/pushNull/reset from the live board at the moment
+        // the slot is formed. Cheap (two king_square() lsb reads) and harmless when FINNY
+        // is off. materialize() has no live Position to re-derive this from when a
+        // refreshed half is finally built, so it is captured up front instead.
+        Square kingW = SQ_NONE, kingB = SQ_NONE;
     };
 
     // enumerate_flat fills `out` with persp's active features as a single flat list
@@ -133,6 +141,57 @@ private:
     // apply_diff applies the multiset symmetric difference (child − parent) to acc via
     // the count-array scratch (O(|parent|+|child|)); leaves counts_ all-zero for reuse.
     void apply_diff(int16_t* acc, const std::vector<int>& parent, const std::vector<int>& child);
+
+    // FINNY (default OFF, see nnue_accumulator.cpp finny_enabled) — an accumulator
+    // refresh cache ("Finny tables", after Koivisto's Luecx; ported from Stockfish's
+    // AccumulatorCaches::Cache, nnue_accumulator.h). `feats` is base-refresh call site's
+    // FULL active feature list (base ++ threat, exactly what build_half would consume) —
+    // base indices live in [0, PsqSize), threat in [PsqSize, InputTotal) (nnue_arch.h),
+    // disjoint ranges, so partitioning by that threshold recovers the same base/threat
+    // split active_features produced without needing to re-derive it from the board.
+    //
+    // Design: one FinnyEntry per (king square, perspective) — 64 * 2 — keyed by the
+    // LITERAL king square (not the coarser bucket|mirror key perspective_bucket_key
+    // returns), mirroring SF's Cache<Size>::entries[SQUARE_NB][COLOR_NB] exactly. This is
+    // valid because base_index(x, aRel, pt0, sq) with x = make_xform(ksq, persp) depends
+    // on ksq/persp ONLY through x.off/x.orient — a pure function of (ksq, persp) alone —
+    // so every base feature this perspective can ever emit while its king sits on `ksq`
+    // is a pure function of (piece color-relative-to-persp, piece type, piece square);
+    // nothing else about the rest of the board matters. A cached entry is therefore
+    // reusable across completely unrelated positions that merely share this perspective's
+    // king square.
+    //
+    // Diffing is done in FEATURE-INDEX space, not board/mailbox space (unlike SF's
+    // get_changed_pieces): the entry remembers the base feature LIST it was last built
+    // from; a fresh use computes the current base feature list (already partitioned out
+    // of `feats` above) and hands (cached list, current list) to the SAME apply_diff
+    // multiset-symmetric-difference primitive every other incremental path in this file
+    // already relies on for bit-exactness (int16 column add/sub commute & associate, so
+    // the result is independent of how the diff was computed or in what order it's
+    // applied). This sidesteps needing a stored board/mailbox at all.
+    //
+    // Threats are NEVER cached (SF doesn't cache them either — its Finny cache covers
+    // only the non-threat PSQFeatureSet accumulator, see nnue_feature_transformer.h's
+    // separate PSQ/Threat AccumulatorStates): this call's threat sublist is added on top
+    // of the (possibly-cached) base contribution via a plain ft_add loop, every time.
+    //
+    // Bit-exactness: acc == B0 + Σ_{f in feats} W0[f], grouped into two passes (base via
+    // the cache's telescoped diff history, threat via a direct sum) instead of one pass
+    // over the full list — int16 addition is commutative/associative, so regrouping by
+    // base-vs-threat and by "already applied via a prior diff" vs "applied now" cannot
+    // change the total. Equivalent to build_half(feats) provided the cache's remembered
+    // feature list for (ksq, persp) truly reflects everything applied to its acc[] so far
+    // — guaranteed by construction (every write path updates both together) and reset at
+    // every clear_finny() (called from reset(), each new search root) so no cache entry
+    // ever survives across searches.
+    void build_half_finny(int16_t* acc, const std::vector<int>& feats, Square ksq, Color persp);
+
+    // clear_finny resets every FinnyEntry to the "empty board" state (bias only, empty
+    // base feature list) — called from reset() so no cache entry survives across a new
+    // search root. The very first use of each entry thereafter is a full diff against
+    // empty (== a full build), byte-identical to build_half's first-touch cost; only
+    // later touches of that same king square/perspective get the cheap-diff benefit.
+    void clear_finny();
 
     // ACCFUSE (default OFF, see nnue_accumulator.cpp acc_fuse_enabled): a fused/tiled
     // apply_diff. Each net-nonzero feature's column is expanded (by |delta| copies of
@@ -157,6 +216,16 @@ private:
     Features             scratch_;  // reusable Features for enumerate_flat
     // Reusable per-perspective sub/add scratch for push_delta (capacity persists).
     std::vector<int>     dSubW_, dAddW_, dSubB_, dAddB_;
+
+    // FINNY cache — one entry per (king square, perspective); see build_half_finny above.
+    struct FinnyEntry {
+        alignas(64) int16_t acc[H];  // bias + Σ cached base-feature columns (never threats)
+        std::vector<int>    feats;   // the base feature list `acc` reflects (all < PsqSize)
+    };
+    FinnyEntry finny_[SQUARE_NB][COLOR_NB];
+    // Reusable partition scratch for build_half_finny (capacity persists).
+    std::vector<int> finnyBase_, finnyThreat_;
+
     int                  sp_ = 0;
 };
 
