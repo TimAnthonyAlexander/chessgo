@@ -19,6 +19,7 @@
 #include <thread>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 using namespace BB;
 
@@ -691,6 +692,23 @@ struct Context {
         // byte-identical (movetime returns before tmScaled is set), so the movetime SPRT and
         // golden/bench are unchanged. Kill-switch: env TIMEMAN=0.
         bool timeMan = true;
+        // ---- NODEEFFORT (2026-07-24, SF search.cpp:487-508/1308/1346, sf_18 cb3d4ee):
+        // two more TIMEMAN-style multiplicative factors on the per-iteration soft-limit
+        // scale, layered on top of the Stormphrax stability/eval-trend scale above:
+        //   highBestMoveEffort — shrink the budget (x0.76) once the current best root
+        //   move has soaked up >=93.34% of this search's total nodes (SF's nodesEffort
+        //   >= 93340, a per-100000 ratio — a structural node-count fraction, not a cp
+        //   value, so SF's threshold is ported unchanged, no value-scale rescale).
+        //   bestMoveInstability — 1.02 + 2.14*(decaying count of this-iteration PV
+        //   flips) — extend the budget while the root PV keeps changing.
+        // Requires TIMEMAN (nested inside its C.tmScaled per-iteration block below) —
+        // real-clock only, matching TIMEMAN's own scope. SF's third factor, fallingEval
+        // (bestPreviousAverageScore across MOVES in the game + a 4-iteration score
+        // ring-buffer), is NOT ported: zug has neither piece of state, and fabricating
+        // it isn't "sound, minimal plumbing" (see the NODEEFFORT comment in start()'s
+        // ID loop for the full list of what's deferred and why). Default OFF; env
+        // NODEEFFORT=1.
+        bool nodeEffort = false;
         // ---- TTCUTBONUS (2026-07-20, SF search.cpp:759-776 + Stormphrax search.cpp:682-698):
         // on the non-PV TT-cutoff fast path (where no move loop runs at this node), credit a
         // quiet ttMove that fails high (ttValue>=beta) with a depth-scaled history+conthist
@@ -957,6 +975,7 @@ struct Context {
             if (const char* e = getenv("MOVEOVERHEAD")) { int v = atoi(e); if (v >= 0) moveOverhead = v; }
             if (const char* e = getenv("CONTEMPT")) contempt = atoi(e); // cp; 0 = off
             if (off("TIMEMAN")) timeMan = false; // shipped default-on (+28 Elo TC-SPRT); kill-switch
+            if (on("NODEEFFORT")) nodeEffort = true; // opt-in: node-effort/instability TIMEMAN scaling
             if (on("TTCUTBONUS")) ttCutBonus = true;
             if (off("LMPHIST")) lmpHist = false; // shipped default-on (movetime SPRT positive); kill-switch
             if (const char* e = getenv("LMPHISTDIV")) { int v = atoi(e); if (v > 0) lmpHistDiv = v; }
@@ -1083,6 +1102,17 @@ struct Context {
     int     threadIdx = 0;
     Move    rootBestMove = MOVE_NONE;
     int     rootBestScore = 0;
+    // NODEEFFORT (SF search.cpp:1308/1346/487-508, sf_18): per-root-move node-count
+    // accrual (SF's RootMove::effort) + a this-iteration best-move-change count (SF's
+    // Worker::bestMoveChanges). Both populated ONLY when Tune::nodeEffort is on, read
+    // by start()'s ID loop to scale the TIMEMAN per-iteration soft-limit alongside its
+    // existing stability/eval-trend factors. rootMoveEffort accumulates across every
+    // completed iteration of ONE start() call (mirrors rm.effort's lifetime — SF only
+    // resets it when a fresh position/search begins); reset in start() below.
+    // unordered_map (not a 64K-entry array) keeps this O(root move count), since Move
+    // is a bare uint16_t with no reserved "small" range to exploit.
+    std::unordered_map<Move, int64_t> rootMoveEffort;
+    int     rootBestMoveChangesIter = 0;
     // OPTIMISM (backlog #17): root side-to-move + a running EMA of the completed root
     // score across ID iterations, both reset in start() and consumed only by
     // optimism_term()/corrected_eval() when Tune::optimism is on. Harmless (never read,
@@ -2624,10 +2654,38 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                     dblMargin -= (int)(std::abs(correction_raw(C, pos, ss)) / C.tune.singCorrDiv);
                 if (C.tune.dblExt && !PvNode && s < singularBeta - dblMargin) {
                     extension = 2;
-                    // Wave 6: a 3rd ply only when the move fails verification by a very
-                    // wide margin — rare, so it can't explode the tree the way SF's raw
-                    // tripleMargin did.
-                    if (C.tune.tripleExt && s < singularBeta - 200) extension = 3;
+                    // TRIPLEEXT full margin (2026-07-24, SF search.cpp:1145-1146, sf_18
+                    // cb3d4ee): tripleMargin = 73 + 302*PvNode - 248*!ttCapture +
+                    // 90*ss->ttPv - corrValAdj - (ss->ply*2 > rootDepth*3)*50, corrValAdj =
+                    // |correctionValue|/230673 (search.cpp:1142). SCALE: 73/302/248/90/50
+                    // are SF-value-scale (pawn=208) bonuses/penalties compared against
+                    // singularBeta-value, which in zug is cp-scale (pawn=100, ratio
+                    // ~0.4808) -> 35/145/119/43/24. corrValAdj's divisor (230673) is
+                    // already zug-scale-correct (matches SINGCORRMARGIN's singCorrDiv,
+                    // see comment above). ss->ply / rootDepth are structural ply counts,
+                    // ported as-is; C.rootDepthGlobal is zug's rootDepth (ID-loop depth,
+                    // set once per iteration — search.cpp:3586-ish). PvNode is always
+                    // false in this branch (outer `!PvNode` gate above) so its term is
+                    // inert here; kept for formula fidelity.
+                    // FLOOR: unlike SF, zug's dblMargin deliberately dropped SF's raw
+                    // PvNode/!ttCapture swing (see the dblMargin comment above — porting
+                    // it unguarded "explode[s] zug's tree ~2 plies"). Applying the same
+                    // -119 !ttCapture swing here without a floor could push tripleMargin
+                    // BELOW dblMargin for a quiet ttMove with no ttPv bonus (35-119 = -84
+                    // vs dblMargin's ~52-76) — since this whole branch already satisfies
+                    // `s < singularBeta - dblMargin`, a tripleMargin < dblMargin would
+                    // make the triple tier fire on EVERY double extension, collapsing the
+                    // "rare 3rd ply for an extremely-singular move" design. Floor at
+                    // dblMargin + 16 (a small structural gap, not a value-scale constant)
+                    // to keep the tiers strictly ordered.
+                    if (C.tune.tripleExt) {
+                        int corrValAdj = (int)(std::abs(correction_raw(C, pos, ss)) / C.tune.singCorrDiv);
+                        int tripleMargin = 35 + 145 * (PvNode ? 1 : 0) - 119 * !ttCapture
+                                          + 43 * (ss->ttPv ? 1 : 0) - corrValAdj
+                                          - ((ss->ply * 2 > C.rootDepthGlobal * 3) ? 24 : 0);
+                        tripleMargin = std::max(tripleMargin, dblMargin + 16);
+                        if (s < singularBeta - tripleMargin) extension = 3;
+                    }
                 }
             }
             else if (singularBeta >= beta) {
@@ -2659,6 +2717,12 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         ss->currentMove = m;
         ss->currentPiece = mover;
         ss->didCapture = isCapture;
+
+        // NODEEFFORT (SF search.cpp:1308): snapshot this Context's node count before
+        // searching a root move, so the delta below can be attributed to it (SF's
+        // `rm.effort += nodes - nodeCount`). Off, or not the root, -> stays 0 and the
+        // read below is skipped entirely — no cost on the byte-identical-off path.
+        int64_t nodeEffortBefore = (rootNode && C.tune.nodeEffort) ? C.nodeCount : 0;
 
         pos.do_move(m, st);
         C.tt.prefetch(pos.key());
@@ -2908,7 +2972,17 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
 
         if (C.stop) return 0;
 
+        // NODEEFFORT: accrue this move's node cost (SF search.cpp:1308, unconditional
+        // for every root move, BEFORE the new-best-move check below — matches SF's
+        // ordering exactly). rootMoveEffort persists across every iteration of this
+        // start() call (reset there), so it's a running total, not a per-iteration one.
+        if (rootNode && C.tune.nodeEffort)
+            C.rootMoveEffort[m] += C.nodeCount - nodeEffortBefore;
+
         if (rootNode && (moveCount == 1 || score > alpha)) {
+            // SF search.cpp:1346: a later move (moveCount>1) overtaking alpha counts as
+            // a PV change this iteration — the raw signal behind bestMoveInstability.
+            if (C.tune.nodeEffort && moveCount > 1) ++C.rootBestMoveChangesIter;
             C.rootBestMove = m;
             C.rootBestScore = score;
         }
@@ -3550,6 +3624,10 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
     for (int i = 0; i < MAX_PLY + 13; ++i) stack[i].ply = i - 7;
 
     C.rootBestMove = MOVE_NONE;
+    // NODEEFFORT: fresh per-search-call state (mirrors SF's RootMoves being rebuilt at
+    // the start of every search) — harmless to clear even when the flag is off.
+    C.rootMoveEffort.clear();
+    C.rootBestMoveChangesIter = 0;
     int maxDepth = C.limits.depth ? C.limits.depth : MAX_PLY - 1;
 
     // HISTDECAY (sf-sp-search-backlog.md #2): faithful SF18/Stormphrax port —
@@ -3582,8 +3660,19 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
     Move   tmPrevBest  = MOVE_NONE;
     double tmAvgScore  = 0.0;
     bool   tmHaveAvg   = false;
+    // NODEEFFORT (SF search.cpp:272/327, sf_18): a decaying (halved each iteration,
+    // like SF's totBestMoveChanges) count of how many times a later root move overtook
+    // alpha this iteration, accumulated across the whole search. Only used/updated
+    // when Tune::nodeEffort is on.
+    double tmTotBestMoveChanges = 0.0;
     for (int depth = 1; depth <= maxDepth; ++depth) {
         C.rootDepthGlobal = depth;
+        // NODEEFFORT: SF search.cpp:327 ages the running instability EMA at the top of
+        // every iteration (before that iteration's own flips are counted below).
+        if (C.tune.nodeEffort) {
+            tmTotBestMoveChanges *= 0.5;
+            C.rootBestMoveChangesIter = 0;
+        }
 
         // Aspiration windows
         int score;
@@ -3635,6 +3724,16 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
 
         if (C.stop && depth > 1) break;
 
+        // NODEEFFORT (SF search.cpp:480-481): fold this iteration's flip count into the
+        // running (decaying) total, then reset the per-iteration counter for the next
+        // depth. Placed after the `C.stop` break so an interrupted iteration's partial
+        // (possibly not-fully-searched) flip count is never folded in — same guard SF
+        // gets from checking threads.stop before this bookkeeping runs.
+        if (C.tune.nodeEffort) {
+            tmTotBestMoveChanges += C.rootBestMoveChangesIter;
+            C.rootBestMoveChangesIter = 0;
+        }
+
         prevScore = score;
         // OPTIMISM: maintain a running EMA of the completed root score, consumed by
         // optimism_term() inside corrected_eval(). Off -> this update is skipped
@@ -3682,6 +3781,24 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
                 tmAvgScore += (score - tmAvgScore) / 8.0;
             } else { tmAvgScore = score; tmHaveAvg = true; }
             double scale = std::max(0.09, stabScale * evalScale);
+            // NODEEFFORT (SF search.cpp:502-505): two more multiplicative factors,
+            // layered on top of the Stormphrax scale above. Both are pure ratios (a
+            // node-count fraction, a flip count), not cp values, so SF's constants are
+            // ported unchanged — no value-scale rescale applies to either.
+            if (C.tune.nodeEffort) {
+                // nodesEffort: share (per 100000) of this search's total nodes so far
+                // spent on the CURRENT best root move (SF: rootMoves[0].effort*100000/
+                // nodes; rootMoves[0] is the current-best after SF's per-iteration sort,
+                // i.e. exactly C.rootBestMove here).
+                auto it = C.rootMoveEffort.find(C.rootBestMove);
+                int64_t effort = (it != C.rootMoveEffort.end()) ? it->second : 0;
+                int64_t nodesEffort = effort * 100000 / std::max<int64_t>(1, C.nodeCount);
+                double highBestMoveEffort = nodesEffort >= 93340 ? 0.76 : 1.0;
+                // bestMoveInstability (SF search.cpp:503): threads.size() divisor is 1
+                // here — this Context's own single-thread ID loop, not an SMP-aggregate.
+                double bestMoveInstability = 1.02 + 2.14 * tmTotBestMoveChanges;
+                scale *= highBestMoveEffort * bestMoveInstability;
+            }
             softLimit = std::max<int64_t>(1, int64_t(C.timeLimitSoft * scale));
             // Never let the scaled soft limit exceed the hard cap.
             if (C.timeLimitHard && softLimit > C.timeLimitHard) softLimit = C.timeLimitHard;
