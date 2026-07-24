@@ -698,3 +698,18 @@ were shown to be favorable NOISE by re-tests — do not ship on a single leaning
   retrain-free single-lever well, at 100ms/1-box confirmation resolution, appears genuinely dry for the
   SF/SP-derived candidates mined so far — the remaining movetime Elo is likely in (a) bigger structural
   ideas, (b) the net retrain, or (c) fishtest-scale confirmation infra, NOT more single-flag SPRTs.
+
+**QSTTQUIET follow-up (2026-07-24):** commit 6667b79 added a `qdepth==0` bound (fire the TT-quiet
+only at the entry qsearch node, pass qdepth+1 into its recursion) — this pushed the stall from
+game 120 to game 218 but did NOT eliminate it (still "stalled/disconnected"). qsearch DOES check
+time (search.cpp:1865, every 1024 nodes + C.stop after each recurse), so the stall is not a missing
+time-check — likely a qsearch ss-ply overflow (qsearch has no `ss->ply >= MAX_PLY` guard like negamax
+does) on a pathological position the quiet extension reaches. NEXT: add an explicit `ss->ply` guard
+to qsearch before recursing, then retest. Left default-off. Low priority (sub-+5 even if fixed).
+
+**QSTTQUIET final (2026-07-24, commit 58abc23):** TWO bugs fixed — (1) unbounded quiet recursion
+(qdepth==0 bound, 6667b79), (2) TT-collision board corruption from missing pseudo_legal guard
+(58abc23). Now crash-stable (ran 520g clean, no stall). Movetime verdict: WASH/slight-neg
+(520g, -5.35, 49.23%) — the +70% qsearch node cost (kiwipete 92926->159383) outweighs the
+accuracy gain at 100ms. Correctly ported now; a candidate for LONGER TC (qsearch cost relatively
+cheaper) but out of movetime scope. Left default-off.
