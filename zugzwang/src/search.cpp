@@ -1859,9 +1859,9 @@ void update_pawn_order_hist(Context& C, const Position& pos, Piece pc, Square to
     update_cont_entry(C.pawnOrderHist[pos.pawn_key() & 8191][piece_dense(pc)][to], scaled);
 }
 
-int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta);
+int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta, int qdepth = 0);
 
-int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta) {
+int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta, int qdepth) {
     if ((++C.nodeCount & 1023) == 0) check_time(C);
     if (C.stop) return 0;
 
@@ -1951,13 +1951,18 @@ int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta) {
     // (mirroring the loop's own `if (score >= beta) break;`, just without a loop to
     // break out of yet). Never double-searched: see the flag comment for why a real
     // quiet/non-promotion ttMove can never also be in `list`.
+    // qdepth == 0 bounds this to the ENTRY qsearch node of each line: the recursion
+    // below passes qdepth+1, and the capture loop passes qdepth unchanged, so once a
+    // quiet has been taken (qdepth>0) no further quiet is searched. Without this bound,
+    // quiet moves don't reduce material like captures do, so a chain of TT-quiet moves
+    // recurses unboundedly -> the engine stalls (observed: "stalled/disconnected @g120").
     bool qsTtQuietCutoff = false;
-    if (!inCheck && C.tune.qsTtQuiet && ttHit && ttMove != MOVE_NONE
+    if (qdepth == 0 && !inCheck && C.tune.qsTtQuiet && ttHit && ttMove != MOVE_NONE
         && !pos.is_capture(ttMove) && type_of_move(ttMove) != PROMOTION
         && tte->bound() != BOUND_UPPER && pos.legal(ttMove)) {
         pos.do_move(ttMove, st);
         C.tt.prefetch(pos.key());
-        int score = -qsearch(C, pos, ss + 1, -beta, -alpha);
+        int score = -qsearch(C, pos, ss + 1, -beta, -alpha, qdepth + 1);
         pos.undo_move(ttMove);
         if (C.stop) return 0;
         if (score > bestValue) {
@@ -1998,7 +2003,7 @@ int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta) {
 
         pos.do_move(m, st);
         C.tt.prefetch(pos.key());
-        int score = -qsearch(C, pos, ss + 1, -beta, -alpha);
+        int score = -qsearch(C, pos, ss + 1, -beta, -alpha, qdepth);
         pos.undo_move(m);
 
         if (C.stop) return 0;
