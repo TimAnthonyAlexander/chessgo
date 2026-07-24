@@ -568,6 +568,88 @@ struct Context {
         int  optBase         = 64;
         int  optMatScale     = 20;
         int  optDiv          = 800;
+        // ---- PIECETOHIST (2026-07-24, Stormphrax history.h:211 m_pieceTo / tunable.h
+        // movepickPieceToWeight=426, searchPieceToWeight=469, lmrPieceToWeight=379,
+        // maxPieceToHistory=16220): standalone [piece][to] quiet-history table — no
+        // from-square, no ancestor conditioning (distinct from both zug's [color][from]
+        // [to] butterfly table and the ancestor-keyed contHist1/2/3/4/6 planes). SP reads
+        // it blended near-equal to butterfly at three independent sites (movepick.cpp:249
+        // ordering weight 426 vs butterfly's 425; search.cpp:1013 main-search statScore
+        // composite 469 vs 481; LMR search.cpp:1155 379 vs 446) and updates it in
+        // lockstep with butterfly everywhere butterfly updates (history.h:144-149
+        // updateMainHistory, called from updateQuietScore alongside the conthist update).
+        // zug has no such table at all. Port: a single Context::pieceToHist
+        // [CONT_PIECE_NB][SQUARE_NB] table (piece_dense() x to-square, matching
+        // captHist's leading dims; no threat-bit sub-dims — zug's own
+        // tPawn/tMinor/tRook threat-ordering bonus is a separate existing mechanism,
+        // kept out of this port to stay reviewable), read into the SAME quiet-history
+        // composite zug already assembles for ordering (score_moves_impl) and for the
+        // LMR reduction (both the cached-histScore reuse path and the two hand-rolled
+        // hist/hist2 fresh-recompute blocks in negamax), and written in lockstep with
+        // the main butterfly update via update_piece_to_hist — same gravity idiom as
+        // update_cont_entry (zug's OWN ±400-bonus/±32000-clamp scale, not SP's raw
+        // magnitudes, matching every other port in this file). pieceToWeight: read as
+        // pieceToHist*pieceToWeight/256; 256 (weight 1.0) lands the term at butterfly's
+        // own implicit (unweighted) scale — SP's own three read sites all cluster
+        // pieceTo's weight within ~10% of butterfly's own (426:425, 469:481, 379:446),
+        // so a flat ~1:1 blend is a faithful simplification of SP's per-site distinct
+        // -but-similar weights, not a divergence from them. Default OFF; env
+        // PIECETOHIST=1. OFF path: the table is never read or written (memset-only, in
+        // reset_tables) -> byte-identical.
+        bool pieceToHist   = false;
+        int  pieceToWeight = 256;
+        // ---- CONTHISTBASE (2026-07-24, Stormphrax history.h:151-177 updateConthist /
+        // 58-60 updateWithBase): blended-base gravity for continuation-history updates.
+        // zug's update_cont_entry (and hence every ch1/ch2/ch3/ch4/ch6 write via
+        // update_cont_hist) is self-referential: `h += 32*bonus - h*|bonus|/512` — the
+        // gravity DECAY term reads the entry's OWN stored value. SP's updateConthist
+        // instead computes a single shared `base` — a weighted blend of butterfly +
+        // pieceTo + the ply-1/2/4/6 conthist entries AT THAT SAME (piece,to) site — and
+        // uses THAT in the decay term instead of each entry's own value (updateWithBase:
+        // `value += bonus - base*|bonus|/max`), for every one of ch1/ch2/ch4/ch6. Weights
+        // (SP tunable.h): contBaseButterflyWeight=211, contBasePieceToWeight=101,
+        // contBaseCont1Weight=929, contBaseCont2Weight=917, contBaseCont4Weight=553,
+        // contBaseCont6Weight=320, base = (sum of weight*value)/1024. zug's ch3 (an
+        // SF-sourced addition — SP has no ply-3 conthist table at all) is NOT part of
+        // the base blend and keeps its existing self-referential update untouched
+        // regardless of this flag. The pieceTo term is included ONLY when
+        // Tune::pieceToHist is ALSO on (dropped, not renormalized, otherwise — matching
+        // SP's own fixed /1024 divisor regardless of which weights are in play; the
+        // missing ~101/1024 contribution is a minor share of the blend, not worth a
+        // dynamic renormalization SP itself doesn't do). Default OFF; env
+        // CONTHISTBASE=1. OFF path: update_cont_hist's base computation is skipped
+        // entirely and every ch1/ch2/ch4/ch6 write uses the exact original
+        // self-referential update_cont_entry call -> byte-identical.
+        bool conthistBase           = false;
+        int  conthistBaseButterflyW = 211;
+        int  conthistBasePieceToW   = 101;
+        int  conthistBaseCont1W     = 929;
+        int  conthistBaseCont2W     = 917;
+        int  conthistBaseCont4W     = 553;
+        int  conthistBaseCont6W     = 320;
+        // ---- QSTTQUIET (2026-07-24, Stormphrax search.cpp:1556-1566): search a
+        // TT-suggested QUIET move in qsearch, not just captures. zug's qsearch
+        // unconditionally generate<CAPTURES>()s when !inCheck (this file's qsearch,
+        // ~line 1756), so a stored quiet ttMove — even one the TT already verified
+        // doesn't fail low here — is otherwise completely invisible to qsearch. Light
+        // port (no movegen restructure): search that ONE move explicitly, right before
+        // the capture loop, folding its score into bestValue/alpha/bestMove exactly like
+        // any other qsearch move. Gate (see the qsearch call site for the exact
+        // condition): !inCheck, ttHit, a real non-capture ttMove that also isn't a
+        // promotion (matches zug's own isQuiet convention used throughout main search —
+        // ~line 2253, !isCapture && type_of_move(m)!=PROMOTION — rather than SP's
+        // isNoisy(), which folds queen promos into "noisy" but leaves under-promotions
+        // "quiet", an asymmetry not worth carrying over), the TT bound isn't UPPER (an
+        // upper-bound entry already says this position fails low here, so the move
+        // isn't a trustworthy signal), and the move is legal. zug's qsearch carries no
+        // PvNode flag (unlike SP's templated qsearch<kPvNode>), so the gate simply
+        // omits SP's `!kPvNode` term. Never double-searched: a real quiet/non-promotion
+        // ttMove can never appear in the CAPTURES-only movelist already generated
+        // (movegen.cpp:31,46,55,62 gate quiet pushes and push-promotions out of
+        // GenType::CAPTURES — only CAPTURING promotions survive there). Default OFF;
+        // env QSTTQUIET=1. OFF path: the whole block is skipped, qsearch is
+        // byte-identical to today.
+        bool qsTtQuiet = false;
         // ---- SYZYGY (2026-07-20): Syzygy tablebase probing — WDL at internal nodes +
         // DTZ at the root. Ported from gomachine. SHIPPED default-ON, path-presence gated:
         // every hook also requires TB::loaded(), so a box WITHOUT a resolvable `syzygy/`
@@ -853,6 +935,16 @@ struct Context {
             if (const char* e = getenv("OPTBASE"))         { int v = atoi(e); if (v >= 0) optBase = v; }
             if (const char* e = getenv("OPTMATSCALE"))     { int v = atoi(e); if (v >= 0) optMatScale = v; }
             if (const char* e = getenv("OPTDIV"))          { int v = atoi(e); if (v > 0) optDiv = v; }
+            if (on("PIECETOHIST")) pieceToHist = true;
+            if (const char* e = getenv("PIECETOWEIGHT")) { int v = atoi(e); if (v >= 0) pieceToWeight = v; }
+            if (on("CONTHISTBASE")) conthistBase = true;
+            if (const char* e = getenv("CONTHISTBASEBUTTERFLYW")) { int v = atoi(e); if (v >= 0) conthistBaseButterflyW = v; }
+            if (const char* e = getenv("CONTHISTBASEPIECETOW"))   { int v = atoi(e); if (v >= 0) conthistBasePieceToW   = v; }
+            if (const char* e = getenv("CONTHISTBASECONT1W"))     { int v = atoi(e); if (v >= 0) conthistBaseCont1W     = v; }
+            if (const char* e = getenv("CONTHISTBASECONT2W"))     { int v = atoi(e); if (v >= 0) conthistBaseCont2W     = v; }
+            if (const char* e = getenv("CONTHISTBASECONT4W"))     { int v = atoi(e); if (v >= 0) conthistBaseCont4W     = v; }
+            if (const char* e = getenv("CONTHISTBASECONT6W"))     { int v = atoi(e); if (v >= 0) conthistBaseCont6W     = v; }
+            if (on("QSTTQUIET")) qsTtQuiet = true;
             if (off("SYZYGY")) syzygy = false; // shipped default-on; kill-switch (path-gated by TB::loaded())
             if (const char* e = getenv("MOVEOVERHEAD")) { int v = atoi(e); if (v >= 0) moveOverhead = v; }
             if (const char* e = getenv("CONTEMPT")) contempt = atoi(e); // cp; 0 = off
@@ -943,6 +1035,13 @@ struct Context {
     // updated on beta cutoff (bonus to the cutoff capture, malus to searched-not-best
     // captures). Gated by Tune::captHist. ~10 KB.
     int16_t captHist[CONT_PIECE_NB][SQUARE_NB][PIECE_TYPE_NB] = {};
+    // PIECETOHIST (Stormphrax history.h:211 m_pieceTo): standalone [piece][to]
+    // quiet-history table — no from-square, no ancestor conditioning (distinct from
+    // both C.history[color][from][to] and the ancestor-keyed contHist1/2/3/4/6 planes
+    // above). Sized like captHist's leading dims (piece_dense() x to-square), no
+    // threat-bit sub-dims. Gated by Tune::pieceToHist; OFF path never reads or writes
+    // it (memset-only, in reset_tables below) -> byte-identical. ~1.5 KB.
+    int16_t pieceToHist[CONT_PIECE_NB][SQUARE_NB] = {};
     // Low-ply history (SF LowPlyHistory): a second butterfly-shaped table keyed
     // additionally by ss->ply, valid only for ply<5 — near the root, the same
     // from/to pair recurs across ID iterations far more than deep in the tree,
@@ -1082,6 +1181,7 @@ void reset_tables(Context& C) {
     std::memset(C.contHist4, 0, sizeof(C.contHist4));
     std::memset(C.contHist6, 0, sizeof(C.contHist6));
     std::memset(C.captHist, 0, sizeof(C.captHist));
+    std::memset(C.pieceToHist, 0, sizeof(C.pieceToHist));
     std::memset(C.lowPly, 0, sizeof(C.lowPly));
     std::memset(C.pawnOrderHist, 0, sizeof(C.pawnOrderHist));
     C.ttMoveHistory = 0;
@@ -1165,6 +1265,15 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     else if (name == "OptBase")          tune.optBase          = clamp(value, 0, 400);
     else if (name == "OptMatScale")      tune.optMatScale      = clamp(value, 0, 200);
     else if (name == "OptDiv")           tune.optDiv           = clamp(value, 100, 4000);
+    // ---- PIECETOHIST / CONTHISTBASE constants (2026-07-24, only read when the owning
+    // flag is on) — Stormphrax history.h pieceTo/conthist-base blend weights. ----
+    else if (name == "PieceToWeight")          tune.pieceToWeight          = clamp(value, 0, 2048);
+    else if (name == "ConthistBaseButterflyW") tune.conthistBaseButterflyW = clamp(value, 0, 4096);
+    else if (name == "ConthistBasePieceToW")   tune.conthistBasePieceToW   = clamp(value, 0, 4096);
+    else if (name == "ConthistBaseCont1W")     tune.conthistBaseCont1W     = clamp(value, 0, 4096);
+    else if (name == "ConthistBaseCont2W")     tune.conthistBaseCont2W     = clamp(value, 0, 4096);
+    else if (name == "ConthistBaseCont4W")     tune.conthistBaseCont4W     = clamp(value, 0, 4096);
+    else if (name == "ConthistBaseCont6W")     tune.conthistBaseCont6W     = clamp(value, 0, 4096);
     // LmrBase/LmrDiv: wire value is the double x LMR_DOUBLE_SCALE (search.h) — see the
     // Tune::lmrBase/lmrDiv comment. Clamp in wire units, convert on the way in.
     else if (name == "LmrBase")        tune.lmrBase        = clamp(value, 3000, 15000) / double(LMR_DOUBLE_SCALE);
@@ -1509,6 +1618,12 @@ void score_moves_impl(Context& C, const Position& pos, ExtMove* begin, ExtMove* 
             m->score = COUNTER_SCORE;
         } else {
             int h = C.history[us][from_sq(mv)][to_sq(mv)];
+            // PIECETOHIST: independent of WithContHist — Tune::pieceToHist is a
+            // separate flag from Tune::contHist, so this must apply whichever
+            // score_moves_impl instantiation runs (score_moves or score_moves_cont).
+            // Default off -> byte-identical (the read/multiply is simply skipped).
+            if (C.tune.pieceToHist)
+                h += C.pieceToHist[piece_dense(pos.moved_piece(mv))][to_sq(mv)] * C.tune.pieceToWeight / 256;
             if constexpr (WithContHist) {
                 int off = piece_dense(pos.moved_piece(mv)) * SQUARE_NB + to_sq(mv);
                 if (ch1) h += ch1[off];
@@ -1632,6 +1747,27 @@ void update_cont_entry(int16_t& h, int bonus) {
     h = int16_t(v);
 }
 
+// CONTHISTBASE (see Tune::conthistBase): same formula as update_cont_entry, except
+// the gravity DECAY term reads an externally-supplied `base` (a cross-table blend)
+// instead of the entry's own stored value h — Stormphrax's updateWithBase vs update
+// (history.h:54-60). Structurally identical to update_cont_entry otherwise (same
+// ±400 bonus clamp, same 32*bonus nudge, same ±32000 backstop clamp).
+void update_cont_entry_based(int16_t& h, int bonus, int base) {
+    bonus = std::max(-400, std::min(400, bonus));
+    int v = int(h) + 32 * bonus - base * std::abs(bonus) / 512;
+    v = std::max(-32000, std::min(32000, v));
+    h = int16_t(v);
+}
+
+// update_piece_to_hist (PIECETOHIST, see Tune::pieceToHist): credit/penalize one
+// quiet move's standalone [piece][to] entry, via zug's own gravity idiom (same as
+// update_cont_entry — zug's ±400-bonus/±32000-clamp scale, not SP's raw magnitudes).
+// Caller has verified tune.pieceToHist is on and the move is a real quiet (not a
+// capture/promotion).
+void update_piece_to_hist(Context& C, Piece pc, Square to, int bonus) {
+    update_cont_entry(C.pieceToHist[piece_dense(pc)][to], bonus);
+}
+
 // update_cont_hist: credit/penalize one quiet move (pc -> to) in both
 // continuation tables via the plane pointers already hoisted for this node by
 // cont_hist_planes (ch1/ch2 nullptr <=> no real ancestor at that ply, same
@@ -1650,14 +1786,39 @@ void update_cont_entry(int16_t& h, int bonus) {
 // is unused — zug has no ply-5 table (see Tune::contHistPlies). SF's flat
 // "+88 * (i<2)" term (search.cpp:1887) only applies to i=1,2, so it's
 // correctly omitted for the deeper plies here too.
-void update_cont_hist(int16_t* ch1, int16_t* ch2, int16_t* ch3, int16_t* ch4, int16_t* ch6,
-                       Piece pc, Square to, int bonus) {
+//
+// CONTHISTBASE (see Tune::conthistBase for the full citation/weights): when on,
+// ch1/ch2/ch4/ch6 (NOT ch3 — SP has no ply-3 conthist table at all) are updated
+// against a shared cross-table `base` instead of each entry's own value. Needs
+// Context& (to read C.history/C.pieceToHist/C.tune) plus the move's color/from-
+// square (Color us, Square from) that plain ch-pointer arithmetic didn't previously
+// require — threaded through every call site below only for this flag; the pointers
+// (ch1..ch6) and pc/to/bonus keep their original meaning.
+void update_cont_hist(Context& C, int16_t* ch1, int16_t* ch2, int16_t* ch3, int16_t* ch4, int16_t* ch6,
+                       Color us, Square from, Piece pc, Square to, int bonus) {
     int off = piece_dense(pc) * SQUARE_NB + to;
-    if (ch1) update_cont_entry(ch1[off], bonus);
-    if (ch2) update_cont_entry(ch2[off], bonus);
+    if (C.tune.conthistBase) {
+        long long base = (long long)C.history[us][from][to] * C.tune.conthistBaseButterflyW;
+        if (C.tune.pieceToHist)
+            base += (long long)C.pieceToHist[piece_dense(pc)][to] * C.tune.conthistBasePieceToW;
+        if (ch1) base += (long long)ch1[off] * C.tune.conthistBaseCont1W;
+        if (ch2) base += (long long)ch2[off] * C.tune.conthistBaseCont2W;
+        if (ch4) base += (long long)ch4[off] * C.tune.conthistBaseCont4W;
+        if (ch6) base += (long long)ch6[off] * C.tune.conthistBaseCont6W;
+        int b = int(base / 1024);
+        if (ch1) update_cont_entry_based(ch1[off], bonus, b);
+        if (ch2) update_cont_entry_based(ch2[off], bonus, b);
+        if (ch4) update_cont_entry_based(ch4[off], bonus * 582 / 1024, b);
+        if (ch6) update_cont_entry_based(ch6[off], bonus * 474 / 1024, b);
+    } else {
+        if (ch1) update_cont_entry(ch1[off], bonus);
+        if (ch2) update_cont_entry(ch2[off], bonus);
+        if (ch4) update_cont_entry(ch4[off], bonus * 582 / 1024);
+        if (ch6) update_cont_entry(ch6[off], bonus * 474 / 1024);
+    }
+    // ch3 (SF-sourced, no SP analog) always uses its existing self-referential
+    // update regardless of CONTHISTBASE — see the comment above.
     if (ch3) update_cont_entry(ch3[off], bonus * 312 / 1024);
-    if (ch4) update_cont_entry(ch4[off], bonus * 582 / 1024);
-    if (ch6) update_cont_entry(ch6[off], bonus * 474 / 1024);
 }
 
 // update_capt_hist: credit/penalize one CAPTURE (pc captures a `victim`-type piece on
@@ -1774,7 +1935,34 @@ int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta) {
     StateInfo st;
     int moveCount = 0;
 
-    while (cur != list.end()) {
+    // QSTTQUIET (see Tune::qsTtQuiet for the full citation): search a TT-suggested
+    // QUIET move here, not just captures — generate<CAPTURES> above never enumerates
+    // it. Fires before the capture loop (matching SP's TT-move-first ordering), folds
+    // straight into bestValue/alpha/bestMove exactly like any other qsearch move, and
+    // sets qsTtQuietCutoff so the capture loop is skipped entirely on a beta cutoff
+    // (mirroring the loop's own `if (score >= beta) break;`, just without a loop to
+    // break out of yet). Never double-searched: see the flag comment for why a real
+    // quiet/non-promotion ttMove can never also be in `list`.
+    bool qsTtQuietCutoff = false;
+    if (!inCheck && C.tune.qsTtQuiet && ttHit && ttMove != MOVE_NONE
+        && !pos.is_capture(ttMove) && type_of_move(ttMove) != PROMOTION
+        && tte->bound() != BOUND_UPPER && pos.legal(ttMove)) {
+        pos.do_move(ttMove, st);
+        C.tt.prefetch(pos.key());
+        int score = -qsearch(C, pos, ss + 1, -beta, -alpha);
+        pos.undo_move(ttMove);
+        if (C.stop) return 0;
+        if (score > bestValue) {
+            bestValue = score;
+            if (score > alpha) {
+                bestMove = ttMove;
+                if (score >= beta) qsTtQuietCutoff = true;
+                else alpha = score;
+            }
+        }
+    }
+
+    while (!qsTtQuietCutoff && cur != list.end()) {
         Move m = pick_next(cur, list.end());
         if (!pos.legal(m)) continue;
         moveCount++;
@@ -1924,23 +2112,38 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                 // large depths degrade gracefully exactly as the real-cutoff block does.
                 int bonus = depth * depth * C.tune.ttCutBonusNum / C.tune.ttCutBonusDen;
                 if (bonus > 0) update_history(C, pos.side_to_move(), ttMove, bonus);
+                // PIECETOHIST: mirrors the butterfly bonus above in lockstep (SP
+                // updateMainHistory updates butterfly+pieceTo together). ttMove is
+                // already verified quiet (!ttCapture && !PROMOTION) by the outer gate.
+                if (C.tune.pieceToHist && bonus > 0)
+                    update_piece_to_hist(C, pos.moved_piece(ttMove), to_sq(ttMove), bonus);
                 if (C.tune.contHist && bonus > 0) {
                     int16_t *ch1, *ch2, *ch3, *ch4, *ch6;
                     cont_hist_planes(C, ss, ch1, ch2, ch3, ch4, ch6);
-                    update_cont_hist(ch1, ch2, ch3, ch4, ch6,
+                    update_cont_hist(C, ch1, ch2, ch3, ch4, ch6, pos.side_to_move(), from_sq(ttMove),
                                      pos.moved_piece(ttMove), to_sq(ttMove), bonus);
                 }
                 // Prev-ply early-quiet penalty (SF: (ss-1)->moveCount < 4 && !priorCapture),
                 // depth-scaled like zug's own quiet malus (-(depth+1)^2), not SF's flat 2060.
                 // malusNum=0 disables it (bonus-only variant).
                 int malus = (depth + 1) * (depth + 1) * C.tune.ttCutMalusNum / C.tune.ttCutMalusDen;
-                if (C.tune.contHist && malus > 0 && (ss - 1)->currentMove != MOVE_NONE
+                if (malus > 0 && (ss - 1)->currentMove != MOVE_NONE
                     && (ss - 1)->currentMove != MOVE_NULL && (ss - 1)->moveCount < 4
                     && !(ss - 1)->didCapture) {
-                    int16_t *p1, *p2, *p3, *p4, *p6;
-                    cont_hist_planes(C, ss - 1, p1, p2, p3, p4, p6);
-                    update_cont_hist(p1, p2, p3, p4, p6, (ss - 1)->currentPiece,
-                                     to_sq((ss - 1)->currentMove), -malus);
+                    // PIECETOHIST: same lockstep mirror as the bonus above. Extra
+                    // promotion exclusion (the surrounding gate doesn't have one) so the
+                    // table only ever sees genuine quiets, matching zug's own isQuiet
+                    // convention (search.cpp ~2253) rather than SF's bare !priorCapture.
+                    if (C.tune.pieceToHist && type_of_move((ss - 1)->currentMove) != PROMOTION)
+                        update_piece_to_hist(C, (ss - 1)->currentPiece,
+                                             to_sq((ss - 1)->currentMove), -malus);
+                    if (C.tune.contHist) {
+                        int16_t *p1, *p2, *p3, *p4, *p6;
+                        cont_hist_planes(C, ss - 1, p1, p2, p3, p4, p6);
+                        update_cont_hist(C, p1, p2, p3, p4, p6, ~pos.side_to_move(),
+                                         from_sq((ss - 1)->currentMove), (ss - 1)->currentPiece,
+                                         to_sq((ss - 1)->currentMove), -malus);
+                    }
                 }
             }
             return ttValue;
@@ -2035,6 +2238,11 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         && ss->staticEval != VALUE_NONE && (ss - 1)->staticEval != VALUE_NONE) {
         int evalBonus = std::max(-209, std::min(167, -((ss - 1)->staticEval + ss->staticEval))) + 59;
         update_history(C, ~pos.side_to_move(), (ss - 1)->currentMove, evalBonus);
+        // PIECETOHIST: mirrors the butterfly bump above in lockstep. Extra promotion
+        // exclusion (this block's own gate only checks !didCapture) so the table only
+        // ever sees genuine quiets, matching zug's own isQuiet convention.
+        if (C.tune.pieceToHist && type_of_move((ss - 1)->currentMove) != PROMOTION)
+            update_piece_to_hist(C, (ss - 1)->currentPiece, to_sq((ss - 1)->currentMove), evalBonus);
     }
 
     // ---- Pruning (non-PV, not in check) ----
@@ -2512,6 +2720,10 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                 hist = (cur - 1)->histScore;
             } else {
                 hist = C.history[us][from_sq(m)][to_sq(m)];
+                // PIECETOHIST: same term score_moves_impl folds into its ordering/
+                // histScore composite — see Tune::pieceToHist. Default off -> no-op.
+                if (C.tune.pieceToHist)
+                    hist += C.pieceToHist[piece_dense(mover)][to_sq(m)] * C.tune.pieceToWeight / 256;
                 if (C.tune.contHist) {
                     int off = piece_dense(mover) * SQUARE_NB + to_sq(m);
                     if (ch1) hist += ch1[off];
@@ -2613,6 +2825,9 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                     hist2 = (cur - 1)->histScore;
                 } else {
                     hist2 = C.history[us][from_sq(m)][to_sq(m)];
+                    // PIECETOHIST: same term as the LMR-branch hist assembly above.
+                    if (C.tune.pieceToHist)
+                        hist2 += C.pieceToHist[piece_dense(mover)][to_sq(m)] * C.tune.pieceToWeight / 256;
                     if (C.tune.contHist) {
                         int off = piece_dense(mover) * SQUARE_NB + to_sq(m);
                         if (ch1) hist2 += ch1[off];
@@ -2670,7 +2885,7 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             // contHist is off — update_cont_hist already null-checks each). Default
             // off; env POSTLMRCH=1.
             if (C.tune.postLmrCh && wasLMRReduced)
-                update_cont_hist(ch1, ch2, ch3, ch4, ch6, mover, to_sq(m), C.tune.postLmrChBonus);
+                update_cont_hist(C, ch1, ch2, ch3, ch4, ch6, us, from_sq(m), mover, to_sq(m), C.tune.postLmrChBonus);
         }
 
         if (PvNode && (moveCount == 1 || score > alpha))
@@ -2759,6 +2974,16 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             for (int i = 0; i < quietCount; ++i)
                 if (quietsSearched[i] != bestMove)
                     update_history(C, us, quietsSearched[i], tMalus[i]);
+            // PIECETOHIST: mirrors the butterfly bestMove/malus updates above in
+            // lockstep (SP updateMainHistory updates butterfly+pieceTo together).
+            // Every move in this branch is already verified quiet by the outer
+            // !is_capture(bestMove) && !PROMOTION gate.
+            if (C.tune.pieceToHist) {
+                update_piece_to_hist(C, pos.moved_piece(bestMove), to_sq(bestMove), bestBonus);
+                for (int i = 0; i < quietCount; ++i)
+                    if (quietsSearched[i] != bestMove)
+                        update_piece_to_hist(C, pos.moved_piece(quietsSearched[i]), to_sq(quietsSearched[i]), tMalus[i]);
+            }
             if (C.tune.lowPlyHist && ss->ply < 5) {
                 update_low_ply_hist(C, ss->ply, bestMove, bestBonus);
                 for (int i = 0; i < quietCount; ++i)
@@ -2779,10 +3004,12 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                 // above paired do_move with undo_move), so moved_piece() is valid.
                 // ch1/ch2 were hoisted once for this node above the move loop —
                 // reuse them here instead of re-deriving the parent key.
-                update_cont_hist(ch1, ch2, ch3, ch4, ch6, pos.moved_piece(bestMove), to_sq(bestMove), bestBonus);
+                update_cont_hist(C, ch1, ch2, ch3, ch4, ch6, us, from_sq(bestMove),
+                                 pos.moved_piece(bestMove), to_sq(bestMove), bestBonus);
                 for (int i = 0; i < quietCount; ++i)
                     if (quietsSearched[i] != bestMove)
-                        update_cont_hist(ch1, ch2, ch3, ch4, ch6, pos.moved_piece(quietsSearched[i]), to_sq(quietsSearched[i]), tMalus[i]);
+                        update_cont_hist(C, ch1, ch2, ch3, ch4, ch6, us, from_sq(quietsSearched[i]),
+                                         pos.moved_piece(quietsSearched[i]), to_sq(quietsSearched[i]), tMalus[i]);
             }
             if ((ss - 1)->currentMove)
                 C.counterMoves[pos.piece_on(to_sq((ss - 1)->currentMove))][to_sq((ss - 1)->currentMove)] = bestMove;
@@ -2819,8 +3046,15 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
                 + ((!ss->inCheck && bestValue <= ss->staticEval - C.tune.pcmSeThresh) ? C.tune.pcmSeW : 0)
                 + (((ss - 1)->staticEval != VALUE_NONE
                     && bestValue <= -(ss - 1)->staticEval - C.tune.pcmParentSeThr) ? C.tune.pcmParentSeW : 0);
-            if (weight > 0)
-                update_history(C, ~us, pm, depth * depth * weight / C.tune.pcmDiv);
+            if (weight > 0) {
+                int pcmBonus = depth * depth * weight / C.tune.pcmDiv;
+                update_history(C, ~us, pm, pcmBonus);
+                // PIECETOHIST: mirrors the butterfly fail-low credit above in lockstep.
+                // Extra promotion exclusion (this block's own gate only checks
+                // !didCapture) so the table only ever sees genuine quiets.
+                if (C.tune.pieceToHist && type_of_move(pm) != PROMOTION)
+                    update_piece_to_hist(C, (ss - 1)->currentPiece, to_sq(pm), pcmBonus);
+            }
         }
     }
 

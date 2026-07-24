@@ -368,6 +368,15 @@ int uci_main() {
             std::cout << "option name OptBase type spin default 64 min 0 max 400\n";
             std::cout << "option name OptMatScale type spin default 20 min 0 max 200\n";
             std::cout << "option name OptDiv type spin default 800 min 100 max 4000\n";
+            // PIECETOHIST / CONTHISTBASE constants (2026-07-24, only read when the owning
+            // env flag is on) — Stormphrax history.h pieceTo table + conthist-base blend.
+            std::cout << "option name PieceToWeight type spin default 256 min 0 max 2048\n";
+            std::cout << "option name ConthistBaseButterflyW type spin default 211 min 0 max 4096\n";
+            std::cout << "option name ConthistBasePieceToW type spin default 101 min 0 max 4096\n";
+            std::cout << "option name ConthistBaseCont1W type spin default 929 min 0 max 4096\n";
+            std::cout << "option name ConthistBaseCont2W type spin default 917 min 0 max 4096\n";
+            std::cout << "option name ConthistBaseCont4W type spin default 553 min 0 max 4096\n";
+            std::cout << "option name ConthistBaseCont6W type spin default 320 min 0 max 4096\n";
             // Ponder (2026-07-20): advertises pondering support so a GUI/CCRL will send
             // `go ponder`. Not read by the engine — pondering is honored unconditionally on
             // `go ponder`; this flag only tells the GUI the feature exists.
