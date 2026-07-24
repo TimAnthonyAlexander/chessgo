@@ -713,3 +713,17 @@ to qsearch before recursing, then retest. Left default-off. Low priority (sub-+5
 (520g, -5.35, 49.23%) — the +70% qsearch node cost (kiwipete 92926->159383) outweighs the
 accuracy gain at 100ms. Correctly ported now; a candidate for LONGER TC (qsearch cost relatively
 cheaper) but out of movetime scope. Left default-off.
+
+## HARNESS VALIDATION (2026-07-24) — the capstone finding
+Ran RULE50DAMP=0 vs base (feature is shipped default-ON, historically "+7.45±8.7 @1406g") to test
+whether the harness can resolve a KNOWN real win. Result: **-2.60 ±11.95 @802g** (wandered -5.7→-1.4→
+-3.1→-2.6). So even a shipped, formerly-"+7.45" feature is worth only ~+2.6 in the CURRENT (much
+stronger: +SF-selectivity, +SMP, +TIMEMAN, etc.) engine, and its CI STILL includes 0 at 800g.
+
+**Implication (why every candidate washed):** the movetime SPRT noise floor is ~±12 Elo @800g / ~±8
+@1600g, which is LARGER than the effect size of every available retrain-free lever (~±3, incl. the
+shipped ones whose marginal value erodes as the engine improves and features interact). Therefore NO
+single lever is confirmable at overnight single-box game counts — you can only resolve >+8 effects
+@~800g, or spend ~4000-10000g per candidate. The null result is REAL (harness works), not a masking
+artifact. The path to more movetime Elo is: (a) fishtest-scale confirmation (many boxes / 10k+ g/patch),
+(b) bigger structural changes, or (c) the net retrain — NOT more single-flag SPRTs on one box.
