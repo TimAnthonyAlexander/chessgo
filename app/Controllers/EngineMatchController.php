@@ -14,9 +14,25 @@ use App\Services\ZugzwangClient;
  * the engines compete. Stateless (FEN-in), like the rest of the engine API.
  *
  *   POST /admin/engine-vs/move
- *     { fen, side: "gomachine"|"zugzwang"|"stockfish", rating?, elo?, movetime?,
- *       nodes?, depth?, aggr?, book? }
- *   → { bestmove, san, fen, status, result?, sideToMove, claimableDraws, by }
+ *     { fen, side: "gomachine"|"zugzwang"|"stockfish",
+ *       variant?: "standard"|"chess960"|"crazyhouse"|"duck"|"antichess",
+ *       duck?, rating?, elo?, movetime?, nodes?, depth?, aggr?, book? }
+ *   → { bestmove, san, fen, status, result?, sideToMove, claimableDraws, eval,
+ *       by, duck?, pocket? }
+ *
+ * VARIANTS. The default `variant` is "standard". chess960 rides the standard
+ * move/bestmove path (the castling rights in the FEN carry the shuffle — no
+ * separate engine method). duck / crazyhouse / antichess each dispatch to the
+ * engine's own variant endpoint via the SAME concrete client, so an admin can
+ * watch gomachine-vs-zugzwang (or an engine vs itself) at any variant with the
+ * chosen engine ACTUALLY playing. The variant bestmove endpoints return the move
+ * ALREADY APPLIED, so those branches need no follow-up /move call.
+ *
+ * ENGINE↔VARIANT compatibility (enforced below): standard is playable by all
+ * three engines; every other variant is gomachine/zugzwang only. Stockfish is
+ * driven through a bare UCI proxy with no UCI_Chess960, so it is standard-only
+ * here — offering it for chess960 would miscastle. A disallowed pairing is a 422,
+ * never a silent reroute to a different engine.
  *
  * This controller deliberately bypasses {@see \App\Services\EngineSelector} and
  * holds BOTH concrete clients directly — the whole point of this view is
@@ -46,6 +62,12 @@ class EngineMatchController extends Controller
     public string $fen = '';
 
     public string $side = 'gomachine';
+
+    /** standard | chess960 | crazyhouse | duck | antichess. */
+    public string $variant = 'standard';
+
+    /** Duck Chess only: the duck's current square ("" before its first placement). */
+    public string $duck = '';
 
     public int $rating = 1500;
 
@@ -77,16 +99,33 @@ class EngineMatchController extends Controller
         $this->validate([
             'fen' => 'required|string',
             'side' => 'in:gomachine,zugzwang,stockfish',
+            'variant' => 'in:standard,chess960,crazyhouse,duck,antichess',
             'aggr' => 'integer|min:0|max:100',
             'nodes' => 'integer|min:0',
             'depth' => 'integer|min:0',
         ]);
+
+        // Engine↔variant compatibility. standard is open to all three engines;
+        // every other variant is gomachine/zugzwang only (Stockfish is a bare UCI
+        // proxy — no Chess960 castling, no fairy variants). Reject a disallowed
+        // pairing with a 422 rather than silently rerouting to another engine.
+        if ($this->side === 'stockfish' && $this->variant !== 'standard') {
+            return JsonResponse::error("stockfish cannot play variant '{$this->variant}'", 422);
+        }
 
         $depth = max(0, min(60, $this->depth));  // fixed-depth budget (all engines)
         $nodes = max(0, $this->nodes);           // fixed-nodes budget (gomachine/zugzwang only)
         // Movetime only binds when neither depth nor nodes is the active limit; clamp
         // it to a sane watch range then.
         $movetime = max(20, min(5000, $this->movetime));
+
+        // Variants (duck/crazyhouse/antichess) dispatch to the engine's own
+        // already-applied bestmove endpoint via the SAME concrete client, so the
+        // chosen engine truly plays and nothing falls back to the EngineSelector
+        // primary. chess960 falls through to the standard path below (FEN-driven).
+        if ($this->variant === 'duck' || $this->variant === 'crazyhouse' || $this->variant === 'antichess') {
+            return $this->playVariant($depth, $nodes, $movetime);
+        }
 
         if ($this->side === 'stockfish') {
             // Stockfish is driven exclusively through the zugzwang client, which
@@ -146,6 +185,57 @@ class EngineMatchController extends Controller
             'claimableDraws' => $applied['claimableDraws'] ?? [],
             'eval' => $best['eval'] ?? null,
             'by' => $this->side,
+        ]);
+    }
+
+    /**
+     * Play one ply of a self-contained variant (duck / crazyhouse / antichess).
+     *
+     * Unlike standard, each variant's `*BestMove` endpoint returns the move
+     * ALREADY APPLIED (newFen + terminal status), so there is no follow-up /move
+     * call — and, crucially, the request goes to the SAME concrete client picked
+     * by `side`, so gomachine really plays when gomachine is selected (no
+     * EngineSelector primary rerouting to zugzwang). Stockfish is rejected earlier
+     * (variants are gomachine/zugzwang only).
+     *
+     * The variant engines own their own rating→strength weakening and ignore
+     * aggression/book, so only rating + one budget dimension are forwarded. The
+     * "Unlosable" sentinel (rating ≤ 0) has no variant analogue, so it is floored
+     * to the weakest real rating (700) — the frontend also hides Unlosable in
+     * variant modes.
+     */
+    private function playVariant(int $depth, int $nodes, int $movetime): JsonResponse
+    {
+        $engine = $this->side === 'zugzwang' ? $this->zugzwang : $this->gomachine;
+        $rating = $this->rating > 0 ? $this->rating : 700; // no worst-move path for variants
+        $mt = ($depth > 0 || $nodes > 0) ? 0 : $movetime;
+
+        if ($this->variant === 'duck') {
+            $applied = $engine->duckBestMove($this->fen, $this->duck, $rating, $mt, $depth, $nodes);
+        } elseif ($this->variant === 'crazyhouse') {
+            $applied = $engine->crazyhouseBestMove($this->fen, $rating, $mt, $depth, $nodes);
+        } else { // antichess
+            $applied = $engine->antichessBestMove($this->fen, $rating, $mt, $depth, $nodes);
+        }
+
+        $uci = $applied['bestmove'] ?? null;
+        if (!is_string($uci) || $uci === '') {
+            return JsonResponse::ok(['bestmove' => null, 'reason' => 'no move (game over?)']);
+        }
+
+        return JsonResponse::ok([
+            'bestmove' => $uci,
+            'san' => $applied['san'] ?? null,
+            'fen' => $applied['newFen'] ?? null,
+            'status' => $applied['status'] ?? 'ongoing',
+            'result' => $applied['result'] ?? null,
+            'sideToMove' => $applied['sideToMove'] ?? null,
+            'claimableDraws' => [], // variants auto-apply their draw rules
+            'eval' => $applied['eval'] ?? null,
+            'by' => $this->side,
+            // Variant-specific board state the frontend carries per ply.
+            'duck' => $applied['duck'] ?? null,
+            'pocket' => $applied['pocket'] ?? null,
         ]);
     }
 }

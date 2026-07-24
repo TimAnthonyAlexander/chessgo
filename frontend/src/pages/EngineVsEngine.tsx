@@ -32,10 +32,9 @@ import { ErrorBanner, NavBtn } from '../components/PanelUI'
 import {
     analyze,
     type Color,
-    duckEval,
-    duckPlay,
     engineVsMove,
     type EngineSide,
+    type EngineVsVariant,
     type GameStatus,
     type MoveEntry,
 } from '../api/client'
@@ -43,6 +42,14 @@ import { useAuth } from '../lib/auth'
 import { statusLabel } from '../lib/chess'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { useMoveNavKeys } from '../lib/useMoveNavKeys'
+import {
+    parsePocket,
+    pocketFromFen,
+    random960,
+    stripCrazyhouseFen,
+    VARIANT_LABEL,
+} from '../lib/variants'
+import Pocket from '../components/Pocket'
 import {
     coordToRating,
     ratingLabel,
@@ -52,6 +59,28 @@ import {
 } from '../lib/botSettings'
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
+// Crazyhouse's canonical start carries an empty pocket "[]".
+const CRAZYHOUSE_START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR[] w KQkq - 0 1'
+
+// The variants this admin view can drive, in display order.
+const EVE_VARIANTS: EngineVsVariant[] = ['standard', 'chess960', 'crazyhouse', 'duck', 'antichess']
+// "Self-search" variants have their own engine (own rules + eval), do NOT use the
+// opening book or aggression, and are gomachine/zugzwang-only. chess960 is NOT one
+// of these — it rides the standard engine path (the FEN's castling carries the shuffle).
+const SELF_VARIANTS: EngineVsVariant[] = ['crazyhouse', 'duck', 'antichess']
+const isSelfVariant = (v: EngineVsVariant) => SELF_VARIANTS.includes(v)
+
+// Engine↔variant compatibility. Standard is playable by all three engines; every
+// other variant is gomachine/zugzwang only (Stockfish is a bare UCI proxy — no
+// Chess960 castling, no fairy variants). Mirrors the server-side guard in
+// EngineMatchController so the UI never offers a pairing the backend rejects.
+const enginesForVariant = (v: EngineVsVariant): EngineSide[] =>
+    v === 'standard' ? ['gomachine', 'zugzwang', 'stockfish'] : ['gomachine', 'zugzwang']
+
+// The starting FEN for a fresh game of each variant (chess960 reshuffles each time).
+const startFenForVariant = (v: EngineVsVariant): string =>
+    v === 'chess960' ? random960() : v === 'crazyhouse' ? CRAZYHOUSE_START_FEN : START_FEN
+
 const MAX_PLIES = 400 // hard stop so two shuffling engines can't loop forever
 const MOVE_DELAY = 550 // ms between plies, so it's watchable
 // Blue board arrow drawn when hovering a candidate (book) move (matches Analysis).
@@ -133,13 +162,17 @@ const DEFAULT_BLACK: SideConfig = { ...DEFAULT_WHITE, engine: 'stockfish' }
 // The left-card settings persist to localStorage, so whatever you last set becomes
 // your new defaults on the next visit. Key is versioned (v2) — the old single-engine
 // shape is intentionally not migrated.
-const SETTINGS_KEY = 'eve.settings.v2'
+const SETTINGS_KEY = 'eve.settings.v3'
 interface EveSettings {
     white: SideConfig
     black: SideConfig
-    duck?: boolean // Duck Chess mode (both sides forced to gomachine)
+    variant?: EngineVsVariant // which variant the board is set to
 }
-const DEFAULT_SETTINGS: EveSettings = { white: DEFAULT_WHITE, black: DEFAULT_BLACK, duck: false }
+const DEFAULT_SETTINGS: EveSettings = {
+    white: DEFAULT_WHITE,
+    black: DEFAULT_BLACK,
+    variant: 'standard',
+}
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))
 
@@ -183,7 +216,10 @@ function loadSettings(): EveSettings {
         return {
             white: coerceSide(p.white, DEFAULT_WHITE),
             black: coerceSide(p.black, DEFAULT_BLACK),
-            duck: typeof p.duck === 'boolean' ? p.duck : false,
+            variant:
+                typeof p.variant === 'string' && EVE_VARIANTS.includes(p.variant as EngineVsVariant)
+                    ? (p.variant as EngineVsVariant)
+                    : 'standard',
         }
     } catch {
         return DEFAULT_SETTINGS // unparseable / storage unavailable → fall back to defaults
@@ -193,8 +229,15 @@ function loadSettings(): EveSettings {
 // Build the engineVsMove params for the side to move, sending ONLY the active
 // budget dimension (the backend pins to exactly one; the others must be omitted).
 type MoveParams = Parameters<typeof engineVsMove>[0]
-function paramsForSide(cfg: SideConfig, fen: string): MoveParams {
+function paramsForSide(
+    cfg: SideConfig,
+    fen: string,
+    variant: EngineVsVariant,
+    duck: string,
+): MoveParams {
     if (cfg.engine === 'stockfish') {
+        // Stockfish is standard-only here (the engine picker enforces it), so no
+        // variant/duck is ever sent on this branch.
         const elo = sfIsUnleashed(cfg.sfElo) ? 0 : cfg.sfElo
         // Stockfish supports movetime | depth only.
         return cfg.limitKind === 'depth'
@@ -202,8 +245,11 @@ function paramsForSide(cfg: SideConfig, fen: string): MoveParams {
             : { fen, side: 'stockfish', elo, movetime: cfg.movetime }
     }
     // gomachine and zugzwang share the exact same param shape — only `side` differs.
+    // `variant` routes to the right engine endpoint server-side; chess960 rides the
+    // standard path (FEN-driven). Duck also forwards the current duck square.
     const side: 'gomachine' | 'zugzwang' = cfg.engine === 'zugzwang' ? 'zugzwang' : 'gomachine'
-    const base = { fen, side, rating: cfg.rating, aggr: cfg.aggr, book: cfg.book }
+    const base: MoveParams = { fen, side, variant, rating: cfg.rating, aggr: cfg.aggr, book: cfg.book }
+    if (variant === 'duck') base.duck = duck
     if (cfg.limitKind === 'depth') return { ...base, depth: cfg.depth }
     if (cfg.limitKind === 'nodes') return { ...base, nodes: cfg.nodes }
     return { ...base, movetime: cfg.movetime }
@@ -234,24 +280,31 @@ export default function EngineVsEngine() {
     // A starting position carried over from the board editor ("Engine vs Engine
     // from this position"). Falls back to the standard start.
     const navFen = (useLocation().state as { fen?: string } | null)?.fen ?? null
-    const startFen = navFen ?? START_FEN
 
     // Per-side settings — initialised from (and persisted back to) localStorage.
     // White is the bottom player; Black is the top player (board is White-at-bottom).
     const [white, setWhite] = useState<SideConfig>(() => loadSettings().white)
     const [black, setBlack] = useState<SideConfig>(() => loadSettings().black)
-    // Duck Chess mode: both sides forced to gomachine (neither Stockfish nor
-    // zugzwang can play Duck Chess yet), driven through the duck engine. Persisted
-    // alongside the side configs.
-    const [duckMode, setDuckMode] = useState<boolean>(() => loadSettings().duck ?? false)
+    // The variant the board is set to (standard / chess960 / crazyhouse / duck /
+    // antichess). Persisted alongside the side configs. Engine choice is gated per
+    // variant (see enginesForVariant) — no engine is ever silently substituted.
+    const [variant, setVariant] = useState<EngineVsVariant>(
+        () => loadSettings().variant ?? 'standard',
+    )
+    // The start FEN for the current game. A nav-carried editor position wins;
+    // otherwise it's the variant's start (chess960 reshuffles). It changes when the
+    // variant changes and on reset (chess960 reshuffles then too).
+    const [startFen, setStartFen] = useState<string>(
+        () => navFen ?? startFenForVariant(loadSettings().variant ?? 'standard'),
+    )
 
     useEffect(() => {
         try {
-            localStorage.setItem(SETTINGS_KEY, JSON.stringify({ white, black, duck: duckMode }))
+            localStorage.setItem(SETTINGS_KEY, JSON.stringify({ white, black, variant }))
         } catch {
             // storage unavailable / quota — settings just won't persist this session
         }
-    }, [white, black, duckMode])
+    }, [white, black, variant])
 
     // Game
     const [fen, setFen] = useState(startFen)
@@ -291,11 +344,17 @@ export default function EngineVsEngine() {
                 to: moves[shownPly - 1].uci.slice(2, 4),
             }
           : null
-    const shownDuck: string | null = duckMode
-        ? atLive
-            ? duck || null
-            : (moves[shownPly - 1]?.duck ?? null)
-        : null
+    const shownDuck: string | null =
+        variant === 'duck'
+            ? atLive
+                ? duck || null
+                : (moves[shownPly - 1]?.duck ?? null)
+            : null
+    // Crazyhouse pockets for the shown position (parsed from the shown FEN, which
+    // carries the "[pocket]" field). Empty for every other variant.
+    const shownPockets = variant === 'crazyhouse' ? parsePocket(pocketFromFen(boardFen)) : null
+    // The board renderer wants a plain FEN — strip Crazyhouse's "[pocket]"/"~" markup.
+    const renderFen = variant === 'crazyhouse' ? stripCrazyhouseFen(boardFen) : boardFen
 
     // History navigation (client-side review only).
     const goFirst = () => setViewIndex(0)
@@ -338,63 +397,20 @@ export default function EngineVsEngine() {
         const id = setTimeout(async () => {
             thinkingRef.current = true
             try {
-                if (duckMode) {
-                    // Duck Chess: drive the game through the duck engine. Both sides
-                    // are gomachine; the mover's rating + search budget come from its
-                    // stored SideConfig. duckEval returns a composite move; duckPlay
-                    // validates + applies it and reports the resulting status.
-                    const r = await duckEval(fen, duck, {
-                        rating: moverCfg.rating,
-                        ...(moverCfg.limitKind === 'depth'
-                            ? { depth: moverCfg.depth }
-                            : moverCfg.limitKind === 'nodes'
-                              ? { nodes: moverCfg.nodes }
-                              : { movetime: moverCfg.movetime }),
-                    })
-                    if (cancelled) return
-                    if (!r.bestmove) {
-                        setRunning(false)
-                        setError('engine returned no move')
-                        return
-                    }
-                    const mv = await duckPlay(fen, duck, r.bestmove)
-                    if (cancelled) return
-                    if (!mv.legal) {
-                        setRunning(false)
-                        setError(mv.error ?? 'engine returned an illegal move')
-                        return
-                    }
-                    setLastMove({ from: r.bestmove.slice(0, 2), to: r.bestmove.slice(2, 4) })
-                    setMoves((m) => [
-                        ...m,
-                        {
-                            ply: m.length + 1,
-                            uci: r.bestmove!,
-                            san: mv.san,
-                            by: 'bot',
-                            fen: mv.newFen,
-                            duck: mv.duck,
-                        },
-                    ])
-                    setFen(mv.newFen)
-                    setDuck(mv.duck)
-                    const gameOver = mv.status !== 'ongoing'
-                    playForSan(mv.san, gameOver) // move/capture/end cue
-                    if (mv.status !== 'ongoing') {
-                        setStatus(mv.status)
-                        setResult(mv.result ?? null)
-                        setRunning(false)
-                    }
-                    return
-                }
-
-                const res = await engineVsMove(paramsForSide(moverCfg, fen))
+                // Every variant goes through the SAME admin endpoint, which dispatches
+                // to the mover's chosen engine with NO fallback — so the selected
+                // engine truly plays (a "gomachine" pick never quietly becomes
+                // zugzwang). The variant bestmove endpoints return the move already
+                // applied, so one call per ply drives standard AND every variant.
+                const res = await engineVsMove(paramsForSide(moverCfg, fen, variant, duck))
                 if (cancelled) return
                 if (!res.bestmove || !res.fen) {
                     setRunning(false)
                     setError(res.reason ?? 'engine returned no move')
                     return
                 }
+                // Duck's bestmove is the composite "<pieceUci>:<duckSquare>" — its
+                // first four chars are still the piece move for the last-move arrow.
                 setLastMove({ from: res.bestmove.slice(0, 2), to: res.bestmove.slice(2, 4) })
                 setMoves((m) => [
                     ...m,
@@ -404,9 +420,21 @@ export default function EngineVsEngine() {
                         san: res.san ?? res.bestmove!,
                         by: 'bot',
                         fen: res.fen!,
+                        ...(res.duck ? { duck: res.duck } : {}),
                     },
                 ])
                 setFen(res.fen)
+                if (variant === 'duck') setDuck(res.duck ?? '')
+                // Self-search variants (duck/crazyhouse/antichess) have no independent
+                // full-strength analyze on the no-fallback admin path, so drive the
+                // eval bar from the mover's returned eval (mover = current side to move,
+                // converted to White-relative).
+                if (isSelfVariant(variant) && res.eval) {
+                    setWhiteEval({
+                        type: res.eval.type,
+                        white: sideToMove === 'w' ? res.eval.value : -res.eval.value,
+                    })
+                }
                 const gameOver = res.status !== 'ongoing' || !!res.claimableDraws?.includes('fifty')
                 playForSan(res.san ?? res.bestmove, gameOver) // move/capture/end cue
                 if (res.status !== 'ongoing') {
@@ -431,7 +459,7 @@ export default function EngineVsEngine() {
             cancelled = true
             clearTimeout(id)
         }
-    }, [running, ply, over, fen, sideToMove, moverCfg, duck, duckMode])
+    }, [running, ply, over, fen, sideToMove, moverCfg, duck, variant])
 
     // Eval bar = ONE consistent evaluator: the site's primary analysis engine at
     // full strength (plain /analyze, no `side` — engine-agnostic, see api/client.ts),
@@ -442,23 +470,17 @@ export default function EngineVsEngine() {
     // mates as M1/M2.
     useEffect(() => {
         if (over) {
-            if (duckMode) {
-                // Duck Chess terminals: win by capturing a king (no check/checkmate).
-                setWhiteEval(
-                    status === 'white_win'
-                        ? { type: 'mate', white: 1 }
-                        : status === 'black_win'
-                          ? { type: 'mate', white: -1 }
-                          : { type: 'cp', white: 0 },
-                )
-                return
-            }
-            // Checkmate: the side to move has been mated, so it's lost. Other terminals
-            // (stalemate / draws) are dead even.
+            // Duck/antichess decide by white_win/black_win (king capture / running out
+            // of material); checkmate is a loss for the side to move; everything else
+            // (stalemate, draws) is dead even.
             setWhiteEval(
-                status === 'checkmate'
-                    ? { type: 'mate', white: sideToMove === 'w' ? -1 : 1 }
-                    : { type: 'cp', white: 0 },
+                status === 'white_win'
+                    ? { type: 'mate', white: 1 }
+                    : status === 'black_win'
+                      ? { type: 'mate', white: -1 }
+                      : status === 'checkmate'
+                        ? { type: 'mate', white: sideToMove === 'w' ? -1 : 1 }
+                        : { type: 'cp', white: 0 },
             )
             return
         }
@@ -466,21 +488,13 @@ export default function EngineVsEngine() {
             setWhiteEval(null) // neutral bar on the idle start screen
             return
         }
+        // Self-search variants set the eval bar from the mover's returned eval inside
+        // the move loop (no independent analyzer on the no-fallback admin path).
+        if (isSelfVariant(variant)) return
+        // Standard + chess960: ONE consistent full-strength evaluator (plain /analyze,
+        // engine-agnostic), re-read after every ply regardless of who moved. We
+        // deliberately avoid the mover's own rating-limited (one-sided) search.
         let cancelled = false
-        if (duckMode) {
-            // Duck eval bar = the duck engine at FULL strength (no rating cap),
-            // side-to-move eval converted to White-relative.
-            duckEval(fen, duck)
-                .then((r) => {
-                    if (cancelled || !r.eval) return
-                    const white = r.sideToMove === 'w' ? r.eval.value : -r.eval.value
-                    setWhiteEval({ type: r.eval.type, white })
-                })
-                .catch(() => {})
-            return () => {
-                cancelled = true
-            }
-        }
         analyze(fen, { movetime: 300 })
             .then((r) => {
                 if (cancelled || !r.eval) return
@@ -491,11 +505,14 @@ export default function EngineVsEngine() {
         return () => {
             cancelled = true
         }
-    }, [fen, status, over, sideToMove, ply, duckMode, duck])
+    }, [fen, status, over, sideToMove, ply, variant])
 
-    function reset() {
+    // Clear the game back to a given start position (adopting it as the new
+    // startFen so history review + the book tree stay consistent).
+    function clearGame(fresh: string) {
         setRunning(false)
-        setFen(startFen)
+        setStartFen(fresh)
+        setFen(fresh)
         setDuck('')
         setMoves([])
         setStatus('ongoing')
@@ -506,20 +523,38 @@ export default function EngineVsEngine() {
         setViewIndex(null)
     }
 
+    // Reset reshuffles Chess960 (a fresh random back rank each game); every other
+    // variant keeps its stable start.
+    function reset() {
+        clearGame(variant === 'chess960' ? random960() : startFen)
+    }
+
+    // Switch variant: gate each side's engine to one this variant can actually play
+    // (an incompatible pick falls back to gomachine — the always-compatible engine),
+    // lift the "Unlosable" sentinel where the variant has no worst-move path, then
+    // start a fresh game at the variant's start position.
+    function changeVariant(v: EngineVsVariant) {
+        if (v === variant) return
+        const allowed = enginesForVariant(v)
+        const fix = (s: SideConfig): SideConfig => {
+            let next = s
+            if (!allowed.includes(s.engine)) next = { ...next, engine: 'gomachine' }
+            if (isSelfVariant(v) && next.rating <= UNLOSABLE_RATING)
+                next = { ...next, rating: 1500 } // no worst-move path in self-variants
+            return next
+        }
+        setWhite(fix)
+        setBlack(fix)
+        setVariant(v)
+        clearGame(startFenForVariant(v))
+    }
+
     // Re-entering from the editor with a different position: adopt it and reset the
     // game (the initial state only reads navFen once).
     useEffect(() => {
         if (!navFen) return
-        setRunning(false)
-        setFen(navFen)
-        setDuck('')
-        setMoves([])
-        setStatus('ongoing')
-        setResult(null)
-        setLastMove(null)
-        setWhiteEval(null)
-        setError(null)
-        setViewIndex(null)
+        clearGame(navFen)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [navFen])
 
     function toggleRun() {
@@ -562,33 +597,21 @@ export default function EngineVsEngine() {
                             boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
                         }}
                     >
-                        <Label>Mode</Label>
+                        <Label>Variant</Label>
                         <ToggleButtonGroup
                             exclusive
                             fullWidth
                             size="small"
-                            value={duckMode ? 'duck' : 'standard'}
-                            onChange={(_, v) => {
-                                if (!v) return
-                                const toDuck = v === 'duck'
-                                // Duck Chess has no worst-move path; lift any "Unlosable"
-                                // side (rating 0) to a real rating so the duck engine
-                                // gets a valid target.
-                                if (toDuck) {
-                                    setWhite((s) =>
-                                        s.rating <= UNLOSABLE_RATING ? { ...s, rating: 1500 } : s,
-                                    )
-                                    setBlack((s) =>
-                                        s.rating <= UNLOSABLE_RATING ? { ...s, rating: 1500 } : s,
-                                    )
-                                }
-                                setDuckMode(toDuck)
-                            }}
+                            value={variant}
+                            onChange={(_, v) => v && changeVariant(v as EngineVsVariant)}
                             disabled={running}
-                            sx={toggleSx}
+                            sx={{ ...toggleSx, flexWrap: 'wrap' }}
                         >
-                            <ToggleButton value="standard">Standard</ToggleButton>
-                            <ToggleButton value="duck">Duck Chess</ToggleButton>
+                            {EVE_VARIANTS.map((v) => (
+                                <ToggleButton key={v} value={v} sx={{ flex: '1 0 30%' }}>
+                                    {VARIANT_LABEL[v]}
+                                </ToggleButton>
+                            ))}
                         </ToggleButtonGroup>
                     </Box>
 
@@ -602,7 +625,7 @@ export default function EngineVsEngine() {
                                     cfg={white}
                                     onChange={(patch) => setWhite((s) => ({ ...s, ...patch }))}
                                     disabled={running}
-                                    duckMode={duckMode}
+                                    variant={variant}
                                 />
                             ) : (
                                 <SideControls
@@ -610,7 +633,7 @@ export default function EngineVsEngine() {
                                     cfg={black}
                                     onChange={(patch) => setBlack((s) => ({ ...s, ...patch }))}
                                     disabled={running}
-                                    duckMode={duckMode}
+                                    variant={variant}
                                 />
                             ),
                     )}
@@ -636,9 +659,9 @@ export default function EngineVsEngine() {
                                 return (
                                     <MatchupRow
                                         key={c}
-                                        icon={engineIcon(duckMode ? 'gomachine' : cfg.engine)}
-                                        name={duckMode ? 'gomachine' : engineName(cfg.engine)}
-                                        detail={duckMode ? `~${cfg.rating} Elo` : sideDetail(cfg)}
+                                        icon={engineIcon(cfg.engine)}
+                                        name={engineName(cfg.engine)}
+                                        detail={sideDetail(cfg)}
                                         side={c}
                                     />
                                 )
@@ -665,14 +688,17 @@ export default function EngineVsEngine() {
                                         state: { moves: moves.map((m) => m.uci), startFen },
                                     })
                                 }
-                                disabled={duckMode || moves.length === 0}
+                                // Analysis board is standard-mechanics (handles chess960
+                                // via the FEN) but doesn't understand the self-variants.
+                                disabled={isSelfVariant(variant) || moves.length === 0}
                             >
                                 <Telescope size={18} />
                             </NavBtn>
                             <NavBtn
                                 label="Play a bot from here"
                                 onClick={() => navigate('/bot', { state: { fen } })}
-                                disabled={running || duckMode}
+                                // The /bot entry starts a standard game from the FEN.
+                                disabled={running || variant !== 'standard'}
                             >
                                 <Bot size={18} />
                             </NavBtn>
@@ -687,6 +713,38 @@ export default function EngineVsEngine() {
                             </NavBtn>
                         </Box>
                     </Box>
+
+                    {/* Crazyhouse "in hand": pockets for the shown position (top =
+                        Black when White-oriented). Display-only in this admin view. */}
+                    {variant === 'crazyhouse' && shownPockets && (
+                        <Box
+                            sx={{
+                                bgcolor: 'var(--surface)',
+                                border: '1px solid var(--line-soft)',
+                                borderRadius: '14px',
+                                p: 1.5,
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 0.75,
+                            }}
+                        >
+                            <Label>In hand</Label>
+                            <Pocket
+                                color={orientation === 'w' ? 'b' : 'w'}
+                                pocket={shownPockets}
+                                selected={null}
+                                interactive={false}
+                                onSelect={() => {}}
+                            />
+                            <Pocket
+                                color={orientation}
+                                pocket={shownPockets}
+                                selected={null}
+                                interactive={false}
+                                onSelect={() => {}}
+                            />
+                        </Box>
+                    )}
 
                     {/* Run controls */}
                     <Box sx={{ display: 'flex', gap: 1 }}>
@@ -712,8 +770,9 @@ export default function EngineVsEngine() {
                     {/* Book info: opening name + candidate-move eval bars for the live
                         position (engine-owned). Hover a move for its arrow + opening;
                         click to open that line in the analysis board. Standard-only —
-                        the book + standard engine don't understand the duck. */}
-                    {!duckMode && (
+                        the opening book is keyed to the standard start; chess960 and the
+                        self-variants have no book. */}
+                    {variant === 'standard' && (
                         <Box
                             sx={{
                                 bgcolor: 'var(--surface)',
@@ -742,9 +801,9 @@ export default function EngineVsEngine() {
             }
         >
             <Board
-                fen={boardFen}
+                fen={renderFen}
                 orientation={orientation}
-                sideToMove={sideToMoveOf(boardFen)}
+                sideToMove={sideToMoveOf(renderFen)}
                 legalMoves={[]}
                 lastMove={shownLast}
                 inCheck={false}
@@ -790,25 +849,25 @@ function SideControls({
     cfg,
     onChange,
     disabled,
-    duckMode = false,
+    variant,
 }: {
     cfg: SideConfig
     onChange: (patch: Partial<SideConfig>) => void
     disabled: boolean
-    // Duck Chess mode: this side is forced to gomachine; hide the engine picker,
-    // Stockfish strength, Aggression, and Opening book — leaving only the rating
-    // slider + the search-limit controls.
-    duckMode?: boolean
+    // The active variant. It gates which engines this side may pick and which
+    // knobs apply: Stockfish is standard-only; the self-variants (crazyhouse/duck/
+    // antichess) ignore aggression + the opening book and have no worst-move stop.
+    variant: EngineVsVariant
 }) {
-    // Duck mode pins the side to gomachine regardless of the stored engine pick.
-    // gomachine and zugzwang share identical controls (rating/aggr/book/search-
-    // limit incl. nodes) — only Stockfish's controls differ.
-    const isRatingEngine = duckMode || cfg.engine !== 'stockfish'
-    // The "Unlosable" stop (worst-move engine, stored as rating 0) is offered on
-    // gomachine/zugzwang in Standard mode only — Duck has no worst-move path, and
-    // Stockfish uses its own UCI_Elo scale. The slider then works in coordinate
-    // space so its lowest notch is the sentinel (one step below the 700 floor).
-    const allowUnlosable = isRatingEngine && !duckMode
+    const allowedEngines = enginesForVariant(variant)
+    // Self-search variants have their own engine with its own rating→strength
+    // weakening; aggression + book don't apply, and there is no worst-move ("Unlosable")
+    // path. chess960 rides the standard engine, so it keeps all standard knobs.
+    const self = isSelfVariant(variant)
+    // gomachine/zugzwang share identical controls (rating/aggr/book/search-limit
+    // incl. nodes) — only Stockfish's differ. Stockfish only ever appears in standard.
+    const isRatingEngine = cfg.engine !== 'stockfish'
+    const allowUnlosable = isRatingEngine && !self
     // Stockfish offers only movetime | depth; if the stored kind is 'nodes' (carried
     // over from gomachine/zugzwang), treat it as movetime for the toggle + sending.
     const effKind: LimitKind =
@@ -827,35 +886,37 @@ function SideControls({
                 boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
             }}
         >
-            {!duckMode && (
-                <ToggleButtonGroup
-                    exclusive
-                    fullWidth
-                    size="small"
-                    value={cfg.engine}
-                    onChange={(_, v) => {
-                        if (!v) return
-                        // Switching to Stockfish: coerce a nodes budget (SF has no nodes
-                        // mode) to movetime so the sent budget stays valid.
-                        if (v === 'stockfish' && cfg.limitKind === 'nodes') {
-                            onChange({ engine: 'stockfish', limitKind: 'movetime' })
-                        } else {
-                            onChange({ engine: v as EngineKind })
-                        }
-                    }}
-                    disabled={disabled}
-                    sx={{ ...toggleSx, mt: 0 }}
-                >
-                    <ToggleButton value="gomachine">gomachine</ToggleButton>
-                    <ToggleButton value="zugzwang">zugzwang</ToggleButton>
-                    <ToggleButton value="stockfish">Stockfish</ToggleButton>
-                </ToggleButtonGroup>
-            )}
+            {/* Engine picker — only the engines the active variant can actually
+                play (Stockfish appears in standard only). */}
+            <ToggleButtonGroup
+                exclusive
+                fullWidth
+                size="small"
+                value={cfg.engine}
+                onChange={(_, v) => {
+                    if (!v) return
+                    // Switching to Stockfish: coerce a nodes budget (SF has no nodes
+                    // mode) to movetime so the sent budget stays valid.
+                    if (v === 'stockfish' && cfg.limitKind === 'nodes') {
+                        onChange({ engine: 'stockfish', limitKind: 'movetime' })
+                    } else {
+                        onChange({ engine: v as EngineKind })
+                    }
+                }}
+                disabled={disabled}
+                sx={{ ...toggleSx, mt: 0 }}
+            >
+                {allowedEngines.map((e) => (
+                    <ToggleButton key={e} value={e}>
+                        {engineName(e)}
+                    </ToggleButton>
+                ))}
+            </ToggleButtonGroup>
 
             {isRatingEngine ? (
                 <>
                     <SliderRow
-                        label={`${duckMode ? 'gomachine' : engineName(cfg.engine)} rating`}
+                        label={`${engineName(cfg.engine)} rating`}
                         value={ratingLabel(cfg.rating)}
                         sliderValue={allowUnlosable ? ratingToCoord(cfg.rating) : cfg.rating}
                         min={allowUnlosable ? UNLOSABLE_SLOT : GOMA_RATING_MIN}
@@ -864,9 +925,9 @@ function SideControls({
                         disabled={disabled}
                         onChange={(n) => onChange({ rating: allowUnlosable ? coordToRating(n) : n })}
                     />
-                    {/* Aggression + opening book are gomachine/zugzwang-only knobs,
-                        hidden in Duck mode (the duck engine ignores them). */}
-                    {!duckMode && (
+                    {/* Aggression + opening book are standard-path knobs (standard +
+                        chess960); the self-variant engines ignore them. */}
+                    {!self && (
                         <>
                             <SliderRow
                                 label="Aggression"

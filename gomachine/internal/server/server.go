@@ -153,6 +153,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /crazyhouse/legal-moves", s.handleCrazyhouseLegalMoves)
 	mux.HandleFunc("POST /crazyhouse/move", s.handleCrazyhouseMove)
 	mux.HandleFunc("POST /crazyhouse/bestmove", s.handleCrazyhouseBestMove)
+
+	// Antichess (Losing Chess): rules + self-contained bot (internal/antichess).
+	// Mirrors zugzwang's /antichess/* so the admin Engine-vs-Engine view can run
+	// gomachine on either side with no cross-engine fallback.
+	mux.HandleFunc("POST /antichess/legal-moves", s.handleAntichessLegalMoves)
+	mux.HandleFunc("POST /antichess/move", s.handleAntichessMove)
+	mux.HandleFunc("POST /antichess/bestmove", s.handleAntichessBestMove)
+
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 	return recoverPanics(mux)
 }

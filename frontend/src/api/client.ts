@@ -109,7 +109,14 @@ export interface EngineVsMove {
     eval: { type: 'cp' | 'mate'; value: number } | null
     by: EngineSide
     reason?: string
+    // Variant-specific board state carried per ply (null for standard/chess960).
+    duck?: string | null // Duck Chess: the duck's square after this ply
+    pocket?: string | null // Crazyhouse: the canonical pocket string after this ply
 }
+
+/** The variants the admin engine-vs-engine view can drive. Standard is playable
+ * by all engines; every other variant is gomachine/zugzwang only. */
+export type EngineVsVariant = 'standard' | 'chess960' | 'crazyhouse' | 'duck' | 'antichess'
 
 /** Admin-only: play one ply of gomachine/zugzwang(rating) vs Stockfish(elo) —
  * or gomachine vs zugzwang — and apply it. Any engine may play either side.
@@ -123,6 +130,8 @@ export interface EngineVsMove {
 export function engineVsMove(params: {
     fen: string
     side: EngineSide
+    variant?: EngineVsVariant // default 'standard'; chess960 rides the standard path
+    duck?: string // Duck Chess only: the duck's current square ("" if unplaced)
     rating?: number
     elo?: number
     movetime?: number
