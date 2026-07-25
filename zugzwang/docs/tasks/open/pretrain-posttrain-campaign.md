@@ -20,6 +20,44 @@
 
 ---
 
+## SESSION SCORECARD — 2026-07-24/25 (autonomous run)
+
+**SHIPPED (pushed to main):**
+| Commit | Lever | Result |
+|---|---|---|
+| `a56ce88` | THREATGATE default-on | byte-identical, **+1.9% NPS** (all arches) |
+| `c553fc5` | THREATDELTA_SF default-on | byte-identical, **+2.82% NPS** (all arches) — SF touch-only-D delta |
+| `c553fc5` | APPLYPREFETCH amd64-gated | byte-identical, **+1.44% NPS** (amd64) |
+| `ce06a59` | Finny arch-gated (arm64-on) | byte-identical, **+1–2% arm64** (amd64 −1.25% → off) |
+
+→ **~+6% amd64 NPS retrain-free (~14 Elo)**, all bench-decided + ASSERT-clean. This is the
+confirmable class (immune to the movetime noise floor). The `apply_diff` threat-bandwidth
+prize (19.3%) remains and needs **int8-QAT (Post-Train)**.
+
+**COMMITTED default-off (tested):**
+- `4834535` P6 TRIPLEEXT (5-term margin), P10 NODEEFFORT · `3a8fffb` Finny · `0352391`
+  FULLPROBCUT + TMFALLING · `839c0b7` SPSA driver (`tools/nnue_spsa/`, validated).
+
+**REJECTED on evidence (not shipped):**
+- CONTHISTPLIES −6 Elo movetime · corr-bundle wash (+0.27) · CONTHISTPLIES-class search solos
+  wash (confirms the search-solo well is dry at movetime) · **full-ProbCut LLR −2.95 REJECT**
+  (clean re-test refuted the audit's "mis-washed" optimism — regresses on top of cheap ProbCut)
+  · P2 sparse-affine (permutation caps block-sparsity at 64.5%, needs a retrain) · Finny-amd64.
+
+**RUNNING / RESUMABLE:**
+- TMFALLING + NODEEFFORT real-clock SPRT (the deferred TIMEMAN pieces, anchored to the shipped
+  +28) — in progress.
+- Output-layer net SPSA (`tools/nnue_spsa/spsa_driver.py`, 648-param surface) — paused mid-run,
+  bit-identical resumable (`--resume`, scratch `~/nnue_spsa_run1`), snapshots every 30 iters.
+
+**KEY EVIDENCE:** fresh 24Jul amd64 profile (retracted a premature Finny kill — `build_half`
+6.24%, not stale <0.8%) · refresh-event breakdown (Finny 3.22% / THREATGATE 2.64% ceilings) ·
+mis-washed audit (found ProbCut/PCM/LMREXT/HistPrune diagnoses to re-check + the unfinished
+TIMEMAN). **Unimplemented audit backlog:** PCM threshold-fix, LMREXT ballast-fix, HistPrune
+clean re-test (post-PvNode-guard).
+
+---
+
 ## Net architecture (reference — used throughout) `[OBS]`
 
 From `zug/nnue_arch.h:8-32`:
