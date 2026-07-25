@@ -286,7 +286,8 @@ inline void emit_changed_edges(const SFTables& T, const PerspXform& x, int aRel,
 }
 
 // ============================================================================
-// THREATDELTA_SF — SF18 "touch-only-D" threat delta (default OFF).
+// THREATDELTA_SF — SF18 "touch-only-D" threat delta (SHIPPED default-on 2026-07-25,
+// +2.82% NPS byte-identical; kill-switch THREATDELTA_SF=0).
 //
 // Port of Stockfish 18's Position::update_piece_threats: touches ONLY the ≤4
 // squares in D (never builds an `affected` set, never calls attackers_to as a

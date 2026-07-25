@@ -1,8 +1,10 @@
 # Cuckoo upcoming-repetition detection (SF #15) — ready-to-execute port
 
-**Status: RESEARCHED + prerequisites verified 2026-07-20. Not yet implemented — a
-correctness-sensitive `do_move` change deferred out of a long session to avoid rushing
-a wrong-draw-claim bug. This doc has everything needed to implement cleanly.**
+**Status: IMPLEMENTED 2026-07-21 (commit `40db482`, env `CUCKOO=1`, default-OFF), unit-verified
+(cuckoo count==3668, byte-identical off, 6/6 repetition test). MOVETIME SPRT: WASH — the
+repetition/fortress positions it helps rarely arise at movetime over a random book. Left
+default-off; a candidate for longer TC only. RESOLVED — this doc records the completed port
+(kept for the design writeup; safe to move to a done/ archive). Do NOT re-SPRT unchanged.**
 
 ## Why this is high-EV
 

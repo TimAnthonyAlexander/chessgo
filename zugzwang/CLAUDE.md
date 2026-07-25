@@ -140,6 +140,15 @@ folds a move in by diffing only the changed base+threat edges (`changed_edges_de
 `apply_diff` machinery, byte-identical eval. `THREATDELTA=0` is the parity/debug
 kill-switch back to the full-enumerate `push()`. Details: `docs/tasks/done/threat-delta.md`.
 
+**Retrain-free accumulator NPS levers (2026-07, all byte-identical, env kill-switches):**
+`LAZYACC`/`LAZYACC2` (deferred-apply, default-on), `THREATGATE` (same-mirror bucket-cross keeps
+threats on the delta path, default-on, +1.9%), `THREATDELTA_SF` (SF18 touch-only-D delta,
+default-on, +2.82%), `APPLYPREFETCH` (prefetch next FT column, **amd64-default-on** / arm64-off,
++1.44%), `Finny` (base-refresh cache, **arm64-default-on** / amd64-off, arch-gated like `ACCFUSE`).
+~+6% amd64 NPS combined. Authoritative profile: `docs/PROFILING/amd/24Jul2026.md`; campaign +
+verdicts: `docs/tasks/open/pretrain-posttrain-campaign.md`. The dominant `apply_diff` threat-
+column bandwidth (19.3%) is the remaining prize — needs **int8-QAT (August retrain)**.
+
 ## Rules / movegen
 
 `src/{position,movegen,bitboard,rules,zobrist}.cpp` — magic-bitboard movegen,

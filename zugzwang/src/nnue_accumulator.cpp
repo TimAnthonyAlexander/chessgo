@@ -13,9 +13,10 @@ namespace NNUE {
 namespace {
 
 // APPLYPREFETCH — software-prefetch upcoming FT weight columns in apply_diff's
-// hot loop. Default OFF; APPLYPREFETCH=1 to enable. Mirrors threat_delta_enabled's
-// env-read style: getenv runs exactly once per process via a lambda-initialized
-// `static const bool`. See apply_diff below for the design + bit-exactness note.
+// hot loop. SHIPPED amd64-default-on (2026-07-25, +1.44% NPS, byte-identical); arch-gated
+// off on arm64 — see apply_prefetch_enabled() below for the gate + rationale. Mirrors
+// threat_delta_enabled's env-read style: getenv runs once per process via a lambda-
+// initialized `static const bool`. See apply_diff below for the design + bit-exactness note.
 bool apply_prefetch_enabled() {
     // SHIPPED arch-gated 2026-07-25: +1.44% NPS amd64 (se 0.65%, 17/24), byte-identical
     // (ASSERT-clean). The prefetch hint is x86-tuned — FT-column indices are feature-scattered,
