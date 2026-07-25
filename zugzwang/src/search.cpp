@@ -1390,6 +1390,13 @@ bool set_tune_option_impl(Context& C, const std::string& name, int value) {
     else if (name == "FutNoMoveBonus") tune.futNoMoveBonus = clamp(value, 0, 200);
     else if (name == "FutAlphaBonus")  tune.futAlphaBonus  = clamp(value, 0, 200);
     else if (name == "TtPvFailLowR")   tune.ttPvFailLowR   = clamp(value, 0, 2048);
+    // TTPVRICH coefficients (only read when env/opt TTPVRICH=1) — conditioned ttPv LMR
+    // de-reduction; x1024 = plies. Ranges bracket zug's current 1024 up toward SF's magnitudes.
+    else if (name == "TtPvBase")       tune.ttPvBase       = clamp(value, 0, 3072);
+    else if (name == "TtPvPvW")        tune.ttPvPvW        = clamp(value, 0, 1536);
+    else if (name == "TtPvPromW")      tune.ttPvPromW      = clamp(value, 0, 1536);
+    else if (name == "TtPvDeepW")      tune.ttPvDeepW      = clamp(value, 0, 1536);
+    else if (name == "TtPvDeepCutW")   tune.ttPvDeepCutW   = clamp(value, 0, 1536);
     // ---- SINGTTPV / RFPQUAD / NONLMRRED / OPTIMISM constants (2026-07-23, sf-sp-search-
     // backlog.md #14/#20/#12/#17) — only read when the owning flag is on. ----
     else if (name == "SingTtPvCoeff")  tune.singTtPvCoeff  = clamp(value, 0, 200);
