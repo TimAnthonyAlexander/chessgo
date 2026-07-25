@@ -461,6 +461,16 @@ struct Context {
         // ---- QSMOVECAP (2026-07-20, sf-sp-search-backlog.md #7): cap qsearch captures.
         bool qsMoveCap  = false;
         int  qsMoveCapN = 2;   // SF's threshold (moveCount > 2 → skip)
+        // ---- QSCHECKS (2026-07-25, investigation): generate quiet (non-capture)
+        // CHECKS at the ENTRY qsearch ply (qdepth==0, !inCheck), SEE>=0, so qsearch
+        // can see a quiet checking refutation/mate (e.g. a back-rank Re8#) instead of
+        // stand-patting on a net eval that loves the checker's transient material.
+        // SF/most engines generate checks at the first qsearch ply; zug currently does
+        // not (generate<CAPTURES> only when !inCheck). Default OFF; env QSCHECKS=1.
+        // PoC/diagnostic — NOT SPRT-gated for ship. Bounded: qdepth==0 only (child gets
+        // qdepth+1 → no recursive quiet-check explosion), SEE>=0, moveCount cap reuse.
+        bool qsChecks   = false;
+        int  qsChecksN  = 3;   // max quiet checks to try at the entry ply
         bool pcm            = false;
         int  pcmBase        = 260;   // SP pcmBaseWeight
         int  pcmDepthW      = 400;   // SP pcmDepthWeight
@@ -993,6 +1003,8 @@ struct Context {
             if (on("SHUFFLEGUARD")) shuffleGuard = true;
             if (on("QSMOVECAP")) qsMoveCap = true;
             if (const char* e = getenv("QSMOVECAPN")) { int v = atoi(e); if (v >= 1) qsMoveCapN = v; }
+            if (on("QSCHECKS")) qsChecks = true;
+            if (const char* e = getenv("QSCHECKSN")) { int v = atoi(e); if (v >= 1) qsChecksN = v; }
             if (off("RULE50DAMP")) rule50Damp = false; // shipped default-on; kill-switch
             if (const char* e = getenv("RULE50DAMPDIV")) { int v = atoi(e); if (v > 0) rule50DampDiv = v; }
             if (on("EVALCOMPLEXITY")) evalComplexity = true;
@@ -2109,6 +2121,39 @@ int qsearch(Context& C, Position& pos, Stack* ss, int alpha, int beta, int qdept
                 bestMove = m;
                 if (score >= beta) break;
                 alpha = score;
+            }
+        }
+    }
+
+    // QSCHECKS (diagnostic, default OFF): at the entry qsearch ply, also try quiet
+    // (non-capture) moves that give check and don't lose material (SEE>=0). Lets qsearch
+    // see a quiet checking refutation/mate the CAPTURES-only list can't enumerate.
+    // Child is searched at qdepth+1 so it never generates quiet checks again (no
+    // explosion). Skipped once we already have a beta cutoff.
+    if (C.tune.qsChecks && qdepth == 0 && !inCheck && !qsTtQuietCutoff && bestValue < beta) {
+        MoveList clist;
+        generate<ALL>(pos, clist);
+        int checksTried = 0;
+        for (ExtMove* it = clist.begin(); it != clist.end() && checksTried < C.tune.qsChecksN; ++it) {
+            Move m = it->move;
+            if (pos.is_capture(m) || type_of_move(m) == PROMOTION) continue; // captures/promos already covered
+            if (m == ttMove) continue;                                       // QSTTQUIET may have searched it
+            if (!pos.gives_check(m)) continue;
+            if (!pos.legal(m)) continue;
+            if (!pos.see_ge(m, 0)) continue;                                 // don't chase material-losing checks
+            checksTried++;
+            pos.do_move(m, st);
+            C.tt.prefetch(pos.key());
+            int score = -qsearch(C, pos, ss + 1, -beta, -alpha, qdepth + 1);
+            pos.undo_move(m);
+            if (C.stop) return 0;
+            if (score > bestValue) {
+                bestValue = score;
+                if (score > alpha) {
+                    bestMove = m;
+                    if (score >= beta) break;
+                    alpha = score;
+                }
             }
         }
     }
