@@ -314,10 +314,10 @@ int uci_main() {
             // conditioned ttPv LMR de-reduction, search.cpp Tune::ttPv* (SF search.cpp:1191-93
             // signal structure, zug-native magnitudes). x1024 = plies.
             std::cout << "option name TtPvBase type spin default 1024 min 0 max 3072\n";
-            std::cout << "option name TtPvPvW type spin default 512 min 0 max 1536\n";
-            std::cout << "option name TtPvPromW type spin default 512 min 0 max 1536\n";
-            std::cout << "option name TtPvDeepW type spin default 512 min 0 max 1536\n";
-            std::cout << "option name TtPvDeepCutW type spin default 512 min 0 max 1536\n";
+            std::cout << "option name TtPvPvW type spin default 0 min 0 max 1536\n";
+            std::cout << "option name TtPvPromW type spin default 1024 min 0 max 1536\n";
+            std::cout << "option name TtPvDeepW type spin default 0 min 0 max 1536\n";
+            std::cout << "option name TtPvDeepCutW type spin default 0 min 0 max 1536\n";
             // PCM constants (2026-07-20, only read when env PCM=1) — fail-low parent-move
             // credit, sf-sp-search-backlog.md #10, SF search.cpp:1423 / SP search.cpp:1398.
             std::cout << "option name PcmBase type spin default 260 min -1024 max 1024\n";

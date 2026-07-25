@@ -244,12 +244,19 @@ struct Context {
         // env TTPVRICH=1. OFF path is byte-identical: the else-branch reproduces today's
         // flat -1024 + TTPVFAILLOW exactly. Starts at zug's current base (1024) so SPSA
         // can raise it rather than jumping to SF's magnitude blind.
-        bool ttPvRich     = false;
+        // SHIPPED default-on 2026-07-25: LEAN config (de-reduce ONLY the highest-signal
+        // ttValue>alpha ttPv nodes) measured +11.3 Elo movetime (LLR 2.01, 2400g) +
+        // +11.3 Elo fixed-nodes (LLR 2.29) — two independent methods agree. The naive
+        // all-terms config was +12 fixed-nodes but −3 movetime (tree-width tax); trimming
+        // to the single promising-term recovers the win at minimal node cost. env
+        // TTPVRICH=0 restores the pre-ship flat r-=1024. The pv/deep/cut weights default
+        // to 0 (off) but stay SPSA-tunable to salvage more later.
+        bool ttPvRich     = true;
         int  ttPvBase     = 1024;   // base de-reduction when ttPv (today's flat value)
-        int  ttPvPvW      = 512;    // extra when PvNode
-        int  ttPvPromW    = 512;    // extra when TT value already beats alpha (promising)
-        int  ttPvDeepW    = 512;    // extra when TT entry is deep enough to trust
-        int  ttPvDeepCutW = 512;    // additional extra on a trusted-deep cutNode
+        int  ttPvPvW      = 0;      // extra when PvNode (off in shipped lean config)
+        int  ttPvPromW    = 1024;   // extra when TT value already beats alpha (the escape term)
+        int  ttPvDeepW    = 0;      // extra when TT entry is deep enough to trust (off in lean)
+        int  ttPvDeepCutW = 0;      // additional extra on a trusted-deep cutNode (off in lean)
         // ---- SF parity micro-pair (SF search.cpp:883/927) — default ON; independent env kill-switches ----
         // RFPTTHIT (2026-07-21, SF search.cpp:880 `futilityMult = 76 - 23*!ss->ttHit`): drop
         // the RFP margin coefficient by rfpTtHitCoeff on a TT MISS (prune more aggressively
@@ -981,6 +988,7 @@ struct Context {
             if (on("TTPVFAILLOW")) ttPvFailLow = true;
             if (const char* e = getenv("TTPVFAILLOWR")) { int v = atoi(e); if (v >= 0) ttPvFailLowR = v; }
             if (on("TTPVRICH")) ttPvRich = true;
+            if (off("TTPVRICH")) ttPvRich = false;   // kill-switch: restore pre-ship flat r-=1024
             if (const char* e = getenv("TTPVBASE"))     { int v = atoi(e); if (v >= 0) ttPvBase     = v; }
             if (const char* e = getenv("TTPVPVW"))      { int v = atoi(e); if (v >= 0) ttPvPvW      = v; }
             if (const char* e = getenv("TTPVPROMW"))    { int v = atoi(e); if (v >= 0) ttPvPromW    = v; }

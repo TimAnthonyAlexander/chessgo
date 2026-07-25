@@ -22,7 +22,7 @@
         "enabled": false
     },
     "opening": {
-        "file": "/Users/tim.alexander/chessgo/gomachine/data/opening_suite.epd",
+        "file": "/Users/tim.alexander/chessgo/zugzwang/book.epd",
         "format": 0,
         "order": 0,
         "plies": -1,
@@ -32,7 +32,7 @@
         "additional_lines_rgx": [],
         "event_name": "Fastchess Tournament",
         "site": "?",
-        "file": "/Users/tim.alexander/sebchess/match.pgn",
+        "file": "",
         "notation": 0,
         "append_file": true,
         "track_nodes": false,
@@ -51,28 +51,28 @@
         "append_file": true
     },
     "sprt": {
-        "alpha": 0.0,
-        "beta": 0.0,
+        "alpha": 0.05,
+        "beta": 0.05,
         "elo0": 0.0,
-        "elo1": 0.0,
+        "elo1": 5.0,
         "model": "normalized",
-        "enabled": false
+        "enabled": true
     },
     "config_name": "config.json",
     "output": 0,
-    "seed": 10847620092254310539,
+    "seed": 15123571430164761556,
     "variant": 0,
     "type": 0,
     "gauntlet_seeds": 1,
-    "ratinginterval": 10,
+    "ratinginterval": 20,
     "scoreinterval": 1,
     "wait": 0,
     "autosaveinterval": 20,
     "games": 2,
-    "rounds": 100,
-    "concurrency": 4,
+    "rounds": 4000,
+    "concurrency": 6,
     "force_concurrency": false,
-    "recover": false,
+    "recover": true,
     "noswap": false,
     "reverse": false,
     "report_penta": true,
@@ -89,75 +89,67 @@
     },
     "engines": [
         {
-            "name": "zugzwang",
+            "name": "cand_ttpvrich_fn",
             "dir": "/Users/tim.alexander/chessgo/zugzwang",
-            "cmd": "./zugzwang",
+            "cmd": "/tmp/wrap_ttpvrich_fn.sh",
             "args": "",
             "restart": false,
             "options": [
                 [
                     "Hash",
-                    "128"
-                ],
-                [
-                    "Threads",
-                    "1"
+                    "64"
                 ]
             ],
             "limit": {
                 "tc": {
                     "increment": 0,
-                    "fixed_time": 100,
+                    "fixed_time": 0,
                     "time": 0,
                     "moves": 0,
-                    "timemargin": 300
+                    "timemargin": 0
                 },
-                "nodes": 0,
+                "nodes": 100000,
                 "plies": 0
             },
             "variant": 0
         },
         {
-            "name": "SebLague-v2",
-            "dir": "",
-            "cmd": "/Users/tim.alexander/sebchess/publish/Chess-Coding-Adventure",
+            "name": "base",
+            "dir": "/Users/tim.alexander/chessgo/zugzwang",
+            "cmd": "/Users/tim.alexander/chessgo/zugzwang/zugzwang",
             "args": "",
             "restart": false,
             "options": [
                 [
                     "Hash",
-                    "128"
-                ],
-                [
-                    "Threads",
-                    "1"
+                    "64"
                 ]
             ],
             "limit": {
                 "tc": {
                     "increment": 0,
-                    "fixed_time": 100,
+                    "fixed_time": 0,
                     "time": 0,
                     "moves": 0,
-                    "timemargin": 300
+                    "timemargin": 0
                 },
-                "nodes": 0,
+                "nodes": 100000,
                 "plies": 0
             },
             "variant": 0
         }
     ],
     "stats": {
-        "zugzwang vs SebLague-v2": {
-            "wins": 192,
-            "losses": 1,
-            "draws": 7,
-            "penta_WW": 92,
-            "penta_WD": 7,
-            "penta_WL": 1,
-            "penta_DD": 0,
-            "penta_LD": 0,
-            "penta_LL": 0
+        "cand_ttpvrich_fn vs base": {
+            "wins": 799,
+            "losses": 713,
+            "draws": 1168,
+            "penta_WW": 26,
+            "penta_WD": 249,
+            "penta_WL": 498,
+            "penta_DD": 362,
+            "penta_LD": 195,
+            "penta_LL": 10
         }
     }
 }
