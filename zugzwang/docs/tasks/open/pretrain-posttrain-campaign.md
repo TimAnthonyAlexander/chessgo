@@ -39,16 +39,22 @@ prize (19.3%) remains and needs **int8-QAT (Post-Train)**.
   FULLPROBCUT + TMFALLING · `839c0b7` SPSA driver (`tools/nnue_spsa/`, validated).
 
 **REJECTED on evidence (not shipped):**
-- CONTHISTPLIES −6 Elo movetime · corr-bundle wash (+0.27) · CONTHISTPLIES-class search solos
-  wash (confirms the search-solo well is dry at movetime) · **full-ProbCut LLR −2.95 REJECT**
-  (clean re-test refuted the audit's "mis-washed" optimism — regresses on top of cheap ProbCut)
+- CONTHISTPLIES −6 Elo movetime · corr-bundle wash (+0.27) — search-solo well is dry at movetime
   · P2 sparse-affine (permutation caps block-sparsity at 64.5%, needs a retrain) · Finny-amd64.
+- **full-ProbCut → REJECT (LLR −2.95)** — clean re-test refuted the audit's "mis-washed"
+  optimism (regresses on top of the cheap TT-only ProbCut). ⚠️ *measured while a stray SPSA
+  process was oversubscribing the box (a failed-pause bug); a cost-adding search feature only
+  looks worse under load, so the reject stands, but re-confirm cleanly if ever revisited.*
+- **TMFALLING+NODEEFFORT (real-clock bundle) → INCONCLUSIVE** (trending −2.24 @ 589g, stopped).
+  ⚠️ *real-clock SPRT is load-sensitive and this ran under the same SPSA oversubscription →
+  contaminated. Also CCRL/clock-mode-only (website bot has no clocks), so low priority. Needs a
+  clean re-test + strip-back (which component) before any conclusion; committed default-off.*
 
-**RUNNING / RESUMABLE:**
-- TMFALLING + NODEEFFORT real-clock SPRT (the deferred TIMEMAN pieces, anchored to the shipped
-  +28) — in progress.
-- Output-layer net SPSA (`tools/nnue_spsa/spsa_driver.py`, 648-param surface) — paused mid-run,
-  bit-identical resumable (`--resume`, scratch `~/nnue_spsa_run1`), snapshots every 30 iters.
+**RUNNING:**
+- Output-layer net SPSA (`tools/nnue_spsa/spsa_driver.py`, 648-param surface) — running **clean**
+  from iter ~160 (was inadvertently oversubscribing during the two SPRTs above; now single-process,
+  uncontested). Checkpoint/resume in `~/nnue_spsa_run1`, snapshots every 30 iters. On completion:
+  SPRT the best snapshot vs base (movetime) — that's the P3 verdict.
 
 **KEY EVIDENCE:** fresh 24Jul amd64 profile (retracted a premature Finny kill — `build_half`
 6.24%, not stale <0.8%) · refresh-event breakdown (Finny 3.22% / THREATGATE 2.64% ceilings) ·
