@@ -234,6 +234,22 @@ struct Context {
         // line the TT calls bad. r += ttPvFailLowR. Default OFF; env TTPVFAILLOW=1.
         bool ttPvFailLow  = false;
         int  ttPvFailLowR = 1024;   // ~1 ply (SP's 1054 in zug's r*1024 units)
+        // TTPVRICH (2026-07-25): condition the ttPv LMR de-reduction on WHY the former-PV
+        // node is trustworthy, replacing zug's flat r -= 1024. Uses SF's SIGNAL STRUCTURE
+        // (search.cpp:1191-1193: base + PvNode + ttValue>alpha + ttDepth>=depth[+cutNode])
+        // but with zug-NATIVE, SPSA-tunable magnitudes — NOT SF's 2719/983/922/934/1011,
+        // which are tuned to SF's whole tree ([[zug-history-scale-not-sf]] discipline).
+        // The (ttValue>alpha) term is the "escape the ttPv reduction trap" reinforcement
+        // zug currently lacks (it only has the negative TTPVFAILLOW half). Default OFF;
+        // env TTPVRICH=1. OFF path is byte-identical: the else-branch reproduces today's
+        // flat -1024 + TTPVFAILLOW exactly. Starts at zug's current base (1024) so SPSA
+        // can raise it rather than jumping to SF's magnitude blind.
+        bool ttPvRich     = false;
+        int  ttPvBase     = 1024;   // base de-reduction when ttPv (today's flat value)
+        int  ttPvPvW      = 512;    // extra when PvNode
+        int  ttPvPromW    = 512;    // extra when TT value already beats alpha (promising)
+        int  ttPvDeepW    = 512;    // extra when TT entry is deep enough to trust
+        int  ttPvDeepCutW = 512;    // additional extra on a trusted-deep cutNode
         // ---- SF parity micro-pair (SF search.cpp:883/927) — default ON; independent env kill-switches ----
         // RFPTTHIT (2026-07-21, SF search.cpp:880 `futilityMult = 76 - 23*!ss->ttHit`): drop
         // the RFP margin coefficient by rfpTtHitCoeff on a TT MISS (prune more aggressively
@@ -964,6 +980,12 @@ struct Context {
             if (const char* e = getenv("SINGCORRDIV")) { int v = atoi(e); if (v > 0) singCorrDiv = v; }
             if (on("TTPVFAILLOW")) ttPvFailLow = true;
             if (const char* e = getenv("TTPVFAILLOWR")) { int v = atoi(e); if (v >= 0) ttPvFailLowR = v; }
+            if (on("TTPVRICH")) ttPvRich = true;
+            if (const char* e = getenv("TTPVBASE"))     { int v = atoi(e); if (v >= 0) ttPvBase     = v; }
+            if (const char* e = getenv("TTPVPVW"))      { int v = atoi(e); if (v >= 0) ttPvPvW      = v; }
+            if (const char* e = getenv("TTPVPROMW"))    { int v = atoi(e); if (v >= 0) ttPvPromW    = v; }
+            if (const char* e = getenv("TTPVDEEPW"))    { int v = atoi(e); if (v >= 0) ttPvDeepW    = v; }
+            if (const char* e = getenv("TTPVDEEPCUTW")) { int v = atoi(e); if (v >= 0) ttPvDeepCutW = v; }
             if (on("FUTSFTERMS")) futSfTerms = true;
             if (const char* e = getenv("FUTNOMOVEBONUS")) { int v = atoi(e); if (v >= 0) futNoMoveBonus = v; }
             if (const char* e = getenv("FUTALPHABONUS"))  { int v = atoi(e); if (v >= 0) futAlphaBonus = v; }
@@ -2907,9 +2929,23 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             if (givesCheck) r -= 1024;
             // #5 ttPv (SF): a former-PV node is tactically live — search its late
             // moves a little more carefully (reduce one ply less).
-            if (C.tune.ttPvOn && ss->ttPv) r -= 1024;
-            // TTPVFAILLOW: undo part of that de-reduction when this node's TT says it fails low.
-            if (C.tune.ttPvFailLow && ss->ttPv && ttHit && ttValue <= alpha) r += C.tune.ttPvFailLowR;
+            if (C.tune.ttPvOn && ss->ttPv) {
+                if (C.tune.ttPvRich) {
+                    // Conditioned de-reduction (SF-structure, zug-native magnitudes):
+                    // trust a former-PV node MORE when the TT itself corroborates the line.
+                    int d = C.tune.ttPvBase;
+                    if (PvNode)                       d += C.tune.ttPvPvW;
+                    if (ttHit && ttValue > alpha)     d += C.tune.ttPvPromW;   // TT already likes it → escape the trap
+                    if (ttHit && tte->depth >= depth) d += C.tune.ttPvDeepW + (cutNode ? C.tune.ttPvDeepCutW : 0);
+                    r -= d;
+                    // Negative half (folds in TTPVFAILLOW): TT says this ttPv node fails low → trust less.
+                    if (ttHit && ttValue <= alpha)    r += C.tune.ttPvFailLowR;
+                } else {
+                    r -= 1024;
+                    // TTPVFAILLOW: undo part of that de-reduction when this node's TT says it fails low.
+                    if (C.tune.ttPvFailLow && ttHit && ttValue <= alpha) r += C.tune.ttPvFailLowR;
+                }
+            }
             // #6 (SF): a child that fails high a lot means siblings here are unlikely
             // to matter — reduce them harder.
             if (C.tune.cutoffCnt) {
