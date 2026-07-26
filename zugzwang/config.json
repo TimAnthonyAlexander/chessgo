@@ -141,14 +141,14 @@
     ],
     "stats": {
         "cand_ttpvrich_fn vs base": {
-            "wins": 799,
-            "losses": 713,
-            "draws": 1168,
+            "wins": 805,
+            "losses": 716,
+            "draws": 1179,
             "penta_WW": 26,
-            "penta_WD": 249,
-            "penta_WL": 498,
-            "penta_DD": 362,
-            "penta_LD": 195,
+            "penta_WD": 253,
+            "penta_WL": 500,
+            "penta_DD": 365,
+            "penta_LD": 196,
             "penta_LL": 10
         }
     }

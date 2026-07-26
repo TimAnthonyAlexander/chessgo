@@ -3,6 +3,7 @@
 namespace App\Controllers;
 
 use App\Models\User;
+use App\Models\ApiToken;
 use BaseApi\Controllers\Controller;
 use BaseApi\Http\JsonResponse;
 use BaseApi\Http\Attributes\ResponseType;
@@ -55,6 +56,30 @@ class LoginController extends Controller
             session_regenerate_id(true);
         }
 
-        return JsonResponse::ok($user->jsonSerialize());
+        // Mint an API token inline so native clients (iOS) get bearer auth
+        // without a second round trip. Additive field — the web SPA (cookie
+        // auth) simply ignores it.
+        $payload = $user->jsonSerialize();
+        $token = $this->issueToken($user);
+        $payload['api_token'] = $token['token'];
+        $payload['api_token_id'] = $token['id'];
+
+        return JsonResponse::ok($payload);
+    }
+
+    /**
+     * @return array{token: string, id: string}
+     */
+    private function issueToken(User $user): array
+    {
+        $plainToken = ApiToken::generateToken();
+
+        $apiToken = new ApiToken();
+        $apiToken->user_id = $user->id;
+        $apiToken->name = 'iOS App';
+        $apiToken->token_hash = ApiToken::hashToken($plainToken);
+        $apiToken->save();
+
+        return ['token' => $plainToken, 'id' => $apiToken->id];
     }
 }

@@ -29,16 +29,17 @@ and the hub's bot moves. **gomachine is the retired reference:**
 The old gomachine-era docs are archived under `gomachine/docs/` (platform) and
 `gomachine/engine/docs/` (engine); `gomachine/CLAUDE.md` is the old root file.
 
-## Components (5 services + MySQL)
+## Components (5 services + MySQL + iOS client)
 
 | Service | Tech | Port | Role |
 |---|---|---|---|
-| BaseAPI | PHP 8.4 (`base-api` / `mason`) | 6464 | REST: auth (session cookies), bot games, `/analyze`, `/ws-ticket`, `/stats`, game persistence + Elo |
+| BaseAPI | PHP 8.4 (`base-api` / `mason`) | 6464 | REST: auth (session cookies **+ bearer tokens for iOS**), bot games, `/analyze`, `/ws-ticket`, `/stats`, game persistence + Elo |
 | Frontend | React + Vite + TS + MUI + Bun | 6465 | lobby, `/bot`, live `/game/:id`, puzzles, analysis, variants, auth |
 | **zugzwang engine** | **C++17** | **6476** | **PRIMARY engine: rules + AI, stateless `(FEN, limit) → result`; standard chess, 3 variants, SF proxy** |
 | gomachine **hub** | Go | 6467 | WebSocket: matchmaking + live games + clocks + bot backfill; calls zugzwang for bot moves; persists to BaseAPI |
 | gomachine **engine** | Go | 6466 | *legacy, deletable* — EvE-only + removable hub fallback |
 | MySQL | — | 3306 | durable data (always running; chessgo never manages it) |
+| **iOS client** | **SwiftUI (iOS 18+)** | — | **native full-parity app: full lobby/live/bot/puzzles/analysis/profile/spectate/settings; talks to BaseAPI (HTTPS) + hub (WS)** |
 
 ## The engine: zugzwang
 
@@ -58,6 +59,30 @@ The old gomachine-era docs are archived under `gomachine/docs/` (platform) and
   self-contained rules/eval/search).
 - Deep dive: **`zugzwang/CLAUDE.md`**.
 
+## The iOS app
+
+Native SwiftUI client at **`ios/`** (Xcode project `ios/ios.xcodeproj`, target/scheme
+`chessgo`, bundle `de.timanthonyalexander.chessgo`, **deployment iOS 18**, built in
+**Xcode 27**). Full parity with the web: guest+login, lobby/matchmaking, live WS games
+(clocks/offers/reconnect/premoves/chat), bot games (8 variants incl. Duck/Crazyhouse),
+puzzles, analysis, profile/leaderboard/streak, spectate, settings, sound.
+
+- **Auth is bearer-token, not cookies** (cookies were unreliable on iOS). Login/signup
+  return `api_token` + `api_token_id` inline; the token lives in the Keychain and rides
+  as `Authorization: Bearer`. Guest play needs no token.
+- **Env switch:** Simulator → `http://127.0.0.1:6464`; device → `https://chessgo-api.timanthonyalexander.de`.
+  The WS URL is never hardcoded — it comes back from `/ws-ticket` as `wsUrl`.
+- **Engine still owns the rules.** The client parses FEN for rendering and submits UCI;
+  it never generates legal moves — it renders the server's `legalMoves`/`status`.
+- Structure: `ios/chessgo/{Core,Models,Services,State,Chess,Theme,Views,Sound}`, plus the
+  cburnett piece set in `ios/chessgo/Assets.xcassets`. Xcode-16 file-system-synchronized
+  group — new `.swift` files are picked up without editing `project.pbxproj`.
+- **Backend changes this added (kept):** `app/Middleware/OptionalAuthMiddleware.php`
+  (auth-if-present, never 401; on the `/ws-ticket` route so bearer clients get *rated*
+  tickets), and inline token minting in `LoginController`/`SignupController`.
+- Design + as-built notes: **`ios/docs/SPEC.md`** and `ios/docs/analysis/*.md`
+  (REST/WS contracts, auth decision, iOS patterns, feature inventory).
+
 ## Where things live
 
 - `app/` — BaseAPI PHP. Models, Services (`ZugzwangClient`, `GomachineClient`,
@@ -70,6 +95,12 @@ The old gomachine-era docs are archived under `gomachine/docs/` (platform) and
 - `frontend/src/{pages,components,lib,api}` — `lib/socket.ts` WS store,
   `lib/auth.ts` session store, `lib/useBoardInteraction.ts` board/premove
   controller, `lib/sounds.ts` Web-Audio.
+- `ios/chessgo/` — the native app. `Core/` (APIClient, APIConfig, Keychain,
+  Resilient `@Default` wrappers), `Services/` (per-domain REST), `State/`
+  (`AuthStore`, `SocketStore` WS store + `LiveGameDriver`, `SettingsStore`,
+  `SpectateStore`), `Chess/` (client-side FEN/board, engine stays rules
+  authority), `Views/` (feature-grouped; `Board/` is the shared board).
+  Docs in `ios/docs/`.
 
 ## Run (dev)
 

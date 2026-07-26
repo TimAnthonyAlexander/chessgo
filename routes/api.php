@@ -47,6 +47,7 @@ use BaseApi\Http\Middleware\RateLimitMiddleware;
 use BaseApi\Http\SessionStartMiddleware;
 use BaseApi\Permissions\PermissionsMiddleware;
 use App\Middleware\CombinedAuthMiddleware;
+use App\Middleware\OptionalAuthMiddleware;
 
 $router = App::router();
 
@@ -226,6 +227,7 @@ $router->get('/admin/games/{id}/anticheat', [
 // gets an account identity (rated play); anonymous callers get a casual ticket.
 $router->get('/ws-ticket', [
     SessionStartMiddleware::class,
+    OptionalAuthMiddleware::class,
     RateLimitMiddleware::class => ['limit' => '300/1m'],
     WsTicketController::class,
 ]);
