@@ -39,8 +39,9 @@ final class AnalysisDriver: BoardControl {
         let fen: String
         /// The move that led to this step. `nil` at the start position.
         /// In review mode this is server SAN; in a locally-played step there
-        /// is no legal-move generator to produce real algebraic notation, so
-        /// it falls back to the UCI string itself (see `submit(_:)`).
+        /// is no server-verified legal-move list, so `SAN.format` best-effort
+        /// derives it from the app's pseudo-legal geometry instead (see
+        /// `submit(_:)`).
         let san: String?
         let uci: String?
         /// White-relative, from the cached review analysis only — `nil` for
@@ -72,6 +73,32 @@ final class AnalysisDriver: BoardControl {
     private(set) var liveEval: AnalyzeResult?
     private(set) var isEvalRunning = false
     private var evalTask: Task<Void, Never>?
+
+    /// Full-strength Stockfish "second opinion" (`POST /sf-analyze`) for the
+    /// currently-viewed step's fen — the ONE source both `EngineLinesPanel`'s
+    /// row and `AnalysisView`'s violet arrow read, so they can never disagree
+    /// or double-fetch. Off by default; flipping it on (either from the
+    /// panel's toggle or the board's SF-arrow toggle — they share this same
+    /// flag) kicks off a fetch immediately, and every subsequent position
+    /// change re-fetches while it stays on.
+    var sfEnabled: Bool = false {
+        didSet {
+            guard sfEnabled != oldValue else { return }
+            if sfEnabled {
+                restartSfFetch()
+            } else {
+                sfTask?.cancel()
+                sfTask = nil
+                sfResult = nil
+                sfError = nil
+                sfLoading = false
+            }
+        }
+    }
+    private(set) var sfResult: SfAnalyzeResult?
+    private(set) var sfLoading = false
+    private(set) var sfError: String?
+    private var sfTask: Task<Void, Never>?
 
     /// 11 rungs, shallow-to-deep (frontend-features.md: "poll 11-rung depth
     /// ladder (6/1200ms → 30/35000ms)"). Intermediate steps are an even
@@ -106,8 +133,8 @@ final class AnalysisDriver: BoardControl {
 
     /// No server check flag exists for an arbitrary viewed position — this
     /// reads the "+"/"#" suffix off the step's own SAN the way `BotGameDriver`
-    /// does off a bot move's SAN. Always false for a locally-played step,
-    /// since those fall back to plain UCI text with no such suffix.
+    /// does off a bot move's SAN. For a locally-played step that suffix comes
+    /// from `SAN.format`'s best-effort check detection (see `submit(_:)`).
     var inCheck: Bool {
         guard let san = steps[safe: currentIndex]?.san else { return false }
         return san.hasSuffix("+") || san.hasSuffix("#")
@@ -137,7 +164,7 @@ final class AnalysisDriver: BoardControl {
         steps = [Step(ply: 0, fen: start, san: nil, uci: nil, evalWhite: nil, bestSan: nil, bestUci: nil, bestDepth: nil, judgment: nil)]
         currentIndex = 0
         refreshLegalMoves()
-        restartLiveEval()
+        onPositionChanged()
     }
 
     // MARK: - Loading (review mode)
@@ -205,7 +232,7 @@ final class AnalysisDriver: BoardControl {
         steps = built
         currentIndex = 0
         refreshLegalMoves()
-        restartLiveEval()
+        onPositionChanged()
     }
 
     // MARK: - Stepping
@@ -224,7 +251,7 @@ final class AnalysisDriver: BoardControl {
         guard steps.indices.contains(index), index != currentIndex else { return }
         currentIndex = index
         refreshLegalMoves()
-        restartLiveEval()
+        onPositionChanged()
     }
 
     // MARK: - BoardControl: submit
@@ -241,7 +268,7 @@ final class AnalysisDriver: BoardControl {
         let newStep = Step(
             ply: (steps[safe: currentIndex]?.ply ?? 0) + 1,
             fen: nextFen,
-            san: uci, // no client-side legal-move generator to produce real SAN
+            san: SAN.format(uci: uci, board: preBoard),
             uci: uci,
             evalWhite: nil,
             bestSan: nil,
@@ -252,7 +279,7 @@ final class AnalysisDriver: BoardControl {
         steps = Array(steps[0...currentIndex]) + [newStep]
         currentIndex = steps.count - 1
         refreshLegalMoves()
-        restartLiveEval()
+        onPositionChanged()
 
         let volume = soundVolume
         if volume > 0 {
@@ -261,8 +288,8 @@ final class AnalysisDriver: BoardControl {
     }
 
     /// Picks the move sound from the move + the board BEFORE it was played.
-    /// There's no client SAN generator here, so this reads the move geometry
-    /// directly rather than parsing notation.
+    /// Reads the move geometry directly rather than parsing `SAN.format`'s
+    /// output back apart — cheaper, and this runs on every submitted move.
     private static func soundEvent(uci: String, preBoard: ChessBoard) -> SoundEngine.SoundEvent {
         guard let move = Move(uci: uci) else { return .move }
         let mover = preBoard.piece(at: move.from)
@@ -308,6 +335,15 @@ final class AnalysisDriver: BoardControl {
 
     // MARK: - Live eval ladder
 
+    /// Every navigation/position change (stepping, submitting a move, or a
+    /// fresh review load) restarts both the live eval ladder and, if it's
+    /// currently on, the Stockfish second opinion — the two independent async
+    /// sources this driver keeps warm for whatever step is being viewed.
+    private func onPositionChanged() {
+        restartLiveEval()
+        if sfEnabled { restartSfFetch() }
+    }
+
     /// Cancels any in-flight ladder and starts a fresh one against the
     /// currently-viewed step's fen. Call on every navigation/position change
     /// (stepping, submitting a move, or a fresh review load).
@@ -336,6 +372,39 @@ final class AnalysisDriver: BoardControl {
     func cancelLiveEval() {
         evalTask?.cancel()
         evalTask = nil
+        sfTask?.cancel()
+        sfTask = nil
+    }
+
+    // MARK: - Stockfish second opinion
+
+    /// Cancels any in-flight request and fires a fresh `/sf-analyze` for the
+    /// currently-viewed step's fen. Guarded on arrival (not just at kickoff)
+    /// so a slow response for a position the user has already navigated away
+    /// from never stomps a newer one — same "moved on already" guard the live
+    /// eval ladder uses.
+    private func restartSfFetch() {
+        sfTask?.cancel()
+        sfError = nil
+        let targetFen = fen
+
+        sfTask = Task {
+            sfLoading = true
+            defer { sfLoading = false }
+            do {
+                let result = try await AnalysisService.shared.sfAnalyze(fen: targetFen)
+                guard !Task.isCancelled, self.fen == targetFen else { return }
+                sfResult = result
+            } catch is CancellationError {
+                // Superseded by a newer fetch — nothing to report.
+            } catch let error as APIError {
+                guard !Task.isCancelled, self.fen == targetFen else { return }
+                sfError = error.errorDescription
+            } catch {
+                guard !Task.isCancelled, self.fen == targetFen else { return }
+                sfError = error.localizedDescription
+            }
+        }
     }
 }
 

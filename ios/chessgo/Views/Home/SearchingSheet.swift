@@ -1,10 +1,12 @@
 import SwiftUI
 
-/// Modal shown while `socket.lobby == .queued`. The only way out is Cancel
-/// (or letting the match land) — mirrors the web's `SearchingDialog`, which
-/// deliberately has no swipe-to-dismiss so a tap-away can't silently strand
-/// the queue entry server-side.
-struct SearchingSheet: View {
+/// Centered matchmaking modal shown while `socket.lobby == .queued` — a small
+/// dialog over a dimmed backdrop, mirroring the web's `SearchingDialog` (NOT a
+/// bottom sheet). The only way out is Cancel (or letting the match land): the
+/// backdrop is deliberately inert so a stray tap can't silently strand the
+/// queue entry server-side. Presented via `.fullScreenCover` with a clear
+/// presentation background so the dim + card compose over the whole screen.
+struct SearchingModal: View {
     let socket: SocketStore
 
     @Environment(\.dismiss) private var dismiss
@@ -21,56 +23,60 @@ struct SearchingSheet: View {
     }
 
     var body: some View {
-        TimelineView(.periodic(from: startedAt, by: 1)) { timeline in
-            let elapsed = max(0, Int(timeline.date.timeIntervalSince(startedAt)))
-            content(elapsed: elapsed)
+        ZStack {
+            // Inert dimmed backdrop — no tap-to-dismiss (see type doc).
+            Color.black.opacity(0.45)
+                .ignoresSafeArea()
+
+            TimelineView(.periodic(from: startedAt, by: 1)) { timeline in
+                let elapsed = max(0, Int(timeline.date.timeIntervalSince(startedAt)))
+                card(elapsed: elapsed)
+            }
+            .padding(Theme.Spacing.xl)
         }
-        .padding(Theme.Spacing.lg)
-        .background(Theme.Colors.background)
-        .interactiveDismissDisabled()
+        .presentationBackground(.clear)
         .onChange(of: socket.game?.id) { _, newValue in
             if newValue != nil { dismiss() }
         }
-        .sheet(isPresented: $isPresentingBotSetup, onDismiss: { dismiss() }) {
+        .fullScreenCover(isPresented: $isPresentingBotSetup, onDismiss: { dismiss() }) {
             BotSetupView()
         }
     }
 
-    private func content(elapsed: Int) -> some View {
-        VStack(spacing: Theme.Spacing.lg) {
-            Spacer()
+    private func card(elapsed: Int) -> some View {
+        let softened = elapsed >= Self.softenAfterSeconds
+        return VStack(spacing: Theme.Spacing.lg) {
+            if let pool = queuedPoolLabel {
+                Text(pool.uppercased())
+                    .font(Theme.caption(12).monospacedDigit())
+                    .tracking(1.4)
+                    .foregroundStyle(Theme.Colors.accent)
+            }
 
             ProgressView()
                 .controlSize(.large)
                 .tint(Theme.Colors.accent)
 
-            VStack(spacing: Theme.Spacing.sm) {
-                Text(Self.format(elapsed))
-                    .font(Theme.title(32).monospacedDigit())
+            VStack(spacing: Theme.Spacing.xs) {
+                Text("Searching… \(Self.format(elapsed))")
+                    .font(Theme.headline(20).monospacedDigit())
                     .foregroundStyle(Theme.Colors.primaryText)
 
-                Text(elapsed >= Self.softenAfterSeconds ? "Adding a computer opponent shortly…" : "Looking for an opponent…")
-                    .font(Theme.body(15))
+                Text(softened
+                     ? "Still searching — we'll add a computer opponent shortly if no one's free."
+                     : "Hang tight while we match you with a player of similar strength.")
+                    .font(Theme.body(14))
                     .foregroundStyle(Theme.Colors.secondaryText)
                     .multilineTextAlignment(.center)
-
-                if let pool = queuedPoolLabel {
-                    Text(pool)
-                        .font(Theme.caption())
-                        .foregroundStyle(Theme.Colors.secondaryText)
-                }
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Spacer()
-
             VStack(spacing: Theme.Spacing.sm) {
-                if elapsed >= Self.softenAfterSeconds {
-                    Button("Play the computer instead") {
-                        socket.cancelQueue()
-                        isPresentingBotSetup = true
-                    }
-                    .prominentGlassButton()
+                Button("Play the computer instead") {
+                    socket.cancelQueue()
+                    isPresentingBotSetup = true
                 }
+                .prominentGlassButton()
 
                 Button("Cancel") {
                     socket.cancelQueue()
@@ -79,6 +85,17 @@ struct SearchingSheet: View {
                 .glassButton()
             }
         }
+        .padding(Theme.Spacing.lg)
+        .frame(maxWidth: 360)
+        .background(
+            Theme.Colors.surfaceElevated,
+            in: RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
+                .stroke(Theme.Colors.primaryText.opacity(0.08), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.28), radius: 30, y: 12)
     }
 
     private var queuedPoolLabel: String? {
@@ -92,32 +109,22 @@ struct SearchingSheet: View {
     }
 }
 
-#Preview("SearchingSheet — early") {
+#Preview("SearchingModal — early") {
     let store = SocketStore()
     store.lobby = .queued(pool: "5+3", variant: "standard")
-    return Color.clear
-        .sheet(isPresented: .constant(true)) {
-            SearchingSheet(socket: store)
+    return Color(Theme.Colors.background)
+        .ignoresSafeArea()
+        .fullScreenCover(isPresented: .constant(true)) {
+            SearchingModal(socket: store)
         }
-        .background(Theme.Colors.background)
 }
 
-#Preview("SearchingSheet — softened") {
+#Preview("SearchingModal — softened") {
     let store = SocketStore()
-    store.lobby = .queued(pool: "3+0", variant: "standard")
-    return SearchingSheetPreviewHost(socket: store)
-}
-
-/// Preview-only: seeds `startedAt` in the past so the "softened" copy and
-/// the bot-backfill offer render immediately instead of waiting 10 real
-/// seconds inside the canvas.
-private struct SearchingSheetPreviewHost: View {
-    let socket: SocketStore
-    var body: some View {
-        Color.clear
-            .sheet(isPresented: .constant(true)) {
-                SearchingSheet(socket: socket, startedAt: Date().addingTimeInterval(-12))
-            }
-            .background(Theme.Colors.background)
-    }
+    store.lobby = .queued(pool: "3+0", variant: "duck")
+    return Color(Theme.Colors.background)
+        .ignoresSafeArea()
+        .fullScreenCover(isPresented: .constant(true)) {
+            SearchingModal(socket: store, startedAt: Date().addingTimeInterval(-12))
+        }
 }

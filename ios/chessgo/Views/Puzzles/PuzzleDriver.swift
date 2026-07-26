@@ -66,6 +66,24 @@ final class PuzzleDriver: BoardControl {
     private(set) var errorMessage: String?
     private(set) var ply: Int = 1
 
+    /// The FEN a failed attempt was made from — `result.solution` is a UCI
+    /// move sequence starting at THIS position (see `handle(_:baseFen:token:)`),
+    /// kept around so `solutionSAN` can walk it into real notation.
+    private(set) var resultBaseFen: String?
+
+    /// `result.solution` is UCI-only from the server; each ply is formatted
+    /// from the position it's actually played on, starting at
+    /// `resultBaseFen`. Empty until a failed attempt has a solution to show.
+    var solutionSAN: [String] {
+        guard let result, let resultBaseFen else { return [] }
+        var board = ChessBoard(fen: resultBaseFen)
+        return result.solution.map { uci in
+            let san = SAN.format(uci: uci, board: board)
+            board = board.applying(uci)
+            return san
+        }
+    }
+
     private let authStore: AuthStore
 
     /// Bumped on every `load`/`loadDaily` call. Async work (the intro delay,
@@ -122,6 +140,7 @@ final class PuzzleDriver: BoardControl {
         phase = .loading
         errorMessage = nil
         result = nil
+        resultBaseFen = nil
         lastMove = nil
         return token
     }
@@ -228,6 +247,7 @@ final class PuzzleDriver: BoardControl {
         if let correct = response.solution.first {
             fen = ChessBoard(fen: baseFen).applying(correct).fen()
             lastMove = correct
+            resultBaseFen = baseFen
         }
         legalMoves = []
         myTurn = false
@@ -248,7 +268,8 @@ extension PuzzleDriver {
         orientation: PieceColor = .white,
         legalMoves: [String] = ["d5e4", "c5d4", "f6e4", "c6d4"],
         lastMove: String? = "c4d5",
-        result: PuzzleMoveResult? = nil
+        result: PuzzleMoveResult? = nil,
+        resultBaseFen: String? = nil
     ) -> PuzzleDriver {
         let driver = PuzzleDriver(authStore: .preview())
         driver.puzzle = PuzzleNext(
@@ -269,6 +290,7 @@ extension PuzzleDriver {
         driver.lastMove = lastMove
         driver.myTurn = phase == .solving
         driver.result = result
+        driver.resultBaseFen = resultBaseFen ?? fen
         return driver
     }
 }

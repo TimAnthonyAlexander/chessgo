@@ -17,6 +17,7 @@ struct BotGameView: View {
     @State private var flipped = false
     @State private var showResignConfirm = false
     @State private var eval: EvalScore?
+    @State private var adminHint: BoardArrow?
 
     private static let evalDepthLadder = [4, 8, 12, 16]
 
@@ -27,6 +28,13 @@ struct BotGameView: View {
             if driver.game == nil {
                 loadingOrError
             } else {
+                AdminBestMove(
+                    fen: driver.fen,
+                    myTurn: driver.myTurn,
+                    variant: driver.variant.rawValue,
+                    duck: driver.duckSquare,
+                    onHint: { adminHint = $0 }
+                )
                 boardArea
                 if driver.variant == .crazyhouse {
                     PocketView(pocket: driver.pocket, sideToMove: currentSideToMove, armed: $armedDrop)
@@ -115,7 +123,13 @@ struct BotGameView: View {
             showsEvalBar: showEvalBar,
             evalBar: { EvalBar(eval: eval, sideToMove: currentSideToMove) },
             board: {
-                BoardView(control: driver, armedDrop: $armedDrop, flipped: flipped, displayOptions: BoardDisplayOptions(settings))
+                BoardView(
+                    control: driver,
+                    armedDrop: $armedDrop,
+                    flipped: flipped,
+                    displayOptions: BoardDisplayOptions(settings),
+                    arrows: adminHint.map { [$0] } ?? []
+                )
             }
         )
     }
@@ -219,6 +233,7 @@ struct BotGameView: View {
         BotGameView(driver: .preview())
     }
     .environment(SettingsStore.preview())
+    .environment(AuthStore.preview())
 }
 
 #Preview("BotGameView — Crazyhouse") {
@@ -230,6 +245,7 @@ struct BotGameView: View {
         ))
     }
     .environment(SettingsStore.preview())
+    .environment(AuthStore.preview())
 }
 
 #Preview("BotGameView — game over") {
@@ -237,4 +253,5 @@ struct BotGameView: View {
         BotGameView(driver: .preview(yourTurn: false, status: "checkmate", result: "1-0"))
     }
     .environment(SettingsStore.preview())
+    .environment(AuthStore.preview())
 }

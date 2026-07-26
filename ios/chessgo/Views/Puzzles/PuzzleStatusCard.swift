@@ -21,8 +21,8 @@ struct PuzzleStatusCard: View {
                     .foregroundStyle(rating.delta >= 0 ? Theme.Colors.positive : Theme.Colors.negative)
             }
 
-            if driver.phase == .failed, let solution = driver.result?.solution, !solution.isEmpty {
-                SolutionReveal(solution: solution)
+            if driver.phase == .failed, !driver.solutionSAN.isEmpty {
+                SolutionReveal(solution: driver.solutionSAN)
             }
 
             if terminal, let themes = driver.result?.themes, !themes.isEmpty {

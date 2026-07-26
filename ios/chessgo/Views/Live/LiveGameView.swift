@@ -11,6 +11,7 @@ struct LiveGameView: View {
     @State private var driver: LiveGameDriver
     @State private var armedDrop: PieceKind?
     @State private var showResignConfirm = false
+    @State private var adminHint: BoardArrow?
     @Environment(SettingsStore.self) private var settings
 
     /// Tracks the last `lastMove` we already sounded for, so the opponent-
@@ -95,8 +96,21 @@ struct LiveGameView: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
                 }
 
-                BoardView(control: driver, armedDrop: $armedDrop, displayOptions: BoardDisplayOptions(settings))
-                    .aspectRatio(1, contentMode: .fit)
+                AdminBestMove(
+                    fen: driver.fen,
+                    myTurn: driver.myTurn,
+                    variant: game.variant,
+                    duck: game.duck,
+                    onHint: { adminHint = $0 }
+                )
+
+                BoardView(
+                    control: driver,
+                    armedDrop: $armedDrop,
+                    displayOptions: BoardDisplayOptions(settings),
+                    arrows: adminHint.map { [$0] } ?? []
+                )
+                .aspectRatio(1, contentMode: .fit)
 
                 if game.variant == "crazyhouse" {
                     PocketView(pocket: game.pocket, sideToMove: game.sideToMove == "w" ? .white : .black, armed: $armedDrop)
@@ -260,6 +274,7 @@ struct LiveGameView: View {
 #Preview("LiveGameView — mid-game") {
     LiveGameView(socket: .preview(game: .mock()))
         .environment(SettingsStore.preview())
+        .environment(AuthStore.preview())
 }
 
 #Preview("LiveGameView — opponent offered a draw") {
@@ -267,14 +282,17 @@ struct LiveGameView: View {
     store.simulateDrawOffered()
     return LiveGameView(socket: store)
         .environment(SettingsStore.preview())
+        .environment(AuthStore.preview())
 }
 
 #Preview("LiveGameView — game over, I won") {
     LiveGameView(socket: .preview(game: .mock(status: "checkmate", ended: true, result: "1-0", reason: "checkmate")))
         .environment(SettingsStore.preview())
+        .environment(AuthStore.preview())
 }
 
 #Preview("LiveGameView — reconnecting") {
     LiveGameView(socket: .preview(game: .mock(), connection: .connecting))
         .environment(SettingsStore.preview())
+        .environment(AuthStore.preview())
 }

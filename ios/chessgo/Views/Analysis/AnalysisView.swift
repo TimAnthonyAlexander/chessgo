@@ -12,6 +12,18 @@ struct AnalysisView: View {
     @State private var driver: AnalysisDriver
     @State private var flipped = false
 
+    /// Web parity (`usePersistentBool`): both arrow toggles survive a
+    /// relaunch. The SF arrow's flag doubles as `driver.sfEnabled` — see
+    /// `onAppear`/`onChange` below — so it, the board arrow, and
+    /// `EngineLinesPanel`'s "Stockfish second opinion" toggle all read one
+    /// shared on/off switch.
+    @AppStorage("analysis.showBestArrow") private var showBestArrow = true
+    @AppStorage("analysis.showSfArrow") private var showSfArrow = false
+
+    /// Violet, distinct from the brass `Theme.Colors.accent` best-move arrow
+    /// — matches the web's `SF_ARROW_COLOR` (`#b06bff`).
+    private static let sfArrowColor = Color(red: 0.69, green: 0.42, blue: 1.0)
+
     /// Game review: load the cached post-mortem for a finished game.
     init(gameId: String) {
         _driver = State(initialValue: AnalysisDriver(gameId: gameId))
@@ -41,6 +53,7 @@ struct AnalysisView: View {
             } else {
                 boardArea
                 controlsRow
+                toggleControlsRow
                 ScrollView {
                     belowBoardStack
                 }
@@ -55,7 +68,13 @@ struct AnalysisView: View {
         .task {
             if driver.mode == .review { await driver.load() }
         }
-        .onAppear { driver.appSettings = settings }
+        .onAppear {
+            driver.appSettings = settings
+            driver.sfEnabled = showSfArrow
+        }
+        .onChange(of: driver.sfEnabled) { _, enabled in
+            showSfArrow = enabled
+        }
         .onDisappear {
             driver.cancelLiveEval()
         }
@@ -164,10 +183,33 @@ struct AnalysisView: View {
             showsEvalBar: true,
             evalBar: { EvalBar(eval: displayEval, sideToMove: sideToMove) },
             board: {
-                BoardView(control: driver)
+                BoardView(control: driver, arrows: boardArrows)
                     .rotationEffect(.degrees(flipped ? 180 : 0))
             }
         )
+    }
+
+    /// The brass best-move arrow (engine ladder's freshest read, falling back
+    /// to the review step's cached best move) and the violet Stockfish
+    /// second-opinion arrow, each gated by its own persisted toggle. When
+    /// both engines agree on the same from→to we draw only the brass one
+    /// rather than stacking two identical arrows.
+    private var boardArrows: [BoardArrow] {
+        let bestUci = driver.liveEval?.bestmove ?? driver.currentStep?.bestUci
+        let bestMove = showBestArrow ? bestUci.flatMap(Move.init(uci:)) : nil
+        let sfMove = driver.sfEnabled ? driver.sfResult?.bestmove.flatMap(Move.init(uci:)) : nil
+
+        let agree = bestMove != nil && sfMove != nil
+            && bestMove!.from == sfMove!.from && bestMove!.to == sfMove!.to
+
+        var result: [BoardArrow] = []
+        if let bestMove {
+            result.append(BoardArrow(from: bestMove.from, to: bestMove.to, color: Theme.Colors.accent))
+        }
+        if let sfMove, !agree {
+            result.append(BoardArrow(from: sfMove.from, to: sfMove.to, color: Self.sfArrowColor))
+        }
+        return result
     }
 
     // MARK: - Below-board panels
@@ -183,7 +225,7 @@ struct AnalysisView: View {
     private var belowBoardStack: some View {
         VStack(spacing: Theme.Spacing.md) {
             OpeningPanel(fen: driver.fen, history: driver.historyUci)
-            EngineLinesPanel(driver: driver)
+            EngineLinesPanel(driver: driver, sfEnabled: sfEnabledBinding, sfResult: driver.sfResult)
             MoveListView(moves: moveListEntries, currentPly: currentPly) { ply in
                 driver.jump(toPly: ply)
             }
@@ -216,6 +258,49 @@ struct AnalysisView: View {
     }
 
     private var isAtEnd: Bool { driver.currentIndex >= driver.steps.count - 1 }
+
+    /// `driver.sfEnabled` is the single shared on/off switch (see the
+    /// `@AppStorage` doc comment above) — this just gives `EngineLinesPanel`
+    /// a `Binding` onto it instead of a plain `Bool`, since `@Observable`
+    /// class properties aren't bindings themselves.
+    private var sfEnabledBinding: Binding<Bool> {
+        Binding(get: { driver.sfEnabled }, set: { driver.sfEnabled = $0 })
+    }
+
+    // MARK: - Arrow + sound toggles
+
+    /// Web parity: best-move arrow, Stockfish second-opinion arrow, and sound
+    /// mute, as a compact icon row. Active state is a filled tint in the
+    /// arrow's own color so the button↔arrow mapping is obvious at a glance.
+    private var toggleControlsRow: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            toggleButton("arrow.up.right", active: showBestArrow, tint: Theme.Colors.accent) {
+                showBestArrow.toggle()
+            }
+            toggleButton("fish.fill", active: driver.sfEnabled, tint: Self.sfArrowColor) {
+                driver.sfEnabled.toggle()
+            }
+            toggleButton(
+                settings.soundEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
+                active: settings.soundEnabled,
+                tint: Theme.Colors.primaryText
+            ) {
+                settings.soundEnabled.toggle()
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func toggleButton(_ systemImage: String, active: Bool, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .semibold))
+                .frame(width: 34, height: 34)
+                .foregroundStyle(active ? tint : Theme.Colors.secondaryText)
+                .background(active ? tint.opacity(0.16) : Color.clear, in: Circle())
+        }
+        .buttonStyle(.plain)
+    }
 
     private func stepButton(_ systemImage: String, disabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {

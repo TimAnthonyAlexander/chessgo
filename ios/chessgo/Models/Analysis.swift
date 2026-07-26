@@ -35,6 +35,26 @@ struct SfAnalyzeResult: Codable, Sendable {
     let eval: EvalScore?
 }
 
+/// `POST /duck/analyze` — full-strength Duck engine evaluation of a Duck
+/// position. `eval` is side-to-move-relative; `bestmove` is a composite
+/// `"<pieceUci>:<duckSquare>"`. No PV, no depth (mirrors web `DuckEval`).
+struct DuckAnalyzeResult: Decodable, Sendable {
+    let eval: EvalScore?
+    let bestmove: String?
+    let bestSan: String?
+    let sideToMove: String?
+}
+
+/// `POST /antichess/analyze` — full-strength Antichess engine evaluation.
+/// `eval` is side-to-move-relative; `bestmove` is a plain UCI (with a `k`
+/// suffix for a king promotion). No PV, no depth (mirrors web `AntichessEval`).
+struct AntichessAnalyzeResult: Decodable, Sendable {
+    let eval: EvalScore?
+    let bestmove: String?
+    let bestSan: String?
+    let sideToMove: String?
+}
+
 /// Game analysis reports eval **white-relative** (`white`), unlike the
 /// side-to-move-relative `EvalScore` used everywhere else.
 struct EvalWhiteScore: Decodable, Sendable {

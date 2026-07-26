@@ -33,6 +33,17 @@ struct BoardDisplayOptions {
     }
 }
 
+/// A directional overlay drawn from one square's center to another's — e.g.
+/// an engine's suggested best move. Given in board-internal (pre-rotation,
+/// pre-orientation-flip) squares, same as everything else `BoardView` draws,
+/// so it lands correctly under both `orientation` and the cosmetic `flipped`
+/// toggle without any special-casing by the caller.
+struct BoardArrow: Equatable {
+    let from: Square
+    let to: Square
+    var color: Color
+}
+
 /// The 8x8 board renderer. Driven entirely by a `BoardControl` — it never
 /// decides legality, it only lays out `control.fen`, filters
 /// `control.legalMoves` down to whatever the user just touched, and calls
@@ -77,16 +88,23 @@ struct BoardView: View {
     private let flipped: Bool
     private let displayOptions: BoardDisplayOptions
 
+    /// Non-interactive overlays (best-move / second-opinion arrows). Empty by
+    /// default so every existing `BoardView(control:)` call site — bot/live/
+    /// puzzle/spectate/home mini-boards — is unaffected and keeps compiling.
+    private let arrows: [BoardArrow]
+
     init(
         control: any BoardControl,
         armedDrop: Binding<PieceKind?> = .constant(nil),
         flipped: Bool = false,
-        displayOptions: BoardDisplayOptions = .default
+        displayOptions: BoardDisplayOptions = .default,
+        arrows: [BoardArrow] = []
     ) {
         self.control = control
         self._armedDrop = armedDrop
         self.flipped = flipped
         self.displayOptions = displayOptions
+        self.arrows = arrows
     }
 
     @State private var selected: Square?
@@ -135,6 +153,9 @@ struct BoardView: View {
                         }
                     }
                 }
+            }
+            if !arrows.isEmpty {
+                arrowsLayer(cell: cell)
             }
             if let piece = draggedPiece, let dragLocation {
                 PieceView(piece: piece)
@@ -225,6 +246,82 @@ struct BoardView: View {
         let row = Int(location.y / cell)
         guard (0..<8).contains(col), (0..<8).contains(row) else { return nil }
         return squareAt(row: row, col: col)
+    }
+
+    /// Inverse of `squareAt(row:col:)` — the grid cell a given square renders
+    /// in, under the current orientation/flip.
+    private func rowCol(for square: Square) -> (row: Int, col: Int) {
+        if effectiveBottomColor == .white {
+            return (7 - square.rank, square.file)
+        } else {
+            return (square.rank, 7 - square.file)
+        }
+    }
+
+    /// Pixel center of a square's cell, in board-local coordinates — the same
+    /// space pieces/highlights render in (and, since this is drawn inside the
+    /// same board `ZStack`, the same space `AnalysisView`'s `.rotationEffect`
+    /// spins as a whole).
+    private func center(of square: Square, cell: CGFloat) -> CGPoint {
+        let (row, col) = rowCol(for: square)
+        return CGPoint(x: (CGFloat(col) + 0.5) * cell, y: (CGFloat(row) + 0.5) * cell)
+    }
+
+    // MARK: - Arrows
+
+    /// Draws each `BoardArrow` as a tinted, semi-transparent line + arrowhead
+    /// from its `from` square's center to its `to` square's center. `Canvas`
+    /// keeps this cheap (one draw pass, no per-arrow view identity) and is
+    /// naturally non-interactive, so it never steals taps/drags from the
+    /// board underneath.
+    private func arrowsLayer(cell: CGFloat) -> some View {
+        Canvas { context, _ in
+            for arrow in arrows {
+                drawArrow(arrow, cell: cell, in: &context)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func drawArrow(_ arrow: BoardArrow, cell: CGFloat, in context: inout GraphicsContext) {
+        let start = center(of: arrow.from, cell: cell)
+        let end = center(of: arrow.to, cell: cell)
+        guard start != end else { return }
+
+        let lineWidth = cell * 0.13
+        let headLength = cell * 0.32
+        let headWidth = cell * 0.26
+        let angle = atan2(end.y - start.y, end.x - start.x)
+
+        // Stop the shaft short of the head so it doesn't poke through the tip.
+        let shaftEnd = CGPoint(
+            x: end.x - cos(angle) * headLength * 0.65,
+            y: end.y - sin(angle) * headLength * 0.65
+        )
+        var shaft = Path()
+        shaft.move(to: start)
+        shaft.addLine(to: shaftEnd)
+        context.stroke(
+            shaft,
+            with: .color(arrow.color.opacity(0.75)),
+            style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
+        )
+
+        let base = CGPoint(x: end.x - cos(angle) * headLength, y: end.y - sin(angle) * headLength)
+        let left = CGPoint(
+            x: base.x + cos(angle + .pi / 2) * headWidth / 2,
+            y: base.y + sin(angle + .pi / 2) * headWidth / 2
+        )
+        let right = CGPoint(
+            x: base.x + cos(angle - .pi / 2) * headWidth / 2,
+            y: base.y + sin(angle - .pi / 2) * headWidth / 2
+        )
+        var head = Path()
+        head.move(to: end)
+        head.addLine(to: left)
+        head.addLine(to: right)
+        head.closeSubpath()
+        context.fill(head, with: .color(arrow.color.opacity(0.85)))
     }
 
     // MARK: - Square rendering
@@ -445,6 +542,24 @@ struct BoardView: View {
         legalMoves: ["g1f3", "d1e2", "e1g1", "f3e5", "f3d4", "f3g5", "f3h4", "b1c3", "b1d2", "a2a3", "a2a4"],
         lastMove: "d7d5"
     ))
+    .padding()
+    .background(Theme.Colors.background)
+}
+
+#Preview("BoardView — arrows") {
+    BoardView(
+        control: PreviewBoardControl(
+            fen: "r1bqk2r/ppp2ppp/2n2n2/2bpp3/2B1P3/3P1N2/PPP2PPP/RNBQK2R w KQkq - 2 6",
+            orientation: .white,
+            myTurn: true,
+            legalMoves: ["g1f3", "d1e2", "e1g1", "f3e5", "f3d4", "f3g5", "f3h4", "b1c3", "b1d2", "a2a3", "a2a4"],
+            lastMove: "d7d5"
+        ),
+        arrows: [
+            BoardArrow(from: Square(algebraic: "g1")!, to: Square(algebraic: "f3")!, color: Theme.Colors.accent),
+            BoardArrow(from: Square(algebraic: "c4")!, to: Square(algebraic: "f7")!, color: Color(red: 0.69, green: 0.42, blue: 1.0)),
+        ]
+    )
     .padding()
     .background(Theme.Colors.background)
 }

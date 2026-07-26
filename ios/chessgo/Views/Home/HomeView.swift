@@ -40,6 +40,8 @@ struct HomeView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                    brandRow
+
                     if let liveGame, !liveGame.ended {
                         ResumeBanner(game: liveGame) { dismissedGameID = nil }
                     }
@@ -83,6 +85,22 @@ struct HomeView: View {
         .fullScreenCover(isPresented: liveGameBinding(for: liveGame)) {
             liveGameCover
         }
+    }
+
+    // MARK: - Brand row
+
+    /// A slim navbar-style brand mark at the top of the lobby (the nav bar is
+    /// hidden on this screen), mirroring the web navbar's logo + wordmark.
+    private var brandRow: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            LogoMark(size: 26)
+            Text("chessgo")
+                .font(Theme.headline(20))
+                .foregroundStyle(Theme.Colors.primaryText)
+            Spacer()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("chessgo")
     }
 
     // MARK: - Live game cover

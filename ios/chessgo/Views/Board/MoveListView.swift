@@ -35,31 +35,51 @@ struct MoveListView: View {
     }
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 2) {
-                    ForEach(pairs, id: \.number) { pair in
-                        HStack(spacing: Theme.Spacing.sm) {
-                            Text("\(pair.number).")
-                                .font(Theme.caption())
-                                .foregroundStyle(Theme.Colors.secondaryText)
-                                .frame(width: 28, alignment: .trailing)
-                            moveCell(pair.white)
-                            moveCell(pair.black)
-                            Spacer(minLength: 0)
+        if moves.isEmpty {
+            emptyState
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(pairs, id: \.number) { pair in
+                            HStack(spacing: Theme.Spacing.sm) {
+                                Text("\(pair.number).")
+                                    .font(Theme.caption())
+                                    .foregroundStyle(Theme.Colors.secondaryText)
+                                    .frame(width: 28, alignment: .trailing)
+                                moveCell(pair.white)
+                                moveCell(pair.black)
+                                Spacer(minLength: 0)
+                            }
+                            .id(pair.number)
                         }
-                        .id(pair.number)
                     }
+                    .padding(Theme.Spacing.sm)
                 }
-                .padding(Theme.Spacing.sm)
-            }
-            .onChange(of: moves.count) { _, _ in
-                guard let last = pairs.last?.number else { return }
-                withAnimation(.easeOut(duration: 0.2)) {
-                    proxy.scrollTo(last, anchor: .bottom)
+                .onChange(of: moves.count) { _, _ in
+                    guard let last = pairs.last?.number else { return }
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        proxy.scrollTo(last, anchor: .bottom)
+                    }
                 }
             }
         }
+    }
+
+    /// Shown in place of the (otherwise blank) list when there's no history
+    /// yet — the analysis start position, a fresh free-explore, etc. Neutral
+    /// on purpose: this view is shared by live/bot/spectate/analysis, so it
+    /// says nothing mode-specific, just fills the list's frame and centers.
+    private var emptyState: some View {
+        VStack(spacing: 4) {
+            Text("No moves yet")
+                .font(Theme.body(15))
+                .foregroundStyle(Theme.Colors.secondaryText)
+            Text("Play a move to start exploring.")
+                .font(Theme.caption(12))
+                .foregroundStyle(Theme.Colors.secondaryText.opacity(0.7))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     @ViewBuilder
@@ -83,6 +103,12 @@ struct MoveListView: View {
 
 #Preview("MoveListView") {
     MoveListViewPreview()
+}
+
+#Preview("MoveListView — empty") {
+    MoveListView(moves: [], currentPly: nil) { _ in }
+        .frame(height: 180)
+        .background(Theme.Colors.background)
 }
 
 private struct MoveListViewPreview: View {

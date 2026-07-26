@@ -19,6 +19,17 @@ private struct SfAnalyzeRequest: Encodable {
     let movetime: Int?
 }
 
+private struct DuckAnalyzeRequest: Encodable {
+    let fen: String
+    let duck: String
+    let movetime: Int?
+}
+
+private struct AntichessAnalyzeRequest: Encodable {
+    let fen: String
+    let movetime: Int?
+}
+
 struct AnalysisService {
     static let shared = AnalysisService()
     private init() {}
@@ -45,6 +56,23 @@ struct AnalysisService {
     /// Full-strength Stockfish second opinion, default movetime 300ms.
     func sfAnalyze(fen: String, movetime: Int? = nil) async throws -> SfAnalyzeResult {
         try await APIClient.shared.post("/sf-analyze", body: SfAnalyzeRequest(fen: fen, movetime: movetime))
+    }
+
+    /// The standard engine has no Duck rules and mis-scores/mis-picks moves
+    /// on a Duck position, so this hits the dedicated Duck engine instead
+    /// (`frontend/src/api/client.ts` `duckEval`). `bestmove` is a composite
+    /// `"<pieceUci>:<duckSquare>"`.
+    func duckAnalyze(fen: String, duck: String, movetime: Int? = nil) async throws -> DuckAnalyzeResult {
+        try await APIClient.shared.post("/duck/analyze", body: DuckAnalyzeRequest(fen: fen, duck: duck, movetime: movetime))
+    }
+
+    /// Antichess has compulsory captures and inverted material, so the
+    /// standard engine's "best move" is frequently illegal here — this hits
+    /// the dedicated Antichess engine instead (`frontend/src/api/client.ts`
+    /// `antichessEval`). `bestmove` is a plain UCI (with a `k` suffix for a
+    /// king promotion).
+    func antichessAnalyze(fen: String, movetime: Int? = nil) async throws -> AntichessAnalyzeResult {
+        try await APIClient.shared.post("/antichess/analyze", body: AntichessAnalyzeRequest(fen: fen, movetime: movetime))
     }
 
     /// `id` is the hub game id (hex string) — same identifier `game(id:)`

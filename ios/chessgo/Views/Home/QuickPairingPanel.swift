@@ -29,8 +29,8 @@ struct QuickPairingPanel: View {
 
             variantSection
         }
-        .sheet(isPresented: $isSearching) {
-            SearchingSheet(socket: socket)
+        .fullScreenCover(isPresented: $isSearching) {
+            SearchingModal(socket: socket)
         }
     }
 
