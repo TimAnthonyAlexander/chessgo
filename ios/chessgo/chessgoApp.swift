@@ -13,7 +13,13 @@ struct ChessgoApp: App {
                 .environment(socket)
                 .environment(settings)
                 .preferredColorScheme(settings.preferredColorScheme)
-                .task { await auth.bootstrap() }
+                .task {
+                    // Warm the audio stack in the background at launch so the
+                    // first move's sound never pays the cold-start cost on the
+                    // main thread. Returns immediately (work runs off-main).
+                    SoundEngine.shared.prewarm()
+                    await auth.bootstrap()
+                }
         }
     }
 }

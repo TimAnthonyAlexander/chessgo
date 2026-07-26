@@ -57,8 +57,14 @@ nonisolated final class SoundEngine: @unchecked Sendable {
     /// makes the `@unchecked Sendable` safe.
     private let queue = DispatchQueue(label: "de.timanthonyalexander.chessgo.sound", qos: .userInitiated)
 
-    private let engine = AVAudioEngine()
-    private let player = AVAudioPlayerNode()
+    // Built lazily on `queue` in `setupIfNeeded`, NOT as init-time stored
+    // properties: constructing `AVAudioEngine`/`AVAudioPlayerNode` (and
+    // touching `mainMixerNode`) can itself reach into CoreAudio and stall on a
+    // Bluetooth route change, so even that must stay off the main thread. This
+    // was the second half of the freeze — `play` dispatched, but the very first
+    // `SoundEngine.shared` access still built the engine on main.
+    private var engine: AVAudioEngine?
+    private var player: AVAudioPlayerNode?
     private var buffers: [SoundEvent: AVAudioPCMBuffer] = [:]
     private var didSetup = false
     private var didAttemptSessionActivation = false
@@ -66,11 +72,13 @@ nonisolated final class SoundEngine: @unchecked Sendable {
 
     private init() {}
 
-    /// One-time engine wiring + buffer generation, deferred off init so even
-    /// first-run setup never runs on the main thread. Called on `queue`.
+    /// One-time engine construction + wiring + buffer generation, deferred off
+    /// init so nothing audio-related runs on the main thread. Called on `queue`.
     private func setupIfNeeded() {
         guard !didSetup else { return }
         didSetup = true
+        let engine = AVAudioEngine()
+        let player = AVAudioPlayerNode()
         engine.attach(player)
         // Connect with the SAME mono format the tone buffers use. Connecting
         // with the mixer's stereo hardware format instead makes
@@ -81,6 +89,21 @@ nonisolated final class SoundEngine: @unchecked Sendable {
             engine.connect(player, to: engine.mainMixerNode, format: format)
         }
         buffers = Self.buildBuffers()
+        self.engine = engine
+        self.player = player
+    }
+
+    /// Warm the whole audio stack ahead of the first move — construct the
+    /// engine, activate the session, and start the engine, all on `queue`.
+    /// Call once at launch so the first move's sound isn't the thing that pays
+    /// the (possibly seconds-long, on a Bluetooth route change) cold start.
+    /// Best-effort and idempotent; returns immediately.
+    func prewarm() {
+        queue.async { [self] in
+            setupIfNeeded()
+            activateSessionIfNeeded()
+            _ = startEngineIfNeeded()
+        }
     }
 
     // MARK: - Playback
@@ -99,7 +122,7 @@ nonisolated final class SoundEngine: @unchecked Sendable {
         // must never hold up the UI — it all runs on `queue` instead.
         queue.async { [self] in
             setupIfNeeded()
-            guard let buffer = buffers[event] else { return }
+            guard let player, let buffer = buffers[event] else { return }
 
             activateSessionIfNeeded()
             guard startEngineIfNeeded() else { return }
@@ -166,6 +189,7 @@ nonisolated final class SoundEngine: @unchecked Sendable {
     /// `false` (never throws) on failure so `play` can just skip the sound.
     private func startEngineIfNeeded() -> Bool {
         if isEngineRunning { return true }
+        guard let engine else { return false }
         do {
             try engine.start()
             isEngineRunning = true
