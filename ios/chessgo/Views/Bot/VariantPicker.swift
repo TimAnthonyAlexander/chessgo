@@ -17,50 +17,61 @@ extension Variant {
     }
 }
 
-/// Reusable variant selector: a vertical list of rows, each the variant name
-/// plus its blurb, with the current pick checked. Deliberately not a
-/// segmented control — eight items with real descriptions read better as a
-/// list than as cramped equal-width segments.
+/// Reusable variant selector: a compact dropdown (a native `Menu`) rather than
+/// a stacked list — eight variants as full rows ate ~90% of the setup screen.
+/// The field shows the current pick's name + blurb; tapping opens the menu with
+/// a checkmark on the active variant.
 struct VariantPicker: View {
     @Binding var selection: Variant
 
     var body: some View {
-        VStack(spacing: Theme.Spacing.xs) {
+        Menu {
             ForEach(Variant.allCases, id: \.self) { variant in
-                row(for: variant)
+                Button {
+                    selection = variant
+                } label: {
+                    if selection == variant {
+                        Label(variant.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(variant.displayName)
+                    }
+                }
             }
-        }
-    }
-
-    private func row(for variant: Variant) -> some View {
-        let isSelected = selection == variant
-        return Button {
-            selection = variant
         } label: {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(variant.displayName)
-                        .font(Theme.body(16))
-                        .foregroundStyle(Theme.Colors.primaryText)
-                    Text(variant.oneLineDescription)
-                        .font(Theme.caption(12))
-                        .foregroundStyle(Theme.Colors.secondaryText)
-                }
-                Spacer(minLength: Theme.Spacing.sm)
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(Theme.Colors.accent)
-                }
-            }
-            .padding(.vertical, Theme.Spacing.sm)
-            .padding(.horizontal, Theme.Spacing.md)
-            .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
-                    .fill(isSelected ? Theme.Colors.surface : Color.clear)
-            )
-            .contentShape(Rectangle())
+            field
         }
         .buttonStyle(.plain)
+    }
+
+    private var field: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(selection.displayName)
+                    .font(Theme.body(16))
+                    .foregroundStyle(Theme.Colors.primaryText)
+                Text(selection.oneLineDescription)
+                    .font(Theme.caption(12))
+                    .foregroundStyle(Theme.Colors.secondaryText)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: Theme.Spacing.sm)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Theme.Colors.secondaryText)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, Theme.Spacing.sm)
+        .padding(.horizontal, Theme.Spacing.md)
+        .frame(minHeight: HomeMetrics.minTapTarget)
+        .background(
+            Theme.Colors.surface,
+            in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
+                .stroke(Theme.Colors.primaryText.opacity(0.08), lineWidth: 1)
+        )
+        .contentShape(Rectangle())
     }
 }
 

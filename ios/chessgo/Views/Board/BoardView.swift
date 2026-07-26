@@ -88,23 +88,31 @@ struct BoardView: View {
     private let flipped: Bool
     private let displayOptions: BoardDisplayOptions
 
-    /// Non-interactive overlays (best-move / second-opinion arrows). Empty by
-    /// default so every existing `BoardView(control:)` call site — bot/live/
-    /// puzzle/spectate/home mini-boards — is unaffected and keeps compiling.
+    /// Non-interactive overlays (best-move / second-opinion arrows, used by
+    /// the analysis board). Empty by default so every existing
+    /// `BoardView(control:)` call site is unaffected and keeps compiling.
     private let arrows: [BoardArrow]
+
+    /// Squares to wash with a translucent accent tint — the admin best-move
+    /// "hold to reveal" peek highlights the move's from/to squares here.
+    /// Empty by default; drawn over the pieces so the two squares read clearly
+    /// only while the peek is held.
+    private let highlightSquares: [Square]
 
     init(
         control: any BoardControl,
         armedDrop: Binding<PieceKind?> = .constant(nil),
         flipped: Bool = false,
         displayOptions: BoardDisplayOptions = .default,
-        arrows: [BoardArrow] = []
+        arrows: [BoardArrow] = [],
+        highlightSquares: [Square] = []
     ) {
         self.control = control
         self._armedDrop = armedDrop
         self.flipped = flipped
         self.displayOptions = displayOptions
         self.arrows = arrows
+        self.highlightSquares = highlightSquares
     }
 
     @State private var selected: Square?
@@ -153,6 +161,9 @@ struct BoardView: View {
                         }
                     }
                 }
+            }
+            if !highlightSquares.isEmpty {
+                highlightLayer(cell: cell)
             }
             if !arrows.isEmpty {
                 arrowsLayer(cell: cell)
@@ -265,6 +276,28 @@ struct BoardView: View {
     private func center(of square: Square, cell: CGFloat) -> CGPoint {
         let (row, col) = rowCol(for: square)
         return CGPoint(x: (CGFloat(col) + 0.5) * cell, y: (CGFloat(row) + 0.5) * cell)
+    }
+
+    // MARK: - Highlight wash (admin peek)
+
+    /// Fills each `highlightSquares` cell with a translucent accent wash. Drawn
+    /// in the board `ZStack` (so it maps to squares and rotates with the board
+    /// under `AnalysisView`'s flip) and non-interactive, so it never steals
+    /// taps. Over the pieces at low opacity so the piece still reads through.
+    /// Light-blue peek wash — deliberately NOT the brass accent (which barely
+    /// reads against the walnut board); a clear cyan-blue stands out on both
+    /// ivory and walnut squares.
+    private static let peekHighlight = Color(red: 0.33, green: 0.66, blue: 1.0)
+
+    private func highlightLayer(cell: CGFloat) -> some View {
+        Canvas { context, _ in
+            for square in highlightSquares {
+                let (row, col) = rowCol(for: square)
+                let rect = CGRect(x: CGFloat(col) * cell, y: CGFloat(row) * cell, width: cell, height: cell)
+                context.fill(Path(rect), with: .color(Self.peekHighlight.opacity(0.6)))
+            }
+        }
+        .allowsHitTesting(false)
     }
 
     // MARK: - Arrows

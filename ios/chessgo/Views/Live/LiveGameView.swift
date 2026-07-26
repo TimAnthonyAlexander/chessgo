@@ -11,7 +11,10 @@ struct LiveGameView: View {
     @State private var driver: LiveGameDriver
     @State private var armedDrop: PieceKind?
     @State private var showResignConfirm = false
-    @State private var adminHint: BoardArrow?
+    /// Admin best-move peek: the engine's suggested from/to squares (admins
+    /// only) and whether the floating peek button is currently held.
+    @State private var bestSquares: [Square] = []
+    @State private var peeking = false
     @Environment(SettingsStore.self) private var settings
 
     /// Tracks the last `lastMove` we already sounded for, so the opponent-
@@ -96,19 +99,11 @@ struct LiveGameView: View {
                     .frame(maxWidth: .infinity, alignment: .trailing)
                 }
 
-                AdminBestMove(
-                    fen: driver.fen,
-                    myTurn: driver.myTurn,
-                    variant: game.variant,
-                    duck: game.duck,
-                    onHint: { adminHint = $0 }
-                )
-
                 BoardView(
                     control: driver,
                     armedDrop: $armedDrop,
                     displayOptions: BoardDisplayOptions(settings),
-                    arrows: adminHint.map { [$0] } ?? []
+                    highlightSquares: peeking ? bestSquares : []
                 )
                 .aspectRatio(1, contentMode: .fit)
 
@@ -131,6 +126,15 @@ struct LiveGameView: View {
                 if !game.ended {
                     controlsRow(game)
                 }
+
+                AdminBestMove(
+                    fen: driver.fen,
+                    myTurn: driver.myTurn,
+                    variant: game.variant,
+                    duck: game.duck,
+                    onBestMove: { bestSquares = $0 },
+                    onPeek: { peeking = $0 }
+                )
 
                 if showMoveList {
                     MoveListView(moves: moveEntries(game), currentPly: nil) { _ in }

@@ -17,24 +17,19 @@ struct BotGameView: View {
     @State private var flipped = false
     @State private var showResignConfirm = false
     @State private var eval: EvalScore?
-    @State private var adminHint: BoardArrow?
+    /// Admin best-move peek: the from/to squares of the engine's suggestion
+    /// (populated only for admins with the toggle on) and whether the floating
+    /// peek button is currently held.
+    @State private var bestSquares: [Square] = []
+    @State private var peeking = false
 
     private static let evalDepthLadder = [4, 8, 12, 16]
 
     var body: some View {
         VStack(spacing: Theme.Spacing.md) {
-            statusBar
-
             if driver.game == nil {
                 loadingOrError
             } else {
-                AdminBestMove(
-                    fen: driver.fen,
-                    myTurn: driver.myTurn,
-                    variant: driver.variant.rawValue,
-                    duck: driver.duckSquare,
-                    onHint: { adminHint = $0 }
-                )
                 boardArea
                 if driver.variant == .crazyhouse {
                     PocketView(pocket: driver.pocket, sideToMove: currentSideToMove, armed: $armedDrop)
@@ -43,6 +38,14 @@ struct BotGameView: View {
                     outcomeBanner(outcome)
                 }
                 controlsRow
+                AdminBestMove(
+                    fen: driver.fen,
+                    myTurn: driver.myTurn,
+                    variant: driver.variant.rawValue,
+                    duck: driver.duckSquare,
+                    onBestMove: { bestSquares = $0 },
+                    onPeek: { peeking = $0 }
+                )
                 if showMoveList {
                     MoveListView(moves: moveListEntries, currentPly: moveListEntries.last?.ply) { _ in }
                         .frame(height: 180)
@@ -50,7 +53,8 @@ struct BotGameView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(Theme.Spacing.lg)
+        .padding(.horizontal, Theme.Spacing.md)
+        .padding(.vertical, Theme.Spacing.sm)
         .background(Theme.Colors.background)
         .navigationTitle(driver.variant.displayName)
         .navigationBarTitleDisplayMode(.inline)
@@ -62,29 +66,6 @@ struct BotGameView: View {
             Button("Resign", role: .destructive) { driver.resign() }
             Button("Cancel", role: .cancel) {}
         }
-    }
-
-    // MARK: - Status
-
-    private var statusBar: some View {
-        HStack {
-            if driver.botThinking {
-                Label("Bot is thinking…", systemImage: "ellipsis")
-                    .font(Theme.caption())
-                    .foregroundStyle(Theme.Colors.secondaryText)
-            } else if driver.game != nil, !driver.isGameOver {
-                Text(driver.myTurn ? "Your move" : "Waiting…")
-                    .font(Theme.caption())
-                    .foregroundStyle(Theme.Colors.secondaryText)
-            }
-            Spacer()
-            if driver.inCheck, !driver.isGameOver {
-                Text("Check")
-                    .font(Theme.caption().bold())
-                    .foregroundStyle(Theme.Colors.negative)
-            }
-        }
-        .frame(minHeight: 20)
     }
 
     @ViewBuilder
@@ -128,7 +109,7 @@ struct BotGameView: View {
                     armedDrop: $armedDrop,
                     flipped: flipped,
                     displayOptions: BoardDisplayOptions(settings),
-                    arrows: adminHint.map { [$0] } ?? []
+                    highlightSquares: peeking ? bestSquares : []
                 )
             }
         )
