@@ -8,6 +8,7 @@ import SwiftUI
 /// `BoardPage` equivalent), which is the one place board+eval-bar geometry
 /// lives, so nothing below it (panels, move list) can resize it.
 struct AnalysisView: View {
+    @Environment(SettingsStore.self) private var settings
     @State private var driver: AnalysisDriver
     @State private var flipped = false
 
@@ -41,7 +42,7 @@ struct AnalysisView: View {
                 boardArea
                 controlsRow
                 ScrollView {
-                    belowBoardPanels
+                    belowBoardStack
                 }
             }
             Spacer(minLength: 0)
@@ -54,6 +55,7 @@ struct AnalysisView: View {
         .task {
             if driver.mode == .review { await driver.load() }
         }
+        .onAppear { driver.appSettings = settings }
         .onDisappear {
             driver.cancelLiveEval()
         }
@@ -170,50 +172,24 @@ struct AnalysisView: View {
 
     // MARK: - Below-board panels
 
-    /// `OpeningPanel`/`EngineLinesPanel` each opt into `.glassCard()`
-    /// (native `.glassEffect` on iOS 26+) independently. Stacked in a plain
-    /// `VStack` those render as separate glass surfaces, each with its own
-    /// specular highlight + drop shadow — close together that reads as a
-    /// heavy, "stacked glass" mess. `GlassEffectContainer` is Apple's fix for
-    /// exactly this: it unifies nearby `.glassEffect` descendants into one
-    /// coherent render pass instead of compounding shadows. Below iOS 26
-    /// `glassCard()` already falls back to a flat fill + hairline stroke, so
-    /// no container is needed there.
-    @ViewBuilder
-    private var belowBoardPanels: some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: Theme.Spacing.md) {
-                belowBoardStack
-            }
-        } else {
-            belowBoardStack
-        }
-    }
-
+    /// The panels below the board are deliberately FLAT — a plain surface
+    /// fill + hairline stroke, no drop shadow. The shared `.glassCard()`
+    /// (native `.glassEffect` on iOS 26+) draws a specular highlight AND a
+    /// drop shadow; because each panel spans the full content width, the
+    /// enclosing `ScrollView` clips those shadows at the left/right edges —
+    /// which read as ugly, cut-off boxes. A flat card has nothing to clip, so
+    /// the stack stays calm and edge-clean. `flatPanel()` is the one card
+    /// style all three below-board panels share.
     private var belowBoardStack: some View {
         VStack(spacing: Theme.Spacing.md) {
             OpeningPanel(fen: driver.fen, history: driver.historyUci)
             EngineLinesPanel(driver: driver)
-            moveListCard
+            MoveListView(moves: moveListEntries, currentPly: currentPly) { ply in
+                driver.jump(toPly: ply)
+            }
+            .frame(height: 180)
+            .flatPanel()
         }
-    }
-
-    /// `MoveListView` has no card styling of its own — give it the same
-    /// flat, hairline-bordered surface as the `.glassCard()` fallback (no
-    /// shadow) instead of leaving it a bare floating list.
-    private var moveListCard: some View {
-        MoveListView(moves: moveListEntries, currentPly: currentPly) { ply in
-            driver.jump(toPly: ply)
-        }
-        .frame(height: 180)
-        .background(
-            Theme.Colors.surface,
-            in: RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.Radius.lg, style: .continuous)
-                .stroke(Theme.Colors.primaryText.opacity(0.06), lineWidth: 1)
-        )
     }
 
     private var sideToMove: PieceColor { ChessBoard(fen: driver.fen).sideToMove }
@@ -272,16 +248,32 @@ struct AnalysisView: View {
     }
 }
 
+extension View {
+    /// Flat below-board card: a plain surface fill + hairline stroke, with NO
+    /// drop shadow — the one card style the analysis panels share. Unlike
+    /// `.glassCard()` it casts no shadow, so a full-width panel inside a
+    /// `ScrollView` never gets its shadow clipped at the content edges (the
+    /// "cut-off boxes" look). Apply AFTER your own padding, like `.glassCard()`.
+    func flatPanel(cornerRadius: CGFloat = Theme.Radius.lg) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        return self
+            .background(Theme.Colors.surface, in: shape)
+            .overlay(shape.stroke(Theme.Colors.primaryText.opacity(0.06), lineWidth: 1))
+    }
+}
+
 #if DEBUG
 #Preview("AnalysisView — free explore") {
     NavigationStack {
         AnalysisView(fen: nil)
     }
+    .environment(SettingsStore.preview())
 }
 
 #Preview("AnalysisView — game review") {
     NavigationStack {
         AnalysisView(previewDriver: .previewReview())
     }
+    .environment(SettingsStore.preview())
 }
 #endif

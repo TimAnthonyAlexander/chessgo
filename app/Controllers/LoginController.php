@@ -8,6 +8,7 @@ use BaseApi\Controllers\Controller;
 use BaseApi\Http\JsonResponse;
 use BaseApi\Http\Attributes\ResponseType;
 use BaseApi\Http\Attributes\Tag;
+use RuntimeException;
 
 /**
  * Login endpoint. Verifies email + password and, on success, persists the
@@ -58,17 +59,28 @@ class LoginController extends Controller
 
         // Mint an API token inline so native clients (iOS) get bearer auth
         // without a second round trip. Additive field — the web SPA (cookie
-        // auth) simply ignores it.
+        // auth) simply ignores it. Never let a failed mint fail the whole
+        // login (the session cookie above already succeeded, so the web SPA
+        // is fine) — just log it and omit the fields, so a bearer client
+        // sees no api_token rather than an unusable/unpersisted one.
         $payload = $user->jsonSerialize();
-        $token = $this->issueToken($user);
-        $payload['api_token'] = $token['token'];
-        $payload['api_token_id'] = $token['id'];
+        try {
+            $token = $this->issueToken($user);
+            $payload['api_token'] = $token['token'];
+            $payload['api_token_id'] = $token['id'];
+        } catch (RuntimeException $e) {
+            error_log('[Login] API token mint failed for user ' . $user->id . ': ' . $e->getMessage());
+        }
 
         return JsonResponse::ok($payload);
     }
 
     /**
      * @return array{token: string, id: string}
+     * @throws RuntimeException if the token fails to persist — a caller must
+     *         never hand a client a bearer token that isn't actually in the
+     *         database, or the very next request with it 401s and the client
+     *         (correctly) treats that as "log this session out."
      */
     private function issueToken(User $user): array
     {
@@ -78,7 +90,10 @@ class LoginController extends Controller
         $apiToken->user_id = $user->id;
         $apiToken->name = 'iOS App';
         $apiToken->token_hash = ApiToken::hashToken($plainToken);
-        $apiToken->save();
+
+        if (!$apiToken->save()) {
+            throw new RuntimeException('Failed to persist API token');
+        }
 
         return ['token' => $plainToken, 'id' => $apiToken->id];
     }

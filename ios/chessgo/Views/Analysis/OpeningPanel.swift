@@ -20,7 +20,8 @@ struct OpeningPanel: View {
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassCard()
+        .padding(Theme.Spacing.md)
+        .flatPanel()
         .task(id: fen) { await load() }
     }
 

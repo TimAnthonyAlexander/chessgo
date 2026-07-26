@@ -91,6 +91,16 @@ final class AnalysisDriver: BoardControl {
     let movesBothSides: Bool = true
     private(set) var legalMoves: [String] = []
 
+    /// Injected by `AnalysisView` (`onAppear`) so playing a move on the board
+    /// makes the same sound it does everywhere else — a plain `@Observable`
+    /// store can't read `@Environment`, so the view hands the settings in
+    /// (same pattern as `LiveGameDriver`/`SpectateStore`).
+    var appSettings: SettingsStore?
+    private var soundVolume: Double {
+        guard let appSettings, appSettings.soundEnabled else { return 0 }
+        return appSettings.soundVolume
+    }
+
     var fen: String { steps[safe: currentIndex]?.fen ?? ChessBoard.startFEN }
     var lastMove: String? { steps[safe: currentIndex]?.uci }
 
@@ -226,7 +236,8 @@ final class AnalysisDriver: BoardControl {
     /// one the loaded game actually continued with.
     func submit(_ uci: String) {
         guard legalMoves.contains(uci) else { return }
-        let nextFen = ChessBoard(fen: fen).applying(uci).fen()
+        let preBoard = ChessBoard(fen: fen)
+        let nextFen = preBoard.applying(uci).fen()
         let newStep = Step(
             ply: (steps[safe: currentIndex]?.ply ?? 0) + 1,
             fen: nextFen,
@@ -242,6 +253,28 @@ final class AnalysisDriver: BoardControl {
         currentIndex = steps.count - 1
         refreshLegalMoves()
         restartLiveEval()
+
+        let volume = soundVolume
+        if volume > 0 {
+            SoundEngine.shared.play(Self.soundEvent(uci: uci, preBoard: preBoard), volume: volume)
+        }
+    }
+
+    /// Picks the move sound from the move + the board BEFORE it was played.
+    /// There's no client SAN generator here, so this reads the move geometry
+    /// directly rather than parsing notation.
+    private static func soundEvent(uci: String, preBoard: ChessBoard) -> SoundEngine.SoundEvent {
+        guard let move = Move(uci: uci) else { return .move }
+        let mover = preBoard.piece(at: move.from)
+        // Castle: the king steps two files.
+        if mover?.kind == .king, abs(move.to.file - move.from.file) == 2 { return .castle }
+        // Capture: destination occupied, or an en-passant pawn capture (a pawn
+        // changing file onto an empty square).
+        let destOccupied = preBoard.piece(at: move.to) != nil
+        let enPassant = mover?.kind == .pawn && move.from.file != move.to.file && !destOccupied
+        if destOccupied || enPassant { return .capture }
+        if move.promotion != nil { return .promote }
+        return .move
     }
 
     // MARK: - Legal-move geometry

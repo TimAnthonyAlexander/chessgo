@@ -73,13 +73,18 @@ class ApiTokenController extends Controller
         $plainToken = ApiToken::generateToken();
         $tokenHash = ApiToken::hashToken($plainToken);
 
-        // Create token record
+        // Create token record. Never hand back a plaintext token that isn't
+        // actually persisted — the client would store it and it would 401 on
+        // first use, indistinguishable from a revoked/expired token.
         $apiToken = new ApiToken();
         $apiToken->user_id = $user['id'];
         $apiToken->name = $this->name;
         $apiToken->token_hash = $tokenHash;
         $apiToken->expires_at = $this->expires_at ?? null;
-        $apiToken->save();
+
+        if (!$apiToken->save()) {
+            return JsonResponse::error('Failed to create API token', 500);
+        }
 
         return JsonResponse::created([
             'token' => $plainToken, // Only shown once!

@@ -9,6 +9,7 @@ use BaseApi\Controllers\Controller;
 use BaseApi\Http\JsonResponse;
 use BaseApi\Http\Attributes\ResponseType;
 use BaseApi\Http\Attributes\Tag;
+use RuntimeException;
 
 /**
  * User registration endpoint.
@@ -71,16 +72,27 @@ class SignupController extends Controller
 
         // Mint an API token inline so native clients (iOS) get bearer auth
         // without a second round trip. Additive field — the web SPA ignores it.
+        // Never let a failed mint fail the whole signup (the session cookie
+        // above already succeeded) — just log it and omit the fields, so a
+        // bearer client sees no api_token rather than an unusable one.
         $payload = $user->jsonSerialize();
-        $token = $this->issueToken($user);
-        $payload['api_token'] = $token['token'];
-        $payload['api_token_id'] = $token['id'];
+        try {
+            $token = $this->issueToken($user);
+            $payload['api_token'] = $token['token'];
+            $payload['api_token_id'] = $token['id'];
+        } catch (RuntimeException $e) {
+            error_log('[Signup] API token mint failed for user ' . $user->id . ': ' . $e->getMessage());
+        }
 
         return JsonResponse::created($payload);
     }
 
     /**
      * @return array{token: string, id: string}
+     * @throws RuntimeException if the token fails to persist — a caller must
+     *         never hand a client a bearer token that isn't actually in the
+     *         database, or the very next request with it 401s and the client
+     *         (correctly) treats that as "log this session out."
      */
     private function issueToken(User $user): array
     {
@@ -90,7 +102,10 @@ class SignupController extends Controller
         $apiToken->user_id = $user->id;
         $apiToken->name = 'iOS App';
         $apiToken->token_hash = ApiToken::hashToken($plainToken);
-        $apiToken->save();
+
+        if (!$apiToken->save()) {
+            throw new RuntimeException('Failed to persist API token');
+        }
 
         return ['token' => $plainToken, 'id' => $apiToken->id];
     }

@@ -28,7 +28,8 @@ struct EngineLinesPanel: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassCard()
+        .padding(Theme.Spacing.md)
+        .flatPanel()
         .onChange(of: sfEnabled) { _, enabled in
             if enabled { Task { await loadSf() } }
         }
