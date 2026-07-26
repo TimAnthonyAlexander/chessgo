@@ -51,10 +51,19 @@ struct WatchView: View {
         }
     }
 
+    /// The very first `/watch` poll is also what wakes the hub's JIT filler
+    /// pool, so an empty first response is expected for a couple of seconds
+    /// while those engine-vs-engine games spin up. Mirror the web
+    /// `LiveTvWidget` warm-up: retry a few times on a short backoff before
+    /// revealing the empty state, so the tab shows a loader instead of
+    /// flashing "No live games" on entry. The steady poll below is the
+    /// longer-term backstop.
+    private static let warmupBackoffMs: [UInt64] = [0, 1200, 2600]
+
     /// `.task` cancels this automatically when the view leaves the hierarchy
     /// (tab switch), so there's no explicit teardown to write.
     private func pollLoop() async {
-        await refresh()
+        await warmUp()
         while !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 2_500_000_000)
             guard !Task.isCancelled else { return }
@@ -62,6 +71,27 @@ struct WatchView: View {
         }
     }
 
+    /// Poll on a short backoff, keeping the loader up until a game lands or the
+    /// attempts are exhausted — only then reveal the empty/error state.
+    private func warmUp() async {
+        for delay in Self.warmupBackoffMs {
+            if Task.isCancelled { return }
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: delay * 1_000_000)
+                if Task.isCancelled { return }
+            }
+            await refresh()
+            if !games.isEmpty {
+                isLoading = false
+                return
+            }
+        }
+        isLoading = false
+    }
+
+    /// Fetches the lobby list. Deliberately does NOT flip `isLoading` — that's
+    /// owned by `warmUp` so an empty warm-up response keeps the loader up
+    /// instead of blanking to "No live games".
     private func refresh() async {
         do {
             let response = try await WatchService.shared.liveGames()
@@ -72,7 +102,6 @@ struct WatchView: View {
             Log.warn("WatchView.refresh: \(error.localizedDescription)")
             loadFailed = true
         }
-        isLoading = false
     }
 }
 
