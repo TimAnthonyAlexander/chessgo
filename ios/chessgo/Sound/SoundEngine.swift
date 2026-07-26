@@ -19,8 +19,18 @@
 
 import AVFoundation
 
-@MainActor
-final class SoundEngine {
+/// `nonisolated` + `@unchecked Sendable`: every audio operation runs on a
+/// private serial queue, NEVER the main thread. Activating `AVAudioSession` or
+/// starting `AVAudioEngine` can block for SECONDS during a Bluetooth route
+/// change (e.g. AirPods handing back from a paired Mac to the phone); doing
+/// that on `@MainActor` — as this used to — froze the entire UI for the whole
+/// hand-off. `play`/`playForSan` now just guard the cheap stuff and dispatch,
+/// returning immediately, so a slow audio route can delay a move's sound but
+/// can never stall the interface. `AVAudioEngine`/its nodes are documented as
+/// usable from any thread and `AVAudioSession` is thread-safe, so confining all
+/// of it to one serial queue is both correct and what makes the unchecked
+/// `Sendable` conformance sound.
+nonisolated final class SoundEngine: @unchecked Sendable {
 
     static let shared = SoundEngine()
 
@@ -41,13 +51,26 @@ final class SoundEngine {
         case end
     }
 
+    /// Serial queue that OWNS every mutable member below (engine, player,
+    /// buffers, the lazy-setup/activation flags). They are only ever touched
+    /// inside a `queue.async` block — that single-threaded confinement is what
+    /// makes the `@unchecked Sendable` safe.
+    private let queue = DispatchQueue(label: "de.timanthonyalexander.chessgo.sound", qos: .userInitiated)
+
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
     private var buffers: [SoundEvent: AVAudioPCMBuffer] = [:]
+    private var didSetup = false
     private var didAttemptSessionActivation = false
     private var isEngineRunning = false
 
-    private init() {
+    private init() {}
+
+    /// One-time engine wiring + buffer generation, deferred off init so even
+    /// first-run setup never runs on the main thread. Called on `queue`.
+    private func setupIfNeeded() {
+        guard !didSetup else { return }
+        didSetup = true
         engine.attach(player)
         // Connect with the SAME mono format the tone buffers use. Connecting
         // with the mixer's stereo hardware format instead makes
@@ -68,17 +91,24 @@ final class SoundEngine {
     /// drops the sound instead of throwing: sound is a nice-to-have, never
     /// something that should be able to break a move.
     func play(_ event: SoundEvent, volume: Double = 1.0) {
-        guard event != .check else { return }
-        guard volume > 0 else { return }
-        guard let buffer = buffers[event] else { return }
+        guard event != .check, volume > 0 else { return }
+        let clampedVolume = Float(max(0, min(1, volume)))
 
-        activateSessionIfNeeded()
-        guard startEngineIfNeeded() else { return }
+        // Hop off the caller's thread (the drivers call this on the main
+        // thread). Everything below can block on a Bluetooth route change and
+        // must never hold up the UI — it all runs on `queue` instead.
+        queue.async { [self] in
+            setupIfNeeded()
+            guard let buffer = buffers[event] else { return }
 
-        player.volume = Float(max(0, min(1, volume)))
-        player.scheduleBuffer(buffer, at: nil, options: .interrupts, completionHandler: nil)
-        if !player.isPlaying {
-            player.play()
+            activateSessionIfNeeded()
+            guard startEngineIfNeeded() else { return }
+
+            player.volume = clampedVolume
+            player.scheduleBuffer(buffer, at: nil, options: .interrupts, completionHandler: nil)
+            if !player.isPlaying {
+                player.play()
+            }
         }
     }
 
