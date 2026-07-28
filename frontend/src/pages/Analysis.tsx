@@ -511,26 +511,19 @@ export default function Analysis() {
         [tree, currentId],
     )
 
-    // Play an entire engine line (the Engine Lines panel's click-to-play) onto the
-    // board — each move in turn, branch-aware like a normal move, landing on the
-    // final position. Stops early (defensively) at the first move that doesn't
-    // apply; a real engine PV should never do that.
+    // Play the FIRST move of an engine line (the Engine Lines panel's click-to-play)
+    // onto the board, branch-aware like a normal move. Only one ply: clicking a line
+    // steps into it, it doesn't fast-forward to the end of the PV. Click the panel
+    // again on the new position to keep walking the line.
     const onPlayEngineLine = useCallback(
         (pvUci: string[]) => {
             if (pvUci.length === 0) return
-            let t = tree
-            let curId = currentId
-            for (const uci of pvUci) {
-                const res = playMove(t, curId, uci)
-                if (res.nodeId === curId) break
-                t = res.tree
-                curId = res.nodeId
-            }
-            if (curId === currentId) return
+            const res = playMove(tree, currentId, pvUci[0])
+            if (res.nodeId === currentId) return
             setAutoMode('off')
-            playMoveSound(t.nodes[curId])
-            setTree(t)
-            setCurrentId(curId)
+            playMoveSound(res.tree.nodes[res.nodeId])
+            setTree(res.tree)
+            setCurrentId(res.nodeId)
         },
         [tree, currentId],
     )
