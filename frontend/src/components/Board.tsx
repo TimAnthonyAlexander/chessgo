@@ -34,11 +34,13 @@ import { DuckGlyph } from './DuckGlyph'
 function PieceGlyph({ piece, set, hidden }: { piece: string; set: string; hidden?: boolean }) {
     return (
         <span
-            className="piece"
-            style={{
-                backgroundImage: `url(${pieceImageUrl(piece, set)})`,
-                ...(hidden ? { opacity: 0 } : {}),
-            }}
+            // Hidden via `.is-hidden` (visibility), NOT inline opacity: a piece
+            // landing on an empty square mounts fresh and so runs `.piece`'s
+            // pieceIn keyframes, and animations outrank inline styles in the
+            // cascade — an inline opacity:0 would be ignored for exactly as long
+            // as the flight lasts, showing a ghost at the destination.
+            className={hidden ? 'piece is-hidden' : 'piece'}
+            style={{ backgroundImage: `url(${pieceImageUrl(piece, set)})` }}
         />
     )
 }
@@ -739,9 +741,8 @@ export default function Board({
                                 )}
                                 {duck === sq && (
                                     <span
-                                        className="duck"
+                                        className={duckFlightTo === sq ? 'duck is-hidden' : 'duck'}
                                         aria-hidden
-                                        style={duckFlightTo === sq ? { opacity: 0 } : undefined}
                                     >
                                         <DuckGlyph />
                                     </span>

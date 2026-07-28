@@ -190,6 +190,15 @@
     animation: pieceIn var(--piece-anim, 0.16s) ease;
 }
 
+/* A piece/duck whose square is currently being flown into (or that's being
+ * dragged / blindfolded). Uses `visibility`, not `opacity`, on purpose: pieceIn
+ * animates opacity, and a running animation beats any opacity we set here or
+ * inline — visibility is untouched by the keyframes, so it actually hides. */
+.piece.is-hidden,
+.duck.is-hidden {
+    visibility: hidden;
+}
+
 /* In-flight piece/duck slide (Board.tsx's FlightPiece): a free-floating overlay
  * positioned + transformed via inline style (grid math, not measured), so it
  * needs its own box model rather than `.piece`'s `inset: 0` (which would fight
