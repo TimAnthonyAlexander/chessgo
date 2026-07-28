@@ -443,12 +443,15 @@ function LineRow({
                         key={i}
                         component="span"
                         sx={{
+                            display: t.firstMove ? 'inline-block' : 'inline',
                             color: t.num ? 'var(--muted)' : 'var(--text)',
                             fontWeight: t.num ? 400 : 600,
                             mr: t.num ? 0.35 : 0.7,
-                            bgcolor: t.firstMove ? 'color-mix(in srgb, var(--accent) 18%, transparent)' : 'transparent',
-                            borderRadius: t.firstMove ? '3px' : undefined,
-                            px: t.firstMove ? 0.25 : undefined,
+                            bgcolor: t.firstMove ? 'color-mix(in srgb, var(--accent) 22%, transparent)' : 'transparent',
+                            borderRadius: t.firstMove ? '4px' : undefined,
+                            px: t.firstMove ? 0.5 : undefined,
+                            py: t.firstMove ? '1px' : undefined,
+                            border: t.firstMove ? '1px solid color-mix(in srgb, var(--accent) 65%, transparent)' : 'none',
                         }}
                     >
                         {t.num ? t.text : <MoveSan san={t.text} />}
