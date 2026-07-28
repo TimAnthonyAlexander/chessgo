@@ -32,7 +32,6 @@ import BoardPage from '../components/BoardPage'
 import EngineLines from '../components/EngineLines'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveTree from '../components/MoveTree'
-import { MoveSan } from '../components/MoveSan'
 import OpeningPanel from '../components/OpeningPanel'
 import { analyze, getGameAnalysis, sfAnalyze, type GameAnalysis } from '../api/client'
 import type { Color } from '../api/client'
@@ -53,7 +52,6 @@ import {
     gameOverAt,
     legalUci,
     playMove,
-    pvToSan,
     START_FEN,
     turnAt,
 } from '../lib/analysisTree'
@@ -778,30 +776,20 @@ export default function Analysis() {
                         maxHeight: { xs: '72vh', md: 'none' },
                     }}
                 >
-                    <EngineLine
+                    <EngineLines
                         engineOn={engineOn}
                         onToggleEngine={toggleEngine}
-                        evalWhite={current.evalWhite}
-                        depth={current.bestDepth}
                         fen={current.fen}
-                        // Duck: the cached eval/depth are meaningful, but the PV is a
-                        // composite duck line chess.js can't render as SAN — suppress it.
-                        pvUci={isDuck ? null : current.bestPv}
-                        pvUnavailable={isDuck}
-                        bestSan={isDuck ? (current.bestSan ?? null) : null}
+                        onPlayLine={onPlayEngineLine}
+                        onHoverMove={setHoverUci}
+                        refreshKey={current.bestDepth ?? undefined}
+                        mainEval={current.evalWhite}
+                        mainPv={current.bestPv}
+                        mainDepth={current.bestDepth}
+                        mainUci={isDuck ? null : (current.bestUci ?? null)}
+                        mainSan={isDuck ? (current.bestSan ?? null) : null}
+                        isDuck={isDuck}
                     />
-
-                    {/* Multi-PV engine lines — the ranked top-N continuations, the single
-                        best showcase of the engine on this page. Standard-only, like the
-                        opening explorer below. */}
-                    {!isDuck && (
-                        <EngineLines
-                            fen={current.fen}
-                            engineOn={engineOn}
-                            onPlayLine={onPlayEngineLine}
-                            onHoverMove={setHoverUci}
-                        />
-                    )}
 
                     <MoveTree tree={tree} currentId={currentId} onSelect={selectNode} />
 
@@ -960,340 +948,6 @@ export default function Analysis() {
     )
 }
 
-function NavBtn({
-    onClick,
-    label,
-    active,
-    grow,
-    accent,
-    children,
-}: {
-    onClick: () => void
-    label: string
-    active?: boolean
-    grow?: boolean
-    // Optional per-button accent (e.g. the color of the arrow this toggle controls).
-    // When set, the icon is ALWAYS tinted this color — so the button↔arrow mapping
-    // reads at a glance, on or off — and the active glow/border use it too. Derived
-    // soft/line tints come from color-mix so any hex or CSS var works.
-    accent?: string
-    children: React.ReactNode
-}) {
-    const tinted = accent != null
-    const acc = accent ?? 'var(--accent)'
-    const soft = tinted ? `color-mix(in srgb, ${acc} 16%, transparent)` : 'var(--accent-soft)'
-    const line = tinted ? `color-mix(in srgb, ${acc} 42%, transparent)` : 'var(--accent-line)'
-    return (
-        <Tooltip title={label} arrow>
-            <Button
-                onClick={onClick}
-                aria-label={label}
-                disableRipple
-                sx={{
-                    minWidth: 0,
-                    flex: grow ? 1 : 'none',
-                    width: grow ? 'auto' : 44,
-                    height: 42,
-                    p: 0,
-                    borderRadius: '9px',
-                    color: active || tinted ? acc : 'var(--text-dim)',
-                    bgcolor: active ? soft : 'transparent',
-                    border: active ? `1px solid ${line}` : '1px solid transparent',
-                    boxShadow: active && tinted ? `0 0 14px -5px ${acc}` : 'none',
-                    transition: 'background-color .15s, color .15s, border-color .15s, box-shadow .2s',
-                    '&:hover': {
-                        color: acc,
-                        bgcolor: active ? soft : tinted ? soft : 'var(--line)',
-                    },
-                    '&:active': { transform: 'translateY(1px)' },
-                }}
-            >
-                {children}
-            </Button>
-        </Tooltip>
-    )
-}
-
-// Short eval for the colored pill: "+0.34", "-1.2", or "#3" / "-#2" for mate.
-function pillEval(ev: WhiteEval | null): string {
-    if (!ev) return '–'
-    if (ev.type === 'mate') return `${ev.white < 0 ? '-' : ''}#${Math.abs(ev.white)}`
-    const v = ev.white / 100
-    return (v > 0 ? '+' : '') + v.toFixed(2)
-}
-
-// Hand-built on/off switch — a gold track with a sliding knob and a soft glow when
-// live. Keyboard + ARIA accessible. Replaces the stock MUI Switch.
-function Toggle({ on, onChange }: { on: boolean; onChange: () => void }) {
-    return (
-        <Box
-            role="switch"
-            aria-checked={on}
-            aria-label="Toggle engine"
-            tabIndex={0}
-            onClick={onChange}
-            onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    onChange()
-                }
-            }}
-            sx={{
-                position: 'relative',
-                flexShrink: 0,
-                width: 48,
-                height: 28,
-                borderRadius: 999,
-                cursor: 'pointer',
-                bgcolor: on ? 'var(--accent)' : 'var(--surface-2)',
-                boxShadow: on
-                    ? '0 0 0 1px var(--accent-line), 0 0 14px -3px rgba(216, 166, 87, 0.7)'
-                    : 'inset 0 0 0 1px var(--line)',
-                transition: 'background-color .22s ease, box-shadow .22s ease',
-                outline: 'none',
-                '&:hover': { bgcolor: on ? 'var(--accent)' : 'var(--line)' },
-                '&:focus-visible': { boxShadow: '0 0 0 2px var(--accent-line)' },
-            }}
-        >
-            <Box
-                sx={{
-                    position: 'absolute',
-                    top: 3,
-                    left: 3,
-                    width: 22,
-                    height: 22,
-                    borderRadius: '50%',
-                    bgcolor: on ? '#15171c' : 'var(--text-dim)',
-                    transform: on ? 'translateX(20px)' : 'translateX(0)',
-                    transition:
-                        'transform .24s cubic-bezier(.34, 1.4, .5, 1), background-color .22s ease',
-                    boxShadow: '0 1px 3px rgba(0, 0, 0, 0.45)',
-                }}
-            />
-        </Box>
-    )
-}
-
-// The engine panel: the custom toggle is the MASTER engine on/off (off suppresses
-// the eval bar, board arrow, and this panel), beside a wordmark + depth readout,
-// with a colored eval pill and the predicted best line (PV) in SAN. Display-only.
-function EngineLine({
-    engineOn,
-    onToggleEngine,
-    evalWhite,
-    depth,
-    fen,
-    pvUci,
-    pvUnavailable,
-    bestSan,
-}: {
-    engineOn: boolean
-    onToggleEngine: () => void
-    evalWhite: WhiteEval | null
-    depth: number | null
-    fen: string
-    pvUci: string[] | null
-    // When true (Duck review), the best line can't be rendered as SAN — show just
-    // the eval pill plus the single best move (`bestSan`), no "analysing…" placeholder.
-    pvUnavailable?: boolean
-    // Duck review: the engine's best move as SAN (e.g. "Nf6 🦆e2"), shown in place of
-    // the (unavailable) principal variation.
-    bestSan?: string | null
-}) {
-    // Render the PV as numbered SAN tokens ("12. Nf3 Nc6 13. Bb5 …") relative to
-    // the current position's move number and side to move.
-    const tokens = useMemo<{ text: string; num: boolean }[]>(() => {
-        if (!pvUci || pvUci.length === 0) return []
-        const fields = fen.split(' ')
-        let full = parseInt(fields[5] || '1', 10) || 1
-        let white = fields[1] !== 'b'
-        const out: { text: string; num: boolean }[] = []
-        pvToSan(fen, pvUci).forEach((m: { san: string }, i) => {
-            if (white) out.push({ text: `${full}.`, num: true })
-            else if (i === 0) out.push({ text: `${full}…`, num: true })
-            out.push({ text: m.san, num: false })
-            if (!white) full += 1
-            white = !white
-        })
-        return out
-    }, [fen, pvUci])
-
-    // Eval pill follows the eval bar's palette: cream when White's better, dark when
-    // Black's. Drawn/zero sits neutral.
-    const whiteAdv = !!evalWhite && evalWhite.white > 0
-    const blackAdv = !!evalWhite && evalWhite.white < 0
-    const pillBg = whiteAdv
-        ? 'linear-gradient(180deg, #f3eee2, #e4dccb)'
-        : blackAdv
-            ? '#15171c'
-            : 'var(--surface-2)'
-    const pillFg = whiteAdv ? '#15171c' : blackAdv ? '#ece9e1' : 'var(--text-dim)'
-
-    return (
-        <Box
-            sx={{
-                borderBottom: '1px solid var(--line-soft)',
-                bgcolor: 'var(--bg-2)',
-                background: engineOn
-                    ? 'linear-gradient(180deg, rgba(216,166,87,0.06), rgba(216,166,87,0) 60%), var(--bg-2)'
-                    : 'var(--bg-2)',
-            }}
-        >
-            {/* Header: toggle + wordmark + depth */}
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, py: 1.25 }}>
-                <Tooltip
-                    title={engineOn ? 'Turn engine off' : 'Turn engine on'}
-                    arrow
-                    placement="top"
-                >
-                    <Toggle on={engineOn} onChange={onToggleEngine} />
-                </Tooltip>
-                <Box sx={{ display: 'flex', flexDirection: 'column', lineHeight: 1 }}>
-                    <Typography
-                        sx={{
-                            fontFamily: 'var(--font-display)',
-                            fontSize: 13,
-                            fontWeight: 700,
-                            letterSpacing: 1.8,
-                            textTransform: 'uppercase',
-                            color: engineOn ? 'var(--text)' : 'var(--muted)',
-                            transition: 'color .2s',
-                        }}
-                    >
-                        Engine
-                    </Typography>
-                </Box>
-                <Box sx={{ flex: 1 }} />
-                {engineOn ? (
-                    depth != null && (
-                        <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.6 }}>
-                            <Typography
-                                sx={{
-                                    fontSize: 10,
-                                    letterSpacing: 1.2,
-                                    textTransform: 'uppercase',
-                                    color: 'var(--muted)',
-                                }}
-                            >
-                                depth
-                            </Typography>
-                            <Typography
-                                sx={{
-                                    fontFamily: 'var(--font-mono)',
-                                    fontSize: 13.5,
-                                    fontWeight: 700,
-                                    color: 'var(--text-dim)',
-                                }}
-                            >
-                                {depth}
-                            </Typography>
-                        </Box>
-                    )
-                ) : (
-                    <Typography
-                        sx={{
-                            fontSize: 10.5,
-                            letterSpacing: 1.5,
-                            textTransform: 'uppercase',
-                            color: 'var(--muted)',
-                        }}
-                    >
-                        off
-                    </Typography>
-                )}
-            </Box>
-
-            {/* Eval pill + best line — only while the engine is on */}
-            {engineOn && (
-                <Box
-                    sx={{
-                        display: 'flex',
-                        alignItems: 'flex-start',
-                        gap: 1.25,
-                        px: 1.5,
-                        pb: 1.5,
-                        minWidth: 0,
-                    }}
-                >
-                    <Box
-                        sx={{
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: 14.5,
-                            fontWeight: 700,
-                            minWidth: 64,
-                            height: 32,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            borderRadius: '6px',
-                            flexShrink: 0,
-                            color: evalWhite ? pillFg : 'var(--muted)',
-                            background: evalWhite ? pillBg : 'var(--surface-2)',
-                            boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
-                        }}
-                    >
-                        {evalWhite ? pillEval(evalWhite) : '…'}
-                    </Box>
-                    <Box
-                        sx={{
-                            flex: 1,
-                            minWidth: 0,
-                            fontSize: 13.5,
-                            lineHeight: '32px',
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                        }}
-                    >
-                        {tokens.length === 0 ? (
-                            pvUnavailable && bestSan ? (
-                                // Duck review: show the single best move (no full PV).
-                                <Box component="span">
-                                    <Box
-                                        component="span"
-                                        sx={{ color: 'var(--muted)', mr: 0.6, fontSize: 11.5 }}
-                                    >
-                                        best
-                                    </Box>
-                                    <Box
-                                        component="span"
-                                        sx={{ color: 'var(--text)', fontWeight: 600 }}
-                                    >
-                                        <MoveSan san={bestSan} />
-                                    </Box>
-                                </Box>
-                            ) : (
-                                <Box
-                                    component="span"
-                                    sx={{ color: 'var(--muted)', fontStyle: 'italic' }}
-                                >
-                                    {pvUnavailable ? '' : 'analysing…'}
-                                </Box>
-                            )
-                        ) : (
-                            tokens.map((t, i) => (
-                                <Box
-                                    key={i}
-                                    component="span"
-                                    sx={{
-                                        color: t.num ? 'var(--muted)' : 'var(--text)',
-                                        fontFamily: t.num ? 'var(--font-mono)' : 'var(--font-mono)',
-                                        fontWeight: t.num ? 400 : 600,
-                                        mr: t.num ? 0.4 : 0.8,
-                                    }}
-                                >
-                                    {/* Move-number tokens are plain; SAN tokens follow the notation pref. */}
-                                    {t.num ? t.text : <MoveSan san={t.text} />}
-                                </Box>
-                            ))
-                        )}
-                    </Box>
-                </Box>
-            )}
-        </Box>
-    )
-}
-
 function AutoBtn({
     active,
     onClick,
@@ -1367,8 +1021,62 @@ function AutoBtn({
     )
 }
 
+function NavBtn({
+    onClick,
+    label,
+    active,
+    grow,
+    accent,
+    children,
+}: {
+    onClick: () => void
+    label: string
+    active?: boolean
+    grow?: boolean
+    // Optional per-button accent (e.g. the color of the arrow this toggle controls).
+    // When set, the icon is ALWAYS tinted this color — so the button↔arrow mapping
+    // reads at a glance, on or off — and the active glow/border use it too. Derived
+    // soft/line tints come from color-mix so any hex or CSS var works.
+    accent?: string
+    children: React.ReactNode
+}) {
+    const tinted = accent != null
+    const acc = accent ?? 'var(--accent)'
+    const soft = tinted ? `color-mix(in srgb, ${acc} 16%, transparent)` : 'var(--accent-soft)'
+    const line = tinted ? `color-mix(in srgb, ${acc} 42%, transparent)` : 'var(--accent-line)'
+    return (
+        <Tooltip title={label} arrow>
+            <Button
+                onClick={onClick}
+                aria-label={label}
+                disableRipple
+                sx={{
+                    minWidth: 0,
+                    flex: grow ? 1 : 'none',
+                    width: grow ? 'auto' : 44,
+                    height: 42,
+                    p: 0,
+                    borderRadius: '9px',
+                    color: active || tinted ? acc : 'var(--text-dim)',
+                    bgcolor: active ? soft : 'transparent',
+                    border: active ? `1px solid ${line}` : '1px solid transparent',
+                    boxShadow: active && tinted ? `0 0 14px -5px ${acc}` : 'none',
+                    transition: 'background-color .15s, color .15s, border-color .15s, box-shadow .2s',
+                    '&:hover': {
+                        color: acc,
+                        bgcolor: active ? soft : tinted ? soft : 'var(--line)',
+                    },
+                    '&:active': { transform: 'translateY(1px)' },
+                }}
+            >
+                {children}
+            </Button>
+        </Tooltip>
+    )
+}
+
 // The game header (players / result / accuracy). Only rendered in review mode
-// (a loaded game); free mode has no header — the engine line sits at the top.
+// (loaded game); free mode has no header — the engine line sits at the top.
 function Header({
     game,
     loading,
