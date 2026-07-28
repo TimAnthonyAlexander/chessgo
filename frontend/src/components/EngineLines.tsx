@@ -272,8 +272,6 @@ export default function EngineLines({
                         display: 'flex',
                         flexDirection: 'column',
                         gap: 0.15,
-                        opacity: stale ? 0.55 : 1,
-                        transition: 'opacity .15s',
                     }}
                 >
                     {/* Line 1: main analysis — same grid layout, highlighted */}
@@ -294,13 +292,29 @@ export default function EngineLines({
                             <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, color: 'var(--text)' }}>
                                 {mainSan}
                             </Typography>
-                            <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, fontWeight: 700, textAlign: 'right' }}>
+                            <Box
+                                sx={{
+                                    fontFamily: 'var(--font-mono)',
+                                    fontSize: 11.5,
+                                    fontWeight: 700,
+                                    px: 0.65,
+                                    py: 0.25,
+                                    borderRadius: '4px',
+                                    color: mainEval && mainEval.white > 0 ? '#15171c' : '#ece9e1',
+                                    background: mainEval && mainEval.white > 0
+                                        ? 'linear-gradient(180deg, #f3eee2, #e4dccb)'
+                                        : mainEval && mainEval.white === 0
+                                            ? 'var(--surface-2)'
+                                            : '#15171c',
+                                    boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
+                                    textAlign: 'center',
+                                }}
+                            >
                                 {mainEval ? evalText(mainEval.type, mainEval.white) : '…'}
-                            </Typography>
+                            </Box>
                         </Box>
                     ) : mainEval && mainPv && mainPv.length > 0 ? (
                         <LineRow
-                            rank={1}
                             move={{
                                 uci: mainUci ?? '',
                                 san: mainPv[0],
@@ -324,18 +338,28 @@ export default function EngineLines({
                         </Typography>
                     )}
 
-                    {/* Lines 2-N: from /candidates, filtered to exclude main best move */}
-                    {candLines.map((m, i) => (
-                        <LineRow
-                            key={m.uci}
-                            rank={i + 2}
-                            move={m}
-                            fen={dataFen || fen}
-                            stm={displayStm}
-                            onPlay={() => onPlayLine(m.pv)}
-                            onHover={onHoverMove}
-                        />
-                    ))}
+                    {candLines.length > 0 && (
+                        <Box
+                            sx={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 0.15,
+                                opacity: stale ? 0.55 : 1,
+                                transition: 'opacity .15s',
+                            }}
+                        >
+                            {candLines.map((m) => (
+                                <LineRow
+                                    key={m.uci}
+                                    move={m}
+                                    fen={dataFen || fen}
+                                    stm={displayStm}
+                                    onPlay={() => onPlayLine(m.pv)}
+                                    onHover={onHoverMove}
+                                />
+                            ))}
+                        </Box>
+                    )}
                 </Box>
             </Box>
         </Box>
@@ -431,17 +455,26 @@ function LineRow({
                     </Box>
                 ))}
             </Typography>
-            <Typography
+            <Box
                 sx={{
                     fontFamily: 'var(--font-mono)',
-                    fontSize: 12.5,
+                    fontSize: 11.5,
                     fontWeight: 700,
-                    color: whiteBetter ? 'var(--text)' : 'var(--text-dim)',
-                    textAlign: 'right',
+                    px: 0.65,
+                    py: 0.25,
+                    borderRadius: '4px',
+                    color: whiteBetter ? '#15171c' : '#ece9e1',
+                    background: whiteBetter
+                        ? 'linear-gradient(180deg, #f3eee2, #e4dccb)'
+                        : white === 0
+                            ? 'var(--surface-2)'
+                            : '#15171c',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
+                    textAlign: 'center',
                 }}
             >
                 {text}
-            </Typography>
+            </Box>
         </Box>
     )
 }
