@@ -54,6 +54,21 @@ function evalLabel(ev: WhiteEval | null): string {
     return (Math.abs(ev.white) / 100).toFixed(1)
 }
 
+// Screen-reader phrasing for the meter's aria-valuetext: names the side ahead
+// and the size of the edge in words, e.g. "White is winning, +2.4" or
+// "Mate in 3 for Black".
+function evalValueText(ev: WhiteEval | null): string {
+    if (!ev) return 'Evaluation unavailable'
+    if (ev.type === 'mate') {
+        const side = ev.white > 0 ? 'White' : 'Black'
+        return `Mate in ${Math.abs(ev.white)} for ${side}`
+    }
+    const pawns = (Math.abs(ev.white) / 100).toFixed(1)
+    if (Math.abs(ev.white) < 20) return `Equal, ${pawns}`
+    const side = ev.white > 0 ? 'White' : 'Black'
+    return `${side} is winning, +${pawns}`
+}
+
 export default function EvalBar({ ev, orientation, sfEv, sfColor = '#b06bff' }: EvalBarProps) {
     // While the engine is still computing the new position's eval, `ev` is null.
     // Keep showing (and animating from) the last known eval instead of snapping the
@@ -77,6 +92,12 @@ export default function EvalBar({ ev, orientation, sfEv, sfColor = '#b06bff' }: 
 
     return (
         <Box
+            role="meter"
+            aria-label="Position evaluation"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(whitePct)}
+            aria-valuetext={evalValueText(shown)}
             sx={{
                 position: 'relative',
                 width: { xs: 26, md: 38 },
@@ -89,6 +110,7 @@ export default function EvalBar({ ev, orientation, sfEv, sfColor = '#b06bff' }: 
         >
             {/* White's region grows from White's side of the board */}
             <Box
+                aria-hidden
                 sx={{
                     position: 'absolute',
                     left: 0,
@@ -104,6 +126,7 @@ export default function EvalBar({ ev, orientation, sfEv, sfColor = '#b06bff' }: 
             {[1, 2, 3, 4, 5, 6, 7].map((i) => (
                 <Box
                     key={i}
+                    aria-hidden
                     sx={{
                         position: 'absolute',
                         left: 0,
@@ -121,6 +144,7 @@ export default function EvalBar({ ev, orientation, sfEv, sfColor = '#b06bff' }: 
                 against the fill's top edge (how close the two engines are). */}
             {sfEv && (
                 <Box
+                    aria-hidden
                     sx={{
                         position: 'absolute',
                         left: 0,
@@ -140,6 +164,7 @@ export default function EvalBar({ ev, orientation, sfEv, sfColor = '#b06bff' }: 
 
             {/* The single eval value, at the winning side's end */}
             <Box
+                aria-hidden
                 sx={{
                     position: 'absolute',
                     left: 0,

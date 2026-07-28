@@ -71,6 +71,11 @@ export default function ChatPanel({
             </Box>
 
             <Box
+                role="log"
+                aria-live="polite"
+                aria-relevant="additions"
+                aria-label="Chat messages"
+                tabIndex={0}
                 sx={{
                     flex: 1,
                     minHeight: 0,
@@ -80,6 +85,7 @@ export default function ChatPanel({
                     display: 'flex',
                     flexDirection: 'column',
                     gap: 0.75,
+                    '&:focus-visible': { outline: '2px solid #5a6bd8', outlineOffset: '-2px' },
                 }}
             >
                 {messages.length === 0 ? (
@@ -111,6 +117,7 @@ export default function ChatPanel({
             >
                 <Box
                     component="input"
+                    aria-label="Chat message"
                     value={text}
                     maxLength={280}
                     disabled={disabled}

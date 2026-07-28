@@ -8,6 +8,7 @@ import {
     Switch,
     Tab,
     Tabs,
+    TextField,
     ToggleButton,
     ToggleButtonGroup,
     Tooltip,
@@ -28,7 +29,7 @@ import {
     useSoundMaterial,
     type SoundMaterial,
 } from '../lib/soundTheme'
-import { previewMaterial, setSoundEnabled, soundEnabled } from '../lib/sounds'
+import { previewMaterial, setSoundEnabled } from '../lib/sounds'
 import { settingsStore, usePrefs, type Prefs } from '../lib/settings'
 import {
     SITE_BACKDROPS,
@@ -65,9 +66,12 @@ function paintSquare(value: string) {
 /** Appearance + preferences picker. Every selection updates its store immediately
  * (live-previewed on the board behind the dialog) and persists — there is no
  * Apply/Save step, just a Done to close. Organized into Board / Gameplay / Sound
- * tabs so the ~20 settings fit cleanly. */
+ * tabs so the ~30 settings fit cleanly; the search box flattens all four tabs into
+ * one filtered list so a setting is never more than a few keystrokes away. */
 export default function ThemeDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
     const [tab, setTab] = useState<TabKey>('theme')
+    const [query, setQuery] = useState('')
+    const searching = query.trim().length > 0
 
     return (
         <Dialog
@@ -87,45 +91,83 @@ export default function ThemeDialog({ open, onClose }: { open: boolean; onClose:
             }}
         >
             <DialogContent sx={{ p: 3, maxHeight: '86vh', overflowY: 'auto' }}>
-                <Typography
+                <Box
                     sx={{
-                        fontFamily: 'var(--font-display)',
-                        fontWeight: 600,
-                        fontSize: 22,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 2,
                         mb: 2,
                     }}
                 >
-                    Settings
-                </Typography>
-
-                <Tabs
-                    value={tab}
-                    onChange={(_, v: TabKey) => setTab(v)}
-                    sx={{
-                        mb: 2.5,
-                        minHeight: 0,
-                        borderBottom: '1px solid var(--line-soft)',
-                        '& .MuiTab-root': {
-                            textTransform: 'none',
+                    <Typography
+                        sx={{
+                            fontFamily: 'var(--font-display)',
                             fontWeight: 600,
-                            fontSize: 14,
-                            minHeight: 40,
-                            color: 'var(--text-dim)',
-                            '&.Mui-selected': { color: 'var(--accent)' },
-                        },
-                        '& .MuiTabs-indicator': { backgroundColor: 'var(--accent)' },
-                    }}
-                >
-                    <Tab value="theme" label="Theme" />
-                    <Tab value="board" label="Board" />
-                    <Tab value="gameplay" label="Gameplay" />
-                    <Tab value="sound" label="Sound" />
-                </Tabs>
+                            fontSize: 22,
+                        }}
+                    >
+                        Settings
+                    </Typography>
+                    <TextField
+                        size="small"
+                        placeholder="Search settings"
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        sx={{
+                            width: 200,
+                            '& .MuiOutlinedInput-root': {
+                                fontSize: 13,
+                                bgcolor: 'var(--surface-2)',
+                                '& fieldset': { borderColor: 'var(--line)' },
+                                '&:hover fieldset': { borderColor: 'var(--line)' },
+                                '&.Mui-focused fieldset': { borderColor: 'var(--accent)' },
+                            },
+                        }}
+                    />
+                </Box>
 
-                {tab === 'theme' && <ThemeTab />}
-                {tab === 'board' && <BoardTab />}
-                {tab === 'gameplay' && <GameplayTab />}
-                {tab === 'sound' && <SoundTab />}
+                {!searching && (
+                    <Tabs
+                        value={tab}
+                        onChange={(_, v: TabKey) => setTab(v)}
+                        sx={{
+                            mb: 2.5,
+                            minHeight: 0,
+                            borderBottom: '1px solid var(--line-soft)',
+                            '& .MuiTab-root': {
+                                textTransform: 'none',
+                                fontWeight: 600,
+                                fontSize: 14,
+                                minHeight: 40,
+                                color: 'var(--text-dim)',
+                                '&.Mui-selected': { color: 'var(--accent)' },
+                            },
+                            '& .MuiTabs-indicator': { backgroundColor: 'var(--accent)' },
+                        }}
+                    >
+                        <Tab value="theme" label="Theme" />
+                        <Tab value="board" label="Board" />
+                        <Tab value="gameplay" label="Gameplay" />
+                        <Tab value="sound" label="Sound" />
+                    </Tabs>
+                )}
+
+                {searching ? (
+                    <>
+                        <ThemeTab query={query} />
+                        <BoardTab query={query} />
+                        <GameplayTab query={query} />
+                        <SoundTab query={query} />
+                    </>
+                ) : (
+                    <>
+                        {tab === 'theme' && <ThemeTab />}
+                        {tab === 'board' && <BoardTab />}
+                        {tab === 'gameplay' && <GameplayTab />}
+                        {tab === 'sound' && <SoundTab />}
+                    </>
+                )}
 
                 <Box
                     sx={{
@@ -139,6 +181,8 @@ export default function ThemeDialog({ open, onClose }: { open: boolean; onClose:
                         onClick={() => {
                             settingsStore.reset()
                             siteThemeStore.reset()
+                            themeStore.reset()
+                            soundThemeStore.reset()
                         }}
                         sx={{ textTransform: 'none', color: 'var(--text-dim)', fontSize: 13 }}
                     >
@@ -157,18 +201,31 @@ export default function ThemeDialog({ open, onClose }: { open: boolean; onClose:
     )
 }
 
+// --- Search -------------------------------------------------------------------
+
+/** Case-insensitive substring match against a row's label + hint, used by the
+ * search box. An empty query always matches (today's behaviour when not
+ * searching). Threaded into RowShell so every Toggle/Segment/Slider row filters
+ * itself with no per-callsite plumbing. */
+function matches(query: string, label: string, hint?: string): boolean {
+    const q = query.trim().toLowerCase()
+    if (!q) return true
+    return label.toLowerCase().includes(q) || !!hint?.toLowerCase().includes(q)
+}
+
 // --- Tabs -------------------------------------------------------------------
 
 /** Site theme: light/dark mode, accent+neutral palette, and page backdrop. These
  * control the WEBSITE chrome and are fully independent of the board theme below —
  * changing one never touches the other. Every choice applies live to the whole
  * app behind the dialog (no Apply step), mirroring the board picker. */
-function ThemeTab() {
+function ThemeTab({ query = '' }: { query?: string }) {
     const site = useSiteTheme()
+    const searching = query.trim().length > 0
 
     return (
         <>
-            <SectionHeading>Appearance</SectionHeading>
+            {!searching && <SectionHeading>Appearance</SectionHeading>}
             <SegmentRow
                 label="Mode"
                 hint="System follows your device's light/dark setting"
@@ -179,121 +236,149 @@ function ThemeTab() {
                     { value: 'system', label: 'System' },
                 ]}
                 onChange={(v) => siteThemeStore.setMode(v as ThemeMode)}
+                query={query}
             />
 
-            <Box sx={{ mt: 2.5 }}>
-                <SectionHeading>Palette</SectionHeading>
-                <Box
-                    sx={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-                        gap: 1.25,
-                        mb: 3,
-                    }}
-                >
-                    {SITE_PALETTES.map((p) => (
-                        <PaletteCard
-                            key={p.id}
-                            id={p.id}
-                            label={p.label}
-                            note={p.note}
-                            mode={site.resolved}
-                            selected={site.palette === p.id}
-                            onSelect={() => siteThemeStore.setPalette(p.id)}
-                        />
-                    ))}
+            {(!searching || matches(query, 'Palette')) && (
+                <Box sx={{ mt: 2.5 }}>
+                    <SectionHeading>Palette</SectionHeading>
+                    <Box
+                        sx={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                            gap: 1.25,
+                            mb: 3,
+                        }}
+                    >
+                        {SITE_PALETTES.map((p) => (
+                            <PaletteCard
+                                key={p.id}
+                                id={p.id}
+                                label={p.label}
+                                note={p.note}
+                                mode={site.resolved}
+                                selected={site.palette === p.id}
+                                onSelect={() => siteThemeStore.setPalette(p.id)}
+                            />
+                        ))}
+                    </Box>
                 </Box>
-            </Box>
+            )}
 
-            <SectionHeading>Backdrop</SectionHeading>
-            <Box
-                sx={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(3, 1fr)',
-                    gap: 1.25,
-                }}
-            >
-                {SITE_BACKDROPS.map((b) => (
-                    <BackdropCard
-                        key={b.id}
-                        id={b.id}
-                        label={b.label}
-                        note={b.note}
-                        selected={site.backdrop === b.id}
-                        onSelect={() => siteThemeStore.setBackdrop(b.id)}
-                    />
-                ))}
-            </Box>
+            {(!searching || matches(query, 'Backdrop')) && (
+                <>
+                    <SectionHeading>Backdrop</SectionHeading>
+                    <Box
+                        sx={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(3, 1fr)',
+                            gap: 1.25,
+                        }}
+                    >
+                        {SITE_BACKDROPS.map((b) => (
+                            <BackdropCard
+                                key={b.id}
+                                id={b.id}
+                                label={b.label}
+                                note={b.note}
+                                selected={site.backdrop === b.id}
+                                onSelect={() => siteThemeStore.setBackdrop(b.id)}
+                            />
+                        ))}
+                    </Box>
+                </>
+            )}
         </>
     )
 }
 
-function BoardTab() {
+function BoardTab({ query = '' }: { query?: string }) {
     const boardId = useBoardThemeId()
     const pieceId = usePieceSet()
     const prefs = usePrefs()
     const boardLabel = BOARD_THEMES.find((t) => t.id === boardId)?.label ?? ''
+    const searching = query.trim().length > 0
 
     return (
         <>
-            <SectionHeading>Board — {boardLabel}</SectionHeading>
-            {/* Left: the selector (one continuous 8×8 board, each theme a 2×2 block).
-             * Right: a live preview of the active theme + piece set. */}
-            <Box
-                sx={{ display: 'flex', gap: 2, mb: 3, alignItems: 'flex-start', flexWrap: 'wrap' }}
-            >
-                <Box sx={{ flex: '1 1 260px', minWidth: 240 }}>
-                    <Box sx={{ border: '1px solid var(--line)', overflow: 'hidden' }}>
-                        <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)' }}>
-                            {BOARD_THEMES.map((theme) => (
-                                <BoardTile
-                                    key={theme.id}
-                                    theme={theme}
-                                    selected={boardId === theme.id}
-                                    onSelect={() => themeStore.setBoard(theme.id)}
-                                />
-                            ))}
-                        </Box>
-                    </Box>
-                </Box>
-
-                <Box sx={{ flex: '1 1 260px', minWidth: 240 }}>
-                    <MiniBoard fen={PREVIEW_FEN} lastMove={PREVIEW_LAST} />
-                    <Typography
+            {(!searching || matches(query, 'Board')) && (
+                <>
+                    <SectionHeading>Board — {boardLabel}</SectionHeading>
+                    {/* Left: the selector (one continuous 8×8 board, each theme a 2×2 block).
+                     * Right: a live preview of the active theme + piece set. */}
+                    <Box
                         sx={{
-                            mt: 1,
-                            fontSize: 11,
-                            textAlign: 'center',
-                            letterSpacing: '0.08em',
-                            textTransform: 'uppercase',
-                            color: 'var(--text-dim)',
+                            display: 'flex',
+                            gap: 2,
+                            mb: 3,
+                            alignItems: 'flex-start',
+                            flexWrap: 'wrap',
                         }}
                     >
-                        Live preview
-                    </Typography>
-                </Box>
-            </Box>
+                        <Box sx={{ flex: '1 1 260px', minWidth: 240 }}>
+                            <Box sx={{ border: '1px solid var(--line)', overflow: 'hidden' }}>
+                                <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)' }}>
+                                    {BOARD_THEMES.map((theme) => (
+                                        <BoardTile
+                                            key={theme.id}
+                                            theme={theme}
+                                            selected={boardId === theme.id}
+                                            onSelect={() => themeStore.setBoard(theme.id)}
+                                        />
+                                    ))}
+                                </Box>
+                            </Box>
+                        </Box>
 
-            <SectionHeading>Pieces</SectionHeading>
-            <Box
-                sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 1.25, mb: 3 }}
-            >
-                {PIECE_SETS.map((set) => (
-                    <PieceCard
-                        key={set.id}
-                        set={set}
-                        selected={pieceId === set.id}
-                        onSelect={() => themeStore.setPieces(set.id)}
-                    />
-                ))}
-            </Box>
+                        <Box sx={{ flex: '1 1 260px', minWidth: 240 }}>
+                            <MiniBoard fen={PREVIEW_FEN} lastMove={PREVIEW_LAST} />
+                            <Typography
+                                sx={{
+                                    mt: 1,
+                                    fontSize: 11,
+                                    textAlign: 'center',
+                                    letterSpacing: '0.08em',
+                                    textTransform: 'uppercase',
+                                    color: 'var(--text-dim)',
+                                }}
+                            >
+                                Live preview
+                            </Typography>
+                        </Box>
+                    </Box>
+                </>
+            )}
 
-            <SectionHeading>Display</SectionHeading>
+            {(!searching || matches(query, 'Pieces')) && (
+                <>
+                    <SectionHeading>Pieces</SectionHeading>
+                    <Box
+                        sx={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(2, 1fr)',
+                            gap: 1.25,
+                            mb: 3,
+                        }}
+                    >
+                        {PIECE_SETS.map((set) => (
+                            <PieceCard
+                                key={set.id}
+                                set={set}
+                                selected={pieceId === set.id}
+                                onSelect={() => themeStore.setPieces(set.id)}
+                            />
+                        ))}
+                    </Box>
+                </>
+            )}
+
+            {!searching && <SectionHeading>Display</SectionHeading>}
             <ToggleRow
                 label="Legal move indicators"
                 hint="Show dots on the squares a selected piece can move to"
                 checked={prefs.showLegalMoves}
                 onChange={(v) => settingsStore.set('showLegalMoves', v)}
+                query={query}
             />
             <SegmentRow
                 label="Coordinates"
@@ -305,24 +390,28 @@ function BoardTab() {
                     { value: 'off', label: 'Off' },
                 ]}
                 onChange={(v) => settingsStore.set('showCoordinates', v as Prefs['showCoordinates'])}
+                query={query}
             />
             <ToggleRow
                 label="Highlight last move"
                 hint="Tint the from/to squares of the most recent move"
                 checked={prefs.highlightLastMove}
                 onChange={(v) => settingsStore.set('highlightLastMove', v)}
+                query={query}
             />
             <ToggleRow
                 label="Highlight check"
                 hint="Glow the king's square when it is in check"
                 checked={prefs.highlightCheck}
                 onChange={(v) => settingsStore.set('highlightCheck', v)}
+                query={query}
             />
             <ToggleRow
                 label="Highlight square under piece"
                 hint="Ring the legal square your dragged piece is hovering"
                 checked={prefs.highlightDragOver}
                 onChange={(v) => settingsStore.set('highlightDragOver', v)}
+                query={query}
             />
             <SegmentRow
                 label="Piece animation"
@@ -335,6 +424,7 @@ function BoardTab() {
                     { value: 'slow', label: 'Slow' },
                 ]}
                 onChange={(v) => settingsStore.set('animationSpeed', v as Prefs['animationSpeed'])}
+                query={query}
             />
             <SliderRow
                 label="Board brightness"
@@ -345,22 +435,43 @@ function BoardTab() {
                 step={5}
                 format={(v) => `${v}%`}
                 onChange={(v) => settingsStore.set('boardBrightness', v)}
+                query={query}
+            />
+            <SliderRow
+                label="Board contrast"
+                hint="Adjust the contrast between the light and dark squares"
+                value={prefs.boardContrast}
+                min={70}
+                max={130}
+                step={5}
+                format={(v) => `${v}%`}
+                onChange={(v) => settingsStore.set('boardContrast', v)}
+                query={query}
             />
             <ToggleRow
                 label="Blindfold mode"
                 hint="Hide all pieces — squares, coordinates and last move stay"
                 checked={prefs.blindfold}
                 onChange={(v) => settingsStore.set('blindfold', v)}
+                query={query}
+            />
+            <ToggleRow
+                label="Show captured pieces"
+                hint="Material captured by each side, next to the clocks"
+                checked={prefs.showCaptured}
+                onChange={(v) => settingsStore.set('showCaptured', v)}
+                query={query}
             />
         </>
     )
 }
 
-function GameplayTab() {
+function GameplayTab({ query = '' }: { query?: string }) {
     const prefs = usePrefs()
+    const searching = query.trim().length > 0
     return (
         <>
-            <SectionHeading>Moving</SectionHeading>
+            {!searching && <SectionHeading>Moving</SectionHeading>}
             <SegmentRow
                 label="Move method"
                 hint="How you move a piece"
@@ -371,18 +482,40 @@ function GameplayTab() {
                     { value: 'drag', label: 'Drag' },
                 ]}
                 onChange={(v) => settingsStore.set('moveMethod', v as Prefs['moveMethod'])}
+                query={query}
             />
             <ToggleRow
                 label="Auto-promote to Queen"
                 hint="Skip the promotion picker and always choose a queen"
                 checked={prefs.autoQueen}
                 onChange={(v) => settingsStore.set('autoQueen', v)}
+                query={query}
             />
             <ToggleRow
                 label="Premoves"
                 hint="Queue a move during your opponent's turn"
                 checked={prefs.premoves}
                 onChange={(v) => settingsStore.set('premoves', v)}
+                query={query}
+            />
+            <ToggleRow
+                label="Click the rook to castle"
+                hint="Otherwise, move the king two squares"
+                checked={prefs.rookCastle}
+                onChange={(v) => settingsStore.set('rookCastle', v)}
+                query={query}
+            />
+            <SegmentRow
+                label="Confirm move before sending"
+                hint="Adds a confirm step so you can't mouse-slip. 'Slow games' = classical and correspondence only."
+                value={prefs.confirmMove}
+                options={[
+                    { value: 'never', label: 'Never' },
+                    { value: 'slow', label: 'Slow games' },
+                    { value: 'always', label: 'Always' },
+                ]}
+                onChange={(v) => settingsStore.set('confirmMove', v as Prefs['confirmMove'])}
+                query={query}
             />
             <SegmentRow
                 label="Default arrow color"
@@ -395,6 +528,7 @@ function GameplayTab() {
                     { value: 'yellow', label: 'Yellow' },
                 ]}
                 onChange={(v) => settingsStore.set('arrowColor', v as Prefs['arrowColor'])}
+                query={query}
             />
             <SegmentRow
                 label="Move notation"
@@ -405,67 +539,91 @@ function GameplayTab() {
                     { value: 'figurine', label: 'Figurine (♘f3)' },
                 ]}
                 onChange={(v) => settingsStore.set('notation', v as Prefs['notation'])}
+                query={query}
             />
 
-            <SectionHeading>During a game</SectionHeading>
+            {!searching && <SectionHeading>During a game</SectionHeading>}
             <ToggleRow
                 label="Confirm resignation"
                 hint="Ask before resigning a game"
                 checked={prefs.confirmResign}
                 onChange={(v) => settingsStore.set('confirmResign', v)}
+                query={query}
             />
             <ToggleRow
                 label="Auto-flip board"
-                hint="Orient the board to the side to move (bot / review)"
+                hint="Orient the board to the side to move"
                 checked={prefs.autoFlip}
                 onChange={(v) => settingsStore.set('autoFlip', v)}
+                query={query}
             />
             <ToggleRow
                 label="Zen mode"
                 hint="Hide clocks, ratings and side panels while playing"
                 checked={prefs.zenMode}
                 onChange={(v) => settingsStore.set('zenMode', v)}
+                query={query}
             />
             <ToggleRow
                 label="Show opponent rating"
                 hint="Display your opponent's rating during play"
                 checked={prefs.showOpponentRating}
                 onChange={(v) => settingsStore.set('showOpponentRating', v)}
+                query={query}
             />
             <ToggleRow
                 label="Show evaluation bar"
-                hint="Show the engine eval bar in bot games"
+                hint="Show the engine eval bar"
                 checked={prefs.showEvalBar}
                 onChange={(v) => settingsStore.set('showEvalBar', v)}
+                query={query}
             />
             <ToggleRow
                 label="Show move list"
                 hint="Show the move/notation panel beside the board"
                 checked={prefs.showMoveList}
                 onChange={(v) => settingsStore.set('showMoveList', v)}
+                query={query}
+            />
+
+            {!searching && <SectionHeading>Clock</SectionHeading>}
+            <SegmentRow
+                label="Show tenths of a second"
+                hint="When the clock displays fractional seconds"
+                value={prefs.clockTenths}
+                options={[
+                    { value: 'never', label: 'Never' },
+                    { value: 'lowtime', label: 'Under 10s' },
+                    { value: 'always', label: 'Always' },
+                ]}
+                onChange={(v) => settingsStore.set('clockTenths', v as Prefs['clockTenths'])}
+                query={query}
+            />
+            <ToggleRow
+                label="Clock progress bar"
+                hint="A bar under each clock that drains as time runs out"
+                checked={prefs.clockBar}
+                onChange={(v) => settingsStore.set('clockBar', v)}
+                query={query}
             />
         </>
     )
 }
 
-function SoundTab() {
+function SoundTab({ query = '' }: { query?: string }) {
     const prefs = usePrefs()
     const materialId = useSoundMaterial()
-    // Master on/off isn't a reactive store; this dialog is its only toggle point,
-    // so mirror it in local state seeded from the module getter.
-    const [on, setOn] = useState(soundEnabled())
+    const searching = query.trim().length > 0
 
     return (
         <>
-            <SectionHeading>Output</SectionHeading>
+            {!searching && <SectionHeading>Output</SectionHeading>}
             <ToggleRow
                 label="Sounds"
                 hint="Master switch for all sound effects"
-                checked={on}
-                onChange={(v) => {
-                    setSoundEnabled(v)
-                    setOn(v)
-                }}
+                checked={prefs.soundEnabled}
+                onChange={(v) => setSoundEnabled(v)}
+                query={query}
             />
             <SliderRow
                 label="Volume"
@@ -474,39 +632,43 @@ function SoundTab() {
                 min={0}
                 max={100}
                 step={5}
-                disabled={!on}
+                disabled={!prefs.soundEnabled}
                 format={(v) => `${v}%`}
                 onChange={(v) => settingsStore.set('soundVolume', v)}
+                query={query}
             />
             <ToggleRow
                 label="Low-time warning"
                 hint="Play a cue when your clock runs low"
                 checked={prefs.soundLowTime}
                 onChange={(v) => settingsStore.set('soundLowTime', v)}
+                query={query}
             />
 
-            <Box sx={{ mt: 3 }}>
-                <SectionHeading>Sound — click to hear</SectionHeading>
-                <Box
-                    sx={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-                        gap: 1.25,
-                    }}
-                >
-                    {SOUND_MATERIALS.map((material) => (
-                        <MaterialCard
-                            key={material.id}
-                            material={material}
-                            selected={materialId === material.id}
-                            onSelect={() => {
-                                soundThemeStore.set(material.id)
-                                previewMaterial(material.id)
-                            }}
-                        />
-                    ))}
+            {(!searching || matches(query, 'Sound')) && (
+                <Box sx={{ mt: 3 }}>
+                    <SectionHeading>Sound — click to hear</SectionHeading>
+                    <Box
+                        sx={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                            gap: 1.25,
+                        }}
+                    >
+                        {SOUND_MATERIALS.map((material) => (
+                            <MaterialCard
+                                key={material.id}
+                                material={material}
+                                selected={materialId === material.id}
+                                onSelect={() => {
+                                    soundThemeStore.set(material.id)
+                                    previewMaterial(material.id)
+                                }}
+                            />
+                        ))}
+                    </Box>
                 </Box>
-            </Box>
+            )}
         </>
     )
 }
@@ -517,11 +679,16 @@ function RowShell({
     label,
     hint,
     control,
+    query = '',
 }: {
     label: string
     hint?: string
     control: React.ReactNode
+    /** Search-box query. When set and it matches neither label nor hint, the row
+     * renders nothing — the single choke point every row type filters through. */
+    query?: string
 }) {
+    if (!matches(query, label, hint)) return null
     return (
         <Box
             sx={{
@@ -553,16 +720,19 @@ function ToggleRow({
     hint,
     checked,
     onChange,
+    query,
 }: {
     label: string
     hint?: string
     checked: boolean
     onChange: (v: boolean) => void
+    query?: string
 }) {
     return (
         <RowShell
             label={label}
             hint={hint}
+            query={query}
             control={
                 <Switch
                     checked={checked}
@@ -585,17 +755,20 @@ function SegmentRow<T extends string>({
     value,
     options,
     onChange,
+    query,
 }: {
     label: string
     hint?: string
     value: T
     options: { value: T; label: string }[]
     onChange: (v: T) => void
+    query?: string
 }) {
     return (
         <RowShell
             label={label}
             hint={hint}
+            query={query}
             control={
                 <ToggleButtonGroup
                     exclusive
@@ -642,6 +815,7 @@ function SliderRow({
     disabled,
     format,
     onChange,
+    query,
 }: {
     label: string
     hint?: string
@@ -652,11 +826,13 @@ function SliderRow({
     disabled?: boolean
     format: (v: number) => string
     onChange: (v: number) => void
+    query?: string
 }) {
     return (
         <RowShell
             label={label}
             hint={hint}
+            query={query}
             control={
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, width: 200 }}>
                     <Slider

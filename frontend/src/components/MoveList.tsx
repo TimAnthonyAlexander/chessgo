@@ -109,10 +109,15 @@ function MoveList({
     // height and moves scroll inside). On xs the parent is already height-bounded, so
     // the outer box scrolls directly and the layout there is unchanged.
     if (!fill) {
-        return <Box sx={{ height: visibleRows * ROW_H, overflowY: 'auto' }}>{rowEls}</Box>
+        return (
+            <Box aria-label="Move list" sx={{ height: visibleRows * ROW_H, overflowY: 'auto' }}>
+                {rowEls}
+            </Box>
+        )
     }
     return (
         <Box
+            aria-label="Move list"
             sx={{
                 flex: 1,
                 minHeight: 0,

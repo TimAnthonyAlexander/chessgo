@@ -781,6 +781,10 @@ export interface Profile {
     games: ProfileGame[]
     gamesTotal: number
     gamesPerPage: number
+    // Per-pool rating trend (oldest -> newest ratings-after), keyed by
+    // RatingCategory plus 'puzzle' | 'duck' | 'antichess'. Feeds every sparkline
+    // in the ratings panel + the hero call-out.
+    ratingHistory: Record<string, number[]>
 }
 
 /** Public profile by display name (ratings + record + first page of games). */
@@ -795,17 +799,31 @@ export interface ProfileGamesPage {
     total: number
 }
 
+/** Extra server-side filters for {@link getProfileGames}: an opponent name
+ * substring and an inclusive from/to date range ('YYYY-MM-DD'). Every field is
+ * optional and composes with the `category`/`result` filters and each other. */
+export interface ProfileGamesFilters {
+    opponent?: string
+    from?: string
+    to?: string
+}
+
 /** A single (1-based) page of a player's game history, filtered server-side by
- * pool category and/or result (empty/`'all'` means no filter on that axis). */
+ * pool category and/or result (empty/`'all'` means no filter on that axis), plus
+ * an optional opponent-name search and date range. */
 export function getProfileGames(
     name: string,
     page: number,
     category = '',
     result = '',
+    filters: ProfileGamesFilters = {},
 ): Promise<ProfileGamesPage> {
     const params = new URLSearchParams({ page: String(page) })
     if (category && category !== 'all') params.set('category', category)
     if (result && result !== 'all') params.set('result', result)
+    if (filters.opponent) params.set('opponent', filters.opponent)
+    if (filters.from) params.set('from', filters.from)
+    if (filters.to) params.set('to', filters.to)
     return request<ProfileGamesPage>(
         `/users/${encodeURIComponent(name)}/games?${params.toString()}`,
     )

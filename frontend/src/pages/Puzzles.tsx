@@ -7,7 +7,9 @@ import {
     ChevronRight,
     Clock,
     Infinity as InfinityIcon,
+    Lightbulb,
     Play,
+    RefreshCw,
     RotateCcw,
     Square as StopIcon,
     Target,
@@ -22,6 +24,7 @@ import BoardActions from '../components/BoardActions'
 import BoardPage from '../components/BoardPage'
 import { ActionBtn, ErrorBanner, NavBtn } from '../components/PanelUI'
 import {
+    analyze,
     type Color,
     nextPuzzle,
     type PuzzleMoveResult,
@@ -46,6 +49,7 @@ interface Mark {
 interface Outcome {
     win: boolean
     delta: number | null // rating change; null when unrated (e.g. logged out)
+    hinted: boolean // a hint was shown before this attempt was submitted
 }
 
 // A curated subset of Lichess theme tags for the v1 filter (incl. the classic
@@ -122,6 +126,27 @@ function storeLimit(v: number | null): void {
     }
 }
 
+// Best consecutive-solve streak, persisted across sessions (the CURRENT streak is
+// session-only — it lives in React state and starts back at 0 on reload). This is
+// unrelated to the navbar's daily-activity flame: that one tracks "played today",
+// this one tracks "solved in a row without failing/hinting/retrying".
+const STREAK_KEY = 'chessgo.puzzleStreak'
+function readBestStreak(): number {
+    try {
+        const v = Number(localStorage.getItem(STREAK_KEY))
+        return Number.isFinite(v) && v > 0 ? Math.floor(v) : 0
+    } catch {
+        return 0
+    }
+}
+function storeBestStreak(v: number): void {
+    try {
+        localStorage.setItem(STREAK_KEY, String(Math.max(0, Math.floor(v))))
+    } catch {
+        /* ignore */
+    }
+}
+
 export default function Puzzles() {
     const { user } = useAuth()
     const userStats = user
@@ -154,6 +179,29 @@ export default function Puzzles() {
     // In-memory (non-persisted) win/loss log for the CURRENT session, newest last.
     const [history, setHistory] = useState<Outcome[]>([])
 
+    // Consecutive-solve streak: current lives only for this session, best persists
+    // (see readBestStreak/storeBestStreak). A failure resets `streak`; a hinted or
+    // retried solve leaves it unchanged (it neither extends nor breaks it).
+    const [streak, setStreak] = useState(0)
+    const [bestStreak, setBestStreak] = useState(readBestStreak)
+
+    // Two-stage hint (Lichess/chess.com convention): 0 = hidden, 1 = the piece to
+    // move is ringed, 2 = the full move is ringed. `submitPuzzleMove`'s payload never
+    // carries the solution (see api/client.ts), so the move comes from the engine's
+    // own `/analyze` instead — fetched lazily on first press and cached per position
+    // so repeat presses / re-renders never re-query it.
+    const [hintStage, setHintStage] = useState<0 | 1 | 2>(0)
+    const [hintMove, setHintMove] = useState<string | null>(null)
+    const [hintLoading, setHintLoading] = useState(false)
+    const [hintUsed, setHintUsed] = useState(false) // any hint shown during THIS attempt
+    const hintCache = useRef<Map<string, string | null>>(new Map())
+
+    // A retry replays the puzzle just failed from its start position. The server
+    // already refuses to re-rate a repeat attempt at the same puzzle (see
+    // PuzzleController::applyResult — the FIRST attempt is the only rated one), so
+    // this just resets the board; it never touches the session history or streak.
+    const [isRetry, setIsRetry] = useState(false)
+
     // Timers for the staged opponent-move + auto-advance animations.
     const timers = useRef<ReturnType<typeof setTimeout>[]>([])
     const clearTimers = () => {
@@ -172,6 +220,28 @@ export default function Puzzles() {
         runningRef.current = mode === 'running'
     }, [mode])
 
+    // Clear the two-stage hint back to hidden (a fresh position to solve — either a
+    // new puzzle, or the next decision point within a multi-move one).
+    const resetHint = () => {
+        setHintStage(0)
+        setHintMove(null)
+        setHintLoading(false)
+    }
+
+    // A clean solve (no hint, not a retry) extends the streak and, if it's a new
+    // personal best, persists it.
+    const extendStreak = () => {
+        setStreak((s) => {
+            const next = s + 1
+            setBestStreak((best) => {
+                if (next <= best) return best
+                storeBestStreak(next)
+                return next
+            })
+            return next
+        })
+    }
+
     // Seed the solving state from a puzzle (freshly fetched or handed in, e.g. the
     // daily puzzle) and run the intro animation.
     const beginPuzzle = useCallback((p: PuzzleNext) => {
@@ -184,6 +254,8 @@ export default function Puzzles() {
         setLegal(p.legal_moves)
         setPly(p.ply)
         setLastMove(null)
+        setHintUsed(false)
+        resetHint()
         setPhase('intro')
         // Show the pre-move position briefly, then "play" the opponent's setup move.
         later(() => {
@@ -200,6 +272,7 @@ export default function Puzzles() {
             setResult(null)
             setOverride(null)
             setLastMove(null)
+            setIsRetry(false) // a freshly-fetched puzzle is always a first (rated) attempt
             setPhase('loading')
             try {
                 beginPuzzle(await nextPuzzle(forTheme || undefined))
@@ -212,6 +285,16 @@ export default function Puzzles() {
         [beginPuzzle],
     )
 
+    // Replay the CURRENT puzzle from its start position. Not a new fetch — the
+    // puzzle's opening state (`data`) is the same object `beginPuzzle` used the
+    // first time, so this resets the board exactly like a first attempt, minus the
+    // scoring (the server no-ops the rating on a repeat submission).
+    const retryPuzzle = useCallback(() => {
+        if (!data) return
+        setIsRetry(true)
+        beginPuzzle(data)
+    }, [data, beginPuzzle])
+
     const startSession = useCallback(
         // `seed` opens a specific puzzle (the daily) instead of fetching a fresh one;
         // seeded sessions don't overwrite the persisted theme/time preferences.
@@ -220,6 +303,7 @@ export default function Puzzles() {
             lowTimeFiredRef.current = false
             setHistory([])
             setError(null)
+            setIsRetry(false)
             setLimitSec(limit)
             setTheme(forTheme)
             if (!seed) {
@@ -324,7 +408,14 @@ export default function Puzzles() {
                 setResult(res)
                 setPhase('solved')
                 sounds.success()
-                setHistory((h) => [...h, { win: true, delta: res.rating?.delta ?? null }])
+                // A retry is never re-scored and doesn't touch the session history or
+                // streak — the original (failed) attempt's entry is what stays on record.
+                if (!isRetry) {
+                    setHistory((h) => [...h, { win: true, delta: res.rating?.delta ?? null, hinted: hintUsed }])
+                    // A hinted solve is still rated normally server-side, but it doesn't
+                    // extend the streak — only a clean solve does.
+                    if (!hintUsed) extendStreak()
+                }
                 if (res.rating) void authStore.refresh()
                 // Timed: keep momentum (short pause). Untimed: a longer celebratory beat.
                 later(advance, limitSec == null ? 2000 : 650)
@@ -345,6 +436,7 @@ export default function Puzzles() {
                     setLastMove(splitUci(reply))
                     sounds.move()
                     setPhase('solving')
+                    resetHint() // a new position to solve — the old hint no longer applies
                 }, 360)
                 return
             }
@@ -360,7 +452,10 @@ export default function Puzzles() {
             }
             setPhase('failed')
             sounds.end()
-            setHistory((h) => [...h, { win: false, delta: res.rating?.delta ?? null }])
+            if (!isRetry) {
+                setHistory((h) => [...h, { win: false, delta: res.rating?.delta ?? null, hinted: hintUsed }])
+                setStreak(0)
+            }
             if (res.rating) void authStore.refresh()
             // Timed: auto-advance after a glimpse of the solution. Untimed: wait for the
             // player (Enter / "Next") so they can study it.
@@ -371,6 +466,40 @@ export default function Puzzles() {
             setLastMove(null)
             setPhase('solving')
             setError(e instanceof Error ? e.message : 'Move failed.')
+        }
+    }
+
+    // Advance the two-stage hint. Stage 1 (piece) is the one that needs the actual
+    // move, fetched from the engine (`/analyze`'s `bestmove`) since the puzzle
+    // payload never carries the solution; stage 2 (full move) just reveals the
+    // `to` square of the move already in hand. Cached per FEN so re-pressing, or
+    // returning to a position, never re-queries the engine.
+    async function requestHint() {
+        if (phase !== 'solving' || !data) return
+        if (hintStage === 1) {
+            setHintStage(2)
+            return
+        }
+        if (hintStage === 2) return
+
+        setHintStage(1)
+        const cached = hintCache.current.get(fen)
+        if (cached !== undefined) {
+            setHintMove(cached)
+            if (cached) setHintUsed(true)
+            return
+        }
+        setHintLoading(true)
+        try {
+            const res = await analyze(fen, { movetime: 400 })
+            hintCache.current.set(fen, res.bestmove ?? null)
+            setHintMove(res.bestmove ?? null)
+            if (res.bestmove) setHintUsed(true)
+        } catch {
+            hintCache.current.set(fen, null)
+            setHintMove(null)
+        } finally {
+            setHintLoading(false)
         }
     }
 
@@ -413,12 +542,22 @@ export default function Puzzles() {
     const orientation: Color = data?.color ?? 'w'
     const displayFen = phase === 'intro' || !data ? (data?.start_fen ?? START_FEN) : fen
     const interactive = phase === 'solving'
+    // Only shown once at least the piece has been revealed, and only while the
+    // hint is actually for THIS position (cleared on every new position by
+    // resetHint — see beginPuzzle / onMove).
+    const hintMark = hintStage > 0 && hintMove ? splitUci(hintMove) : null
 
     return (
         <BoardPage
             left={
                 <Box sx={{ display: { xs: 'none', md: 'block' } }}>
-                    <RunningAside user={userStats} theme={theme} limitSec={limitSec} />
+                    <RunningAside
+                        user={userStats}
+                        theme={theme}
+                        limitSec={limitSec}
+                        streak={streak}
+                        bestStreak={bestStreak}
+                    />
                 </Box>
             }
             right={
@@ -432,6 +571,15 @@ export default function Puzzles() {
                         theme={theme}
                         limitSec={limitSec}
                         remainingMs={remainingMs}
+                        streak={streak}
+                        bestStreak={bestStreak}
+                        isRetry={isRetry}
+                        hintStage={hintStage}
+                        hintLoading={hintLoading}
+                        hintUnavailable={hintStage > 0 && !hintLoading && hintMove == null}
+                        hintUsed={hintUsed}
+                        onHint={() => void requestHint()}
+                        onRetry={retryPuzzle}
                         onNext={() => void load(theme)}
                         onStop={endSession}
                     />
@@ -457,6 +605,8 @@ export default function Puzzles() {
                 inCheck={false}
                 interactive={interactive}
                 onMove={onMove}
+                hint={hintMark}
+                hintStage={hintMark ? (hintStage === 1 ? 'piece' : 'move') : null}
                 {...(override ? { overrideBoard: override } : {})}
             />
         </BoardPage>
@@ -779,10 +929,14 @@ function RunningAside({
     user,
     theme,
     limitSec,
+    streak,
+    bestStreak,
 }: {
     user: { rating: number; games: number; provisional: boolean } | null
     theme: string
     limitSec: number | null
+    streak: number
+    bestStreak: number
 }) {
     const fmt = TIME_FORMATS.find((f) => f.value === limitSec)
     return (
@@ -837,6 +991,47 @@ function RunningAside({
                 )}
             </Box>
 
+            {/* Consecutive-solve streak — distinct from the navbar's daily-activity
+                flame (that one tracks "played today"; this one tracks "solved in a
+                row without failing"). Plain number + label, nothing decorative. */}
+            <Box
+                sx={{
+                    borderTop: '1px solid var(--line-soft)',
+                    mt: 2.25,
+                    pt: 2.25,
+                    display: 'flex',
+                    gap: 2.5,
+                }}
+            >
+                <Box>
+                    <Label>Streak</Label>
+                    <Typography
+                        sx={{
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: 22,
+                            fontWeight: 700,
+                            lineHeight: 1,
+                        }}
+                    >
+                        {streak}
+                    </Typography>
+                </Box>
+                <Box>
+                    <Label>Best</Label>
+                    <Typography
+                        sx={{
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: 22,
+                            fontWeight: 700,
+                            lineHeight: 1,
+                            color: 'var(--muted)',
+                        }}
+                    >
+                        {bestStreak}
+                    </Typography>
+                </Box>
+            </Box>
+
             <Box
                 sx={{
                     borderTop: '1px solid var(--line-soft)',
@@ -865,6 +1060,15 @@ function StatusCard({
     theme,
     limitSec,
     remainingMs,
+    streak,
+    bestStreak,
+    isRetry,
+    hintStage,
+    hintLoading,
+    hintUnavailable,
+    hintUsed,
+    onHint,
+    onRetry,
     onNext,
     onStop,
 }: {
@@ -876,13 +1080,26 @@ function StatusCard({
     theme: string
     limitSec: number | null
     remainingMs: number
+    streak: number
+    bestStreak: number
+    isRetry: boolean
+    hintStage: 0 | 1 | 2
+    hintLoading: boolean
+    hintUnavailable: boolean
+    hintUsed: boolean
+    onHint: () => void
+    onRetry: () => void
     onNext: () => void
     onStop: () => void
 }) {
     const terminal = phase === 'solved' || phase === 'failed'
-    const delta = result?.rating?.delta ?? null
+    // A retry's rating delta is always 0 (the server only rates the first attempt
+    // at a puzzle) — showing it as a real rating line would misread as re-scoring,
+    // so it's suppressed in favor of the quiet "Retry" chip below.
+    const delta = isRetry ? null : (result?.rating?.delta ?? null)
     const toMove = orientation === 'w' ? 'White' : 'Black'
     const lowTime = limitSec != null && remainingMs <= 10_000
+    const solving = phase === 'intro' || phase === 'solving' || phase === 'checking'
     const [sound, setSound] = useState(soundEnabled())
 
     function toggleSound() {
@@ -941,6 +1158,14 @@ function StatusCard({
 
             {/* Headline */}
             <Box sx={{ px: 2.25, py: 2.25 }}>
+                {/* Quiet label for a replay: the board reset to the puzzle's start, but
+                    this attempt is practice only — it was already scored (or missed) the
+                    first time, and this pass never touches history or rating. */}
+                {isRetry && !terminal && (
+                    <Box sx={{ mb: 1.25 }}>
+                        <Chip>Retry · not rescored</Chip>
+                    </Box>
+                )}
                 {phase === 'loading' && (
                     <Row>
                         <CircularProgress size={16} sx={{ color: 'var(--muted)' }} />
@@ -985,6 +1210,17 @@ function StatusCard({
                             >
                                 Solved!
                             </Typography>
+                            {isRetry ? (
+                                <Typography sx={{ fontSize: 13, color: 'var(--muted)' }}>
+                                    Retry · not rescored
+                                </Typography>
+                            ) : (
+                                hintUsed && (
+                                    <Typography sx={{ fontSize: 13, color: 'var(--accent)' }}>
+                                        Solved with a hint
+                                    </Typography>
+                                )
+                            )}
                             {result?.alternative && (
                                 <Typography sx={{ fontSize: 13, color: 'var(--muted)' }}>
                                     Not the puzzle line — but that works!
@@ -1012,6 +1248,11 @@ function StatusCard({
                             >
                                 Incorrect
                             </Typography>
+                            {isRetry && (
+                                <Typography sx={{ fontSize: 13, color: 'var(--muted)' }}>
+                                    Retry · not rescored
+                                </Typography>
+                            )}
                             {puzzleRating != null && (
                                 <Typography sx={{ fontSize: 13, color: 'var(--muted)' }}>
                                     Puzzle rating {puzzleRating}
@@ -1058,12 +1299,52 @@ function StatusCard({
 
             {/* Controls */}
             <Box sx={{ px: 2.25, pb: 2.25, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
-                <ActionBtn
-                    tone={terminal ? 'primary' : 'neutral'}
-                    icon={terminal ? <ChevronRight size={16} /> : <RotateCcw size={15} />}
-                    label={terminal ? 'Next puzzle' : 'Skip'}
-                    onClick={onNext}
-                />
+                {/* Two-stage hint: first press rings the piece to move, second press
+                    rings the full move. Disabled once the position isn't actually being
+                    solved (loading / mid-check / already resolved). */}
+                {!terminal && (
+                    <ActionBtn
+                        tone="neutral"
+                        icon={<Lightbulb size={15} />}
+                        label={
+                            hintLoading
+                                ? 'Loading hint…'
+                                : hintUnavailable
+                                  ? 'No hint available'
+                                  : hintStage === 0
+                                    ? 'Hint'
+                                    : hintStage === 1
+                                      ? 'Reveal move'
+                                      : 'Move revealed'
+                        }
+                        onClick={onHint}
+                        disabled={!solving || hintLoading || hintStage === 2 || hintUnavailable}
+                    />
+                )}
+
+                {terminal ? (
+                    <Box sx={{ display: 'flex', gap: 1 }}>
+                        <ActionBtn
+                            tone="neutral"
+                            icon={<RefreshCw size={15} />}
+                            label="Retry"
+                            onClick={onRetry}
+                        />
+                        <ActionBtn
+                            tone="primary"
+                            icon={<ChevronRight size={16} />}
+                            label="Next puzzle"
+                            onClick={onNext}
+                        />
+                    </Box>
+                ) : (
+                    <ActionBtn
+                        tone="neutral"
+                        icon={<RotateCcw size={15} />}
+                        label="Skip"
+                        onClick={onNext}
+                    />
+                )}
                 <ActionBtn
                     tone="danger"
                     icon={<StopIcon size={14} />}
@@ -1071,7 +1352,7 @@ function StatusCard({
                     onClick={onStop}
                 />
 
-                {/* Mobile-only rating line (the desktop aside is hidden on xs). */}
+                {/* Mobile-only rating + streak lines (the desktop aside is hidden on xs). */}
                 <Typography
                     sx={{
                         display: { xs: 'block', md: 'none' },
@@ -1095,6 +1376,22 @@ function StatusCard({
                     ) : (
                         'Log in to track your puzzle rating.'
                     )}
+                </Typography>
+                <Typography
+                    sx={{
+                        display: { xs: 'block', md: 'none' },
+                        fontSize: 12.5,
+                        color: 'var(--muted)',
+                    }}
+                >
+                    Streak:{' '}
+                    <Box component="span" sx={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>
+                        {streak}
+                    </Box>{' '}
+                    · Best:{' '}
+                    <Box component="span" sx={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}>
+                        {bestStreak}
+                    </Box>
                 </Typography>
             </Box>
         </Card>
@@ -1140,35 +1437,57 @@ function HistoryBoxes({ history }: { history: Outcome[] }) {
     const ordered = [...history].reverse()
     return (
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.6 }}>
-            {ordered.map(({ win, delta }, i) => (
-                <Box
-                    key={history.length - 1 - i}
-                    sx={{
-                        minWidth: 26,
-                        height: 26,
-                        px: delta != null ? 0.85 : 0,
-                        borderRadius: '7px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 0.4,
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: 11.5,
-                        fontWeight: 600,
-                        color: win ? '#7bb661' : '#e0796b',
-                        bgcolor: win ? 'rgba(123,182,97,0.16)' : 'rgba(224,121,107,0.16)',
-                        border: `1px solid ${win ? 'rgba(123,182,97,0.4)' : 'rgba(224,121,107,0.4)'}`,
-                    }}
-                >
-                    {win ? <Check size={13} /> : <X size={13} />}
-                    {delta != null && (
-                        <span>
-                            {delta >= 0 ? '+' : ''}
-                            {delta}
-                        </span>
-                    )}
-                </Box>
-            ))}
+            {ordered.map(({ win, delta, hinted }, i) => {
+                // A hinted SOLVE is rated normally (the server doesn't know a hint was
+                // shown) but reads differently here — it wasn't a clean solve, so it
+                // shouldn't look identical to one. A hinted miss is still just a miss.
+                const isHintedSolve = win && hinted
+                return (
+                    <Box
+                        key={history.length - 1 - i}
+                        sx={{
+                            minWidth: 26,
+                            height: 26,
+                            px: delta != null ? 0.85 : 0,
+                            borderRadius: '7px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 0.4,
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: 11.5,
+                            fontWeight: 600,
+                            color: isHintedSolve ? 'var(--accent)' : win ? '#7bb661' : '#e0796b',
+                            bgcolor: isHintedSolve
+                                ? 'var(--accent-soft)'
+                                : win
+                                  ? 'rgba(123,182,97,0.16)'
+                                  : 'rgba(224,121,107,0.16)',
+                            border: `1px solid ${
+                                isHintedSolve
+                                    ? 'var(--accent-line)'
+                                    : win
+                                      ? 'rgba(123,182,97,0.4)'
+                                      : 'rgba(224,121,107,0.4)'
+                            }`,
+                        }}
+                    >
+                        {isHintedSolve ? (
+                            <Lightbulb size={13} />
+                        ) : win ? (
+                            <Check size={13} />
+                        ) : (
+                            <X size={13} />
+                        )}
+                        {delta != null && (
+                            <span>
+                                {delta >= 0 ? '+' : ''}
+                                {delta}
+                            </span>
+                        )}
+                    </Box>
+                )
+            })}
         </Box>
     )
 }

@@ -129,7 +129,7 @@ func (h *Hub) joinChallenge(c *Client, code string) {
 	h.removeChallenge(ch)
 	h.dequeue(creator) // make sure neither side lingers in a public pool
 	h.dequeue(c)
-	h.startGameWith(white, black, ch.tc, ch.pool, rated, ch.variant)
+	h.startGameWith(white, black, ch.tc, ch.pool, rated, ch.variant, "")
 }
 
 // cancelChallenge drops the client's own pending challenge (if any) and returns

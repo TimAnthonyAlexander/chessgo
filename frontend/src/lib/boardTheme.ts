@@ -435,6 +435,16 @@ class ThemeStore {
         this.emit()
     }
 
+    /** Restore the default board theme + piece set (used by the Settings dialog's
+     * "Reset to defaults"). Same shape as the setters: persist, repaint, emit. */
+    reset(): void {
+        this.state = { board: DEFAULT_BOARD, pieces: DEFAULT_PIECES }
+        this.persist(LS_BOARD, this.state.board)
+        this.persist(LS_PIECES, this.state.pieces)
+        this.applyBoardVars()
+        this.emit()
+    }
+
     private applyBoardVars(): void {
         if (typeof document === 'undefined') return
         const { vars } = boardById(this.state.board)

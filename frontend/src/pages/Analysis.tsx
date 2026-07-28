@@ -26,8 +26,10 @@ import { useLocation, useParams } from 'react-router-dom'
 import AnalysisAside from '../components/AnalysisAside'
 import Board from '../components/Board'
 import BlunderRewind, { BlunderRewindBanner } from '../components/BlunderRewind'
+import ConfirmDialog from '../components/ConfirmDialog'
 import DuckFreeBoard from '../components/DuckFreeBoard'
 import BoardPage from '../components/BoardPage'
+import EngineLines from '../components/EngineLines'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveTree from '../components/MoveTree'
 import { MoveSan } from '../components/MoveSan'
@@ -35,6 +37,10 @@ import OpeningPanel from '../components/OpeningPanel'
 import { analyze, getGameAnalysis, sfAnalyze, type GameAnalysis } from '../api/client'
 import type { Color } from '../api/client'
 import { buildBlunderPuzzles, colorInGame } from '../lib/blunderRewind'
+import { toPgn, type ParsedPgn } from '../lib/pgn'
+import { useMoveNavKeys } from '../lib/useMoveNavKeys'
+import { useShortcuts } from '../lib/shortcuts'
+import { usePrefs } from '../lib/settings'
 import { VARIANT_LABEL } from '../lib/variants'
 import {
     type GameOver,
@@ -145,9 +151,15 @@ export default function Analysis() {
     const importMoves = navState?.moves ?? null
     const importStartFen = navState?.startFen ?? START_FEN
 
+    const prefs = usePrefs()
+
     const [tree, setTree] = useState<Tree>(() => createTree(START_FEN))
     const [currentId, setCurrentId] = useState(0)
     const [orientation, setOrientation] = useState<Color>('w')
+    // Once the user flips the board by hand, that choice wins over the autoFlip
+    // preference (which otherwise re-orients to the side to move every ply) until
+    // the next game/position load resets it — see the effect below.
+    const [manualFlip, setManualFlip] = useState(false)
     // View preferences persist across refreshes (localStorage).
     const [showArrow, setShowArrow] = usePersistentBool('chessgo.analysis.showArrow', true)
     // Optional second-opinion arrow: full-strength Stockfish's best move, drawn
@@ -178,6 +190,12 @@ export default function Analysis() {
     // When true (and a game is loaded) the review layout is swapped for the
     // self-contained rewind board.
     const [rewind, setRewind] = useState(false)
+    // Free mode only: hides the opening explorer without losing engine analysis
+    // (bound to the 'e' shortcut below).
+    const [showOpening, setShowOpening] = usePersistentBool('chessgo.analysis.showOpening', true)
+    // A pasted PGN awaiting confirmation because it would discard moves already
+    // on the board (free mode only — see onImportPgn below).
+    const [pendingImport, setPendingImport] = useState<ParsedPgn | null>(null)
 
     // --- Load a finished game's analysis (review mode) ---
     useEffect(() => {
@@ -255,8 +273,11 @@ export default function Analysis() {
     const myColor = useMemo(() => (game ? colorInGame(game, user?.name) : null), [game, user])
 
     // Coming from a game analysis, auto-orient so the viewer is always at the bottom
-    // (falls back to White for spectators / non-participants).
+    // (falls back to White for spectators / non-participants). A fresh game/position
+    // load also clears any manual flip from a previous game, so autoFlip (if on)
+    // takes over again immediately rather than staying stuck on the old override.
     useEffect(() => {
+        setManualFlip(false)
         if (game) setOrientation(myColor ?? 'w')
     }, [game, myColor])
 
@@ -279,6 +300,13 @@ export default function Analysis() {
         () => (isDuck || over.over ? [] : legalUci(current)),
         [current.fen, over.over, isDuck],
     )
+
+    // The orientation actually shown: the autoFlip preference re-orients to the
+    // side to move every ply, but only until the user flips by hand (manualFlip),
+    // at which point their explicit choice (`orientation`) is authoritative — an
+    // analysis board that kept auto-flipping under you while stepping through a
+    // game would be disorienting once you've picked a fixed side to view from.
+    const displayOrientation: Color = prefs.autoFlip && !manualFlip ? sideToMove : orientation
 
     // --- Live engine eval + best line: progressive ("streaming") deepening ---
     // We can't stream over the wire (no SSE behind Cloudflare), so we emulate it by
@@ -454,18 +482,19 @@ export default function Analysis() {
         setCurrentId(fresh.rootId)
     }, [])
 
-    useEffect(() => {
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'ArrowLeft') goPrev()
-            else if (e.key === 'ArrowRight') goNext()
-            else if (e.key === 'ArrowUp') goStart()
-            else if (e.key === 'ArrowDown') goEnd()
-            else return
-            e.preventDefault()
-        }
-        window.addEventListener('keydown', onKey)
-        return () => window.removeEventListener('keydown', onKey)
-    }, [goPrev, goNext, goStart, goEnd])
+    // Registered once through the shared registry (arrows/Home/End) — replaces a
+    // private keydown listener that duplicated this and, unlike the shared hook,
+    // had no guard against hijacking arrow keys while typing in a text field.
+    useMoveNavKeys({ onPrev: goPrev, onNext: goNext, onFirst: goStart, onLast: goEnd })
+
+    // Flip the board by hand. Toggles from whatever is CURRENTLY shown (which, if
+    // autoFlip is on and hasn't been overridden yet, is the side to move) and — per
+    // the autoFlip preference's contract on this page — marks the choice manual so
+    // it sticks instead of being overridden again on the next ply.
+    const flipBoard = useCallback(() => {
+        setOrientation(displayOrientation === 'w' ? 'b' : 'w')
+        setManualFlip(true)
+    }, [displayOrientation])
 
     // --- Making a move (branch-aware) ---
     const onMove = useCallback(
@@ -480,6 +509,82 @@ export default function Analysis() {
             setCurrentId(res.nodeId)
         },
         [tree, currentId],
+    )
+
+    // Play an entire engine line (the Engine Lines panel's click-to-play) onto the
+    // board — each move in turn, branch-aware like a normal move, landing on the
+    // final position. Stops early (defensively) at the first move that doesn't
+    // apply; a real engine PV should never do that.
+    const onPlayEngineLine = useCallback(
+        (pvUci: string[]) => {
+            if (pvUci.length === 0) return
+            let t = tree
+            let curId = currentId
+            for (const uci of pvUci) {
+                const res = playMove(t, curId, uci)
+                if (res.nodeId === curId) break
+                t = res.tree
+                curId = res.nodeId
+            }
+            if (curId === currentId) return
+            setAutoMode('off')
+            playMoveSound(t.nodes[curId])
+            setTree(t)
+            setCurrentId(curId)
+        },
+        [tree, currentId],
+    )
+
+    // --- PGN import/export (AnalysisAside's Game card) ---
+
+    // The tree's mainline (children[0] at every step) as SAN, root to tip — what
+    // "the current game" means for export, regardless of which node is being
+    // viewed (branches aren't included; PGN has no first-class variation syntax
+    // here and the mainline is what the user was actually replaying/playing).
+    const mainlineSans = useCallback((): string[] => {
+        const out: string[] = []
+        let node = tree.nodes[tree.rootId]
+        while (node && node.children.length > 0) {
+            const next = tree.nodes[node.children[0]]
+            if (!next?.move) break
+            out.push(next.move.san)
+            node = next
+        }
+        return out
+    }, [tree])
+
+    // Build a PGN of the current game on demand. Review mode fills in the real
+    // player names + result; free mode leans on toPgn's own sensible defaults.
+    const getPgn = useCallback((): string => {
+        const sanMoves = mainlineSans()
+        const startFen = tree.nodes[tree.rootId]?.fen ?? START_FEN
+        if (game) {
+            return toPgn(
+                { sanMoves, startFen },
+                { White: game.whiteName, Black: game.blackName, Result: game.result },
+            )
+        }
+        return toPgn({ sanMoves, startFen })
+    }, [tree, game, mainlineSans])
+
+    // Replace the board with a parsed PGN's game (free mode only — the aside hides
+    // Import entirely in review mode).
+    const applyImport = useCallback((parsed: ParsedPgn) => {
+        const built = buildFromMoves(parsed.startFen, parsed.uciMoves)
+        setAutoMode('off')
+        setTree(built.tree)
+        setCurrentId(built.lastId)
+    }, [])
+
+    // An import replaces the whole board — confirm first if there's anything on
+    // it that would be lost (more than just the empty root node).
+    const onImportPgn = useCallback(
+        (parsed: ParsedPgn) => {
+            const hasMoves = Object.keys(tree.nodes).length > 1
+            if (hasMoves) setPendingImport(parsed)
+            else applyImport(parsed)
+        },
+        [tree, applyImport],
     )
 
     // --- Auto Play: step through the mainline (children[0]) on a timer ---
@@ -537,6 +642,32 @@ export default function Analysis() {
             return !on
         })
     }, [])
+
+    // Analysis-specific bindings, borrowing Lichess's vocabulary (users arrive with
+    // it already learned). Move navigation itself is useMoveNavKeys above; these are
+    // the extras this page actually has a mechanism for — no dead keys.
+    useShortcuts('analysis', [
+        { keys: 'f', label: 'Flip board', group: 'Analysis', run: flipBoard },
+        { keys: 'l', label: 'Toggle engine', group: 'Analysis', run: toggleEngine },
+        ...(isDuck
+            ? []
+            : [
+                  {
+                      keys: ' ',
+                      label: 'Play engine best move',
+                      group: 'Analysis',
+                      run: () => {
+                          if (engineOn && current.bestUci) onMove(current.bestUci)
+                      },
+                  },
+                  {
+                      keys: 'e',
+                      label: 'Toggle opening explorer',
+                      group: 'Analysis',
+                      run: () => setShowOpening((v) => !v),
+                  },
+              ]),
+    ])
 
     // Stockfish's best move for the CURRENT position (ignore a stale one held for a
     // previous FEN). Only surfaced while the engine + the SF-arrow toggle are on.
@@ -618,15 +749,19 @@ export default function Analysis() {
                     showSetup={!id}
                     hideActions={isDuck}
                     onEnableDuck={!id ? () => setDuckFree(true) : undefined}
+                    getPgn={getPgn}
+                    onImportPgn={onImportPgn}
                 />
             }
             evalBar={
-                <EvalBar
-                    ev={engineOn ? current.evalWhite : null}
-                    orientation={orientation}
-                    sfEv={sfEvForBar}
-                    sfColor={SF_ARROW_COLOR}
-                />
+                prefs.showEvalBar ? (
+                    <EvalBar
+                        ev={engineOn ? current.evalWhite : null}
+                        orientation={displayOrientation}
+                        sfEv={sfEvForBar}
+                        sfColor={SF_ARROW_COLOR}
+                    />
+                ) : undefined
             }
             right={
                 /* Sidebar */
@@ -662,6 +797,18 @@ export default function Analysis() {
                         pvUnavailable={isDuck}
                         bestSan={isDuck ? (current.bestSan ?? null) : null}
                     />
+
+                    {/* Multi-PV engine lines — the ranked top-N continuations, the single
+                        best showcase of the engine on this page. Standard-only, like the
+                        opening explorer below. */}
+                    {!isDuck && (
+                        <EngineLines
+                            fen={current.fen}
+                            engineOn={engineOn}
+                            onPlayLine={onPlayEngineLine}
+                            onHoverMove={setHoverUci}
+                        />
+                    )}
 
                     <MoveTree tree={tree} currentId={currentId} onSelect={selectNode} />
 
@@ -757,10 +904,7 @@ export default function Analysis() {
                                     <Fish size={19} />
                                 </NavBtn>
                             )}
-                            <NavBtn
-                                onClick={() => setOrientation((o) => (o === 'w' ? 'b' : 'w'))}
-                                label="Flip board"
-                            >
+                            <NavBtn onClick={flipBoard} label="Flip board">
                                 <FlipVertical2 size={19} />
                             </NavBtn>
                             <NavBtn
@@ -778,8 +922,8 @@ export default function Analysis() {
                     </Box>
 
                     {/* Opening explorer / candidates are standard-only (chess.js +
-                        standard engine) — hidden for duck review. */}
-                    {!isDuck && (
+                        standard engine) — hidden for duck review, and toggleable ('e'). */}
+                    {!isDuck && showOpening && (
                         <OpeningPanel
                             tree={tree}
                             currentId={currentId}
@@ -793,7 +937,7 @@ export default function Analysis() {
         >
             <Board
                 fen={current.fen}
-                orientation={orientation}
+                orientation={displayOrientation}
                 sideToMove={sideToMove}
                 legalMoves={legalMoves}
                 lastMove={lastMove}
@@ -806,6 +950,18 @@ export default function Analysis() {
                 arrow2={sfArrow}
                 circle={circle}
                 duck={isDuck ? current.duck || null : null}
+            />
+            <ConfirmDialog
+                open={pendingImport !== null}
+                title="Replace the current game?"
+                message="Importing this PGN discards the moves on the board. This can't be undone."
+                confirmLabel="Import"
+                danger
+                onConfirm={() => {
+                    if (pendingImport) applyImport(pendingImport)
+                    setPendingImport(null)
+                }}
+                onClose={() => setPendingImport(null)}
             />
         </BoardPage>
     )

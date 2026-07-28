@@ -28,6 +28,14 @@ class ProfileController extends Controller
     /** How many recent games to embed in the first profile payload (page 1). */
     private const RECENT_GAMES = 10;
 
+    /** How many points to keep per rating-pool sparkline (oldest → newest). */
+    private const HISTORY_POINTS = 20;
+
+    /** Rating pools backed by a `Game.category` value (time controls + the
+     *  isolated Duck/Antichess pools). Puzzle history comes from PuzzleAttempt
+     *  instead, since puzzles aren't Game rows. */
+    private const HISTORY_CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'duck', 'antichess'];
+
     /** Bound from path {name}. */
     public string $name = '';
 
@@ -95,6 +103,10 @@ class ProfileController extends Controller
             'games' => $rows,
             'gamesTotal' => $paged->total,
             'gamesPerPage' => self::RECENT_GAMES,
+            // Per-pool rating trend (oldest → newest ratings-after), one series per
+            // key in HISTORY_CATEGORIES plus 'puzzle'. Feeds the small sparkline
+            // next to every pool in the ratings panel (and the hero call-out).
+            'ratingHistory' => $this->ratingHistory($id),
         ]);
     }
 
@@ -144,5 +156,71 @@ class ProfileController extends Controller
             'draws' => $draws,
             'total' => $wins + $losses + $draws,
         ];
+    }
+
+    /**
+     * Per-pool rating history for the sparklines: one series per time-control /
+     * Duck / Antichess pool (from Game rows) plus puzzle (from PuzzleAttempt).
+     * No schema change — every series is reconstructed from already-stored
+     * rating-after values on the last HISTORY_POINTS rated results.
+     *
+     * @return array<string, list<int>>
+     */
+    private function ratingHistory(string $id): array
+    {
+        $out = [];
+        foreach (self::HISTORY_CATEGORIES as $cat) {
+            $out[$cat] = $this->categoryRatingSeries($id, $cat);
+        }
+        $out['puzzle'] = $this->puzzleRatingSeries($id);
+
+        return $out;
+    }
+
+    /**
+     * The last HISTORY_POINTS rated ratings-after for one Game.category pool,
+     * oldest first (chronological, for a left-to-right sparkline).
+     *
+     * @return list<int>
+     */
+    private function categoryRatingSeries(string $id, string $category): array
+    {
+        $games = Game::query()
+            ->whereGroup(function ($g) use ($id): void {
+                $g->where('white_user_id', '=', $id)->orWhere('black_user_id', '=', $id);
+            })
+            ->where('category', '=', $category)
+            ->where('rated', '=', true)
+            ->orderByDesc('created_at')
+            ->limit(self::HISTORY_POINTS)
+            ->get();
+
+        $series = [];
+        foreach ($games as $g) {
+            $after = $g->white_user_id === $id ? $g->white_rating_after : $g->black_rating_after;
+            if ($after !== null) {
+                $series[] = $after;
+            }
+        }
+
+        return array_reverse($series);
+    }
+
+    /**
+     * The last HISTORY_POINTS puzzle-rating-after values, oldest first.
+     *
+     * @return list<int>
+     */
+    private function puzzleRatingSeries(string $id): array
+    {
+        $attempts = PuzzleAttempt::query()
+            ->where('user_id', '=', $id)
+            ->orderByDesc('created_at')
+            ->limit(self::HISTORY_POINTS)
+            ->get();
+
+        $series = array_map(static fn (PuzzleAttempt $a): int => $a->rating_after, $attempts);
+
+        return array_reverse($series);
     }
 }

@@ -10,7 +10,7 @@ import (
 // inMsg is a message from a client. Type is one of: queue, cancel, move,
 // resign, watch, unwatch, drawOffer, drawAccept, drawDecline, takebackOffer,
 // takebackAccept, takebackDecline, chat, createChallenge, joinChallenge,
-// cancelChallenge.
+// cancelChallenge, rematchOffer, rematchAccept, rematchDecline, rematchCancel.
 type inMsg struct {
 	Type   string `json:"type"`
 	Pool   string `json:"pool,omitempty"`   // time control, e.g. "3+0" (queue, createChallenge)

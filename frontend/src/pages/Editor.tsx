@@ -8,10 +8,12 @@ import {
     Cpu,
     Dices,
     Eraser,
+    FileInput,
     FlipVertical2,
     Microscope,
     RotateCcw,
 } from 'lucide-react'
+import { Chess } from 'chess.js'
 import BoardEditor, { type Brush, EditorPalette } from '../components/BoardEditor'
 import BoardPage from '../components/BoardPage'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
@@ -31,6 +33,16 @@ import {
     withClearedBoard,
 } from '../lib/fenEdit'
 
+// Returns the FEN if chess.js accepts it, else null.
+function validFen(fen: string): string | null {
+    try {
+        new Chess(fen.trim())
+        return fen.trim()
+    } catch {
+        return null
+    }
+}
+
 const CASTLE_RIGHTS: { code: string; label: string }[] = [
     { code: 'K', label: 'White O-O' },
     { code: 'Q', label: 'White O-O-O' },
@@ -47,6 +59,9 @@ export default function Editor() {
     const [orientation, setOrientation] = useState<Color>('w')
     const [brush, setBrush] = useState<Brush>(null)
     const [copied, setCopied] = useState(false)
+    const [pasteOpen, setPasteOpen] = useState(false)
+    const [pasteVal, setPasteVal] = useState('')
+    const [pasteErr, setPasteErr] = useState(false)
 
     const active = activeOf(fen)
     const castling = castlingOf(fen)
@@ -82,6 +97,18 @@ export default function Editor() {
         const has = castling.includes(code)
         const next = has ? castling.replace(code, '') : castling + code
         setFen(withCastling(fen, next))
+    }
+
+    const submitPaste = () => {
+        const ok = validFen(pasteVal)
+        if (!ok) {
+            setPasteErr(true)
+            return
+        }
+        setFen(ok)
+        setPasteOpen(false)
+        setPasteVal('')
+        setPasteErr(false)
     }
 
     const copyFen = async () => {
@@ -189,7 +216,60 @@ export default function Editor() {
                                 label="Flip"
                                 onClick={() => setOrientation((o) => (o === 'w' ? 'b' : 'w'))}
                             />
+                            <ToolBtn
+                                icon={<FileInput size={15} />}
+                                label="Paste FEN"
+                                onClick={() => {
+                                    setPasteOpen((v) => !v)
+                                    setPasteErr(false)
+                                }}
+                            />
                         </Box>
+
+                        {pasteOpen && (
+                            <Box>
+                                <Box
+                                    component="input"
+                                    autoFocus
+                                    value={pasteVal}
+                                    placeholder="Paste a FEN, then Enter"
+                                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                                        setPasteVal(e.target.value)
+                                        setPasteErr(false)
+                                    }}
+                                    onKeyDown={(e: React.KeyboardEvent) => {
+                                        if (e.key === 'Enter') submitPaste()
+                                        else if (e.key === 'Escape') setPasteOpen(false)
+                                    }}
+                                    sx={{
+                                        width: '100%',
+                                        boxSizing: 'border-box',
+                                        fontFamily: 'var(--font-mono)',
+                                        fontSize: 12,
+                                        color: 'var(--text)',
+                                        bgcolor: 'var(--bg)',
+                                        border: `1px solid ${pasteErr ? 'var(--danger, #e5484d)' : 'var(--line)'}`,
+                                        borderRadius: '8px',
+                                        px: 1.25,
+                                        py: 1,
+                                        outline: 'none',
+                                        '&:focus': {
+                                            borderColor: pasteErr
+                                                ? 'var(--danger, #e5484d)'
+                                                : 'var(--accent-line)',
+                                        },
+                                        '&::placeholder': { color: 'var(--muted)' },
+                                    }}
+                                />
+                                {pasteErr && (
+                                    <Typography
+                                        sx={{ fontSize: 11.5, color: 'var(--danger, #e5484d)', mt: 0.5 }}
+                                    >
+                                        Not a valid FEN.
+                                    </Typography>
+                                )}
+                            </Box>
+                        )}
 
                         {/* FEN readout */}
                         <Box>

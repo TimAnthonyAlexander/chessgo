@@ -71,6 +71,20 @@ class SoundThemeStore {
         }
         for (const l of this.listeners) l()
     }
+
+    /** Restore the default material (used by the Settings dialog's "Reset to
+     * defaults"). Same shape as set(): persist + emit; a material paints nothing,
+     * so there's no vars step. */
+    reset(): void {
+        if (this.material === DEFAULT_MATERIAL) return
+        this.material = DEFAULT_MATERIAL
+        try {
+            localStorage.setItem(LS_MATERIAL, DEFAULT_MATERIAL)
+        } catch {
+            // ignore quota / unavailable
+        }
+        for (const l of this.listeners) l()
+    }
 }
 
 export const soundThemeStore = new SoundThemeStore()

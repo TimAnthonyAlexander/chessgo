@@ -6,12 +6,15 @@
 // Persistence: ONE JSON blob under `chessgo.prefs`, merged over DEFAULTS on load
 // so adding a new key later never breaks an existing user (missing keys fall back
 // to their default). Board color theme + piece set live in boardTheme.ts, and the
-// sound master toggle + timbre live in sounds.ts/soundTheme.ts — those keep their
-// own keys; this store owns everything else.
+// sound TIMBRE (material) lives in soundTheme.ts — those keep their own keys. The
+// sound master on/off (`soundEnabled`) lives HERE (migrated from a standalone
+// `chessgo.sound` key — see init()'s migrateSoundEnabled()) so it's reactive via
+// usePrefs() like everything else; sounds.ts just re-exports thin delegates.
 //
 // A few settings are CSS-custom-property driven (animation speed, board
-// brightness): they're pushed onto <html> via applyVars() on init + on change, so
-// every Board/MiniBoard repaints for free — exactly like boardTheme's palette vars.
+// brightness/contrast): they're pushed onto <html> via applyVars() on init + on
+// change, so every Board/MiniBoard repaints for free — exactly like boardTheme's
+// palette vars.
 import { useSyncExternalStore } from 'react'
 import { sanToGlyph } from './chess'
 
@@ -20,6 +23,8 @@ export type AnimSpeed = 'none' | 'fast' | 'normal' | 'slow'
 export type MoveMethod = 'both' | 'click' | 'drag'
 export type ArrowColor = 'green' | 'blue' | 'red' | 'yellow'
 export type Notation = 'san' | 'figurine'
+export type ConfirmMove = 'never' | 'slow' | 'always'
+export type ClockTenths = 'never' | 'lowtime' | 'always'
 
 export interface Prefs {
     // --- Board display ---
@@ -31,7 +36,11 @@ export interface Prefs {
     animationSpeed: AnimSpeed
     /** Board square brightness, 70–100 (%). 100 = untouched. */
     boardBrightness: number
+    /** Board square contrast, 70–130 (%). 100 = untouched. */
+    boardContrast: number
     blindfold: boolean
+    /** Material captured by each side, shown next to the clocks. */
+    showCaptured: boolean
     // --- Move input / behavior ---
     autoQueen: boolean
     moveMethod: MoveMethod
@@ -39,6 +48,10 @@ export interface Prefs {
     arrowColor: ArrowColor
     /** Move-list notation: plain SAN (default) or figurine piece glyphs. */
     notation: Notation
+    /** Clicking the rook (not just the king) castles. */
+    rookCastle: boolean
+    /** Require a confirm step before a move is sent. */
+    confirmMove: ConfirmMove
     // --- Gameplay UX (game pages) ---
     confirmResign: boolean
     autoFlip: boolean
@@ -46,10 +59,16 @@ export interface Prefs {
     showOpponentRating: boolean
     showEvalBar: boolean
     showMoveList: boolean
+    // --- Clock ---
+    /** When to show tenths of a second on the clock. */
+    clockTenths: ClockTenths
+    clockBar: boolean
     // --- Sound ---
     /** Master output volume, 0–100 (100 = the engine's full headroom). */
     soundVolume: number
     soundLowTime: boolean
+    /** Master sound on/off — migrated from its own `chessgo.sound` key, see init(). */
+    soundEnabled: boolean
 }
 
 export const DEFAULTS: Prefs = {
@@ -60,20 +79,27 @@ export const DEFAULTS: Prefs = {
     highlightDragOver: true,
     animationSpeed: 'normal',
     boardBrightness: 100,
+    boardContrast: 100,
     blindfold: false,
+    showCaptured: true,
     autoQueen: false,
     moveMethod: 'both',
     premoves: true,
     arrowColor: 'green',
     notation: 'san',
+    rookCastle: true,
+    confirmMove: 'never',
     confirmResign: true,
     autoFlip: false,
     zenMode: false,
     showOpponentRating: true,
     showEvalBar: true,
     showMoveList: true,
+    clockTenths: 'lowtime',
+    clockBar: true,
     soundVolume: 100,
     soundLowTime: true,
+    soundEnabled: true,
 }
 
 const LS_KEY = 'chessgo.prefs'
@@ -105,20 +131,27 @@ function sanitize(raw: unknown): Prefs {
     bool('highlightDragOver')
     oneOf('animationSpeed', ['none', 'fast', 'normal', 'slow'] as const)
     clampNum('boardBrightness', 70, 100)
+    clampNum('boardContrast', 70, 130)
     bool('blindfold')
+    bool('showCaptured')
     bool('autoQueen')
     oneOf('moveMethod', ['both', 'click', 'drag'] as const)
     bool('premoves')
     oneOf('arrowColor', ['green', 'blue', 'red', 'yellow'] as const)
     oneOf('notation', ['san', 'figurine'] as const)
+    bool('rookCastle')
+    oneOf('confirmMove', ['never', 'slow', 'always'] as const)
     bool('confirmResign')
     bool('autoFlip')
     bool('zenMode')
     bool('showOpponentRating')
     bool('showEvalBar')
     bool('showMoveList')
+    oneOf('clockTenths', ['never', 'lowtime', 'always'] as const)
+    bool('clockBar')
     clampNum('soundVolume', 0, 100)
     bool('soundLowTime')
+    bool('soundEnabled')
     return out
 }
 
@@ -135,7 +168,24 @@ class SettingsStore {
         } catch {
             this.state = { ...DEFAULTS }
         }
+        this.migrateSoundEnabled()
         this.applyVars()
+    }
+
+    // One-time migration: the sound master toggle used to live under its own
+    // `chessgo.sound` key (sounds.ts), separate from this blob. Fold it into
+    // `soundEnabled` here and drop the old key so this only ever runs once.
+    // Never throws — a failed migration just keeps the default.
+    private migrateSoundEnabled(): void {
+        try {
+            const old = localStorage.getItem('chessgo.sound')
+            if (old === null) return
+            this.state = { ...this.state, soundEnabled: old !== 'off' }
+            localStorage.removeItem('chessgo.sound')
+            this.persist()
+        } catch {
+            // ignore — migration is best-effort
+        }
     }
 
     getSnapshot = (): Prefs => this.state
@@ -163,14 +213,16 @@ class SettingsStore {
         this.emit()
     }
 
-    // Push the CSS-var-driven settings onto <html>: piece animation duration and
-    // the board dim overlay (1 - brightness). Board.css reads both.
+    // Push the CSS-var-driven settings onto <html>: piece animation duration, the
+    // board dim overlay (1 - brightness), and the board contrast filter. Board.css
+    // reads all three.
     private applyVars(): void {
         if (typeof document === 'undefined') return
         const root = document.documentElement
         root.style.setProperty('--piece-anim', `${ANIM_MS[this.state.animationSpeed]}ms`)
         const dim = Math.min(1, Math.max(0, (100 - this.state.boardBrightness) / 100))
         root.style.setProperty('--board-dim', dim.toFixed(3))
+        root.style.setProperty('--board-contrast', `${this.state.boardContrast}%`)
     }
 
     private persist(): void {

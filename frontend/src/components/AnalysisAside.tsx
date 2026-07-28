@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
 import { Box, Tooltip, Typography } from '@mui/material'
-import { Check, Copy, Dices, FileInput, RotateCcw } from 'lucide-react'
+import { Check, Copy, Dices, Download, FileInput, Link2, RotateCcw } from 'lucide-react'
 import { Chess } from 'chess.js'
 import { START_FEN } from '../lib/analysisTree'
 import { random960 } from '../lib/variants'
 import { computeMaterial, type Material } from '../lib/material'
+import { copyText, downloadPgn, fromPgn, pgnFilename, type ParsedPgn } from '../lib/pgn'
 import BoardActions from './BoardActions'
 
 // Returns the FEN if chess.js accepts it, else null.
@@ -24,6 +25,8 @@ export default function AnalysisAside({
     showSetup = true,
     hideActions = false,
     onEnableDuck,
+    getPgn,
+    onImportPgn,
 }: {
     fen: string
     onLoadFen: (fen: string) => void
@@ -35,6 +38,12 @@ export default function AnalysisAside({
     // Free mode only: switch the analysis board into interactive Duck Chess. When
     // provided, a "Duck Chess" button sits beside the Chess960 setup button.
     onEnableDuck?: () => void
+    // Returns the current game as a PGN string, computed on demand (so it's
+    // always up to date). Copy/Download PGN are hidden when this is absent.
+    getPgn?: () => string
+    // Called with a successfully parsed pasted PGN — the caller owns loading it
+    // into the board. Import is a no-op (button hidden) when this is absent.
+    onImportPgn?: (parsed: ParsedPgn) => void
 }) {
     const mat = useMemo(() => computeMaterial(fen), [fen])
 
@@ -52,6 +61,12 @@ export default function AnalysisAside({
             {showSetup && (
                 <PositionCard fen={fen} onLoadFen={onLoadFen} onEnableDuck={onEnableDuck} />
             )}
+            {/* Copy link always works (just the current URL); Copy/Download PGN and
+                Import PGN degrade away individually when their prop is absent. */}
+            <GameCard
+                getPgn={getPgn}
+                onImportPgn={showSetup ? onImportPgn : undefined}
+            />
             {/* Cross-links: edit the board, play a bot, or (admins) run an engine
                 match — all seeded from the position on the board. "Analyse this
                 position" is omitted (you're already in analysis). */}
@@ -182,6 +197,143 @@ function SideRow({
                 </Typography>
             )}
         </Box>
+    )
+}
+
+// Copy/Download PGN, Copy link, and Import PGN. Copy link never depends on a
+// prop (it's just the current URL); the PGN actions individually disappear
+// when their prop isn't supplied by the caller.
+function GameCard({
+    getPgn,
+    onImportPgn,
+}: {
+    getPgn?: () => string
+    onImportPgn?: (parsed: ParsedPgn) => void
+}) {
+    const [pasteOpen, setPasteOpen] = useState(false)
+    const [pasteVal, setPasteVal] = useState('')
+    const [pasteErr, setPasteErr] = useState<string | null>(null)
+    const [copiedPgn, setCopiedPgn] = useState(false)
+    const [copiedLink, setCopiedLink] = useState(false)
+
+    const submitImport = () => {
+        const parsed = fromPgn(pasteVal)
+        if (!parsed.ok) {
+            setPasteErr(parsed.error)
+            return
+        }
+        onImportPgn?.(parsed)
+        setPasteOpen(false)
+        setPasteVal('')
+        setPasteErr(null)
+    }
+
+    const copyPgn = async () => {
+        if (!getPgn) return
+        if (await copyText(getPgn())) {
+            setCopiedPgn(true)
+            setTimeout(() => setCopiedPgn(false), 1400)
+        }
+    }
+
+    const downloadCurrentPgn = () => {
+        if (!getPgn) return
+        const text = getPgn()
+        const parsed = fromPgn(text)
+        downloadPgn(text, pgnFilename(parsed.ok ? parsed.headers : {}))
+    }
+
+    const copyLink = async () => {
+        if (await copyText(window.location.href)) {
+            setCopiedLink(true)
+            setTimeout(() => setCopiedLink(false), 1400)
+        }
+    }
+
+    return (
+        <Card label="Game">
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                <Box sx={{ display: 'flex', gap: 1 }}>
+                    {getPgn && (
+                        <>
+                            <AsideBtn
+                                icon={copiedPgn ? <Check size={15} /> : <Copy size={15} />}
+                                label={copiedPgn ? 'Copied' : 'Copy PGN'}
+                                onClick={copyPgn}
+                            />
+                            <AsideBtn
+                                icon={<Download size={15} />}
+                                label="Download PGN"
+                                onClick={downloadCurrentPgn}
+                            />
+                        </>
+                    )}
+                    <AsideBtn
+                        icon={copiedLink ? <Check size={15} /> : <Link2 size={15} />}
+                        label={copiedLink ? 'Copied' : 'Copy link'}
+                        onClick={copyLink}
+                    />
+                </Box>
+
+                {onImportPgn && (
+                    <>
+                        <AsideBtn
+                            icon={<FileInput size={15} />}
+                            label="Import PGN…"
+                            active={pasteOpen}
+                            onClick={() => {
+                                setPasteOpen((v) => !v)
+                                setPasteErr(null)
+                            }}
+                        />
+
+                        {pasteOpen && (
+                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                                <Box
+                                    component="textarea"
+                                    autoFocus
+                                    value={pasteVal}
+                                    placeholder="Paste a PGN…"
+                                    rows={5}
+                                    onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => {
+                                        setPasteVal(e.target.value)
+                                        setPasteErr(null)
+                                    }}
+                                    sx={{
+                                        width: '100%',
+                                        boxSizing: 'border-box',
+                                        resize: 'vertical',
+                                        fontFamily: 'var(--font-mono)',
+                                        fontSize: 12,
+                                        color: 'var(--text)',
+                                        bgcolor: 'var(--bg)',
+                                        border: `1px solid ${pasteErr ? 'var(--danger, #e5484d)' : 'var(--line)'}`,
+                                        borderRadius: '8px',
+                                        px: 1.25,
+                                        py: 1,
+                                        outline: 'none',
+                                        '&:focus': {
+                                            borderColor: pasteErr
+                                                ? 'var(--danger, #e5484d)'
+                                                : 'var(--accent-line)',
+                                        },
+                                        '&::placeholder': { color: 'var(--muted)' },
+                                    }}
+                                />
+                                {pasteErr && (
+                                    <Typography
+                                        sx={{ fontSize: 11.5, color: 'var(--danger, #e5484d)' }}
+                                    >
+                                        {pasteErr}
+                                    </Typography>
+                                )}
+                                <AsideBtn icon={<FileInput size={15} />} label="Load" onClick={submitImport} />
+                            </Box>
+                        )}
+                    </>
+                )}
+            </Box>
+        </Card>
     )
 }
 

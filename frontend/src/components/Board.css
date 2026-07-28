@@ -62,6 +62,9 @@
         0 0 0 1px rgba(0, 0, 0, 0.35);
     user-select: none;
     touch-action: none;
+    /* Board-contrast preference, 70–130%; 100% (the default) is a no-op. Set on
+     * <html> by settings.ts, alongside --board-dim below. */
+    filter: contrast(var(--board-contrast, 100%));
 }
 
 /* Board-brightness preference: a black scrim over the squares (and legal-move

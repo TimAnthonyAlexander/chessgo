@@ -38,6 +38,12 @@ type Client struct {
 	botFillDelay  time.Duration // per-queue randomized wait before bot backfill (realism jitter)
 	watching      *game     // the game this client is spectating, if any
 	challengeCode string    // code of a pending private challenge this client created, "" if none
+	// lastGame is the game this client just finished, kept around so it can
+	// offer/accept/decline/cancel a rematch with the same opponent. Cleared
+	// (see rematch.go's disarmRematch/retireRematch) once the rematch window
+	// closes: a rematch starts, either side leaves, the window times out, or
+	// this client starts any other new game.
+	lastGame *game
 }
 
 func (c *Client) readPump() {

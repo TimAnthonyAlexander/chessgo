@@ -49,6 +49,20 @@ type game struct {
 	takebackPending bool
 	takebackBy      chess.Color
 
+	// Rematch (see rematch.go). Only meaningful once the game has ended:
+	// rematchArmedAt is stamped by armRematch at finish() and bounds the whole
+	// rematch window (rematchTTL) regardless of whether an offer is ever made —
+	// the finished game otherwise lives on only via each client's `lastGame`
+	// pointer, so nothing else would ever reclaim it. rematchPending/rematchBy
+	// track a standing offer within that window, mirroring drawPending/drawBy.
+	rematchPending bool
+	rematchBy      chess.Color
+	rematchArmedAt time.Time
+	// rematchOf is the finished game's id this game was created FROM via an
+	// accepted rematch, "" for a normally-matched game. Carried into the
+	// "matched" wire message so the client can tell the two apart.
+	rematchOf string
+
 	// filler is true for an engine-vs-engine "watch" game: it has no human
 	// players, is never rated, and is NOT reported to onFinish (no persistence,
 	// no Elo). It exists only to populate the spectator lobby.

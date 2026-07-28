@@ -14,12 +14,7 @@ import RecordPanel from '../components/profile/RecordPanel'
 import RatingsPanel from '../components/profile/RatingsPanel'
 import GamesPanel from '../components/profile/GamesPanel'
 import ProfileSkeleton from '../components/profile/ProfileSkeleton'
-import {
-    primaryRating,
-    ratingSeries,
-    type CatFilter,
-    type ResultFilter,
-} from '../components/profile/shared'
+import { primaryRating, type CatFilter, type ResultFilter } from '../components/profile/shared'
 
 export default function Profile() {
     const { name = '' } = useParams<{ name: string }>()
@@ -34,6 +29,9 @@ export default function Profile() {
     const [total, setTotal] = useState(0)
     const [category, setCategory] = useState<CatFilter>('all')
     const [result, setResult] = useState<ResultFilter>('all')
+    const [opponent, setOpponent] = useState('')
+    const [dateFrom, setDateFrom] = useState('')
+    const [dateTo, setDateTo] = useState('')
     const [pageLoading, setPageLoading] = useState(false)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
@@ -45,6 +43,9 @@ export default function Profile() {
         // Reset filters/paging for the newly-viewed profile.
         setCategory('all')
         setResult('all')
+        setOpponent('')
+        setDateFrom('')
+        setDateTo('')
         getProfile(name)
             .then((p) => {
                 if (cancelled) return
@@ -72,12 +73,13 @@ export default function Profile() {
     const totalPages = Math.max(1, Math.ceil(total / perPage))
 
     // A single fetch path for every page/filter change — the server does the
-    // filtering, so `total` (and thus the page count) reflects the filtered set.
+    // filtering (category, result, opponent substring, date range), so `total`
+    // (and thus the page count) reflects the filtered set. All axes compose.
     const fetchGames = useCallback(
-        (n: number, cat: CatFilter, res: ResultFilter) => {
+        (n: number, cat: CatFilter, res: ResultFilter, opp: string, from: string, to: string) => {
             if (!data) return
             setPageLoading(true)
-            getProfileGames(data.name, n, cat, res)
+            getProfileGames(data.name, n, cat, res, { opponent: opp, from, to })
                 .then((r) => {
                     setPageGames(r.games)
                     setPage(r.page)
@@ -94,9 +96,9 @@ export default function Profile() {
     const goToPage = useCallback(
         (n: number) => {
             if (n === page || n < 1 || n > totalPages || pageLoading) return
-            fetchGames(n, category, result)
+            fetchGames(n, category, result, opponent, dateFrom, dateTo)
         },
-        [fetchGames, page, totalPages, pageLoading, category, result],
+        [fetchGames, page, totalPages, pageLoading, category, result, opponent, dateFrom, dateTo],
     )
 
     // Filter changes always reset to page 1.
@@ -104,17 +106,41 @@ export default function Profile() {
         (cat: CatFilter) => {
             if (cat === category || pageLoading) return
             setCategory(cat)
-            fetchGames(1, cat, result)
+            fetchGames(1, cat, result, opponent, dateFrom, dateTo)
         },
-        [fetchGames, category, result, pageLoading],
+        [fetchGames, category, result, opponent, dateFrom, dateTo, pageLoading],
     )
     const changeResult = useCallback(
         (res: ResultFilter) => {
             if (res === result || pageLoading) return
             setResult(res)
-            fetchGames(1, category, res)
+            fetchGames(1, category, res, opponent, dateFrom, dateTo)
         },
-        [fetchGames, category, result, pageLoading],
+        [fetchGames, category, result, opponent, dateFrom, dateTo, pageLoading],
+    )
+    const changeOpponent = useCallback(
+        (opp: string) => {
+            if (opp === opponent || pageLoading) return
+            setOpponent(opp)
+            fetchGames(1, category, result, opp, dateFrom, dateTo)
+        },
+        [fetchGames, category, result, opponent, dateFrom, dateTo, pageLoading],
+    )
+    const changeDateFrom = useCallback(
+        (from: string) => {
+            if (from === dateFrom || pageLoading) return
+            setDateFrom(from)
+            fetchGames(1, category, result, opponent, from, dateTo)
+        },
+        [fetchGames, category, result, opponent, dateFrom, dateTo, pageLoading],
+    )
+    const changeDateTo = useCallback(
+        (to: string) => {
+            if (to === dateTo || pageLoading) return
+            setDateTo(to)
+            fetchGames(1, category, result, opponent, dateFrom, to)
+        },
+        [fetchGames, category, result, opponent, dateFrom, dateTo, pageLoading],
     )
 
     // Category chips to offer: 'all' plus the time controls the player has games
@@ -135,7 +161,7 @@ export default function Profile() {
     // and pick the player's headline (most-played) rating for the hero call-out.
     const primary = useMemo(() => {
         if (!data) return null
-        return primaryRating(data, ratingSeries(data.games, data.id))
+        return primaryRating(data)
     }, [data])
 
     return (
@@ -201,6 +227,12 @@ export default function Profile() {
                                 availableCats={availableCats}
                                 onCategory={changeCategory}
                                 onResult={changeResult}
+                                opponent={opponent}
+                                dateFrom={dateFrom}
+                                dateTo={dateTo}
+                                onOpponent={changeOpponent}
+                                onDateFrom={changeDateFrom}
+                                onDateTo={changeDateTo}
                             />
                         </Box>
                     </Box>

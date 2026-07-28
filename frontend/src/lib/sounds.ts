@@ -18,7 +18,14 @@ import { settingsStore } from './settings'
 
 let ctx: AudioContext | null = null
 let master: GainNode | null = null
-let enabled = readEnabled()
+
+// Master on/off now lives in the unified prefs blob (settings.ts) as `soundEnabled`
+// — it used to be a standalone `chessgo.sound` localStorage key with its own module
+// variable here; settingsStore.init() migrates that old key once (see its
+// migrateSoundEnabled()). Read live rather than cached so it's correct even before
+// this module has seen a gesture, and so a settingsStore.reset() takes effect with
+// no extra wiring.
+const isEnabled = (): boolean => settingsStore.get('soundEnabled')
 
 // The engine's headroom ceiling — the master gain at 100% volume. Per-voice gains
 // are tuned so the in-phase sum stays clear of clipping at this level; the volume
@@ -81,7 +88,7 @@ const LOOKAHEAD = 0.015
 let keepAlive: { osc: OscillatorNode; gain: GainNode } | null = null
 
 function startKeepAlive(): void {
-    if (keepAlive || !armed || !enabled) return
+    if (keepAlive || !armed || !isEnabled()) return
     if (typeof document !== 'undefined' && document.hidden) return
     const a = audio()
     if (!a) return
@@ -110,25 +117,15 @@ function stopKeepAlive(): void {
     keepAlive = null
 }
 
-function readEnabled(): boolean {
-    try {
-        return localStorage.getItem('chessgo.sound') !== 'off'
-    } catch {
-        return true
-    }
-}
-
+/** Thin delegate to settingsStore's `soundEnabled` — kept so every existing call
+ * site (this module's own guards, plus every UI reading the master toggle) is
+ * unchanged. ThemeDialog now reads the same value reactively via usePrefs(). */
 export function soundEnabled(): boolean {
-    return enabled
+    return isEnabled()
 }
 
 export function setSoundEnabled(on: boolean): void {
-    enabled = on
-    try {
-        localStorage.setItem('chessgo.sound', on ? 'on' : 'off')
-    } catch {
-        /* ignore */
-    }
+    settingsStore.set('soundEnabled', on)
     // Only hold the audio unit awake while we actually make sound. Muting releases
     // it (power + no tab audio indicator); unmuting re-warms it so the very next
     // move cue is instant. No-op until the first gesture arms us.
@@ -319,7 +316,7 @@ function epNote({
 }
 
 function guard(fn: () => void): void {
-    if (!enabled) return
+    if (!isEnabled()) return
     try {
         fn()
     } catch {
@@ -668,6 +665,14 @@ if (typeof window !== 'undefined') {
     // Live-apply the volume preference: any settings change re-reads the volume and
     // updates the master node (no-op until the context is built). Cheap.
     settingsStore.subscribe(applyMasterVolume)
+
+    // Keep the keep-alive oscillator in sync with `soundEnabled` even when it
+    // changes without going through setSoundEnabled() — e.g. the Settings dialog's
+    // "Reset to defaults", which calls settingsStore.reset() directly.
+    settingsStore.subscribe(() => {
+        if (isEnabled()) startKeepAlive()
+        else stopKeepAlive()
+    })
 
     // When the tab returns to the foreground (or the OS ends an interruption), try a
     // gestureless resume — it succeeds in the common auto-recover case and rejects

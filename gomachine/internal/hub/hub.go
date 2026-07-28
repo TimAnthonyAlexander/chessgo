@@ -38,7 +38,11 @@ type Hub struct {
 	games       map[string]*game
 	playerGames map[string]*game      // identity id -> active game (for reconnect)
 	challenges  map[string]*challenge // pending private invites, keyed by short code
-	onFinish    func(FinishedGame)
+	// rematchWindows indexes finished games still eligible for a rematch
+	// (armed by armRematch at finish(), keyed by game id) so the ticker can
+	// reclaim them after rematchTTL — see rematch.go.
+	rematchWindows map[string]*game
+	onFinish       func(FinishedGame)
 
 	// Bot backfill: if a player waits longer than a randomized per-player delay
 	// (see randomBotFillDelay; botDelay is now only a legacy on/off default) with no human match,
@@ -185,16 +189,17 @@ type FinishedGame struct {
 // New creates a Hub authenticating tickets with the given shared secret.
 func New(secret string) *Hub {
 	return &Hub{
-		secret:      secret,
-		register:    make(chan *Client),
-		unregister:  make(chan *Client),
-		commands:    make(chan command, 256),
-		pools:       map[string][]*Client{},
-		games:       map[string]*game{},
-		playerGames: map[string]*game{},
-		challenges:  map[string]*challenge{},
-		botMoves:    make(chan botMoveResult, 64),
-		botChats:    make(chan botChatResult, 64),
+		secret:         secret,
+		register:       make(chan *Client),
+		unregister:     make(chan *Client),
+		commands:       make(chan command, 256),
+		pools:          map[string][]*Client{},
+		games:          map[string]*game{},
+		playerGames:    map[string]*game{},
+		challenges:     map[string]*challenge{},
+		rematchWindows: map[string]*game{},
+		botMoves:       make(chan botMoveResult, 64),
+		botChats:       make(chan botChatResult, 64),
 	}
 }
 
@@ -262,6 +267,7 @@ func (h *Hub) Run() {
 			h.checkBotFill()
 			h.checkFillers()
 			h.checkChallenges()
+			h.checkRematches()
 			h.publishLobby()
 		}
 	}
@@ -303,6 +309,14 @@ func (h *Hub) handle(cmd command) {
 		h.joinChallenge(c, cmd.msg.Code)
 	case "cancelChallenge":
 		h.cancelChallenge(c)
+	case "rematchOffer":
+		h.rematchOffer(c)
+	case "rematchAccept":
+		h.rematchAccept(c)
+	case "rematchDecline":
+		h.rematchDecline(c)
+	case "rematchCancel":
+		h.rematchCancel(c)
 	}
 }
 
@@ -362,13 +376,21 @@ func (h *Hub) startGame(a, b *Client, tc timeControl, pool, variant string) {
 	// Public pairing is rated only if both sides are accounts; startGameWith further
 	// gates by variant (standard → time-control pools, duck → the duck pool, 960
 	// unrated). The queue key carries the variant through (standard threads bare).
-	h.startGameWith(white, black, tc, pool, !white.id.Anon && !black.id.Anon, variant)
+	h.startGameWith(white, black, tc, pool, !white.id.Anon && !black.id.Anon, variant, "")
 }
 
 // startGameWith creates a game between two clients with explicit colors and a
 // caller-decided rated flag. Shared by public matchmaking (random colors, rated
-// iff both accounts) and private challenges (creator's color/rated preference).
-func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, rated bool, variantID string) {
+// iff both accounts), private challenges (creator's color/rated preference) and
+// an accepted rematch (rematchOf carries the finished game's id forward, ""
+// otherwise). Returns the new game.
+func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, rated bool, variantID string, rematchOf string) *game {
+	// Starting any new game retires whatever rematch window either side's
+	// previous finished game still held open — offering a rematch to someone
+	// who already started playing again makes no sense, and leaving the
+	// window armed would otherwise leak a stale broadcast to them mid-game.
+	h.retireRematch(white.lastGame)
+	h.retireRematch(black.lastGame)
 	variantID = normalizeVariant(variantID)
 	// Rating eligibility by variant. Standard chess feeds the time-control Glicko
 	// pools; Duck Chess, Crazyhouse and Antichess each feed their own isolated pool
@@ -388,7 +410,7 @@ func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, r
 	}
 	st, err := variant.New(variantID, startFen)
 	if err != nil {
-		return // defensive: our start FENs always parse
+		return nil // defensive: our start FENs always parse
 	}
 	g := &game{
 		id:        newID(),
@@ -403,6 +425,7 @@ func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, r
 		online:    [2]bool{true, true},
 		startFen:  startFen,
 		variant:   variantID,
+		rematchOf: rematchOf,
 	}
 	white.game, black.game = g, g
 	h.games[g.id] = g
@@ -412,6 +435,7 @@ func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, r
 	h.activeGames.Add(1)
 	h.sendMatched(g, white, chess.White)
 	h.sendMatched(g, black, chess.Black)
+	return g
 }
 
 func (h *Hub) sendMatched(g *game, c *Client, color chess.Color) {
@@ -432,6 +456,7 @@ func (h *Hub) sendMatched(g *game, c *Client, color chess.Color) {
 		"clock":       map[string]int64{"w": g.clockMs[chess.White], "b": g.clockMs[chess.Black]},
 		"opponent":    map[string]any{"name": opp.Name, "rating": opp.RatingFor(categoryFor(g.pool, g.variant)), "anon": opp.Anon},
 		"legalMoves":  g.legalMoves(),
+		"rematch":     g.rematchOf != "", // true iff this game was created by an accepted rematch
 	}
 	g.addExtras(payload)
 	c.trySend(mustJSON(out("matched", payload)))
@@ -686,6 +711,13 @@ func (h *Hub) finish(g *game, result, reason string) {
 	})))
 	h.teardown(g)
 
+	// Filler (engine-vs-engine) games have no human clients to rematch, so
+	// they never open a rematch window (armRematch would just index a game
+	// nothing ever references).
+	if !g.filler {
+		h.armRematch(g)
+	}
+
 	// Filler (engine-vs-engine) games are never persisted or rated.
 	if h.onFinish != nil && !g.filler {
 		h.onFinish(FinishedGame{
@@ -797,8 +829,9 @@ func (h *Hub) resumeMsg(g *game, color chess.Color) map[string]any {
 // absent player still flags normally.
 func (h *Hub) handleDisconnect(c *Client) {
 	h.dequeue(c)
-	h.dropChallenge(c) // tear down any pending private invite this client created
-	h.unwatchGame(c)   // a spectator (or a player who was also watching) leaving
+	h.dropChallenge(c)          // tear down any pending private invite this client created
+	h.unwatchGame(c)            // a spectator (or a player who was also watching) leaving
+	h.retireRematch(c.lastGame) // no one left to offer/accept a rematch with
 	g := c.game
 	if g == nil || g.over {
 		return

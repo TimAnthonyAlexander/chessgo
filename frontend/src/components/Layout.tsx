@@ -9,12 +9,14 @@ import {
     useMediaQuery,
     useTheme,
 } from '@mui/material'
-import { ChevronDown, LogOut, Palette, UserRound } from 'lucide-react'
+import { ChevronDown, Keyboard, LogOut, Palette, UserRound } from 'lucide-react'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { gameSocket } from '../lib/socket'
 import { authStore, useAuth } from '../lib/auth'
+import { useGlobalShortcutListener, useShortcuts } from '../lib/shortcuts'
 import AuthDialog, { type AuthMode } from './AuthDialog'
 import ThemeDialog from './ThemeDialog'
+import ShortcutsDialog from './ShortcutsDialog'
 import Logo from './Logo'
 import NavStreak from './NavStreak'
 import Footer from './Footer'
@@ -95,10 +97,31 @@ export default function Layout() {
     const [authOpen, setAuthOpen] = useState(false)
     const [authMode, setAuthMode] = useState<AuthMode>('login')
     const [themeOpen, setThemeOpen] = useState(false)
+    const [shortcutsOpen, setShortcutsOpen] = useState(false)
     const openAuth = (mode: AuthMode = 'login') => {
         setAuthMode(mode)
         setAuthOpen(true)
     }
+
+    // The one app-wide keydown listener, plus the always-on globals: `?` opens
+    // this dialog (Shift+/ on most layouts — matched by character, not the
+    // physical key) and Escape closes it. Escape is only registered while the
+    // dialog is actually open, so it never intercepts a page's own Escape
+    // handling (e.g. Board.tsx) the rest of the time.
+    useGlobalShortcutListener()
+    useShortcuts('global', [
+        { keys: '?', label: 'Show keyboard shortcuts', group: 'Global', run: () => setShortcutsOpen(true) },
+        ...(shortcutsOpen
+            ? [
+                  {
+                      keys: 'Escape',
+                      label: 'Close this dialog',
+                      group: 'Global',
+                      run: () => setShortcutsOpen(false),
+                  },
+              ]
+            : []),
+    ])
 
     // The same nav model the desktop bar uses, flattened for the mobile drawer.
     const sections: MobileNavSection[] = navItems(user?.role === 'admin').map((item) =>
@@ -174,6 +197,19 @@ export default function Layout() {
                         onLogin={() => openAuth('login')}
                         onLogout={() => void authStore.logout()}
                     />
+                    <Tooltip title="Keyboard shortcuts">
+                        <IconButton
+                            aria-label="Keyboard shortcuts"
+                            size="small"
+                            onClick={() => setShortcutsOpen(true)}
+                            sx={{
+                                color: 'var(--text-dim)',
+                                '&:hover': { color: 'var(--accent)' },
+                            }}
+                        >
+                            <Keyboard size={18} />
+                        </IconButton>
+                    </Tooltip>
                     <Tooltip title="Appearance">
                         <IconButton
                             aria-label="Appearance"
@@ -221,6 +257,8 @@ export default function Layout() {
             />
 
             <ThemeDialog open={themeOpen} onClose={() => setThemeOpen(false)} />
+
+            <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
         </Box>
     )
 }

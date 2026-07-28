@@ -145,6 +145,11 @@ a {
 }
 
 @media (prefers-reduced-motion: reduce) {
+    /* Overrides whatever animation speed Settings picked (--piece-anim, set on
+       <html> by lib/settings.ts) — the OS-level preference always wins. */
+    :root {
+        --piece-anim: 0ms;
+    }
     * {
         animation-duration: 0.001ms !important;
         transition-duration: 0.001ms !important;

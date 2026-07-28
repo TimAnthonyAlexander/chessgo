@@ -228,9 +228,21 @@ function GameCard({
         }
     }, [game.fen, game.sideToMove, showEval])
 
+    const timeControl = game.pool
+    const label = `${game.white.name} vs ${game.black.name}, ${timeControl}`
+
     return (
         <Box
             onClick={onClick}
+            role="button"
+            tabIndex={0}
+            aria-label={label}
+            onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onClick()
+                }
+            }}
             sx={{
                 position: 'relative',
                 bgcolor: 'var(--surface)',
@@ -242,6 +254,7 @@ function GameCard({
                 transition: 'transform .12s ease, border-color .12s ease',
                 '&:hover': { transform: 'translateY(-2px)', borderColor: 'var(--accent-line)' },
                 '&:hover .watch-cta': { opacity: 1 },
+                '&:focus-visible': { outline: '2px solid #5a6bd8', outlineOffset: '2px' },
             }}
         >
             <PlayerRow side={game.black} ms={game.clockB} active={blackActive} />

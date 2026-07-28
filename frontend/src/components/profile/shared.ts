@@ -77,22 +77,6 @@ export function fmtRelative(iso: string): string {
     return fmtDate(iso)
 }
 
-// Per-category rating progression, oldest → newest, reconstructed from each
-// rated game's post-game rating. Feeds the hero sparkline; no backend change.
-export function ratingSeries(games: ProfileGame[], userId: string): Record<string, number[]> {
-    const out: Record<string, number[]> = {}
-    // `games` arrives newest-first; walk it backwards for chronological order.
-    for (let i = games.length - 1; i >= 0; i--) {
-        const g = games[i]
-        if (!g.rated || g.variant !== 'standard') continue
-        const { ratingAfter } = perspective(g, userId)
-        if (ratingAfter == null) continue
-        const cat = g.category || ''
-        ;(out[cat] ??= []).push(ratingAfter)
-    }
-    return out
-}
-
 export interface PrimaryRating {
     key: RatingCategory
     label: Category
@@ -106,10 +90,7 @@ export interface PrimaryRating {
 
 // The player's "headline" rating: the most-played time control. Drives the big
 // call-out in the hero. Returns null only if the profile has no ratings at all.
-export function primaryRating(
-    profile: Profile,
-    series: Record<string, number[]>,
-): PrimaryRating | null {
+export function primaryRating(profile: Profile): PrimaryRating | null {
     let best: { key: RatingCategory; label: Category } | null = null
     let bestGames = -1
     for (const c of TC_CATEGORIES) {
@@ -122,9 +103,8 @@ export function primaryRating(
     if (!best) return null
 
     const tile = profile.ratings[best.key]
-    const s = series[best.key] ?? []
-    // Trend over at most the last ~16 rated games in this category.
-    const window = s.slice(-16)
+    // The server already caps this at HISTORY_POINTS, oldest -> newest.
+    const window = profile.ratingHistory[best.key] ?? []
     const delta = window.length >= 2 ? window[window.length - 1] - window[0] : null
 
     return {

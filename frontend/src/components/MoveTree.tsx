@@ -28,6 +28,17 @@ const JUDGMENT_GLYPH: Record<Judgment, string> = {
     blunder: '??',
 }
 
+// Accessible name for each judgment glyph — announced by screen readers and
+// shown as a hover title, since the glyph itself conveys meaning through color
+// + symbol only.
+const JUDGMENT_NAME: Record<Judgment, string> = {
+    best: 'Best move',
+    good: 'Good move',
+    inaccuracy: 'Inaccuracy',
+    mistake: 'Mistake',
+    blunder: 'Blunder',
+}
+
 interface Props {
     tree: Tree
     currentId: number
@@ -98,8 +109,10 @@ export default function MoveTree({ tree, currentId, onSelect }: Props) {
         const active = node.id === currentId
         return (
             <Box
-                component="span"
+                component="button"
+                type="button"
                 key={node.id}
+                aria-current={active ? 'step' : undefined}
                 onClick={() => onSelect(node.id)}
                 sx={{
                     cursor: 'pointer',
@@ -109,6 +122,8 @@ export default function MoveTree({ tree, currentId, onSelect }: Props) {
                     px: 0.4,
                     py: '1px',
                     mr: 0.25,
+                    m: 0,
+                    border: 'none',
                     borderRadius: '3px',
                     fontFamily: 'var(--font-mono)',
                     fontSize: 12.5,
@@ -116,6 +131,7 @@ export default function MoveTree({ tree, currentId, onSelect }: Props) {
                     color: active ? '#fff' : j ? JUDGMENT_COLOR[j] : 'var(--text-dim)',
                     bgcolor: active ? CURRENT_BG : 'transparent',
                     '&:hover': active ? {} : { bgcolor: 'var(--line)' },
+                    '&:focus-visible': { outline: '2px solid #5a6bd8', outlineOffset: '1px' },
                 }}
             >
                 {num && (
@@ -128,7 +144,11 @@ export default function MoveTree({ tree, currentId, onSelect }: Props) {
                 )}
                 <span>
                     {node.move ? <MoveSan san={node.move.san} /> : ''}
-                    {j && JUDGMENT_GLYPH[j]}
+                    {j && JUDGMENT_GLYPH[j] && (
+                        <Box component="span" aria-label={JUDGMENT_NAME[j]} title={JUDGMENT_NAME[j]}>
+                            {JUDGMENT_GLYPH[j]}
+                        </Box>
+                    )}
                 </span>
             </Box>
         )
@@ -277,11 +297,18 @@ function Cell({
     const j = node.judgment
     return (
         <Box
+            component="button"
+            type="button"
+            aria-current={active ? 'step' : undefined}
             onClick={() => onSelect(node.id)}
             sx={{
                 minHeight: ROW_H,
                 display: 'flex',
                 alignItems: 'center',
+                width: '100%',
+                textAlign: 'left',
+                border: 'none',
+                m: 0,
                 px: 1.25,
                 cursor: 'pointer',
                 fontFamily: 'var(--font-mono)',
@@ -297,10 +324,15 @@ function Cell({
                           ? 'rgba(255,255,255,0.09)'
                           : 'rgba(255,255,255,0.06)',
                 },
+                '&:focus-visible': { outline: '2px solid #5a6bd8', outlineOffset: '-2px' },
             }}
         >
             {node.move ? <MoveSan san={node.move.san} /> : ''}
-            {j ? JUDGMENT_GLYPH[j] : ''}
+            {j && JUDGMENT_GLYPH[j] && (
+                <Box component="span" aria-label={JUDGMENT_NAME[j]} title={JUDGMENT_NAME[j]}>
+                    {JUDGMENT_GLYPH[j]}
+                </Box>
+            )}
         </Box>
     )
 }

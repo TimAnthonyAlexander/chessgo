@@ -1,5 +1,6 @@
+import { useEffect, useState } from 'react'
 import { Box, Typography } from '@mui/material'
-import { Bot, ChevronLeft, ChevronRight, Skull } from 'lucide-react'
+import { Bot, ChevronLeft, ChevronRight, Search, Skull } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import type { ProfileGame } from '../../api/client'
 import { DuckGlyph } from '../DuckGlyph'
@@ -11,6 +12,10 @@ import {
     perspective,
     type ResultFilter,
 } from './shared'
+
+// How long to wait after the last keystroke before the opponent search fires
+// server-side (avoids one request per character).
+const SEARCH_DEBOUNCE_MS = 300
 
 const CAT_LABEL: Record<Exclude<CatFilter, 'all'>, string> = {
     bullet: 'Bullet',
@@ -37,6 +42,12 @@ export default function GamesPanel({
     availableCats,
     onCategory,
     onResult,
+    opponent,
+    dateFrom,
+    dateTo,
+    onOpponent,
+    onDateFrom,
+    onDateTo,
 }: {
     games: ProfileGame[]
     userId: string
@@ -49,9 +60,18 @@ export default function GamesPanel({
     availableCats: CatFilter[]
     onCategory: (cat: CatFilter) => void
     onResult: (res: ResultFilter) => void
+    // Opponent-name search (debounced client-side) + inclusive date range —
+    // both server-side filters, composing with category/result above.
+    opponent: string
+    dateFrom: string
+    dateTo: string
+    onOpponent: (v: string) => void
+    onDateFrom: (v: string) => void
+    onDateTo: (v: string) => void
 }) {
     const navigate = useNavigate()
-    const unfiltered = category === 'all' && result === 'all'
+    const unfiltered =
+        category === 'all' && result === 'all' && !opponent && !dateFrom && !dateTo
 
     return (
         <Panel>
@@ -70,6 +90,15 @@ export default function GamesPanel({
                         ))}
                     </Box>
                 }
+            />
+
+            <FilterBar
+                opponent={opponent}
+                dateFrom={dateFrom}
+                dateTo={dateTo}
+                onOpponent={onOpponent}
+                onDateFrom={onDateFrom}
+                onDateTo={onDateTo}
             />
 
             {availableCats.length > 2 && (
@@ -123,6 +152,101 @@ export default function GamesPanel({
             )}
         </Panel>
     )
+}
+
+// Opponent search + date range, above the pool chips. Kept as plain bordered
+// controls (no MUI TextField/DatePicker) so it matches the hand-styled Chip/
+// PageBtn look already on this panel rather than introducing a new control style.
+function FilterBar({
+    opponent,
+    dateFrom,
+    dateTo,
+    onOpponent,
+    onDateFrom,
+    onDateTo,
+}: {
+    opponent: string
+    dateFrom: string
+    dateTo: string
+    onOpponent: (v: string) => void
+    onDateFrom: (v: string) => void
+    onDateTo: (v: string) => void
+}) {
+    // A local draft so every keystroke feels instant while the committed
+    // (server-triggering) value only updates after the debounce settles.
+    const [draft, setDraft] = useState(opponent)
+
+    // Stay in sync if the committed value changes from outside (profile switch,
+    // filters reset) without re-firing the debounce for that sync itself.
+    useEffect(() => {
+        setDraft(opponent)
+    }, [opponent])
+
+    useEffect(() => {
+        if (draft === opponent) return
+        const t = window.setTimeout(() => onOpponent(draft), SEARCH_DEBOUNCE_MS)
+        return () => window.clearTimeout(t)
+    }, [draft, opponent, onOpponent])
+
+    return (
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 1.5 }}>
+            <Box sx={{ position: 'relative', flex: '1 1 180px', minWidth: 140 }}>
+                <Search
+                    size={13}
+                    color="var(--muted)"
+                    style={{ position: 'absolute', left: 10, top: '50%', translate: '0 -50%' }}
+                />
+                <Box
+                    component="input"
+                    type="text"
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    placeholder="Search opponent"
+                    aria-label="Search opponent"
+                    sx={inputSx({ pl: 3 })}
+                />
+            </Box>
+            <Box
+                component="input"
+                type="date"
+                value={dateFrom}
+                max={dateTo || undefined}
+                onChange={(e) => onDateFrom(e.target.value)}
+                aria-label="From date"
+                sx={inputSx({ width: 132, flex: '0 0 auto', colorScheme: 'auto' })}
+            />
+            <Box
+                component="input"
+                type="date"
+                value={dateTo}
+                min={dateFrom || undefined}
+                onChange={(e) => onDateTo(e.target.value)}
+                aria-label="To date"
+                sx={inputSx({ width: 132, flex: '0 0 auto', colorScheme: 'auto' })}
+            />
+        </Box>
+    )
+}
+
+// Shared look for the hand-styled search/date inputs above — a quiet bordered
+// field matching the Chip/PageBtn controls rather than the MUI default.
+function inputSx(extra: Record<string, unknown>) {
+    return {
+        width: '100%',
+        height: 32,
+        px: 1.1,
+        fontFamily: 'var(--font-display)',
+        fontSize: 12.5,
+        color: 'var(--text)',
+        bgcolor: 'transparent',
+        border: '1px solid var(--line-soft)',
+        borderRadius: '8px',
+        outline: 'none',
+        transition: 'border-color .12s ease',
+        '&::placeholder': { color: 'var(--muted)' },
+        '&:focus': { borderColor: 'var(--accent-line)' },
+        ...extra,
+    }
 }
 
 // Page numbers to render, collapsing long runs to a single ellipsis around the

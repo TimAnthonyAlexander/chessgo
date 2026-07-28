@@ -5,11 +5,14 @@ import type { Profile, RatingCategory } from '../../api/client'
 import { CATEGORY_META } from '../../lib/timeControl'
 import { DuckGlyph } from '../DuckGlyph'
 import { Panel, PanelHead } from '../home/Panel'
+import RatingSparkline from './RatingSparkline'
 import { TC_CATEGORIES } from './shared'
 
 /** Compact ratings list for the sidebar: one row per pool (denser + more
  * scannable than the old six-tile grid), with the player's primary category
- * subtly highlighted, and puzzle/duck surfaced as accent rows below. */
+ * subtly highlighted, and puzzle/duck surfaced as accent rows below. Every
+ * pool gets its own small trend sparkline (from `profile.ratingHistory`), not
+ * just the primary one the hero shows. */
 export default function RatingsPanel({
     profile,
     primaryKey,
@@ -33,6 +36,7 @@ export default function RatingsPanel({
                             rating={t.rating}
                             provisional={t.provisional}
                             sub={`${t.games} ${t.games === 1 ? 'game' : 'games'}`}
+                            series={profile.ratingHistory[key] ?? []}
                             primary={key === primaryKey}
                         />
                     )
@@ -47,6 +51,7 @@ export default function RatingsPanel({
                     rating={profile.puzzle.rating}
                     provisional={profile.puzzle.provisional}
                     sub={`${profile.puzzle.solved}W ${profile.puzzle.games - profile.puzzle.solved}L`}
+                    series={profile.ratingHistory.puzzle ?? []}
                     accent
                 />
                 <RatingRow
@@ -60,6 +65,7 @@ export default function RatingsPanel({
                     rating={profile.duck.rating}
                     provisional={profile.duck.provisional}
                     sub={`${profile.duck.games} ${profile.duck.games === 1 ? 'game' : 'games'}`}
+                    series={profile.ratingHistory.duck ?? []}
                     accent
                 />
                 <RatingRow
@@ -69,6 +75,7 @@ export default function RatingsPanel({
                     rating={profile.antichess.rating}
                     provisional={profile.antichess.provisional}
                     sub={`${profile.antichess.games} ${profile.antichess.games === 1 ? 'game' : 'games'}`}
+                    series={profile.ratingHistory.antichess ?? []}
                     accent
                 />
             </Box>
@@ -83,6 +90,7 @@ function RatingRow({
     rating,
     provisional,
     sub,
+    series,
     primary,
     accent,
 }: {
@@ -92,6 +100,7 @@ function RatingRow({
     rating: number
     provisional: boolean
     sub: string
+    series: number[]
     primary?: boolean
     accent?: boolean
 }) {
@@ -114,6 +123,9 @@ function RatingRow({
                     {label}
                 </Typography>
                 <Typography sx={{ fontSize: 11, color: 'var(--muted)' }}>{sub}</Typography>
+            </Box>
+            <Box sx={{ width: 44, height: 20, flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+                <RatingSparkline series={series} color={color} width={44} height={20} />
             </Box>
             <Typography
                 sx={{

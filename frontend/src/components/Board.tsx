@@ -140,6 +140,12 @@ interface BoardProps {
      * keyboard 'H' hold on desktop and a floating press-and-hold pad on touch devices.
      * When false, `hint` is never shown. */
     hintReveal?: boolean
+    /** External two-stage hint control (the puzzle trainer's hint button), independent
+     * of the admin hold-to-peek interaction above. 'piece' rings only `hint.from` (which
+     * piece to move); 'move' rings both `hint.from` and `hint.to` (the full move). Unlike
+     * `hintReveal`, this stays visible for as long as the page keeps it set — there's no
+     * hold/release. Omit/null to leave it out of the render entirely. */
+    hintStage?: 'piece' | 'move' | null
     /** The local player's own color — enables premove input while it isn't their
      * turn (i.e. while `interactive` is false). Omit/null to disable premoves. */
     premoveColor?: Color | null
@@ -273,6 +279,7 @@ export default function Board({
     circle,
     hint,
     hintReveal = false,
+    hintStage = null,
     premoveColor,
     premoves,
     onCancelPremove,
@@ -299,6 +306,11 @@ export default function Board({
     // Admin best-move hint hold-to-reveal: `hint` (from the page) is only DISPLAYED
     // while `peek` is true, so nothing stands on the board for a spectator to notice.
     const [peek, setPeek] = useState(false)
+    // The two hint mechanisms are independent: admin hold-to-peek (`peek`) always
+    // rings both squares; the puzzle trainer's `hintStage` rings just the FROM
+    // square at 'piece' and both at 'move'. Either one being active shows the mark.
+    const hintVisible = peek || hintStage != null
+    const hintShowTo = peek || hintStage === 'move'
 
     // Annotations are per-position: clear them whenever the position changes.
     useEffect(() => {
@@ -729,9 +741,11 @@ export default function Board({
                                 {prefs.showLegalMoves && isTarget && piece && <span className="ring" />}
                                 {isDuckTarget && !piece && <span className="dot" />}
                                 {isDropTarget && !piece && <span className="dot" />}
-                                {peek && hint && (hint.from === sq || hint.to === sq) && (
-                                    <span className="hint-mark" />
-                                )}
+                                {hintVisible &&
+                                    hint &&
+                                    (hint.from === sq || (hintShowTo && hint.to === sq)) && (
+                                        <span className="hint-mark" />
+                                    )}
                                 {piece && (
                                     <PieceGlyph
                                         piece={piece}

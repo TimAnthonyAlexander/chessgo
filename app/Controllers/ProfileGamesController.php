@@ -14,10 +14,14 @@ use App\Models\User;
  *
  * Filtering is server-side (so it spans the whole history, not just the page):
  *   GET /users/{name}/games?page=<n>&category=<pool>&result=<win|loss|draw>
+ *     &opponent=<name-substring>&from=<YYYY-MM-DD>&to=<YYYY-MM-DD>
  *
  * `category` is a stored value (bullet|blitz|rapid|classical|duck — Chess960
  * games keep their time-control category). `result` is from the profiled
  * player's own perspective, so it depends on which colour they played.
+ * `opponent` matches a substring of the *other* side's display name (parameterized
+ * LIKE, never string-concatenated SQL). `from`/`to` bound `created_at` by calendar
+ * day (inclusive) and compose with every other filter above.
  */
 class ProfileGamesController extends Controller
 {
@@ -38,8 +42,23 @@ class ProfileGamesController extends Controller
     /** Bound from ?result= — 'win' | 'loss' | 'draw', or '' for all. */
     public string $result = '';
 
+    /** Bound from ?opponent= — free-text substring of the opponent's display name. */
+    public string $opponent = '';
+
+    /** Bound from ?from= — inclusive lower date bound, 'YYYY-MM-DD'. */
+    public string $from = '';
+
+    /** Bound from ?to= — inclusive upper date bound, 'YYYY-MM-DD'. */
+    public string $to = '';
+
     public function get(): JsonResponse
     {
+        $this->validate([
+            'opponent' => 'string|max:64',
+            'from' => 'string|max:10',
+            'to' => 'string|max:10',
+        ]);
+
         $name = trim($this->name);
         if ($name === '') {
             return JsonResponse::badRequest('name is required');
@@ -80,6 +99,34 @@ class ProfileGamesController extends Controller
             });
         } elseif ($this->result === 'draw') {
             $query->where('result', '=', '1/2-1/2');
+        }
+
+        // Opponent search — substring match on whichever side ISN'T the profiled
+        // player, parameterized (never string-concatenated into the query).
+        $opponent = trim($this->opponent);
+        if ($opponent !== '') {
+            $like = '%' . $opponent . '%';
+            $query->whereGroup(function ($g) use ($id, $like): void {
+                $g->whereGroup(
+                    fn ($x) => $x->where('white_user_id', '=', $id)
+                        ->where('black_name', 'LIKE', $like),
+                )->orWhereGroup(
+                    fn ($x) => $x->where('black_user_id', '=', $id)
+                        ->where('white_name', 'LIKE', $like),
+                );
+            });
+        }
+
+        // Date range — inclusive calendar-day bounds on created_at. Malformed
+        // input is ignored rather than rejected (the date inputs never send
+        // anything else, and a stray filter shouldn't 400 the whole request).
+        $from = trim($this->from);
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $from) === 1) {
+            $query->where('created_at', '>=', $from . ' 00:00:00');
+        }
+        $to = trim($this->to);
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $to) === 1) {
+            $query->where('created_at', '<=', $to . ' 23:59:59');
         }
 
         $paged = $query
