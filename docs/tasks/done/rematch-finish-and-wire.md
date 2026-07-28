@@ -1,6 +1,6 @@
 # Rematch — finish the hub work and wire the UI
 
-**Status:** backend partially built and UNVERIFIED. No frontend at all.
+**Status:** verified and completed — 2026-07-28. Backend committed in 1509eea, frontend wired in follow-up.
 
 There is no rematch in the product. When a live game ends the only options are
 "Lobby" and "New game", and "New game" re-queues the matchmaking pool rather than

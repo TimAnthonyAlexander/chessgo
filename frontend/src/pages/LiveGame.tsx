@@ -121,6 +121,17 @@ export default function LiveGame() {
         delta: number
     } | null>(null)
 
+    // When a rematch is accepted, the hub sends `matched` with a fresh game ID.
+    // If we're already on the LiveGame page showing the ended game, navigate to the
+    // new game's URL so the route matches the game being played.
+    const prevGameId = useRef<string | null>(null)
+    useEffect(() => {
+        if (g && !g.ended && prevGameId.current && prevGameId.current !== g.id) {
+            navigate(`/game/${g.id}`, { replace: true })
+        }
+        prevGameId.current = g?.id ?? null
+    }, [g?.id, g?.ended])
+
     function toggleSound() {
         const next = !sound
         setSound(next)
@@ -686,7 +697,27 @@ export default function LiveGame() {
                                     </Box>
                                 </Typography>
                             )}
+                            {g.rematchOffer === 'theirs' && (
+                                <OfferBanner
+                                    label="Opponent wants a rematch"
+                                    onAccept={() => gameSocket.acceptRematch()}
+                                    onDecline={() => gameSocket.declineRematch()}
+                                />
+                            )}
                             <Box sx={{ display: 'flex', gap: 1 }}>
+                                {g.rematchOffer === 'mine' ? (
+                                    <ActionBtn
+                                        tone="primary"
+                                        label="Offered…"
+                                        onClick={() => gameSocket.cancelRematch()}
+                                    />
+                                ) : g.rematchOffer === 'theirs' ? null : (
+                                    <ActionBtn
+                                        tone="primary"
+                                        label="Rematch"
+                                        onClick={() => gameSocket.offerRematch()}
+                                    />
+                                )}
                                 <ActionBtn
                                     tone="neutral"
                                     label="Lobby"

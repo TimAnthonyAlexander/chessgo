@@ -44,6 +44,7 @@ export interface LiveGameState {
     messages: ChatMessage[]
     drawOffer: OfferState
     takebackOffer: OfferState
+    rematchOffer: OfferState
 }
 
 let chatSeq = 0
@@ -107,6 +108,7 @@ function buildGame(m: Msg): LiveGameState {
         messages: [],
         drawOffer: null,
         takebackOffer: null,
+        rematchOffer: null,
     }
 }
 
@@ -142,6 +144,7 @@ function buildResume(m: Msg): LiveGameState {
         messages: [],
         drawOffer: null,
         takebackOffer: null,
+        rematchOffer: null,
     }
 }
 
@@ -331,13 +334,31 @@ class GameSocket {
         this.setOffer('takebackOffer', null)
     }
 
+    offerRematch() {
+        this.rawSend({ type: 'rematchOffer' })
+    }
+
+    acceptRematch() {
+        this.rawSend({ type: 'rematchAccept' })
+    }
+
+    declineRematch() {
+        this.rawSend({ type: 'rematchDecline' })
+        this.setOffer('rematchOffer', null)
+    }
+
+    cancelRematch() {
+        this.rawSend({ type: 'rematchCancel' })
+        this.setOffer('rematchOffer', null)
+    }
+
     sendChat(text: string) {
         const trimmed = text.trim()
         if (!trimmed) return
         this.rawSend({ type: 'chat', text: trimmed })
     }
 
-    private setOffer(key: 'drawOffer' | 'takebackOffer', val: OfferState) {
+    private setOffer(key: 'drawOffer' | 'takebackOffer' | 'rematchOffer', val: OfferState) {
         const g = this.state.game
         if (!g) return
         this.set({ game: { ...g, [key]: val } })
@@ -448,6 +469,15 @@ class GameSocket {
             case 'takebackDeclined':
                 this.setOffer('takebackOffer', null)
                 break
+            case 'rematchOffered':
+                this.onOffer('rematchOffer', msg.by)
+                break
+            case 'rematchDeclined':
+                this.setOffer('rematchOffer', null)
+                break
+            case 'rematchExpired':
+                this.setOffer('rematchOffer', null)
+                break
             case 'chat':
                 this.onChat(msg)
                 break
@@ -504,7 +534,7 @@ class GameSocket {
     }
 
     // A draw/takeback offer arrived: 'mine' if we sent it (echo), 'theirs' otherwise.
-    private onOffer(key: 'drawOffer' | 'takebackOffer', by: string) {
+    private onOffer(key: 'drawOffer' | 'takebackOffer' | 'rematchOffer', by: string) {
         const g = this.state.game
         if (!g) return
         this.set({ game: { ...g, [key]: by === g.color ? 'mine' : 'theirs' } })

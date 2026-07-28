@@ -449,6 +449,31 @@ export default function BotGame() {
         setStartFen(null)
     }
 
+    // Rematch: start a new bot game with colors swapped, same rating and variant.
+    // Client-side only — no hub involvement.
+    function rematch() {
+        if (!game) return
+        const other: Color = game.human_color === 'w' ? 'b' : 'w'
+        setColorChoice(other)
+        setStartFen(null)
+        setError(null)
+        setCreating(true)
+        setResigned(false)
+        setFlipped(false)
+        setViewIndex(null)
+        const fen = variant === 'chess960' ? random960() : undefined
+        createBotGame(rating, other, { variant, fen })
+            .then((g) => {
+                setGame(g)
+                const opener = g.moves[g.moves.length - 1]
+                if (opener) playForSan(opener.san, g.status !== 'ongoing')
+            })
+            .catch((e) => {
+                setError(e instanceof Error ? e.message : 'Could not start a game.')
+            })
+            .finally(() => setCreating(false))
+    }
+
     // "New game" action for the UI: confirm first when a game is still in progress
     // (one click would otherwise wipe it), otherwise return to setup immediately.
     function requestNewGame() {
@@ -554,6 +579,8 @@ export default function BotGame() {
                         onUndo={undo}
                         onResign={requestResign}
                         onNewGame={requestNewGame}
+                        onRematch={rematch}
+                        creating={creating}
                         showMoveList={prefs.showMoveList}
                         zen={prefs.zenMode && ongoing}
                         isAdmin={isAdmin}
@@ -666,6 +693,8 @@ function MovePanel({
     onUndo,
     onResign,
     onNewGame,
+    onRematch,
+    creating,
     showMoveList,
     zen,
     isAdmin,
@@ -693,6 +722,8 @@ function MovePanel({
     onUndo: () => void
     onResign: () => void
     onNewGame: () => void
+    onRematch: () => void
+    creating: boolean
     /** Show the SAN move grid (preference). Nav controls stay either way. */
     showMoveList: boolean
     /** Zen mode active for this (ongoing) game — hide rating chrome. */
@@ -885,6 +916,15 @@ function MovePanel({
                         label="New game"
                         onClick={onNewGame}
                     />
+                    {!ongoing && (
+                        <ActionBtn
+                            tone="primary"
+                            icon={<RotateCcw size={15} />}
+                            label="Rematch"
+                            onClick={onRematch}
+                            disabled={creating}
+                        />
+                    )}
                 </Box>
 
                 {/* Once the game is over, offer to carry the position elsewhere —
