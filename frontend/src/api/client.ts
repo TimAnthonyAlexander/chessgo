@@ -213,6 +213,15 @@ export interface Analysis {
     bestmove: string | null
     pv: string[] | null // principal variation (best line) as UCI moves from the position
     depth: number | null
+    lines?: AnalysisLine[] // multi-PV lines when multipv > 1, same depth as the main result
+}
+
+export interface AnalysisLine {
+    bestmove: string
+    san: string
+    eval: { type: 'cp' | 'mate'; value: number }
+    pv: string[]
+    depth: number
 }
 
 /** Full-strength evaluation of a position (drives the eval bar, level-independent).
@@ -229,11 +238,12 @@ export interface Analysis {
  */
 export function analyze(
     fen: string,
-    opts?: { movetime?: number; depth?: number; signal?: AbortSignal },
+    opts?: { movetime?: number; depth?: number; multipv?: number; signal?: AbortSignal },
 ): Promise<Analysis> {
-    const body: { fen: string; movetime?: number; depth?: number } = { fen }
+    const body: { fen: string; movetime?: number; depth?: number; multipv?: number } = { fen }
     if (opts?.movetime) body.movetime = opts.movetime
     if (opts?.depth) body.depth = opts.depth
+    if (opts?.multipv) body.multipv = opts.multipv
     // `signal` lets a caller abort an in-flight request when it's no longer wanted —
     // the analysis board cancels the previous position's deepening when you move, so
     // the trailing deep call doesn't hog a browser connection / engine worker.

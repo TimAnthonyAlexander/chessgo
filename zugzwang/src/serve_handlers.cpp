@@ -331,6 +331,7 @@ json best_move(const json& body) {
     bool hasLevel = jhas(limits, "level");
     int depth = limits.value("depth", 0);
     int movetimeMs = limits.value("movetime", 0);
+    int multipv = limits.value("multipv", 0);
     int64_t nodes = limits.value("nodes", static_cast<int64_t>(0));
     // aggr/fast: STUBBED (ignored) — see WIRING_RECON.md + the port report.
     // `book` is now HONORED on the rating path below (was previously stubbed).
@@ -413,11 +414,9 @@ json best_move(const json& body) {
     }
 
     // Opening book: serve a precomputed result instantly for full-strength
-    // analysis (no rating/level/worst — mirrors gomachine's bookHit at the
-    // exact same call site, server.go handleBestMove, and zugzwang's own UCI
-    // try_book_move). Movegen-validated: a stale/wrong record can never yield
-    // an illegal move here.
-    if (Book::shared().loaded()) {
+    // analysis (no rating/level/worst). Skip when multipv > 1 — the book has
+    // one move; multi-PV needs a real search for all N lines.
+    if (multipv <= 1 && Book::shared().loaded()) {
         if (const Book::BookEntry* e = Book::shared().lookup(Book::book_key(pos));
             e && !e->pv.empty()) {
             Move bm = Rules::parse_uci_move(pos, e->pv[0]);
@@ -447,6 +446,34 @@ json best_move(const json& body) {
         lim.movetime = movetimeMs;
     } else {
         lim.movetime = 1000;
+    }
+    if (multipv > 1) {
+        // Multi-PV: sequential depth-gated searches sharing the same TT.
+        // When `depth > 0`, each candidate gets `depth - 1` — same depth,
+        // no time split (multi_pv only splits time when depth == 0).
+        // When `depth == 0`, the full movetime is split across legal moves.
+        auto cands = multi_pv(group, pos, depth, movetimeMs);
+        if (multipv < static_cast<int>(cands.size())) cands.resize(multipv);
+        json lines = json::array();
+        for (const CandidateLine& c : cands) {
+            lines.push_back(json{
+                {"bestmove", move_to_uci(c.move)},
+                {"san", Rules::san(pos, c.move)},
+                {"eval", eval_json(c.score)},
+                {"pv", uci_pv(c.pv)},
+                {"depth", c.depth},
+            });
+        }
+        const CandidateLine& top = cands[0];
+        return json{
+            {"bestmove", move_to_uci(top.move)},
+            {"san", Rules::san(pos, top.move)},
+            {"eval", eval_json(top.score)},
+            {"pv", uci_pv(top.pv)},
+            {"depth", top.depth},
+            {"lines", lines},
+            {"opening", openingResp},
+        };
     }
     Search::Result r = Search::start_group(group, pos, lim);
     if (r.bestMove == MOVE_NONE) {

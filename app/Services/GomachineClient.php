@@ -164,11 +164,14 @@ class GomachineClient
      *
      * @return array<string, mixed> {bestmove, san, eval, pv, depth, nodes}
      */
-    public function analyze(string $fen, int $movetimeMs = 1500, int $depth = 0): array
+    public function analyze(string $fen, int $movetimeMs = 1500, int $depth = 0, int $multipv = 0): array
     {
         $limits = ['movetime' => $movetimeMs];
         if ($depth > 0) {
             $limits['depth'] = $depth;
+        }
+        if ($multipv > 0) {
+            $limits['multipv'] = $multipv;
         }
 
         // The analysis board's deep-rung calls pass a large movetime ceiling; give

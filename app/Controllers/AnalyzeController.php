@@ -38,6 +38,8 @@ class AnalyzeController extends Controller
 
     public int $depth = 0;
 
+    public int $multipv = 0;
+
     public function __construct(
         private readonly EngineSelector $engine,
         private readonly AnticheatService $anticheat,
@@ -66,13 +68,15 @@ class AnalyzeController extends Controller
         $movetime = $this->movetime > 0
             ? ($depth > 0 ? max(500, min(45000, $this->movetime)) : max(50, min(2000, $this->movetime)))
             : ($depth > 0 ? 4000 : 1500);
-        $res = $this->engine->analyze($this->fen, $movetime, $depth);
+        $multipv = $this->multipv > 0 ? min(12, $this->multipv) : 0;
+        $res = $this->engine->analyze($this->fen, $movetime, $depth, $multipv);
 
         return JsonResponse::ok([
             'eval' => $res['eval'] ?? null,
             'bestmove' => $res['bestmove'] ?? null,
             'pv' => $res['pv'] ?? null,
             'depth' => $res['depth'] ?? null,
+            'lines' => $res['lines'] ?? null,
         ]);
     }
 

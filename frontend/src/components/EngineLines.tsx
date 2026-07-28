@@ -1,19 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Box, Tooltip, Typography } from '@mui/material'
-import { candidates, type CandidateMove } from '../api/client'
-import type { WhiteEval } from './EvalBar'
 import { pvToSan } from '../lib/analysisTree'
 import { MoveSan } from './MoveSan'
+import type { AnalysisLine } from '../api/client'
 
-// How many ranked lines the user can choose to see (1-5), default 3.
 const MIN_LINES = 1
 const MAX_LINES = 5
 const DEFAULT_LINES = 3
-
-// Debounce before firing a request, so rapid navigation (arrow-key scrubbing)
-// doesn't fire one /candidates call per intermediate position.
-const DEBOUNCE_MS = 150
-
 const LS_KEY = 'chessgo.analysis.multipvLines'
 
 function loadLineCount(): number {
@@ -34,7 +27,6 @@ function saveLineCount(n: number): void {
     }
 }
 
-// "+1.8" / "-0.5" / "M4" / "-M4", from White's perspective.
 function evalText(type: 'cp' | 'mate', white: number): string {
     if (type === 'mate') return `${white < 0 ? '-' : ''}M${Math.abs(white)}`
     const v = white / 100
@@ -76,93 +68,36 @@ function Toggle({ on, onChange }: { on: boolean; onChange: () => void }) {
 }
 
 /**
- * Engine analysis header + ranked multi-PV lines. Line 1 is drawn from the main
- * progressive-deepening analysis (always matches the eval bar). Lines 2-N come
- * from a separate /candidates call, filtered to exclude the main best move so
- * there's no duplicate. The /candidates movetime scales with the main analysis
- * depth — shallow at first, deeper as the analysis climbs the ladder.
+ * Engine analysis header + ranked multi-PV lines. All lines come from the main
+ * progressive-deepening analysis (multipv=5) — no separate /candidates call.
+ * Line 1 matches the eval bar exactly; lines 2-N are at the same depth.
  */
 export default function EngineLines({
-    fen,
     engineOn,
     onToggleEngine,
     onPlayLine,
     onHoverMove,
-    refreshKey,
-    mainEval,
-    mainPv,
-    mainDepth,
-    mainUci,
-    mainSan,
+    lines,
+    fen,
     isDuck,
+    mainSan,
 }: {
-    fen: string
     engineOn: boolean
     onToggleEngine: () => void
     onPlayLine: (pvUci: string[]) => void
     onHoverMove?: (uci: string | null) => void
-    refreshKey?: number
-    /** Main progressive-deepening analysis data (line 1). */
-    mainEval: WhiteEval | null
-    mainPv: string[] | null
-    mainDepth: number | null
-    mainUci: string | null
-    /** Duck review: the engine's best move as SAN, shown in place of the PV. */
-    mainSan?: string | null
-    /** Duck: suppress /candidates (engine has no meaningful multi-PV for duck). */
+    lines: AnalysisLine[] | null
+    fen: string
     isDuck?: boolean
+    /** Duck review: the engine's best move as SAN. */
+    mainSan?: string | null
 }) {
     const [numLines, setNumLines] = useState(loadLineCount)
-    const [candLines, setCandLines] = useState<CandidateMove[]>([])
-    const [dataFen, setDataFen] = useState('')
-
-    // Scale the /candidates search budget with the main analysis depth, so the
-    // candidate lines deepen alongside the main recommendation instead of staying
-    // frozen at a shallow 350ms snapshot.
-    const movetime = useMemo(() => {
-        const d = refreshKey ?? 0
-        if (d <= 6) return 350
-        if (d <= 12) return 700
-        if (d <= 18) return 1500
-        if (d <= 25) return 3000
-        return 5000
-    }, [refreshKey])
-
-    useEffect(() => {
-        if (!engineOn || !fen || isDuck) {
-            setCandLines([])
-            setDataFen('')
-            return
-        }
-        let alive = true
-        const ac = new AbortController()
-        const t = setTimeout(() => {
-            void candidates(fen, { multipv: 12, movetime, signal: ac.signal })
-                .then((res) => {
-                    if (!alive) return
-                    // Dedupe by first move: exclude the main analysis's best move
-                    // (line 1) and take only the first numLines-1 distinct UCIs.
-                    const filtered = mainUci
-                        ? res.moves.filter((m) => m.uci !== mainUci).slice(0, numLines - 1)
-                        : res.moves.slice(0, numLines - 1)
-                    setCandLines(filtered)
-                    setDataFen(fen)
-                })
-                .catch(() => {
-                    /* aborted or engine error — keep last result */
-                })
-        }, DEBOUNCE_MS)
-        return () => {
-            alive = false
-            clearTimeout(t)
-            ac.abort()
-        }
-    }, [engineOn, fen, numLines, movetime, mainUci, isDuck])
 
     if (!engineOn) return null
 
-    const stale = dataFen !== fen
-    const displayStm: 'w' | 'b' = fen ? (fen.split(' ')[1] === 'b' ? 'b' : 'w') : 'w'
+    const shown = lines?.slice(0, numLines) ?? []
+    const top = shown[0] ?? null
 
     return (
         <Box
@@ -173,7 +108,7 @@ export default function EngineLines({
                     : 'var(--bg-2)',
             }}
         >
-            {/* Header: toggle + wordmark + depth (absorbed from EngineLine) */}
+            {/* Header: toggle + wordmark + depth */}
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, px: 1.5, pt: 1.25, pb: 0.5 }}>
                 <Tooltip title={engineOn ? 'Turn engine off' : 'Turn engine on'} arrow placement="top">
                     <Toggle on={engineOn} onChange={onToggleEngine} />
@@ -193,7 +128,7 @@ export default function EngineLines({
                     </Typography>
                 </Box>
                 <Box sx={{ flex: 1 }} />
-                {mainDepth != null && (
+                {top?.depth != null && (
                     <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.6 }}>
                         <Typography
                             sx={{
@@ -213,13 +148,13 @@ export default function EngineLines({
                                 color: 'var(--text-dim)',
                             }}
                         >
-                            {mainDepth}
+                            {top.depth}
                         </Typography>
                     </Box>
                 )}
             </Box>
 
-            {/* Ranked lines: 1 = main analysis (highlighted), 2-N = /candidates */}
+            {/* Ranked lines */}
             <Box sx={{ borderTop: '1px solid var(--line-soft)', px: 1.5, py: 1.1 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.75 }}>
                     <Typography
@@ -267,98 +202,59 @@ export default function EngineLines({
                     </Box>
                 </Box>
 
-                <Box
-                    sx={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 0.15,
-                    }}
-                >
-                    {/* Line 1: main analysis — same grid layout, highlighted */}
-                    {isDuck && mainSan ? (
-                        <Box
-                            sx={{
-                                display: 'grid',
-                                gridTemplateColumns: '1fr auto',
-                                alignItems: 'baseline',
-                                gap: 0.85,
-                                px: 0.5,
-                                py: 0.45,
-                                borderRadius: '6px',
-                                bgcolor: 'var(--accent-soft)',
-                                border: '1px solid var(--accent-line)',
-                            }}
-                        >
-                            <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, color: 'var(--text)' }}>
-                                {mainSan}
-                            </Typography>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.15 }}>
+                    {shown.length === 0 ? (
+                        isDuck && mainSan ? (
                             <Box
                                 sx={{
-                                    fontFamily: 'var(--font-mono)',
-                                    fontSize: 11.5,
-                                    fontWeight: 700,
-                                    px: 0.65,
-                                    py: 0.25,
-                                    borderRadius: '4px',
-                                    color: mainEval && mainEval.white > 0 ? '#15171c' : '#ece9e1',
-                                    background: mainEval && mainEval.white > 0
-                                        ? 'linear-gradient(180deg, #f3eee2, #e4dccb)'
-                                        : mainEval && mainEval.white === 0
-                                            ? 'var(--surface-2)'
-                                            : '#15171c',
-                                    boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
-                                    textAlign: 'center',
+                                    display: 'grid',
+                                    gridTemplateColumns: '1fr auto',
+                                    alignItems: 'baseline',
+                                    gap: 0.85,
+                                    px: 0.5,
+                                    py: 0.45,
+                                    borderRadius: '6px',
+                                    bgcolor: 'var(--accent-soft)',
+                                    border: '1px solid var(--accent-line)',
                                 }}
                             >
-                                {mainEval ? evalText(mainEval.type, mainEval.white) : '…'}
+                                <Typography sx={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, color: 'var(--text)' }}>
+                                    {mainSan}
+                                </Typography>
+                                <Box
+                                    sx={{
+                                        fontFamily: 'var(--font-mono)',
+                                        fontSize: 11.5,
+                                        fontWeight: 700,
+                                        px: 0.65,
+                                        py: 0.25,
+                                        borderRadius: '4px',
+                                        color: '#ece9e1',
+                                        background: '#15171c',
+                                        boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
+                                        textAlign: 'center',
+                                    }}
+                                >
+                                    ?
+                                </Box>
                             </Box>
-                        </Box>
-                    ) : mainEval && mainPv && mainPv.length > 0 ? (
-                        <LineRow
-                            move={{
-                                uci: mainUci ?? '',
-                                san: mainPv[0],
-                                eval: {
-                                    type: mainEval.type,
-                                    value: displayStm === 'w' ? mainEval.white : -mainEval.white,
-                                },
-                                pv: mainPv,
-                                depth: mainDepth ?? 0,
-                                opening: null,
-                            }}
-                            fen={fen}
-                            stm={displayStm}
-                            onPlay={() => onPlayLine(mainPv)}
-                            onHover={onHoverMove}
-                            highlighted
-                        />
+                        ) : (
+                            <Typography sx={{ fontSize: 12, color: 'var(--muted)', fontStyle: 'italic' }}>
+                                Analysing…
+                            </Typography>
+                        )
                     ) : (
-                        <Typography sx={{ fontSize: 12, color: 'var(--muted)', fontStyle: 'italic' }}>
-                            Analysing…
-                        </Typography>
-                    )}
-
-                    {candLines.length > 0 && (
-                        <Box
-                            sx={{
-                                display: 'flex',
-                                flexDirection: 'column',
-                                gap: 0.15,
-                                opacity: stale ? 0.55 : 1,
-                                transition: 'opacity .15s',
-                            }}
-                        >
-                            {candLines.map((m) => (
-                                <LineRow
-                                    key={m.uci}
-                                    move={m}
-                                    fen={dataFen || fen}
-                                    stm={displayStm}
-                                    onPlay={() => onPlayLine(m.pv)}
-                                    onHover={onHoverMove}
-                                />
-                            ))}
-                        </Box>
+                        shown.map((line, i) => (
+                            <LineRow
+                                key={line.bestmove}
+                                line={line}
+                                fen={fen}
+                                highlighted={i === 0}
+                                onPlay={() => onPlayLine(line.pv)}
+                                onHover={onHoverMove ? () => onHoverMove(line.bestmove) : undefined}
+                                onHoverEnd={onHoverMove ? () => onHoverMove(null) : undefined}
+                            />
+                        ))
                     )}
                 </Box>
             </Box>
@@ -366,51 +262,49 @@ export default function EngineLines({
     )
 }
 
-// One ranked candidate line: "2  +0.34  1.e4 e5 2.Nf3 Nc6 …" — rank + eval + PV.
 function LineRow({
-    move,
+    line,
     fen,
-    stm,
+    highlighted,
     onPlay,
     onHover,
-    highlighted,
+    onHoverEnd,
 }: {
-    move: CandidateMove
+    line: AnalysisLine
     fen: string
-    stm: 'w' | 'b'
-    onPlay: () => void
-    onHover?: (uci: string | null) => void
     highlighted?: boolean
+    onPlay: () => void
+    onHover?: () => void
+    onHoverEnd?: () => void
 }) {
-    const white = stm === 'w' ? move.eval.value : -move.eval.value
-    const text = evalText(move.eval.type, white)
-    const whiteBetter = white > 0
-
-    const fields = fen.split(' ')
-    let full = parseInt(fields[5] || '1', 10) || 1
-    let whiteToMove = fields[1] !== 'b'
-    const tokens: { text: string; num: boolean; firstMove?: boolean }[] = []
-    let firstMoveSeen = false
-    pvToSan(fen, move.pv).forEach((mv, i) => {
-        // Skip the leading "1." / "1…" — every line is an alternative first move.
-        if (i === 0) {
+    const tokens = useMemo<{ text: string; num: boolean; firstMove?: boolean }[]>(() => {
+        if (!line.pv || line.pv.length === 0) return []
+        const sans = pvToSan(fen, line.pv)
+        let full = 1
+        let whiteToMove = true
+        const out: { text: string; num: boolean; firstMove?: boolean }[] = []
+        let firstMoveSeen = false
+        sans.forEach((mv, i) => {
+            if (whiteToMove) out.push({ text: `${full}.`, num: true })
+            else if (i === 0) out.push({ text: `${full}…`, num: true })
             const isFirst = !firstMoveSeen
-            tokens.push({ text: mv.san, num: false, firstMove: isFirst })
+            out.push({ text: mv.san, num: false, firstMove: isFirst })
             firstMoveSeen = true
-        } else {
-            if (whiteToMove) tokens.push({ text: `${full}.`, num: true })
-            tokens.push({ text: mv.san, num: false })
-        }
-        if (!whiteToMove) full += 1
-        whiteToMove = !whiteToMove
-    })
+            if (!whiteToMove) full += 1
+            whiteToMove = !whiteToMove
+        })
+        return out
+    }, [fen, line.pv])
+
+    const evalValue = line.eval.value
+    const whiteBetter = evalValue > 0
 
     return (
         <Box
             role="button"
             onClick={onPlay}
-            onMouseEnter={() => onHover?.(move.uci)}
-            onMouseLeave={() => onHover?.(null)}
+            onMouseEnter={onHover}
+            onMouseLeave={onHoverEnd}
             sx={{
                 display: 'grid',
                 gridTemplateColumns: '1fr auto',
@@ -469,14 +363,14 @@ function LineRow({
                     color: whiteBetter ? '#15171c' : '#ece9e1',
                     background: whiteBetter
                         ? 'linear-gradient(180deg, #f3eee2, #e4dccb)'
-                        : white === 0
+                        : evalValue === 0
                             ? 'var(--surface-2)'
                             : '#15171c',
                     boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
                     textAlign: 'center',
                 }}
             >
-                {text}
+                {evalText(line.eval.type, evalValue)}
             </Box>
         </Box>
     )
