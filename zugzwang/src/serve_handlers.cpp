@@ -156,36 +156,56 @@ struct CandidateLine {
 // budget evenly across the legal moves (gomachine instead shares one
 // iterative-deepening pass with a global time budget across all moves at
 // once — a real but reasonable engineering deviation for Wave 1; see report).
-std::vector<CandidateLine> multi_pv(Search::SearchGroup& group, Position& pos, int depth, int movetimeMs) {
+std::vector<CandidateLine> multi_pv(Search::SearchGroup& group, Position& pos, int depth, int movetimeMs, int topN = 0) {
     MoveList ml;
     Rules::generate_legal(pos, ml);
 
     int perMoveTimeMs = 0;
+    int n = std::max<int>(1, static_cast<int>(ml.size()));
     if (depth <= 0) {
-        int n = std::max<int>(1, static_cast<int>(ml.size()));
         perMoveTimeMs = std::max(5, movetimeMs / n);
+    } else {
+        if (movetimeMs > 0) {
+            perMoveTimeMs = std::max(10, movetimeMs / n);
+        }
     }
 
-    std::vector<CandidateLine> out;
-    out.reserve(ml.size());
+    // Pre-score every legal move with a cheap static eval so we only deep-search
+    // the most promising ones — not all 20-40 moves.
+    struct ScoredMove { Move move; int score; };
+    std::vector<ScoredMove> scored;
+    scored.reserve(ml.size());
     for (const ExtMove& em : ml) {
-        Move m = em.move;
+        StateInfo st;
+        pos.do_move(em.move, st);
+        scored.push_back({em.move, -Eval::evaluate(pos)});
+        pos.undo_move(em.move);
+    }
+    std::stable_sort(scored.begin(), scored.end(),
+        [](const ScoredMove& a, const ScoredMove& b) { return a.score > b.score; });
+
+    // Only search the top candidates — the rest are noise. When topN is given,
+    // use it; otherwise search all (backward-compatible for the opening explorer).
+    int searchCount = topN > 0 ? std::min(topN, static_cast<int>(scored.size())) : static_cast<int>(scored.size());
+
+    std::vector<CandidateLine> out;
+    out.reserve(searchCount);
+    for (int i = 0; i < searchCount; ++i) {
+        Move m = scored[i].move;
         StateInfo st;
         pos.do_move(m, st);
 
         CandidateLine line;
         line.move = m;
         if (depth > 0 && depth - 1 <= 0) {
-            line.score = -Eval::evaluate(pos);
+            line.score = scored[i].score; // reuse static eval
             line.depth = 1;
             line.pv = {m};
         } else {
             Search::Limits lim;
             lim.silent = true;
             if (depth > 0) lim.depth = depth - 1;
-            else lim.movetime = perMoveTimeMs;
-            // SMP per candidate sub-search: fans out across the group's K
-            // workers on its shared TT (K==1 => byte-identical single thread).
+            if (perMoveTimeMs > 0) lim.movetime = perMoveTimeMs;
             Search::Result r = Search::start_group(group, pos, lim);
             line.score = -r.score;
             line.depth = r.depth + 1;
@@ -448,14 +468,56 @@ json best_move(const json& body) {
         lim.movetime = 1000;
     }
     if (multipv > 1) {
-        // Multi-PV: sequential depth-gated searches sharing the same TT.
-        // When `depth > 0`, each candidate gets `depth - 1` — same depth,
-        // no time split (multi_pv only splits time when depth == 0).
-        // When `depth == 0`, the full movetime is split across legal moves.
-        auto cands = multi_pv(group, pos, depth, movetimeMs);
-        if (multipv < static_cast<int>(cands.size())) cands.resize(multipv);
+        // Multi-PV: line 1 from the opening book when available (the move is
+        // precomputed), lines 2-N from the engine. The book move gets an engine
+        // search too so its eval is at the same depth as the other lines.
         json lines = json::array();
+        Move bookMove = MOVE_NONE;
+
+        if (Book::shared().loaded()) {
+            if (const Book::BookEntry* e = Book::shared().lookup(Book::book_key(pos));
+                e && !e->pv.empty()) {
+                bookMove = Rules::parse_uci_move(pos, e->pv[0]);
+            }
+        }
+
+        int searchN = std::max(multipv * 2, 10);
+        auto cands = multi_pv(group, pos, depth, movetimeMs, searchN);
+
+        // Book move first: search it with the engine for a consistent eval, but
+        // prefer the book's longer PV (precomputed from master games).
+        if (bookMove != MOVE_NONE) {
+            for (const CandidateLine& c : cands) {
+                if (c.move == bookMove) {
+                    lines.push_back(json{
+                        {"bestmove", move_to_uci(c.move)},
+                        {"san", Rules::san(pos, c.move)},
+                        {"eval", eval_json(c.score)},
+                        {"pv", uci_pv(c.pv)},
+                        {"depth", c.depth},
+                    });
+                    break;
+                }
+            }
+            // Fallback: book move wasn't in engine candidates (shouldn't happen, but
+            // if it does, use the book data directly so line 1 isn't empty).
+            if (lines.empty()) {
+                if (const Book::BookEntry* e = Book::shared().lookup(Book::book_key(pos));
+                    e && !e->pv.empty()) {
+                    lines.push_back(json{
+                        {"bestmove", move_to_uci(bookMove)},
+                        {"san", Rules::san(pos, bookMove)},
+                        {"eval", book_eval_json(*e)},
+                        {"pv", e->pv},
+                        {"depth", e->depth},
+                    });
+                }
+            }
+        }
+
+        // Remaining lines from engine, excluding the book move (already line 1).
         for (const CandidateLine& c : cands) {
+            if (c.move == bookMove) continue;
             lines.push_back(json{
                 {"bestmove", move_to_uci(c.move)},
                 {"san", Rules::san(pos, c.move)},
@@ -463,14 +525,16 @@ json best_move(const json& body) {
                 {"pv", uci_pv(c.pv)},
                 {"depth", c.depth},
             });
+            if (static_cast<int>(lines.size()) >= multipv) break;
         }
-        const CandidateLine& top = cands[0];
+
+        const json& top = lines[0];
         return json{
-            {"bestmove", move_to_uci(top.move)},
-            {"san", Rules::san(pos, top.move)},
-            {"eval", eval_json(top.score)},
-            {"pv", uci_pv(top.pv)},
-            {"depth", top.depth},
+            {"bestmove", top["bestmove"]},
+            {"san", top["san"]},
+            {"eval", top["eval"]},
+            {"pv", top["pv"]},
+            {"depth", top["depth"]},
             {"lines", lines},
             {"opening", openingResp},
         };
@@ -517,7 +581,8 @@ json candidates(const json& body) {
     std::vector<uint64_t> hist = Rules::history_keys(historyFens);
     Rules::seed_history(pos, hist);
 
-    auto cands = multi_pv(group, pos, depth, movetimeMs);
+    int searchN = multipv > 0 ? std::max(multipv * 2, 10) : 12;
+    auto cands = multi_pv(group, pos, depth, movetimeMs, searchN);
     if (multipv > 0 && static_cast<size_t>(multipv) < cands.size()) cands.resize(multipv);
 
     // Line up to and including the current position, reused to name the
