@@ -33,7 +33,7 @@ import EngineLines from '../components/EngineLines'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveTree from '../components/MoveTree'
 import OpeningPanel from '../components/OpeningPanel'
-import { analyze, getGameAnalysis, sfAnalyze, type GameAnalysis } from '../api/client'
+import { analyze, getGameAnalysis, sfAnalyze, type AnalysisLine, type GameAnalysis } from '../api/client'
 import type { Color } from '../api/client'
 import { buildBlunderPuzzles, colorInGame } from '../lib/blunderRewind'
 import { toPgn, type ParsedPgn } from '../lib/pgn'
@@ -181,6 +181,7 @@ export default function Analysis() {
     // UCI of the candidate (book) move currently hovered in the OpeningPanel, drawn
     // as a blue arrow on the board. Cleared whenever the viewed node changes.
     const [hoverUci, setHoverUci] = useState<string | null>(null)
+    const [analysisLines, setAnalysisLines] = useState<AnalysisLine[] | null>(null)
     // Free mode only: interactive Duck Chess. When true (and no game is loaded) the
     // standard board/tree layout is replaced by the self-contained duck board.
     const [duckFree, setDuckFree] = useState(false)
@@ -357,11 +358,15 @@ export default function Analysis() {
 
                 let r: Awaited<ReturnType<typeof analyze>>
                 try {
-                    r = await analyze(fen, { depth: target, movetime: ceilingMs, signal: ac.signal })
+                    r = await analyze(fen, { depth: target, movetime: ceilingMs, multipv: 5, signal: ac.signal })
                 } catch {
-                    return // engine error or aborted — keep whatever we already have
+                    return
                 }
                 if (cancelled) return
+
+                if (r.lines && r.lines.length > 0) {
+                    setAnalysisLines(r.lines)
+                }
 
                 const got = r.depth ?? target
                 // This rung's budget wasn't enough to get deeper than what we already
@@ -781,11 +786,8 @@ export default function Analysis() {
                         onToggleEngine={toggleEngine}
                         onPlayLine={onPlayEngineLine}
                         onHoverMove={setHoverUci}
+                        lines={analysisLines}
                         fen={current.fen}
-                        mainEval={current.evalWhite}
-                        mainPv={current.bestPv}
-                        mainDepth={current.bestDepth}
-                        mainUci={isDuck ? null : (current.bestUci ?? null)}
                         isDuck={isDuck}
                         mainSan={isDuck ? (current.bestSan ?? null) : null}
                     />
