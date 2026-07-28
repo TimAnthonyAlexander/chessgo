@@ -310,16 +310,21 @@ final class AnalysisDriver: BoardControl {
         legalMoves = Self.permissiveLegalMoves(fen: fen)
     }
 
-    /// Every pseudo-legal destination for every piece belonging to the side
-    /// to move, using the same permissive premove geometry the board already
-    /// uses elsewhere (ignores pins/check — there is no server to re-verify
-    /// against here, so this IS the final word for what's offered).
+    /// Every pseudo-legal destination for every piece belonging to the side to
+    /// move (ignores pins/check — there is no server to re-verify against
+    /// here, so this IS the final word for what's offered). Unlike
+    /// `premoveTargets` (Chess/Premove.swift), which is deliberately blind to
+    /// occupancy because a premove's board state at execution time is
+    /// unknown, the analysis board always knows the CURRENT position exactly
+    /// — so this respects it: pawns can't capture into empty air or jump a
+    /// blocker, sliders stop at the first piece, and nothing lands on a
+    /// friendly square.
     private static func permissiveLegalMoves(fen: String) -> [String] {
         let board = ChessBoard(fen: fen)
         var out: [String] = []
         for square in Square.all {
             guard let piece = board.piece(at: square), piece.color == board.sideToMove else { continue }
-            for target in premoveTargets(from: square, board: board) {
+            for target in pseudoLegalTargets(from: square, piece: piece, board: board) {
                 let promotionRank = piece.color == .white ? 7 : 0
                 if piece.kind == .pawn, target.rank == promotionRank {
                     for promo: PieceKind in [.queen, .rook, .bishop, .knight] {
@@ -330,6 +335,84 @@ final class AnalysisDriver: BoardControl {
                 }
             }
         }
+        return out
+    }
+
+    /// Occupancy-aware destinations for one piece on the given (known)
+    /// board — the analysis-board counterpart to `premoveTargets`.
+    private static func pseudoLegalTargets(from: Square, piece: Piece, board: ChessBoard) -> [Square] {
+        var out: [Square] = []
+
+        func target(_ file: Int, _ rank: Int) -> Square? {
+            Square(file: file, rank: rank)
+        }
+
+        switch piece.kind {
+        case .pawn:
+            let direction = piece.color == .white ? 1 : -1
+            let startRank = piece.color == .white ? 1 : 6
+            if let oneAhead = target(from.file, from.rank + direction), board.piece(at: oneAhead) == nil {
+                out.append(oneAhead)
+                if from.rank == startRank, let twoAhead = target(from.file, from.rank + 2 * direction),
+                   board.piece(at: twoAhead) == nil {
+                    out.append(twoAhead)
+                }
+            }
+            for df in [-1, 1] {
+                guard let diag = target(from.file + df, from.rank + direction) else { continue }
+                if let occupant = board.piece(at: diag), occupant.color != piece.color {
+                    out.append(diag)
+                } else if diag == board.enPassant {
+                    out.append(diag)
+                }
+            }
+        case .knight:
+            for (df, dr) in [(1, 2), (2, 1), (2, -1), (1, -2), (-1, -2), (-2, -1), (-2, 1), (-1, 2)] {
+                guard let square = target(from.file + df, from.rank + dr) else { continue }
+                if board.piece(at: square)?.color != piece.color { out.append(square) }
+            }
+        case .king:
+            for df in -1...1 {
+                for dr in -1...1 where df != 0 || dr != 0 {
+                    guard let square = target(from.file + df, from.rank + dr) else { continue }
+                    if board.piece(at: square)?.color != piece.color { out.append(square) }
+                }
+            }
+            if from.file == 4 {
+                let rank = from.rank
+                let rights = board.castlingRights
+                let kingsideLetter: Character = piece.color == .white ? "K" : "k"
+                let queensideLetter: Character = piece.color == .white ? "Q" : "q"
+                if rights.contains(kingsideLetter),
+                   let f = target(5, rank), let g = target(6, rank),
+                   board.piece(at: f) == nil, board.piece(at: g) == nil {
+                    out.append(g)
+                }
+                if rights.contains(queensideLetter),
+                   let d = target(3, rank), let c = target(2, rank), let b = target(1, rank),
+                   board.piece(at: d) == nil, board.piece(at: c) == nil, board.piece(at: b) == nil {
+                    out.append(c)
+                }
+            }
+        case .bishop, .rook, .queen:
+            let directions: [(Int, Int)]
+            switch piece.kind {
+            case .bishop: directions = [(1, 1), (1, -1), (-1, 1), (-1, -1)]
+            case .rook: directions = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+            default: directions = [(1, 1), (1, -1), (-1, 1), (-1, -1), (1, 0), (-1, 0), (0, 1), (0, -1)]
+            }
+            for (df, dr) in directions {
+                for i in 1...7 {
+                    guard let square = target(from.file + df * i, from.rank + dr * i) else { break }
+                    if let occupant = board.piece(at: square) {
+                        if occupant.color != piece.color { out.append(square) }
+                        break
+                    }
+                    out.append(square)
+                }
+            }
+        }
+
         return out
     }
 

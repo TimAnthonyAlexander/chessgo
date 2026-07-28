@@ -95,7 +95,7 @@ export function metaBool(meta: Record<string, unknown>, key: string): boolean | 
 /** The hub game id a flag is tied to (`meta.game_id`), as a string, or null.
  * Four of the five signals carry it; `analysis_during_game` does not. */
 export function metaGameId(meta: Record<string, unknown>): string | null {
-    const v = meta['game_id']
+    const v = meta.game_id
     if (typeof v === 'string' && v.trim() !== '') return v
     if (typeof v === 'number' && Number.isFinite(v)) return String(v)
     return null

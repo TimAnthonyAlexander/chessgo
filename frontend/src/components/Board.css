@@ -190,6 +190,33 @@
     animation: pieceIn var(--piece-anim, 0.16s) ease;
 }
 
+/* In-flight piece/duck slide (Board.tsx's FlightPiece): a free-floating overlay
+ * positioned + transformed via inline style (grid math, not measured), so it
+ * needs its own box model rather than `.piece`'s `inset: 0` (which would fight
+ * the explicit left/top/width/height the slide is computed from). No mount
+ * animation here — the transform IS the animation. */
+.piece-flight {
+    position: absolute;
+    z-index: 3;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 88%;
+    pointer-events: none;
+    will-change: transform;
+}
+.duck-flight {
+    position: absolute;
+    z-index: 4;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9cqi;
+    line-height: 1;
+    pointer-events: none;
+    filter: drop-shadow(0 0.3cqi 0.5cqi rgba(0, 0, 0, 0.55));
+    will-change: transform;
+}
+
 /* Legal-move markers */
 .dot {
     position: absolute;

@@ -1,5 +1,7 @@
 import {
+    type CSSProperties,
     type PointerEvent as ReactPointerEvent,
+    type TransitionEvent as ReactTransitionEvent,
     useCallback,
     useEffect,
     useMemo,
@@ -26,6 +28,7 @@ import {
 } from '../lib/chess'
 import { usePieceSet } from '../lib/boardTheme'
 import { usePrefs, type ArrowColor } from '../lib/settings'
+import { DUCK_FLIGHT, diffBoardsForAnimation, type Flight } from '../lib/pieceAnimation'
 import { DuckGlyph } from './DuckGlyph'
 
 function PieceGlyph({ piece, set, hidden }: { piece: string; set: string; hidden?: boolean }) {
@@ -36,6 +39,70 @@ function PieceGlyph({ piece, set, hidden }: { piece: string; set: string; hidden
                 backgroundImage: `url(${pieceImageUrl(piece, set)})`,
                 ...(hidden ? { opacity: 0 } : {}),
             }}
+        />
+    )
+}
+
+interface ActiveFlight extends Flight {
+    key: string
+}
+
+// One in-flight piece (or duck) slide. Positioned at its DESTINATION square via
+// grid math (no getBoundingClientRect — the board is a perfect 8x8 grid, so a
+// square's on-screen position is just its file/rank as a percentage), then
+// rendered pre-offset back to its origin with `transition: none` and flipped to
+// its resting transform one frame later — a FLIP animation computed instead of
+// measured. `onDone` fires from the transform's own `transitionend`, so cleanup
+// tracks the real animation length (whatever --piece-anim currently is) rather
+// than guessing a matching setTimeout.
+function FlightPiece({
+    flight,
+    set,
+    center,
+    onDone,
+}: {
+    flight: ActiveFlight
+    set: string
+    center: (sq: Square) => { x: number; y: number }
+    onDone: () => void
+}) {
+    const [settled, setSettled] = useState(false)
+    useEffect(() => {
+        const raf = requestAnimationFrame(() => setSettled(true))
+        return () => cancelAnimationFrame(raf)
+    }, [])
+
+    const from = center(flight.from)
+    const to = center(flight.to)
+    // Deltas expressed as a percentage of ONE SQUARE (the element's own box),
+    // since CSS translate() percentages resolve against the element itself —
+    // translate(100%, 0) is exactly one square right, regardless of board size.
+    const dx = ((from.x - to.x) / 10) * 100
+    const dy = ((from.y - to.y) / 10) * 100
+    const style: CSSProperties = {
+        left: `${((to.x - 5) / 80) * 100}%`,
+        top: `${((to.y - 5) / 80) * 100}%`,
+        width: '12.5%',
+        height: '12.5%',
+        transform: settled ? 'translate(0, 0)' : `translate(${dx}%, ${dy}%)`,
+        transition: settled ? 'transform var(--piece-anim, 0.16s) ease' : 'none',
+    }
+    const onTransitionEnd = (e: ReactTransitionEvent) => {
+        if (e.propertyName === 'transform') onDone()
+    }
+
+    if (flight.piece === DUCK_FLIGHT) {
+        return (
+            <span className="duck-flight" style={style} onTransitionEnd={onTransitionEnd} aria-hidden>
+                <DuckGlyph />
+            </span>
+        )
+    }
+    return (
+        <span
+            className="piece-flight"
+            style={{ ...style, backgroundImage: `url(${pieceImageUrl(flight.piece, set)})` }}
+            onTransitionEnd={onTransitionEnd}
         />
     )
 }
@@ -336,6 +403,70 @@ export default function Board({
     )
     const circleColor = circle?.color ?? 'var(--accent)'
 
+    // Piece-slide animation: diff the previous board snapshot against this one
+    // and play the resulting flights. Position-diff-based (see pieceAnimation.ts),
+    // so it fires identically for a local move, an opponent's move arriving over
+    // the socket, spectating, and stepping through move-list history either way
+    // in Analysis/Puzzles — there is no separate "remote move" code path.
+    const [flights, setFlights] = useState<ActiveFlight[]>([])
+    const prevBoardRef = useRef<BoardMap | null>(null)
+    const prevDuckRef = useRef<Square | null>(null)
+    const flightIdRef = useRef(0)
+    // Set by a local drag-drop commit for the exact (from, to) it just placed —
+    // that piece already visually traveled under the cursor, so the next diff
+    // should settle it instantly rather than replaying a redundant slide. A
+    // click-to-move commit leaves this null, since the piece hasn't moved yet.
+    const suppressPairRef = useRef<{ from: Square; to: Square } | null>(null)
+
+    useEffect(() => {
+        const prevBoard = prevBoardRef.current
+        const prevDuck = prevDuckRef.current
+        const duckNow = duck ?? null
+        prevBoardRef.current = board
+        prevDuckRef.current = duckNow
+
+        // First mount, or animations off: snap straight to the new position.
+        if (!prevBoard || prefs.animationSpeed === 'none') {
+            setFlights([])
+            return
+        }
+
+        let next = diffBoardsForAnimation(prevBoard, board)
+
+        const suppressed = suppressPairRef.current
+        if (suppressed) {
+            const before = next.length
+            next = next.filter((f) => !(f.from === suppressed.from && f.to === suppressed.to))
+            // Only consume the suppression once it actually matched a flight —
+            // if an unrelated diff (e.g. the opponent's move) lands first, keep
+            // it queued for the transition it was really meant for.
+            if (next.length !== before) suppressPairRef.current = null
+        }
+
+        // The duck isn't part of BoardMap (it's a standalone square prop), so it
+        // gets its own flight, appended alongside whatever piece(s) moved.
+        if (prevDuck && duckNow && prevDuck !== duckNow) {
+            next = [...next, { from: prevDuck, to: duckNow, piece: DUCK_FLIGHT }]
+        }
+
+        setFlights(next.map((f) => ({ ...f, key: `f${flightIdRef.current++}` })))
+        // Deliberately not exhaustive: `prefs.animationSpeed` is read as a
+        // point-in-time gate above, not a reactive trigger — changing the
+        // setting mid-flight shouldn't retroactively cancel an animation that
+        // already started under the previous setting.
+    }, [board, duck])
+
+    const animatingTo = useMemo(() => {
+        const set = new Set<Square>()
+        for (const f of flights) if (f.piece !== DUCK_FLIGHT) set.add(f.to)
+        return set
+    }, [flights])
+    const duckFlightTo = flights.find((f) => f.piece === DUCK_FLIGHT)?.to ?? null
+
+    function endFlight(key: string) {
+        setFlights((prev) => prev.filter((f) => f.key !== key))
+    }
+
     const ranks = orientation === 'w' ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7]
     const files = orientation === 'w' ? [0, 1, 2, 3, 4, 5, 6, 7] : [7, 6, 5, 4, 3, 2, 1, 0]
 
@@ -356,7 +487,11 @@ export default function Board({
         return !!p && (isWhitePiece(p) ? 'w' : 'b') === movingColor
     }
 
-    function commit(from: Square, to: Square) {
+    function commit(from: Square, to: Square, viaDrag = false) {
+        // A dragged piece already visually traveled under the cursor — don't
+        // replay a slide once the confirmed board state reflects this move.
+        // A click-to-move commit hasn't moved yet, so it's left to animate.
+        if (viaDrag) suppressPairRef.current = { from, to }
         if (interactive) {
             const options = promotionsFor(legalMoves, from, to)
             if (options.length > 0) {
@@ -508,7 +643,7 @@ export default function Board({
             if (d.reselect) setSelected(null) // tapped an already-selected piece → toggle off
             // else: keep it selected (dots shown)
         } else if (dropSq && destsFor(d.from).has(dropSq)) {
-            commit(d.from, dropSq)
+            commit(d.from, dropSq, true)
         } else {
             setSelected(null) // dropped off-board or on an invalid square → deselect
             if (premoveActive) onCancelPremove?.()
@@ -599,11 +734,15 @@ export default function Board({
                                     <PieceGlyph
                                         piece={piece}
                                         set={pieceSet}
-                                        hidden={isDragOrigin || prefs.blindfold}
+                                        hidden={isDragOrigin || prefs.blindfold || animatingTo.has(sq)}
                                     />
                                 )}
                                 {duck === sq && (
-                                    <span className="duck" aria-hidden>
+                                    <span
+                                        className="duck"
+                                        aria-hidden
+                                        style={duckFlightTo === sq ? { opacity: 0 } : undefined}
+                                    >
                                         <DuckGlyph />
                                     </span>
                                 )}
@@ -613,6 +752,16 @@ export default function Board({
                         )
                     }),
                 )}
+
+                {flights.map((f) => (
+                    <FlightPiece
+                        key={f.key}
+                        flight={f}
+                        set={pieceSet}
+                        center={center}
+                        onDone={() => endFlight(f.key)}
+                    />
+                ))}
 
                 {(arrowGeom || arrow2Geom || circleGeom) && (
                     <svg
