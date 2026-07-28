@@ -137,11 +137,11 @@ export default function EngineLines({
         let alive = true
         const ac = new AbortController()
         const t = setTimeout(() => {
-            void candidates(fen, { multipv: numLines + 1, movetime, signal: ac.signal })
+            void candidates(fen, { multipv: 12, movetime, signal: ac.signal })
                 .then((res) => {
                     if (!alive) return
-                    // Filter out the move that matches the main analysis — line 1
-                    // is drawn from main data, so we don't want a duplicate.
+                    // Dedupe by first move: exclude the main analysis's best move
+                    // (line 1) and take only the first numLines-1 distinct UCIs.
                     const filtered = mainUci
                         ? res.moves.filter((m) => m.uci !== mainUci).slice(0, numLines - 1)
                         : res.moves.slice(0, numLines - 1)
