@@ -5,8 +5,9 @@ import type { Square } from '../lib/chess'
 import { pvToSan } from '../lib/analysisTree'
 import { MoveSan } from './MoveSan'
 
-// The from/to squares to whisper onto the board as pixel dots.
-type Hint = { from: Square; to: Square } | null
+// The from/to squares to whisper onto the board as pixel dots, plus the raw UCI
+// so the board's 'G' shortcut can play the move straight through.
+type Hint = { from: Square; to: Square; uci: string } | null
 
 // Extract the from/to squares from a best-move UCI. Duck's best move is a
 // composite "<pieceUci>:<duckSquare>" — we hint only the piece move (the duck
@@ -15,7 +16,7 @@ function hintFromUci(uci: string | null): Hint {
     if (!uci) return null
     const m = uci.split(':')[0]
     if (m.length < 4) return null
-    return { from: m.slice(0, 2), to: m.slice(2, 4) }
+    return { from: m.slice(0, 2), to: m.slice(2, 4), uci: m }
 }
 
 // Convert the engine's UCI best move (e.g. "e2e4", "b1c3") into SAN piece
@@ -79,9 +80,11 @@ function saveEnabled(on: boolean): void {
     }
 }
 
-// Admin-only inline toggle: when on, fetches the full-strength engine best move
-// for the given position and shows it compactly (move · eval). Self-contained —
-// pages just render it (gated on the admin role) and feed the current FEN.
+// Admin-only best-move readout. The engine is queried for EVERY position we're on
+// move in, regardless of the toggle — the toggle only decides whether the text row
+// (move · eval) is rendered. The board's hold-to-peek ('H') and play-best ('G')
+// shortcuts therefore work whether the row is shown or not. Self-contained — pages
+// just render it (gated on the admin role) and feed the current FEN.
 //
 // Duck Chess: the standard engine has no duck rules, and its "best move" is often
 // exactly the square the duck now blocks — so in duck mode we query the DUCK engine
@@ -126,7 +129,7 @@ export default function AdminBestMove({
     // Report the current best-move squares up to the page (which feeds them to the
     // board). The board itself owns the hold-to-reveal gating — nothing is drawn until
     // the admin peeks (keyboard on desktop, the touch pad on mobile). Never report a
-    // stale hint: cleared on error, and on off-turn/disabled via `best` below.
+    // stale hint: cleared on error, and on off-turn via `best` below.
     useEffect(() => {
         onHintRef.current?.(error ? null : (best?.hint ?? null))
     }, [best, error])
@@ -134,7 +137,7 @@ export default function AdminBestMove({
     useEffect(() => {
         // Only compute the best move for the player's own side — no point spending
         // engine time on the opponent's reply.
-        if (!enabled || !fen || !myTurn) {
+        if (!fen || !myTurn) {
             setBest(null)
             setError(null)
             return
@@ -205,7 +208,7 @@ export default function AdminBestMove({
             cancelled = true
             controller.abort()
         }
-    }, [enabled, fen, myTurn, isDuck, isAntichess, duck])
+    }, [fen, myTurn, isDuck, isAntichess, duck])
 
     return (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>

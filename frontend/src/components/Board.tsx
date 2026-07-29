@@ -5,6 +5,7 @@ import {
     type TransitionEvent as ReactTransitionEvent,
     useCallback,
     useEffect,
+    useLayoutEffect,
     useMemo,
     useRef,
     useState,
@@ -148,12 +149,13 @@ interface BoardProps {
      * an arrow can't express). `color` defaults to the accent (gold) best-move hue. */
     circle?: { square: Square; color?: string } | null
     /** Optional best-move hint: a thin accent ring on the from + to squares. Used by
-     * the admin best-move toggle. Only ever DISPLAYED while the admin is actively
-     * peeking (see `hintReveal`) — so a spectator never sees a standing mark. */
-    hint?: { from: Square; to: Square } | null
-    /** Enables the hold-to-reveal peek interaction for `hint` (admin-only): the
-     * keyboard 'H' hold on desktop and a floating press-and-hold pad on touch devices.
-     * When false, `hint` is never shown. */
+     * the admin best-move readout. Only ever DISPLAYED while the admin is actively
+     * peeking (see `hintReveal`) — so a spectator never sees a standing mark.
+     * `uci` (when present) is the full move, so 'G' can play it. */
+    hint?: { from: Square; to: Square; uci?: string } | null
+    /** Enables the admin hint shortcuts for `hint`: the keyboard 'H' hold-to-peek on
+     * desktop (plus a floating press-and-hold pad on touch devices) and 'G' to play
+     * the hinted move outright. When false, `hint` is never shown or played. */
     hintReveal?: boolean
     /** External two-stage hint control (the puzzle trainer's hint button), independent
      * of the admin hold-to-peek interaction above. 'piece' rings only `hint.from` (which
@@ -444,6 +446,26 @@ export default function Board({
         }
     }, [hintReveal])
 
+    // Desktop shortcut: tap 'G' to PLAY the hinted best move (admin). Same submission
+    // path as clicking the piece — the hint's UCI already carries any promotion suffix.
+    // Kept in a ref so the listener never re-subscribes on a new hint/callback identity.
+    const hintUci = hint?.uci
+    const playHint = useRef<(() => void) | null>(null)
+    playHint.current = interactive && hintUci ? () => onMove(hintUci) : null
+    useEffect(() => {
+        if (!hintReveal) return
+        const down = (e: KeyboardEvent) => {
+            if (e.repeat || e.ctrlKey || e.metaKey || e.altKey || e.code !== 'KeyG') return
+            const el = e.target as HTMLElement | null
+            const tag = el?.tagName
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable)
+                return
+            playHint.current?.()
+        }
+        window.addEventListener('keydown', down)
+        return () => window.removeEventListener('keydown', down)
+    }, [hintReveal])
+
     const board: BoardMap = useMemo(() => overrideBoard ?? parseFen(fen), [overrideBoard, fen])
 
     // Premove mode: while it isn't our turn but we're a player, we let the user
@@ -563,7 +585,14 @@ export default function Board({
     // click-to-move commit leaves this null, since the piece hasn't moved yet.
     const suppressPairRef = useRef<{ from: Square; to: Square } | null>(null)
 
-    useEffect(() => {
+    // useLayoutEffect, NOT useEffect: this must run before the browser paints the
+    // new position. A passive effect is flushed in a later task, so a board change
+    // coming from a DISCRETE event (our own click/keypress commit) gets painted
+    // once with the piece already sitting on its destination and no flight yet —
+    // then the slide starts, and the piece reads as doubled. Updates from async
+    // sources (the socket — i.e. the opponent's move) had their passive effect
+    // flushed before that first paint, which is why only our OWN moves flickered.
+    useLayoutEffect(() => {
         const prevBoard = prevBoardRef.current
         const prevDuck = prevDuckRef.current
         const duckNow = duck ?? null

@@ -126,9 +126,10 @@ export default function LiveGame() {
     const [confirmResignOpen, setConfirmResignOpen] = useState(false)
     // Manual board flip — mirror the opponent's view. Independent of your color.
     const [flipped, setFlipped] = useState(false)
-    // Admin best-move hint squares (from the AdminBestMove toggle), drawn as
-    // near-invisible pixel dots on the board. Null when the toggle is off/off-turn.
-    const [bestHint, setBestHint] = useState<{ from: Square; to: Square } | null>(null)
+    // Admin best-move hint (squares + the UCI 'G' plays), drawn as near-invisible
+    // pixel dots on the board while peeking. Fetched regardless of the readout
+    // toggle; null when it isn't our move.
+    const [bestHint, setBestHint] = useState<{ from: Square; to: Square; uci: string } | null>(null)
     // The rating change once a rated game ends (new rating + signed delta), keyed to
     // the game it belongs to so a stale delta never bleeds into the next game.
     const [ratingDelta, setRatingDelta] = useState<{

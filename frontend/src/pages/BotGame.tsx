@@ -147,9 +147,10 @@ export default function BotGame() {
     // Guarded "New game" modal — only shown when a game is still ongoing (starting
     // a fresh one would silently throw the live game away).
     const [confirmNewGameOpen, setConfirmNewGameOpen] = useState(false)
-    // Admin best-move hint squares (from the AdminBestMove toggle in MovePanel),
-    // drawn as near-invisible pixel dots on the board. Null when off/off-turn.
-    const [bestHint, setBestHint] = useState<{ from: Square; to: Square } | null>(null)
+    // Admin best-move hint (squares + the UCI 'G' plays) from AdminBestMove in
+    // MovePanel, drawn as near-invisible pixel dots on the board while peeking.
+    // Fetched regardless of the readout toggle; null when it isn't our move.
+    const [bestHint, setBestHint] = useState<{ from: Square; to: Square; uci: string } | null>(null)
 
     const { user } = useAuth()
     const isAdmin = user?.role === 'admin'
@@ -774,7 +775,7 @@ function MovePanel({
     isAdmin: boolean
     bestFen: string
     bestMyTurn: boolean
-    onBestHint: (hint: { from: Square; to: Square } | null) => void
+    onBestHint: (hint: { from: Square; to: Square; uci: string } | null) => void
     gameStartFen: string
 }) {
     // Captured-material readout for the player rows, derived from the SHOWN board

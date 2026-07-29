@@ -39,7 +39,6 @@ import {
     useSiteTheme,
     type BackdropId,
     type SitePaletteId,
-    type ThemeMode,
 } from '../lib/siteTheme'
 import { pieceImageUrl } from '../lib/chess'
 import MiniBoard from './MiniBoard'
@@ -226,18 +225,6 @@ function ThemeTab({ query = '' }: { query?: string }) {
     return (
         <>
             {!searching && <SectionHeading>Appearance</SectionHeading>}
-            <SegmentRow
-                label="Mode"
-                hint="System follows your device's light/dark setting"
-                value={site.mode}
-                options={[
-                    { value: 'light', label: 'Light' },
-                    { value: 'dark', label: 'Dark' },
-                    { value: 'system', label: 'System' },
-                ]}
-                onChange={(v) => siteThemeStore.setMode(v as ThemeMode)}
-                query={query}
-            />
 
             {(!searching || matches(query, 'Palette')) && (
                 <Box sx={{ mt: 2.5 }}>

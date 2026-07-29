@@ -33,6 +33,13 @@ function hueFor(ms: number): string {
     return ms < DANGER_MS ? HUE_DANGER : ms < WARN_MS ? HUE_WARN : HUE_NORMAL
 }
 
+// The DIGITS only. A running clock reads plain white at normal time — it's the thing
+// you actually look at — while the border and the bar keep the accent. Low-time still
+// escalates the number to amber then red, since that's the whole point of the tiers.
+function digitHueFor(ms: number): string {
+    return ms < DANGER_MS ? HUE_DANGER : ms < WARN_MS ? HUE_WARN : 'var(--text)'
+}
+
 /** Snap to the authoritative time, then self-tick only while this side is actually
  *  running (the idle side's remaining is static, so it needs no interval). Shared by
  *  the digits and the bar so each stays a leaf that re-renders on its own. */
@@ -88,7 +95,7 @@ export default function Clock({ getMs, active, running = true }: ClockProps) {
                 borderRadius: 1.5,
                 minWidth: 96,
                 textAlign: 'center',
-                color: active ? hue : 'var(--text-dim)',
+                color: active ? digitHueFor(ms) : 'var(--text-dim)',
                 bgcolor: active ? 'var(--surface-2)' : 'transparent',
                 border: '1px solid',
                 borderColor: active ? hue : 'transparent',

@@ -415,8 +415,6 @@ const LS_BACKDROP = 'chessgo.site.backdrop'
 
 const paletteById = (id: string | null): SitePalette =>
     PALETTES.find((p) => p.id === id) ?? PALETTES.find((p) => p.id === DEFAULT_PALETTE)!
-const asMode = (v: string | null): ThemeMode =>
-    v === 'light' || v === 'dark' || v === 'system' ? v : DEFAULT_MODE
 const asBackdrop = (v: string | null): BackdropId =>
     BACKDROPS.some((b) => b.id === v) ? (v as BackdropId) : DEFAULT_BACKDROP
 
@@ -458,27 +456,19 @@ class SiteThemeStore {
         resolved: 'dark',
     }
     private listeners = new Set<() => void>()
-    private mql: MediaQueryList | null = null
 
     /** Read persisted choices and paint the site palette + backdrop onto <html>.
      * Call once, synchronously, before first render (main.tsx). */
     init(): void {
         try {
-            this.mode = asMode(localStorage.getItem(LS_MODE))
+            // The mode is deliberately NOT read back from storage: the site is
+            // dark-only, and the settings modal no longer offers light/system. Anyone
+            // who picked one of those before would otherwise be stuck there with no
+            // control left to change it. Palette and backdrop still persist.
             this.palette = paletteById(localStorage.getItem(LS_PALETTE)).id
             this.backdrop = asBackdrop(localStorage.getItem(LS_BACKDROP))
         } catch {
             // localStorage unavailable (private mode) — keep defaults.
-        }
-        // Keep 'system' live: re-resolve whenever the OS scheme flips.
-        if (typeof window !== 'undefined' && window.matchMedia) {
-            this.mql = window.matchMedia('(prefers-color-scheme: dark)')
-            const onChange = () => {
-                if (this.mode === 'system') this.apply()
-            }
-            // addEventListener is the modern API; older Safari used addListener.
-            if (this.mql.addEventListener) this.mql.addEventListener('change', onChange)
-            else this.mql.addListener?.(onChange)
         }
         this.apply()
     }
