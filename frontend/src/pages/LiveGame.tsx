@@ -486,11 +486,20 @@ export default function LiveGame() {
                             humanColor={g.color}
                         />
                     )}
-                    <ChatPanel
-                        messages={g.messages}
-                        onSend={(t) => gameSocket.sendChat(t)}
-                        disabled={g.ended}
-                    />
+                    {/* Grows to eat whatever the game cards above don't use, pinning the
+                        chat to the bottom half. */}
+                    <Box sx={{ flex: 1, minHeight: 0 }} />
+                    {/* The chat is exactly the bottom half of the column (which is the
+                        board's height), regardless of how many cards sit above it.
+                        `0 0 50%` — no grow, no shrink, so it's a fixed half rather than
+                        whatever is left over. */}
+                    <Box sx={{ flex: '0 0 50%', minHeight: 0, display: 'flex' }}>
+                        <ChatPanel
+                            messages={g.messages}
+                            onSend={(t) => gameSocket.sendChat(t)}
+                            disabled={g.ended}
+                        />
+                    </Box>
                 </Box>
                 </>
             }
