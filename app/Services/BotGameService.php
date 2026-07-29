@@ -207,28 +207,22 @@ class BotGameService
 
         $this->apply($game, $move, $result, 'human');
 
-        // Double Move: the human plays two plies per bot reply, under king-capture
-        // rules (the win is taking the king, not delivering mate). After the FIRST
-        // ply of the pair, the bot does not reply yet:
+        // Double Move: the human plays two plies per bot reply. After the FIRST ply
+        // of the pair the bot normally passes — EXCEPT when that ply gave check.
+        //
+        // This is the balanced Marseillais rule: a checking first ply ENDS the turn
+        // (no second ply), so the bot gets to answer the check like in normal chess.
+        // Without it, a first-ply check is an unstoppable win — the bot never moves
+        // in between, so the checking piece just takes the king next ply — which made
+        // the variant trivially winnable. Checks stay fully legal; they only cost the
+        // free tempo. Falling through here also keeps the position ordinary chess
+        // (bot to move, in check) rather than the illegal "enemy king in check on your
+        // own move" FEN a pass-flip would produce.
         if ($game->variant === 'doublemove'
             && $game->status === 'ongoing'
+            && empty($result['check'])
             && $this->isFirstDoubleMove($game)
         ) {
-            if (!empty($result['check'])) {
-                // The first ply gave check. The bot does NOT move between the human's
-                // two plies, so the checking piece captures the bot's king on the
-                // second ply, unstoppably — the human simply wins now. (This also
-                // sidesteps the illegal "enemy king in check on your move" FEN that a
-                // flip would otherwise produce.) Recorded as a checkmate result so the
-                // eval bar / caption / result all read as a win; side_to_move is left
-                // as the bot's color (its king is the one that falls).
-                $game->status = 'checkmate';
-                $game->result = $game->human_color === 'w' ? '1-0' : '0-1';
-                $game->save();
-
-                return ['ok' => true];
-            }
-
             // Quiet first ply: the bot "passes" by flipping the side to move back to
             // the human for their second ply.
             $flipped = $this->flipSideToMove($game->fen);

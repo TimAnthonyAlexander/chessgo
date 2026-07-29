@@ -38,7 +38,8 @@ export const VARIANT_BLURB: Record<Variant, string> = {
         'Räuberschach — captures are compulsory and the king is just a piece. Lose all your men (or get stalemated) to win.',
     fading: 'Full strength to start — Zugzwang loses 100 Elo with every move it makes.',
     glassjaw: 'Full strength — but every check you give it costs Zugzwang 300 Elo for good.',
-    doublemove: "You play two moves for every one of Zugzwang's. Set its strength with the slider.",
+    doublemove:
+        "You play two moves for every one of Zugzwang's — but a check ends your turn on the spot.",
 }
 
 /** Pocket piece letters (always uppercase; color is by context). */

@@ -12,7 +12,7 @@ extension Variant {
         case .antichess: return "Captures are forced. Lose every piece to win."
         case .fading: return "The bot gets weaker every move it makes."
         case .glassjaw: return "The bot is strong until you land a check, then it wilts."
-        case .doublemove: return "Each side plays two moves in a row."
+        case .doublemove: return "Two moves per turn — a check ends your turn early."
         }
     }
 }

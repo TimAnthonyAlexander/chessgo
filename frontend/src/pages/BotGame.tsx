@@ -1163,7 +1163,7 @@ function Setup({
                     : variant === 'glassjaw'
                       ? 'Play Glass Jaw — full strength, but every check you land costs Zugzwang 300 Elo for good.'
                       : variant === 'doublemove'
-                        ? "Play Double Move — two moves for every one of Zugzwang's; a check on your first move takes the king and wins."
+                        ? "Play Double Move — two moves for every one of Zugzwang's; check with the first and your turn ends there."
                         : customStart
                           ? 'Play the Zugzwang engine from this position.'
                           : 'Play the Zugzwang engine.'
