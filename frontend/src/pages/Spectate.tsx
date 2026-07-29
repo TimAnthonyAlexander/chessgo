@@ -3,7 +3,7 @@ import { Box, Button, Tooltip, Typography } from '@mui/material'
 import { ArrowLeft, Gauge, Target, User, Volume2, VolumeX } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router-dom'
 import Board from '../components/Board'
-import Clock from '../components/Clock'
+import Clock, { ClockBar } from '../components/Clock'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveList from '../components/MoveList'
 import { MoveSan } from '../components/MoveSan'
@@ -28,6 +28,8 @@ import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds
 // each independently toggleable (persisted in localStorage). Ordinary spectators
 // see the board as-is — no analyze traffic for them.
 const LS_EVAL = 'spectate-eval-bar'
+const MOVE_LIST_ROWS = 7
+
 const LS_ARROW = 'spectate-best-arrow'
 
 function loadFlag(key: string): boolean {
@@ -176,12 +178,24 @@ export default function Spectate() {
 
     return (
         <BoardPage
+            // Right card is compact by design (a fixed 7-row move list), so it shrinks
+            // to its content and centres against the board — matching LiveGame.
+            rightFit
             evalBar={evalBarVisible ? <EvalBar ev={whiteEval} orientation="w" /> : undefined}
-            left={<SpectateInfoCard pool={g.pool} variant={g.variant} fen={g.fen} />}
+            left={
+                <SpectateInfoCard
+                    pool={g.pool}
+                    variant={g.variant}
+                    fen={g.fen}
+                    rated={g.rated}
+                    live={!g.over}
+                />
+            }
             right={
                 <Box
                     sx={{
-                        flex: 1,
+                        // Sized by its content, not stretched to the column.
+                        flex: '0 0 auto',
                         minHeight: 0,
                         display: 'flex',
                         flexDirection: 'column',
@@ -194,77 +208,6 @@ export default function Spectate() {
                         width: '100%',
                     }}
                 >
-                    {/* Header: pool + rated + a live badge */}
-                    <Box
-                        sx={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 1,
-                            px: 1.75,
-                            py: 1.25,
-                            bgcolor: 'var(--bg-2)',
-                            borderBottom: '1px solid var(--line-soft)',
-                        }}
-                    >
-                        <Typography
-                            sx={{
-                                fontFamily: 'var(--font-mono)',
-                                fontSize: 12.5,
-                                color: 'var(--text-dim)',
-                            }}
-                        >
-                            {g.pool}
-                        </Typography>
-                        {!g.over && (
-                            <Box
-                                sx={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: 0.5,
-                                    px: 0.9,
-                                    py: 0.2,
-                                    borderRadius: '6px',
-                                    fontSize: 10,
-                                    fontWeight: 700,
-                                    letterSpacing: '0.1em',
-                                    textTransform: 'uppercase',
-                                    color: '#7bb661',
-                                }}
-                            >
-                                <Box
-                                    sx={{
-                                        width: 6,
-                                        height: 6,
-                                        borderRadius: '50%',
-                                        bgcolor: '#7bb661',
-                                    }}
-                                />{' '}
-                                Live
-                            </Box>
-                        )}
-                        <Box
-                            sx={{
-                                ml: 'auto',
-                                px: 1,
-                                py: 0.3,
-                                borderRadius: '6px',
-                                fontSize: 10.5,
-                                fontWeight: 700,
-                                letterSpacing: '0.1em',
-                                textTransform: 'uppercase',
-                                border: '1px solid',
-                                color: g.rated ? 'var(--accent)' : 'var(--text-dim)',
-                                bgcolor: g.rated ? 'var(--accent-soft)' : 'transparent',
-                                borderColor: g.rated ? 'var(--accent-line)' : 'var(--line)',
-                            }}
-                        >
-                            {g.rated ? 'Rated' : 'Casual'}
-                        </Box>
-                        <NavBtn small label={sound ? 'Mute' : 'Unmute'} onClick={toggleSound}>
-                            {sound ? <Volume2 size={18} /> : <VolumeX size={18} />}
-                        </NavBtn>
-                    </Box>
-
                     {/* Admin engine overlay controls */}
                     {isAdmin && (
                         <AdminControls
@@ -293,16 +236,39 @@ export default function Spectate() {
                         getMs={() => spectateRemaining(g, 'b')}
                         active={!g.over && g.sideToMove === 'b' && g.moves.length >= 2}
                         running={!g.over && g.moves.length >= 2}
+                        initialMs={g.timeControl.base}
                         divider="bottom"
                     />
 
+                    {/* Fixed 7 rows: padded when the game is short, scrolling (and
+                        auto-following the latest move) once it's longer, so the panel
+                        height never jumps mid-game. */}
                     <MoveList
-                        fill
+                        visibleRows={MOVE_LIST_ROWS}
                         moves={moveEntries}
                         currentPly={moveEntries.length}
                         startPly={g.startPly}
                         onSelectPly={() => {}}
                     />
+
+                    {/* Sound sits under the move list, where LiveGame keeps its board
+                        controls. No flip (spectators always view from White) and no
+                        move-nav — this list isn't scrubbable yet, see
+                        docs/tasks/open/spectate-ply-scrubbing.md. */}
+                    <Box
+                        sx={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            px: 1.25,
+                            py: 0.75,
+                            borderTop: '1px solid var(--line-soft)',
+                            bgcolor: 'var(--bg-2)',
+                        }}
+                    >
+                        <NavBtn small label={sound ? 'Mute' : 'Unmute'} onClick={toggleSound}>
+                            {sound ? <Volume2 size={18} /> : <VolumeX size={18} />}
+                        </NavBtn>
+                    </Box>
 
                     {g.over ? (
                         <Box
@@ -379,6 +345,7 @@ export default function Spectate() {
                         getMs={() => spectateRemaining(g, 'w')}
                         active={!g.over && g.sideToMove === 'w' && g.moves.length >= 2}
                         running={!g.over && g.moves.length >= 2}
+                        initialMs={g.timeControl.base}
                         divider="top"
                     />
                 </Box>
@@ -405,17 +372,21 @@ function PlayerBar({
     getMs,
     active,
     running,
+    initialMs,
     divider,
 }: {
     side: SpectateSide
     getMs: () => number
     active: boolean
     running: boolean
+    /** The time control's initial time (ms), for the clockBar strip. */
+    initialMs?: number
     divider?: 'top' | 'bottom'
 }) {
     return (
         <Box
             sx={{
+                position: 'relative',
                 display: 'flex',
                 alignItems: 'center',
                 gap: 1.25,
@@ -424,6 +395,7 @@ function PlayerBar({
                 bgcolor: 'var(--bg-2)',
                 borderTop: divider === 'top' ? '1px solid var(--line-soft)' : undefined,
                 borderBottom: divider === 'bottom' ? '1px solid var(--line-soft)' : undefined,
+                overflow: 'hidden',
             }}
         >
             <Avatar small>
@@ -453,6 +425,8 @@ function PlayerBar({
             <Box sx={{ ml: 'auto' }}>
                 <Clock getMs={getMs} active={active} running={running} />
             </Box>
+            {/* Full-bleed along the bottom of the whole row, not just under the digits. */}
+            <ClockBar getMs={getMs} active={active} running={running} initialMs={initialMs} />
         </Box>
     )
 }

@@ -15,10 +15,15 @@ export default function SpectateInfoCard({
     pool,
     variant,
     fen,
+    rated,
+    live,
 }: {
     pool: string
     variant: Variant
     fen: string
+    rated: boolean
+    /** Game still in progress — drives the Live marker. */
+    live: boolean
 }) {
     const cat = categoryFor(pool)
     const mat = useMemo(() => computeMaterial(fen), [fen])
@@ -72,23 +77,65 @@ export default function SpectateInfoCard({
                 )}
             </Box>
 
+            {/* Rated/casual, the pool, and the Live marker — these used to sit in the
+                right panel's header row, which is gone; this card is the one place the
+                game's mode is described now. */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1.25 }}>
+                <Typography
+                    sx={{
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 13,
+                        color: 'var(--text-dim)',
+                    }}
+                >
+                    {pool}
+                </Typography>
+                <Box
+                    sx={{
+                        px: 1,
+                        py: 0.3,
+                        borderRadius: '6px',
+                        fontSize: 10.5,
+                        fontWeight: 700,
+                        letterSpacing: '0.1em',
+                        textTransform: 'uppercase',
+                        border: '1px solid',
+                        color: rated ? 'var(--accent)' : 'var(--text-dim)',
+                        bgcolor: rated ? 'var(--accent-soft)' : 'transparent',
+                        borderColor: rated ? 'var(--accent-line)' : 'var(--line)',
+                    }}
+                >
+                    {rated ? 'Rated' : 'Casual'}
+                </Box>
+                {live && (
+                    <Box
+                        sx={{
+                            ml: 'auto',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 0.5,
+                            fontSize: 10,
+                            fontWeight: 700,
+                            letterSpacing: '0.1em',
+                            textTransform: 'uppercase',
+                            color: '#7bb661',
+                        }}
+                    >
+                        <Box
+                            sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#7bb661' }}
+                        />
+                        Live
+                    </Box>
+                )}
+            </Box>
+
             {showCaptured && (
             <Box sx={{ borderTop: '1px solid var(--line-soft)', mt: 2, pt: 2 }}>
                 <Label>Material</Label>
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, mt: 1 }}>
-                    <MaterialRow
-                        label="White"
-                        pieces={mat.capturedByWhite}
-                        color="b"
-                        adv={mat.diff > 0 ? mat.diff : 0}
-                    />
+                    <MaterialRow label="White" pieces={mat.capturedByWhite} color="b" />
                     <Box sx={{ height: '1px', bgcolor: 'var(--line-soft)' }} />
-                    <MaterialRow
-                        label="Black"
-                        pieces={mat.capturedByBlack}
-                        color="w"
-                        adv={mat.diff < 0 ? -mat.diff : 0}
-                    />
+                    <MaterialRow label="Black" pieces={mat.capturedByBlack} color="w" />
                 </Box>
             </Box>
             )}
@@ -96,17 +143,16 @@ export default function SpectateInfoCard({
     )
 }
 
-/** One side's captured pieces (opponent's color) + a material advantage badge. */
+/** One side's captured pieces (the opponent's colour). No numeric advantage — the
+ *  pieces themselves say who is up and by how much. */
 function MaterialRow({
     label,
     pieces,
     color,
-    adv,
 }: {
     label: string
     pieces: string[]
     color: 'w' | 'b'
-    adv: number
 }) {
     return (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minHeight: 24 }}>
@@ -150,18 +196,6 @@ function MaterialRow({
                     ))
                 )}
             </Box>
-            {adv > 0 && (
-                <Typography
-                    sx={{
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: 13.5,
-                        fontWeight: 700,
-                        color: 'var(--accent)',
-                    }}
-                >
-                    +{adv}
-                </Typography>
-            )}
         </Box>
     )
 }
