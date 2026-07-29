@@ -28,7 +28,7 @@ import {
 } from '../lib/chess'
 import { usePieceSet } from '../lib/boardTheme'
 import { usePrefs, type ArrowColor } from '../lib/settings'
-import { DUCK_FLIGHT, diffBoardsForAnimation, type Flight } from '../lib/pieceAnimation'
+import { DUCK_FLIGHT, diffBoardsForAnimation, sameBoard, type Flight } from '../lib/pieceAnimation'
 import { DuckGlyph } from './DuckGlyph'
 
 function PieceGlyph({ piece, set, hidden }: { piece: string; set: string; hidden?: boolean }) {
@@ -69,9 +69,22 @@ function FlightPiece({
     onDone: () => void
 }) {
     const [settled, setSettled] = useState(false)
+    // Latest `onDone` behind a ref so the mount effect below can have empty deps —
+    // the parent passes a fresh closure every render, which would otherwise restart
+    // the fallback timer on each one.
+    const doneRef = useRef(onDone)
+    doneRef.current = onDone
     useEffect(() => {
         const raf = requestAnimationFrame(() => setSettled(true))
-        return () => cancelAnimationFrame(raf)
+        // Safety net: `transitionend` is the real cleanup signal, but it can be
+        // missed (an interrupted transform, a backgrounded tab). A stranded flight
+        // keeps its destination square hidden forever, so sweep it well after the
+        // longest speed tier (280ms) has elapsed. Cleanup is idempotent.
+        const timer = window.setTimeout(() => doneRef.current(), 1500)
+        return () => {
+            cancelAnimationFrame(raf)
+            window.clearTimeout(timer)
+        }
     }, [])
 
     const from = center(flight.from)
@@ -444,6 +457,14 @@ export default function Board({
             setFlights([])
             return
         }
+
+        // Same position, new object: a re-render, not a move. Our OWN moves land
+        // here — the optimistic overlay shows the move (starting the flight), then
+        // the authoritative FEN echoes back and `board` is re-parsed into an equal
+        // but distinct BoardMap. Clearing the flight list on that no-op diff is what
+        // made your own moves snap while everyone else's slid, so leave any running
+        // flight alone and let it finish.
+        if (sameBoard(prevBoard, board) && prevDuck === duckNow) return
 
         let next = diffBoardsForAnimation(prevBoard, board)
 

@@ -62,6 +62,17 @@ function distance(a: Square, b: Square): number {
     return Math.max(Math.abs(fileOf(a) - fileOf(b)), Math.abs(rankOf(a) - rankOf(b)))
 }
 
+// Same pieces on the same squares. A BoardMap is rebuilt (new object identity)
+// every time the FEN string is re-parsed, so identity comparison says "changed"
+// for positions that are in fact the same — this is the content check that
+// distinguishes a real position change from a re-render of the same one.
+export function sameBoard(a: BoardMap, b: BoardMap): boolean {
+    const keys = Object.keys(a)
+    if (keys.length !== Object.keys(b).length) return false
+    for (const sq of keys) if (a[sq] !== b[sq]) return false
+    return true
+}
+
 export function diffBoardsForAnimation(prev: BoardMap, next: BoardMap): Flight[] {
     const departures: { sq: Square; piece: string }[] = []
     const arrivals: { sq: Square; piece: string }[] = []
