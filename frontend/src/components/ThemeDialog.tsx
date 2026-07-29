@@ -505,6 +505,13 @@ function GameplayTab({ query = '' }: { query?: string }) {
                 onChange={(v) => settingsStore.set('rookCastle', v)}
                 query={query}
             />
+            <ToggleRow
+                label="Play with the keyboard"
+                hint="Arrow keys move a cursor around the board, Enter selects and moves. Off by default: it makes squares focusable and takes the arrow keys away from the move list."
+                checked={prefs.keyboardBoard}
+                onChange={(v) => settingsStore.set('keyboardBoard', v)}
+                query={query}
+            />
             <SegmentRow
                 label="Confirm move before sending"
                 hint="Adds a confirm step so you can't mouse-slip. 'Slow games' = classical and correspondence only."

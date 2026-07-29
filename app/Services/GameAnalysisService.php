@@ -79,7 +79,7 @@ class GameAnalysisService
             throw new RuntimeException('engine returned no positions');
         }
 
-        $payload = $this->build($game, $moves, $sans, $positions);
+        $payload = $this->build($this->gameMeta($game), $moves, $sans, $positions);
 
         $game->setAnalysis($payload);
         $game->save();
@@ -112,7 +112,7 @@ class GameAnalysisService
             throw new RuntimeException('engine returned no positions');
         }
 
-        $payload = $this->build($game, $moves, $sans, $positions);
+        $payload = $this->build($this->gameMeta($game), $moves, $sans, $positions);
 
         $game->setAnalysis($payload);
         $game->save();
@@ -147,12 +147,98 @@ class GameAnalysisService
             throw new RuntimeException('engine returned no positions');
         }
 
-        $payload = $this->build($game, $moves, $sans, $positions);
+        $payload = $this->build($this->gameMeta($game), $moves, $sans, $positions);
 
         $game->setAnalysis($payload);
         $game->save();
 
         return $payload;
+    }
+
+    /**
+     * Stateless full-game analysis for an ad-hoc move list — no persisted Game,
+     * nothing cached, nothing written to the database. Powers Blunder Rewind for
+     * games that have no Game row (bot games chiefly): {@see build()} produces the
+     * exact same payload shape as the persisted-game path, just seeded with
+     * generic metadata instead of a Game's names/result/rating. Standard rules
+     * only — callers (bot games, imported PGNs) never send Chess960/Duck/
+     * Crazyhouse move lists through this path.
+     *
+     * @param list<string> $moves UCI moves in order
+     * @return array<string, mixed>
+     */
+    public function analyzeMoves(array $moves, ?string $startFen = null): array
+    {
+        $moves = array_map('strval', $moves);
+
+        $res = $this->engine->analyzeGame($moves, $startFen);
+        $positions = is_array($res['positions'] ?? null) ? $res['positions'] : [];
+        if ($positions === []) {
+            throw new RuntimeException('engine returned no positions');
+        }
+
+        // The engine doesn't return SAN for a raw move list — only a persisted
+        // Game carries the hub's SANs. Blunder detection only reads cpLoss/
+        // judgment/uci, so falling back to the UCI itself for display is fine here.
+        $sans = $moves;
+
+        $last = $positions[count($positions) - 1];
+        $meta = [
+            'variant' => 'standard',
+            'hubGameId' => '',
+            'result' => $this->deriveResult($last),
+            'reason' => '',
+            'pool' => '',
+            'rated' => false,
+            'whiteName' => 'White',
+            'blackName' => 'Black',
+            'whiteIsBot' => false,
+            'blackIsBot' => false,
+        ];
+
+        return $this->build($meta, $moves, $sans, $positions);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function gameMeta(Game $game): array
+    {
+        return [
+            'variant' => $game->variant,
+            'hubGameId' => $game->hub_game_id,
+            'result' => $game->result,
+            'reason' => $game->reason,
+            'pool' => $game->pool,
+            'rated' => $game->rated,
+            'whiteName' => $game->white_name,
+            'blackName' => $game->black_name,
+            'whiteIsBot' => $game->white_is_bot,
+            'blackIsBot' => $game->black_is_bot,
+        ];
+    }
+
+    /**
+     * Derive a "1-0"/"0-1"/"1/2-1/2" result from the final position's terminal
+     * state — there's no persisted Game to read a result off for a stateless
+     * move-list analysis. Callers only ever submit a finished game here, so the
+     * last position should always be terminal; "*" is a defensive fallback.
+     *
+     * @param array<string, mixed> $last
+     */
+    private function deriveResult(array $last): string
+    {
+        if (($last['terminal'] ?? false) !== true) {
+            return '*';
+        }
+        if (($last['checkmate'] ?? false) === true) {
+            // The side to move at the final position is the one checkmated.
+            $stm = (($last['sideToMove'] ?? 'w') === 'b') ? 'b' : 'w';
+
+            return $stm === 'w' ? '0-1' : '1-0';
+        }
+
+        return '1/2-1/2';
     }
 
     /**
@@ -184,12 +270,15 @@ class GameAnalysisService
     }
 
     /**
+     * @param array<string, mixed> $meta {@see gameMeta()} / the stateless meta in
+     *   {@see analyzeMoves()} — the game-level fields build() needs that don't
+     *   come from the engine's per-position payload.
      * @param list<string> $moves
      * @param list<string> $sans
      * @param list<array<string, mixed>> $positions
      * @return array<string, mixed>
      */
-    private function build(Game $game, array $moves, array $sans, array $positions): array
+    private function build(array $meta, array $moves, array $sans, array $positions): array
     {
         $moveCount = count($moves);
         $plies = [];
@@ -204,7 +293,7 @@ class GameAnalysisService
                 // harmless, the client ignores it when the game isn't a duck game).
                 'duck' => (string) ($p['duck'] ?? ''),
                 'sideToMove' => $stm,
-                'evalWhite' => $this->whiteEval($p, $stm, $game->result),
+                'evalWhite' => $this->whiteEval($p, $stm, (string) $meta['result']),
                 'bestUci' => $this->stringOrNull($p['bestmove'] ?? null),
                 'bestSan' => $this->stringOrNull($p['bestSan'] ?? null),
                 // Engine's predicted best line (UCI, bestUci first) + search depth,
@@ -237,16 +326,16 @@ class GameAnalysisService
             'version' => self::VERSION,
             // Lets the client tell a duck review apart from a standard one (drives
             // the per-ply duck overlay); '' / 'standard' for ordinary games.
-            'variant' => $game->variant,
-            'hubGameId' => $game->hub_game_id,
-            'result' => $game->result,
-            'reason' => $game->reason,
-            'pool' => $game->pool,
-            'rated' => $game->rated,
-            'whiteName' => $game->white_name,
-            'blackName' => $game->black_name,
-            'whiteIsBot' => $game->white_is_bot,
-            'blackIsBot' => $game->black_is_bot,
+            'variant' => $meta['variant'],
+            'hubGameId' => $meta['hubGameId'],
+            'result' => $meta['result'],
+            'reason' => $meta['reason'],
+            'pool' => $meta['pool'],
+            'rated' => $meta['rated'],
+            'whiteName' => $meta['whiteName'],
+            'blackName' => $meta['blackName'],
+            'whiteIsBot' => $meta['whiteIsBot'],
+            'blackIsBot' => $meta['blackIsBot'],
             'startFen' => (string) ($positions[0]['fen'] ?? self::START_FEN),
             'plies' => $plies,
             'summary' => $this->summary($plies),

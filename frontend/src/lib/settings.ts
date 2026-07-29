@@ -50,6 +50,13 @@ export interface Prefs {
     notation: Notation
     /** Clicking the rook (not just the king) castles. */
     rookCastle: boolean
+    /** Play the board with the keyboard: arrow keys walk a focus cursor, Enter
+     *  selects and moves. OFF by default and deliberately opt-in — when on, the
+     *  board's squares become focusable (so a click leaves a focus ring) and
+     *  arrow keys are taken over by the cursor instead of scrubbing the move
+     *  list, which almost nobody wants. Screen-reader labels on the board do
+     *  not depend on this. */
+    keyboardBoard: boolean
     /** Require a confirm step before a move is sent. */
     confirmMove: ConfirmMove
     // --- Gameplay UX (game pages) ---
@@ -88,6 +95,7 @@ export const DEFAULTS: Prefs = {
     arrowColor: 'green',
     notation: 'san',
     rookCastle: true,
+    keyboardBoard: false,
     confirmMove: 'never',
     confirmResign: true,
     autoFlip: false,
@@ -140,6 +148,7 @@ function sanitize(raw: unknown): Prefs {
     oneOf('arrowColor', ['green', 'blue', 'red', 'yellow'] as const)
     oneOf('notation', ['san', 'figurine'] as const)
     bool('rookCastle')
+    bool('keyboardBoard')
     oneOf('confirmMove', ['never', 'slow', 'always'] as const)
     bool('confirmResign')
     bool('autoFlip')

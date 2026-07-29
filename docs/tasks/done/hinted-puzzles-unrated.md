@@ -1,6 +1,25 @@
 # Don't rate a puzzle that was solved with a hint
 
-**Status:** not started. Rating hole is live.
+**Status:** completed — 2026-07-29.
+
+Client sends `hinted` with the solving move; `applyResult` takes it as a fourth
+parameter and, when set, records the `PuzzleAttempt` with
+`rating_before === rating_after` (so it consumes the first-attempt slot) and
+skips the Glicko update entirely. The response carries `unrated: bool` and
+`reason: 'hint'|'replay'|null`, so the UI distinguishes a hinted solve from a
+replay instead of showing a bare "+0". `recordActivity` (daily flame) and the
+client-side "hint doesn't extend the session streak" rule are unchanged.
+
+**Trust decision (open risk):** `rating_puzzle` *is* on the public leaderboard
+(`LeaderboardController.php:28`), so a modified client can claim `hinted` on
+every failure to dodge rating losses forever. Shipped trusting the flag: the lie
+is one-directional (`solved` stays engine-verified, so a gain can't be
+fabricated, only a loss avoided) and real proof-of-hint needs the schema change
+this task forbids. See `docs/tasks/open/server-side-hint-proof.md`.
+
+One doc correction: `post()` has never used `$this->validate([...])` for
+`move`/`fen`/`ply` — it casts manually with early `badRequest` returns. `hinted`
+was added the same way rather than introducing a second pattern.
 
 The puzzle trainer now has a two-stage hint (piece, then full move). Rating is
 decided entirely server-side in `PuzzleController::applyResult`, and the server

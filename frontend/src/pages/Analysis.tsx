@@ -5,6 +5,7 @@ import {
     useCallback,
     useEffect,
     useMemo,
+    useRef,
     useState,
 } from 'react'
 import { Box, Button, Tooltip, Typography } from '@mui/material'
@@ -22,7 +23,7 @@ import {
     VolumeX,
     Zap,
 } from 'lucide-react'
-import { useLocation, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import AnalysisAside from '../components/AnalysisAside'
 import Board from '../components/Board'
 import BlunderRewind, { BlunderRewindBanner } from '../components/BlunderRewind'
@@ -33,7 +34,14 @@ import EngineLines from '../components/EngineLines'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveTree from '../components/MoveTree'
 import OpeningPanel from '../components/OpeningPanel'
-import { analyze, getGameAnalysis, sfAnalyze, type AnalysisLine, type GameAnalysis } from '../api/client'
+import {
+    analyze,
+    analyzeGameMoves,
+    getGameAnalysis,
+    sfAnalyze,
+    type AnalysisLine,
+    type GameAnalysis,
+} from '../api/client'
 import type { Color } from '../api/client'
 import { buildBlunderPuzzles, colorInGame } from '../lib/blunderRewind'
 import { toPgn, type ParsedPgn } from '../lib/pgn'
@@ -142,10 +150,20 @@ function playMoveSound(node?: TreeNode) {
 export default function Analysis() {
     const { id } = useParams<{ id?: string }>()
     const { user } = useAuth()
+    const location = useLocation()
+    const navigate = useNavigate()
     // Free mode can be seeded with an in-memory game (moves replayed from a start
     // position) passed via navigation state — e.g. from Engine vs Engine, which is
-    // never persisted so it can't be loaded by id.
-    const navState = useLocation().state as { moves?: string[]; startFen?: string } | null
+    // never persisted so it can't be loaded by id. A game-over "Review N blunders"
+    // CTA (no persisted id, e.g. a bot game) can additionally carry the player's
+    // color and an already-fetched analysis, so Blunder Rewind doesn't have to
+    // re-run the ~2s engine burst it just ran to compute that count.
+    const navState = location.state as {
+        moves?: string[]
+        startFen?: string
+        humanColor?: Color
+        analysis?: GameAnalysis
+    } | null
     const importMoves = navState?.moves ?? null
     const importStartFen = navState?.startFen ?? START_FEN
 
@@ -202,13 +220,36 @@ export default function Analysis() {
         setRewind(false) // exit any Blunder Rewind when (re)loading a game
         if (!id) {
             if (importMoves && importMoves.length > 0) {
-                // Seeded free mode: replay an imported game onto a fresh tree.
+                // Seeded free mode: replay an imported game onto a fresh tree. The
+                // board renders immediately from the move list; full analysis (needed
+                // for Blunder Rewind's blunder detection) is fetched separately below
+                // and never blocks it.
                 const built = buildFromMoves(importStartFen, importMoves)
                 setTree(built.tree)
                 setCurrentId(built.lastId) // land on the final position
-                setGame(null)
                 setLoading(false)
-                return
+
+                // Already analyzed by the caller (e.g. a "Review N blunders" CTA that
+                // fetched this to show the count) — use it as-is, no second engine burst.
+                if (navState?.analysis) {
+                    setGame(navState.analysis)
+                    return
+                }
+
+                setGame(null)
+                let cancelled = false
+                void (async () => {
+                    try {
+                        const a = await analyzeGameMoves(importMoves, importStartFen)
+                        if (!cancelled) setGame(a)
+                    } catch {
+                        // Best-effort: the board + live per-position engine eval work fine
+                        // without it — this only gates the blunder-rewind banner/deep link.
+                    }
+                })()
+                return () => {
+                    cancelled = true
+                }
             }
             // Free mode: fresh board from the start position — or a custom one carried
             // over from the board editor ("Analyse this position").
@@ -257,7 +298,7 @@ export default function Analysis() {
         return () => {
             cancelled = true
         }
-    }, [id, importMoves, importStartFen])
+    }, [id, importMoves, importStartFen, navState])
 
     // A hovered candidate move only makes sense for the position it was listed for;
     // drop it when the viewed node changes (the row also unmounts on navigation).
@@ -269,7 +310,15 @@ export default function Analysis() {
     }, [id])
 
     // Which side the viewer played (by name), or null if they weren't a participant.
-    const myColor = useMemo(() => (game ? colorInGame(game, user?.name) : null), [game, user])
+    // Which side the viewer played. For a persisted game (id path) this is a name
+    // match against the signed-in user; a stateless moves-only game (no id, e.g. a
+    // bot game reviewed via "Review N blunders") has no meaningful whiteName/
+    // blackName to match against, so the caller passes the human's color directly.
+    const myColor = useMemo(() => {
+        if (!game) return null
+        if (!id && navState?.humanColor) return navState.humanColor
+        return colorInGame(game, user?.name)
+    }, [game, user, id, navState])
 
     // Coming from a game analysis, auto-orient so the viewer is always at the bottom
     // (falls back to White for spectators / non-participants). A fresh game/position
@@ -286,6 +335,23 @@ export default function Analysis() {
         () => (game ? buildBlunderPuzzles(game, myColor ?? undefined) : []),
         [game, myColor],
     )
+
+    // Deep link straight into Blunder Rewind: a game-over "Review N blunders" CTA
+    // navigates here with `?rewind=1`. Enter it once the analysis has loaded and
+    // actually has gradeable blunders — never on every render, and never more than
+    // once per game (tracked by id, or 'free' for the moves-only path) so exiting
+    // the rewind doesn't immediately bounce back in. The query param is stripped on
+    // entry (same location.state, so it doesn't retrigger the load effect above).
+    const consumedRewindRef = useRef<string | null>(null)
+    useEffect(() => {
+        if (new URLSearchParams(location.search).get('rewind') !== '1') return
+        if (!game || blunderPuzzles.length === 0) return
+        const key = id ?? 'free'
+        if (consumedRewindRef.current === key) return
+        consumedRewindRef.current = key
+        setRewind(true)
+        navigate(id ? `/analysis/${id}` : '/analysis', { replace: true, state: location.state })
+    }, [id, location.search, location.state, game, blunderPuzzles.length, navigate])
 
     const current = tree.nodes[currentId] ?? tree.nodes[tree.rootId]
     // Reviewing a loaded Duck Chess game: playback only (no client-side duck rules,
@@ -721,8 +787,9 @@ export default function Analysis() {
     }
 
     // Blunder Rewind replaces the review layout with the self-contained retry board
-    // (only in review mode, only when the game actually has gradeable blunders).
-    if (id && rewind && game && blunderPuzzles.length > 0) {
+    // (only once a game — persisted or a stateless moves-only replay — is loaded
+    // and actually has gradeable blunders).
+    if (rewind && game && blunderPuzzles.length > 0) {
         return (
             <BlunderRewind
                 game={game}
@@ -797,7 +864,7 @@ export default function Analysis() {
                     {id && <Header game={game} loading={loading} loadError={loadError} />}
 
                     {/* Blunder Rewind: replay the game's blunders as retry puzzles. */}
-                    {id && game && blunderPuzzles.length > 0 && (
+                    {game && blunderPuzzles.length > 0 && (
                         <BlunderRewindBanner
                             count={blunderPuzzles.length}
                             onStart={() => setRewind(true)}

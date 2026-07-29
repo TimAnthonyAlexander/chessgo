@@ -107,6 +107,7 @@ class PuzzleController extends Controller
         $move = (string) ($body['move'] ?? '');
         $fen = (string) ($body['fen'] ?? '');
         $ply = (int) ($body['ply'] ?? 0);
+        $hinted = (bool) ($body['hinted'] ?? false);
 
         if ($move === '' || strlen($move) > 5) {
             return JsonResponse::badRequest('move is required (UCI)');
@@ -144,7 +145,7 @@ class PuzzleController extends Controller
                     'solved' => false,
                     'solution' => array_values(array_slice($solution, $ply)),
                     'themes' => $puzzle->getThemes(),
-                    'rating' => $this->applyResult($user, $puzzle, false),
+                    'rating' => $this->applyResult($user, $puzzle, false, $hinted),
                 ]);
             }
             $alternative = true;
@@ -163,7 +164,7 @@ class PuzzleController extends Controller
                 'status' => $applied['status'] ?? 'ongoing',
                 'fen' => $applied['newFen'] ?? $fen,
                 'themes' => $puzzle->getThemes(),
-                'rating' => $this->applyResult($user, $puzzle, true),
+                'rating' => $this->applyResult($user, $puzzle, true, $hinted),
             ]);
         }
 
@@ -306,9 +307,17 @@ class PuzzleController extends Controller
      * Apply the rated outcome for a logged-in solver, ONCE per puzzle (the first
      * attempt is the rated one). Updates the isolated rating_puzzle only.
      *
-     * @return array{value:int,delta:int,games:int}|null null when anonymous.
+     * $hinted is untrusted client input — a solver could falsely claim a hint to
+     * dodge a rating loss, and rating_puzzle IS shown on the public leaderboard
+     * (see LeaderboardController). But the lie is capped one-directional: it can
+     * only turn a loss into a no-op, never a loss into a gain (solved is still
+     * engine-verified), so the worst case is a slow upward drift, not a fabricated
+     * rank. Building server-side proof of "a hint was actually shown" would need
+     * new schema, which this task explicitly rules out — trusted as-is for now.
+     *
+     * @return array{value:int,delta:int,games:int,unrated:bool,reason:?string}|null null when anonymous.
      */
-    private function applyResult(?User $user, Puzzle $puzzle, bool $solved): ?array
+    private function applyResult(?User $user, Puzzle $puzzle, bool $solved, bool $hinted = false): ?array
     {
         if (!$user instanceof User) {
             return null;
@@ -326,7 +335,34 @@ class PuzzleController extends Controller
             [$user->id, $puzzle->id],
         );
         if ($alreadyPlayed) {
-            return ['value' => $user->rating_puzzle, 'delta' => 0, 'games' => $user->games_puzzle];
+            return [
+                'value' => $user->rating_puzzle,
+                'delta' => 0,
+                'games' => $user->games_puzzle,
+                'unrated' => true,
+                'reason' => 'replay',
+            ];
+        }
+
+        if ($hinted) {
+            // Still consumes the first-attempt slot (the attempt row) so a later
+            // replay of this puzzle can't earn rating on an answer already shown —
+            // but no Glicko update, and no *_puzzle field on the user changes.
+            $attempt = new PuzzleAttempt();
+            $attempt->user_id = $user->id;
+            $attempt->puzzle_id = $puzzle->id;
+            $attempt->solved = $solved;
+            $attempt->rating_before = $user->rating_puzzle;
+            $attempt->rating_after = $user->rating_puzzle;
+            $attempt->save();
+
+            return [
+                'value' => $user->rating_puzzle,
+                'delta' => 0,
+                'games' => $user->games_puzzle,
+                'unrated' => true,
+                'reason' => 'hint',
+            ];
         }
 
         $before = $user->rating_puzzle;
@@ -362,7 +398,13 @@ class PuzzleController extends Controller
         $attempt->rating_after = $after;
         $attempt->save();
 
-        return ['value' => $after, 'delta' => $after - $before, 'games' => $user->games_puzzle];
+        return [
+            'value' => $after,
+            'delta' => $after - $before,
+            'games' => $user->games_puzzle,
+            'unrated' => false,
+            'reason' => null,
+        ];
     }
 
     /**

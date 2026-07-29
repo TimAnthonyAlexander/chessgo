@@ -46,6 +46,64 @@ export function isWhitePiece(piece: string): boolean {
     return piece === piece.toUpperCase()
 }
 
+// Classify a KING move (from, to already known to be the king's own squares)
+// as castling, returning which side it castles toward, or null for an
+// ordinary king step. A king only ever moves more than one square when
+// castling (FIDE rule), so:
+//   - a two-file jump is always a castle (works for standard chess and any
+//     Chess960 start where the king happens to sit exactly 2 files from its
+//     landing square — e.g. the standard e-file start).
+//   - otherwise (Chess960, king starting elsewhere), a same-rank landing on
+//     the back rank's g/c file that ISN'T a plain one-square step is also a
+//     castle — the engine's move_to_uci always encodes castling as (king
+//     origin, king destination on g/c-file), even letting to === from when
+//     the king already sits on its own destination file.
+// Known gap (shared with applyUciVisually's castling case below, not new
+// here): if the king starts exactly ONE file from its own castling
+// destination (e.g. king on f1 castling kingside to g1), the resulting UCI
+// ("f1g1") is byte-identical to an ordinary one-square king step — the wire
+// format itself can't disambiguate, since move_to_uci drops the CASTLING
+// type flag. That configuration is classified as a normal move (no rook
+// side-effect assumed), matching this codebase's existing accepted
+// limitation rather than inventing a new one.
+function castleSideForKingMove(from: Square, to: Square): 'k' | 'q' | null {
+    const fileDiff = Math.abs(fileOf(to) - fileOf(from))
+    if (fileDiff === 2) return fileOf(to) > fileOf(from) ? 'k' : 'q'
+    const toFile = to[0]
+    if (to[1] === from[1] && fileDiff !== 1 && (toFile === 'g' || toFile === 'c')) {
+        return toFile === 'g' ? 'k' : 'q'
+    }
+    return null
+}
+
+// Resolve the physical rook square for one side of a castle. Chess960-safe:
+// picks the OUTERMOST rook on that side of the king (highest file to the
+// right for kingside, lowest file to the left for queenside) — the
+// unambiguous "castling rook" per Chess960 rules, since a king/rook pair
+// can't have another rook between them and still legally castle.
+function castlingRookSquare(
+    board: BoardMap,
+    king: Square,
+    side: 'k' | 'q',
+    white: boolean,
+): Square | null {
+    const rook = white ? 'R' : 'r'
+    const kf = fileOf(king)
+    const kr = rankOf(king)
+    if (side === 'k') {
+        for (let f = 7; f > kf; f--) {
+            const sq = squareAt(f, kr)
+            if (board[sq] === rook) return sq
+        }
+    } else {
+        for (let f = 0; f < kf; f++) {
+            const sq = squareAt(f, kr)
+            if (board[sq] === rook) return sq
+        }
+    }
+    return null
+}
+
 /**
  * Apply a UCI move to a board map for immediate visual feedback. Handles
  * captures, castling, en passant, and promotion. Display-only — not a rules
@@ -73,47 +131,18 @@ export function applyUciVisually(board: BoardMap, uci: string): BoardMap {
     next[to] = promo ? (white ? promo.toUpperCase() : promo.toLowerCase()) : piece
 
     // Castling (display-only, best-effort — the engine's authoritative FEN is the
-    // real source of truth). Two cases:
-    //   - Standard: the king travels exactly two files (e1g1 / e1c1).
-    //   - Chess960: a king landing on its back-rank g/c-file via a king-two-square
-    //     castling UCI (e.g. b1g1), distinguished from a normal one-step king move.
-    // The correct back-rank rook is relocated to f-file (kingside) or d-file
-    // (queenside); if none is found we simply leave the king moved (fallback).
+    // real source of truth). Side + the physical rook come from the two shared
+    // helpers above (also used by rookCastleMoves for the rookCastle input
+    // mapping); the rook is relocated to f-file (kingside) or d-file (queenside),
+    // or left in place if none is found (fallback).
     if (lower === 'k') {
-        const fileDiff = Math.abs(fileOf(to) - fileOf(from))
         const backRank = white ? '1' : '8'
-        const toFile = to[0]
-        const onBackRank = from[1] === backRank && to[1] === backRank
-        let side: 'k' | 'q' | null = null
-        if (fileDiff === 2) {
-            side = fileOf(to) > fileOf(from) ? 'k' : 'q'
-        } else if (onBackRank && fileDiff !== 1 && (toFile === 'g' || toFile === 'c')) {
-            side = toFile === 'g' ? 'k' : 'q'
-        }
+        const side = castleSideForKingMove(from, to)
         if (side) {
-            const rook = white ? 'R' : 'r'
-            const kf = fileOf(from)
-            const kr = rankOf(from)
-            if (side === 'k') {
-                // Kingside: the rook on the highest file to the RIGHT of the king → f-file.
-                for (let f = 7; f > kf; f--) {
-                    const sq = squareAt(f, kr)
-                    if (board[sq] === rook) {
-                        delete next[sq]
-                        next[`f${backRank}`] = rook
-                        break
-                    }
-                }
-            } else {
-                // Queenside: the rook on the lowest file to the LEFT of the king → d-file.
-                for (let f = 0; f < kf; f++) {
-                    const sq = squareAt(f, kr)
-                    if (board[sq] === rook) {
-                        delete next[sq]
-                        next[`d${backRank}`] = rook
-                        break
-                    }
-                }
+            const rookSq = castlingRookSquare(board, from, side, white)
+            if (rookSq) {
+                delete next[rookSq]
+                next[`${side === 'k' ? 'f' : 'd'}${backRank}`] = white ? 'R' : 'r'
             }
         }
     }
@@ -126,6 +155,40 @@ export function targetsFrom(legalMoves: string[], from: Square): Set<Square> {
     const out = new Set<Square>()
     for (const m of legalMoves) {
         if (m.slice(0, 2) === from) out.add(m.slice(2, 4))
+    }
+    return out
+}
+
+/**
+ * `rookCastle` pref support: a rook-square → king-castling-UCI map for
+ * `color`'s king, built ONLY from the engine's legal-move list (never
+ * inferred) — for every castling-shaped move already legal for the king (see
+ * castleSideForKingMove), resolves which physical rook belongs to that side
+ * (Chess960-safe outermost-rook heuristic, castlingRookSquare — the same one
+ * applyUciVisually uses to relocate the rook visually) and maps that rook's
+ * square to the king's OWN move (e.g. "e1g1"), not to a g/c-file square.
+ *
+ * Mapping onto the king's square (rather than its landing file) is the point:
+ * a piece can never legally move onto its own king, so this can never collide
+ * with — and so can never strand — a real legal rook move. A g/c-file mapping
+ * would collide constantly (whenever kingside castling is legal, the h-file
+ * rook can almost always also slide onto g-file as a perfectly ordinary
+ * non-castling move), which is exactly the "don't strand a legal rook move"
+ * failure the caller (Board.tsx) must avoid.
+ */
+export function rookCastleMoves(
+    board: BoardMap,
+    legalMoves: string[],
+    color: 'w' | 'b',
+): Map<Square, string> {
+    const out = new Map<Square, string>()
+    const king = kingSquare(board, color === 'w')
+    if (!king) return out
+    for (const to of targetsFrom(legalMoves, king)) {
+        const side = castleSideForKingMove(king, to)
+        if (!side) continue
+        const rookSq = castlingRookSquare(board, king, side, color === 'w')
+        if (rookSq) out.set(rookSq, king + to)
     }
     return out
 }

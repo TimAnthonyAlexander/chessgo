@@ -21,6 +21,7 @@ import {
 } from '../lib/spectate'
 import { useSpectate } from '../lib/useSpectate'
 import { useAuth } from '../lib/auth'
+import { usePrefs } from '../lib/settings'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 
 // Admins get a full-strength eval bar + best-move arrow over the spectated board,
@@ -53,6 +54,7 @@ export default function Spectate() {
     const s = useSpectate()
     const g = s.game
     const [sound, setSound] = useState(soundEnabled())
+    const prefs = usePrefs()
 
     function toggleSound() {
         const next = !sound
@@ -67,7 +69,11 @@ export default function Spectate() {
     // clock tick — and convert the side-to-move eval to White's perspective.
     const [showEval, setShowEval] = useState(() => loadFlag(LS_EVAL))
     const [showArrow, setShowArrow] = useState(() => loadFlag(LS_ARROW))
-    const engineOn = isAdmin && (showEval || showArrow)
+    // The eval bar also honors the site-wide "Show eval bar" preference (Analysis
+    // and BotGame both gate on prefs.showEvalBar); the admin's own showEval flag is
+    // an independent extra toggle on top of it, not a replacement for it.
+    const evalBarVisible = isAdmin && showEval && prefs.showEvalBar
+    const engineOn = isAdmin && (evalBarVisible || showArrow)
     const [whiteEval, setWhiteEval] = useState<WhiteEval | null>(null)
     const [bestUci, setBestUci] = useState<string | null>(null)
 
@@ -170,7 +176,7 @@ export default function Spectate() {
 
     return (
         <BoardPage
-            evalBar={isAdmin && showEval ? <EvalBar ev={whiteEval} orientation="w" /> : undefined}
+            evalBar={evalBarVisible ? <EvalBar ev={whiteEval} orientation="w" /> : undefined}
             left={<SpectateInfoCard pool={g.pool} variant={g.variant} fen={g.fen} />}
             right={
                 <Box

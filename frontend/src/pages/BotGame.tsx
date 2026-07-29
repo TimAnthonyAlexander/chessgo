@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useMemo, useState } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
     Box,
     CircularProgress,
@@ -22,6 +22,7 @@ import {
     User,
     Volume2,
     VolumeX,
+    Zap,
 } from 'lucide-react'
 import Board from '../components/Board'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
@@ -34,18 +35,23 @@ import ConfirmDialog from '../components/ConfirmDialog'
 import OpeningPanel from '../components/OpeningPanel'
 import {
     analyze,
+    analyzeGameMoves,
     type BotGame as Game,
     type Color,
     createBotGame,
+    type GameAnalysis,
     playMove,
     undoMove,
 } from '../api/client'
+import { buildBlunderPuzzles } from '../lib/blunderRewind'
 import { statusLabel, type Square } from '../lib/chess'
 import { computeMaterial } from '../lib/material'
 import { buildFromMoves } from '../lib/analysisTree'
 import { useBoardInteraction } from '../lib/useBoardInteraction'
 import { useDuckInteraction } from '../lib/useDuckInteraction'
 import { useCrazyhouseDrops } from '../lib/useCrazyhouseDrops'
+import { useConfirmMove } from '../lib/useConfirmMove'
+import PendingMoveBar from '../components/PendingMoveBar'
 import PocketPanel from '../components/PocketPanel'
 import { useMoveNavKeys } from '../lib/useMoveNavKeys'
 import {
@@ -61,7 +67,7 @@ import {
 } from '../lib/botSettings'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { useAuth } from '../lib/auth'
-import { usePrefs } from '../lib/settings'
+import { usePrefs, useSetting } from '../lib/settings'
 import AdminBestMove from '../components/AdminBestMove'
 import BoardActions from '../components/BoardActions'
 import VariantPicker from '../components/VariantPicker'
@@ -243,6 +249,25 @@ export default function BotGame() {
         interactive && isCrazyhouse,
         submitMove,
     )
+
+    // confirmMove: hold a real (on-turn) move for an explicit Confirm/Cancel
+    // before it reaches the server. Bot games are untimed (no pool/time control
+    // at all), so there's no "Classical" to detect — pass `category: null`,
+    // which means 'slow' never fires here and only 'always' does. Only the
+    // standard piece-move path (`interaction.onMove`, also used by Crazyhouse's
+    // own piece moves) is wrapped; Duck Chess's two-phase controller and
+    // Crazyhouse drops go straight through, same as LiveGame.
+    const confirmMove = useConfirmMove(prefs.confirmMove, null, interaction.onMove)
+    // Board's raw move intent: a premove (made while it isn't our turn) bypasses
+    // confirmation — it's already a deliberate commitment — and goes straight to
+    // the real submit. A real (on-turn) move runs through the gate.
+    const handleBoardMove = (uci: string) => {
+        if (!interactive) {
+            interaction.onMove(uci)
+            return
+        }
+        confirmMove.onMove(uci)
+    }
 
     // The optimistic overlay + last-move highlight come from whichever controller
     // is live for this variant.
@@ -619,18 +644,28 @@ export default function BotGame() {
                 )
             }
         >
+            <Box sx={{ position: 'relative', width: '100%' }}>
             <Board
                 fen={boardFen}
                 orientation={orientation}
                 sideToMove={game?.side_to_move ?? 'w'}
-                legalMoves={interactive ? game.legal_moves : []}
+                legalMoves={interactive && !confirmMove.pending ? game.legal_moves : []}
                 lastMove={lastMove}
                 inCheck={shownInCheck}
-                interactive={interactive}
+                interactive={interactive && !confirmMove.pending}
                 hint={atLive ? bestHint : null}
                 hintReveal={isAdmin}
-                onMove={isDuck ? duck.onMove : interaction.onMove}
-                premoveColor={ongoing && atLive && !isDuck && prefs.premoves ? humanColor : null}
+                onMove={isDuck ? duck.onMove : handleBoardMove}
+                arrow={
+                    confirmMove.pending
+                        ? { from: confirmMove.pending.from, to: confirmMove.pending.to }
+                        : null
+                }
+                premoveColor={
+                    confirmMove.pending || !ongoing || !atLive || isDuck || !prefs.premoves
+                        ? null
+                        : humanColor
+                }
                 premoves={atLive && !isDuck ? interaction.premoves : null}
                 onCancelPremove={interaction.cancelPremove}
                 duck={shownDuck}
@@ -641,6 +676,14 @@ export default function BotGame() {
                 onDropCancel={drops.cancel}
                 {...(activeOverride && atLive ? { overrideBoard: activeOverride } : {})}
             />
+            {confirmMove.pending && (
+                <PendingMoveBar
+                    pending={confirmMove.pending}
+                    onConfirm={confirmMove.confirm}
+                    onCancel={confirmMove.cancel}
+                />
+            )}
+            </Box>
             {/* Resign confirmation — only reached when the confirmResign preference
                 is on (requestResign resigns directly otherwise). */}
             <ConfirmDialog
@@ -738,6 +781,10 @@ function MovePanel({
     // (so it tracks history review, like the eval bar). `captured(c)` = the pieces
     // color `c` has taken (its opponent's color); `advantage(c)` = c's point lead.
     const mat = useMemo(() => computeMaterial(bestFen), [bestFen])
+    // Single-key subscriptions — only re-render this panel when one of these
+    // preferences itself changes.
+    const showCaptured = useSetting('showCaptured')
+    const showOpponentRating = useSetting('showOpponentRating')
     const human = game.human_color
     const opp = other(human)
     const captured = (c: Color) => (c === 'w' ? mat.capturedByWhite : mat.capturedByBlack)
@@ -745,6 +792,37 @@ function MovePanel({
         const d = c === 'w' ? mat.diff : -mat.diff
         return d > 0 ? d : 0
     }
+
+    const navigate = useNavigate()
+
+    // Blunder count for the game-over "Review N blunders" CTA. Fetched once per
+    // finished game — never blocks the game-over screen; a slow/failed fetch just
+    // means the CTA doesn't show. Same variant gating as "Analyse game" below: a
+    // bot game has no persisted Game row, so only the moves-based analyzer's
+    // standard-rules, alternating variants can be replayed at all.
+    const [blunderInfo, setBlunderInfo] = useState<{
+        gameId: string
+        count: number
+        analysis: GameAnalysis
+    } | null>(null)
+    useEffect(() => {
+        if (ongoing) return
+        if (!(isAlternating(game.variant) && usesStandardRules(game.variant))) return
+        if (blunderInfo?.gameId === game.id) return
+        let cancelled = false
+        void (async () => {
+            try {
+                const a = await analyzeGameMoves(game.moves.map((m) => m.uci), gameStartFen)
+                if (cancelled) return
+                setBlunderInfo({ gameId: game.id, count: buildBlunderPuzzles(a, human).length, analysis: a })
+            } catch {
+                // Best-effort — the CTA just won't appear if this fails.
+            }
+        })()
+        return () => {
+            cancelled = true
+        }
+    }, [ongoing, game.id, game.variant, game.moves, gameStartFen, human, blunderInfo])
 
     // A linear tree of the game so far, so the engine-owned OpeningPanel can name
     // the opening (and show candidate lines) for the live position during play.
@@ -799,14 +877,18 @@ function MovePanel({
                         </Typography>
                         <NewBadge />
                     </Box>
-                    {/* Zen mode hides the rating chrome (distraction-free play). */}
-                    {!zen && (
+                    {/* Zen mode hides the rating chrome (distraction-free play); the
+                        showOpponentRating preference gates it independently, same as
+                        LiveGame's opponent rating readout. */}
+                    {!zen && showOpponentRating && (
                         <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
                             Engine · {ratingLabel(game.rating ?? rating)}
                         </Typography>
                     )}
                 </Box>
-                <MaterialStrip pieces={captured(opp)} color={human} adv={advantage(opp)} />
+                {showCaptured && (
+                    <MaterialStrip pieces={captured(opp)} color={human} adv={advantage(opp)} />
+                )}
             </Box>
 
             {error && <ErrorBanner>{error}</ErrorBanner>}
@@ -852,7 +934,9 @@ function MovePanel({
                     >
                         You
                     </Typography>
-                    <MaterialStrip pieces={captured(human)} color={opp} adv={advantage(human)} />
+                    {showCaptured && (
+                        <MaterialStrip pieces={captured(human)} color={opp} adv={advantage(human)} />
+                    )}
                     <Box sx={{ flex: 1 }} />
                     <Typography
                         sx={{ fontSize: 13, fontWeight: 600, color: TONE_COLOR[statusTone] }}
@@ -892,6 +976,15 @@ function MovePanel({
                     />
                 )}
 
+                {/* Blunder Rewind CTA: a count baked into the button once it's ready, or
+                    a quiet one-liner instead of a dead button when the player had none.
+                    Nothing renders while the fetch is in flight. */}
+                {!ongoing && blunderInfo?.gameId === game.id && blunderInfo.count === 0 && (
+                    <Typography sx={{ fontSize: 13, textAlign: 'center', color: 'var(--text-dim)' }}>
+                        No blunders this game.
+                    </Typography>
+                )}
+
                 <Box sx={{ display: 'flex', gap: 1 }}>
                     {ongoing && (
                         <ActionBtn
@@ -910,12 +1003,6 @@ function MovePanel({
                             onClick={onResign}
                         />
                     )}
-                    <ActionBtn
-                        tone="primary"
-                        icon={<RotateCcw size={15} />}
-                        label="New game"
-                        onClick={onNewGame}
-                    />
                     {!ongoing && (
                         <ActionBtn
                             tone="primary"
@@ -925,6 +1012,29 @@ function MovePanel({
                             disabled={creating}
                         />
                     )}
+                    {!ongoing && blunderInfo?.gameId === game.id && blunderInfo.count > 0 && (
+                        <ActionBtn
+                            tone="primary"
+                            icon={<Zap size={15} />}
+                            label={`Review ${blunderInfo.count} blunder${blunderInfo.count === 1 ? '' : 's'}`}
+                            onClick={() =>
+                                navigate('/analysis?rewind=1', {
+                                    state: {
+                                        moves: game.moves.map((m) => m.uci),
+                                        startFen: gameStartFen,
+                                        humanColor: human,
+                                        analysis: blunderInfo.analysis,
+                                    },
+                                })
+                            }
+                        />
+                    )}
+                    <ActionBtn
+                        tone="primary"
+                        icon={<RotateCcw size={15} />}
+                        label="New game"
+                        onClick={onNewGame}
+                    />
                 </Box>
 
                 {/* Once the game is over, offer to carry the position elsewhere —

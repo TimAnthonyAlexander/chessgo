@@ -1,5 +1,6 @@
 import {
     type CSSProperties,
+    type KeyboardEvent as ReactKeyboardEvent,
     type PointerEvent as ReactPointerEvent,
     type TransitionEvent as ReactTransitionEvent,
     useCallback,
@@ -23,6 +24,7 @@ import {
     premoveTargets,
     promotionsFor,
     rankOf,
+    rookCastleMoves,
     squareAt,
     targetsFrom,
 } from '../lib/chess'
@@ -195,6 +197,16 @@ const PROMO_NAMES: Record<string, string> = {
     n: 'Knight',
     k: 'King',
 }
+// Full piece names for square accessible names ("e4, white pawn") and the move
+// live-region announcement ("pawn e2 to e4").
+const PIECE_NAMES: Record<string, string> = {
+    p: 'pawn',
+    n: 'knight',
+    b: 'bishop',
+    r: 'rook',
+    q: 'queen',
+    k: 'king',
+}
 
 // Build an arrow as a SINGLE filled polygon (shaft + head) from a→b in the 80×80
 // board space. Used for the "both engines agree" arrow, where we want ONE arrow
@@ -306,6 +318,11 @@ export default function Board({
     const boardRef = useRef<HTMLDivElement>(null)
     const pieceSet = usePieceSet() // re-render (with new piece SVGs) when the set changes
     const prefs = usePrefs() // user display/input preferences (legal-move dots, coords, …)
+    // Opt-in keyboard play. Off by default: it makes every square focusable and
+    // hands the arrow keys to a board cursor instead of the move list, which is
+    // the wrong trade for nearly everyone. The board's ARIA labels and the live
+    // region do NOT depend on this — the position stays readable either way.
+    const keyboardBoard = prefs.keyboardBoard
     // Move method: 'both' allows drag + click-to-move; 'click' disables drag;
     // 'drag' disables the select-then-tap commit (must drag the piece).
     const allowDrag = prefs.moveMethod !== 'click'
@@ -325,20 +342,69 @@ export default function Board({
     const hintVisible = peek || hintStage != null
     const hintShowTo = peek || hintStage === 'move'
 
+    // --- Keyboard / screen-reader support -----------------------------------
+    // `cursor` is the roving-tabindex focus square: independent of `selected` (the
+    // piece armed to move). Arrow keys walk `cursor` around the grid; Enter/Space
+    // on the cursor square feeds the SAME select/commit machinery pointer input
+    // uses (see moveCursor/activateCursor below and commit() further down) — one
+    // move-submission path, no forked legality. Default corner is the visual
+    // top-left of the CURRENT orientation so it's deterministic without favoring
+    // either side.
+    const [cursor, setCursor] = useState<Square>(() =>
+        squareAt(orientation === 'w' ? 0 : 7, orientation === 'w' ? 7 : 0),
+    )
+    // Only true while DOM focus actually sits on a square of THIS board — drives
+    // the focus ring so it never shows on page load or for a plain mouse click
+    // elsewhere. Toggled by the per-square onFocus below and the container's
+    // onBlur (checking the move stayed inside the board).
+    const [gridFocused, setGridFocused] = useState(false)
+    const squareRefs = useRef<Map<Square, HTMLDivElement>>(new Map())
+    // Polite live-region text: set on piece selection and on every move that
+    // lands (see the effects below) — never on a bare cursor move, which would
+    // flood a screen reader on every arrow press.
+    const [announcement, setAnnouncement] = useState('')
+    const promoRef = useRef<HTMLDivElement>(null)
+    // Skip the very first promo-effect run (mount) so opening the page never
+    // yanks focus into the board uninvited.
+    const promoMountedRef = useRef(false)
+
     // Annotations are per-position: clear them whenever the position changes.
     useEffect(() => {
         setShapes([])
         setDrawing(null)
     }, [fen])
 
-    // Dismiss the promotion picker on Escape (keyboard accessibility).
+    // Dismiss the promotion picker on Escape (keyboard accessibility), and — the
+    // SAME handler, not a second one — also cancel a keyboard-armed selection so
+    // Escape does double duty without a second window listener that could race
+    // the picker's own dismissal.
     useEffect(() => {
-        if (!promo) return
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') setPromo(null)
+            if (e.key !== 'Escape') return
+            if (promo) setPromo(null)
+            if (selected) setSelected(null)
         }
         window.addEventListener('keydown', onKey)
         return () => window.removeEventListener('keydown', onKey)
+    }, [promo, selected])
+
+    // Move the picker's own keyboard focus in when it opens (its buttons are real
+    // <button>s, so Tab/Enter/Space already work — this just saves a Tab press),
+    // and hand focus back to the cursor square when it closes so keyboard play
+    // continues without hunting for it.
+    useEffect(() => {
+        if (!promoMountedRef.current) {
+            promoMountedRef.current = true
+            return
+        }
+        if (promo) {
+            const raf = requestAnimationFrame(() => promoRef.current?.querySelector('button')?.focus())
+            return () => cancelAnimationFrame(raf)
+        }
+        // Only hand focus back to the board when keyboard play is on — otherwise
+        // the squares aren't focusable at all and this would move focus nowhere.
+        if (keyboardBoard) squareRefs.current.get(cursor)?.focus()
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [promo])
 
     // Desktop peek: press-and-hold 'H' to reveal the best-move hint, release to hide.
@@ -390,19 +456,71 @@ export default function Board({
     const duckPlacing = duckTargets != null
     const inputEnabled = !duckPlacing && (interactive || premoveActive)
     const movingColor: Color = interactive ? sideToMove : (premoveColor ?? sideToMove)
-    const destsFor = (from: Square): Set<Square> =>
-        interactive ? targetsFrom(legalMoves, from) : premoveTargets(board, from)
+
+    // rookCastle pref: rook-square → king-castling-UCI, derived entirely from
+    // `legalMoves` (see rookCastleMoves) — so ONLY while it's genuinely our
+    // move (`interactive`); during a premove the real legal-move list belongs
+    // to the side still to move, not us, and premoveTargets below is already
+    // a pseudo-legal geometric guess rather than an engine-backed one, so
+    // extending the "never infer castling legality" rule to that guess would
+    // just be a second, less-grounded guess. Net effect: premove rook-click
+    // castling isn't offered — unchanged from before this pref existed; the
+    // king itself remains premovable to its castle square exactly as today.
+    // Empty (no-op) whenever the pref is off, so every consumer below is a
+    // byte-for-byte no-op too when `rookCastle` is off.
+    const rookCastles = useMemo(
+        () =>
+            interactive && prefs.rookCastle
+                ? rookCastleMoves(board, legalMoves, movingColor)
+                : new Map<Square, string>(),
+        [interactive, prefs.rookCastle, board, legalMoves, movingColor],
+    )
+    const destsFor = (from: Square): Set<Square> => {
+        if (!interactive) return premoveTargets(board, from)
+        const dests = targetsFrom(legalMoves, from)
+        // A castling-eligible rook additionally targets its OWN KING's square
+        // (never a real rook move — you can't move onto your own king — so
+        // this can never strand a genuine rook move behind the pref).
+        const castleUci = rookCastles.get(from)
+        if (castleUci) dests.add(castleUci.slice(0, 2))
+        return dests
+    }
 
     // Recomputed only when the selection / legal targets actually change — not on
     // every render (e.g. the continuous setDrag during a drag).
     const targets = useMemo(
         () => (selected ? destsFor(selected) : new Set<Square>()),
-        [selected, interactive, legalMoves, board],
+        [selected, interactive, legalMoves, board, rookCastles],
     )
     const checkKing = useMemo(
         () => (inCheck && prefs.highlightCheck ? kingSquare(board, sideToMove === 'w') : null),
         [inCheck, prefs.highlightCheck, board, sideToMove],
     )
+
+    // Live-region announcement: piece selection (armed to move — from ANY input,
+    // pointer or keyboard) and every move that actually lands, from ANY source —
+    // pointer, drag, keyboard, a remote opponent's move over the socket, or
+    // scrubbing move history — since `fen`/`lastMove`/`inCheck` are the props
+    // every one of those paths already updates. Never fires on a bare cursor
+    // move (see moveCursor below), which would flood a screen reader.
+    useEffect(() => {
+        if (!selected) return
+        const piece = board[selected]
+        const name = piece ? (PIECE_NAMES[piece.toLowerCase()] ?? 'piece') : 'piece'
+        setAnnouncement(`Selected ${name} on ${selected}`)
+    }, [selected])
+
+    const prevFenRef = useRef<string | null>(null)
+    useEffect(() => {
+        const prevFen = prevFenRef.current
+        prevFenRef.current = fen
+        if (!lastMove || prevFen === null || prevFen === fen) return
+        const piece = board[lastMove.to] // occupant AFTER the move has landed
+        const name = piece ? (PIECE_NAMES[piece.toLowerCase()] ?? 'piece') : 'piece'
+        const noMoves = legalMoves.length === 0
+        const suffix = inCheck ? (noMoves ? ', checkmate' : ', check') : ''
+        setAnnouncement(`${name} ${lastMove.from} to ${lastMove.to}${suffix}`)
+    }, [fen, lastMove, board, inCheck, legalMoves.length])
 
     // Square center in an 80×80 coordinate space (10 units / square), oriented.
     const center = useCallback(
@@ -527,6 +645,16 @@ export default function Board({
         // replay a slide once the confirmed board state reflects this move.
         // A click-to-move commit hasn't moved yet, so it's left to animate.
         if (viaDrag) suppressPairRef.current = { from, to }
+        // rookCastle: `from` is a castling-eligible rook and `to` is its own
+        // king's square (see rookCastleMoves) — send the KING's real UCI
+        // move, never a synthetic rook-to-king string; the engine only ever
+        // accepts the king-two-square castling encoding.
+        const castleUci = rookCastles.get(from)
+        if (castleUci && castleUci.slice(0, 2) === to) {
+            setSelected(null)
+            onMove(castleUci)
+            return
+        }
         if (interactive) {
             const options = promotionsFor(legalMoves, from, to)
             if (options.length > 0) {
@@ -549,6 +677,60 @@ export default function Board({
         const promoting = piece === 'p' && (to[1] === '8' || to[1] === '1')
         setSelected(null)
         onMove(from + to + (promoting ? 'q' : ''))
+    }
+
+    // Walk the roving-tabindex cursor one square in a VISUAL direction (dCol/dRow
+    // are screen-space: +1 col = right, +1 row = down), translated to file/rank
+    // deltas per `orientation` so ArrowRight always means visually right even on
+    // a flipped board. Clamps at the edge rather than wrapping.
+    function moveCursor(dCol: number, dRow: number) {
+        const fileDelta = orientation === 'w' ? dCol : -dCol
+        const rankDelta = orientation === 'w' ? -dRow : dRow
+        const nf = Math.min(7, Math.max(0, fileOf(cursor) + fileDelta))
+        const nr = Math.min(7, Math.max(0, rankOf(cursor) + rankDelta))
+        const next = squareAt(nf, nr)
+        if (next === cursor) return
+        setCursor(next)
+        // Roving tabindex needs an explicit focus move; deferred one frame so the
+        // tabIndex swap (old cell -1, new cell 0) has committed to the DOM first.
+        requestAnimationFrame(() => squareRefs.current.get(next)?.focus())
+    }
+
+    // Enter/Space on the cursor square — the keyboard counterpart to a pointer tap.
+    // Mirrors onPointerDown's branching EXACTLY (duck-placement → drop-arm →
+    // normal select/commit) and calls the very same ownPieceAt/targets/commit
+    // functions, so there is one move-submission path, not a forked one.
+    function activateCursor() {
+        if (promo) return
+        const sq = cursor
+        if (duckPlacing) {
+            if (duckTargets?.has(sq)) onPlaceDuck?.(sq)
+            return
+        }
+        if (dropTargets != null) {
+            if (dropTargets.has(sq)) {
+                onDrop?.(sq)
+                return
+            }
+            onDropCancel?.()
+            // fall through — the same activation may instead pick up a board piece
+        }
+        if (!inputEnabled) return
+        if (selected && rookCastles.get(selected)?.slice(0, 2) === sq) {
+            // rookCastle: the king's own square doubles as a legit target for a
+            // selected castling rook (see destsFor) but the king square ALSO
+            // satisfies ownPieceAt below (it's a real own piece) — checked
+            // first so activating it commits the castle instead of just
+            // reselecting to the king.
+            commit(selected, sq)
+        } else if (ownPieceAt(sq)) {
+            setSelected(sq)
+        } else if (selected && targets.has(sq)) {
+            commit(selected, sq)
+        } else {
+            setSelected(null)
+            if (premoveActive) onCancelPremove?.()
+        }
     }
 
     // Add a shape, or toggle it off if the identical one already exists. A
@@ -586,6 +768,7 @@ export default function Board({
         // empty target square; normal piece selection/drag/premove is disabled.
         if (duckPlacing) {
             const sq = squareFromPoint(e.clientX, e.clientY)
+            if (sq) setCursor(sq) // keep the roving-tabindex cursor in sync with pointer input
             if (sq && duckTargets?.has(sq)) onPlaceDuck?.(sq)
             return
         }
@@ -595,6 +778,7 @@ export default function Board({
         // the same click can instead pick up a board piece).
         if (dropTargets != null) {
             const sq = squareFromPoint(e.clientX, e.clientY)
+            if (sq) setCursor(sq)
             if (sq && dropTargets.has(sq)) {
                 onDrop?.(sq)
                 return
@@ -605,8 +789,16 @@ export default function Board({
         if (!inputEnabled) return
         const sq = squareFromPoint(e.clientX, e.clientY)
         if (!sq) return
+        setCursor(sq) // keep the roving-tabindex cursor in sync with pointer input
 
-        if (ownPieceAt(sq)) {
+        if (allowClick && selected && rookCastles.get(selected)?.slice(0, 2) === sq) {
+            // rookCastle: same precedence fix as activateCursor — the king's
+            // square is both a legal target for the selected castling rook
+            // AND a real own piece, so it must be checked before the
+            // ownPieceAt/reselect branch below, or a second click meant to
+            // finish the castle would just reselect to the king instead.
+            commit(selected, sq)
+        } else if (ownPieceAt(sq)) {
             e.preventDefault()
             // Drag is suppressed in click-to-move-only mode; the piece still
             // selects so the second click can commit.
@@ -693,7 +885,65 @@ export default function Board({
         onMove(from + to + letter)
     }
 
+    // Board-level keyboard nav (event delegation on the container, mirroring the
+    // single onPointerDown/Move/Up above rather than one handler per square).
+    // Arrows move the cursor; Enter/Space activate it. Both call
+    // preventDefault + stopPropagation so the SAME keypress can't also reach the
+    // window-level move-nav shortcut registry (lib/shortcuts.ts binds
+    // ArrowLeft/Right/Up/Down/Home/End globally for move-history scrubbing on
+    // several pages) — stopping native propagation here means that listener
+    // simply never sees the event while a square on this board holds focus; when
+    // focus is elsewhere the event never reaches this handler at all, so
+    // move-nav keeps working exactly as today. Escape is deliberately NOT handled
+    // here: Board already owns a single window Escape listener (promo dismiss +
+    // selection cancel, above) — adding a second one that stops propagation would
+    // race it, so this handler just lets Escape bubble to that listener.
+    // While the promotion picker is open, its real <button>s already handle
+    // Enter/Space/Tab themselves — don't intercept.
+    function onBoardKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+        // Opt-in only. With the pref off the squares aren't focusable, so this
+        // handler is unreachable in practice — but bail explicitly anyway, so
+        // arrow keys are guaranteed to keep bubbling to the window-level
+        // move-nav registry rather than being swallowed here.
+        if (!keyboardBoard) return
+        if (promo) return
+        switch (e.key) {
+            case 'ArrowLeft':
+                e.preventDefault()
+                e.stopPropagation()
+                moveCursor(-1, 0)
+                return
+            case 'ArrowRight':
+                e.preventDefault()
+                e.stopPropagation()
+                moveCursor(1, 0)
+                return
+            case 'ArrowUp':
+                e.preventDefault()
+                e.stopPropagation()
+                moveCursor(0, -1)
+                return
+            case 'ArrowDown':
+                e.preventDefault()
+                e.stopPropagation()
+                moveCursor(0, 1)
+                return
+            case 'Enter':
+            case ' ':
+            case 'Spacebar':
+                e.preventDefault()
+                e.stopPropagation()
+                activateCursor()
+        }
+    }
+
     const coordsOutside = prefs.showCoordinates === 'outside'
+    // Describes the position at a glance for a screen-reader user landing on the
+    // board: whose turn it is (the actual game state, independent of whether
+    // THIS client can move right now) and which side is nearest the viewer.
+    const boardAriaLabel = `Chess board, ${sideToMove === 'w' ? 'White' : 'Black'} to move, ${
+        orientation === 'w' ? 'White' : 'Black'
+    } at the bottom`
 
     return (
         <div className={`board-wrap${coordsOutside ? ' coords-outside' : ''}`}>
@@ -707,6 +957,19 @@ export default function Board({
             <div
                 ref={boardRef}
                 className={`board${drag ? ' dragging' : ''}`}
+                // Grid semantics chosen over 64 individual <button>s: the container
+                // already owns pointer hit-testing (one delegated handler, not one
+                // per square — see onPointerDown), 64 focusable buttons would make
+                // screen-reader browse mode unusable on an 8x8 (every cell stealing
+                // linear Tab/arrow focus meant for the page), and role="grid" +
+                // roving tabindex (one square tabIndex=0, the rest -1) is the
+                // standard accessible pattern for a 2D cell matrix (ARIA APG "Grid").
+                // "grid" is the INTERACTIVE matrix role and promises arrow-key
+                // navigation, so it's only honest while keyboard play is on.
+                // With the pref off the board is still fully readable, just
+                // static — which is exactly what "table" means.
+                role={keyboardBoard ? 'grid' : 'table'}
+                aria-label={boardAriaLabel}
                 onPointerDown={onPointerDown}
                 onPointerMove={onPointerMove}
                 onPointerUp={onPointerUp}
@@ -715,79 +978,137 @@ export default function Board({
                     setDrawing(null)
                 }}
                 onContextMenu={(e) => e.preventDefault()}
+                onKeyDown={onBoardKeyDown}
+                onBlur={(e) => {
+                    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setGridFocused(false)
+                }}
             >
-                {ranks.map((rank) =>
-                    files.map((file) => {
-                        const sq = squareAt(file, rank)
-                        const piece = board[sq]
-                        const light = (file + rank) % 2 === 1
-                        const isTarget = targets.has(sq)
-                        const isDuckTarget = duckTargets?.has(sq) ?? false
-                        const isDropTarget = dropTargets?.has(sq) ?? false
-                        const isLast =
-                            prefs.highlightLastMove &&
-                            lastMove &&
-                            (lastMove.from === sq || lastMove.to === sq)
-                        const isPremove = !!premoves?.some((p) => p.from === sq || p.to === sq)
-                        const isDragOrigin = !!drag && drag.from === sq
-                        const isOver =
-                            prefs.highlightDragOver &&
-                            !!drag &&
-                            drag.over === sq &&
-                            destsFor(drag.from).has(sq)
-                        const classes = [
-                            'sq',
-                            light ? 'light' : 'dark',
-                            inputEnabled ? 'interactive' : '',
-                            selected === sq ? 'sel' : '',
-                            isLast ? 'last' : '',
-                            isPremove ? 'premove' : '',
-                            isOver ? 'over' : '',
-                            checkKing === sq ? 'check' : '',
-                        ]
-                            .filter(Boolean)
-                            .join(' ')
+                {ranks.map((rank) => (
+                    // display:contents so this wrapper (needed for the role="row"
+                    // semantic) doesn't itself become a grid item — its children
+                    // still lay out as direct children of the CSS Grid above.
+                    <div role="row" key={`rank-${rank}`} style={{ display: 'contents' }}>
+                        {files.map((file) => {
+                            const sq = squareAt(file, rank)
+                            const piece = board[sq]
+                            const light = (file + rank) % 2 === 1
+                            const isTarget = targets.has(sq)
+                            const isDuckTarget = duckTargets?.has(sq) ?? false
+                            const isDropTarget = dropTargets?.has(sq) ?? false
+                            const isLast =
+                                prefs.highlightLastMove &&
+                                lastMove &&
+                                (lastMove.from === sq || lastMove.to === sq)
+                            const isPremove = !!premoves?.some((p) => p.from === sq || p.to === sq)
+                            const isDragOrigin = !!drag && drag.from === sq
+                            const isOver =
+                                prefs.highlightDragOver &&
+                                !!drag &&
+                                drag.over === sq &&
+                                destsFor(drag.from).has(sq)
+                            const isCursor = cursor === sq
+                            const classes = [
+                                'sq',
+                                light ? 'light' : 'dark',
+                                inputEnabled ? 'interactive' : '',
+                                selected === sq ? 'sel' : '',
+                                isLast ? 'last' : '',
+                                isPremove ? 'premove' : '',
+                                isOver ? 'over' : '',
+                                checkKing === sq ? 'check' : '',
+                                keyboardBoard && isCursor && gridFocused ? 'focus-ring' : '',
+                            ]
+                                .filter(Boolean)
+                                .join(' ')
 
-                        // In-square coordinates only in 'inside' mode ('outside' draws
-                        // them in the gutter layer below; 'off' hides them entirely).
-                        const coordsInside = prefs.showCoordinates === 'inside'
-                        const showFile =
-                            coordsInside && (orientation === 'w' ? rank === 0 : rank === 7)
-                        const showRank =
-                            coordsInside && (orientation === 'w' ? file === 0 : file === 7)
+                            // Accessible name: square + occupant, plus whichever
+                            // states apply — read by VoiceOver/NVDA as the cell is
+                            // focused (Tab in, or an arrow-key cursor move).
+                            const occupantName = piece
+                                ? `${isWhitePiece(piece) ? 'white' : 'black'} ${
+                                      PIECE_NAMES[piece.toLowerCase()] ?? piece
+                                  }`
+                                : 'empty'
+                            const stateBits = [
+                                selected === sq && 'selected',
+                                prefs.showLegalMoves && isTarget && 'legal move',
+                                isDuckTarget && 'duck placement target',
+                                isDropTarget && 'drop target',
+                                isLast && 'last move',
+                                checkKing === sq && 'king in check',
+                            ].filter(Boolean) as string[]
+                            const squareAriaLabel = `${sq}, ${occupantName}${
+                                stateBits.length ? `, ${stateBits.join(', ')}` : ''
+                            }`
 
-                        return (
-                            <div key={sq} className={classes}>
-                                {prefs.showLegalMoves && isTarget && !piece && <span className="dot" />}
-                                {prefs.showLegalMoves && isTarget && piece && <span className="ring" />}
-                                {isDuckTarget && !piece && <span className="dot" />}
-                                {isDropTarget && !piece && <span className="dot" />}
-                                {hintVisible &&
-                                    hint &&
-                                    (hint.from === sq || (hintShowTo && hint.to === sq)) && (
-                                        <span className="hint-mark" />
+                            // In-square coordinates only in 'inside' mode ('outside' draws
+                            // them in the gutter layer below; 'off' hides them entirely).
+                            const coordsInside = prefs.showCoordinates === 'inside'
+                            const showFile =
+                                coordsInside && (orientation === 'w' ? rank === 0 : rank === 7)
+                            const showRank =
+                                coordsInside && (orientation === 'w' ? file === 0 : file === 7)
+
+                            return (
+                                <div
+                                    key={sq}
+                                    ref={(el) => {
+                                        if (el) squareRefs.current.set(sq, el)
+                                        else squareRefs.current.delete(sq)
+                                    }}
+                                    className={classes}
+                                    role={keyboardBoard ? 'gridcell' : 'cell'}
+                                    aria-label={squareAriaLabel}
+                                    // Roving tabindex: only the cursor square is Tab-reachable;
+                                    // arrow keys move both `cursor` and real DOM focus (see
+                                    // moveCursor), so Tab always lands where the user left off.
+                                    //
+                                    // With keyboard play off we omit tabIndex ENTIRELY rather
+                                    // than setting -1: a plain <div> with no tabIndex isn't
+                                    // focusable at all, so clicking a square can't leave a focus
+                                    // ring and Tab walks straight past the board, exactly as
+                                    // before any of this existed.
+                                    tabIndex={keyboardBoard ? (isCursor ? 0 : -1) : undefined}
+                                    onFocus={
+                                        keyboardBoard
+                                            ? () => {
+                                                  setCursor(sq)
+                                                  setGridFocused(true)
+                                              }
+                                            : undefined
+                                    }
+                                >
+                                    {prefs.showLegalMoves && isTarget && !piece && <span className="dot" />}
+                                    {prefs.showLegalMoves && isTarget && piece && <span className="ring" />}
+                                    {isDuckTarget && !piece && <span className="dot" />}
+                                    {isDropTarget && !piece && <span className="dot" />}
+                                    {hintVisible &&
+                                        hint &&
+                                        (hint.from === sq || (hintShowTo && hint.to === sq)) && (
+                                            <span className="hint-mark" />
+                                        )}
+                                    {piece && (
+                                        <PieceGlyph
+                                            piece={piece}
+                                            set={pieceSet}
+                                            hidden={isDragOrigin || prefs.blindfold || animatingTo.has(sq)}
+                                        />
                                     )}
-                                {piece && (
-                                    <PieceGlyph
-                                        piece={piece}
-                                        set={pieceSet}
-                                        hidden={isDragOrigin || prefs.blindfold || animatingTo.has(sq)}
-                                    />
-                                )}
-                                {duck === sq && (
-                                    <span
-                                        className={duckFlightTo === sq ? 'duck is-hidden' : 'duck'}
-                                        aria-hidden
-                                    >
-                                        <DuckGlyph />
-                                    </span>
-                                )}
-                                {showRank && <span className="coord rank">{rank + 1}</span>}
-                                {showFile && <span className="coord file">{'abcdefgh'[file]}</span>}
-                            </div>
-                        )
-                    }),
-                )}
+                                    {duck === sq && (
+                                        <span
+                                            className={duckFlightTo === sq ? 'duck is-hidden' : 'duck'}
+                                            aria-hidden
+                                        >
+                                            <DuckGlyph />
+                                        </span>
+                                    )}
+                                    {showRank && <span className="coord rank">{rank + 1}</span>}
+                                    {showFile && <span className="coord file">{'abcdefgh'[file]}</span>}
+                                </div>
+                            )
+                        })}
+                    </div>
+                ))}
 
                 {flights.map((f) => (
                     <FlightPiece
@@ -1019,7 +1340,7 @@ export default function Board({
 
                 {promo && (
                     <div className="promo-backdrop" onPointerDown={() => setPromo(null)}>
-                        <div className="promo" onPointerDown={(e) => e.stopPropagation()}>
+                        <div ref={promoRef} className="promo" onPointerDown={(e) => e.stopPropagation()}>
                             {PROMO_ORDER.filter((p) => promo.options.includes(p)).map((p) => (
                                 <button
                                     key={p}
@@ -1035,6 +1356,12 @@ export default function Board({
                         </div>
                     </div>
                 )}
+            </div>
+
+            {/* Polite live region for move/selection announcements (screen readers
+                only — visually hidden). Never touched on a bare cursor move. */}
+            <div className="sr-only" aria-live="polite" aria-atomic="true">
+                {announcement}
             </div>
 
             {coordsOutside && (

@@ -6,6 +6,7 @@ import { START_FEN } from '../lib/analysisTree'
 import { random960 } from '../lib/variants'
 import { computeMaterial, type Material } from '../lib/material'
 import { copyText, downloadPgn, fromPgn, pgnFilename, type ParsedPgn } from '../lib/pgn'
+import { useSetting } from '../lib/settings'
 import BoardActions from './BoardActions'
 
 // Returns the FEN if chess.js accepts it, else null.
@@ -46,6 +47,9 @@ export default function AnalysisAside({
     onImportPgn?: (parsed: ParsedPgn) => void
 }) {
     const mat = useMemo(() => computeMaterial(fen), [fen])
+    // Single-key subscription — showCaptured gates this card the same way it
+    // gates the equivalent readouts in LiveGame/BotGame/SpectateInfoCard.
+    const showCaptured = useSetting('showCaptured')
 
     return (
         <Box
@@ -57,7 +61,7 @@ export default function AnalysisAside({
                 width: '100%',
             }}
         >
-            <MaterialCard mat={mat} />
+            {showCaptured && <MaterialCard mat={mat} />}
             {showSetup && (
                 <PositionCard fen={fen} onLoadFen={onLoadFen} onEnableDuck={onEnableDuck} />
             )}

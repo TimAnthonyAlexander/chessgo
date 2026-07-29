@@ -3,6 +3,7 @@ import { Box, Typography } from '@mui/material'
 import { Crown, Rabbit, Timer, Zap } from 'lucide-react'
 import { type Variant, VARIANT_LABEL } from '../lib/variants'
 import { computeMaterial } from '../lib/material'
+import { useSetting } from '../lib/settings'
 import { PANEL_SHADOW } from './PanelUI'
 
 // The left column complements the right panel rather than echoing it. The right
@@ -21,6 +22,10 @@ export default function SpectateInfoCard({
 }) {
     const cat = categoryFor(pool)
     const mat = useMemo(() => computeMaterial(fen), [fen])
+    // Single-key subscription — the showCaptured preference gates this card's
+    // Material section the same way it gates the equivalent readouts in
+    // LiveGame/BotGame, so one global switch behaves consistently everywhere.
+    const showCaptured = useSetting('showCaptured')
 
     return (
         <Box
@@ -67,6 +72,7 @@ export default function SpectateInfoCard({
                 )}
             </Box>
 
+            {showCaptured && (
             <Box sx={{ borderTop: '1px solid var(--line-soft)', mt: 2, pt: 2 }}>
                 <Label>Material</Label>
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, mt: 1 }}>
@@ -85,6 +91,7 @@ export default function SpectateInfoCard({
                     />
                 </Box>
             </Box>
+            )}
         </Box>
     )
 }

@@ -46,6 +46,11 @@
        set per-theme) so it can't leak when switching themes. */
     --dot-halo: rgba(248, 246, 240, 0.4);
     --check: rgba(202, 74, 74, 0.66);
+    /* Keyboard focus ring (roving-tabindex cursor square) — a cool blue, deliberately
+       far from the warm olive select/last-move tint and the red check glow so all
+       four board states stay visually distinct at once. Drawn as a ring (box-shadow),
+       not a fill, so it never gets confused with the `--select` overlay. */
+    --focus: rgba(77, 166, 255, 0.9);
     --coord-on-light: #6f828f;
     --coord-on-dark: #e4eaef;
     --board-border-color: transparent; /* per-square gridline; themes may override */
@@ -102,6 +107,22 @@ body {
 a {
     color: inherit;
     text-decoration: none;
+}
+
+/* Visually hidden but still readable by screen readers — for aria-live
+   announcement regions and similar (e.g. Board.tsx's move/selection announcer).
+   The standard "clip" technique: present in the accessibility tree and DOM flow,
+   invisible and zero-footprint on screen. */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
 }
 
 ::selection {

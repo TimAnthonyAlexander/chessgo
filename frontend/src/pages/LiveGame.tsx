@@ -15,16 +15,26 @@ import { useNavigate } from 'react-router-dom'
 import Board from '../components/Board'
 import BoardPage from '../components/BoardPage'
 import ChatPanel from '../components/ChatPanel'
-import Clock from '../components/Clock'
+import Clock, { ClockBar } from '../components/Clock'
 import LiveModeCard from '../components/LiveModeCard'
 import MoveList from '../components/MoveList'
 import { ActionBtn, Avatar, NavBtn, PANEL_SHADOW } from '../components/PanelUI'
-import { candidates, getGame, type MoveEntry, type Opening, type User as AuthUser } from '../api/client'
+import {
+    candidates,
+    getGame,
+    getGameAnalysis,
+    type MoveEntry,
+    type Opening,
+    type User as AuthUser,
+} from '../api/client'
+import { buildBlunderPuzzles } from '../lib/blunderRewind'
 import { type Color, gameSocket, type LiveGameState, liveRemaining } from '../lib/socket'
 import { computeMaterial, type Material } from '../lib/material'
 import { categoryFor } from '../lib/timeControl'
 import { useGameSocket } from '../lib/useGameSocket'
 import { useBoardInteraction } from '../lib/useBoardInteraction'
+import { useConfirmMove } from '../lib/useConfirmMove'
+import PendingMoveBar from '../components/PendingMoveBar'
 import { useDuckInteraction } from '../lib/useDuckInteraction'
 import { useCrazyhouseDrops } from '../lib/useCrazyhouseDrops'
 import PocketPanel from '../components/PocketPanel'
@@ -34,7 +44,7 @@ import { applyUciVisually, type BoardMap, type Square, parseFen } from '../lib/c
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { type Variant, VARIANT_LABEL } from '../lib/variants'
 import { authStore, useAuth } from '../lib/auth'
-import { usePrefs } from '../lib/settings'
+import { usePrefs, useSetting } from '../lib/settings'
 import ConfirmDialog from '../components/ConfirmDialog'
 import AdminBestMove from '../components/AdminBestMove'
 import BoardActions from '../components/BoardActions'
@@ -228,6 +238,28 @@ export default function LiveGame() {
         (uci) => gameSocket.move(uci),
     )
 
+    // confirmMove: hold a real (on-turn) move for an explicit Confirm/Cancel
+    // before it reaches the socket. 'slow' only fires for Classical (this app has
+    // no correspondence). Only the standard piece-move path (`interaction.onMove`,
+    // also used by Crazyhouse's own piece moves) is wrapped — Duck Chess's
+    // two-phase piece+duck controller and Crazyhouse drops go straight through,
+    // matching the task's own framing (wrap what feeds `<Board onMove>`).
+    const confirmMove = useConfirmMove(
+        prefs.confirmMove,
+        g ? categoryFor(g.pool) : null,
+        interaction.onMove,
+    )
+    // Board's raw move intent: a premove (made while it isn't our turn) bypasses
+    // confirmation entirely — it's already a deliberate commitment — and goes
+    // straight to the real submit. A real (on-turn) move runs through the gate.
+    const handleBoardMove = (uci: string) => {
+        if (!boardInteractive) {
+            interaction.onMove(uci)
+            return
+        }
+        confirmMove.onMove(uci)
+    }
+
     // The optimistic overlay + last-move highlight come from whichever controller
     // is live for this variant.
     const activeOverride = isDuck ? duck.override : interaction.override
@@ -310,6 +342,45 @@ export default function LiveGame() {
             cancelled = true
         }
     }, [g?.id, g?.ended, g?.rated])
+
+    // Blunder count for the game-over "Review N blunders" CTA. Fetched once per
+    // game, right after it ends — never blocks the game-over screen; a slow or
+    // failed fetch just means the CTA doesn't show. Skipped for Duck Chess (no
+    // full-game analyzer) and aborted games (nothing to review). The hub persists
+    // the game fire-and-forget, so the Game record backing the analysis may not
+    // exist for a beat after `ended` flips — retry through that same window the
+    // rating-delta fetch above already handles.
+    const blunderFetched = useRef<string | null>(null)
+    const [blunderCount, setBlunderCount] = useState<{ id: string; count: number } | null>(null)
+    useEffect(() => {
+        if (!g || !g.ended || g.variant === 'duck') return
+        if (g.reason === 'aborted' || g.status === 'aborted') return
+        if (blunderFetched.current === g.id) return
+        blunderFetched.current = g.id
+        const id = g.id
+        const myColor = g.color
+        let cancelled = false
+
+        void (async () => {
+            for (let attempt = 0; attempt < 8 && !cancelled; attempt++) {
+                try {
+                    const a = await getGameAnalysis(id)
+                    if (cancelled) return
+                    if (!a.unsupported) {
+                        setBlunderCount({ id, count: buildBlunderPuzzles(a, myColor).length })
+                    }
+                    return
+                } catch {
+                    // Not persisted yet (404) or a transient error — retry shortly.
+                }
+                await new Promise((r) => setTimeout(r, 600))
+            }
+        })()
+
+        return () => {
+            cancelled = true
+        }
+    }, [g?.id, g?.ended, g?.variant, g?.reason, g?.status])
 
     // Tab-title nudge: when the tab is backgrounded AND it's your move, flag the
     // title so a waiting player notices from another tab; clear it on focus or once
@@ -403,7 +474,7 @@ export default function LiveGame() {
                         />
                     )}
                     {!zen && g.variant === 'standard' && <LiveOpening fen={g.fen} />}
-                    {!zen && (
+                    {!zen && prefs.showCaptured && (
                         <CapturedPanel
                             mat={mat}
                             opponentColor={other(g.color)}
@@ -512,6 +583,7 @@ export default function LiveGame() {
                         getMs={() => liveRemaining(g, other(g.color))}
                         active={!g.ended && g.sideToMove === other(g.color)}
                         running={!g.ended && g.moves.length >= 2}
+                        initialMs={g.timeControl.base}
                         mat={mat}
                         color={other(g.color)}
                         online={g.opponentOnline}
@@ -697,6 +769,20 @@ export default function LiveGame() {
                                     </Box>
                                 </Typography>
                             )}
+                            {/* Blunder Rewind CTA: a count baked into the button once it's
+                                ready, or a quiet one-liner instead of a dead button when the
+                                player had none. Nothing renders while the fetch is in flight. */}
+                            {blunderCount && blunderCount.id === g.id && blunderCount.count === 0 && (
+                                <Typography
+                                    sx={{
+                                        fontSize: 13,
+                                        textAlign: 'center',
+                                        color: 'var(--text-dim)',
+                                    }}
+                                >
+                                    No blunders this game.
+                                </Typography>
+                            )}
                             {g.rematchOffer === 'theirs' && (
                                 <OfferBanner
                                     label="Opponent wants a rematch"
@@ -716,6 +802,13 @@ export default function LiveGame() {
                                         tone="primary"
                                         label="Rematch"
                                         onClick={() => gameSocket.offerRematch()}
+                                    />
+                                )}
+                                {blunderCount && blunderCount.id === g.id && blunderCount.count > 0 && (
+                                    <ActionBtn
+                                        tone="primary"
+                                        label={`Review ${blunderCount.count} blunder${blunderCount.count === 1 ? '' : 's'}`}
+                                        onClick={() => navigate(`/analysis/${g.id}?rewind=1`)}
                                     />
                                 )}
                                 <ActionBtn
@@ -760,6 +853,7 @@ export default function LiveGame() {
                         getMs={() => liveRemaining(g, g.color)}
                         active={myTurn}
                         running={!g.ended && g.moves.length >= 2}
+                        initialMs={g.timeControl.base}
                         mat={mat}
                         color={g.color}
                         divider="top"
@@ -783,14 +877,23 @@ export default function LiveGame() {
                 fen={g.fen}
                 orientation={orientation}
                 sideToMove={g.sideToMove}
-                legalMoves={boardInteractive ? g.legalMoves : []}
+                legalMoves={boardInteractive && !confirmMove.pending ? g.legalMoves : []}
                 lastMove={atLive ? (activeOptimisticLast ?? g.lastMove) : historyLast}
                 inCheck={!atLive || isDuck || isAntichess ? false : g.check}
-                interactive={boardInteractive}
-                onMove={isDuck ? duck.onMove : interaction.onMove}
+                interactive={boardInteractive && !confirmMove.pending}
+                onMove={isDuck ? duck.onMove : handleBoardMove}
                 hint={atLive ? bestHint : null}
                 hintReveal={isAdmin}
-                premoveColor={g.ended || isDuck || !atLive || !prefs.premoves ? null : g.color}
+                arrow={
+                    confirmMove.pending
+                        ? { from: confirmMove.pending.from, to: confirmMove.pending.to }
+                        : null
+                }
+                premoveColor={
+                    confirmMove.pending || g.ended || isDuck || !atLive || !prefs.premoves
+                        ? null
+                        : g.color
+                }
                 premoves={isDuck || !atLive ? null : interaction.premoves}
                 onCancelPremove={interaction.cancelPremove}
                 duck={atLive ? shownDuck : null}
@@ -805,6 +908,13 @@ export default function LiveGame() {
                         : {}
                     : { overrideBoard: historyBoard ?? undefined })}
             />
+            {confirmMove.pending && (
+                <PendingMoveBar
+                    pending={confirmMove.pending}
+                    onConfirm={confirmMove.confirm}
+                    onCancel={confirmMove.cancel}
+                />
+            )}
             {s.conn !== 'open' && !g.ended && (
                 <Box
                     sx={{
@@ -1007,6 +1117,7 @@ function PlayerBar({
     getMs,
     active,
     running,
+    initialMs,
     mat,
     color,
     online,
@@ -1018,6 +1129,9 @@ function PlayerBar({
     getMs: () => number
     active: boolean
     running: boolean
+    /** The time control's initial time (ms), forwarded to Clock for the
+     * clockBar preference. */
+    initialMs?: number
     /** Live material read (shared) + which side this bar is, for the captured strip. */
     mat: Material
     color: Color
@@ -1027,9 +1141,13 @@ function PlayerBar({
     zen?: boolean
 }) {
     const { captured, glyphColor, adv } = sideMaterial(mat, color)
+    // Single-key subscription — only re-renders this bar when the preference
+    // itself changes, not on every settings edit.
+    const showCaptured = useSetting('showCaptured')
     return (
         <Box
             sx={{
+                position: 'relative',
                 display: 'flex',
                 alignItems: 'center',
                 gap: 1.25,
@@ -1038,6 +1156,7 @@ function PlayerBar({
                 bgcolor: 'var(--bg-2)',
                 borderTop: divider === 'top' ? '1px solid var(--line-soft)' : undefined,
                 borderBottom: divider === 'bottom' ? '1px solid var(--line-soft)' : undefined,
+                overflow: 'hidden',
             }}
         >
             <Avatar small>
@@ -1071,7 +1190,7 @@ function PlayerBar({
             </Box>
             {/* Compact strip in the bar on MOBILE only — on desktop the captured
                 pieces live in the roomy left-column CapturedPanel (no wrapping). */}
-            {!zen && (
+            {!zen && showCaptured && (
                 <CapturedGlyphs
                     captured={captured}
                     glyphColor={glyphColor}
@@ -1083,6 +1202,16 @@ function PlayerBar({
                 <Box sx={{ ml: 'auto' }}>
                     <Clock getMs={getMs} active={active} running={running} />
                 </Box>
+            )}
+            {/* Full-bleed along the bottom of the whole row, not just under the
+                digits — so the remaining-time line reads as the row's own meter. */}
+            {!zen && (
+                <ClockBar
+                    getMs={getMs}
+                    active={active}
+                    running={running}
+                    initialMs={initialMs}
+                />
             )}
         </Box>
     )

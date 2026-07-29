@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Box } from '@mui/material'
+import { useSetting, type ClockTenths } from '../lib/settings'
 
 interface ClockProps {
     /** Reads the live remaining ms (recomputed against `Date.now()` on each call).
@@ -11,6 +12,10 @@ interface ClockProps {
     /** Clocks are actually live (game not over and both openers have moved). When
      *  false the countdown holds — no interval is armed. */
     running?: boolean
+    /** The time control's initial time for this side, in ms — the denominator for
+     * the `clockBar` progress bar. Optional: omit when it isn't known (untimed
+     * games) and the bar simply doesn't render, rather than guessing. */
+    initialMs?: number
 }
 
 // Escalating urgency tiers — ONE hue per tier, applied to BOTH the text and the
@@ -24,14 +29,34 @@ const HUE_NORMAL = 'var(--accent)'
 const HUE_WARN = 'var(--warn, #e9c46a)'
 const HUE_DANGER = 'var(--danger, #e07a5f)'
 
-function format(ms: number): string {
+function hueFor(ms: number): string {
+    return ms < DANGER_MS ? HUE_DANGER : ms < WARN_MS ? HUE_WARN : HUE_NORMAL
+}
+
+/** Snap to the authoritative time, then self-tick only while this side is actually
+ *  running (the idle side's remaining is static, so it needs no interval). Shared by
+ *  the digits and the bar so each stays a leaf that re-renders on its own. */
+function useRemainingMs(getMs: () => number, active: boolean, running: boolean): number {
+    const [ms, setMs] = useState(() => getMs())
+    useEffect(() => {
+        setMs(getMs())
+        if (!active || !running) return
+        const id = window.setInterval(() => setMs(getMs()), 200)
+        return () => window.clearInterval(id)
+    }, [getMs, active, running])
+    return ms
+}
+
+function format(ms: number, tenths: ClockTenths): string {
     const total = Math.max(0, Math.ceil(ms / 100) / 10) // tenths
     const mins = Math.floor(total / 60)
     const secs = total - mins * 60
-    if (mins === 0 && ms < 10_000) {
-        // Under 10s: show tenths (e.g. 7.3)
-        return secs.toFixed(1)
-    }
+    // 'lowtime' (default): tenths only under 10s in the final minute — the
+    // original hardcoded behavior. 'always'/'never' override that gate
+    // outright; either way the minutes:seconds fallback is unchanged.
+    const showTenths =
+        tenths === 'always' ? true : tenths === 'never' ? false : mins === 0 && ms < 10_000
+    if (showTenths) return secs.toFixed(1)
     return `${mins}:${Math.floor(secs).toString().padStart(2, '0')}`
 }
 
@@ -44,19 +69,12 @@ function format(ms: number): string {
  * the closure's identity changes and the display snaps to truth.
  */
 export default function Clock({ getMs, active, running = true }: ClockProps) {
-    const [ms, setMs] = useState(() => getMs())
-
-    // Snap to the authoritative time whenever the inputs change (a move landed →
-    // fresh `getMs`), then self-tick only while this side is actually running (the
-    // idle side's remaining is static, so it needs no interval).
-    useEffect(() => {
-        setMs(getMs())
-        if (!active || !running) return
-        const id = window.setInterval(() => setMs(getMs()), 200)
-        return () => window.clearInterval(id)
-    }, [getMs, active, running])
-
-    const hue = ms < DANGER_MS ? HUE_DANGER : ms < WARN_MS ? HUE_WARN : HUE_NORMAL
+    // Single-key subscription (not usePrefs()): only re-renders when this one
+    // setting changes (rare, user-driven), so it adds nothing beyond the tick
+    // interval, which already re-renders this leaf every 200ms while running.
+    const clockTenths = useSetting('clockTenths')
+    const ms = useRemainingMs(getMs, active, running)
+    const hue = hueFor(ms)
 
     return (
         <Box
@@ -77,7 +95,44 @@ export default function Clock({ getMs, active, running = true }: ClockProps) {
                 transition: 'color 0.15s ease, background 0.15s ease, border-color 0.15s ease',
             }}
         >
-            {format(ms)}
+            {format(ms, clockTenths)}
         </Box>
+    )
+}
+
+/**
+ * The `clockBar` strip: remaining time as a proportion of the time control's
+ * initial time.
+ *
+ * Deliberately a SEPARATE leaf from `Clock` rather than a child of it, because it
+ * spans the full width of the player row while the digits sit right-aligned within
+ * it. Render it inside a `position: relative` container and it draws edge to edge
+ * along that container's bottom. Ticking here (not in the row) keeps the 200ms
+ * update from re-rendering the surrounding page, exactly as `Clock` does.
+ *
+ * Renders nothing when the pref is off or `initialMs` is unknown — degrading to no
+ * bar rather than a guessed denominator.
+ */
+export function ClockBar({ getMs, active, running = true, initialMs }: ClockProps) {
+    const clockBar = useSetting('clockBar')
+    const ms = useRemainingMs(getMs, active, running)
+    if (!clockBar || !initialMs || initialMs <= 0) return null
+
+    const pct = Math.min(1, Math.max(0, ms / initialMs))
+    return (
+        <Box
+            aria-hidden
+            sx={{
+                position: 'absolute',
+                left: 0,
+                bottom: 0,
+                height: '2px',
+                width: `${pct * 100}%`,
+                bgcolor: hueFor(ms),
+                opacity: active ? 1 : 0.35,
+                transition: 'width 0.2s linear, opacity 0.15s ease',
+                pointerEvents: 'none',
+            }}
+        />
     )
 }

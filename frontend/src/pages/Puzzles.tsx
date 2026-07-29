@@ -48,7 +48,7 @@ interface Mark {
 }
 interface Outcome {
     win: boolean
-    delta: number | null // rating change; null when unrated (e.g. logged out)
+    delta: number | null // rating change; null when unrated (hint, replay, or logged out)
     hinted: boolean // a hint was shown before this attempt was submitted
 }
 
@@ -400,7 +400,7 @@ export default function Puzzles() {
         playForMove(board, uci)
         setPhase('checking')
         try {
-            const res = await submitPuzzleMove(data.id, uci, fen, ply)
+            const res = await submitPuzzleMove(data.id, uci, fen, ply, hintUsed)
 
             if (res.correct && res.complete) {
                 setOverride(null)
@@ -411,9 +411,12 @@ export default function Puzzles() {
                 // A retry is never re-scored and doesn't touch the session history or
                 // streak — the original (failed) attempt's entry is what stays on record.
                 if (!isRetry) {
-                    setHistory((h) => [...h, { win: true, delta: res.rating?.delta ?? null, hinted: hintUsed }])
-                    // A hinted solve is still rated normally server-side, but it doesn't
-                    // extend the streak — only a clean solve does.
+                    setHistory((h) => [
+                        ...h,
+                        { win: true, delta: res.rating?.unrated ? null : (res.rating?.delta ?? null), hinted: hintUsed },
+                    ])
+                    // A hinted solve records the attempt but earns no rating server-side,
+                    // and it doesn't extend the streak — only a clean solve does.
                     if (!hintUsed) extendStreak()
                 }
                 if (res.rating) void authStore.refresh()
@@ -453,7 +456,10 @@ export default function Puzzles() {
             setPhase('failed')
             sounds.end()
             if (!isRetry) {
-                setHistory((h) => [...h, { win: false, delta: res.rating?.delta ?? null, hinted: hintUsed }])
+                setHistory((h) => [
+                    ...h,
+                    { win: false, delta: res.rating?.unrated ? null : (res.rating?.delta ?? null), hinted: hintUsed },
+                ])
                 setStreak(0)
             }
             if (res.rating) void authStore.refresh()
@@ -1095,8 +1101,10 @@ function StatusCard({
     const terminal = phase === 'solved' || phase === 'failed'
     // A retry's rating delta is always 0 (the server only rates the first attempt
     // at a puzzle) — showing it as a real rating line would misread as re-scoring,
-    // so it's suppressed in favor of the quiet "Retry" chip below.
-    const delta = isRetry ? null : (result?.rating?.delta ?? null)
+    // so it's suppressed in favor of the quiet "Retry" chip below. Same for any
+    // server-reported unrated attempt (hint used, or a replay) — see the honest
+    // "unrated" line rendered below instead of a numeric delta.
+    const delta = isRetry || result?.rating?.unrated ? null : (result?.rating?.delta ?? null)
     const toMove = orientation === 'w' ? 'White' : 'Black'
     const lowTime = limitSec != null && remainingMs <= 10_000
     const solving = phase === 'intro' || phase === 'solving' || phase === 'checking'
@@ -1262,6 +1270,13 @@ function StatusCard({
                     </Row>
                 )}
 
+                {terminal && result?.rating?.reason === 'hint' && (
+                    <Typography
+                        sx={{ mt: 1.5, fontFamily: 'var(--font-mono)', fontSize: 13.5, color: 'var(--muted)' }}
+                    >
+                        Hint used — this one doesn't count toward your rating.
+                    </Typography>
+                )}
                 {terminal && delta != null && (
                     <Typography
                         sx={{

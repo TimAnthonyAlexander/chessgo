@@ -32,6 +32,7 @@ use App\Controllers\FillerFensController;
 use App\Controllers\BotChatController;
 use App\Controllers\GameController;
 use App\Controllers\GameAnalysisController;
+use App\Controllers\GameMovesAnalysisController;
 use App\Controllers\ProfileController;
 use App\Controllers\ProfileGamesController;
 use App\Controllers\PuzzleController;
@@ -281,6 +282,15 @@ $router->get('/games/{id}/analysis', [
     GameAnalysisController::class,
 ]);
 
+// Stateless full-game analysis for an ad-hoc move list (bot games have no Game
+// row to key off): { moves: string[], startFen? }. Same payload shape as the
+// route above, but never cached — every call is a fresh ~2s engine burst, so
+// this is rate-limited tighter than the persisted (mostly cache-hit) route.
+$router->post('/games/analysis', [
+    RateLimitMiddleware::class => ['limit' => '60/1m'],
+    GameMovesAnalysisController::class,
+]);
+
 // ================================
 // Player profiles (public — ratings + record + game history, keyed by name)
 // ================================
@@ -315,7 +325,7 @@ $router->get('/puzzles/next', [
 ]);
 
 // Submit one player move (UCI), validated against the hidden solution line:
-//   { move: "e2e4", fen: "<current FEN>", ply: 1 }
+//   { move: "e2e4", fen: "<current FEN>", ply: 1, hinted: false }
 $router->post('/puzzles/{id}/move', [
     SessionStartMiddleware::class,
     RateLimitMiddleware::class => ['limit' => '1200/1m'],

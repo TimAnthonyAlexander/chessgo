@@ -532,6 +532,19 @@ export function getGameAnalysis(id: string): Promise<GameAnalysis> {
     return request<GameAnalysis>(`/games/${id}/analysis`)
 }
 
+/** Same payload shape as {@link getGameAnalysis}, but for a game with no persisted
+ * id (bot games, imported PGNs) — replays `moves` from `startFen` (default the
+ * standard start) and analyzes it fresh. Never cached: every call is a ~2s engine
+ * burst, so callers should fetch once and hold the result rather than re-fetching. */
+export function analyzeGameMoves(moves: string[], startFen?: string): Promise<GameAnalysis> {
+    const body: { moves: string[]; startFen?: string } = { moves }
+    if (startFen) body.startFen = startFen
+    return request<GameAnalysis>('/games/analysis', {
+        method: 'POST',
+        body: JSON.stringify(body),
+    })
+}
+
 // --- Puzzles (Lichess-style training, SPEC §Puzzles) ---
 
 /** A served puzzle. The opponent's setup move is already applied into `fen`
@@ -552,6 +565,10 @@ export interface PuzzleRating {
     value: number
     delta: number
     games: number
+    /** True when this attempt earned no rating change (a hint was used, or the
+     *  puzzle was already attempted before) — see `reason`. */
+    unrated: boolean
+    reason: 'hint' | 'replay' | null
 }
 
 /** Result of submitting one player move. On a correct non-final move the
@@ -580,16 +597,19 @@ export function nextPuzzle(theme?: string): Promise<PuzzleNext> {
     return request<PuzzleNext>(`/puzzles/next${q}`)
 }
 
-/** Submit one player move (UCI) for validation against the hidden solution. */
+/** Submit one player move (UCI) for validation against the hidden solution.
+ *  `hinted` marks that a hint was shown before this move — the server records
+ *  the attempt but applies no rating change. */
 export function submitPuzzleMove(
     id: string,
     move: string,
     fen: string,
     ply: number,
+    hinted = false,
 ): Promise<PuzzleMoveResult> {
     return request<PuzzleMoveResult>(`/puzzles/${id}/move`, {
         method: 'POST',
-        body: JSON.stringify({ move, fen, ply }),
+        body: JSON.stringify({ move, fen, ply, hinted }),
     })
 }
 
