@@ -41,6 +41,7 @@ import {
     sfAnalyze,
     type AnalysisLine,
     type GameAnalysis,
+    type Opening,
 } from '../api/client'
 import type { Color } from '../api/client'
 import { buildBlunderPuzzles, colorInGame } from '../lib/blunderRewind'
@@ -59,6 +60,7 @@ import {
     createTree,
     gameOverAt,
     legalUci,
+    pathToNode,
     playMove,
     START_FEN,
     turnAt,
@@ -91,18 +93,28 @@ const SF_ARROW_COLOR = '#b06bff'
 // one position the search keeps climbing (the effect aborts the moment they
 // navigate). The engine returns the instant it REACHES a target depth, so the
 // big ceilings only ever bite on positions too complex to get there quickly.
-const ANALYSIS_LADDER: { depth: number; ceilingMs: number }[] = [
-    { depth: 6, ceilingMs: 1200 },
-    { depth: 9, ceilingMs: 1500 },
-    { depth: 12, ceilingMs: 2000 },
-    { depth: 14, ceilingMs: 2500 },
-    { depth: 16, ceilingMs: 3500 },
-    { depth: 18, ceilingMs: 5000 },
-    { depth: 20, ceilingMs: 7000 },
-    { depth: 22, ceilingMs: 10000 },
-    { depth: 25, ceilingMs: 16000 },
-    { depth: 28, ceilingMs: 24000 },
-    { depth: 30, ceilingMs: 35000 },
+//
+// `multipv` is per-rung and deliberately DROPS TO 1 on the deep tail. Asking the
+// engine for N lines makes it run N root searches per iteration — measured ~2.5x
+// the wall clock of a single line at the same target (depth 22: 8.1s vs 3.2s), and
+// that cost compounds down a ladder that reaches 30. The move list does not need
+// depth 30 to be useful; the eval bar does. So the list is filled by the rungs up
+// to 16 and then left alone (the ladder only ever REPLACES lines when a response
+// carries them), while the eval bar keeps climbing cheaply. One search per rung
+// either way — this is not a second search, just a narrower one.
+const LINES_MAX_DEPTH = 16
+const ANALYSIS_LADDER: { depth: number; ceilingMs: number; multipv: number }[] = [
+    { depth: 6, ceilingMs: 1200, multipv: 5 },
+    { depth: 9, ceilingMs: 1500, multipv: 5 },
+    { depth: 12, ceilingMs: 2000, multipv: 5 },
+    { depth: 14, ceilingMs: 2500, multipv: 5 },
+    { depth: 16, ceilingMs: 3500, multipv: 5 },
+    { depth: 18, ceilingMs: 5000, multipv: 1 },
+    { depth: 20, ceilingMs: 7000, multipv: 1 },
+    { depth: 22, ceilingMs: 10000, multipv: 1 },
+    { depth: 25, ceilingMs: 16000, multipv: 1 },
+    { depth: 28, ceilingMs: 24000, multipv: 1 },
+    { depth: 30, ceilingMs: 35000, multipv: 1 },
 ]
 
 type AutoMode = 'off' | 'play' | 'best'
@@ -200,6 +212,14 @@ export default function Analysis() {
     // as a blue arrow on the board. Cleared whenever the viewed node changes.
     const [hoverUci, setHoverUci] = useState<string | null>(null)
     const [analysisLines, setAnalysisLines] = useState<AnalysisLine[] | null>(null)
+    // Opening of the currently viewed position, from the SAME /analyze call as
+    // `analysisLines` (a pure book lookup server-side, no extra search). Feeds
+    // OpeningPanel's header — see the ladder effect below.
+    const [analysisOpening, setAnalysisOpening] = useState<Opening | null>(null)
+    // True while the ladder's search for the CURRENTLY VIEWED position hasn't
+    // produced anything yet — lets OpeningPanel show "Exploring…" vs "No moves"
+    // instead of guessing from `analysisLines` alone (see the ladder effect below).
+    const [linesLoading, setLinesLoading] = useState(false)
     // Free mode only: interactive Duck Chess. When true (and no game is loaded) the
     // standard board/tree layout is replaced by the self-contained duck board.
     const [duckFree, setDuckFree] = useState(false)
@@ -366,12 +386,43 @@ export default function Analysis() {
         [current.fen, over.over, isDuck],
     )
 
+    // Prior-position FENs (root→previous) for the viewed node, same shape
+    // OpeningPanel's own `/candidates` fetch builds — sent as `history` on the
+    // ladder's `/analyze` calls below so the engine can name the deepest-match
+    // opening for the position, not just guess from the FEN alone.
+    const historyFens = useMemo(() => {
+        const path = pathToNode(tree, currentId)
+        return path.slice(0, -1).map((n) => n.fen)
+    }, [tree, currentId])
+
     // The orientation actually shown: the autoFlip preference re-orients to the
     // side to move every ply, but only until the user flips by hand (manualFlip),
     // at which point their explicit choice (`orientation`) is authoritative — an
     // analysis board that kept auto-flipping under you while stepping through a
     // game would be disorienting once you've picked a fixed side to view from.
     const displayOrientation: Color = prefs.autoFlip && !manualFlip ? sideToMove : orientation
+
+    // MultiPV lines live only in this component, not on the tree node (the tree
+    // persists eval/bestmove/pv/depth, not the full N-line set). So walking BACK
+    // to a node whose eval is already deeper than the ladder's last rung would
+    // otherwise leave the move list permanently empty — every rung gets skipped,
+    // no /analyze call fires, and OpeningPanel renders "No moves". It used to
+    // dodge this by always re-fetching /candidates itself; now that the lines
+    // come from the ladder, this cache is what makes a revisit instant.
+    const linesCache = useRef(new Map<number, { lines: AnalysisLine[]; opening: Opening | null }>())
+
+    // Swap the multi-PV move list/opening the instant the VIEWED position changes,
+    // before the ladder effect below has a chance to fetch anything for it. Without
+    // this, OpeningPanel would briefly keep rendering the PREVIOUS position's moves
+    // (playable into the wrong position) while the new position's first rung is
+    // still in flight. A cache hit renders immediately and skips the "Exploring…"
+    // state entirely.
+    useEffect(() => {
+        const hit = linesCache.current.get(current.id)
+        setAnalysisLines(hit?.lines ?? null)
+        setAnalysisOpening(hit?.opening ?? null)
+        setLinesLoading(!hit)
+    }, [current.id])
 
     // --- Live engine eval + best line: progressive ("streaming") deepening ---
     // We can't stream over the wire (no SSE behind Cloudflare), so we emulate it by
@@ -384,11 +435,17 @@ export default function Analysis() {
     // guard) so re-renders from our own annotateEval don't restart it — the effect
     // re-keys only when the VIEWED position changes (current.id/fen).
     useEffect(() => {
-        if (!engineOn) return // engine analysis disabled — no fetching
+        if (!engineOn) {
+            setLinesLoading(false) // no fetching — nothing for OpeningPanel to wait on
+            return
+        }
         // Duck review: the cached per-ply evals from the payload are already on every
         // node — don't stream the STANDARD engine against a duck position (it has no
         // duck rules and would mis-evaluate it).
-        if (isDuck) return
+        if (isDuck) {
+            setLinesLoading(false)
+            return
+        }
         // While a game is loading, the tree is still the transient empty root; don't
         // fire /analyze against it — that races buildFromAnalysis (whichever lands
         // last wins) and would overwrite the persisted, book-backed game analysis.
@@ -396,6 +453,7 @@ export default function Analysis() {
 
         // Terminal positions: derive the eval locally, no engine call (no line to show).
         if (over.over) {
+            setLinesLoading(false) // terminal position — no move list to search for
             if (current.evalWhite !== null) return
             let ev: WhiteEval
             if (over.checkmate) ev = { type: 'mate', white: sideToMove === 'w' ? -1 : 1 }
@@ -412,68 +470,108 @@ export default function Analysis() {
         // node missing its PV is treated as depth 0 so we always fetch a line for it.
         let achieved = current.bestPv != null ? (current.bestDepth ?? 0) : 0
 
+        // `achieved` guards the EVAL from being downgraded, but it must not be
+        // allowed to starve the MOVE LIST. A revisited node can carry a depth-22
+        // stored eval and no cached lines, in which case every rung is `<= achieved`
+        // and the ladder makes no call at all. When we have no lines for this node,
+        // run the deepest rung that is still within the stored depth first (it can't
+        // downgrade anything — the `got <= achieved` guard below drops its eval) purely
+        // to repopulate the list, then continue up the ladder as usual.
+        // The backfill rung is capped at LINES_MAX_DEPTH: it exists only to refill the
+        // move list, so it takes the deepest multi-line rung available rather than
+        // matching a deep stored eval it can't beat anyway.
+        const rungs = [...ANALYSIS_LADDER]
+        if (!linesCache.current.has(nodeId) && achieved > 0) {
+            const backfill = [...ANALYSIS_LADDER]
+                .reverse()
+                .find((r) => r.multipv > 1 && r.depth <= Math.min(achieved, LINES_MAX_DEPTH))
+            if (backfill) rungs.unshift(backfill)
+        }
+
         let cancelled = false
         // Abort the in-flight request when we leave this position, so the previous
         // position's trailing deep call (up to the server's time ceiling) doesn't hog
         // a browser connection / engine worker and delay the new position's first guess.
         const ac = new AbortController()
         const run = async () => {
-            for (const { depth: target, ceilingMs } of ANALYSIS_LADDER) {
-                if (cancelled) return
-                if (target <= achieved) continue
+            // `finally` covers every exit (loop exhausted, mate found, aborted, or
+            // errored) so OpeningPanel's "still searching" flag always resolves —
+            // it does NOT mean "lines landed", just that this position's ladder run
+            // is done asking.
+            try {
+                for (const [i, { depth: target, ceilingMs, multipv }] of rungs.entries()) {
+                    if (cancelled) return
+                    // i === 0 may be the backfill rung above, which is deliberately
+                    // at-or-below `achieved` — let that one through.
+                    if (target <= achieved && !(i === 0 && rungs.length > ANALYSIS_LADDER.length)) continue
 
-                let r: Awaited<ReturnType<typeof analyze>>
-                try {
-                    r = await analyze(fen, { depth: target, movetime: ceilingMs, multipv: 5, signal: ac.signal })
-                } catch {
-                    return
+                    let r: Awaited<ReturnType<typeof analyze>>
+                    try {
+                        r = await analyze(fen, {
+                            depth: target,
+                            movetime: ceilingMs,
+                            multipv,
+                            history: historyFens,
+                            signal: ac.signal,
+                        })
+                    } catch {
+                        return
+                    }
+                    if (cancelled) return
+
+                    if (r.lines && r.lines.length > 0) {
+                        setAnalysisLines(r.lines)
+                        // Cache under the node, not the FEN: transpositions are rare here
+                        // and the node id is what the navigation effect above looks up.
+                        linesCache.current.set(nodeId, { lines: r.lines, opening: r.opening ?? null })
+                    }
+                    if (r.opening !== undefined) {
+                        setAnalysisOpening(r.opening ?? null)
+                    }
+
+                    const got = r.depth ?? target
+                    // This rung's budget wasn't enough to get deeper than what we already
+                    // have — DON'T stop: skip to the next rung, which grants strictly more
+                    // time and can break through. (Stopping here was the bug that pinned
+                    // the readout at ~16.) The loop is bounded by the ladder, so a truly
+                    // walled position simply exhausts it.
+                    if (got <= achieved) continue
+
+                    // Coalesce a null PV to [] so the node reads as "resolved, no line".
+                    if (!r.eval) {
+                        setTree((t) =>
+                            annotateEval(
+                                t,
+                                nodeId,
+                                { type: 'cp', white: 0 },
+                                r.bestmove,
+                                r.pv ?? [],
+                                got,
+                            ),
+                        )
+                    } else {
+                        const white = stm === 'w' ? r.eval.value : -r.eval.value
+                        setTree((t) =>
+                            annotateEval(
+                                t,
+                                nodeId,
+                                { type: r.eval!.type, white },
+                                r.bestmove,
+                                r.pv ?? [],
+                                got,
+                            ),
+                        )
+                    }
+                    achieved = got
+
+                    if (r.eval?.type === 'mate') return // mate found — deeper won't change it
+                    // NOTE: got < target (ceiling cut this rung short) is NOT terminal —
+                    // the next rung hands out a larger budget and may reach deeper. We
+                    // only stop once a bigger budget yields no deeper result (handled by
+                    // the `got <= achieved` guard at the top of the next iteration).
                 }
-                if (cancelled) return
-
-                if (r.lines && r.lines.length > 0) {
-                    setAnalysisLines(r.lines)
-                }
-
-                const got = r.depth ?? target
-                // This rung's budget wasn't enough to get deeper than what we already
-                // have — DON'T stop: skip to the next rung, which grants strictly more
-                // time and can break through. (Stopping here was the bug that pinned
-                // the readout at ~16.) The loop is bounded by the ladder, so a truly
-                // walled position simply exhausts it.
-                if (got <= achieved) continue
-
-                // Coalesce a null PV to [] so the node reads as "resolved, no line".
-                if (!r.eval) {
-                    setTree((t) =>
-                        annotateEval(
-                            t,
-                            nodeId,
-                            { type: 'cp', white: 0 },
-                            r.bestmove,
-                            r.pv ?? [],
-                            got,
-                        ),
-                    )
-                } else {
-                    const white = stm === 'w' ? r.eval.value : -r.eval.value
-                    setTree((t) =>
-                        annotateEval(
-                            t,
-                            nodeId,
-                            { type: r.eval!.type, white },
-                            r.bestmove,
-                            r.pv ?? [],
-                            got,
-                        ),
-                    )
-                }
-                achieved = got
-
-                if (r.eval?.type === 'mate') return // mate found — deeper won't change it
-                // NOTE: got < target (ceiling cut this rung short) is NOT terminal —
-                // the next rung hands out a larger budget and may reach deeper. We
-                // only stop once a bigger budget yields no deeper result (handled by
-                // the `got <= achieved` guard at the top of the next iteration).
+            } finally {
+                if (!cancelled) setLinesLoading(false)
             }
         }
         void run()
@@ -485,6 +583,10 @@ export default function Analysis() {
         // Keyed on the VIEWED position only — current.bestPv/bestDepth are read at
         // effect start (above) but deliberately NOT deps: our own setTree updates them
         // each step, and re-running would abort the in-flight call and re-fetch it.
+        // `historyFens` is read via closure for the same reason `history` is excluded
+        // from OpeningPanel's own fetch deps (OpeningPanel.tsx): it's a fresh array on
+        // every tree annotation even though its content only changes with current.id,
+        // which IS a dep — so this is redundant, not stale.
     }, [engineOn, isDuck, loading, current.id, current.fen, over.over, over.checkmate, sideToMove])
 
     // --- Stockfish second-opinion best move (optional arrow) ---
@@ -979,6 +1081,14 @@ export default function Analysis() {
                             engineOn={engineOn}
                             onMove={onMove}
                             onHoverMove={setHoverUci}
+                            // The board already runs a MultiPV ladder against this exact
+                            // position (above) — drive the panel off that instead of firing
+                            // a second, disagreeing /candidates search.
+                            external={{
+                                lines: analysisLines,
+                                opening: analysisOpening,
+                                loading: linesLoading,
+                            }}
                         />
                     )}
                 </Box>

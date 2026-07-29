@@ -26,6 +26,62 @@ struct Limits {
     // (start() is reused verbatim by serve.cpp — the UCI loop still wants them,
     // the HTTP handlers read the returned Result instead).
     bool silent = false;
+    // Number of principal variations to report, SF-style (UCI "MultiPV", SF
+    // search.cpp:302-310). ONE iterative-deepening search produces all N lines at
+    // the SAME depth: the ID loop runs an inner `pvIdx` loop, each pass searching
+    // the root restricted to the not-yet-emitted root moves. 1 (the default, and
+    // every pre-existing caller) is the exact single-PV search this engine has
+    // always run — every SPSA margin and the whole SPRT/CCRL baseline depend on
+    // that tree being unchanged, so the whole MultiPV apparatus is deliberately a
+    // no-op at pvIdx==0 (see search.cpp's ID loop for the identity argument).
+    // Clamped to the root's legal move count at start() entry.
+    int multiPV = 1;
+};
+
+// One reported principal variation — the public, caller-facing shape of a
+// MultiPV line (Result::lines). `score` is this engine's internal convention
+// (VALUE_MATE-relative, see types.h), `depth` is the ID depth the line was
+// completed at — identical across every line of one Result, which is the whole
+// point of doing real MultiPV instead of N independent searches. selDepth is
+// reserved (this engine does not track a selective depth yet, so it is 0).
+struct Line {
+    int score = 0;
+    int depth = 0;
+    int selDepth = 0;
+    std::vector<Move> pv;
+};
+
+// Root move bookkeeping, ported from SF's RootMove (~sf18-arm/src/search.h:85-110).
+// One entry per legal root move, built once at start() entry and carried across
+// EVERY iterative-deepening iteration of that one search — that persistence is what
+// makes MultiPV cheap (shared TT, shared root ordering) and what lets a fail-low
+// move keep its previous ordering via the stable sort.
+//
+// score/prevScore/avgScore all start at -VALUE_INFINITE, SF's "never searched"
+// sentinel; a move that neither is moveCount==1 nor beats alpha is reset to
+// -VALUE_INFINITE after its search so that the STABLE sort pushes only the new PV
+// to the front and preserves the relative order of everything else (SF
+// search.cpp:1349-1352).
+struct RootMove {
+    RootMove() = default;
+    explicit RootMove(Move m) : move(m), pv(1, m) {}
+
+    // Sort in DESCENDING score order (SF search.h:93-96): best line first, ties
+    // broken by the previous iteration's score so a genuinely stable ranking
+    // survives an iteration where several moves failed low together.
+    bool operator<(const RootMove& m) const {
+        return m.score != score ? m.score < score : m.prevScore < prevScore;
+    }
+    bool operator==(const Move& m) const { return pv[0] == m; }
+
+    Move move = MOVE_NONE;
+    int  score     = -VALUE_INFINITE; // this iteration's score (clobbered every search)
+    int  prevScore = -VALUE_INFINITE; // last iteration's score (SF previousScore)
+    int  avgScore  = -VALUE_INFINITE; // running /2 blend (SF averageScore); seeds the
+                                      // aspiration window for pvIdx > 0 lines ONLY
+    int64_t effort = 0;               // nodes spent on this root move (SF RootMove::effort),
+                                      // consumed by the NODEEFFORT time-management factor
+    std::vector<Move> pv;             // pv[0] == move, always
 };
 
 // Result of a completed (or interrupted) iterative-deepening search —
@@ -41,6 +97,13 @@ struct Result {
     int depth = 0;
     int64_t nodes = 0;
     std::vector<Move> pv;
+    // The MultiPV lines from that same completed iteration, best first. ALWAYS
+    // populated (size 1 when limits.multiPV == 1, which is every legacy caller),
+    // and lines[0] is by construction the same line the scalar fields above
+    // describe: lines[0].pv[0] == bestMove, lines[0].score == score,
+    // lines[0].depth == depth. Callers that only want the best move keep reading
+    // the scalars and are entirely unaffected.
+    std::vector<Line> lines;
 };
 
 // ---- Concurrent search contexts ----

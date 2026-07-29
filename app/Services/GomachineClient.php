@@ -162,10 +162,21 @@ class GomachineClient
      * analysis board polls this with increasing depths to "stream" a refining
      * evaluation; the engine's warm transposition table makes each step cheap.
      *
-     * @return array<string, mixed> {bestmove, san, eval, pv, depth, nodes}
+     * `$multipv > 1` returns `lines`: the top N moves from ONE search, all at the
+     * same depth (the engine's native MultiPV), each with the opening it leads to.
+     *
+     * @param string[] $history Prior-position FENs (root→previous). Naming only —
+     *   the engine uses them to resolve the DEEPEST named opening along the line,
+     *   for the position and for every line. Mirrors {@see candidates()}.
+     * @return array<string, mixed> {bestmove, san, eval, pv, depth, nodes, opening, lines?}
      */
-    public function analyze(string $fen, int $movetimeMs = 1500, int $depth = 0, int $multipv = 0): array
-    {
+    public function analyze(
+        string $fen,
+        int $movetimeMs = 1500,
+        int $depth = 0,
+        int $multipv = 0,
+        array $history = [],
+    ): array {
         $limits = ['movetime' => $movetimeMs];
         if ($depth > 0) {
             $limits['depth'] = $depth;
@@ -179,10 +190,15 @@ class GomachineClient
         // configured default) so the client doesn't sever a legitimate deep search.
         $timeoutMs = max($this->timeoutMs, $movetimeMs + 5000);
 
-        return $this->post('/bestmove', [
+        $body = [
             'fen' => $fen,
             'limits' => $limits,
-        ], $timeoutMs);
+        ];
+        if ($history !== []) {
+            $body['history'] = array_values($history);
+        }
+
+        return $this->post('/bestmove', $body, $timeoutMs);
     }
 
     /**

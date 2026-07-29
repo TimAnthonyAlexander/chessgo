@@ -9,6 +9,8 @@
 #include "zobrist.h"
 #include <cassert>
 #include <chrono>
+#include <cstdio>   // NNUE_ASSERT root-ttMove drift report
+#include <cstdlib>  // std::abort for the same
 #include <cstring>
 #include <iostream>
 #include <algorithm>
@@ -1198,16 +1200,27 @@ struct Context {
     int     threadIdx = 0;
     Move    rootBestMove = MOVE_NONE;
     int     rootBestScore = 0;
-    // NODEEFFORT (SF search.cpp:1308/1346/487-508, sf_18): per-root-move node-count
-    // accrual (SF's RootMove::effort) + a this-iteration best-move-change count (SF's
-    // Worker::bestMoveChanges). Both populated ONLY when Tune::nodeEffort is on, read
-    // by start()'s ID loop to scale the TIMEMAN per-iteration soft-limit alongside its
-    // existing stability/eval-trend factors. rootMoveEffort accumulates across every
-    // completed iteration of ONE start() call (mirrors rm.effort's lifetime — SF only
-    // resets it when a fresh position/search begins); reset in start() below.
-    // unordered_map (not a 64K-entry array) keeps this O(root move count), since Move
-    // is a bare uint16_t with no reserved "small" range to exploit.
-    std::unordered_map<Move, int64_t> rootMoveEffort;
+    // ---- Root move list + MultiPV (SF search.h:85-110, search.cpp:302-441) ----
+    // Every legal root move, rebuilt at start() entry and carried across every ID
+    // iteration of that one search. Re-sorted (STABLY, descending by score) after
+    // each root search so rootMoves[0] is always the current best line — which is
+    // exactly what makes rootMoves[pvIdx].pv[0] a drop-in for the old scalar
+    // `rootBestMove` as the root ttMove (SF search.cpp:707).
+    std::vector<RootMove> rootMoves;
+    // Clamped to max(1, min(limits.multiPV, rootMoves.size())) in start(). 1 for
+    // every legacy caller -> the pvIdx loop runs exactly once with pvIdx==0, where
+    // the root-move filter, the TT-store guard and the per-line window seeding are
+    // all provable no-ops, so the searched tree is byte-identical to pre-MultiPV.
+    int     multiPV = 1;
+    int     pvIdx   = 0;
+    // NODEEFFORT (SF search.cpp:1308/1346/487-508, sf_18): the per-root-move
+    // node-count accrual now lives in RootMove::effort (SF's own home for it),
+    // replacing the old `unordered_map<Move,int64_t> rootMoveEffort` — same values,
+    // same lifetime (accumulates across every completed iteration of ONE start()
+    // call, since rootMoves is rebuilt per call), just stored next to the move it
+    // belongs to. Still written ONLY when Tune::nodeEffort is on. This counter is
+    // the matching this-iteration best-move-change count (SF's Worker::bestMoveChanges),
+    // read by start()'s ID loop to scale the TIMEMAN per-iteration soft limit.
     int     rootBestMoveChangesIter = 0;
     // OPTIMISM (backlog #17): root side-to-move + a running EMA of the completed root
     // score across ID iterations, both reset in start() and consumed only by
@@ -1290,6 +1303,58 @@ struct Stack {
     bool  ttPv;       // #5: this node is (or descends from) a PV — gates RFP, de-reduces LMR
     int   moveCount;  // #10 PCM: this node's live move-loop counter, read one ply down
 };
+
+// Locate a root move's RootMove entry (SF's `*std::find(rootMoves.begin(),
+// rootMoves.end(), move)` at search.cpp:1306). Linear over the legal root moves
+// (<=~100, and only ever at ply 0), so the cost is invisible next to a root
+// subtree search. Returns nullptr only if `m` is not a root move, which cannot
+// happen for a move the root move loop actually tried.
+static inline RootMove* find_root_move(Context& C, Move m) {
+    for (RootMove& rm : C.rootMoves)
+        if (rm.move == m) return &rm;
+    return nullptr;
+}
+
+// Re-rank the root moves the CURRENT line and every later line may still use
+// (SF search.cpp:383/425). The sort MUST be stable: everything except the new PV
+// (and, at moveCount==1, the first move) was just reset to -VALUE_INFINITE, and
+// stability is what preserves last iteration's ordering for all of them. The
+// [0, pvIdx) prefix is the already-emitted lines and is deliberately frozen.
+static inline void sort_root_moves(Context& C) {
+    std::stable_sort(C.rootMoves.begin() + C.pvIdx, C.rootMoves.end());
+}
+
+// Re-rank the lines ALREADY EMITTED, [0, pvIdx], once this line's aspiration loop
+// has settled on an exact score (SF search.cpp:424,
+// `stable_sort(rootMoves.begin() + pvFirst, rootMoves.begin() + pvIdx + 1)`; zug has
+// no TB-rank grouping, so pvFirst is always 0).
+//
+// This is what keeps the reported lines monotone. Line k is searched with its OWN
+// aspiration window, and its exact score can land ABOVE line k-1's — line k-1's
+// score came from a search that was still ordering the remaining moves off shallow,
+// reduced estimates (root LMR, and zug's DEPTHDROP shrinking depth for later root
+// moves), so it under-rates them. Without this sort the line keeps its slot and the
+// analysis board renders line 3 as better than line 2. Verified against SF18 on
+// r1bq2r1/b4pk1/p1pp1p2/1p2pP2/1P2P1PB/3P4/1PPQ2P1/R3K2R w KQ: SF is strictly
+// descending, zug was not, at every DEPTHDROP setting.
+//
+// BYTE IDENTITY: at multiPV==1 pvIdx is always 0, so this sorts a one-element range
+// — a no-op, and the single-PV tree is untouched.
+static inline void sort_emitted_lines(Context& C) {
+    std::stable_sort(C.rootMoves.begin(), C.rootMoves.begin() + C.pvIdx + 1);
+}
+
+// SF search.cpp:1019 root filter: is `m` still in play for the CURRENT PV line,
+// i.e. in rootMoves[pvIdx..end)? Everything before pvIdx has already been emitted
+// as an earlier line and must not be searched again.
+//
+// BYTE IDENTITY: the caller guards this on `C.pvIdx != 0`, so at multiPV==1 it is
+// never even called. That is not just an optimization — it is the proof: rootMoves
+// holds EVERY legal root move, so at pvIdx==0 the count over the whole list is 1
+// for every move the root loop can reach, and the filter can never skip anything.
+static inline bool root_move_in_play(Context& C, Move m) {
+    return std::count(C.rootMoves.begin() + C.pvIdx, C.rootMoves.end(), m) > 0;
+}
 
 // #13 is_shuffling (SF18 search.cpp:145-152, VERIFIED): a dead 4-ply single-piece
 // round-trip in a rule50 shuffle, where singular-extending the ttMove is wasted
@@ -2279,7 +2344,50 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
     bool ttHit;
     TTEntry* tte = C.tt.probe(pos.key(), ttHit);
     int ttValue = ttHit ? C.tt.value_from_tt(tte->value, ss->ply) : VALUE_NONE;
-    Move ttMove = rootNode ? C.rootBestMove : (ttHit ? tte->move : MOVE_NONE);
+    // Root ttMove is the CURRENT PV line's own best move (SF search.cpp:707,
+    // `ttData.move = rootNode ? rootMoves[pvIdx].pv[0] : ...`), not one global
+    // best move — under MultiPV each line must be ordered by its own head move.
+    //
+    // BYTE IDENTITY at pvIdx==0: rootMoves is stable-sorted descending after every
+    // root search, so rootMoves[0] is the highest-scoring root move, which is exactly
+    // the move the old scalar `C.rootBestMove` held (both are "the last move that was
+    // moveCount==1 or beat alpha", and alpha rises monotonically so that move has the
+    // max score). The one place they used to differ is BEFORE any root move has been
+    // searched — zug's rootBestMove is MOVE_NONE there while SF's RootMove ctor
+    // pre-seeds pv[0] with the move itself — hence the -VALUE_INFINITE "never scored"
+    // guard, which reproduces zug's MOVE_NONE exactly on iteration 1.
+    //
+    // The empty-rootMoves case is a TERMINAL root (checkmate/stalemate): the ID loop
+    // still runs one root negamax there, because its mated_in()/VALUE_DRAW return is
+    // load-bearing for the Result (see start()'s "case 2" comment) — it just never
+    // enters the move loop.
+    Move ttMove;
+    if (rootNode) {
+        ttMove = MOVE_NONE;
+        if (!C.rootMoves.empty()) {
+            const RootMove& rm = C.rootMoves[C.pvIdx];
+            if (rm.score != -VALUE_INFINITE) ttMove = rm.pv[0];
+        }
+#ifdef NNUE_ASSERT
+        // The identity claim above, checked in the validation build. NDEBUG is on in
+        // every build here, so assert() would compile away — abort explicitly, in the
+        // same style as the accumulator drift check (nnue_accumulator.cpp:717).
+        // multiPV==1 only: that is the identity claim being protected. Under MultiPV
+        // the emitted-prefix sort (sort_emitted_lines, SF search.cpp:424) can promote a
+        // later line above line 0, so rootMoves[0] legitimately stops tracking the
+        // scalar rootBestMove — which is SF's behaviour too (its bestmove IS
+        // rootMoves[0].pv[0], re-ranked and all).
+        if (C.multiPV == 1 && C.pvIdx == 0 && ttMove != C.rootBestMove) {
+            std::fprintf(stderr,
+                "root ttMove drift: rootMoves[0].pv[0]=%s rootBestMove=%s depth=%d fen=%s\n",
+                move_to_uci(ttMove).c_str(), move_to_uci(C.rootBestMove).c_str(),
+                depth, pos.fen().c_str());
+            std::abort();
+        }
+#endif
+    } else {
+        ttMove = ttHit ? tte->move : MOVE_NONE;
+    }
     bool ttCapture = ttMove && pos.is_capture(ttMove);
     // #5 ttPv: this node counts as "PV-descended" if it is a PvNode or the TT entry
     // was flagged PV. Preserved (not recomputed) on singular-verification re-entry.
@@ -2680,6 +2788,11 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         Move m = pick_next(cur, list.end());
         if (m == excluded) continue;
         if (!pos.legal(m)) continue;
+        // MultiPV root filter (SF search.cpp:1019): skip root moves already emitted
+        // as an earlier PV line. Guarded on pvIdx!=0 so the single-PV search never
+        // even evaluates it — see root_move_in_play() for why that is an identity,
+        // not an approximation.
+        if (rootNode && C.pvIdx != 0 && !root_move_in_play(C, m)) continue;
         moveCount++;
         ss->moveCount = moveCount; // #10 PCM: a child reads (ss-1)->moveCount to learn
                                    // how late its parent tried the move that led into it.
@@ -3171,19 +3284,58 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
 
         if (C.stop) return 0;
 
-        // NODEEFFORT: accrue this move's node cost (SF search.cpp:1308, unconditional
-        // for every root move, BEFORE the new-best-move check below — matches SF's
-        // ordering exactly). rootMoveEffort persists across every iteration of this
-        // start() call (reset there), so it's a running total, not a per-iteration one.
-        if (rootNode && C.tune.nodeEffort)
-            C.rootMoveEffort[m] += C.nodeCount - nodeEffortBefore;
+        // ---- Per-root-move bookkeeping (SF search.cpp:1305-1352) ----
+        // Every root move that finishes its search updates its own RootMove: the node
+        // cost it drew, a running average of its score, and — if it is this line's PV
+        // move — its score and full PV. A move that neither is moveCount==1 nor beats
+        // alpha is reset to -VALUE_INFINITE so the STABLE sort in the ID loop pushes
+        // only the new PV to the front and leaves every other move's relative order
+        // untouched (SF's own comment at 1349-1352).
+        //
+        // BYTE IDENTITY: none of this feeds a pruning/ordering decision inside the
+        // tree. The only value read back by the searched tree is rootMoves[pvIdx].pv[0]
+        // as the root ttMove, which reproduces C.rootBestMove exactly (see the TT-probe
+        // comment above); rootBestMove/rootBestScore are still maintained verbatim.
+        RootMove* rmp = rootNode ? find_root_move(C, m) : nullptr;
+        if (rmp) { // rootNode, and `m` is (always) one of the generated legal root moves
+            RootMove& rm = *rmp;
 
-        if (rootNode && (moveCount == 1 || score > alpha)) {
-            // SF search.cpp:1346: a later move (moveCount>1) overtaking alpha counts as
-            // a PV change this iteration — the raw signal behind bestMoveInstability.
-            if (C.tune.nodeEffort && moveCount > 1) ++C.rootBestMoveChangesIter;
-            C.rootBestMove = m;
-            C.rootBestScore = score;
+            // SF search.cpp:1308: unconditional for every root move, BEFORE the
+            // new-best-move check — matches SF's ordering exactly. Kept gated on the
+            // NODEEFFORT flag (the only consumer) so the default path is unchanged;
+            // effort accumulates across every iteration of this start() call, since
+            // rootMoves itself is rebuilt per call.
+            if (C.tune.nodeEffort) rm.effort += C.nodeCount - nodeEffortBefore;
+
+            // SF search.cpp:1310-1311. Seeds the aspiration window for pvIdx>0 lines
+            // ONLY — line 0 deliberately keeps zug's prevScore seeding (see the ID loop).
+            rm.avgScore = rm.avgScore != -VALUE_INFINITE ? (score + rm.avgScore) / 2 : score;
+
+            if (moveCount == 1 || score > alpha) {
+                rm.score = score;
+                // SF search.cpp:1336-1343: pv[0] is this move, the tail is the child's
+                // PV. Identical construction to zug's own ss->pv copy a few lines below
+                // (same (ss+1)->pv, same moment), so rootMoves[0].pv == ss->pv whenever
+                // the search finished in-window — which is the only state ever published.
+                rm.pv.assign(1, m);
+                for (int i = 0; i < (ss + 1)->pvLen; ++i) rm.pv.push_back((ss + 1)->pv[i]);
+
+                // SF search.cpp:1346: a later move (moveCount>1) overtaking alpha counts as
+                // a PV change this iteration — the raw signal behind bestMoveInstability.
+                // SF restricts it to line 0 (`&& !pvIdx`); zug's time management only ever
+                // ran single-PV, so keep it exactly that way.
+                // Both of these describe LINE 0 (the actual best move of the search) —
+                // a pvIdx>0 line's alpha-raiser is the best of the *remaining* moves and
+                // must never clobber them. pvIdx is always 0 at multiPV==1, so the guard
+                // is inert on the single-PV path.
+                if (C.pvIdx == 0) {
+                    if (C.tune.nodeEffort && moveCount > 1) ++C.rootBestMoveChangesIter;
+                    C.rootBestMove = m;
+                    C.rootBestScore = score;
+                }
+            } else {
+                rm.score = -VALUE_INFINITE;
+            }
         }
 
         if (score > bestValue) {
@@ -3349,7 +3501,12 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
     if (C.tune.ttPvOn && !excluded && bestValue <= alpha && ss->ply > 0)
         ss->ttPv = ss->ttPv || (ss - 1)->ttPv;
 
-    if (!excluded) {
+    // SF search.cpp:1465, `if (!excludedMove && !(rootNode && pvIdx))`: a pvIdx>0 root
+    // search only looked at a SUBSET of the root moves, so its bestValue is not the true
+    // value of this position — storing it would poison the shared TT for every later
+    // line (and for the next iteration's line 0). No-op at pvIdx==0, hence byte-identical
+    // on the single-PV path.
+    if (!excluded && !(rootNode && C.pvIdx)) {
         Bound b = bestValue >= beta ? BOUND_LOWER
                 : (PvNode && bestMove) ? BOUND_EXACT : BOUND_UPPER;
         C.tt.store(tte, pos.key(), C.tt.value_to_tt(bestValue, ss->ply),
@@ -3366,22 +3523,54 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
     return bestValue;
 }
 
-void print_pv(Context& C, Position& pos, Stack* ss, int depth, int score, int64_t nodes) {
-    (void)pos;
-    int64_t ms = elapsed(C);
-    int64_t nps = ms > 0 ? nodes * 1000 / ms : 0;
-    std::cout << "info depth " << depth << " score ";
+// Emit "score cp N" / "score mate N" for one line, in this engine's mate-distance
+// convention. Factored out of print_pv so the single-PV and MultiPV branches can
+// never drift apart.
+void print_score(int score) {
     if (is_mate_score(score)) {
         int mateIn = (score > 0 ? (VALUE_MATE - score + 1) : -(VALUE_MATE + score)) / 2;
         std::cout << "mate " << mateIn;
     } else {
         std::cout << "cp " << score;
     }
-    std::cout << " nodes " << nodes << " nps " << nps
-              << " time " << ms << " hashfull " << C.tt.hashfull() << " pv";
-    for (int i = 0; i < ss->pvLen; ++i)
-        std::cout << " " << move_to_uci(ss->pv[i]);
-    std::cout << std::endl;
+}
+
+void print_pv(Context& C, Position& pos, Stack* ss, int depth, int score, int64_t nodes) {
+    (void)pos;
+    int64_t ms = elapsed(C);
+    int64_t nps = ms > 0 ? nodes * 1000 / ms : 0;
+
+    // Single PV: byte-for-byte the line this engine has always printed. NO `multipv`
+    // token — a GUI/SPRT/CCRL parser sees an unchanged stream, and so does
+    // test/multipv_identity.sh, whose whole job is to prove that.
+    if (C.multiPV <= 1) {
+        std::cout << "info depth " << depth << " score ";
+        print_score(score);
+        std::cout << " nodes " << nodes << " nps " << nps
+                  << " time " << ms << " hashfull " << C.tt.hashfull() << " pv";
+        for (int i = 0; i < ss->pvLen; ++i)
+            std::cout << " " << move_to_uci(ss->pv[i]);
+        std::cout << std::endl;
+        return;
+    }
+
+    // MultiPV: one `info ... multipv i ...` line per PV, best first (SF search.cpp:2124
+    // — `for (i = 0; i < multiPV; ++i) ... info.multiPV = i + 1`). rootMoves is already
+    // sorted descending by the ID loop, so index order IS rank order and the scores come
+    // out non-increasing. All lines carry the same `depth`, which is the entire point of
+    // real MultiPV. `multipv` goes right after `depth`, as SF orders it.
+    int n = std::min<int>(C.multiPV, static_cast<int>(C.rootMoves.size()));
+    for (int i = 0; i < n; ++i) {
+        const RootMove& rm = C.rootMoves[i];
+        if (rm.score == -VALUE_INFINITE) break; // line never completed (interrupted iteration)
+        std::cout << "info depth " << depth << " multipv " << (i + 1) << " score ";
+        print_score(rm.score);
+        std::cout << " nodes " << nodes << " nps " << nps
+                  << " time " << ms << " hashfull " << C.tt.hashfull() << " pv";
+        for (Move m : rm.pv)
+            std::cout << " " << move_to_uci(m);
+        std::cout << std::endl;
+    }
 }
 
 void set_time_limits(Context& C, const Position& pos) {
@@ -3529,20 +3718,31 @@ Context& smp_context(int i) {
 // worker's completed iteration) and exactly one "bestmove" line. During the SMP
 // search every worker runs silent (limits.silent=true), so this is the only
 // UCI output — guaranteeing the single bestmove line UCI requires.
-void print_smp_result(const Result& r, int64_t startTime) {
+void print_smp_result(const Result& r, int64_t startTime, int multiPV) {
     int64_t ms = now_ms() - startTime;
     int64_t nps = ms > 0 ? r.nodes * 1000 / ms : 0;
-    std::cout << "info depth " << r.depth << " score ";
-    if (is_mate_score(r.score)) {
-        int mateIn = (r.score > 0 ? (VALUE_MATE - r.score + 1) : -(VALUE_MATE + r.score)) / 2;
-        std::cout << "mate " << mateIn;
+    if (multiPV <= 1) {
+        // Byte-identical to the pre-MultiPV single info line — no `multipv` token.
+        std::cout << "info depth " << r.depth << " score ";
+        print_score(r.score);
+        std::cout << " nodes " << r.nodes << " nps " << nps << " time " << ms
+                  << " hashfull " << TT.hashfull() << " pv";
+        for (Move m : r.pv) std::cout << " " << move_to_uci(m);
+        std::cout << std::endl;
     } else {
-        std::cout << "cp " << r.score;
+        // The CHOSEN worker's whole line set — never a merge across workers (see
+        // run_lazy_smp: lines from different threads come from different trees and
+        // are not mutually comparable).
+        for (size_t i = 0; i < r.lines.size(); ++i) {
+            const Line& ln = r.lines[i];
+            std::cout << "info depth " << ln.depth << " multipv " << (i + 1) << " score ";
+            print_score(ln.score);
+            std::cout << " nodes " << r.nodes << " nps " << nps << " time " << ms
+                      << " hashfull " << TT.hashfull() << " pv";
+            for (Move m : ln.pv) std::cout << " " << move_to_uci(m);
+            std::cout << std::endl;
+        }
     }
-    std::cout << " nodes " << r.nodes << " nps " << nps << " time " << ms
-              << " hashfull " << TT.hashfull() << " pv";
-    for (Move m : r.pv) std::cout << " " << move_to_uci(m);
-    std::cout << std::endl;
     std::cout << "bestmove " << move_to_uci(r.bestMove);
     if (r.pv.size() > 1 && r.pv[0] == r.bestMove) // ponder move = 2nd PV move (SF search.cpp:246)
         std::cout << " ponder " << move_to_uci(r.pv[1]);
@@ -3676,6 +3876,11 @@ Result run_lazy_smp(std::vector<Context*>& workers, TranspositionTable& tt,
                 best = i;
         }
     }
+    // The chosen worker's ENTIRE Result, MultiPV lines included. Lines are never
+    // merged across workers: each worker ran its own independent MultiPV loop over
+    // its own tree, so line 2 from thread 3 is not comparable to line 1 from thread
+    // 0. The vote above only ever inspects line 0 (bestMove/score/depth), exactly as
+    // it did before MultiPV existed, so single-PV thread selection is unchanged.
     Result chosen = results[best];
 
     // Report the true aggregate node count across all workers.
@@ -3851,9 +4056,24 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
     for (int i = 0; i < MAX_PLY + 13; ++i) stack[i].ply = i - 7;
 
     C.rootBestMove = MOVE_NONE;
-    // NODEEFFORT: fresh per-search-call state (mirrors SF's RootMoves being rebuilt at
-    // the start of every search) — harmless to clear even when the flag is off.
-    C.rootMoveEffort.clear();
+    // ---- Root move list (SF search.cpp:302-310 / thread.cpp's RootMoves build) ----
+    // Every legal root move, once, carried across the whole ID loop. This is also the
+    // NODEEFFORT reset (rm.effort starts at 0 on a freshly built list — mirrors SF,
+    // which only resets effort when a fresh search begins).
+    C.rootMoves.clear();
+    {
+        MoveList rootList;
+        generate<ALL>(pos, rootList);
+        for (const ExtMove& em : rootList)
+            if (pos.legal(em.move)) C.rootMoves.emplace_back(em.move);
+    }
+    // SF search.cpp:310, `multiPV = std::min(multiPV, rootMoves.size())`. The extra
+    // max(1,...) keeps a TERMINAL root (no legal moves) running exactly one root
+    // negamax — its mated_in()/VALUE_DRAW return is load-bearing for the Result (see
+    // the "case 2" comment at the bottom of this function).
+    C.multiPV = std::max(1, std::min(C.limits.multiPV < 1 ? 1 : C.limits.multiPV,
+                                     static_cast<int>(C.rootMoves.size())));
+    C.pvIdx = 0;
     C.rootBestMoveChangesIter = 0;
     int maxDepth = C.limits.depth ? C.limits.depth : MAX_PLY - 1;
 
@@ -3917,53 +4137,99 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
             C.rootBestMoveChangesIter = 0;
         }
 
-        // Aspiration windows
-        int score;
-        if (depth <= 4) {
-            C.rootDelta = VALUE_INFINITE - (-VALUE_INFINITE); // ROOTDELTALMR: full-window branch (SF sets rootDelta unconditionally)
-            score = negamax<true>(C, pos, ss, -VALUE_INFINITE, VALUE_INFINITE, depth, false);
-        } else {
-            // SF search.cpp:355 scales the initial delta off |meanSquaredScore| (a
-            // quadratic volatility signal zug doesn't track); zug's only available
-            // prior-score signal at this point is `prevScore` (the completed
-            // previous iteration's root score), so ASPADAPT uses a linear proxy:
-            // delta = aspInitDelta + |prevScore|/12. K=12 chosen so a near-zero eval
-            // leaves delta at the unchanged baseline (25), a one-pawn score (100cp)
-            // adds ~8, and a clearly-won position (300cp) roughly doubles delta to
-            // ~50 — widening the window before the volatile position forces a
-            // re-search, without perturbing quiet/equal positions.
-            int delta = C.tune.aspAdapt
-                ? C.tune.aspInitDelta + std::abs(prevScore) / 12
-                : C.tune.aspInitDelta;
-            // SMPDIV: stagger each Lazy-SMP worker's initial window width by its index
-            // (SF search.cpp:355 `delta = 5 + threadIdx%8 + …`) so threads search
-            // slightly different windows and diverge. threadIdx==0 on the main/single
-            // thread path → no change; whole block is a no-op unless SMPDIV=1.
-            if (smp_div_enabled()) delta += C.threadIdx % 8;
-            int alpha = std::max(prevScore - delta, -VALUE_INFINITE);
-            int beta  = std::min(prevScore + delta, VALUE_INFINITE);
-            while (true) {
-                // ROOTDELTALMR: re-sync rootDelta to the window about to be searched
-                // on *every* pass through this loop, including re-searches after a
-                // fail-high/low widens [alpha,beta] below (SF search.cpp:374 does the
-                // same — rootDelta is set inside its `while (true)` re-search loop,
-                // not before it). Without this, a widened re-search window makes
-                // node-local delta (beta-alpha at depth) exceed a stale rootDelta
-                // frozen from before the widening, blowing the ROOTDELTALMR term past
-                // its intended [0,608] bound.
-                C.rootDelta = beta - alpha;
-                score = negamax<true>(C, pos, ss, alpha, beta, depth, false);
-                if (C.stop) break;
-                if (score <= alpha) {
-                    beta = (alpha + beta) / 2;
-                    alpha = std::max(score - delta, -VALUE_INFINITE);
-                } else if (score >= beta) {
-                    beta = std::min(score + delta, VALUE_INFINITE);
-                } else break;
-                // SF search.cpp:418: delta += delta / 3 (vs zug's default delta/2).
-                delta += C.tune.aspAdapt ? delta / 3 : delta / 2;
+        // Save last iteration's scores BEFORE the first PV line is searched — every
+        // score except the new PV's is about to be reset to -VALUE_INFINITE, and
+        // prevScore is what the stable sort's tiebreak (and a pvIdx>0 window seed)
+        // falls back on (SF search.cpp:330-331).
+        for (RootMove& rm : C.rootMoves) rm.prevScore = rm.score;
+
+        // ---- MultiPV loop (SF search.cpp:341) ----
+        // One full root search per reported line; each pass is restricted to the root
+        // moves not yet emitted, so all N lines finish at THIS depth and their scores
+        // are directly comparable. C.multiPV == 1 for every legacy caller, so this loop
+        // body runs exactly once with pvIdx == 0 — where the root filter, the TT-store
+        // guard and the per-line window seeding below are all provable no-ops. That is
+        // the byte-identity contract for the single-PV tree.
+        int score = 0;
+        for (C.pvIdx = 0; C.pvIdx < C.multiPV; ++C.pvIdx) {
+            // Aspiration windows
+            int lineScore;
+            if (depth <= 4) {
+                C.rootDelta = VALUE_INFINITE - (-VALUE_INFINITE); // ROOTDELTALMR: full-window branch (SF sets rootDelta unconditionally)
+                lineScore = negamax<true>(C, pos, ss, -VALUE_INFINITE, VALUE_INFINITE, depth, false);
+                sort_root_moves(C);
+            } else {
+                // Window seed. Line 0 keeps zug's `prevScore` (the completed previous
+                // iteration's root score) UNCHANGED — deliberately NOT SF's
+                // averageScore/meanSquaredScore seeding, which would perturb every
+                // window on every iteration and invalidate the SPSA/SPRT baseline.
+                // Per-line avgScore seeding (SF search.cpp:356-358) applies to pvIdx>0
+                // only, where there is no baseline to protect and a per-line average is
+                // strictly better than reusing line 0's score.
+                int seed = prevScore;
+                if (C.pvIdx != 0) {
+                    const RootMove& rm = C.rootMoves[C.pvIdx];
+                    seed = rm.avgScore != -VALUE_INFINITE   ? rm.avgScore
+                         : rm.prevScore != -VALUE_INFINITE  ? rm.prevScore
+                                                            : prevScore;
+                }
+                // SF search.cpp:355 scales the initial delta off |meanSquaredScore| (a
+                // quadratic volatility signal zug doesn't track); zug's only available
+                // prior-score signal at this point is `prevScore` (the completed
+                // previous iteration's root score), so ASPADAPT uses a linear proxy:
+                // delta = aspInitDelta + |prevScore|/12. K=12 chosen so a near-zero eval
+                // leaves delta at the unchanged baseline (25), a one-pawn score (100cp)
+                // adds ~8, and a clearly-won position (300cp) roughly doubles delta to
+                // ~50 — widening the window before the volatile position forces a
+                // re-search, without perturbing quiet/equal positions.
+                int delta = C.tune.aspAdapt
+                    ? C.tune.aspInitDelta + std::abs(seed) / 12
+                    : C.tune.aspInitDelta;
+                // SMPDIV: stagger each Lazy-SMP worker's initial window width by its index
+                // (SF search.cpp:355 `delta = 5 + threadIdx%8 + …`) so threads search
+                // slightly different windows and diverge. threadIdx==0 on the main/single
+                // thread path → no change; whole block is a no-op unless SMPDIV=1.
+                if (smp_div_enabled()) delta += C.threadIdx % 8;
+                int alpha = std::max(seed - delta, -VALUE_INFINITE);
+                int beta  = std::min(seed + delta, VALUE_INFINITE);
+                while (true) {
+                    // ROOTDELTALMR: re-sync rootDelta to the window about to be searched
+                    // on *every* pass through this loop, including re-searches after a
+                    // fail-high/low widens [alpha,beta] below (SF search.cpp:374 does the
+                    // same — rootDelta is set inside its `while (true)` re-search loop,
+                    // not before it). Without this, a widened re-search window makes
+                    // node-local delta (beta-alpha at depth) exceed a stale rootDelta
+                    // frozen from before the widening, blowing the ROOTDELTALMR term past
+                    // its intended [0,608] bound.
+                    C.rootDelta = beta - alpha;
+                    lineScore = negamax<true>(C, pos, ss, alpha, beta, depth, false);
+                    // Re-sort after EVERY root search, including each fail-high/low
+                    // re-search (SF search.cpp:383, inside its `while (true)`) — the
+                    // next pass reads rootMoves[pvIdx].pv[0] as its root ttMove, so a
+                    // stale order there would change the tree. This is precisely what
+                    // makes rootMoves[0].pv[0] track the old scalar `rootBestMove`.
+                    sort_root_moves(C);
+                    if (C.stop) break;
+                    if (lineScore <= alpha) {
+                        beta = (alpha + beta) / 2;
+                        alpha = std::max(lineScore - delta, -VALUE_INFINITE);
+                    } else if (lineScore >= beta) {
+                        beta = std::min(lineScore + delta, VALUE_INFINITE);
+                    } else break;
+                    // SF search.cpp:418: delta += delta / 3 (vs zug's default delta/2).
+                    delta += C.tune.aspAdapt ? delta / 3 : delta / 2;
+                }
             }
+            // Now that this line has an exact score, re-rank the emitted prefix so the
+            // reported lines stay in descending order (SF search.cpp:424).
+            sort_emitted_lines(C);
+            // The search's score IS line 0's score — every scalar consumer below
+            // (prevScore, TIMEMAN, Result::score) means the best line, never a
+            // secondary one.
+            if (C.pvIdx == 0) score = lineScore;
+            if (C.stop) break;
         }
+        C.pvIdx = 0; // leave the Context in its single-PV resting state
 
         if (C.stop && depth > 1) break;
 
@@ -3999,6 +4265,44 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
         lastResult.nodes = C.nodeCount;
         lastResult.pv.assign(ss->pv, ss->pv + ss->pvLen);
 
+        // Publish the MultiPV lines from this FULLY COMPLETED iteration, so a later
+        // timeout still returns the last complete, internally-consistent line set —
+        // exactly the guarantee the scalar fields above already give. lines[0] mirrors
+        // them by construction: rootMoves[0] is the sorted-best root move, i.e.
+        // C.rootBestMove, its score is the in-window root value `score`, and its pv was
+        // built from the same (ss+1)->pv that ss->pv was.
+        lastResult.lines.clear();
+        if (C.rootMoves.empty()) {
+            // Terminal root (checkmate/stalemate): no root move exists, but the score is
+            // real and load-bearing. One line, no moves.
+            Line ln;
+            ln.score = score;
+            ln.depth = depth;
+            ln.pv = lastResult.pv;
+            lastResult.lines.push_back(ln);
+        } else {
+            int n = std::min<int>(C.multiPV, static_cast<int>(C.rootMoves.size()));
+            for (int i = 0; i < n; ++i) {
+                const RootMove& rm = C.rootMoves[i];
+                // Only reachable on a degenerate interrupted depth-1 iteration (the ID
+                // loop's `C.stop && depth > 1` break lets depth 1 through). Stop rather
+                // than report a sentinel score.
+                if (rm.score == -VALUE_INFINITE) break;
+                Line ln;
+                ln.score = rm.score;
+                ln.depth = depth;
+                ln.pv = rm.pv;
+                lastResult.lines.push_back(ln);
+            }
+            if (lastResult.lines.empty()) {
+                Line ln;
+                ln.score = score;
+                ln.depth = depth;
+                ln.pv = lastResult.pv;
+                lastResult.lines.push_back(ln);
+            }
+        }
+
         // Soft time check between iterations. In the default (legacy) time scheme the soft
         // limit is a flat wall. When TIMEMAN clock-mode is active (C.tmScaled), scale it per
         // iteration by best-move stability and eval trend (Stormphrax limit.cpp:46-102).
@@ -4033,8 +4337,8 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
                 // spent on the CURRENT best root move (SF: rootMoves[0].effort*100000/
                 // nodes; rootMoves[0] is the current-best after SF's per-iteration sort,
                 // i.e. exactly C.rootBestMove here).
-                auto it = C.rootMoveEffort.find(C.rootBestMove);
-                int64_t effort = (it != C.rootMoveEffort.end()) ? it->second : 0;
+                const RootMove* rbm = find_root_move(C, C.rootBestMove);
+                int64_t effort = rbm ? rbm->effort : 0;
                 int64_t nodesEffort = effort * 100000 / std::max<int64_t>(1, C.nodeCount);
                 double highBestMoveEffort = nodesEffort >= 93340 ? 0.76 : 1.0;
                 // bestMoveInstability (SF search.cpp:503): threads.size() divisor is 1
@@ -4108,6 +4412,17 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
         lastResult.depth = 0;
         lastResult.nodes = C.nodeCount;
         lastResult.pv.assign(1, best);
+        lastResult.lines.clear();
+    }
+    // Result::lines is a promise: ALWAYS at least one entry, always mirroring the
+    // scalar fields. Covers the fallback above and any path where no iteration ever
+    // published (e.g. a movetime so small that depth 1 never completed).
+    if (lastResult.lines.empty()) {
+        Line ln;
+        ln.score = lastResult.score;
+        ln.depth = lastResult.depth;
+        ln.pv = lastResult.pv;
+        lastResult.lines.push_back(ln);
     }
     // Ponder/infinite hold (SF search.cpp:210-216): the UCI protocol forbids emitting
     // bestmove while pondering or in an `infinite` search until the GUI sends `stop`/
@@ -4147,7 +4462,11 @@ Result start_smp(Position& rootPos, const Limits& limits, int threads) {
     // Fathom's non-thread-safe DTZ path is safe. Gated: C.tune.syzygy + TB::loaded().
     // Skipped while pondering: an instant DTZ bestmove would break the UCI ponder hold (the
     // search must not emit until ponderhit/stop). WDL-in-search still guides the ponder search.
-    if (!limits.ponderMode) {
+    // Also skipped under MultiPV > 1: the caller asked for N ranked lines and this path can
+    // only ever produce one, so run the real search instead (WDL-in-search still scores every
+    // line correctly inside a TB position). multiPV<=1 keeps the instant short-circuit exactly
+    // as before.
+    if (!limits.ponderMode && limits.multiPV <= 1) {
         Context& C0 = default_ctx_ref();
         if (C0.tune.syzygy && TB::loaded() && rootPos.castling_rights() == 0
             && (unsigned) BB::popcount(rootPos.pieces()) <= TB::max_pieces()) {
@@ -4162,6 +4481,7 @@ Result start_smp(Position& rootPos, const Limits& limits, int threads) {
                 r.depth = 0;
                 r.nodes = 0;
                 r.pv.assign(1, tbMove);
+                { Line ln; ln.score = score; ln.depth = 0; ln.pv = r.pv; r.lines.push_back(ln); }
                 if (!limits.silent) {
                     std::cout << "info depth 0 score cp " << score << " nodes 0 pv "
                               << move_to_uci(tbMove) << "\n";
@@ -4193,7 +4513,7 @@ Result start_smp(Position& rootPos, const Limits& limits, int threads) {
     Result chosen = run_lazy_smp(workers, ::TT, smpStop, rootPos, limits);
 
     if (!limits.silent)
-        print_smp_result(chosen, limits.startTime ? limits.startTime : now_ms());
+        print_smp_result(chosen, limits.startTime ? limits.startTime : now_ms(), limits.multiPV);
 
     return chosen;
 }

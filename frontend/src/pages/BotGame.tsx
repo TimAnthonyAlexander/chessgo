@@ -10,8 +10,6 @@ import {
 } from '@mui/material'
 import {
     Bot,
-    ChevronFirst,
-    ChevronLast,
     ChevronLeft,
     ChevronRight,
     Flag,
@@ -81,6 +79,10 @@ import {
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 const other = (c: Color): Color => (c === 'w' ? 'b' : 'w')
+
+// Full-move rows the move list shows before it starts scrolling. Fixed (not
+// content-driven) so the right card keeps one height from move 1 to move 60.
+const MOVE_LIST_ROWS = 7
 
 // Eval-bar depth ladder: a shallow first guess lands in a few ms (so the bar
 // tracks the live position instead of lagging a full move behind), then deepens.
@@ -558,6 +560,9 @@ export default function BotGame() {
 
     return (
         <BoardPage
+            // Right card is compact by design (a fixed 7-row move list), so it shrinks
+            // to its content and centres against the board, same as LiveGame.
+            rightFit
             left={
                 <>
                     {isCrazyhouse && game && (
@@ -596,10 +601,8 @@ export default function BotGame() {
                         statusTone={statusTone}
                         error={error}
                         onSelectPly={selectPly}
-                        onFirst={goFirst}
                         onPrev={goPrev}
                         onNext={goNext}
-                        onLast={goLast}
                         onFlip={() => setFlipped((f) => !f)}
                         onToggleSound={toggleSound}
                         onUndo={undo}
@@ -728,10 +731,8 @@ function MovePanel({
     statusTone,
     error,
     onSelectPly,
-    onFirst,
     onPrev,
     onNext,
-    onLast,
     onFlip,
     onToggleSound,
     onUndo,
@@ -757,10 +758,8 @@ function MovePanel({
     statusTone: StatusTone
     error: string | null
     onSelectPly: (p: number) => void
-    onFirst: () => void
     onPrev: () => void
     onNext: () => void
-    onLast: () => void
     onFlip: () => void
     onToggleSound: () => void
     onUndo: () => void
@@ -782,6 +781,9 @@ function MovePanel({
     // (so it tracks history review, like the eval bar). `captured(c)` = the pieces
     // color `c` has taken (its opponent's color); `advantage(c)` = c's point lead.
     const mat = useMemo(() => computeMaterial(bestFen), [bestFen])
+    // Whether the shown ply is the live position — disables "Next" in the control
+    // row below (mirrors LiveGame's atLive).
+    const atLive = shownPly === game.moves.length
     // Single-key subscriptions — only re-render this panel when one of these
     // preferences itself changes.
     const showCaptured = useSetting('showCaptured')
@@ -839,7 +841,10 @@ function MovePanel({
     return (
         <Box
             sx={{
-                flex: 1,
+                // Sized by its content (the 7-row move list plus the header and
+                // controls), NOT stretched to the column: the column is `rightFit`
+                // and centres this card against the board, same as LiveGame.
+                flex: '0 0 auto',
                 minHeight: 0,
                 display: 'flex',
                 flexDirection: 'column',
@@ -848,6 +853,8 @@ function MovePanel({
                 borderRadius: 'var(--panel-radius)',
                 overflow: 'hidden',
                 boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+                alignSelf: { md: 'stretch' },
+                width: '100%',
             }}
         >
             {/* Opponent */}
@@ -894,13 +901,52 @@ function MovePanel({
 
             {error && <ErrorBanner>{error}</ErrorBanner>}
 
-            {/* Move grid (fills the panel). Hidden by preference keeps the nav
-                controls below — a flex spacer holds the footer at the bottom. */}
-            {showMoveList ? (
-                <MoveList fill moves={game.moves} currentPly={shownPly} onSelectPly={onSelectPly} />
-            ) : (
-                <Box sx={{ flex: 1, minHeight: 0 }} />
+            {/* Moves — a FIXED 7 rows: padded with empty rows when the game is shorter
+                and scrolling once it's longer, so the panel height never jumps mid-game.
+                Hidden entirely when the showMoveList preference is off. */}
+            {showMoveList && (
+                <MoveList
+                    visibleRows={MOVE_LIST_ROWS}
+                    moves={game.moves}
+                    currentPly={shownPly}
+                    onSelectPly={onSelectPly}
+                />
             )}
+
+            {/* Board + history controls, directly under the move list: flip and
+                sound, then step back/forward through the game — the same handlers
+                the arrow keys (useMoveNavKeys) use, so the two paths can't diverge. */}
+            <Box
+                sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1,
+                    px: 1.25,
+                    py: 0.75,
+                    borderTop: '1px solid var(--line-soft)',
+                    bgcolor: 'var(--bg-2)',
+                }}
+            >
+                <NavBtn small label="Flip board" onClick={onFlip}>
+                    <FlipVertical2 size={18} />
+                </NavBtn>
+                <NavBtn small label={sound ? 'Mute' : 'Unmute'} onClick={onToggleSound}>
+                    {sound ? <Volume2 size={18} /> : <VolumeX size={18} />}
+                </NavBtn>
+                <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
+                    <NavBtn
+                        small
+                        label="Previous move"
+                        onClick={onPrev}
+                        disabled={shownPly === 0}
+                    >
+                        <ChevronLeft size={18} />
+                    </NavBtn>
+                    <NavBtn small label="Next move" onClick={onNext} disabled={atLive}>
+                        <ChevronRight size={18} />
+                    </NavBtn>
+                </Box>
+            </Box>
 
             {/* Opening name (+ candidate lines) for the live position. Standard-rules
                 AND alternating only (the explorer/engine only understand standard,
@@ -944,28 +990,6 @@ function MovePanel({
                     >
                         {caption}
                     </Typography>
-                </Box>
-
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                    <NavBtn label="First move" onClick={onFirst} grow>
-                        <ChevronFirst size={21} />
-                    </NavBtn>
-                    <NavBtn label="Previous" onClick={onPrev} grow>
-                        <ChevronLeft size={21} />
-                    </NavBtn>
-                    <NavBtn label="Next" onClick={onNext} grow>
-                        <ChevronRight size={21} />
-                    </NavBtn>
-                    <NavBtn label="Latest" onClick={onLast} grow>
-                        <ChevronLast size={21} />
-                    </NavBtn>
-                    <Box sx={{ width: '1px', height: 26, bgcolor: 'var(--line)', mx: 0.5 }} />
-                    <NavBtn label="Flip board" onClick={onFlip}>
-                        <FlipVertical2 size={19} />
-                    </NavBtn>
-                    <NavBtn label={sound ? 'Mute' : 'Unmute'} onClick={onToggleSound}>
-                        {sound ? <Volume2 size={19} /> : <VolumeX size={19} />}
-                    </NavBtn>
                 </Box>
 
                 {isAdmin && (
@@ -1175,7 +1199,12 @@ function Setup({
             <Box>
                 <Label>Mode</Label>
                 <Box sx={{ mt: 1 }}>
-                    <VariantPicker value={variant} onChange={onVariant} disabled={creating} />
+                    <VariantPicker
+                        value={variant}
+                        onChange={onVariant}
+                        disabled={creating}
+                        layout="menu"
+                    />
                 </Box>
             </Box>
 

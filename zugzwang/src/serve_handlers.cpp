@@ -7,7 +7,6 @@
 #include "rules.h"
 #include "rating.h"
 #include "search.h"
-#include "eval.h"
 #include "movegen.h"
 #include "sf_uci.h"
 #include <algorithm>
@@ -138,88 +137,104 @@ std::map<std::string, uint64_t> run_perft_divide(Position& pos, int depth, uint6
     return out;
 }
 
-// ---- /candidates full-strength MultiPV (every legal move, no weakening) ----
+// ---- full-strength MultiPV lines (shared by /bestmove and /candidates) ----
 
-struct CandidateLine {
+// One reported analysis line, already rendered into wire types. `evalObj`/
+// `depth` come from the BOOK for the book line and from the engine for the
+// rest, deliberately un-normalized — see analysis_lines() for why the two are
+// not made comparable.
+struct AnalysisLine {
     Move move = MOVE_NONE;
-    int score = 0;
+    json evalObj;
+    std::vector<std::string> pv; // UCI, pv[0] == move
     int depth = 0;
-    std::vector<Move> pv;
 };
 
-// Full-strength eval of every legal move at `pos`, ranked best-first. Mirrors
-// searcher.MultiPV's MEANING (independent per-move search, best-first, PV =
-// [move, ...continuation]); the mechanism differs from gomachine's single
-// negamax-per-move call — see rating.cpp's root_scores doc for why (no
-// exported fixed-depth negamax entry point here, only the full
-// iterative-deepening Search::start). depth<=0 with movetime>0 splits the
-// budget evenly across the legal moves (gomachine instead shares one
-// iterative-deepening pass with a global time budget across all moves at
-// once — a real but reasonable engineering deviation for Wave 1; see report).
-std::vector<CandidateLine> multi_pv(Search::SearchGroup& group, Position& pos, int depth, int movetimeMs, int topN = 0) {
-    MoveList ml;
-    Rules::generate_legal(pos, ml);
+// Top-`n` lines for `pos`, best first, from ONE MultiPV search
+// (Search::Limits::multiPV — SF's root-move + pvIdx loop, ~sf18-arm/src/
+// search.cpp:341-383). Every engine line completes at the SAME iterative-
+// deepening depth, which is the entire point: the predecessor here ran one
+// independent start_group() PER MOVE behind a static-eval prefilter, so the
+// lines landed at different depths, the evals were not comparable to each
+// other or to the eval bar, and a mate that hangs material (Be5# in
+// r4rk1/ppq2pBp/2pbp3/8/2B5/2nP3P/PPPnRP2/6RK w - -) was prefiltered out
+// before it was ever searched. The real search finds mates because it
+// searches.
+//
+// THE BOOK OUTRANKS THE ENGINE'S OWN LINES. book.bin is not an opening book in
+// the usual "master-game popularity" sense: it is a Stockfish-computed
+// best-move cache — hours of search per entry, storing {score, mate, depth,
+// pv} — and it is worth roughly 100 Elo over our own search. Those ARE the
+// best moves, so a book hit IS line 1, carrying the book's own eval, pv and
+// depth, and is never re-ranked against engine scores (which would demote it
+// on nothing but our own shallower opinion). The book move is then dropped
+// from the engine's lines so that no first move appears twice.
+std::vector<AnalysisLine> analysis_lines(Search::SearchGroup& group, Position& pos, Search::Limits lim, int n) {
+    n = std::max(1, n);
 
-    int perMoveTimeMs = 0;
-    int n = std::max<int>(1, static_cast<int>(ml.size()));
-    if (depth <= 0) {
-        perMoveTimeMs = std::max(5, movetimeMs / n);
-    } else {
-        if (movetimeMs > 0) {
-            perMoveTimeMs = std::max(10, movetimeMs / n);
+    Move bookMove = MOVE_NONE;
+    const Book::BookEntry* bookEntry = nullptr;
+    if (Book::shared().loaded()) {
+        if (const Book::BookEntry* e = Book::shared().lookup(Book::book_key(pos)); e && !e->pv.empty()) {
+            // Movegen-validated, so a stale record can't yield an illegal move.
+            if (Move bm = Rules::parse_uci_move(pos, e->pv[0]); bm != MOVE_NONE) {
+                bookMove = bm;
+                bookEntry = e;
+            }
         }
     }
 
-    // Pre-score every legal move with a cheap static eval so we only deep-search
-    // the most promising ones — not all 20-40 moves.
-    struct ScoredMove { Move move; int score; };
-    std::vector<ScoredMove> scored;
-    scored.reserve(ml.size());
-    for (const ExtMove& em : ml) {
-        StateInfo st;
-        pos.do_move(em.move, st);
-        scored.push_back({em.move, -Eval::evaluate(pos)});
-        pos.undo_move(em.move);
+    // One search at multiPV = n. Worst case the book move is NOT among the n
+    // engine lines, leaving n of them after the drop; we take n-1 and prepend
+    // the book line, so n is always enough — no need to over-request.
+    lim.silent = true;
+    lim.multiPV = n;
+    Search::Result r = Search::start_group(group, pos, lim);
+
+    // The book decides the ORDER; the engine supplies the NUMBERS. Line 1 is the
+    // book move, but rendered with the engine's own eval/pv/depth whenever the
+    // engine searched it too (it nearly always does — book moves are strong). A
+    // list that mixes the book's depth-22 Stockfish score with depth-12 engine
+    // scores is not internally comparable and routinely renders line 1 as "worse"
+    // than line 2, which reads as a broken board. This is also what the predecessor
+    // did ("the book move gets an engine search too so its eval is at the same
+    // depth as the other lines") — worth preserving.
+    //
+    // The book's own eval is NOT discarded: /bestmove reports it as the top-level
+    // eval (the eval bar), where it is the better number and has nothing to be
+    // compared against. Only the multi-line list is normalized to one source.
+    const Search::Line* bookLine = nullptr;
+    if (bookMove != MOVE_NONE)
+        for (const Search::Line& l : r.lines)
+            if (!l.pv.empty() && l.pv[0] == bookMove) { bookLine = &l; break; }
+
+    std::vector<AnalysisLine> out;
+    out.reserve(n);
+    if (bookEntry) {
+        // Fallback to the book's own record when the move is somehow absent from the
+        // engine's n lines, so line 1 is populated in every case.
+        if (bookLine) out.push_back({bookMove, eval_json(bookLine->score), uci_pv(bookLine->pv), bookLine->depth});
+        else          out.push_back({bookMove, book_eval_json(*bookEntry), bookEntry->pv, bookEntry->depth});
     }
-    std::stable_sort(scored.begin(), scored.end(),
-        [](const ScoredMove& a, const ScoredMove& b) { return a.score > b.score; });
-
-    // Only search the top candidates — the rest are noise. When topN is given,
-    // use it; otherwise search all (backward-compatible for the opening explorer).
-    int searchCount = topN > 0 ? std::min(topN, static_cast<int>(scored.size())) : static_cast<int>(scored.size());
-
-    std::vector<CandidateLine> out;
-    out.reserve(searchCount);
-    for (int i = 0; i < searchCount; ++i) {
-        Move m = scored[i].move;
-        StateInfo st;
-        pos.do_move(m, st);
-
-        CandidateLine line;
-        line.move = m;
-        if (depth > 0 && depth - 1 <= 0) {
-            line.score = scored[i].score; // reuse static eval
-            line.depth = 1;
-            line.pv = {m};
-        } else {
-            Search::Limits lim;
-            lim.silent = true;
-            if (depth > 0) lim.depth = depth - 1;
-            if (perMoveTimeMs > 0) lim.movetime = perMoveTimeMs;
-            Search::Result r = Search::start_group(group, pos, lim);
-            line.score = -r.score;
-            line.depth = r.depth + 1;
-            line.pv.push_back(m);
-            for (Move pm : r.pv) line.pv.push_back(pm);
-        }
-
-        pos.undo_move(m);
-        out.push_back(std::move(line));
+    for (const Search::Line& l : r.lines) {
+        if (static_cast<int>(out.size()) >= n) break;
+        if (l.pv.empty() || l.pv[0] == bookMove) continue;
+        out.push_back({l.pv[0], eval_json(l.score), uci_pv(l.pv), l.depth});
     }
-
-    std::stable_sort(out.begin(), out.end(),
-                      [](const CandidateLine& a, const CandidateLine& b) { return a.score > b.score; });
     return out;
+}
+
+// {"eco","name"} of the opening the move `m` LEADS TO — the deepest named
+// position along baseKeys (root->pos, inclusive) plus m's child key. Pure book
+// lookup, no search. Mirrors gomachine's per-candidate naming in
+// handleCandidates. `pos` is restored before returning.
+json line_opening_json(const std::vector<uint64_t>& baseKeys, Position& pos, Move m) {
+    std::vector<uint64_t> childKeys = baseKeys;
+    StateInfo st;
+    pos.do_move(m, st);
+    childKeys.push_back(Book::book_key(pos));
+    pos.undo_move(m);
+    return opening_json(childKeys);
 }
 
 } // namespace
@@ -343,7 +358,8 @@ json best_move(const json& body) {
     // same for every branch below (book-hit, weakened, and full-strength),
     // mirrors gomachine's openingFor(pos, req.History) being called with the
     // same `pos`/`req.History` at all three call sites in handleBestMove.
-    json openingResp = opening_json(opening_key_line(historyFens, pos));
+    std::vector<uint64_t> baseKeys = opening_key_line(historyFens, pos);
+    json openingResp = opening_json(baseKeys);
     json limits = body.value("limits", json::object());
 
     bool worst = jbool(limits, "worst");
@@ -434,8 +450,9 @@ json best_move(const json& body) {
     }
 
     // Opening book: serve a precomputed result instantly for full-strength
-    // analysis (no rating/level/worst). Skip when multipv > 1 — the book has
-    // one move; multi-PV needs a real search for all N lines.
+    // analysis (no rating/level/worst). Skip when multipv > 1 — the book has one
+    // move; the multi-PV branch below still puts it first, it just has to search
+    // for lines 2..N as well, so it can't short-circuit here.
     if (multipv <= 1 && Book::shared().loaded()) {
         if (const Book::BookEntry* e = Book::shared().lookup(Book::book_key(pos));
             e && !e->pv.empty()) {
@@ -468,73 +485,50 @@ json best_move(const json& body) {
         lim.movetime = 1000;
     }
     if (multipv > 1) {
-        // Multi-PV: line 1 from the opening book when available (the move is
-        // precomputed), lines 2-N from the engine. The book move gets an engine
-        // search too so its eval is at the same depth as the other lines.
+        // Multi-PV: ONE search at multiPV = N (so every engine line lands at the
+        // same depth), book-first — see analysis_lines() for the book rationale.
+        std::vector<AnalysisLine> cands = analysis_lines(group, pos, lim, multipv);
+        if (cands.empty()) {
+            return json{{"bestmove", nullptr}, {"reason", "no legal moves"}};
+        }
+
         json lines = json::array();
-        Move bookMove = MOVE_NONE;
-
-        if (Book::shared().loaded()) {
-            if (const Book::BookEntry* e = Book::shared().lookup(Book::book_key(pos));
-                e && !e->pv.empty()) {
-                bookMove = Rules::parse_uci_move(pos, e->pv[0]);
-            }
-        }
-
-        int searchN = std::max(multipv * 2, 10);
-        auto cands = multi_pv(group, pos, depth, movetimeMs, searchN);
-
-        // Book move first: search it with the engine for a consistent eval, but
-        // prefer the book's longer PV (precomputed from master games).
-        if (bookMove != MOVE_NONE) {
-            for (const CandidateLine& c : cands) {
-                if (c.move == bookMove) {
-                    lines.push_back(json{
-                        {"bestmove", move_to_uci(c.move)},
-                        {"san", Rules::san(pos, c.move)},
-                        {"eval", eval_json(c.score)},
-                        {"pv", uci_pv(c.pv)},
-                        {"depth", c.depth},
-                    });
-                    break;
-                }
-            }
-            // Fallback: book move wasn't in engine candidates (shouldn't happen, but
-            // if it does, use the book data directly so line 1 isn't empty).
-            if (lines.empty()) {
-                if (const Book::BookEntry* e = Book::shared().lookup(Book::book_key(pos));
-                    e && !e->pv.empty()) {
-                    lines.push_back(json{
-                        {"bestmove", move_to_uci(bookMove)},
-                        {"san", Rules::san(pos, bookMove)},
-                        {"eval", book_eval_json(*e)},
-                        {"pv", e->pv},
-                        {"depth", e->depth},
-                    });
-                }
-            }
-        }
-
-        // Remaining lines from engine, excluding the book move (already line 1).
-        for (const CandidateLine& c : cands) {
-            if (c.move == bookMove) continue;
+        for (const AnalysisLine& c : cands) {
             lines.push_back(json{
                 {"bestmove", move_to_uci(c.move)},
                 {"san", Rules::san(pos, c.move)},
-                {"eval", eval_json(c.score)},
-                {"pv", uci_pv(c.pv)},
+                {"eval", c.evalObj},
+                {"pv", c.pv},
                 {"depth", c.depth},
+                // The opening THIS line's first move leads to (deepest match
+                // including that move) — what the analysis board's opening panel
+                // labels each move with; null when unnamed.
+                {"opening", line_opening_json(baseKeys, pos, c.move)},
             });
-            if (static_cast<int>(lines.size()) >= multipv) break;
         }
 
+        // Top-level = the eval bar. On a book hit this reports the BOOK's own
+        // Stockfish-grade eval/pv/depth rather than line 1's normalized engine
+        // numbers — the same thing the multipv<=1 short-circuit above returns, so
+        // the eval bar reads identically whether or not the caller asked for
+        // multiple lines. `lines` stays normalized for comparability; see
+        // analysis_lines().
         const json& top = lines[0];
+        json ev = top["eval"], pv = top["pv"], dep = top["depth"];
+        if (Book::shared().loaded()) {
+            if (const Book::BookEntry* e = Book::shared().lookup(Book::book_key(pos));
+                e && !e->pv.empty() && Rules::parse_uci_move(pos, e->pv[0]) != MOVE_NONE) {
+                ev = book_eval_json(*e);
+                pv = e->pv;
+                dep = e->depth;
+            }
+        }
         return json{
             {"bestmove", top["bestmove"]},
             {"san", top["san"]},
-            {"eval", top["eval"]},
-            {"pv", top["pv"]},
-            {"depth", top["depth"]},
+            {"eval", ev},
+            {"pv", pv},
+            {"depth", dep},
             {"lines", lines},
             {"opening", openingResp},
         };
@@ -558,11 +552,13 @@ json best_move(const json& body) {
     };
 }
 
-// Deliberately does NOT probe the book: gomachine's own handleCandidates
-// (server.go) never calls bookHit either — the analysis-board eval bar wants
-// a real per-move search score for EVERY legal move (including the book
-// move), not a book shortcut for just one of them. Parity means matching
-// that omission, not adding a probe gomachine itself doesn't have here.
+// The opening explorer's move list: the current line's opening name plus the
+// top-N moves, each with an eval, a PV, and the opening it leads to. Same ONE
+// MultiPV search and the same book-first rule as /bestmove's `lines` (see
+// analysis_lines) — the two endpoints must agree on line 1, they are two views
+// of the same analysis. The response schema is frozen (`{opening, moves:
+// [{uci, san, eval, pv, depth, opening}]}`): the opening explorer plus the
+// BotGame and Engine-vs-Engine panels all consume it.
 json candidates(const json& body) {
     Search::GroupLease lease;
     Search::SearchGroup& group = lease.group();
@@ -581,9 +577,10 @@ json candidates(const json& body) {
     std::vector<uint64_t> hist = Rules::history_keys(historyFens);
     Rules::seed_history(pos, hist);
 
-    int searchN = multipv > 0 ? std::max(multipv * 2, 10) : 12;
-    auto cands = multi_pv(group, pos, depth, movetimeMs, searchN);
-    if (multipv > 0 && static_cast<size_t>(multipv) < cands.size()) cands.resize(multipv);
+    Search::Limits lim;
+    lim.depth = depth;
+    lim.movetime = movetimeMs;
+    std::vector<AnalysisLine> cands = analysis_lines(group, pos, lim, multipv > 0 ? multipv : 12);
 
     // Line up to and including the current position, reused to name the
     // opening EACH candidate move leads to (deepest match including that
@@ -591,20 +588,14 @@ json candidates(const json& body) {
     std::vector<uint64_t> baseKeys = opening_key_line(historyFens, pos);
 
     json moves = json::array();
-    for (const CandidateLine& c : cands) {
-        std::vector<uint64_t> childKeys = baseKeys;
-        StateInfo st;
-        pos.do_move(c.move, st);
-        childKeys.push_back(Book::book_key(pos));
-        pos.undo_move(c.move);
-
+    for (const AnalysisLine& c : cands) {
         moves.push_back(json{
             {"uci", move_to_uci(c.move)},
             {"san", Rules::san(pos, c.move)},
-            {"eval", eval_json(c.score)},
-            {"pv", uci_pv(c.pv)},
+            {"eval", c.evalObj},
+            {"pv", c.pv},
             {"depth", c.depth},
-            {"opening", opening_json(childKeys)}, // opening this move leads to (null if unnamed)
+            {"opening", line_opening_json(baseKeys, pos, c.move)}, // opening this move leads to (null if unnamed)
         });
     }
     return json{{"opening", opening_json(baseKeys)}, {"moves", moves}};

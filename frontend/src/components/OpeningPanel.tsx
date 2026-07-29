@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Box, Tooltip, Typography } from '@mui/material'
 import { BookOpen } from 'lucide-react'
-import { candidates, type Candidates, type CandidateMove } from '../api/client'
+import {
+    candidates,
+    type AnalysisLine,
+    type Candidates,
+    type CandidateMove,
+    type Opening,
+} from '../api/client'
 import { gameOverAt, pathToNode, START_FEN, type Tree } from '../lib/analysisTree'
 import { MoveSan } from './MoveSan'
 
@@ -92,11 +98,52 @@ function useCandidates(tree: Tree, currentId: number, engineOn: boolean) {
     return { data, loading, dataFen }
 }
 
+/** A `/candidates`-shaped row's UCI field is `uci`; a multi-PV `/analyze` line
+ * calls the same thing `bestmove` (it's a root move, not literally "the
+ * candidate" — see AnalysisLine). Map to the one shape the render code below
+ * understands, so MoveRow never has to know which search produced its data. */
+function lineToCandidateMove(l: AnalysisLine): CandidateMove {
+    return {
+        uci: l.bestmove,
+        san: l.san,
+        eval: l.eval,
+        pv: l.pv,
+        depth: l.depth,
+        opening: l.opening ?? null,
+    }
+}
+
+/** Data supplied by a caller that already runs its own MultiPV search against
+ * this exact position — the Analysis board's depth ladder (`Analysis.tsx:427`,
+ * `analyze(fen, { multipv: 5 })`). Passing this in makes the panel render off
+ * THAT result instead of firing a second, independently-timed `/candidates`
+ * search that can (and did) disagree with the eval bar. See
+ * docs/tasks/open/real-multipv-root-search.md Phase 5. */
+export interface OpeningPanelExternalData {
+    // Multi-PV lines for the CURRENTLY VIEWED position. The caller is responsible
+    // for clearing this to null the instant the viewed position changes (before
+    // its own search returns) — the panel trusts a non-null value to belong to
+    // `tree`/`currentId` and does no staleness check of its own.
+    lines: AnalysisLine[] | null
+    // The current position's opening name (a separate book lookup from `lines`).
+    opening: Opening | null
+    // True while the caller's search for this position hasn't produced a result
+    // yet. Distinguishes "still searching" (show "Exploring…") from "search
+    // finished with nothing" (show "No moves") — the latter only fires against an
+    // older backend that never sends `lines` at all.
+    loading: boolean
+}
+
 /**
  * The opening explorer panel: the line's opening name (engine-classified) over a
  * list of candidate moves, each with a per-move eval bar. Everything chess here is
- * computed by the engine (`/candidates`); this component only renders and lets you
- * click a move to play it into the tree.
+ * computed by the engine; this component only renders and lets you click a move
+ * to play it into the tree.
+ *
+ * By default it fetches its own `/candidates`. If `external` is supplied (the
+ * Analysis board, which already runs a MultiPV ladder against this position), it
+ * renders off that instead and never calls `/candidates` — see
+ * {@link OpeningPanelExternalData}.
  */
 export default function OpeningPanel({
     tree,
@@ -104,6 +151,7 @@ export default function OpeningPanel({
     engineOn,
     onMove,
     onHoverMove,
+    external,
 }: {
     tree: Tree
     currentId: number
@@ -112,10 +160,31 @@ export default function OpeningPanel({
     // Hovering a candidate row reports its UCI (null on leave) so the board can
     // draw an arrow for it.
     onHoverMove?: (uci: string | null) => void
+    external?: OpeningPanelExternalData
 }) {
-    const { data, dataFen } = useCandidates(tree, currentId, engineOn)
+    // Force the internal hook's "engine off" branch when a caller supplies its
+    // own data — it becomes a no-op (no fetch, no state churn) rather than a
+    // second search racing the caller's.
+    const own = useCandidates(tree, currentId, engineOn && !external)
+
+    // The viewed position's fen, needed to classify "starting position" / "out of
+    // book" for the external path (own-fetch keeps using `own.dataFen`, its own
+    // frozen "last computed for" value, unchanged from before).
+    const viewedFen = useMemo(() => {
+        const path = pathToNode(tree, currentId)
+        return path[path.length - 1]?.fen ?? ''
+    }, [tree, currentId])
 
     if (!engineOn) return null
+
+    const usingExternal = !!external
+    const data: Candidates | null = external
+        ? external.lines && external.lines.length > 0
+            ? { opening: external.opening, moves: external.lines.slice(0, MAX_ROWS).map(lineToCandidateMove) }
+            : null
+        : own.data
+    const dataFen = external ? viewedFen : own.dataFen
+    const isLoading = external ? external.loading : own.loading
 
     // Render the LAST loaded result, with the side-to-move IT was computed for —
     // so the bars stay correct and frozen while the next call is in flight (no
@@ -197,7 +266,18 @@ export default function OpeningPanel({
                     <Typography
                         sx={{ fontSize: 12, color: 'var(--muted)', fontStyle: 'italic', px: 0.5, py: 0.75 }}
                     >
-                        {data ? 'No moves' : 'Exploring moves…'}
+                        {/* Own-fetch path: unchanged from before (always "Exploring…" until
+                            data lands). External path: "Exploring…" only while the caller's
+                            search is actually still running for this position, else a plain
+                            "No moves" — matters only against an older backend that never sends
+                            `lines` at all (see OpeningPanelExternalData.loading). */}
+                        {data
+                            ? 'No moves'
+                            : usingExternal
+                              ? isLoading
+                                  ? 'Exploring moves…'
+                                  : 'No moves'
+                              : 'Exploring moves…'}
                     </Typography>
                 ) : (
                     displayMoves.map((m) => (

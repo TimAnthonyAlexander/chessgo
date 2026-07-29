@@ -24,6 +24,12 @@ static Position pos;
 static std::thread searchThread;
 static int ttSizeMB = 128;
 static int engineThreads = 1; // UCI "Threads" option — Lazy SMP worker count (1 = single-thread)
+// UCI "MultiPV": how many principal variations `go` should report. 1 (the default) is
+// the engine's normal single-PV search — same tree, same node counts, and print_pv emits
+// the exact same info lines with no `multipv` token, so every SPRT/CCRL/fastchess run is
+// unaffected. >1 runs SF's real root MultiPV loop (search.cpp): N lines, one search, all
+// at the same depth.
+static int multiPV = 1;
 static Book::Book book;
 static bool ownBook = true;  // default-ON (2026-07-20): the +150-Elo GMBK book
                              // (book.bin → ../gomachine/data/book.bin) is used in EVERY
@@ -122,6 +128,7 @@ static void go_cmd(std::istringstream& is) {
     join_search();
     Search::Limits limits;
     limits.startTime = Search::now_ms();
+    limits.multiPV = multiPV;
     std::string token;
     while (is >> token) {
         if (token == "wtime") is >> limits.time[WHITE];
@@ -159,7 +166,11 @@ static void go_cmd(std::istringstream& is) {
         });
         return;
     }
-    if (!limits.ponderMode && try_book_move(pos)) return; // book hit: skip the search entirely (never while pondering)
+    // Book hit: skip the search entirely. Never while pondering, and never under
+    // MultiPV>1 — the book stores ONE move, and a GUI asking for N ranked lines must
+    // get a real search rather than a single line. MultiPV==1 (play, SPRTs, CCRL) is
+    // the unchanged path.
+    if (!limits.ponderMode && multiPV <= 1 && try_book_move(pos)) return;
     Search::request_stop(false);
     // Lazy SMP: start_smp runs engineThreads Contexts sharing the global TT +
     // one stop flag. engineThreads==1 delegates to the byte-identical single-
@@ -248,6 +259,7 @@ int uci_main() {
             std::cout << "id author " << ENGINE_AUTHOR << "\n";
             std::cout << "option name Hash type spin default 128 min 1 max 4096\n";
             std::cout << "option name Threads type spin default 1 min 1 max 256\n";
+            std::cout << "option name MultiPV type spin default 1 min 1 max 256\n";
             // SPSA-tunable search margins (search.cpp Tune struct; Search::set_tune_option
             // applies these on setoption). Defaults reproduce the pre-tunable literals exactly.
             std::cout << "option name RfpMargin type spin default 84 min 40 max 130\n";
@@ -407,6 +419,8 @@ int uci_main() {
                 TT.resize(ttSizeMB);
             } else if (name == "Threads") {
                 engineThreads = std::max(1, std::min(256, std::stoi(value)));
+            } else if (name == "MultiPV") {
+                multiPV = std::max(1, std::min(256, std::stoi(value)));
             } else if (name == "OwnBook") {
                 ownBook = (value == "true");
             } else if (name == "UCI_LimitStrength") {

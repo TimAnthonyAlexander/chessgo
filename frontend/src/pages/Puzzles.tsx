@@ -555,6 +555,11 @@ export default function Puzzles() {
 
     return (
         <BoardPage
+            // The right column is a stack of naturally-sized cards (status, optional
+            // board actions, optional history, optional error) — never a fixed-height
+            // panel — so it shrinks to its content and centres against the board
+            // instead of standing full board-height with an empty tail below it.
+            rightFit
             left={
                 <Box sx={{ display: { xs: 'none', md: 'block' } }}>
                     <RunningAside

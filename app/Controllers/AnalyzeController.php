@@ -13,8 +13,16 @@ use App\Services\AnticheatService;
  * FEN, returns the engine's best move + evaluation at full power, regardless of
  * any game's bot difficulty.
  *
- *   POST /analyze   { fen: "<FEN>", movetime?: <ms>, depth?: <ply> }
- *   → { eval: {type:"cp"|"mate", value}, bestmove, pv: [uci...], depth }
+ *   POST /analyze   { fen, movetime?: <ms>, depth?: <ply>, multipv?, history?: ["<FEN>"...] }
+ *   → { eval: {type:"cp"|"mate", value}, bestmove, pv: [uci...], depth, opening, lines }
+ *
+ * `history` is the prior-position FENs (root→previous). It buys no search
+ * strength — it is what lets the engine NAME the opening (its native-Zobrist
+ * table resolves the DEEPEST named position along the line, the Lichess rule),
+ * both for the position itself (`opening`) and for each `lines[]` entry (the
+ * opening that line's first move leads to). Mirrors CandidatesController's
+ * `history`; the analysis board now gets the move list off this one search
+ * instead of a second /candidates call.
  *
  * `pv` is the principal variation (the engine's predicted best line) as UCI
  * moves from this position, used by the analysis board's engine line. `movetime`
@@ -40,6 +48,9 @@ class AnalyzeController extends Controller
 
     public int $multipv = 0;
 
+    /** @var array<int, mixed> Prior-position FENs, root→previous (opening naming only). */
+    public array $history = [];
+
     public function __construct(
         private readonly EngineSelector $engine,
         private readonly AnticheatService $anticheat,
@@ -50,6 +61,7 @@ class AnalyzeController extends Controller
     {
         $this->validate([
             'fen' => 'required|string',
+            'history' => 'array',
         ]);
 
         // Anti-cheat: a logged-in user analyzing a position while they have a live
@@ -69,13 +81,17 @@ class AnalyzeController extends Controller
             ? ($depth > 0 ? max(500, min(45000, $this->movetime)) : max(50, min(2000, $this->movetime)))
             : ($depth > 0 ? 4000 : 1500);
         $multipv = $this->multipv > 0 ? min(12, $this->multipv) : 0;
-        $res = $this->engine->analyze($this->fen, $movetime, $depth, $multipv);
+        // Coerce to a clean list of FEN strings — the engine skips any entry it
+        // can't parse, so a junk element degrades the opening NAME, never the search.
+        $history = array_values(array_map('strval', $this->history));
+        $res = $this->engine->analyze($this->fen, $movetime, $depth, $multipv, $history);
 
         return JsonResponse::ok([
             'eval' => $res['eval'] ?? null,
             'bestmove' => $res['bestmove'] ?? null,
             'pv' => $res['pv'] ?? null,
             'depth' => $res['depth'] ?? null,
+            'opening' => $res['opening'] ?? null,
             'lines' => $res['lines'] ?? null,
         ]);
     }

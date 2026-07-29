@@ -134,9 +134,16 @@ class EngineSelector extends GomachineClient
     }
 
     #[Override]
-    public function analyze(string $fen, int $movetimeMs = 1500, int $depth = 0, int $multipv = 0): array
-    {
-        return $this->primaryOnly(static fn (GomachineClient $c): array => $c->analyze($fen, $movetimeMs, $depth, $multipv));
+    public function analyze(
+        string $fen,
+        int $movetimeMs = 1500,
+        int $depth = 0,
+        int $multipv = 0,
+        array $history = [],
+    ): array {
+        return $this->primaryOnly(
+            static fn (GomachineClient $c): array => $c->analyze($fen, $movetimeMs, $depth, $multipv, $history),
+        );
     }
 
     #[Override]

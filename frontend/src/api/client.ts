@@ -213,6 +213,7 @@ export interface Analysis {
     bestmove: string | null
     pv: string[] | null // principal variation (best line) as UCI moves from the position
     depth: number | null
+    opening?: Opening | null // the CURRENT position's opening (pure book lookup, no search)
     lines?: AnalysisLine[] // multi-PV lines when multipv > 1, same depth as the main result
 }
 
@@ -222,6 +223,7 @@ export interface AnalysisLine {
     eval: { type: 'cp' | 'mate'; value: number }
     pv: string[]
     depth: number
+    opening?: Opening | null // the opening this move leads to (book lookup, null if unnamed)
 }
 
 /** Full-strength evaluation of a position (drives the eval bar, level-independent).
@@ -238,12 +240,19 @@ export interface AnalysisLine {
  */
 export function analyze(
     fen: string,
-    opts?: { movetime?: number; depth?: number; multipv?: number; signal?: AbortSignal },
+    opts?: {
+        movetime?: number
+        depth?: number
+        multipv?: number
+        history?: string[] // prior-position FENs (root→previous), for deepest-match opening naming
+        signal?: AbortSignal
+    },
 ): Promise<Analysis> {
-    const body: { fen: string; movetime?: number; depth?: number; multipv?: number } = { fen }
+    const body: { fen: string; movetime?: number; depth?: number; multipv?: number; history?: string[] } = { fen }
     if (opts?.movetime) body.movetime = opts.movetime
     if (opts?.depth) body.depth = opts.depth
     if (opts?.multipv) body.multipv = opts.multipv
+    if (opts?.history && opts.history.length > 0) body.history = opts.history
     // `signal` lets a caller abort an in-flight request when it's no longer wanted —
     // the analysis board cancels the previous position's deepening when you move, so
     // the trailing deep call doesn't hog a browser connection / engine worker.
