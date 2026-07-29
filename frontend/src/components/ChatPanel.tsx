@@ -34,6 +34,7 @@ export default function ChatPanel({
     return (
         <Box
             sx={{
+                // Fills whatever the cards above it leave in the column.
                 flex: 1,
                 minHeight: 0,
                 display: 'flex',
@@ -88,15 +89,9 @@ export default function ChatPanel({
                     '&:focus-visible': { outline: '2px solid #5a6bd8', outlineOffset: '-2px' },
                 }}
             >
-                {messages.length === 0 ? (
-                    <Typography
-                        sx={{ fontSize: 12.5, color: 'var(--muted)', textAlign: 'center', mt: 1 }}
-                    >
-                        Say hello — be nice.
-                    </Typography>
-                ) : (
-                    messages.map((m) => <ChatLine key={m.id} m={m} />)
-                )}
+                {messages.map((m) => (
+                    <ChatLine key={m.id} m={m} />
+                ))}
                 <div ref={endRef} />
             </Box>
 

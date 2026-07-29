@@ -156,8 +156,11 @@ export function ActionBtn({
                 '&:active': { transform: disabled ? 'none' : 'translateY(1px)' },
             }}
         >
-            {icon}
-            {label}
+            {/* The icon never shrinks — as a bare flex child it would be the thing
+                that gives when the label is long, and a squashed icon reads as broken.
+                The label ellipsises instead, which is the correct thing to lose. */}
+            {icon && <Box sx={{ display: 'flex', flexShrink: 0 }}>{icon}</Box>}
+            <Box sx={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</Box>
         </Box>
     )
 }

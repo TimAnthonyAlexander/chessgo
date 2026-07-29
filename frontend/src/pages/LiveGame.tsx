@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Button, type SxProps, type Theme, Typography } from '@mui/material'
 import {
     Check,
+    ChevronLeft,
+    ChevronRight,
     Flag,
     FlipVertical2,
     Handshake,
@@ -42,7 +44,7 @@ import { parsePocket } from '../lib/variants'
 import { useMoveNavKeys } from '../lib/useMoveNavKeys'
 import { applyUciVisually, type BoardMap, type Square, parseFen } from '../lib/chess'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
-import { type Variant, VARIANT_LABEL } from '../lib/variants'
+import { type Variant } from '../lib/variants'
 import { authStore, useAuth } from '../lib/auth'
 import { usePrefs, useSetting } from '../lib/settings'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -447,9 +449,10 @@ export default function LiveGame() {
 
     return (
         <BoardPage
-            // The move list is a fixed 7 rows, so the right card is compact by
-            // design — let the column shrink to it and centre against the board
-            // instead of standing board-height with an empty tail below.
+            // Right card is compact by design (a fixed 7-row move list), so it shrinks
+            // to its content and centres against the board. The LEFT column stays full
+            // board-height with the chat filling whatever the cards above it leave —
+            // Lichess's live layout.
             rightFit
             left={
                 <>
@@ -510,72 +513,6 @@ export default function LiveGame() {
                         width: '100%',
                     }}
                 >
-                    {/* Pool + rated badge */}
-                    <Box
-                        sx={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 1,
-                            px: 1.75,
-                            py: 1.25,
-                            bgcolor: 'var(--bg-2)',
-                            borderBottom: '1px solid var(--line-soft)',
-                        }}
-                    >
-                        <Typography
-                            sx={{
-                                fontFamily: 'var(--font-mono)',
-                                fontSize: 12.5,
-                                color: 'var(--text-dim)',
-                            }}
-                        >
-                            {g.pool}
-                        </Typography>
-                        {g.variant !== 'standard' && (
-                            <Box
-                                sx={{
-                                    px: 1,
-                                    py: 0.3,
-                                    borderRadius: '6px',
-                                    fontFamily: 'var(--font-mono)',
-                                    fontSize: 10.5,
-                                    fontWeight: 700,
-                                    letterSpacing: '0.1em',
-                                    textTransform: 'uppercase',
-                                    color: 'var(--accent)',
-                                    bgcolor: 'var(--accent-soft)',
-                                    border: '1px solid var(--accent-line)',
-                                }}
-                            >
-                                {VARIANT_LABEL[g.variant]}
-                            </Box>
-                        )}
-                        <Box
-                            sx={{
-                                ml: 'auto',
-                                px: 1,
-                                py: 0.3,
-                                borderRadius: '6px',
-                                fontSize: 10.5,
-                                fontWeight: 700,
-                                letterSpacing: '0.1em',
-                                textTransform: 'uppercase',
-                                border: '1px solid',
-                                color: g.rated ? 'var(--accent)' : 'var(--text-dim)',
-                                bgcolor: g.rated ? 'var(--accent-soft)' : 'transparent',
-                                borderColor: g.rated ? 'var(--accent-line)' : 'var(--line)',
-                            }}
-                        >
-                            {g.rated ? 'Rated' : 'Casual'}
-                        </Box>
-                        <NavBtn small label="Flip board" onClick={() => setFlipped((f) => !f)}>
-                            <FlipVertical2 size={18} />
-                        </NavBtn>
-                        <NavBtn small label={sound ? 'Mute' : 'Unmute'} onClick={toggleSound}>
-                            {sound ? <Volume2 size={18} /> : <VolumeX size={18} />}
-                        </NavBtn>
-                    </Box>
-
                     {/* Opponent */}
                     <PlayerBar
                         name={g.opponent.name}
@@ -630,26 +567,40 @@ export default function LiveGame() {
                         />
                     )}
 
-                    {/* Admin-only: engine best move toggle for the current position */}
-                    {isAdmin && (
-                        <Box
-                            sx={{
-                                px: 1.25,
-                                py: 0.75,
-                                borderTop: '1px solid var(--line-soft)',
-                                bgcolor: 'var(--bg-2)',
-                            }}
-                        >
-                            <AdminBestMove
-                                fen={g.fen}
-                                myTurn={!g.ended && g.sideToMove === g.color}
-                                isDuck={isDuck}
-                                isAntichess={isAntichess}
-                                duck={g.duck ?? null}
-                                onHint={setBestHint}
-                            />
+                    {/* Board + history controls, directly under the move list: flip and
+                        sound, then step back/forward through the game — the same
+                        handlers the arrow keys use, so the two paths can't diverge. */}
+                    <Box
+                        sx={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 1,
+                            px: 1.25,
+                            py: 0.75,
+                            borderTop: '1px solid var(--line-soft)',
+                            bgcolor: 'var(--bg-2)',
+                        }}
+                    >
+                        <NavBtn small label="Flip board" onClick={() => setFlipped((f) => !f)}>
+                            <FlipVertical2 size={18} />
+                        </NavBtn>
+                        <NavBtn small label={sound ? 'Mute' : 'Unmute'} onClick={toggleSound}>
+                            {sound ? <Volume2 size={18} /> : <VolumeX size={18} />}
+                        </NavBtn>
+                        <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
+                            <NavBtn
+                                small
+                                label="Previous move"
+                                onClick={goPrev}
+                                disabled={shownPly === 0}
+                            >
+                                <ChevronLeft size={18} />
+                            </NavBtn>
+                            <NavBtn small label="Next move" onClick={goNext} disabled={atLive}>
+                                <ChevronRight size={18} />
+                            </NavBtn>
                         </Box>
-                    )}
+                    </Box>
 
                     {/* Draw / takeback / resign while playing, or the result when over */}
                     {!g.ended ? (
@@ -677,12 +628,22 @@ export default function LiveGame() {
                                     onDecline={() => gameSocket.respondTakeback(false)}
                                 />
                             )}
-                            <Box sx={{ display: 'flex', gap: 1 }}>
+                            {/* Draw / takeback / resign as equal thirds. `flex: 1` +
+                                `minWidth: 0` on each child so the three stay exactly
+                                even regardless of label length ("Requested…" is much
+                                wider than "Draw"). */}
+                            <Box
+                                sx={{
+                                    display: 'flex',
+                                    gap: 1,
+                                    '& > *': { flex: 1, minWidth: 0 },
+                                }}
+                            >
                                 {g.drawOffer === 'mine' ? (
                                     <ActionBtn
                                         tone="neutral"
                                         icon={<Handshake size={15} />}
-                                        label="Offered…"
+                                        label="Cancel"
                                         onClick={() => gameSocket.cancelDraw()}
                                     />
                                 ) : (
@@ -698,31 +659,31 @@ export default function LiveGame() {
                                     <ActionBtn
                                         tone="neutral"
                                         icon={<Undo2 size={15} />}
-                                        label="Requested…"
+                                        label="Cancel"
                                         onClick={() => gameSocket.cancelTakeback()}
                                     />
                                 ) : (
                                     <ActionBtn
                                         tone="neutral"
                                         icon={<Undo2 size={15} />}
-                                        label="Takeback"
+                                        label="Undo"
                                         onClick={() => gameSocket.offerTakeback()}
                                         disabled={
                                             g.takebackOffer === 'theirs' || g.moves.length === 0
                                         }
                                     />
                                 )}
+                                <ActionBtn
+                                    tone="danger"
+                                    icon={<Flag size={15} />}
+                                    label="Resign"
+                                    onClick={() =>
+                                        prefs.confirmResign
+                                            ? setConfirmResignOpen(true)
+                                            : gameSocket.resign()
+                                    }
+                                />
                             </Box>
-                            <ActionBtn
-                                tone="danger"
-                                icon={<Flag size={15} />}
-                                label="Resign"
-                                onClick={() =>
-                                    prefs.confirmResign
-                                        ? setConfirmResignOpen(true)
-                                        : gameSocket.resign()
-                                }
-                            />
                         </Box>
                     ) : (
                         <Box
@@ -847,6 +808,28 @@ export default function LiveGame() {
                                     }
                                 />
                             )}
+                        </Box>
+                    )}
+
+                    {/* Admin-only: engine best move toggle for the current position.
+                        Sits below the action row so it never pushes the buttons around. */}
+                    {isAdmin && (
+                        <Box
+                            sx={{
+                                px: 1.25,
+                                py: 0.75,
+                                borderTop: '1px solid var(--line-soft)',
+                                bgcolor: 'var(--bg-2)',
+                            }}
+                        >
+                            <AdminBestMove
+                                fen={g.fen}
+                                myTurn={!g.ended && g.sideToMove === g.color}
+                                isDuck={isDuck}
+                                isAntichess={isAntichess}
+                                duck={g.duck ?? null}
+                                onHint={setBestHint}
+                            />
                         </Box>
                     )}
 

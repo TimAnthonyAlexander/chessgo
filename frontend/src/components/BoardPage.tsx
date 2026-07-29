@@ -65,12 +65,21 @@ interface BoardPageProps {
      *  The column keeps its fixed WIDTH and its board-height CAP either way, so the
      *  board still can't be moved or resized by what's in here. */
     rightFit?: boolean
+    /** Same, for the left column. */
+    leftFit?: boolean
     /** Optional eval bar, floated flush against the board's left edge without taking
      *  any layout width — so it never resizes or shifts the board. */
     evalBar?: ReactNode
 }
 
-export default function BoardPage({ children, left, right, evalBar, rightFit }: BoardPageProps) {
+export default function BoardPage({
+    children,
+    left,
+    right,
+    evalBar,
+    rightFit,
+    leftFit,
+}: BoardPageProps) {
     return (
         <Box
             sx={{
@@ -104,7 +113,12 @@ export default function BoardPage({ children, left, right, evalBar, rightFit }: 
                     The board keeps its reserved margin either way, so it never moves —
                     only the card shifts, and toggling a page's bar on/off slides just
                     this card, never the board. */}
-                <SideColumn order={{ xs: 3, md: 0 }} shiftRight={evalBar ? 0 : GAP_EVAL_EXTRA}>
+                <SideColumn
+                    order={{ xs: 3, md: 0 }}
+                    shiftRight={evalBar ? 0 : GAP_EVAL_EXTRA}
+                    fit={leftFit}
+                    fitAlign="start"
+                >
                     {left}
                 </SideColumn>
 
@@ -176,6 +190,7 @@ function SideColumn({
     order,
     shiftRight = 0,
     fit = false,
+    fitAlign = 'center',
 }: {
     children?: ReactNode
     order: { xs: number; md: number }
@@ -188,6 +203,9 @@ function SideColumn({
     // the column still can never grow the grid row — the board stays put either way.
     // Desktop only; on mobile the column is full-width and stacks as before.
     fit?: boolean
+    // Where a `fit` column sits against the board: centred, or aligned to the board's
+    // top edge. Only meaningful when `fit` is set.
+    fitAlign?: 'start' | 'center'
 }) {
     return (
         <Box
@@ -197,8 +215,8 @@ function SideColumn({
                 height: fit ? undefined : { md: BOARD_SIZE },
                 maxHeight: fit ? { md: BOARD_SIZE } : undefined,
                 // `alignItems: 'start'` on the grid keeps every other column top-aligned;
-                // this one opts into being centred on its own.
-                alignSelf: fit ? { md: 'center' } : undefined,
+                // a fit column opts into its own alignment via `fitAlign`.
+                alignSelf: fit ? { md: fitAlign } : undefined,
                 // Only bites if a fit column's content somehow exceeds the board height —
                 // it scrolls internally rather than stretching the row.
                 overflowY: fit ? { md: 'auto' } : undefined,
