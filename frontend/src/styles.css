@@ -33,6 +33,14 @@
     --eval-white: #f3eee2; /* eval-bar white share */
     --eval-black: #191c22; /* eval-bar black share */
 
+    /* Corner radius for the cards that flank the board (the BoardPage side columns).
+       (see the clock-bar-pulse keyframes below the :root block for the running-clock line)
+       Kept close to the board's own 5px (see .board in Board.css) so a panel sitting
+       beside the board reads as part of the same object rather than a rounder card
+       floating next to it. There is no site-wide radius scale — radii are per
+       component — so this token covers the board pages only, deliberately. */
+    --panel-radius: 9px;
+
     /* Board — Lichess-style cool grey-blue two-tone */
     --board-light: #dde2e6;
     --board-dark: #8198a6;
@@ -107,6 +115,29 @@ body {
 a {
     color: inherit;
     text-decoration: none;
+}
+
+/* The remaining-time line under the RUNNING side's player row breathes gently, so
+   whose clock is actually counting reads from the bar alone, without adding a second
+   decorative element. Deliberately shallow (never fully fades) and slow: it should
+   register in peripheral vision, not pull the eye off the board. Only ever applied to
+   the side that is both active and running — a still bar means a stopped clock, which
+   is information, so this is not decoration.
+   Honoured against prefers-reduced-motion below. */
+@keyframes clock-bar-pulse {
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.6;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .clock-bar-pulse {
+        animation: none !important;
+    }
 }
 
 /* Visually hidden but still readable by screen readers — for aria-live

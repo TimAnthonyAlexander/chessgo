@@ -398,7 +398,7 @@ function Card({ children, sx }: { children: React.ReactNode; sx?: object }) {
             sx={{
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: '14px',
+                borderRadius: 'var(--panel-radius)',
                 p: 1.75,
                 display: 'flex',
                 flexDirection: 'column',

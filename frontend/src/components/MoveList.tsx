@@ -12,7 +12,13 @@ interface MoveListProps {
     startPly?: number // half-moves already played before moves[0] (mid-game seed); numbers/columns shift accordingly
 }
 
-const ROW_H = 31 // px per row; keep in sync with Cell minHeight so rows fit exactly
+const ROW_H = 31 // px per row on desktop
+// Phones get a comfortable touch target instead. EVERY cell in a row uses this same
+// pair — number gutter, real moves, the "…" placeholder and the empty padding cells
+// alike — so a padded row is exactly as tall as a played one and a fixed-height list
+// shows the same number of rows on both. Keep in sync with the fixed height below.
+const ROW_H_XS = 44
+const ROW_MIN = { xs: ROW_H_XS, md: ROW_H }
 const DEFAULT_VISIBLE_ROWS = 10
 
 /** Lichess-style move grid: number gutter, White column (lighter), Black column.
@@ -110,7 +116,13 @@ function MoveList({
     // the outer box scrolls directly and the layout there is unchanged.
     if (!fill) {
         return (
-            <Box aria-label="Move list" sx={{ height: visibleRows * ROW_H, overflowY: 'auto' }}>
+            <Box
+                aria-label="Move list"
+                sx={{
+                    height: { xs: visibleRows * ROW_H_XS, md: visibleRows * ROW_H },
+                    overflowY: 'auto',
+                }}
+            >
                 {rowEls}
             </Box>
         )
@@ -143,7 +155,7 @@ function RowNumber({ no }: { no?: number }) {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                minHeight: ROW_H,
+                minHeight: ROW_MIN,
                 color: 'var(--muted)',
                 fontFamily: 'var(--font-mono)',
                 fontSize: 12,
@@ -161,7 +173,7 @@ function EllipsisCell() {
     return (
         <Box
             sx={{
-                minHeight: 31,
+                minHeight: ROW_MIN,
                 display: 'flex',
                 alignItems: 'center',
                 px: 1.25,
@@ -190,7 +202,7 @@ function Cell({
 }) {
     const base = whiteCol ? 'rgba(255,255,255,0.05)' : 'transparent'
     if (!entry) {
-        return <Box sx={{ minHeight: 31, bgcolor: base }} />
+        return <Box sx={{ minHeight: ROW_MIN, bgcolor: base }} />
     }
     const isCurrent = entry.ply === current
     const ply = entry.ply
@@ -202,7 +214,7 @@ function Cell({
             onClick={() => onSelect(ply)}
             sx={{
                 // Comfortable touch target on phones, unchanged 31px look on desktop.
-                minHeight: { xs: 44, md: 31 },
+                minHeight: ROW_MIN,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'flex-start',

@@ -10,6 +10,7 @@ import ChallengeJoin from './pages/ChallengeJoin'
 import Watch from './pages/Watch'
 import Spectate from './pages/Spectate'
 import Profile from './pages/Profile'
+import RouteError, { NotFound } from './components/RouteError'
 // Heavy / rare routes are split into their own chunks so the critical path
 // (home, live game, layout) isn't gated on Analysis (~1.4k lines), the whole
 // /admin/* subtree, the editor, or chess.js (only pulled by analysis/editor).
@@ -65,31 +66,43 @@ function suspended(node: ReactNode): ReactNode {
 const router = createBrowserRouter([
     {
         element: <Layout />,
+        // Last resort: the Layout shell itself threw, so there's no nav to keep.
+        // The error page carries its own wordmark link home.
+        errorElement: <RouteError />,
         children: [
-            { path: '/', element: <Home /> },
-            { path: '/bot', element: suspended(<BotGame />) },
-            { path: '/puzzles', element: suspended(<Puzzles />) },
-            { path: '/guess-the-elo', element: suspended(<GuessTheElo />) },
-            { path: '/game/:id', element: <LiveGame /> },
-            { path: '/challenge/:code', element: <ChallengeJoin /> },
-            { path: '/watch', element: <Watch /> },
-            { path: '/watch/:id', element: <Spectate /> },
-            { path: '/analysis', element: suspended(<Analysis />) },
-            { path: '/analysis/:id', element: suspended(<Analysis />) },
-            { path: '/editor', element: suspended(<Editor />) },
-            { path: '/@/:name', element: <Profile /> },
-            { path: '/admin/engine-vs', element: suspended(<EngineVsEngine />) },
             {
-                path: '/admin',
-                element: suspended(<Admin />),
+                // Pathless wrapper whose only job is to own the error boundary for
+                // every page below it — a thrown render error swaps the outlet
+                // content and leaves the nav, theme, and footer painted.
+                errorElement: <RouteError />,
                 children: [
-                    { index: true, element: suspended(<AdminDashboard />) },
-                    { path: 'users', element: suspended(<AdminUsers />) },
-                    { path: 'users/:id', element: suspended(<AdminUserDetail />) },
-                    { path: 'games', element: suspended(<AdminGames />) },
-                    { path: 'anticheat', element: suspended(<AdminAnticheat />) },
-                    { path: 'anticheat/:userId', element: suspended(<AdminAnticheatUser />) },
-                    { path: 'anticheat/game/:id', element: suspended(<AdminAnticheatGame />) },
+                    { path: '/', element: <Home /> },
+                    { path: '/bot', element: suspended(<BotGame />) },
+                    { path: '/puzzles', element: suspended(<Puzzles />) },
+                    { path: '/guess-the-elo', element: suspended(<GuessTheElo />) },
+                    { path: '/game/:id', element: <LiveGame /> },
+                    { path: '/challenge/:code', element: <ChallengeJoin /> },
+                    { path: '/watch', element: <Watch /> },
+                    { path: '/watch/:id', element: <Spectate /> },
+                    { path: '/analysis', element: suspended(<Analysis />) },
+                    { path: '/analysis/:id', element: suspended(<Analysis />) },
+                    { path: '/editor', element: suspended(<Editor />) },
+                    { path: '/@/:name', element: <Profile /> },
+                    { path: '/admin/engine-vs', element: suspended(<EngineVsEngine />) },
+                    {
+                        path: '/admin',
+                        element: suspended(<Admin />),
+                        children: [
+                            { index: true, element: suspended(<AdminDashboard />) },
+                            { path: 'users', element: suspended(<AdminUsers />) },
+                            { path: 'users/:id', element: suspended(<AdminUserDetail />) },
+                            { path: 'games', element: suspended(<AdminGames />) },
+                            { path: 'anticheat', element: suspended(<AdminAnticheat />) },
+                            { path: 'anticheat/:userId', element: suspended(<AdminAnticheatUser />) },
+                            { path: 'anticheat/game/:id', element: suspended(<AdminAnticheatGame />) },
+                        ],
+                    },
+                    { path: '*', element: <NotFound /> },
                 ],
             },
         ],

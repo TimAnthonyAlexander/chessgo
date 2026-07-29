@@ -119,18 +119,24 @@ export function ClockBar({ getMs, active, running = true, initialMs }: ClockProp
     if (!clockBar || !initialMs || initialMs <= 0) return null
 
     const pct = Math.min(1, Math.max(0, ms / initialMs))
+    // Pulse only while this side is genuinely counting down. A still bar therefore
+    // means "not your clock", which makes the animation informative rather than
+    // ornamental — and it stops the moment the game does.
+    const ticking = active && running
     return (
         <Box
             aria-hidden
+            className={ticking ? 'clock-bar-pulse' : undefined}
             sx={{
                 position: 'absolute',
                 left: 0,
                 bottom: 0,
-                height: '2px',
+                height: '3px',
                 width: `${pct * 100}%`,
                 bgcolor: hueFor(ms),
                 opacity: active ? 1 : 0.35,
                 transition: 'width 0.2s linear, opacity 0.15s ease',
+                animation: ticking ? 'clock-bar-pulse 1.9s ease-in-out infinite' : undefined,
                 pointerEvents: 'none',
             }}
         />

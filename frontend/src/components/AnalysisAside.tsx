@@ -86,7 +86,7 @@ function Card({ label, children }: { label: string; children: React.ReactNode })
         <Box
             sx={{
                 border: '1px solid var(--line-soft)',
-                borderRadius: '12px',
+                borderRadius: 'var(--panel-radius)',
                 bgcolor: 'var(--surface)',
                 overflow: 'hidden',
                 boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',

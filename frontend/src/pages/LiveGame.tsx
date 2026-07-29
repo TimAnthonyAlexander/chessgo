@@ -53,6 +53,10 @@ const other = (c: Color): Color => (c === 'w' ? 'b' : 'w')
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 
+// Full-move rows the move list shows before it starts scrolling. Fixed (not
+// content-driven) so the right card keeps one height from move 1 to move 60.
+const MOVE_LIST_ROWS = 7
+
 // The signed-in user's rating for THIS game's rated pool: variant games map to
 // their own rating (duck / crazyhouse), everything else to the pool's time-control
 // category. Null when signed out — anonymous players have no rating to show.
@@ -443,6 +447,10 @@ export default function LiveGame() {
 
     return (
         <BoardPage
+            // The move list is a fixed 7 rows, so the right card is compact by
+            // design — let the column shrink to it and centre against the board
+            // instead of standing board-height with an empty tail below.
+            rightFit
             left={
                 <>
                 {isCrazyhouse && (
@@ -465,20 +473,13 @@ export default function LiveGame() {
                     }}
                 >
                     {!zen && (
-                        <LiveModeCard
-                            pool={g.pool}
-                            rated={g.rated}
-                            color={g.color}
-                            opponent={g.opponent}
-                            variant={g.variant}
-                        />
+                        <LiveModeCard pool={g.pool} rated={g.rated} variant={g.variant} />
                     )}
                     {!zen && g.variant === 'standard' && <LiveOpening fen={g.fen} />}
                     {!zen && prefs.showCaptured && (
                         <CapturedPanel
                             mat={mat}
                             opponentColor={other(g.color)}
-                            opponentName={g.opponent.name}
                             humanColor={g.color}
                         />
                     )}
@@ -493,13 +494,16 @@ export default function LiveGame() {
             right={
                 <Box
                     sx={{
-                        flex: 1,
+                        // Sized by its content (the 7-row move list plus the header and
+                        // controls), NOT stretched to the column: the column is `rightFit`
+                        // and centres this card against the board.
+                        flex: '0 0 auto',
                         minHeight: 0,
                         display: 'flex',
                         flexDirection: 'column',
                         bgcolor: 'var(--surface)',
                         border: '1px solid var(--line-soft)',
-                        borderRadius: '14px',
+                        borderRadius: 'var(--panel-radius)',
                         overflow: 'hidden',
                         boxShadow: PANEL_SHADOW,
                         alignSelf: { md: 'stretch' },
@@ -612,18 +616,18 @@ export default function LiveGame() {
                         </Box>
                     )}
 
-                    {/* Moves (fills the panel). Hidden under zen mode or when the
-                        showMoveList pref is off; a flex spacer then keeps the panel's
-                        bottom controls anchored where the list would have pushed them. */}
-                    {!zen && prefs.showMoveList ? (
+                    {/* Moves — a FIXED 7 rows: padded with empty rows when the game is
+                        shorter and scrolling (auto-following the latest move) once it's
+                        longer, so the panel height never jumps mid-game. Hidden under
+                        zen mode or when the showMoveList pref is off, in which case the
+                        panel simply loses that height rather than holding a blank gap. */}
+                    {!zen && prefs.showMoveList && (
                         <MoveList
-                            fill
+                            visibleRows={MOVE_LIST_ROWS}
                             moves={moveEntries}
                             currentPly={shownPly}
                             onSelectPly={selectPly}
                         />
-                    ) : (
-                        <Box sx={{ flex: 1, minHeight: 0 }} />
                     )}
 
                     {/* Admin-only: engine best move toggle for the current position */}
@@ -972,34 +976,29 @@ export default function LiveGame() {
     )
 }
 
-// This bar's own captured pieces + material advantage, derived from the shared
-// FEN-based material read (same logic the spectator info card uses).
-function sideMaterial(
-    mat: Material,
-    color: Color,
-): { captured: string[]; glyphColor: Color; adv: number } {
+// This bar's own captured pieces, derived from the shared FEN-based material read
+// (same logic the spectator info card uses). No numeric advantage: the pieces
+// themselves say who is up and by what.
+function sideMaterial(mat: Material, color: Color): { captured: string[]; glyphColor: Color } {
     const captured = color === 'w' ? mat.capturedByWhite : mat.capturedByBlack
-    const adv = color === 'w' ? Math.max(0, mat.diff) : Math.max(0, -mat.diff)
-    return { captured, glyphColor: color === 'w' ? 'b' : 'w', adv }
+    return { captured, glyphColor: color === 'w' ? 'b' : 'w' }
 }
 
 // Captured-piece glyph row: overlapping cburnett SVGs for the pieces a side has
-// captured, plus its signed material advantage. Shared by the player bar (mobile)
-// and the desktop CapturedPanel. Renders nothing when there's nothing to show.
+// captured. Shared by the player bar (mobile) and the desktop CapturedPanel.
+// Renders nothing when there's nothing to show.
 function CapturedGlyphs({
     captured,
     glyphColor,
-    adv,
     size = 16,
     sx,
 }: {
     captured: string[]
     glyphColor: Color
-    adv: number
     size?: number
     sx?: SxProps<Theme>
 }) {
-    if (captured.length === 0 && adv <= 0) return null
+    if (captured.length === 0) return null
     return (
         <Box
             sx={[
@@ -1026,19 +1025,6 @@ function CapturedGlyphs({
                     }}
                 />
             ))}
-            {adv > 0 && (
-                <Typography
-                    sx={{
-                        ml: 0.5,
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: 12,
-                        fontWeight: 700,
-                        color: 'var(--accent)',
-                    }}
-                >
-                    +{adv}
-                </Typography>
-            )}
         </Box>
     )
 }
@@ -1049,28 +1035,19 @@ function CapturedGlyphs({
 function CapturedPanel({
     mat,
     opponentColor,
-    opponentName,
     humanColor,
 }: {
     mat: Material
     opponentColor: Color
-    opponentName: string
     humanColor: Color
 }) {
     const opp = sideMaterial(mat, opponentColor)
     const you = sideMaterial(mat, humanColor)
-    if (
-        opp.captured.length === 0 &&
-        opp.adv === 0 &&
-        you.captured.length === 0 &&
-        you.adv === 0
-    ) {
-        return null
-    }
-    const rows = [
-        { label: opponentName, side: opp },
-        { label: 'You', side: you },
-    ]
+    if (opp.captured.length === 0 && you.captured.length === 0) return null
+    // Unlabelled, opponent row first — the same top-to-bottom order as the player
+    // bars beside the board, and each row's pieces are the colour it captured, so a
+    // name would only repeat what the glyphs and the layout already say.
+    const rows = [opp, you]
     return (
         <Box
             sx={{
@@ -1081,28 +1058,15 @@ function CapturedPanel({
                 py: 1.25,
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: '12px',
+                borderRadius: 'var(--panel-radius)',
                 boxShadow: PANEL_SHADOW,
             }}
         >
-            {rows.map(({ label, side }, i) => (
+            {rows.map((side, i) => (
                 <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 1, minHeight: 20 }}>
-                    <Typography
-                        noWrap
-                        sx={{
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: 11,
-                            color: 'var(--text-dim)',
-                            width: 64,
-                            flexShrink: 0,
-                        }}
-                    >
-                        {label}
-                    </Typography>
                     <CapturedGlyphs
                         captured={side.captured}
                         glyphColor={side.glyphColor}
-                        adv={side.adv}
                         size={18}
                     />
                 </Box>
@@ -1140,7 +1104,7 @@ function PlayerBar({
     /** Zen mode: suppress the rating badge, captured strip and clock (just the name). */
     zen?: boolean
 }) {
-    const { captured, glyphColor, adv } = sideMaterial(mat, color)
+    const { captured, glyphColor } = sideMaterial(mat, color)
     // Single-key subscription — only re-renders this bar when the preference
     // itself changes, not on every settings edit.
     const showCaptured = useSetting('showCaptured')
@@ -1194,7 +1158,6 @@ function PlayerBar({
                 <CapturedGlyphs
                     captured={captured}
                     glyphColor={glyphColor}
-                    adv={adv}
                     sx={{ display: { xs: 'flex', md: 'none' }, maxWidth: 150 }}
                 />
             )}
@@ -1221,6 +1184,12 @@ function PlayerBar({
 // name (ECO + name) as the game develops, showing NOTHING until one is known so it
 // never shifts the layout. Renders only the name — never candidate moves or evals —
 // so it gives no engine assistance during the game.
+//
+// The name is STICKY: once an opening has been identified it stays for the rest of
+// the game. Every game leaves book eventually, and letting the label vanish at that
+// moment both loses the one bit of context worth keeping ("this was a Najdorf") and
+// shifts the column. A later, more specific name still replaces an earlier one —
+// only the drop back to "no opening" is ignored.
 function LiveOpening({ fen }: { fen: string }) {
     const [opening, setOpening] = useState<Opening | null>(null)
     useEffect(() => {
@@ -1233,7 +1202,7 @@ function LiveOpening({ fen }: { fen: string }) {
         let alive = true
         void candidates(fen, { multipv: 1, movetime: 120, signal: ac.signal })
             .then((res) => {
-                if (alive) setOpening(res.opening)
+                if (alive && res.opening) setOpening(res.opening)
             })
             .catch(() => {
                 /* aborted / transient — keep the last shown name */
@@ -1255,7 +1224,7 @@ function LiveOpening({ fen }: { fen: string }) {
                 py: 1,
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: '12px',
+                borderRadius: 'var(--panel-radius)',
                 boxShadow: PANEL_SHADOW,
             }}
         >

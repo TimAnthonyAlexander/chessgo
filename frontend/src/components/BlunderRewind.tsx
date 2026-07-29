@@ -200,7 +200,7 @@ export default function BlunderRewind({
                         flexDirection: 'column',
                         minHeight: 0,
                         border: '1px solid var(--line-soft)',
-                        borderRadius: '12px',
+                        borderRadius: 'var(--panel-radius)',
                         bgcolor: 'var(--surface)',
                         overflow: 'hidden',
                         boxShadow: PANEL_SHADOW,

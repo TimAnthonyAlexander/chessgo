@@ -40,7 +40,7 @@ export default function ChatPanel({
                 flexDirection: 'column',
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: '14px',
+                borderRadius: 'var(--panel-radius)',
                 overflow: 'hidden',
                 boxShadow: PANEL_SHADOW,
             }}

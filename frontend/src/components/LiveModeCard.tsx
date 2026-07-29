@@ -1,22 +1,21 @@
 import { type ReactNode } from 'react'
 import { Box, Typography } from '@mui/material'
 import { Crown, Rabbit, Timer, Zap } from 'lucide-react'
-import type { Color } from '../lib/socket'
 import { type Variant, VARIANT_LABEL } from '../lib/variants'
 
-/** Left-side card for a live human game: time-control category, rated/casual,
- * variant (when not standard), and opponent details. Mirrors GameModeCard. */
+/** Left-side card for a live human game: time-control category, rated/casual, and
+ * variant (when not standard).
+ *
+ * Deliberately says nothing about WHO is playing or which colour you are: both
+ * player rows sit beside the board with names and ratings, and your own colour is
+ * implied by the orientation you're looking at. Repeating it here was noise. */
 export default function LiveModeCard({
     pool,
     rated,
-    color,
-    opponent,
     variant = 'standard',
 }: {
     pool: string
     rated: boolean
-    color: Color
-    opponent: { name: string; rating: number; anon: boolean }
     variant?: Variant
 }) {
     const cat = categoryFor(pool)
@@ -87,39 +86,7 @@ export default function LiveModeCard({
             >
                 {pool}
             </Typography>
-
-            <Box sx={{ borderTop: '1px solid var(--line-soft)', mt: 2.25, pt: 2.25 }}>
-                <Label>Opponent</Label>
-                <Typography sx={{ fontWeight: 600, fontSize: 16 }}>{opponent.name}</Typography>
-                <Typography sx={{ color: 'var(--text-dim)', fontSize: 13.5 }}>
-                    {opponent.anon ? 'Unrated player' : `Rating ${opponent.rating}`}
-                </Typography>
-            </Box>
-
-            <Box sx={{ borderTop: '1px solid var(--line-soft)', mt: 2.25, pt: 2.25 }}>
-                <Label>You play</Label>
-                <Typography sx={{ fontWeight: 600, fontSize: 16 }}>
-                    {color === 'w' ? 'White' : 'Black'}
-                </Typography>
-            </Box>
         </Box>
-    )
-}
-
-function Label({ children }: { children: ReactNode }) {
-    return (
-        <Typography
-            sx={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: 10.5,
-                letterSpacing: '0.16em',
-                textTransform: 'uppercase',
-                color: 'var(--muted)',
-                mb: 0.75,
-            }}
-        >
-            {children}
-        </Typography>
     )
 }
 

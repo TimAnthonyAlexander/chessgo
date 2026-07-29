@@ -58,12 +58,19 @@ interface BoardPageProps {
     left?: ReactNode
     /** Right side column (e.g. move list + controls). Same footprint as the left. */
     right?: ReactNode
+    /** Let the right column shrink to its content instead of filling the board's
+     *  height, and centre it vertically against the board. For pages whose right
+     *  card is deliberately compact (a fixed-height move list rather than one that
+     *  fills), where a full-height column would leave a tall empty tail.
+     *  The column keeps its fixed WIDTH and its board-height CAP either way, so the
+     *  board still can't be moved or resized by what's in here. */
+    rightFit?: boolean
     /** Optional eval bar, floated flush against the board's left edge without taking
      *  any layout width — so it never resizes or shifts the board. */
     evalBar?: ReactNode
 }
 
-export default function BoardPage({ children, left, right, evalBar }: BoardPageProps) {
+export default function BoardPage({ children, left, right, evalBar, rightFit }: BoardPageProps) {
     return (
         <Box
             sx={{
@@ -153,7 +160,9 @@ export default function BoardPage({ children, left, right, evalBar }: BoardPageP
                 </Box>
 
                 {/* Right column — always rendered (empty when unused). */}
-                <SideColumn order={{ xs: 2, md: 0 }}>{right}</SideColumn>
+                <SideColumn order={{ xs: 2, md: 0 }} fit={rightFit}>
+                    {right}
+                </SideColumn>
             </Box>
         </Box>
     )
@@ -166,6 +175,7 @@ function SideColumn({
     children,
     order,
     shiftRight = 0,
+    fit = false,
 }: {
     children?: ReactNode
     order: { xs: number; md: number }
@@ -173,13 +183,25 @@ function SideColumn({
     // eval-bar gap for the left card when a page has no bar. A transform (not a
     // margin) so it never reflows the grid or moves the board — mobile is untouched.
     shiftRight?: number
+    // Shrink to content and centre against the board, instead of standing a full
+    // board-height tall. The board-height becomes a max rather than a fixed size, so
+    // the column still can never grow the grid row — the board stays put either way.
+    // Desktop only; on mobile the column is full-width and stacks as before.
+    fit?: boolean
 }) {
     return (
         <Box
             sx={{
                 order,
                 width: { xs: '100%', md: `${SIDE_W}px` },
-                height: { md: BOARD_SIZE },
+                height: fit ? undefined : { md: BOARD_SIZE },
+                maxHeight: fit ? { md: BOARD_SIZE } : undefined,
+                // `alignItems: 'start'` on the grid keeps every other column top-aligned;
+                // this one opts into being centred on its own.
+                alignSelf: fit ? { md: 'center' } : undefined,
+                // Only bites if a fit column's content somehow exceeds the board height —
+                // it scrolls internally rather than stretching the row.
+                overflowY: fit ? { md: 'auto' } : undefined,
                 minWidth: 0,
                 minHeight: 0,
                 display: 'flex',

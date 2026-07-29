@@ -592,7 +592,7 @@ export default function EngineVsEngine() {
                         sx={{
                             bgcolor: 'var(--surface)',
                             border: '1px solid var(--line-soft)',
-                            borderRadius: '14px',
+                            borderRadius: 'var(--panel-radius)',
                             p: 1.75,
                             boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
                         }}
@@ -646,7 +646,7 @@ export default function EngineVsEngine() {
                         sx={{
                             bgcolor: 'var(--surface)',
                             border: '1px solid var(--line-soft)',
-                            borderRadius: '14px',
+                            borderRadius: 'var(--panel-radius)',
                             p: 1.75,
                             display: 'flex',
                             flexDirection: 'column',
@@ -721,7 +721,7 @@ export default function EngineVsEngine() {
                             sx={{
                                 bgcolor: 'var(--surface)',
                                 border: '1px solid var(--line-soft)',
-                                borderRadius: '14px',
+                                borderRadius: 'var(--panel-radius)',
                                 p: 1.5,
                                 display: 'flex',
                                 flexDirection: 'column',
@@ -777,7 +777,7 @@ export default function EngineVsEngine() {
                             sx={{
                                 bgcolor: 'var(--surface)',
                                 border: '1px solid var(--line-soft)',
-                                borderRadius: '14px',
+                                borderRadius: 'var(--panel-radius)',
                                 overflow: 'hidden',
                             }}
                         >
@@ -878,7 +878,7 @@ function SideControls({
             sx={{
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: '14px',
+                borderRadius: 'var(--panel-radius)',
                 p: 1.75,
                 display: 'flex',
                 flexDirection: 'column',

@@ -844,7 +844,7 @@ function MovePanel({
                 flexDirection: 'column',
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: '14px',
+                borderRadius: 'var(--panel-radius)',
                 overflow: 'hidden',
                 boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
             }}
@@ -1147,7 +1147,7 @@ function Setup({
             sx={{
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: '14px',
+                borderRadius: 'var(--panel-radius)',
                 p: 2.75,
                 display: 'flex',
                 flexDirection: 'column',

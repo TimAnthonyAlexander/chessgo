@@ -33,7 +33,7 @@ export default function SpectateInfoCard({
                 display: { xs: 'none', md: 'block' },
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: '14px',
+                borderRadius: 'var(--panel-radius)',
                 p: 2.5,
                 boxShadow: PANEL_SHADOW,
             }}
