@@ -73,7 +73,7 @@ Phases loading/intro/solving/checking/solved/failed/empty.
 - Nav: mobile hamburger → drawer, 44pt rows (HIG). Footer/chrome hidden on board routes (max viewport).
 
 ## Analysis (later — heaviest)
-GET /games/{id}/analysis (retry 5×/1200ms on 404 race). Lichess-style branching move tree. Engine eval = poll 11-rung depth ladder (6/1200ms → 30/35000ms), render progressively, abort on nav. SF second-opinion toggle (/sf-analyze) = translucent arrow. Eval bar win% sigmoid, GOMACHINE_CP_SCALE=0.5 (native cp runs ~2× hot). Opening explorer /candidates multipv=4. Auto-play/auto-best modes. Blunder Rewind = graded retry of each blunder ply.
+GET /games/{id}/analysis (retry 5×/1200ms on 404 race). Lichess-style branching move tree. Engine eval = poll 11-rung depth ladder (6/1200ms → 30/35000ms), render progressively, abort on nav. SF second-opinion toggle (/sf-analyze) = translucent arrow. Eval bar win% sigmoid, GOMACHINE_CP_SCALE=0.5 (native cp runs ~2× hot). Opening explorer is fed by the SAME ladder — rungs through depth 16 request `multipv:5` and their `lines` drive the move list; deeper rungs drop to one line (N lines cost ~N root searches) and the panel keeps the last list it got. One search per position, not two. Auto-play/auto-best modes. Blunder Rewind = graded retry of each blunder ply.
 
 ## iOS build priority (core → peripheral)
 1. Board + move interaction + rules-split (substrate)

@@ -224,7 +224,12 @@ struct AnalysisView: View {
     /// style all three below-board panels share.
     private var belowBoardStack: some View {
         VStack(spacing: Theme.Spacing.md) {
-            OpeningPanel(fen: driver.fen, history: driver.historyUci)
+            OpeningPanel(
+                fen: driver.fen,
+                lines: driver.analysisLines,
+                opening: driver.analysisOpening,
+                isLoading: driver.isEvalRunning
+            )
             EngineLinesPanel(driver: driver, sfEnabled: sfEnabledBinding, sfResult: driver.sfResult)
             MoveListView(moves: moveListEntries, currentPly: currentPly) { ply in
                 driver.jump(toPly: ply)

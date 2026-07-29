@@ -1,11 +1,28 @@
 import Foundation
 
-/// `POST /analyze` — full-strength single-line eval of a position.
+/// `POST /analyze` — full-strength eval of a position. With `multipv > 1` the
+/// engine returns `lines`: the top N moves from ONE MultiPV search, all at the
+/// same depth (see docs/tasks/open/real-multipv-root-search.md). `opening` is a
+/// book lookup for the request position, free of any search.
 struct AnalyzeResult: Decodable, Sendable {
     let eval: EvalScore?
     let bestmove: String?
     @DefaultEmptyArray var pv: [String]
     let depth: Int?
+    let opening: Opening?
+    @DefaultEmptyArray var lines: [AnalysisLine]
+}
+
+/// One MultiPV line from `/analyze`. Same shape as `CandidateMove` except the
+/// UCI field is named `bestmove` (it is a mini `/bestmove` result), and
+/// `opening` names what this move LEADS TO.
+struct AnalysisLine: Decodable, Sendable {
+    let bestmove: String
+    let san: String
+    let eval: EvalScore?
+    @DefaultEmptyArray var pv: [String]
+    let depth: Int?
+    let opening: Opening?
 }
 
 struct Opening: Codable, Sendable {

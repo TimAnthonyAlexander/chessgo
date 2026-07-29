@@ -4,6 +4,11 @@ private struct AnalyzeRequest: Encodable {
     let fen: String
     let movetime: Int?
     let depth: Int?
+    let multipv: Int?
+    /// Prior-position FENs, root→previous — NOT UCI moves. The server re-walks
+    /// them through its own Zobrist to resolve the DEEPEST named opening along
+    /// the line; anything that isn't a parseable FEN is silently skipped.
+    let history: [String]?
 }
 
 private struct CandidatesRequest: Encodable {
@@ -34,9 +39,21 @@ struct AnalysisService {
     static let shared = AnalysisService()
     private init() {}
 
-    /// Default movetime 1500ms server-side; depth clamped 1..40.
-    func analyze(fen: String, movetime: Int? = nil, depth: Int? = nil) async throws -> AnalyzeResult {
-        try await APIClient.shared.post("/analyze", body: AnalyzeRequest(fen: fen, movetime: movetime, depth: depth))
+    /// Default movetime 1500ms server-side; depth clamped 1..40; `multipv`
+    /// clamped to 12. With `multipv > 1` the result carries `lines` — the top N
+    /// moves from ONE search, all at the same depth — so the opening explorer
+    /// and the eval bar are fed by a single request instead of two.
+    func analyze(
+        fen: String,
+        movetime: Int? = nil,
+        depth: Int? = nil,
+        multipv: Int? = nil,
+        history: [String]? = nil
+    ) async throws -> AnalyzeResult {
+        try await APIClient.shared.post(
+            "/analyze",
+            body: AnalyzeRequest(fen: fen, movetime: movetime, depth: depth, multipv: multipv, history: history)
+        )
     }
 
     /// `multipv` clamps to 12, `movetime` to 50..2000 (default 300), `depth` to 30.

@@ -38,7 +38,6 @@ export default function EngineLines({
     isDuck?: boolean; mainSan?: string | null
 }) {
     const [numLines, setNumLines] = useState(loadLineCount)
-    if (!engineOn) return null
 
     const shown = lines?.slice(0, numLines) ?? []
     const depth = shown[0]?.depth ?? null
@@ -59,8 +58,15 @@ export default function EngineLines({
             if (!white) full += 1; white = !white
         })
         return { tokens: out, ev }
-    }), [fen, shown])
+        // `shown` is a fresh array every render, so depending on it defeated the
+        // memo entirely; it is fully derived from these three, which are stable.
+    }), [fen, lines, numLines])
 
+    // Engine off hides the LINES, never the header — the on/off Toggle lives in
+    // that header, so returning null for the whole panel (as this used to) left
+    // no way to turn the engine back on except the `L` hotkey. The off-state
+    // styling below (the flat background, the "Turn engine on" tooltip) was
+    // written for exactly this and had been dead code ever since.
     return (
         <Box sx={{ bgcolor:'var(--bg-2)',
             background: engineOn ? 'linear-gradient(180deg, rgba(216,166,87,0.06), rgba(216,166,87,0) 60%), var(--bg-2)' : 'var(--bg-2)' }}>
@@ -70,13 +76,14 @@ export default function EngineLines({
                 </Tooltip>
                 <Typography sx={{ fontFamily:'var(--font-display)', fontSize:13, fontWeight:700, letterSpacing:1.8, textTransform:'uppercase', color:'var(--text)' }}>Engine</Typography>
                 <Box sx={{ flex:1 }} />
-                {depth != null && (
+                {engineOn && depth != null && (
                     <Box sx={{ display:'flex', alignItems:'baseline', gap:0.6 }}>
                         <Typography sx={{ fontSize:10, letterSpacing:1.2, textTransform:'uppercase', color:'var(--muted)' }}>depth</Typography>
                         <Typography sx={{ fontFamily:'var(--font-mono)', fontSize:13.5, fontWeight:700, color:'var(--text-dim)' }}>{depth}</Typography>
                     </Box>
                 )}
             </Box>
+            {engineOn && (
             <Box sx={{ borderTop:'1px solid var(--line-soft)', px:1.5, py:1.1 }}>
                 <Box sx={{ display:'flex', alignItems:'center', gap:1, mb:0.75 }}>
                     <Typography sx={{ flex:1, fontFamily:'var(--font-display)', fontSize:11.5, fontWeight:700, letterSpacing:1.6, textTransform:'uppercase', color:'var(--text-dim)' }}>Engine lines</Typography>
@@ -139,6 +146,7 @@ export default function EngineLines({
                     )}
                 </Box>
             </Box>
+            )}
         </Box>
     )
 }

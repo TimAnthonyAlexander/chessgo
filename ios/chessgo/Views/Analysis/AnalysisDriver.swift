@@ -74,6 +74,17 @@ final class AnalysisDriver: BoardControl {
     private(set) var isEvalRunning = false
     private var evalTask: Task<Void, Never>?
 
+    /// The MultiPV move list and opening name for the currently-viewed step,
+    /// carried by the SAME ladder responses that drive `liveEval` — the
+    /// opening explorer used to run its own second `/candidates` search of the
+    /// identical position, which meant two searches that could (and did)
+    /// disagree with each other and with the eval bar. One search now feeds
+    /// both. Deep rungs return no lines by design (see `ladder`), so these are
+    /// only ever REPLACED by a response that actually carries lines, never
+    /// cleared by one that doesn't.
+    private(set) var analysisLines: [AnalysisLine] = []
+    private(set) var analysisOpening: Opening?
+
     /// Full-strength Stockfish "second opinion" (`POST /sf-analyze`) for the
     /// currently-viewed step's fen — the ONE source both `EngineLinesPanel`'s
     /// row and `AnalysisView`'s violet arrow read, so they can never disagree
@@ -103,9 +114,21 @@ final class AnalysisDriver: BoardControl {
     /// 11 rungs, shallow-to-deep (frontend-features.md: "poll 11-rung depth
     /// ladder (6/1200ms → 30/35000ms)"). Intermediate steps are an even
     /// spread between those two documented endpoints.
-    private static let ladder: [(depth: Int, movetimeMs: Int)] = [
-        (6, 1200), (8, 2000), (10, 3200), (12, 5000), (14, 7500),
-        (16, 10500), (18, 14000), (20, 18000), (23, 23000), (26, 29000), (30, 35000),
+    ///
+    /// `multipv` is per-rung and DROPS TO 1 past `linesMaxDepth`, matching the
+    /// web ladder. Asking for N lines makes the engine run N root searches per
+    /// iteration — measured ~4.4x the wall clock of one line at depth 22, and
+    /// Stockfish pays the same ~4.6x, so it is inherent to alpha-beta rather
+    /// than something either engine can optimize away. The move list does not
+    /// need depth 30 to be useful; the eval bar does. So the deep tail buys
+    /// depth instead of width, and the panel keeps the lines the shallower
+    /// rungs already delivered (results only ever REPLACE lines when they
+    /// carry some).
+    private static let linesMaxDepth = 16
+    private static let ladder: [(depth: Int, movetimeMs: Int, multipv: Int)] = [
+        (6, 1200, 5), (8, 2000, 5), (10, 3200, 5), (12, 5000, 5), (14, 7500, 5),
+        (16, 10500, 5), (18, 14000, 1), (20, 18000, 1), (23, 23000, 1),
+        (26, 29000, 1), (30, 35000, 1),
     ]
 
     // MARK: - BoardControl
@@ -142,12 +165,18 @@ final class AnalysisDriver: BoardControl {
 
     var currentStep: Step? { steps[safe: currentIndex] }
 
-    /// UCI history from the start position up to (not including) the
-    /// currently-viewed step — passed to `/candidates` so opening lookups
-    /// stay unambiguous.
-    var historyUci: [String] {
-        guard currentIndex > 0, steps.count > 1 else { return [] }
-        return steps[1...currentIndex].compactMap { $0.uci }
+    /// Prior-position FENs, root→previous (excluding the currently-viewed
+    /// step), for the engine's opening lookup.
+    ///
+    /// This used to send UCI moves (`historyUci`), which the endpoint quietly
+    /// threw away: server-side every history entry is validated as a FEN and
+    /// skipped if it isn't one, so a list of `["e2e4", "e7e5"]` reduced to an
+    /// EMPTY history. The opening name was then only ever classified from the
+    /// current position's own key, never the deepest match along the line —
+    /// which is why iOS could name a transposition differently from the web.
+    var historyFens: [String] {
+        guard currentIndex > 0 else { return [] }
+        return steps[0..<currentIndex].map(\.fen)
     }
 
     // MARK: - Init
@@ -433,7 +462,10 @@ final class AnalysisDriver: BoardControl {
     private func restartLiveEval() {
         evalTask?.cancel()
         liveEval = nil
+        analysisLines = []
+        analysisOpening = nil
         let targetFen = fen
+        let targetHistory = historyFens
 
         evalTask = Task {
             isEvalRunning = true
@@ -441,11 +473,23 @@ final class AnalysisDriver: BoardControl {
             for rung in Self.ladder {
                 if Task.isCancelled { return }
                 guard let outcome = try? await AnalysisService.shared.analyze(
-                    fen: targetFen, movetime: rung.movetimeMs, depth: rung.depth
+                    fen: targetFen,
+                    movetime: rung.movetimeMs,
+                    depth: rung.depth,
+                    multipv: rung.multipv > 1 ? rung.multipv : nil,
+                    history: targetHistory.isEmpty ? nil : targetHistory
                 ) else { continue }
                 if Task.isCancelled { return }
                 guard self.fen == targetFen else { return } // moved on already
                 self.liveEval = outcome
+                // Single-line rungs carry no move list — keep what the earlier
+                // multi-line rungs produced rather than blanking the panel.
+                if !outcome.lines.isEmpty { self.analysisLines = outcome.lines }
+                // The opening name rides on EVERY response (it's a book lookup,
+                // not a search result), so take it independently of the lines —
+                // both were cleared above, and every rung here is the same
+                // position, so this can never latch a stale name.
+                if let opening = outcome.opening { self.analysisOpening = opening }
             }
         }
     }

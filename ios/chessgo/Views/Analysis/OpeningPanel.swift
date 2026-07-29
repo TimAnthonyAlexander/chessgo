@@ -1,16 +1,27 @@
 import SwiftUI
 
-/// Opening explorer: `POST /candidates` for the currently-viewed fen —
-/// opening name (ECO + name) when the position is still in book, plus the
-/// ranked candidate moves with a mini eval each. Once out of book there's no
-/// opening name, so this falls back to showing just the top candidate.
+/// Opening explorer: the opening name (ECO + name) when the position is still
+/// in book, plus the engine's ranked move list with a mini eval each.
+///
+/// This panel does NOT search. It renders the MultiPV `lines` that
+/// `AnalysisDriver`'s eval ladder already fetched for this exact position —
+/// it used to fire its own `POST /candidates` for the same fen, which meant
+/// two independent searches of one position whose numbers could disagree with
+/// each other and with the eval bar. One search now feeds both, and the list
+/// deepens as the ladder climbs instead of being frozen at one shallow budget.
 struct OpeningPanel: View {
     let fen: String
-    var history: [String] = []
+    let lines: [AnalysisLine]
+    let opening: Opening?
+    /// True while the ladder has yet to deliver anything for this position —
+    /// lets the panel show a spinner rather than "no moves" before the first
+    /// rung lands.
+    var isLoading: Bool = false
 
-    @State private var candidates: Candidates?
-    @State private var isLoading = false
-    @State private var errorMessage: String?
+    /// How many ranked moves to show. The ladder requests 5; the extra one
+    /// absorbs the book move being pinned to the front without pushing a real
+    /// engine line off the bottom.
+    private static let maxRows = 4
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
@@ -22,30 +33,31 @@ struct OpeningPanel: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Theme.Spacing.md)
         .flatPanel()
-        .task(id: fen) { await load() }
     }
 
     @ViewBuilder
     private var content: some View {
-        if isLoading, candidates == nil {
-            ProgressView().frame(maxWidth: .infinity, alignment: .leading)
-        } else if let errorMessage {
-            Text(errorMessage)
-                .font(Theme.body(13))
-                .foregroundStyle(Theme.Colors.secondaryText)
-        } else if let candidates {
-            openingHeader(candidates)
-            moveList(candidates)
+        openingHeader
+        if lines.isEmpty {
+            if isLoading {
+                ProgressView().frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text("No candidate moves.")
+                    .font(Theme.caption())
+                    .foregroundStyle(Theme.Colors.secondaryText)
+            }
         } else {
-            Text("No data.")
-                .font(Theme.caption())
-                .foregroundStyle(Theme.Colors.secondaryText)
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(lines.prefix(Self.maxRows).enumerated()), id: \.offset) { index, line in
+                    candidateRow(rank: index + 1, line: line)
+                }
+            }
         }
     }
 
     @ViewBuilder
-    private func openingHeader(_ candidates: Candidates) -> some View {
-        if let opening = candidates.opening {
+    private var openingHeader: some View {
+        if let opening {
             Text("\(opening.eco) · \(opening.name)")
                 .font(Theme.body(15).bold())
                 .foregroundStyle(Theme.Colors.primaryText)
@@ -56,35 +68,17 @@ struct OpeningPanel: View {
         }
     }
 
-    @ViewBuilder
-    private func moveList(_ candidates: Candidates) -> some View {
-        if candidates.moves.isEmpty {
-            Text("No candidate moves.")
-                .font(Theme.caption())
-                .foregroundStyle(Theme.Colors.secondaryText)
-        } else if candidates.opening == nil, let best = candidates.moves.first {
-            // Out of book: just the best move, no full ranked list.
-            candidateRow(rank: 1, move: best)
-        } else {
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(candidates.moves.prefix(4).enumerated()), id: \.offset) { index, move in
-                    candidateRow(rank: index + 1, move: move)
-                }
-            }
-        }
-    }
-
-    private func candidateRow(rank: Int, move: CandidateMove) -> some View {
+    private func candidateRow(rank: Int, line: AnalysisLine) -> some View {
         HStack {
             Text("\(rank).")
                 .font(Theme.caption())
                 .foregroundStyle(Theme.Colors.secondaryText)
                 .frame(width: 20, alignment: .trailing)
-            Text(move.san)
+            Text(line.san)
                 .font(Theme.body(15))
                 .foregroundStyle(Theme.Colors.primaryText)
             Spacer()
-            Text(evalLabel(move.eval, sideToMove: sideToMove))
+            Text(evalLabel(line.eval, sideToMove: sideToMove))
                 .font(Theme.caption(13).monospacedDigit())
                 .foregroundStyle(Theme.Colors.secondaryText)
         }
@@ -92,37 +86,24 @@ struct OpeningPanel: View {
 
     private var sideToMove: PieceColor { ChessBoard(fen: fen).sideToMove }
 
-    /// `CandidateMove.eval` is side-to-move relative (rest-api.md), same as
-    /// `/analyze`. Converts to white-relative and applies the same 0.5
-    /// display-cp scale as `EvalBar` so every number on the analysis screen
-    /// reads consistently.
+    /// Line evals are side-to-move relative (rest-api.md), same as `/analyze`.
+    /// Converts to white-relative and applies the same 0.5 display-cp scale as
+    /// `EvalBar` so every number on the analysis screen reads consistently.
     private func evalLabel(_ eval: EvalScore?, sideToMove: PieceColor) -> String {
         guard let eval else { return "—" }
         let whiteRelative = sideToMove == .white ? eval.value : -eval.value
         if eval.type == "mate" { return "M\(whiteRelative)" }
         return String(format: "%+.1f", Double(whiteRelative) * 0.5 / 100)
     }
-
-    private func load() async {
-        isLoading = true
-        errorMessage = nil
-        defer { isLoading = false }
-        do {
-            candidates = try await AnalysisService.shared.candidates(
-                fen: fen,
-                history: history.isEmpty ? nil : history,
-                multipv: 4
-            )
-        } catch let error as APIError {
-            errorMessage = error.errorDescription
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
 }
 
 #Preview("OpeningPanel — start position") {
-    OpeningPanel(fen: ChessBoard.startFEN)
-        .padding()
-        .background(Theme.Colors.background)
+    OpeningPanel(
+        fen: ChessBoard.startFEN,
+        lines: [],
+        opening: Opening(eco: "B00", name: "King's Pawn Game"),
+        isLoading: true
+    )
+    .padding()
+    .background(Theme.Colors.background)
 }
