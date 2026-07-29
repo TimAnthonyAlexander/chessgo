@@ -21,14 +21,14 @@ export interface SoundMaterial {
 // Picker display order. Wood leads (it's the default + the classic sound); the
 // rest run from hard/bright to soft to retro.
 export const SOUND_MATERIALS: SoundMaterial[] = [
-    { id: 'wood', label: 'Wood', description: 'Warm inharmonic knock — the classic' },
+    { id: 'felt', label: 'Felt', description: 'Soft, muffled thud — the classic' },
+    { id: 'wood', label: 'Wood', description: 'Warm inharmonic knock' },
     { id: 'glass', label: 'Glass', description: 'Bright, ringing, crystalline' },
     { id: 'marble', label: 'Marble', description: 'Hard, sharp click-clack' },
-    { id: 'felt', label: 'Felt', description: 'Soft, muffled thud' },
     { id: 'eightbit', label: '8-bit', description: 'Retro square-wave blip' },
 ]
 
-const DEFAULT_MATERIAL: MaterialId = 'wood'
+const DEFAULT_MATERIAL: MaterialId = 'felt'
 const LS_MATERIAL = 'chessgo.sound.material'
 
 const isMaterial = (id: string | null): id is MaterialId =>

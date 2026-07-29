@@ -32,6 +32,7 @@ export type PieceSetId =
     | 'merida'
     | 'chessnut'
     | 'fantasy'
+    | 'neo'
     | 'letters'
     | 'circles'
 
@@ -51,6 +52,9 @@ export interface PieceSet {
     label: string
     /** Attribution + license, shown in the picker and kept for the CREDITS files. */
     credit: string
+    /** File extension of the artwork. Sets are vector by default; raster sets
+     * (300px PNG sprites) set this so pieceImageUrl() builds the right URL. */
+    ext?: 'svg' | 'png'
 }
 
 // --- Board themes -----------------------------------------------------------
@@ -380,17 +384,24 @@ export const BOARD_THEMES: BoardTheme[] = BOARD_ORDER.map(
 )
 
 // --- Piece sets -------------------------------------------------------------
-// SVGs live in /public/piece/<id>/{w,b}{K,Q,R,B,N,P}.svg. Sets vendored from the
-// Lichess (lila) repo; only commercial-friendly licenses are shipped.
+// Artwork lives in /public/piece/<id>/{w,b}{K,Q,R,B,N,P}.<ext>. Sets are SVG
+// unless they declare ext: 'png' (raster sets ship 300px sprites). Vector sets
+// are vendored from the Lichess (lila) repo.
 
 export const PIECE_SETS: PieceSet[] = [
     { id: 'cburnett', label: 'Cburnett', credit: 'Colin M.L. Burnett · GPLv2+' },
     { id: 'merida', label: 'Merida', credit: 'Armando H. Marroquin · GPLv2+' },
     { id: 'chessnut', label: 'Chessnut', credit: 'Alexis Luengas · Apache 2.0' },
     { id: 'fantasy', label: 'Fantasy', credit: 'Maurizio Monge · MIT' },
+    { id: 'neo', label: 'Neo', credit: 'Neo · 300px raster set', ext: 'png' },
     { id: 'letters', label: 'Letters', credit: 'chessgo original · CC0' },
     { id: 'circles', label: 'Circles', credit: 'chessgo original · CC0 — self-handicap' },
 ]
+
+/** Artwork extension for a set id; unknown ids fall back to the vector default. */
+export function pieceExt(id: string): string {
+    return PIECE_SETS.find((p) => p.id === id)?.ext ?? 'svg'
+}
 
 const DEFAULT_BOARD: BoardThemeId = 'cherry'
 const DEFAULT_PIECES: PieceSetId = 'cburnett'

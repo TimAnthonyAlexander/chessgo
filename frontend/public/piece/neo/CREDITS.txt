@@ -1,0 +1,6 @@
+Chess piece set: "neo"
+
+Raster set, 300x300 PNG per piece, supplied locally (see /neo300 in the repo
+root). Unlike the other sets here, this one is NOT vendored from lichess-org/lila
+and its license has not been verified — the "Neo" design is chess.com's default
+piece set. Confirm the rights before shipping this to production.
