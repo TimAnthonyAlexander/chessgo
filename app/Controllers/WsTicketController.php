@@ -6,6 +6,7 @@ use BaseApi\App;
 use BaseApi\Controllers\Controller;
 use BaseApi\Http\JsonResponse;
 use App\Models\User;
+use App\Services\BearerAuth;
 use App\Services\WsTicketService;
 
 /**
@@ -26,10 +27,22 @@ class WsTicketController extends Controller
 
     public function get(): JsonResponse
     {
-        // Optional session auth: resolve the logged-in user from the session
-        // (SessionStartMiddleware ran). $request->user is only set on the
-        // token-auth path, so fall back to the session user_id for the SPA.
+        // Who is calling? Three sources, in order, and NONE of them may be the
+        // only one: the ticket's identity decides whether live play is rated and
+        // whether the hub can tie this connection to games the same account has
+        // open elsewhere, so falling through to anonymous is a real bug, not a
+        // graceful degradation.
+        //
+        //   1. $request->user  — set by OptionalAuthMiddleware when it's in effect.
+        //   2. the bearer token, resolved HERE (BearerAuth) — the middleware was
+        //      silently not applying in production, which handed every iOS client
+        //      an anonymous ticket keyed by its install id.
+        //   3. the session — the SPA's cookie path.
         $user = $this->request->user ?? null;
+        if (!is_array($user) || empty($user['id'])) {
+            $user = BearerAuth::user($this->request);
+        }
+
         if (!is_array($user) || empty($user['id'])) {
             $uid = $_SESSION['user_id'] ?? null;
             if ($uid) {

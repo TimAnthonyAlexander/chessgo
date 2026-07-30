@@ -128,7 +128,14 @@ extension SocketStore {
     }
 
     private func send<T: Encodable>(_ frame: T) {
-        guard let socketTask, connection == .open, let data = try? Self.encoder.encode(frame) else { return }
+        guard let socketTask, connection == .open, let data = try? Self.encoder.encode(frame) else {
+            // A dropped send looks identical to a hub that ignored us — say which.
+            Log.warn("WSDEBUG out DROPPED (conn=\(connection), task=\(socketTask != nil))")
+            return
+        }
+        #if DEBUG
+        Log.warn("WSDEBUG out -> \(String(data: data, encoding: .utf8) ?? "")")
+        #endif
         Task {
             try? await socketTask.send(.data(data))
         }

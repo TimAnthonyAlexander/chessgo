@@ -29,7 +29,8 @@ per-pool rating blocks for `bullet/blitz/rapid/classical/puzzle/duck/crazyhouse/
 `GET /ws-ticket?anon=<stableClientId>` → `{ticket, wsUrl, identity:{name,anon,rating}}`.
 - `wsUrl` dev `ws://127.0.0.1:6467/ws`, prod `wss://.../ws` — ALWAYS read from response, never hardcode.
 - Ticket TTL 60s; mint fresh on every socket connect/reconnect.
-- **KNOWN GAP (being patched):** route only runs `SessionStartMiddleware`, so bearer tokens are NOT honored → a token-only client is treated as anonymous (unrated live play). FIX: add `CombinedAuthMiddleware` so `$request->user` is populated from the bearer token. See SPEC "backend patch".
+- **Bearer tokens ARE honored** (`OptionalAuthMiddleware` on the route, plus `BearerAuth::user()` resolved inside `WsTicketController` itself). The controller does not rely on the middleware alone: on prod the middleware silently wasn't applying and every iOS client got `anon:true` with its install id as `sub` — invisible to the hub as the account, so no cross-device resume and **unrated** live play. `BearerAuth` also reads `$_SERVER[HTTP_AUTHORIZATION]`/`REDIRECT_HTTP_AUTHORIZATION`, since which of those carries the header depends on the SAPI.
+- **Sanity check after any deploy:** the ticket's `sub` must equal your user id (decode `ticket.split('.')[0]` as base64url) and `identity.anon` must be false. An install-UUID `sub` means the token wasn't honored.
 
 ## BOT GAMES (no auth required; guest-playable)
 - `POST /bot-games` — body `{rating?:int(0..3500, default 1500; 0=Unlosable bot plays worst), human_color?:"w"|"b", fen?, variant?:"standard"|"chess960"|"duck"|"crazyhouse"|"antichess"|"fading"|"glassjaw"|"doublemove"}` → 201 game state.

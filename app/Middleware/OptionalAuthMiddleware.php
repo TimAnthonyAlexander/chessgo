@@ -4,8 +4,7 @@ declare(strict_types=1);
 
 namespace App\Middleware;
 
-use Throwable;
-use App\Models\ApiToken;
+use App\Services\BearerAuth;
 use Exception;
 use Override;
 use BaseApi\Http\Middleware;
@@ -45,42 +44,12 @@ class OptionalAuthMiddleware implements Middleware
 
     /**
      * Try to authenticate via API token (Authorization: Bearer <token>).
+     * `BearerAuth` also covers the SAPI variants where the header only shows up
+     * in $_SERVER — see the note there.
      */
     private function tryApiTokenAuth(Request $request): ?array
     {
-        $authHeader = null;
-        foreach ($request->headers ?? [] as $k => $v) {
-            if (strcasecmp((string)$k, 'authorization') === 0) {
-                $authHeader = is_array($v) ? reset($v) : $v;
-                break;
-            }
-        }
-
-        if (!is_string($authHeader) || strncasecmp($authHeader, 'Bearer ', 7) !== 0) {
-            return null;
-        }
-
-        $token = trim(substr($authHeader, 7));
-        if ($token === '' || $token === '0') {
-            return null;
-        }
-
-        try {
-            $tokenModel = ApiToken::findByToken($token);
-            if (!$tokenModel instanceof ApiToken || $tokenModel->isExpired()) {
-                return null;
-            }
-
-            $userProvider = App::userProvider();
-            $user = $userProvider->byId($tokenModel->user_id);
-            if ($user) {
-                $tokenModel->updateLastUsed();
-            }
-
-            return $user;
-        } catch (Throwable) {
-            return null;
-        }
+        return BearerAuth::user($request);
     }
 
     /**

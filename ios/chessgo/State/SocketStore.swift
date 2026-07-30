@@ -160,12 +160,26 @@ final class SocketStore {
         do {
             let ticket = try await WsTicketService.shared.fetch(anonId: KeychainHelper.shared.anonymousId)
             guard shouldStayConnected else { return }
+            Log.warn("WSDEBUG ticket sub=\(Self.ticketSub(ticket.ticket)) anon=\(ticket.identity.anon) name=\(ticket.identity.name) bearer=\(KeychainHelper.shared.token != nil)")
             openSocket(with: ticket)
         } catch {
             lastError = "Couldn't reach the realtime server."
             connection = .closed
             scheduleReconnect()
         }
+    }
+
+    /// TEMP DEBUG: pull `sub` out of the ws-ticket's base64url payload so the
+    /// hub identity this device connects as can be compared with the browser's.
+    static func ticketSub(_ ticket: String) -> String {
+        let part = ticket.split(separator: ".").first.map(String.init) ?? ""
+        var b64 = part.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        b64 += String(repeating: "=", count: (4 - b64.count % 4) % 4)
+        guard let data = Data(base64Encoded: b64),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return "<undecodable>"
+        }
+        return "\(json["sub"] ?? "<none>")"
     }
 
     private func openSocket(with ticket: WsTicketResponse) {
