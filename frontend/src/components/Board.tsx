@@ -1219,6 +1219,13 @@ export default function Board({
                                 stateBits.length ? `, ${stateBits.join(', ')}` : ''
                             }`
 
+                            // Whether this square's legal-move marker is currently shown
+                            // (see the always-mounted <span> below). Duck/drop targets are
+                            // empty-square-only modes, hence the extra !piece.
+                            const markerOn =
+                                (prefs.showLegalMoves && isTarget) ||
+                                ((isDuckTarget || isDropTarget) && !piece)
+
                             // In-square coordinates only in 'inside' mode ('outside' draws
                             // them in the gutter layer below; 'off' hides them entirely).
                             const coordsInside = prefs.showCoordinates === 'inside'
@@ -1256,10 +1263,14 @@ export default function Board({
                                             : undefined
                                     }
                                 >
-                                    {prefs.showLegalMoves && isTarget && !piece && <span className="dot" />}
-                                    {prefs.showLegalMoves && isTarget && piece && <span className="ring" />}
-                                    {isDuckTarget && !piece && <span className="dot" />}
-                                    {isDropTarget && !piece && <span className="dot" />}
+                                    {/* Legal-move marker: a dot on an empty square, a ring
+                                        around an occupied (capture) one. ALWAYS mounted and
+                                        toggled with `.on`, never conditionally rendered —
+                                        that's what lets it scale from 0 on the way IN and
+                                        back to 0 on the way OUT. An unmount can't be
+                                        animated, and faking one with a timer would mean
+                                        holding 64 squares' worth of exit state in React. */}
+                                    <span className={`${piece ? 'ring' : 'dot'}${markerOn ? ' on' : ''}`} />
                                     {hintVisible &&
                                         hint &&
                                         (hint.from === sq || (hintShowTo && hint.to === sq)) && (

@@ -268,38 +268,47 @@
     will-change: transform;
 }
 
-/* Legal-move markers */
-.dot {
+/* Legal-move markers. Every square owns one permanently (Board.tsx never
+   mounts/unmounts them) and it rests at scale(0) — invisible, zero-size. Adding
+   `.on` grows it to full size; removing `.on` shrinks it back to nothing. So
+   selecting or picking up a piece pops the markers in, and dropping or
+   deselecting pops them out, on the same transition. All three states below are
+   plain `transform`, so they interpolate between each other cleanly — including
+   an out-animation that starts from the enlarged drag-over size. */
+.dot,
+.ring {
     position: absolute;
     z-index: 1;
+    border-radius: 50%;
+    pointer-events: none;
+    transform: scale(0);
+    transition: transform 0.14s ease;
+}
+.dot {
     width: 30%;
     height: 30%;
-    border-radius: 50%;
     background: var(--dot);
-    pointer-events: none;
-    /* Scales about its own center (see .sq centering below) when a drag
-       hovers this square — grow the shape itself, not a halo around it. */
-    transition: transform 0.12s ease;
+}
+.ring {
+    inset: 7%;
+    border: 0.6cqi solid var(--dot);
 }
 .sq.light .dot {
     background: var(--dot-light);
 }
-.sq.dragTarget .dot {
-    transform: scale(1.5);
-}
-.ring {
-    position: absolute;
-    z-index: 1;
-    inset: 7%;
-    border-radius: 50%;
-    border: 0.6cqi solid var(--dot);
-    pointer-events: none;
-    transition: transform 0.12s ease;
-}
 .sq.light .ring {
     border-color: var(--dot-light);
 }
-.sq.dragTarget .ring {
+.dot.on,
+.ring.on {
+    transform: scale(1);
+}
+/* Grow the marker on the square a dragged piece is hovering. Scales about its
+   own center — the shape itself, not a halo around it. */
+.sq.dragTarget .dot.on {
+    transform: scale(1.5);
+}
+.sq.dragTarget .ring.on {
     transform: scale(1.15);
 }
 @media (prefers-reduced-motion: reduce) {
