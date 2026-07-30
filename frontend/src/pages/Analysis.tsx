@@ -445,6 +445,26 @@ export default function Analysis() {
         achievedDepth: current.bestDepth ?? 0,
     })
     const localEngineOn = localRace.enabled
+    // The local engine is warming up (fetching the net, booting the wasm module).
+    // The ladder waits this out rather than filling the gap with server results —
+    // see its comment. Once the engine has failed, this stops being true and the
+    // auto-disable effect below takes over.
+    const localWarmingUp = localEngineOn && localRace.download.status !== 'ready' && localRace.download.status !== 'error'
+
+    // A local engine that failed to load is no engine at all: fall back to the
+    // server rather than leaving the board permanently blank. Turning the setting
+    // off (rather than just ignoring it) is what makes the ladder resume, and it
+    // leaves the control showing an off toggle the user can flip back on — the
+    // download state still carries the error message and a Retry.
+    const localDownloadStatus = localRace.download.status
+    const localSetEnabled = localRace.setEnabled
+    useEffect(() => {
+        if (localDownloadStatus === 'error' && localEngineOn) {
+            localSetEnabled(false)
+        }
+        // Narrow deps on purpose: `localRace` is a fresh object every render, so
+        // depending on it would run this body on every one.
+    }, [localDownloadStatus, localEngineOn, localSetEnabled])
 
     // Toggling the local engine swaps which engine produced everything currently
     // on screen — the move list, the badge, the per-node source map, and the
@@ -522,6 +542,17 @@ export default function Analysis() {
     useEffect(() => {
         if (!engineOn) {
             setLinesLoading(false) // no fetching — nothing for OpeningPanel to wait on
+            return
+        }
+        // The local engine is still fetching its net / booting its module. Show
+        // NOTHING rather than filling the gap with server results: those would be
+        // a different engine at a different depth, on screen for a second or two
+        // and then replaced the moment local came up. A brief empty panel that
+        // then fills in once is calmer, and honest about which engine is talking.
+        // If local fails, the auto-disable effect above clears `localEngineOn`,
+        // this gate opens, and the full server ladder runs as usual.
+        if (localWarmingUp) {
+            setLinesLoading(true) // OpeningPanel shows its "searching" state meanwhile
             return
         }
         // Duck review: the cached per-ply evals from the payload are already on every
@@ -753,7 +784,11 @@ export default function Analysis() {
         // the toggle has to switch between the search ladder and the cache-only
         // lookup right away, otherwise turning the local engine on leaves the
         // current position still hammering /analyze until you navigate away.
-    }, [engineOn, localEngineOn, isDuck, loading, current.id, current.fen, over.over, over.checkmate, sideToMove])
+        // `localWarmingUp` IS a dependency: the effect has to re-run the moment the
+        // local engine finishes loading (or fails), because that is what releases
+        // the gate above. Without it the board would sit empty until the next
+        // navigation.
+    }, [engineOn, localEngineOn, localWarmingUp, isDuck, loading, current.id, current.fen, over.over, over.checkmate, sideToMove])
 
     // --- Stockfish second-opinion best move (optional arrow) ---
     // One full-strength Stockfish call per viewed position, only while the toggle
