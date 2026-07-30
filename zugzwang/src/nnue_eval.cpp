@@ -95,6 +95,55 @@ static inline float screlu(float x) {
     return x * x;
 }
 
+// ---- SATLEAK: leaky SCReLU (default eps = 0, i.e. exactly screlu) -------------
+// The tail's D2=16 L1 layer rails completely once either side is up ~a piece, and the
+// output then collapses to a per-(bucket, rail-pattern) constant. But the CLAMP is what
+// destroys the gradient, not the layer: the pre-activations keep varying with the
+// position. Measured on a fixed frame, black down Q+B+R vs down Q+B+2R evaluate to the
+// same -1062 while the largest pre-activation overshoot moves 2.95 -> 3.65. The extra
+// rook is visible to the net and screlu throws it away.
+//
+// So instead of substituting a weaker hand-crafted eval (every SATFIX mode cost Elo,
+// -3.7 to -20.8), continue the activation linearly past each rail. Identical to screlu
+// on [0,1] and continuous at both knees, so positions where nothing rails are untouched
+// and only the collapsed regime changes — and it changes using the net's OWN weights.
+//
+// eps = 0 makes this bit-for-bit screlu (x<0 -> 0*x = 0, x>1 -> 1 + 0 = 1), so the
+// default build needs no branch and is byte-identical by construction.
+static inline float screlu_leak(float x, float eps) {
+    if (x < 0.0f) return eps * x;                  // linear, negative, small slope
+    if (x > 1.0f) return 1.0f + eps * (x - 1.0f);  // linear continuation above the rail
+    return x * x;
+}
+
+// L1 leak slope, from SATLEAK in per-mille (SATLEAK=50 -> 0.05). 0/absent = off.
+static inline float sat_leak_eps() {
+    static const float e = [] {
+        const char* s = getenv("SATLEAK");
+        return s ? static_cast<float>(atoi(s)) / 1000.0f : 0.0f;
+    }();
+    return e;
+}
+// SATSOFT (per-mille): leak slope applied ONLY at fully-collapsed nodes. 1000 = the
+// activation continues linearly past both rails (no clamp at all). This is the shipping
+// form of the idea; SATLEAK/SATLEAK2 are the ungated versions kept for attribution.
+static inline float satsoft_eps() {
+    static const float e = [] {
+        const char* s = getenv("SATSOFT");
+        return s ? static_cast<float>(atoi(s)) / 1000.0f : 0.0f;
+    }();
+    return e;
+}
+// L2 leak slope (SATLEAK2, per-mille). L1 variation is useless if L2 clamps it away
+// again, so the two normally move together; kept separate to attribute the effect.
+static inline float sat_leak2_eps() {
+    static const float e = [] {
+        const char* s = getenv("SATLEAK2");
+        return s ? static_cast<float>(atoi(s)) / 1000.0f : 0.0f;
+    }();
+    return e;
+}
+
 
 // pairwiseU8Scalar (kernels.go:250-267): the int8-path pairwise FT activation for
 // one output. a=clamp(lo,0,ftQA), b=clamp(hi,0,ftQA); u8 = (a*b + ftRound) >> ftShift.
@@ -468,9 +517,28 @@ int eval_from_halves(const int16_t* accW, const int16_t* accB, const Position& p
     const int8_t* L1W = g_net.L1W8.data() + static_cast<std::size_t>(bk) * D2 * H;
     const float*  L1B = g_net.L1B.data()  + static_cast<std::size_t>(bk) * D2;
     float l1[D2];
+    float leakEps = sat_leak_eps();   // 0 by default -> screlu_leak == screlu
     for (int o = 0; o < D2; ++o) {
         int32_t d = dot_u8i8(aq, L1W + static_cast<std::size_t>(o) * H, H);
-        l1[o] = screlu(static_cast<float>(d) * L1Inv + L1B[o]);
+        l1[o] = screlu_leak(static_cast<float>(d) * L1Inv + L1B[o], leakEps);
+    }
+
+    // SATSOFT: the leak CANNOT be applied globally — 14 of 16 lanes sit on a rail even
+    // in the starting position (that sparsity is how SCReLU works), so unclamping
+    // everywhere rewrites the eval in every position and fails the golden gate 0/38.
+    // Gate it on total collapse instead: only when ALL D2 lanes are railed is the
+    // output a constant, and only then is the soft extrapolation strictly more
+    // informative than what it replaces. Every other position stays byte-identical.
+    if (satsoft_eps() > 0.0f) {
+        int railed = 0;
+        for (int o = 0; o < D2; ++o) railed += (l1[o] == 0.0f) | (l1[o] == 1.0f);
+        if (railed == D2) {
+            leakEps = satsoft_eps();
+            for (int o = 0; o < D2; ++o) {
+                int32_t d = dot_u8i8(aq, L1W + static_cast<std::size_t>(o) * H, H);
+                l1[o] = screlu_leak(static_cast<float>(d) * L1Inv + L1B[o], leakEps);
+            }
+        }
     }
 
     // SATFIX/SATDIAG rail tally. Read off l1[] rather than instrumenting the loop
@@ -486,16 +554,33 @@ int eval_from_halves(const int16_t* accW, const int16_t* accB, const Position& p
         g_satdiag.l1lo   = l1lo;
         g_satdiag.l1hi   = l1hi;
         g_satdiag.l1live = D2 - l1lo - l1hi;
-        if (diag) { g_satdiag.l2lo = g_satdiag.l2hi = 0; }
+        if (diag) {
+            g_satdiag.l2lo = g_satdiag.l2hi = 0;
+            // Recompute the pre-activations to report how far past the rails they sit.
+            // Diagnostic path only — never on the hot path.
+            float lo = 0.0f, hi = 0.0f;
+            for (int o = 0; o < D2; ++o) {
+                int32_t d = dot_u8i8(aq, L1W + static_cast<std::size_t>(o) * H, H);
+                const float x = static_cast<float>(d) * L1Inv + L1B[o];
+                if (x < 0.0f && -x > lo)      lo = -x;
+                if (x > 1.0f && x - 1.0f > hi) hi = x - 1.0f;
+            }
+            g_satdiag.ovLo = lo;
+            g_satdiag.ovHi = hi;
+        }
     }
 
     // (3) L2 float GEMV (input-major, D2 -> D3) -> +bias -> SCReLU.
     float l2[D3];
     gemv_f32(l2, D3, l1, D2, g_net.L2W.data(), NB * D3, bk * D3);
     const float* L2B = g_net.L2B.data() + static_cast<std::size_t>(bk) * D3;
+    // In the SATSOFT path leakEps has been raised, so L2 softens too — L1 variation is
+    // pointless if L2 clamps it straight back off (measured: leaking L2 alone changes
+    // nothing at all, since its inputs were the constant).
+    const float leak2Eps = sat_leak2_eps() > 0.0f ? sat_leak2_eps() : leakEps;
     for (int o = 0; o < D3; ++o) {
         const float x = l2[o] + L2B[o];
-        l2[o] = screlu(x);
+        l2[o] = screlu_leak(x, leak2Eps);
         if (diag) { if (x <= 0.0f) ++g_satdiag.l2lo; else if (x >= 1.0f) ++g_satdiag.l2hi; }
     }
 

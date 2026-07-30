@@ -26,6 +26,7 @@
 
 #include "nnue.h"      // NNUE::load / loaded / evaluate declarations (evaluate lives elsewhere)
 #include "nnue_net.h"  // NNUE::Net, g_net, load_net  (+ nnue_arch.h dims/quant constants)
+#include "nnue_web_format.h" // pre-quantized ("web format") file format shared with tools/netweb_writer
 
 #include <cmath>
 #include <cstdint>
@@ -106,11 +107,12 @@ inline std::int8_t quant_l1(float w) {
     return static_cast<std::int8_t>(q);
 }
 
-} // namespace
-
 // Reads the bullet float32 export at `path`, quantizes into g_net, sets g_net.ok.
-// Returns false on any read/size mismatch (leaving g_net.ok == false).
-bool load_net(const char* path) {
+// Returns false on any read/size mismatch (leaving g_net.ok == false). Renamed from
+// the historical `load_net` (now the public dispatcher below) when the pre-quantized
+// web-format fast path was added; body is UNCHANGED — see the file-header comment for
+// why this arithmetic must never be perturbed.
+bool load_net_float32(const char* path) {
     g_net = Net{}; // reset: fresh, ok == false until fully populated
 
     // Section sizes (float32 counts), identical to ImportBulletEnrichedNet.
@@ -216,6 +218,139 @@ bool load_net(const char* path) {
 
     g_net.ok = true;
     return true;
+}
+
+// Reads a pre-quantized "web format" file (nnue_web_format.h) straight into g_net —
+// no quantization arithmetic, just validated byte copies. Returns false (leaving
+// g_net.ok == false) on any size/magic/version/arch/checksum mismatch: a bad file
+// must fail loudly rather than silently produce a wrong eval.
+bool load_net_prequant(const char* path) {
+    using namespace WebFormat;
+    g_net = Net{};
+
+    std::FILE* fp = std::fopen(path, "rb");
+    if (!fp) return false;
+    std::fseek(fp, 0, SEEK_END);
+    const long fsize = std::ftell(fp);
+    std::fseek(fp, 0, SEEK_SET);
+    if (fsize < static_cast<long>(kHeaderSize)) { std::fclose(fp); return false; }
+
+    std::vector<unsigned char> raw(static_cast<std::size_t>(fsize));
+    const std::size_t got = std::fread(raw.data(), 1, static_cast<std::size_t>(fsize), fp);
+    std::fclose(fp);
+    if (got != static_cast<std::size_t>(fsize)) return false;
+
+    const unsigned char* p = raw.data();
+
+    // --- header: magic + version + arch/quant constants + payload size + checksum ---
+    if (std::memcmp(p, kMagic, sizeof(kMagic)) != 0) return false;
+    const std::uint32_t formatVersion = wf_rd_u32(p + 8);
+    const std::uint32_t inputTotal    = wf_rd_u32(p + 12);
+    const std::uint32_t hdrH          = wf_rd_u32(p + 16);
+    const std::uint32_t hdrD2         = wf_rd_u32(p + 20);
+    const std::uint32_t hdrD3         = wf_rd_u32(p + 24);
+    const std::uint32_t hdrNB         = wf_rd_u32(p + 28);
+    const std::uint32_t hdrFtQA       = wf_rd_u32(p + 32);
+    const std::uint32_t hdrInt8QA     = wf_rd_u32(p + 36);
+    const std::uint32_t hdrL1QB       = wf_rd_u32(p + 40);
+    const std::uint32_t hdrFtShift    = wf_rd_u32(p + 44);
+    const std::uint64_t payloadSize   = wf_rd_u64(p + 48);
+    const std::uint64_t headerCsum    = wf_rd_u64(p + 56);
+
+    if (formatVersion != kFormatVersion) return false;
+
+    // Validate every arch/quant constant against the compiled-in net this binary
+    // expects (nnue_arch.h). A mismatch means the file targets a different net
+    // architecture — refuse rather than reinterpret its bytes under the wrong shape.
+    if (inputTotal != static_cast<std::uint32_t>(InputTotal) ||
+        hdrH       != static_cast<std::uint32_t>(H)          ||
+        hdrD2      != static_cast<std::uint32_t>(D2)         ||
+        hdrD3      != static_cast<std::uint32_t>(D3)         ||
+        hdrNB      != static_cast<std::uint32_t>(NB)         ||
+        hdrFtQA    != static_cast<std::uint32_t>(ftQA)       ||
+        hdrInt8QA  != static_cast<std::uint32_t>(int8QA)     ||
+        hdrL1QB    != static_cast<std::uint32_t>(L1QB)       ||
+        hdrFtShift != static_cast<std::uint32_t>(ftShift))
+        return false;
+
+    // Truncated-download check: cheap, before touching the checksum.
+    if (static_cast<std::uint64_t>(fsize) < static_cast<std::uint64_t>(kHeaderSize) + payloadSize)
+        return false;
+
+    const unsigned char* payload = p + kHeaderSize;
+    const SectionCounts counts = section_counts();
+    if (payloadSize != payload_bytes(counts)) return false; // arch matched but size didn't — corrupt/foreign file
+
+    // Corruption check: FNV-1a over the payload must match the header's checksum.
+    // Catches a truncated OR bit-flipped download that happens to pass the size checks.
+    if (fnv1a64(payload, static_cast<std::size_t>(payloadSize)) != headerCsum) return false;
+
+    // --- payload: explicit little-endian decode straight into Net's vectors ---
+    const unsigned char* cur = payload;
+
+    g_net.W0i.resize(counts.nW0i);
+    for (std::size_t i = 0; i < counts.nW0i; ++i)
+        g_net.W0i[i] = wf_rd_i16(cur + i * 2);
+    cur += counts.nW0i * 2;
+
+    g_net.B0i.resize(counts.nB0i);
+    for (std::size_t i = 0; i < counts.nB0i; ++i)
+        g_net.B0i[i] = wf_rd_i16(cur + i * 2);
+    cur += counts.nB0i * 2;
+
+    // int8: single bytes, no endianness — a direct copy is unambiguous.
+    g_net.L1W8.resize(counts.nL1W8);
+    std::memcpy(g_net.L1W8.data(), cur, counts.nL1W8);
+    cur += counts.nL1W8;
+
+    g_net.L1B.resize(counts.nL1B);
+    for (std::size_t i = 0; i < counts.nL1B; ++i)
+        g_net.L1B[i] = wf_rd_f32(cur + i * 4);
+    cur += counts.nL1B * 4;
+
+    g_net.L2W.resize(counts.nL2W);
+    for (std::size_t i = 0; i < counts.nL2W; ++i)
+        g_net.L2W[i] = wf_rd_f32(cur + i * 4);
+    cur += counts.nL2W * 4;
+
+    g_net.L2B.resize(counts.nL2B);
+    for (std::size_t i = 0; i < counts.nL2B; ++i)
+        g_net.L2B[i] = wf_rd_f32(cur + i * 4);
+    cur += counts.nL2B * 4;
+
+    g_net.OW.resize(counts.nOW);
+    for (std::size_t i = 0; i < counts.nOW; ++i)
+        g_net.OW[i] = wf_rd_f32(cur + i * 4);
+    cur += counts.nOW * 4;
+
+    g_net.OB.resize(counts.nOB);
+    for (std::size_t i = 0; i < counts.nOB; ++i)
+        g_net.OB[i] = wf_rd_f32(cur + i * 4);
+    cur += counts.nOB * 4;
+
+    // Same opt-in huge-pages behavior as the float32 path (byte-identical eval either way).
+    if (net_hugepages_enabled())
+        advise_hugepages(g_net.W0i.data(), g_net.W0i.size() * sizeof(std::int16_t));
+
+    g_net.ok = true;
+    return true;
+}
+
+} // namespace
+
+// Public loader: sniffs the first bytes for the pre-quantized "web format" magic
+// (nnue_web_format.h) and dispatches accordingly. The float32 path's arithmetic
+// (load_net_float32, above) is completely untouched by this — it is called exactly
+// as it always was when the magic doesn't match.
+bool load_net(const char* path) {
+    std::FILE* fp = std::fopen(path, "rb");
+    if (!fp) return false;
+    unsigned char magic[sizeof(WebFormat::kMagic)];
+    const std::size_t got = std::fread(magic, 1, sizeof(magic), fp);
+    std::fclose(fp);
+    const bool isPrequant = got == sizeof(magic) &&
+                             std::memcmp(magic, WebFormat::kMagic, sizeof(magic)) == 0;
+    return isPrequant ? load_net_prequant(path) : load_net_float32(path);
 }
 
 // --- Public NNUE::load / loaded (nnue.h). evaluate() is a separate file. ---

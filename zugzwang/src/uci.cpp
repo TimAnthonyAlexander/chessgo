@@ -471,7 +471,9 @@ int uci_main() {
             if (NNUE::satdiag_enabled())
                 std::cout << " sat l1 " << NNUE::g_satdiag.l1lo << "/" << NNUE::g_satdiag.l1hi
                           << " of " << NNUE::D2 << "  l2 " << NNUE::g_satdiag.l2lo << "/"
-                          << NNUE::g_satdiag.l2hi << " of " << NNUE::D3;
+                          << NNUE::g_satdiag.l2hi << " of " << NNUE::D3
+                          << "  overshoot lo " << NNUE::g_satdiag.ovLo
+                          << " hi " << NNUE::g_satdiag.ovHi;
             std::cout << std::endl;
         } else if (cmd == "d") {
             std::cout << pos.fen() << std::endl;
