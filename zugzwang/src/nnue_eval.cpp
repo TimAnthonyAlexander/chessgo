@@ -244,6 +244,45 @@ static inline void pairwise_u8_block(const int16_t* src, uint8_t* dst) {
         vst1_u8(dst + i, packed);
     }
 }
+#elif defined(__wasm_simd128__)
+#include <wasm_simd128.h>
+// WASM SIMD128 (16 lanes/step -- two i16x8 vectors narrowed together into one
+// v128 of u8 lanes per wasm_u8x16_narrow_i16x8, since WASM has no single-vector
+// narrow-to-half-width op like NEON's vmovn_u16). Same bit-exactness argument as
+// the NEON block above: the product/round/shift stays within an UNSIGNED 16-bit
+// lane at every step, and wasm_i16x8_mul/wasm_i16x8_add are plain mod-2^16
+// operations (bit-identical regardless of the signed/unsigned tag used to read
+// them), so the only place signedness matters is the shift -- wasm_u16x8_shr is
+// the LOGICAL (zero-fill) right shift, matching >>9 on the always-non-negative
+// true value, exactly as vshrq_n_u16 does for NEON. wasm_u8x16_narrow_i16x8
+// applies unsigned saturation on the way to u8, but every lane here is already
+// in [0,127] (proved above), so the saturation branch never fires -- narrow is
+// therefore an exact truncation here, not an approximation.
+static inline void pairwise_u8_block(const int16_t* src, uint8_t* dst) {
+    constexpr int half = H / 2;  // 256
+    static_assert(half % 16 == 0, "wasm pairwise step must divide half");
+    const v128_t z = wasm_i16x8_splat(0);
+    const v128_t c = wasm_i16x8_splat(255);
+    const v128_t r = wasm_i16x8_splat(256);
+    for (int i = 0; i < half; i += 16) {
+        v128_t lo0 = wasm_v128_load(src + i);
+        v128_t hi0 = wasm_v128_load(src + i + half);
+        v128_t lo1 = wasm_v128_load(src + i + 8);
+        v128_t hi1 = wasm_v128_load(src + i + half + 8);
+        lo0 = wasm_i16x8_min(wasm_i16x8_max(lo0, z), c);   // clamp [0,255]
+        hi0 = wasm_i16x8_min(wasm_i16x8_max(hi0, z), c);
+        lo1 = wasm_i16x8_min(wasm_i16x8_max(lo1, z), c);
+        hi1 = wasm_i16x8_min(wasm_i16x8_max(hi1, z), c);
+        v128_t p0 = wasm_i16x8_mul(lo0, hi0);               // exact: product < 2^16
+        v128_t p1 = wasm_i16x8_mul(lo1, hi1);
+        p0 = wasm_i16x8_add(p0, r);                         // exact: still < 2^16
+        p1 = wasm_i16x8_add(p1, r);
+        p0 = wasm_u16x8_shr(p0, 9);                         // logical >>9 -> [0,127]
+        p1 = wasm_u16x8_shr(p1, 9);
+        v128_t packed = wasm_u8x16_narrow_i16x8(p0, p1);    // [p0 lanes | p1 lanes] -> 16x u8
+        wasm_v128_store(dst + i, packed);
+    }
+}
 #else
 // No SIMD target recognized: fall back to the scalar formula, element by
 // element. Still correct and still used only when PAIRSIMD=1 is requested.
@@ -422,6 +461,60 @@ static inline int32_t dot_u8i8(const uint8_t* a, const int8_t* w, int n) {
         vacc = vdotq_s32(vacc, va, vw);
     }
     int32_t acc = vaddvq_s32(vacc);
+    if (i < n)
+        acc += dot_u8i8_scalar(a + i, w + i, n - i);
+    return acc;
+}
+#elif defined(__wasm_simd128__)
+#include <wasm_simd128.h>
+// WASM dot_u8i8. Two sub-variants, selected at compile time by which Makefile.wasm
+// target is building (simd128 vs relaxed -- see Makefile.wasm's -mrelaxed-simd flag,
+// which is the only thing that defines __wasm_relaxed_simd__):
+//
+//   * __wasm_relaxed_simd__ (relaxed build): i32x4.relaxed_dot_i8x16_i7x16_add is the
+//     direct WASM analogue of VPDPBUSD/vdotq_s32 -- a single widening
+//     multiply-add-accumulate instruction. Its second operand is documented as
+//     "i7x16": only the low 7 bits of each lane are specified, the top bit's
+//     contribution is implementation-defined. That is EXACTLY the int8QA=127
+//     constraint this file already leans on for AVX512/NEON (see this file's
+//     block comment above dot_u8i8_scalar) -- a[] never sets bit 7, so every
+//     implementation's choice for that bit is moot and the instruction is
+//     deterministic on our data regardless of which WASM engine runs it. Put the
+//     unconstrained weight column in the i8x16 slot and the u8-range activation
+//     lane in the i7x16 slot.
+//   * plain __wasm_simd128__ (baseline build, no relaxed-simd): no native i8 dot
+//     instruction exists, so build the same widening dot from two steps that DO
+//     exist in the MVP SIMD128 spec: wasm_i16x8_extmul_{low,high}_i8x16 widens
+//     the elementwise product into i16 lanes (exact -- max magnitude 127*127 =
+//     16129 fits i16 with room to spare), then wasm_i32x4_extadd_pairwise_i16x8
+//     widens-and-sums adjacent pairs into i32 (also exact -- the widen happens
+//     BEFORE the add, so there is no intermediate 16-bit accumulation to
+//     overflow even though a pair sum can reach ~32258). Either sub-variant
+//     reduces, term for term, to the same Sigma a[i]*w[i] proven above to equal
+//     dot_u8i8_scalar's saturating formula on real (non-adversarial) data.
+static inline int32_t dot_u8i8(const uint8_t* a, const int8_t* w, int n) {
+    v128_t vacc = wasm_i32x4_splat(0);
+    int i = 0;
+#ifdef __wasm_relaxed_simd__
+    for (; i + 16 <= n; i += 16) {
+        v128_t vw = wasm_v128_load(w + i);
+        v128_t va = wasm_v128_load(a + i);
+        vacc = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(vw, va, vacc);
+    }
+#else
+    for (; i + 16 <= n; i += 16) {
+        v128_t vw = wasm_v128_load(w + i);
+        v128_t va = wasm_v128_load(a + i);
+        v128_t plo = wasm_i16x8_extmul_low_i8x16(vw, va);
+        v128_t phi = wasm_i16x8_extmul_high_i8x16(vw, va);
+        v128_t slo = wasm_i32x4_extadd_pairwise_i16x8(plo);
+        v128_t shi = wasm_i32x4_extadd_pairwise_i16x8(phi);
+        vacc = wasm_i32x4_add(vacc, wasm_i32x4_add(slo, shi));
+    }
+#endif
+    alignas(16) int32_t lanes[4];
+    wasm_v128_store(lanes, vacc);
+    int32_t acc = lanes[0] + lanes[1] + lanes[2] + lanes[3];
     if (i < n)
         acc += dot_u8i8_scalar(a + i, w + i, n - i);
     return acc;

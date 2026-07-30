@@ -145,6 +145,38 @@ bool finny_enabled() {
 // ftAdd / ftSub — add or subtract feature f's int16 FT weight column into a half.
 // Mirrors gomachine ftAdd/ftSub (enriched.go): W0i is feature-major, W0i[f*H + i].
 // int16 wraparound add/sub, exactly as the from-scratch buildAccHalf.
+//
+// WASM SIMD128: unconditional (no env gate, unlike PAIRSIMD/DOTSPLIT in
+// nnue_eval.cpp) -- this is the plain accumulator update every do_move/undo_move
+// pays for on the delta path, so it is worth vectorizing directly rather than
+// leaving it to autovectorization. wasm_i16x8_add/sub lower to a single v128.add
+// / v128.sub per 8 lanes and are DEFINED as wraparound mod-2^16 arithmetic (see
+// wasm_simd128.h: both are implemented as a plain __u16x8 +/-, no saturation),
+// which is bit-for-bit the same operation as int16_t's own two's-complement
+// wraparound +=/−= -- not an approximation, the identical ring operation just
+// applied 8 lanes at a time. H=512 is exactly divisible by 8, so there is no
+// scalar tail to reconcile.
+#if defined(__wasm_simd128__)
+#include <wasm_simd128.h>
+inline void ft_add(int16_t* acc, int f) {
+    const int16_t* col = g_net.W0i.data() + static_cast<std::size_t>(f) * H;
+    static_assert(H % 8 == 0, "wasm ft_add step must divide H");
+    for (int i = 0; i < H; i += 8) {
+        v128_t va = wasm_v128_load(acc + i);
+        v128_t vc = wasm_v128_load(col + i);
+        wasm_v128_store(acc + i, wasm_i16x8_add(va, vc));
+    }
+}
+inline void ft_sub(int16_t* acc, int f) {
+    const int16_t* col = g_net.W0i.data() + static_cast<std::size_t>(f) * H;
+    static_assert(H % 8 == 0, "wasm ft_sub step must divide H");
+    for (int i = 0; i < H; i += 8) {
+        v128_t va = wasm_v128_load(acc + i);
+        v128_t vc = wasm_v128_load(col + i);
+        wasm_v128_store(acc + i, wasm_i16x8_sub(va, vc));
+    }
+}
+#else
 inline void ft_add(int16_t* acc, int f) {
     const int16_t* col = g_net.W0i.data() + static_cast<std::size_t>(f) * H;
     for (int i = 0; i < H; ++i) acc[i] += col[i];
@@ -153,6 +185,7 @@ inline void ft_sub(int16_t* acc, int f) {
     const int16_t* col = g_net.W0i.data() + static_cast<std::size_t>(f) * H;
     for (int i = 0; i < H; ++i) acc[i] -= col[i];
 }
+#endif
 
 } // namespace
 
