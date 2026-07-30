@@ -22,6 +22,13 @@ json perft(const json& body);
 // search — see opening_key_line/opening_json in serve_handlers.cpp, which
 // this handler is just those two calls around parse_legal_or_throw.
 json opening(const json& body);
+// Search-free book probe: a pure Book::lookup() by book_key(fen), no search,
+// no Search::Context. Exists so the PHP analysis board's `cacheOnly` mode
+// (local-engine-in-browser users; AnalyzeController::resolveAnalysis) can
+// still get the book's ~100-Elo-over-search move on a cache miss without
+// paying for a full search — see serve_handlers.cpp, which wraps
+// parse_legal_or_throw + Book::shared().lookup + Rules::parse_uci_move.
+json book(const json& body);
 
 // Search-backed endpoints. Each leases an independent Search::SearchGroup from
 // the pool (Search::GroupLease, search.h/.cpp) for the duration of its search.

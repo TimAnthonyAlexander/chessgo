@@ -276,4 +276,17 @@ class EngineSelector extends GomachineClient
     {
         return $this->zugzwang->opening($fen, $history);
     }
+
+    /**
+     * Search-free book probe — always zugzwang, never gomachine: the `/book`
+     * endpoint ({@see ZugzwangClient::book()}) only exists on zugzwang, same
+     * always-zugzwang shape as `opening()`/`stockfishMove()`. Never throws —
+     * see `ZugzwangClient::book()` for the ok/hit contract callers must check.
+     *
+     * @return array{ok: false, hit: false}|array{ok: true, hit: false}|array{ok: true, hit: true, eval: array<string, mixed>, bestmove: string, pv: list<string>, depth: int}
+     */
+    public function book(string $fen): array
+    {
+        return $this->zugzwang->book($fen);
+    }
 }

@@ -19,11 +19,13 @@ use App\Services\EvalCacheService;
  *   → { eval: {type:"cp"|"mate", value}, bestmove, pv: [uci...], depth, opening, lines, source }
  *
  * `source` tells a caller whether this response was served from `eval_cache`
- * ("cache") or a fresh engine search ("engine") — added for the in-browser
- * local-engine feature (frontend/src/lib/engine/), which races a local search
- * against this endpoint and badges a displayed cache result until local
- * analysis supersedes it (see precedence.ts). Purely informational: it does
- * not affect the cache-or-search decision itself.
+ * ("cache"), a fresh engine search ("engine"), the precomputed opening book on
+ * a `cacheOnly` cache miss ("book" — see `resolveAnalysis()`), or nothing at
+ * all ("miss", `cacheOnly` only) — added for the in-browser local-engine
+ * feature (frontend/src/lib/engine/), which races a local search against this
+ * endpoint and badges a displayed cache result until local analysis
+ * supersedes it (see precedence.ts). Purely informational: it does not affect
+ * the cache-or-search decision itself.
  *
  * `history` is the prior-position FENs (root→previous). It buys no search
  * strength — it is what lets the engine NAME the opening (its native-Zobrist
@@ -196,8 +198,38 @@ class AnalyzeController extends Controller
                     return $hit;
                 }
             } elseif ($cacheOnly) {
-                // Miss, and we are forbidden from searching. Say so plainly; the
-                // client's local engine supplies the eval.
+                // Cache miss, and we are forbidden from searching. Before giving
+                // up, consult the book: a pure Zobrist-keyed lookup
+                // (EngineSelector::book(), no Search::Context on the engine
+                // side), so it's allowed even under cacheOnly. A hit is the
+                // ~100-Elo-over-our-search Stockfish-quality move — return it
+                // AND write it into eval_cache (source 'book') so every later
+                // visit to this position is a pure DB hit, book or not, with no
+                // engine call at all. put() still enforces its own
+                // never-downgrade ordering, so a depth-22 book entry can't
+                // clobber an already-deeper stored row.
+                $book = $this->engine->book($fen);
+                if ($book['hit'] === true) {
+                    $bookResult = [
+                        'eval' => $book['eval'],
+                        'bestmove' => $book['bestmove'],
+                        'pv' => $book['pv'],
+                        'depth' => $book['depth'],
+                    ];
+                    $this->evalCache->put($fen, $bookResult, 'book');
+
+                    return [
+                        'eval' => $book['eval'],
+                        'bestmove' => $book['bestmove'],
+                        'pv' => $book['pv'],
+                        'depth' => $book['depth'],
+                        'lines' => null,
+                        'source' => 'book',
+                    ];
+                }
+
+                // Book missed too. Say so plainly; the client's local engine
+                // supplies the eval.
                 return [
                     'eval' => null,
                     'bestmove' => null,

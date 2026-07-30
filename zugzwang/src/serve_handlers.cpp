@@ -353,6 +353,40 @@ json opening(const json& body) {
     return json{{"opening", opening_json(baseKeys)}};
 }
 
+// Search-free book probe: a pure Book::lookup() by book_key(pos), no
+// Search::Context, no TT — the exact same book consult /bestmove's
+// full-strength path does, just without the search that normally follows a
+// miss. Exists for the PHP analysis board's `cacheOnly` mode (the browser's
+// local engine is doing the searching, so the server must never start one of
+// its own) so a cache-miss position can still get the book's ~100-Elo-over-
+// search move on a pure lookup. Movegen-validated exactly like /bestmove's
+// book branches (Rules::parse_uci_move) — a stale record can't yield an
+// illegal move. Mirrors book_eval_json's {type,value} shape (see its doc
+// comment: BookEntry::score/mate are side-to-move relative, same convention
+// as eval_json, so no sign flip is needed here either) so /book and /analyze
+// never disagree about the same entry.
+json book(const json& body) {
+    std::string fen = body.value("fen", "");
+    Position pos;
+    parse_legal_or_throw(fen, pos);
+
+    if (!Book::shared().loaded()) return json{{"hit", false}};
+
+    const Book::BookEntry* e = Book::shared().lookup(Book::book_key(pos));
+    if (!e || e->pv.empty()) return json{{"hit", false}};
+
+    Move bm = Rules::parse_uci_move(pos, e->pv[0]);
+    if (bm == MOVE_NONE) return json{{"hit", false}};
+
+    return json{
+        {"hit", true},
+        {"eval", book_eval_json(*e)},
+        {"bestmove", e->pv[0]},
+        {"pv", e->pv},
+        {"depth", e->depth},
+    };
+}
+
 // ==================== search-backed handlers ====================
 
 json best_move(const json& body) {

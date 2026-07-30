@@ -84,4 +84,66 @@ class ZugzwangClient extends GomachineClient
 
         return ['ok' => true, 'opening' => $opening];
     }
+
+    /**
+     * Search-free book probe (`POST /book`) — a pure Zobrist-keyed lookup into
+     * zugzwang's precomputed depth-22 Stockfish best-move cache
+     * (`zugzwang/src/book.h`), no search. Used by AnalyzeController's
+     * `cacheOnly` path: when the eval cache misses and the caller has asked us
+     * not to search (the browser's own local engine is doing that), a book hit
+     * still gets the ~100-Elo-over-our-search move for free.
+     *
+     * MUST degrade gracefully and never throw, exactly like {@see opening()}:
+     * `/book` may not exist yet on an older deployed engine, so an unreachable
+     * engine, a 404, or a malformed response are all caught here and reported
+     * via `ok: false` rather than propagating. Callers MUST check `ok`:
+     *   - `ok: false` — couldn't resolve (missing endpoint / unreachable /
+     *     malformed). Treat as unknown, same as a book miss.
+     *   - `ok: true, hit: false` — the engine resolved it; genuinely not in
+     *     the book.
+     *   - `ok: true, hit: true, eval, bestmove, pv, depth` — a book hit.
+     *
+     * Short timeout — this sits on the `cacheOnly` fast path, and the lookup
+     * itself does no search.
+     *
+     * @return array{ok: false, hit: false}|array{ok: true, hit: false}|array{ok: true, hit: true, eval: array<string, mixed>, bestmove: string, pv: list<string>, depth: int}
+     */
+    public function book(string $fen): array
+    {
+        try {
+            $decoded = $this->post('/book', ['fen' => $fen], 1000);
+        } catch (\Throwable) {
+            return ['ok' => false, 'hit' => false];
+        }
+
+        if (!array_key_exists('hit', $decoded) || !is_bool($decoded['hit'])) {
+            return ['ok' => false, 'hit' => false];
+        }
+
+        if ($decoded['hit'] === false) {
+            return ['ok' => true, 'hit' => false];
+        }
+
+        $eval = $decoded['eval'] ?? null;
+        $bestmove = $decoded['bestmove'] ?? null;
+        $pv = $decoded['pv'] ?? null;
+        $depth = $decoded['depth'] ?? null;
+        if (
+            !is_array($eval) || !isset($eval['type'], $eval['value'])
+            || !is_string($bestmove)
+            || !is_array($pv)
+            || !is_int($depth)
+        ) {
+            return ['ok' => false, 'hit' => false];
+        }
+
+        return [
+            'ok' => true,
+            'hit' => true,
+            'eval' => $eval,
+            'bestmove' => $bestmove,
+            'pv' => array_values(array_map('strval', $pv)),
+            'depth' => $depth,
+        ];
+    }
 }

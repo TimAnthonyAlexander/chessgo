@@ -239,6 +239,113 @@ class AnalyzeControllerTest extends TestCase
         $this->assertSame([], $engine->analyzeCalls, 'a failed opening lookup must not fall through to a search');
     }
 
+    // --- cacheOnly + cache MISS: the book fallback ---
+    //
+    // Same "local engine is doing the search" contract as above — the book
+    // probe is a pure lookup on the engine side (no Search::Context), so it's
+    // allowed even under cacheOnly. These must never invoke analyze().
+
+    public function test_cache_only_miss_with_book_hit_returns_book_result_and_writes_cache(): void
+    {
+        $engine = new FakeAnalyzeEngine();
+        $engine->bookResult = [
+            'ok' => true,
+            'hit' => true,
+            'eval' => ['type' => 'cp', 'value' => 33],
+            'bestmove' => 'e2e4',
+            'pv' => ['e2e4', 'e7e5', 'g1f3'],
+            'depth' => 22,
+        ];
+        $controller = $this->makeController($engine);
+
+        $result = $controller->resolveAnalysis(self::START_FEN, 1500, 0, 5, [], cacheOnly: true);
+
+        $this->assertSame('book', $result['source']);
+        $this->assertSame(['type' => 'cp', 'value' => 33], $result['eval']);
+        $this->assertSame('e2e4', $result['bestmove']);
+        $this->assertSame(['e2e4', 'e7e5', 'g1f3'], $result['pv']);
+        $this->assertSame(22, $result['depth']);
+        $this->assertSame([], $engine->analyzeCalls, 'a book hit must never trigger a search');
+        $this->assertCount(1, $engine->bookCalls);
+        $this->assertSame(self::START_FEN, $engine->bookCalls[0]);
+
+        $cached = $this->cache->get(self::START_FEN, 20, 1);
+        $this->assertNotNull($cached, 'a book hit must be written into eval_cache');
+        $this->assertSame(22, $cached->depth);
+        $this->assertSame('book', $cached->source);
+        $this->assertSame('e2e4', $cached->bestmove);
+    }
+
+    public function test_cache_only_miss_with_book_miss_returns_miss_and_writes_nothing(): void
+    {
+        $engine = new FakeAnalyzeEngine();
+        $engine->bookResult = ['ok' => true, 'hit' => false];
+        $controller = $this->makeController($engine);
+
+        $result = $controller->resolveAnalysis(self::START_FEN, 1500, 0, 5, [], cacheOnly: true);
+
+        $this->assertSame('miss', $result['source']);
+        $this->assertNull($result['eval']);
+        $this->assertSame([], $engine->analyzeCalls, 'a book miss must never trigger a search');
+        $this->assertCount(1, $engine->bookCalls);
+
+        $cached = $this->cache->get(self::START_FEN, 0, 1);
+        $this->assertNull($cached, 'a book miss must write nothing to eval_cache');
+    }
+
+    public function test_cache_only_hit_never_probes_the_book(): void
+    {
+        $this->putResult(self::START_FEN, depth: 24);
+
+        $engine = new FakeAnalyzeEngine();
+        $engine->openingResult = ['ok' => true, 'opening' => null];
+        $controller = $this->makeController($engine);
+
+        $result = $controller->resolveAnalysis(self::START_FEN, 1500, 20, 0, [], cacheOnly: true);
+
+        $this->assertSame('cache', $result['source']);
+        $this->assertSame([], $engine->bookCalls, 'a cache hit already answered — the book must never be probed');
+    }
+
+    public function test_cache_only_miss_book_hit_does_not_downgrade_a_deeper_existing_row(): void
+    {
+        // A deeper row is already stored (e.g. a real search on this position
+        // ran via the non-cacheOnly path), but it does not satisfy the
+        // requested depth (35), so the cache lookup itself still misses and
+        // the book gets probed — exactly the scenario where put()'s
+        // never-downgrade ordering has to hold: the book's depth-22 entry must
+        // not clobber the already-deeper depth-30 row.
+        $this->putResult(self::START_FEN, depth: 30);
+
+        $engine = new FakeAnalyzeEngine();
+        $engine->bookResult = [
+            'ok' => true,
+            'hit' => true,
+            'eval' => ['type' => 'cp', 'value' => 33],
+            'bestmove' => 'e2e4',
+            'pv' => ['e2e4'],
+            'depth' => 22,
+        ];
+        $controller = $this->makeController($engine);
+
+        $result = $controller->resolveAnalysis(self::START_FEN, 1500, 35, 0, [], cacheOnly: true);
+
+        // The response itself still reports the book's own (shallower) result
+        // — the caller asked for depth 35 and cacheOnly forbids searching for
+        // it, so the book move is the best available answer for THIS request.
+        $this->assertSame('book', $result['source']);
+        $this->assertSame(22, $result['depth']);
+        $this->assertCount(1, $engine->bookCalls);
+
+        // But the STORED row must not regress: the pre-existing depth-30 entry
+        // is better than the book's depth-22 one, so put() must have left it
+        // untouched.
+        $cached = $this->cache->get(self::START_FEN, 0, 1);
+        $this->assertNotNull($cached);
+        $this->assertSame(30, $cached->depth, 'a shallower book entry must never downgrade a deeper stored row');
+        $this->assertNotSame('book', $cached->source, 'the pre-existing row (not the book write) must still be stored');
+    }
+
     private function makeController(EngineSelector $engine): AnalyzeController
     {
         $anticheat = new class extends AnticheatService {
@@ -299,6 +406,12 @@ class FakeAnalyzeEngine extends EngineSelector
     /** @var array{ok: bool, opening: array<string, mixed>|null} */
     public array $openingResult = ['ok' => true, 'opening' => null];
 
+    /** @var list<string> */
+    public array $bookCalls = [];
+
+    /** @var array{ok: false, hit: false}|array{ok: true, hit: false}|array{ok: true, hit: true, eval: array<string, mixed>, bestmove: string, pv: list<string>, depth: int} */
+    public array $bookResult = ['ok' => true, 'hit' => false];
+
     public function __construct()
     {
     }
@@ -326,5 +439,12 @@ class FakeAnalyzeEngine extends EngineSelector
         $this->openingCalls[] = ['fen' => $fen, 'history' => $history];
 
         return $this->openingResult;
+    }
+
+    public function book(string $fen): array
+    {
+        $this->bookCalls[] = $fen;
+
+        return $this->bookResult;
     }
 }
