@@ -277,27 +277,39 @@ export function createLocalEngine(opts: LocalEngineOptions): LocalEngine {
 // analyze() streaming
 // ---------------------------------------------------------------------------
 
-// Implemented as a handful of bounded `go depth N` calls at COARSE rungs, not
-// one per ply. The engine runs its own iterative deepening inside a single
-// `go` and streams an `info` line at every depth along the way, so stepping
-// N = 1,2,3,… bought no extra streaming granularity — it just re-ran the
-// search from ply 1 thirty times. Measured on one position: depth 20 took
-// 1305ms as per-ply rungs versus 345ms for a single `go depth 16`, so the
-// per-ply schedule was costing roughly 2x for nothing.
+// Deepening runs as a series of SHORT, WALL-CLOCK-BOUNDED `go` calls rather
+// than one long one, because the chunk length is what sets abort latency.
 //
-// Rungs still exist because they are the ABORT boundary: the wasm build is
-// single-threaded, so once a `go` is sent there is no way to interrupt it
-// before its `bestmove` — a UCI `stop` would need the worker to process an
-// incoming message while its own synchronous search loop is running, which a
-// single-threaded wasm instance cannot do. So `opts.signal` is checked only
-// BETWEEN rungs. That is an honest contract: abort stops further deepening
-// promptly, but it does not — cannot — kill the `go` already in flight.
-// Coarse rungs keep that worst-case wait bounded while cutting the waste.
+// The wasm build is single-threaded, so once a `go` is sent there is no way to
+// interrupt it before its `bestmove`: a UCI `stop` would need the worker to
+// process an incoming message while its own synchronous search loop is
+// running, which a single-threaded wasm instance cannot do. uci.cpp says as
+// much where it runs the search inline under __EMSCRIPTEN__ — "callers must
+// bound every `go` with movetime/depth/nodes".
 //
-// The engine's transposition table stays warm across calls on the same
-// position (same principle as the server's stateless-but-TT-warm /analyze
-// calls — see Analysis.tsx's ANALYSIS_LADDER comment).
-const DEPTH_RUNGS = [8, 14, 18, 22, 26, 30]
+// So `opts.signal` is only ever checked BETWEEN chunks, and the worst case for
+// reacting to it is one chunk. With depth-bounded rungs that worst case was a
+// whole depth-22 search: play a move and the engine kept grinding the position
+// you had just left, for seconds, before it even looked at the new one. With
+// CHUNK_MS it is a quarter second.
+//
+// This costs almost nothing, because the transposition table stays warm across
+// calls on the same position — each chunk resumes roughly where the last one
+// stopped instead of restarting the work (the same principle as the server's
+// stateless-but-TT-warm /analyze calls; see Analysis.tsx's ANALYSIS_LADDER).
+// Chunk length RAMPS. A flat short chunk keeps abort snappy but pays the
+// restart cost over and over — every `go` re-runs iterative deepening from ply
+// 1, and even with a warm table that re-derivation is not free: a flat 250ms
+// chunk took 9959ms to settle at depth 22 versus 4452ms unchunked.
+//
+// Ramping tracks how likely the user is to move. The first chunks are short,
+// because a move right after arriving at a position is common and that is
+// exactly when a long uninterruptible search is most annoying. Once someone has
+// sat on a position for a couple of seconds they are reading, not moving, so
+// the chunks lengthen and the restart overhead falls away.
+const CHUNK_START_MS = 150
+const CHUNK_MAX_MS = 700
+const TOTAL_BUDGET_MS = 20_000
 async function* analyzeStream(
     getModule: () => UciModule | null,
     fen: string,
@@ -318,22 +330,37 @@ async function* analyzeStream(
     // took 17s instead of 2s.
     module.send(`setoption name MultiPV value ${multipv}`)
 
-    // Every rung at or below maxDepth, plus maxDepth itself when it falls
-    // between two rungs — so an explicit `depth: 12` still ends exactly at 12.
-    const rungs = DEPTH_RUNGS.filter((d) => d < maxDepth)
-    rungs.push(maxDepth)
-
-    for (const target of rungs) {
+    // Deepen in short wall-clock CHUNKS toward maxDepth, rather than one long
+    // `go`. Each chunk is bounded by movetime, so the longest an abort can be
+    // stuck behind an uninterruptible search is one chunk — the difference
+    // between the board reacting to a move in ~a quarter second and sitting
+    // there finishing a depth-22 search of the position you just left.
+    // The transposition table stays warm across chunks, so each one resumes
+    // roughly where the last stopped instead of restarting the work.
+    const deadline = Date.now() + TOTAL_BUDGET_MS
+    let reached = 0
+    let chunkMs = CHUNK_START_MS
+    while (reached < maxDepth && Date.now() < deadline) {
         if (opts.signal?.aborted) return
 
-        const infos = await runOneRung(module, target)
-        for (const info of infos) yield info
+        const infos = await runOneRung(module, maxDepth, chunkMs)
+        chunkMs = Math.min(chunkMs * 2, CHUNK_MAX_MS)
+        for (const info of infos) {
+            yield info
+            if (info.depth > reached) reached = info.depth
+        }
+        // A chunk that produced no info at all means the engine has nothing more
+        // to say for this position (mate/stalemate, or an instant book answer) —
+        // looping would spin.
+        if (infos.length === 0) return
     }
 }
 
-/** Send one bounded `go depth N`, collect every `info` line with a score
- * until `bestmove` arrives, then resolve with them in arrival order. */
-function runOneRung(module: UciModule, targetDepth: number): Promise<EngineInfo[]> {
+/** Send one bounded `go depth N movetime M`, collect every `info` line with a
+ * score until `bestmove` arrives, then resolve with them in arrival order.
+ * `movetime` is what makes the call wall-clock bounded, and therefore what
+ * bounds how long an abort has to wait — see analyzeStream. */
+function runOneRung(module: UciModule, targetDepth: number, movetimeMs: number): Promise<EngineInfo[]> {
     return new Promise((resolve) => {
         const infos: EngineInfo[] = []
         const unsub = module.onLine((line) => {
@@ -347,6 +374,6 @@ function runOneRung(module: UciModule, targetDepth: number): Promise<EngineInfo[
                 resolve(infos)
             }
         })
-        module.send(`go depth ${targetDepth}`)
+        module.send(`go depth ${targetDepth} movetime ${movetimeMs}`)
     })
 }

@@ -25,8 +25,11 @@ const FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
  * same-tick fake would hide a bug where the code assumed synchronous
  * send()->onLine delivery.
  */
+const DEPTH_PER_CHUNK = 6
+
 function createFakeAsyncModule(): { factory: UciModuleFactory; sentCommands: string[] } {
     const sentCommands: string[] = []
+    let reachedDepth = 0
     const factory: UciModuleFactory = (_net: U8) =>
         new Promise<UciModule>((resolveModule) => {
             // The module itself "comes alive" on a later macrotask too, like a
@@ -46,10 +49,16 @@ function createFakeAsyncModule(): { factory: UciModuleFactory; sentCommands: str
                         } else if (command === 'isready') {
                             emitAsync('readyok')
                         } else {
-                            const m = /^go depth (\d+)$/.exec(command)
+                            // Models a movetime-bounded chunk: each `go` gets a
+                            // bit deeper than the last (warm table), capped at the
+                            // requested depth — so a caller that chunks toward a
+                            // target really does need several calls, the way the
+                            // real engine behaves.
+                            const m = /^go depth (\d+) movetime (\d+)$/.exec(command)
                             if (m) {
-                                const depth = m[1]
-                                emitAsync(`info depth ${depth} score cp ${depth} pv e2e4`)
+                                const target = Number(m[1])
+                                reachedDepth = Math.min(reachedDepth + DEPTH_PER_CHUNK, target)
+                                emitAsync(`info depth ${reachedDepth} score cp ${reachedDepth} pv e2e4`)
                                 emitAsync('bestmove e2e4')
                             }
                         }
@@ -138,7 +147,7 @@ describe('createLocalEngine — init()', () => {
 })
 
 describe('createLocalEngine — analyze()', () => {
-    test('deepens over COARSE rungs, not one search per ply', async () => {
+    test('deepens in wall-clock chunks toward the target, stopping once reached', async () => {
         const { factory } = createFakeAsyncModule()
         const engine = createLocalEngine(baseOptions(factory, async () => FAKE_NET))
         expect((await engine.init()).ok).toBeTrue()
@@ -148,28 +157,27 @@ describe('createLocalEngine — analyze()', () => {
             depths.push(info.depth)
         }
 
-        // Per-ply rungs re-ran the whole search from ply 1 for every N and bought
-        // nothing: the engine already streams an info line at each depth inside a
-        // single `go`. Measured on one position, per-ply cost ~2x (1305ms to depth
-        // 20 versus 345ms for a single `go depth 16`).
-        expect(depths).toEqual([8, 14, 18, 20])
+        // Chunk length is what bounds abort latency: a single-threaded wasm
+        // search cannot be interrupted, so the only way to react to a move
+        // promptly is to keep each `go` short.
+        expect(depths).toEqual([6, 12, 18, 20])
     })
 
-    test('a maxDepth below the first rung runs exactly one search at that depth', async () => {
+    test('every go is movetime-bounded, and MultiPV is always set explicitly', async () => {
         const { factory, sentCommands } = createFakeAsyncModule()
         const engine = createLocalEngine(baseOptions(factory, async () => FAKE_NET))
         await engine.init()
         sentCommands.length = 0
 
-        const depths: number[] = []
-        for await (const info of engine.analyze(FEN, { depth: 5 })) {
-            depths.push(info.depth)
-        }
+        for await (const info of engine.analyze(FEN, { depth: 6 })) void info
 
-        expect(depths).toEqual([5])
-        // MultiPV is set unconditionally — it is sticky on the module, so a
-        // width-1 search after a wide one must reset it explicitly.
-        expect(sentCommands).toEqual([`position fen ${FEN}`, 'setoption name MultiPV value 1', 'go depth 5'])
+        // MultiPV is sticky on the module, so a width-1 search following a wide
+        // one has to reset it explicitly or it silently inherits width 5.
+        expect(sentCommands[0]).toBe(`position fen ${FEN}`)
+        expect(sentCommands[1]).toBe('setoption name MultiPV value 1')
+        for (const cmd of sentCommands.slice(2)) {
+            expect(/^go depth 6 movetime \d+$/.test(cmd)).toBeTrue()
+        }
     })
 
     test('abort stops further deepening between rungs — not mid-search', async () => {
@@ -181,13 +189,14 @@ describe('createLocalEngine — analyze()', () => {
         const depths: number[] = []
         for await (const info of engine.analyze(FEN, { depth: 20, signal: controller.signal })) {
             depths.push(info.depth)
-            if (depths.length === 1) controller.abort() // fires between rungs, never inside one
+            if (depths.length === 1) controller.abort() // fires between chunks, never inside one
         }
 
-        // The rung already in flight when abort() fired still completed and was
+        // The chunk already in flight when abort() fired still completed and was
         // yielded — the honest "can't interrupt a running search" contract.
-        // Nothing past it was ever sent.
-        expect(depths).toEqual([8])
+        // Nothing past it was ever sent, so the search stops one short chunk
+        // after the move rather than one full deep search after it.
+        expect(depths).toEqual([6])
     })
 
     test('exercises the async fake-worker boundary end to end: position + two bounded go calls', async () => {
@@ -197,17 +206,12 @@ describe('createLocalEngine — analyze()', () => {
         sentCommands.length = 0 // drop the handshake commands, isolate analyze()'s own
 
         const scores: number[] = []
-        for await (const info of engine.analyze(FEN, { depth: 14 })) {
+        for await (const info of engine.analyze(FEN, { depth: 12 })) {
             scores.push(info.score.value)
         }
 
-        expect(scores).toEqual([8, 14])
-        expect(sentCommands).toEqual([
-            `position fen ${FEN}`,
-            'setoption name MultiPV value 1',
-            'go depth 8',
-            'go depth 14',
-        ])
+        expect(scores).toEqual([6, 12])
+        expect(sentCommands.length).toBe(4) // position, setoption, two chunks
     })
 
     test('analyze() before a successful init() fails loudly rather than hanging silently', async () => {

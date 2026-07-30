@@ -137,8 +137,21 @@ export function useLocalEngineRace({ active, fen }: LocalEngineRaceOptions): Loc
     // hiding it (see the task's "explain briefly why" requirement).
     const capability = useMemo(() => computeCapability(features()), [])
     const [download, dispatch] = useReducer(reduceDownloadState, INITIAL_DOWNLOAD_STATE)
-    const [candidate, setCandidate] = useState<RaceCandidate | null>(null)
-    const [lines, setLines] = useState<AnalysisLine[] | null>(null)
+    // Both results are stored TAGGED WITH THE FEN they were computed for, and
+    // filtered against the current `fen` on the way out (see the return below).
+    //
+    // Without that, a stale result leaks for exactly one commit after a move:
+    // `current.id` in Analysis.tsx updates in the same render that the new fen
+    // arrives, but the reset below only lands on the NEXT render — so the
+    // consuming effect sees the new node paired with the previous position's
+    // candidate and writes it. Visible as the best-move arrow being one move
+    // behind: it never appeared for the position you were on, then snapped into
+    // place the moment you played the next one.
+    //
+    // Filtering by fen makes that unrepresentable rather than depending on the
+    // order two independent effects happen to run in.
+    const [candidate, setCandidate] = useState<{ fen: string; value: RaceCandidate } | null>(null)
+    const [lines, setLines] = useState<{ fen: string; value: AnalysisLine[] } | null>(null)
     const engineRef = useRef<LocalEngine | null>(null)
     // Bumped by retry() to force the lifecycle effect to run again after an
     // error, without needing `download` itself as a dependency (which would
@@ -216,7 +229,7 @@ export function useLocalEngineRace({ active, fen }: LocalEngineRaceOptions): Loc
             let pending: RaceCandidate | null = null
             const flush = () => {
                 if (!pending || cancelled) return
-                setCandidate(pending)
+                setCandidate({ fen, value: pending })
                 pending = null
                 lastEmit = Date.now()
             }
@@ -249,7 +262,7 @@ export function useLocalEngineRace({ active, fen }: LocalEngineRaceOptions): Loc
                     consume(info)
                 }
                 flush()
-                setLines(toAnalysisLines(fen, bySlot))
+                setLines({ fen, value: toAnalysisLines(fen, bySlot) })
 
                 // Phase 2 — deep and narrow: settles the eval and the arrow.
                 for await (const info of engine.analyze(fen, {
@@ -278,8 +291,9 @@ export function useLocalEngineRace({ active, fen }: LocalEngineRaceOptions): Loc
         enabled,
         setEnabled,
         download,
-        lines,
+        // Never hand out a result computed for a different position.
+        lines: lines?.fen === fen ? lines.value : null,
         retry: () => setRetryTick((t) => t + 1),
-        candidate,
+        candidate: candidate?.fen === fen ? candidate.value : null,
     }
 }

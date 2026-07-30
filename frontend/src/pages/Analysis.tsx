@@ -596,7 +596,13 @@ export default function Analysis() {
                     let r: Awaited<ReturnType<typeof analyze>>
                     try {
                         r = await analyze(fen, {
-                            multipv: 5,
+                            // multipv 1, not 5. The cache only serves an entry
+                            // holding at least as many lines as asked for, so
+                            // requesting 5 missed every single-line row — and
+                            // with the local engine on, the move list comes from
+                            // local anyway. A stored multi-line entry still
+                            // returns its lines, so asking narrow costs nothing.
+                            multipv: 1,
                             history: historyFens,
                             cacheOnly: true,
                             signal: ac.signal,
