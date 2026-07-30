@@ -464,6 +464,19 @@ int hce_blend(const Position& pos, int netEval) {
 // the net's scale where the rails begin, and every further material change moves it by a
 // full piece value. Continuity check: up a bishop -> 1086 + (443 - 450) = 1079.
 // SatHceRef is the onset baseline, overridable for tuning (SPSA candidate).
+// Modes (SATFIX=n). Mode 2 measured -12.1 +/- 8.4 Elo at normal play, so a symmetric
+// HCE substitution is too blunt: at a railed node the SEARCH is not blind even though
+// the eval is — captures change piece count, which changes the output bucket and the
+// rail pattern, so the eval still moves across plies — while substituting HCE injects a
+// weaker positional signal at every railed node, including up-a-piece middlegames that
+// are WINNING and were converting fine. Same trap HCEBLEND hit (its winning-side blend
+// was the standard-play dip). Hence the one-sided and material-only variants.
+//   1 = pure HCE, both sides
+//   2 = anchored HCE, both sides            (measured -12.1 Elo)
+//   3 = anchored HCE, LOSING side only
+//   5 = material-only, LOSING side only     (minimal intervention: restores monotonicity
+//       without importing any HCE positional opinion; reference-free)
+//   9 = tally only, no substitution         (control: isolates the instrumentation cost)
 static inline int satfix_mode() {
     static const int mode = [] { const char* e = getenv("SATFIX"); return e ? atoi(e) : 0; }();
     return mode;
@@ -473,11 +486,24 @@ static inline int sat_hce_ref() {
     return r;
 }
 
+// Full-value linear material, stm-relative. Unlike MatGradVal (deliberately small
+// weights meant to be added on top of a live net eval) these are true piece values,
+// because at a railed node they are the ENTIRE eval, not a nudge.
+constexpr int SatMatVal[7] = {0, 100, 320, 330, 500, 900, 0}; // -,P,N,B,R,Q,K
+static int material_only(const Position& pos) {
+    Color us = pos.side_to_move(), them = ~us;
+    int d = 0;
+    for (int pt = PAWN; pt <= QUEEN; ++pt)
+        d += SatMatVal[pt] * (pos.count(us, PieceType(pt)) - pos.count(them, PieceType(pt)));
+    return d;
+}
+
 // stm-relative replacement eval for a node whose net output has railed to a constant.
 int sat_substitute(const Position& pos, int raw, int mode) {
+    if (mode == 5) return material_only(pos);
     const int hce = hce_evaluate(pos);
     if (mode == 1) return hce;                                  // pure HCE
-    const int ref = raw >= 0 ? sat_hce_ref() : -sat_hce_ref();  // mode 2: anchored
+    const int ref = raw >= 0 ? sat_hce_ref() : -sat_hce_ref();  // modes 2/3: anchored
     return raw + (hce - ref);
 }
 
@@ -495,8 +521,12 @@ int Eval::evaluate(const Position& pos) {
     // SATFIX (see above): every L1 lane railed => the net output is a constant with no
     // gradient, so hand this node to the never-saturating hand eval.
     const int satMode = satfix_mode();
-    if (satMode != 0 && NNUE::g_satdiag.l1live == 0)
-        return sat_substitute(pos, raw, satMode);
+    if (satMode != 0 && satMode != 9 && NNUE::g_satdiag.l1live == 0) {
+        // Modes 3/5 fire only when the side to move is the one that is behind; the
+        // winning side keeps the pure net, which is where mode 2 lost its Elo.
+        const bool losingSideOnly = (satMode == 3 || satMode == 5);
+        if (!losingSideOnly || raw < 0) return sat_substitute(pos, raw, satMode);
+    }
     if (matgrad_enabled())  v += material_gradient(pos, raw);
     if (hceblend_enabled()) v += hce_blend(pos, raw);
     return v;

@@ -146,6 +146,62 @@ Reported positions, all movetimes 300/1000/3000 ms:
   `a7a5`, hanging the pawn to `Bxa5`/`Qxa5`; `SATFIX` plays `b6`/`a6`/`Kg7`, none of
   which drop anything. Neither config picks the reported `Nb4`.
 
+## 4b. SPRT result: the symmetric substitution is a REGRESSION
+
+`SATFIX=2` (both sides) measured **-12.1 +/- 8.4 Elo** at normal play, 1393 games,
+movetime 100 ms, bounds [-5, 0], pentanomial `[12, 128, 443, 91, 6]`. Not noise.
+
+Why, and it is the same trap `HCEBLEND` fell into: **a railed node is not a blind
+search.** Captures change piece count, which changes the output bucket and the rail
+pattern, so the eval still moves from ply to ply even while it is locally constant.
+Substituting the HCE therefore does not fill a vacuum — it replaces a strong signal
+with a weak one at *every* railed node, including up-a-piece middlegames that are
+WINNING and were converting perfectly well. `HCEBLEND`'s own notes record the same
+finding ("blending on the winning side just injected weaker-HCE noise; that was the
+small standard-play dip"), which is why it ended up losing-side-only.
+
+So the gate has to be one-sided, and the substitution should import as little
+hand-crafted opinion as possible. Modes added:
+
+| mode | what | golden | suite: total hung | pos1 |
+|---|---|---|---|---|
+| 0 (shipped) | — | 37/38 | 4580 cp | `O-O`, loses Q |
+| 9 | tally only, no substitution (**control**) | 37/38 | 4330 cp | `O-O`, loses Q |
+| 2 | anchored HCE, both sides | 34/38 | 300 cp | saves Q |
+| 3 | anchored HCE, **losing side only** | 37/38 | 440 cp | saves Q |
+| 5 | **material-only**, losing side only | 37/38 | 420 cp | saves Q |
+
+Mode 9 confirms the instrumentation itself is behaviourally inert, so the -12.1 is all
+substitution, not measurement cost. Modes 3 and 5 keep essentially the whole
+correctness win (~90% less material given away) while touching none of the three
+railed golden FENs — all of which are winning-side. Mode 5 is the minimal intervention:
+full-value linear material and nothing else, no PST/mobility/king-safety opinion, and
+reference-free.
+
+Note the suite has run-to-run variance at fixed movetime (baseline measured 5760 cp and
+4580 cp on two runs), so read the ~10x gap, not the exact percentage.
+
+## 4c. The tuning-co-adaptation question (open, and bigger than this fix)
+
+Every search flag default and all 8 SPSA margins were accepted by SPRT against an eval
+that is blind in ~6.6% of positions. That does not make the tuning *wrong* — it is
+correctly fitted to the eval the engine actually has — but it does mean:
+
+- The margins were never fitted to the railed tail, so any eval fix moves that tail
+  into a region the tuning has never seen. Re-SPSA with the fix on before judging it.
+- **Techniques whose value depends on eval quality in decisive positions may have
+  washed for the wrong reason.** `optimism` is the sharpest example: SF derives it from
+  `|psqt - positional|`, a complexity signal our single-head net structurally cannot
+  produce, and a railed eval makes it meaningless. Same suspicion applies to `EVALHIST`
+  and the RFP/razoring margin variants. These deserve a re-test *after* the eval is
+  fixed, not before — check the washed ledger in
+  `../../gomachine/engine/docs/OPTIMIZATIONS.md` for candidates.
+- After the August retrain the whole margin set must be re-SPSA'd; current values are
+  not portable to a net with a working gradient.
+- **`test/golden_eval.txt` currently freezes rail constants (1086, 1235, 1235) as the
+  reference values**, so the golden gate will actively resist any eval fix. Re-freeze it
+  once the eval is settled.
+
 ## 5. Next
 
 1. **SPRT `SATFIX=2` and `SATFIX=1` at normal play** (movetime, on coalla). This is
