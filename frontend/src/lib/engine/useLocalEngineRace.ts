@@ -181,10 +181,16 @@ export function useLocalEngineRace({ active, fen, achievedDepth = 0 }: LocalEngi
     }, [enabled])
 
     // --- Engine lifecycle: resolve the net (cache hit or download), spin up
-    // the module, complete the UCI handshake. The whole body is a no-op
-    // unless BOTH `enabled` and `capability.available` are true. ---
+    // the module, complete the UCI handshake. The whole body is a no-op unless
+    // `active` (the engine panel is on and this position is analyzable),
+    // `enabled`, and `capability.available` are ALL true.
+    //
+    // `active` matters as much as `enabled` now that local defaults to ON:
+    // without it, merely opening the analysis board with the engine switched
+    // OFF would start a 36 MB download nobody asked for. Nothing is fetched
+    // until the user actually turns the engine on. ---
     useEffect(() => {
-        if (!enabled || !capability.available) return
+        if (!active || !enabled || !capability.available) return
 
         let cancelled = false
         dispatch({ type: 'start' })
@@ -225,7 +231,7 @@ export function useLocalEngineRace({ active, fen, achievedDepth = 0 }: LocalEngi
             engineRef.current = null
             dispatch({ type: 'reset' })
         }
-    }, [enabled, capability.available, retryTick])
+    }, [active, enabled, capability.available, retryTick])
 
     // --- Streaming analysis for the current position, once the engine is
     // ready. No-op unless the caller says this position is worth analyzing

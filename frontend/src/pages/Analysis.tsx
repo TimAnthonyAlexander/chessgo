@@ -207,7 +207,11 @@ export default function Analysis() {
     } | null>(null)
     const [sound, setSound] = useState(soundEnabled())
     // master: eval bar + arrow + engine line (persisted across refreshes)
-    const [engineOn, setEngineOn] = usePersistentBool('chessgo.analysis.engineOn', true)
+    // OFF by default. Paired with the local engine defaulting ON (see
+    // lib/engine/settings.ts): engine-on + local-off sent essentially all
+    // analysis to the server, which is the opposite of what the in-browser
+    // engine is for. Turning the engine on now brings local with it.
+    const [engineOn, setEngineOn] = usePersistentBool('chessgo.analysis.engineOn', false)
     const [game, setGame] = useState<GameAnalysis | null>(null)
     const [loadError, setLoadError] = useState<string | null>(null)
     const [loading, setLoading] = useState<boolean>(!!id)

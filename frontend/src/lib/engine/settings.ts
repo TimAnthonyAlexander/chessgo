@@ -1,7 +1,16 @@
-// Persisted opt-in switch for the in-browser (WASM) local engine — OFF by
-// default, exactly like Lichess: the local engine only ever starts because the
-// user flipped this on. Nothing downloads or runs before that (see
-// useLocalEngineRace.ts, the only consumer that acts on it).
+// Persisted switch for the in-browser (WASM) local engine — ON by default,
+// but only ever acted on once the user turns the engine panel on at all (the
+// engine itself now defaults to OFF, see Analysis.tsx's `engineOn`).
+//
+// The pairing is the point. With the engine defaulting ON and local defaulting
+// OFF, essentially every analysis request went to the server, which is exactly
+// backwards: the local engine exists to keep that work off the server. So the
+// engine starts off, and the first time someone turns it on they get the local
+// engine with it.
+//
+// Nothing downloads or runs before that — useLocalEngineRace's lifecycle
+// effect is gated on `active` (engine on) as well as this flag, so a visitor
+// who never turns the engine on never fetches the net.
 //
 // Deliberately its OWN localStorage key (`engine.enabled`), not folded into
 // settings.ts's `chessgo.prefs` blob: that blob is Analysis/game VIEW
@@ -35,11 +44,15 @@ export interface LocalEngineSettingsStore {
 
 function readEnabled(storage: StorageLike): boolean {
     try {
-        // Absent key (never toggled) reads as not-'1', i.e. false — the
-        // documented default.
-        return storage.getItem(ENGINE_ENABLED_KEY) === '1'
+        // Tri-state on purpose: absent means "never chosen" and defaults to ON,
+        // while an explicit '0' is a real user decision and is respected. Only
+        // setEnabled() ever writes, so the absent state stays meaningful instead
+        // of being overwritten with a default on first read.
+        const raw = storage.getItem(ENGINE_ENABLED_KEY)
+        if (raw === null) return true
+        return raw === '1'
     } catch {
-        return false
+        return true
     }
 }
 

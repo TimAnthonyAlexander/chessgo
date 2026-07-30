@@ -16,9 +16,9 @@ function createFakeStorage(initial: Record<string, string> = {}): StorageLike & 
 }
 
 describe('createLocalEngineSettingsStore', () => {
-    test('defaults to false when the key was never set', () => {
+    test('defaults to ENABLED when the key was never set — the engine toggle is what gates it', () => {
         const store = createLocalEngineSettingsStore(createFakeStorage())
-        expect(store.isEnabled()).toBeFalse()
+        expect(store.isEnabled()).toBeTrue()
     })
 
     test('reads a persisted "1" as enabled', () => {
@@ -26,7 +26,7 @@ describe('createLocalEngineSettingsStore', () => {
         expect(store.isEnabled()).toBeTrue()
     })
 
-    test('reads anything other than "1" (e.g. "0", garbage) as disabled', () => {
+    test('an explicit "0" is respected — a real user decision, not the absent default', () => {
         expect(createLocalEngineSettingsStore(createFakeStorage({ [ENGINE_ENABLED_KEY]: '0' })).isEnabled()).toBeFalse()
         expect(
             createLocalEngineSettingsStore(createFakeStorage({ [ENGINE_ENABLED_KEY]: 'garbage' })).isEnabled(),
@@ -34,7 +34,9 @@ describe('createLocalEngineSettingsStore', () => {
     })
 
     test('setEnabled(true) persists "1" under the documented key', () => {
-        const storage = createFakeStorage()
+        // Starts from an explicit '0' so setEnabled(true) is a real change —
+        // an absent key already reads as enabled.
+        const storage = createFakeStorage({ [ENGINE_ENABLED_KEY]: '0' })
         const store = createLocalEngineSettingsStore(storage)
         store.setEnabled(true)
         expect(store.isEnabled()).toBeTrue()
@@ -56,7 +58,7 @@ describe('createLocalEngineSettingsStore', () => {
         store.subscribe(() => {
             notifications++
         })
-        store.setEnabled(false) // already false — matches the default
+        store.setEnabled(true) // already true — matches the default
         expect(notifications).toBe(0)
         expect(storage.data[ENGINE_ENABLED_KEY]).toBe(undefined)
     })
@@ -67,10 +69,10 @@ describe('createLocalEngineSettingsStore', () => {
         const unsubscribe = store.subscribe(() => {
             notifications++
         })
-        store.setEnabled(true)
+        store.setEnabled(false)
         expect(notifications).toBe(1)
         unsubscribe()
-        store.setEnabled(false)
+        store.setEnabled(true)
         expect(notifications).toBe(1) // no longer subscribed
     })
 
@@ -84,8 +86,8 @@ describe('createLocalEngineSettingsStore', () => {
             },
         }
         const store = createLocalEngineSettingsStore(throwing)
-        expect(store.isEnabled()).toBeFalse() // construction-time read failure -> default false
-        store.setEnabled(true) // must not throw despite setItem failing
-        expect(store.isEnabled()).toBeTrue() // in-memory state still updated
+        expect(store.isEnabled()).toBeTrue() // construction-time read failure -> default enabled
+        store.setEnabled(false) // must not throw despite setItem failing
+        expect(store.isEnabled()).toBeFalse() // in-memory state still updated
     })
 })
