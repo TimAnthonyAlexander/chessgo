@@ -1,7 +1,10 @@
 # Eval rail collapse — the net goes completely blind once either side is up a piece
 
-Status: **root cause found and measured; retrain-free fix implemented behind `SATFIX`
-(default OFF); needs SPRT before the default flips.**
+Status: **SHIPPED — `SATSOFT` default ON (commit a7a0d5a), `SATSOFT=0` is the kill-switch.**
+Normal play −0.58 ± 6.31 and knight odds −0.35 ± 3.23 (3000 games each, i.e. free), while
+SF18-judged centipawn loss over collapsed positions halves (45 → 22 cp overall,
+62 → 27 cp on the winning side). The `SATFIX` HCE-substitution family is superseded and
+stays default-off — every one of its modes cost Elo.
 
 Supersedes the diagnosis in `MATGRAD`/`HCEBLEND` (`src/eval.cpp`), which were built on
 a wrong model of the failure and cannot work at any constant setting — see §3.
@@ -281,11 +284,18 @@ correctly fitted to the eval the engine actually has — but it does mean:
   | rule50 damping ALONE | never isolated | same |
   | `EVALHIST` (default OFF) | "saturated" | orders moves by eval that cannot vary |
 
-  **Test in progress:** `optsoft` — both sides run `SATSOFT=1000`, candidate additionally
-  gets `OPTIMISM=1`, bounds [0,+5]. If a lever that washed against the blind eval gains
-  once the eval can see, the hypothesis is confirmed and the rest of the shortlist is
-  worth re-running. If it washes again, the co-adaptation story is not carrying much and
-  the shortlist can be closed.
+  **Result: the hypothesis does NOT pay out on its sharpest candidate.** `optsoft` (both
+  sides `SATSOFT=1000`, candidate additionally `OPTIMISM=1`, bounds [0,+5]) measured
+  **−1.27 ± 6.25 over 3000 games**, LLR −0.63. `OPTIMISM` washed at +1.24 ± 9.71 against
+  the blind eval and washes again with the eval fixed — two independent measurements,
+  4100 games combined, both centred on zero. Giving it a gradient to work with did not
+  unlock it; it simply is not worth Elo in this engine.
+
+  That weakens but does not kill the rest of the shortlist. The rule50 + material
+  output-scaling entry remains the interesting one, because its recorded failure reason
+  was literally "SF's constants don't transfer to our net's scale" — and in decisive
+  positions that scale *was* a per-bucket constant, which is a different failure mode
+  from OPTIMISM's. Isolating rule50-damping is still untried.
 - After the August retrain the whole margin set must be re-SPSA'd; current values are
   not portable to a net with a working gradient.
 - **`test/golden_eval.txt` currently freezes rail constants (1086, 1235, 1235) as the
