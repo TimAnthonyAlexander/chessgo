@@ -249,12 +249,22 @@ correctly fitted to the eval the engine actually has — but it does mean:
 - The margins were never fitted to the railed tail, so any eval fix moves that tail
   into a region the tuning has never seen. Re-SPSA with the fix on before judging it.
 - **Techniques whose value depends on eval quality in decisive positions may have
-  washed for the wrong reason.** `optimism` is the sharpest example: SF derives it from
-  `|psqt - positional|`, a complexity signal our single-head net structurally cannot
-  produce, and a railed eval makes it meaningless. Same suspicion applies to `EVALHIST`
-  and the RFP/razoring margin variants. These deserve a re-test *after* the eval is
-  fixed, not before — check the washed ledger in
-  `../../gomachine/engine/docs/OPTIMIZATIONS.md` for candidates.
+  washed for the wrong reason.** The washed ledger
+  (`../../gomachine/engine/docs/OPTIMIZATIONS.md`) is mostly pruning/ordering, which the
+  collapse does not touch. The genuinely eval-dependent shortlist is small:
+
+  | lever | measured | why it is a suspect |
+  |---|---|---|
+  | `OPTIMISM` (impl'd, default OFF) | **+1.24 ± 9.71** wash, 1120 g | tilts the eval by root score; meaningless where the eval is a constant |
+  | rule50 + material output scaling | **−7.6 ± 13.4** reject, 732 g | failure was blamed on "SF's constants don't transfer to our net's scale" — but the scale IS a per-bucket constant in decisive positions |
+  | rule50 damping ALONE | never isolated | same |
+  | `EVALHIST` (default OFF) | "saturated" | orders moves by eval that cannot vary |
+
+  **Test in progress:** `optsoft` — both sides run `SATSOFT=1000`, candidate additionally
+  gets `OPTIMISM=1`, bounds [0,+5]. If a lever that washed against the blind eval gains
+  once the eval can see, the hypothesis is confirmed and the rest of the shortlist is
+  worth re-running. If it washes again, the co-adaptation story is not carrying much and
+  the shortlist can be closed.
 - After the August retrain the whole margin set must be re-SPSA'd; current values are
   not portable to a net with a working gradient.
 - **`test/golden_eval.txt` currently freezes rail constants (1086, 1235, 1235) as the
