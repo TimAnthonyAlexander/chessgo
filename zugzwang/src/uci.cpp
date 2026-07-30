@@ -1,3 +1,4 @@
+#include "uci.h"
 #include "position.h"
 #include "movegen.h"
 #include "search.h"
@@ -11,6 +12,7 @@
 #include "book.h"
 #include "zug_tb.h"
 #include "rating.h"
+#include "rules.h"
 #include <iostream>
 #include <sstream>
 #include <thread>
@@ -88,7 +90,30 @@ static void position_cmd(std::istringstream& is) {
             fen += token + " ";
     } else return;
 
+    // Two-tier FEN validation, mirroring the HTTP serve path's gate
+    // (serve_handlers.cpp parse_legal_or_throw / Rules::valid_fen_structure's doc
+    // comment). Tier 1 MUST run BEFORE pos.set(): Position::set() unconditionally
+    // computes king_square(sideToMove) in set_check_info(), which is undefined
+    // behavior — a reproduced segfault (exit 139) — on a FEN with a missing king.
+    // The UCI path previously had no such gate; in the browser this is the ONLY
+    // path a FEN reaches the engine through, and a segfault there aborts the whole
+    // wasm module, not just one request, so this gate applies unconditionally
+    // (native and wasm alike) rather than behind an __EMSCRIPTEN__ guard.
+    if (!Rules::valid_fen_structure(fen)) {
+        std::cout << "info string invalid fen: malformed FEN string" << std::endl;
+        return; // pos left untouched — safe to keep issuing commands
+    }
+
+    // Tier 2: well-formed but illegal (e.g. the side not to move is already in
+    // check). pos.set() itself cannot crash here (both kings are present per
+    // tier 1), but searching from an illegal position is meaningless — reject
+    // and fall back to a known-good position rather than silently misbehaving.
     pos.set(fen);
+    if (!Rules::position_legal(pos)) {
+        std::cout << "info string illegal position: side not to move is in check, or a king is missing" << std::endl;
+        pos.set(START_FEN);
+        return;
+    }
 
     if (token == "moves")
         while (is >> token) {
@@ -152,6 +177,32 @@ static void go_cmd(std::istringstream& is) {
     // During ponder we must NOT emit a bestmove immediately: skip both the weakening ladder
     // and the opening book (which print+return instantly) and fall through to a real search
     // that holds until `ponderhit`/`stop`. (Full-strength CCRL play never hits these anyway.)
+#ifdef __EMSCRIPTEN__
+    // No pthreads in the wasm build (single-threaded, deliberately — see
+    // wasm_main.cpp): every `go` runs SYNCHRONOUSLY on the calling thread instead
+    // of spawning searchThread. The engine lives in a JS Web Worker, so blocking
+    // this call is correct there — the worker just doesn't process another
+    // message until the search returns. Consequence: an async `stop` can no
+    // longer interrupt an in-flight search (there is no other thread to signal
+    // from); callers must bound every `go` with movetime/depth/nodes. `stop`/
+    // `quit` still behave sanely — join_search() is a no-op (searchThread was
+    // never actually started) so there is nothing to deadlock on.
+    if (uciLimitStrength && !limits.ponderMode) {
+        Search::request_stop(false);
+        std::vector<uint64_t> hist;
+        Rating::WeakResult wr = Rating::best_move_for_rating_single(
+            Search::default_context(), pos, uciElo, limits.depth, limits.movetime, limits.nodes, hist);
+        std::cout << "bestmove " << (wr.move != MOVE_NONE ? move_to_uci(wr.move) : "0000")
+                  << std::endl;
+        return;
+    }
+    if (!limits.ponderMode && multiPV <= 1 && try_book_move(pos)) return;
+    Search::request_stop(false);
+    // engineThreads is forced to 1 on the wasm path (setoption "Threads" clamps
+    // it below), so start_smp's threads<=1 branch is the exact single-thread
+    // path — byte-identical tree/output to the native default, no thread spawn.
+    Search::start_smp(pos, limits, engineThreads);
+#else
     if (uciLimitStrength && !limits.ponderMode) {
         // Weakened play through the rating ladder. Runs on the search thread (so
         // `stop` still joins cleanly) and prints its own bestmove — the ladder's
@@ -181,6 +232,7 @@ static void go_cmd(std::istringstream& is) {
     // waits for the entire (multi-threaded) search to finish.
     int nThreads = engineThreads;
     searchThread = std::thread([limits, nThreads]() { Search::start_smp(pos, limits, nThreads); });
+#endif
 }
 
 static uint64_t perft_count(Position& p, int depth) {
@@ -222,14 +274,21 @@ static void bench() {
     (void)totalNodes;
 }
 
-// Entry point for the UCI CLI path (bare `./zugzwang`, no subcommand). Renamed
-// from `main` so main.cpp can dispatch between this and `serve_main` (the HTTP
-// serve subcommand, src/serve.cpp) — the UCI loop itself is untouched.
-int uci_main() {
+// One-time engine startup. Native: also loads net.nnue/book.bin/syzygy off
+// disk (unchanged behavior). Under __EMSCRIPTEN__ there is no filesystem in
+// the browser, so all three are skipped here — the wasm entry point
+// (wasm_main.cpp) instead calls NNUE::load_from_memory() once the JS side has
+// fetched the net bytes. Skipping book/syzygy is safe by construction: an
+// unloaded Book::loaded()==false makes try_book_move() a no-op regardless of
+// OwnBook, and TB::loaded()==false gates every TB:: call in search.cpp — both
+// are the exact same "not loaded" state a native run with no book.bin/syzygy/
+// directory already produces (book.cpp/zug_tb.cpp's documented fallback).
+void uci_init() {
     BB::init();
     Zobrist::init();
     Eval::init();
     Search::init();
+#ifndef __EMSCRIPTEN__
     if (NNUE::load("net.nnue"))
         std::cerr << "NNUE: loaded net.nnue\n";
     else
@@ -246,12 +305,20 @@ int uci_main() {
         else
             std::cerr << "Syzygy: none at " << tbPath << " — TB probing off\n";
     }
+#else
+    std::cerr << "NNUE: wasm build — waiting for load_net_from_memory()\n";
+#endif
     TT.resize(ttSizeMB);
 
     pos.set(START_FEN);
+}
 
-    std::string line;
-    while (std::getline(std::cin, line)) {
+// Dispatches ONE UCI command line. This is the exact body of the old
+// uci_main() stdin loop, extracted verbatim (a pure refactor — see uci.h) so
+// the wasm entry point can feed it commands one at a time without a stdin
+// loop, while native behavior (uci_main() below) is completely unchanged.
+bool uci_command(const std::string& line) {
+    {
         std::istringstream is(line);
         std::string cmd;
         is >> cmd;
@@ -260,7 +327,11 @@ int uci_main() {
             std::cout << "id name " << ENGINE_NAME << "\n";
             std::cout << "id author " << ENGINE_AUTHOR << "\n";
             std::cout << "option name Hash type spin default 128 min 1 max 4096\n";
+#ifdef __EMSCRIPTEN__
+            std::cout << "option name Threads type spin default 1 min 1 max 1\n";
+#else
             std::cout << "option name Threads type spin default 1 min 1 max 256\n";
+#endif
             std::cout << "option name MultiPV type spin default 1 min 1 max 256\n";
             // SPSA-tunable search margins (search.cpp Tune struct; Search::set_tune_option
             // applies these on setoption). Defaults reproduce the pre-tunable literals exactly.
@@ -420,7 +491,13 @@ int uci_main() {
                 ttSizeMB = std::stoi(value);
                 TT.resize(ttSizeMB);
             } else if (name == "Threads") {
+#ifdef __EMSCRIPTEN__
+                // No pthreads in the wasm build: single search-thread only,
+                // regardless of what the caller asks for (see go_cmd).
+                engineThreads = 1;
+#else
                 engineThreads = std::max(1, std::min(256, std::stoi(value)));
+#endif
             } else if (name == "MultiPV") {
                 multiPV = std::max(1, std::min(256, std::stoi(value)));
             } else if (name == "OwnBook") {
@@ -454,7 +531,7 @@ int uci_main() {
             stop_search();
         } else if (cmd == "quit") {
             stop_search();
-            break;
+            return false; // signals uci_main() to stop reading stdin (old loop's `break`)
         } else if (cmd == "perft") {
             int d; is >> d;
             int64_t start = Search::now_ms();
@@ -479,6 +556,18 @@ int uci_main() {
             std::cout << pos.fen() << std::endl;
         }
     }
+    return true;
+}
+
+// Entry point for the UCI CLI path (bare `./zugzwang`, no subcommand). Renamed
+// from `main` so main.cpp can dispatch between this and `serve_main` (the HTTP
+// serve subcommand, src/serve.cpp) — the UCI loop itself is untouched: it now
+// just calls uci_init() once and uci_command() per stdin line, both above.
+int uci_main() {
+    uci_init();
+    std::string line;
+    while (std::getline(std::cin, line))
+        if (!uci_command(line)) break;
     stop_search();
     return 0;
 }

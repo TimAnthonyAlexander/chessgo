@@ -1,0 +1,96 @@
+# Makefile.wasm — single-threaded WebAssembly build of the zugzwang UCI
+# engine (analysis-in-the-browser milestone). Deliberately separate from the
+# main `Makefile` (native builds) to avoid touching it.
+#
+# Requires Emscripten (activate first): source ~/emsdk/emsdk_env.sh
+#
+# Targets:
+#   make -f Makefile.wasm            # both variants (baseline SIMD128 + relaxed-simd)
+#   make -f Makefile.wasm simd128    # baseline SIMD128 only  -> zugzwang.{js,wasm}
+#   make -f Makefile.wasm relaxed    # relaxed-simd variant   -> zugzwang-relaxed.{js,wasm}
+#   make -f Makefile.wasm clean
+#
+# No pthreads / SharedArrayBuffer: the app is not cross-origin isolated for
+# this milestone, so `go` runs synchronously on the calling thread (see
+# uci.cpp's __EMSCRIPTEN__ branch) instead of spawning a search thread — the
+# module is meant to live in a Web Worker, where blocking is correct.
+
+CXX      = em++
+CXXSTD   = -std=c++17 -O3 -flto -DNDEBUG
+WARN     = -Wall -Wno-unused
+# NOTE: -ffp-contract=off is NOT passed here (unlike the native Makefile's
+# amd64 prod flags) — this build's float32 NNUE path only needs to match its
+# OWN scalar arithmetic bit-for-bit across recompiles of THIS file, which
+# -O3 without contraction differences already guarantees on one target;
+# what must be bit-exact is the pre-quantized int16/int8 payload shared
+# byte-for-byte with native (nnue_web_format.h), which involves no floating
+# per-node arithmetic at all in the wasm build (load_net_from_memory is a
+# pure byte copy).
+CXXFLAGS = $(CXXSTD) $(WARN) -Isrc/syzygy
+
+# Emscripten link-time behavior:
+#   ALLOW_MEMORY_GROWTH   - the net alone is ~94 MB resident (W0i dominates);
+#                            growth lets small early allocations not force a
+#                            huge up-front reservation.
+#   INITIAL_MEMORY        - big enough to load the net without an early
+#                            growth pause (net ~94MB + TT default 128MB +
+#                            engine tables + wasm/JS glue headroom).
+#   MAXIMUM_MEMORY         - wasm32 hard-caps at 4 GB; ~2 GB is the practical
+#                            ceiling for a single linear memory in a browser
+#                            tab (Chrome/Firefox both get flaky well before 4G).
+#   MODULARIZE+EXPORT_ES6  - import { default as ZugzwangModule } from '...'
+#                            (factory function returning a Promise<Module>),
+#                            the standard pattern for an engine-in-a-Worker.
+#   ENVIRONMENT=web,worker - no Node/shell fallback code shipped to the browser.
+#   EXPORTED_FUNCTIONS      - the C shim in wasm_main.cpp + malloc/free (JS
+#                            needs _malloc/_free to hand the fetched net
+#                            bytes into the wasm heap before calling
+#                            zug_load_net).
+#   EXPORTED_RUNTIME_METHODS - ccall/cwrap so JS can call the exported
+#                            functions by name instead of raw table indices.
+LDFLAGS = $(CXXSTD) \
+  -sALLOW_MEMORY_GROWTH=1 \
+  -sINITIAL_MEMORY=320MB \
+  -sMAXIMUM_MEMORY=2048MB \
+  -sMODULARIZE=1 -sEXPORT_ES6=1 \
+  -sENVIRONMENT=web,worker \
+  -sEXPORTED_FUNCTIONS=_zug_init,_zug_load_net,_zug_command,_malloc,_free \
+  -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,HEAPU8 \
+  -sSTACK_SIZE=2MB \
+  -sASSERTIONS=0
+
+# Same TU set the native Makefile links for the UCI CLI path, minus
+# HTTP-serve-only files (serve.cpp, serve_handlers.cpp, sf_uci.cpp), minus
+# main.cpp (replaced by wasm_main.cpp), minus the syzygy tablebase sources
+# (no filesystem in the browser to point them at — zug_tb_wasm_stub.cpp
+# supplies no-op TB:: symbols so search.cpp's TB::loaded()-gated calls still
+# link), and minus perft.cpp/duck.cpp/crazyhouse.cpp/antichess.cpp/
+# openings.cpp (variant/opening-book machinery the UCI path never calls —
+# see uci.cpp's #includes; trimming them keeps the wasm binary smaller).
+SRC = src/wasm_main.cpp src/uci.cpp src/search.cpp src/eval.cpp src/position.cpp \
+      src/bitboard.cpp src/zobrist.cpp src/movegen.cpp src/tt.cpp \
+      src/nnue_net.cpp src/nnue_features.cpp src/nnue_eval.cpp \
+      src/nnue_accumulator.cpp \
+      src/rules.cpp src/rating.cpp src/weakening.cpp src/book.cpp \
+      src/zug_tb_wasm_stub.cpp
+
+.PHONY: all simd128 relaxed clean
+
+all: simd128 relaxed
+
+# Baseline variant: WASM SIMD128 (widely supported — Chrome/Firefox/Safari
+# all ship it), no relaxed-simd instructions.
+simd128: CXXFLAGS += -msimd128
+simd128:
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o zugzwang.js $(SRC)
+
+# Relaxed-SIMD variant: superset of SIMD128 with a handful of relaxed
+# (platform-native-rounding) vector instructions — faster on engines that
+# support it (client-side capability-detected, hence a separate build rather
+# than a runtime branch).
+relaxed: CXXFLAGS += -msimd128 -mrelaxed-simd
+relaxed:
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o zugzwang-relaxed.js $(SRC)
+
+clean:
+	rm -f zugzwang.js zugzwang.wasm zugzwang-relaxed.js zugzwang-relaxed.wasm

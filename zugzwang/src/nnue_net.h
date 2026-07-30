@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <cstddef>
 #include <vector>
 #include "nnue_arch.h"
 
@@ -30,5 +31,14 @@ extern Net g_net;
 // Reads the bullet float32 export at `path`, quantizes into g_net (W0i, B0i, L1W8,
 // L1B, L2*, O*), sets g_net.ok. Returns false on any size/format mismatch.
 bool load_net(const char* path);
+
+// Loads a pre-quantized "web format" net (nnue_web_format.h) directly from an
+// in-memory buffer — no filesystem access, no quantization arithmetic (just
+// validated byte copies). This is the WASM/browser entry point (no
+// filesystem there); shares its validation + payload-copy logic with the
+// file-path pre-quantized loader inside nnue_net.cpp, so the two can never
+// silently diverge. Returns false (leaving g_net.ok == false) on any
+// size/magic/version/arch/checksum mismatch.
+bool load_net_from_memory(const std::uint8_t* data, std::size_t len);
 
 } // namespace NNUE

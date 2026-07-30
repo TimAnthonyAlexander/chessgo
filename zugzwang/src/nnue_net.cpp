@@ -220,27 +220,19 @@ bool load_net_float32(const char* path) {
     return true;
 }
 
-// Reads a pre-quantized "web format" file (nnue_web_format.h) straight into g_net —
-// no quantization arithmetic, just validated byte copies. Returns false (leaving
-// g_net.ok == false) on any size/magic/version/arch/checksum mismatch: a bad file
-// must fail loudly rather than silently produce a wrong eval.
-bool load_net_prequant(const char* path) {
+// Shared pre-quantized parser: validates the header/checksum against a raw
+// in-memory buffer and byte-copies the payload into g_net. Returns false
+// (leaving g_net.ok == false) on any size/magic/version/arch/checksum
+// mismatch: a bad file must fail loudly rather than silently produce a wrong
+// eval. Used by BOTH loaders below — the file path reads the whole file into
+// a vector first, the WASM/memory path (load_net_from_memory, no filesystem
+// in the browser) is handed the caller's buffer directly — so the two can
+// never drift apart on validation or payload layout.
+bool load_net_prequant_buffer(const unsigned char* p, std::size_t fsize) {
     using namespace WebFormat;
     g_net = Net{};
 
-    std::FILE* fp = std::fopen(path, "rb");
-    if (!fp) return false;
-    std::fseek(fp, 0, SEEK_END);
-    const long fsize = std::ftell(fp);
-    std::fseek(fp, 0, SEEK_SET);
-    if (fsize < static_cast<long>(kHeaderSize)) { std::fclose(fp); return false; }
-
-    std::vector<unsigned char> raw(static_cast<std::size_t>(fsize));
-    const std::size_t got = std::fread(raw.data(), 1, static_cast<std::size_t>(fsize), fp);
-    std::fclose(fp);
-    if (got != static_cast<std::size_t>(fsize)) return false;
-
-    const unsigned char* p = raw.data();
+    if (fsize < kHeaderSize) return false;
 
     // --- header: magic + version + arch/quant constants + payload size + checksum ---
     if (std::memcmp(p, kMagic, sizeof(kMagic)) != 0) return false;
@@ -336,7 +328,37 @@ bool load_net_prequant(const char* path) {
     return true;
 }
 
+// Reads a pre-quantized "web format" file (nnue_web_format.h) off disk into a
+// buffer, then hands it to the shared parser above. Native-only entry point
+// (fopen); the wasm/no-filesystem entry point is load_net_from_memory below.
+bool load_net_prequant(const char* path) {
+    std::FILE* fp = std::fopen(path, "rb");
+    if (!fp) return false;
+    std::fseek(fp, 0, SEEK_END);
+    const long fsize = std::ftell(fp);
+    std::fseek(fp, 0, SEEK_SET);
+    if (fsize < static_cast<long>(WebFormat::kHeaderSize)) { std::fclose(fp); return false; }
+
+    std::vector<unsigned char> raw(static_cast<std::size_t>(fsize));
+    const std::size_t got = std::fread(raw.data(), 1, static_cast<std::size_t>(fsize), fp);
+    std::fclose(fp);
+    if (got != static_cast<std::size_t>(fsize)) return false;
+
+    return load_net_prequant_buffer(raw.data(), raw.size());
+}
+
 } // namespace
+
+// Loads the pre-quantized "web format" (nnue_web_format.h) directly from an
+// in-memory buffer — no filesystem access at all. This is the WASM entry
+// point: there is no filesystem in the browser, so JS fetches net.web.nnue
+// and hands the raw bytes straight here instead of going through load_net()/
+// a path. Shares 100% of its header/checksum validation and payload-copy
+// logic with the file path (load_net_prequant_buffer, above) — the two can
+// never silently diverge.
+bool load_net_from_memory(const std::uint8_t* data, std::size_t len) {
+    return load_net_prequant_buffer(reinterpret_cast<const unsigned char*>(data), len);
+}
 
 // Public loader: sniffs the first bytes for the pre-quantized "web format" magic
 // (nnue_web_format.h) and dispatches accordingly. The float32 path's arithmetic
@@ -359,6 +381,13 @@ namespace { bool s_loaded = false; }
 
 bool load(const char* path) {
     s_loaded = load_net(path);
+    return s_loaded;
+}
+
+// wasm/no-filesystem entry point: load a pre-quantized net straight from
+// bytes (see load_net_from_memory above). Same s_loaded bookkeeping as load().
+bool load_from_memory(const std::uint8_t* data, std::size_t len) {
+    s_loaded = load_net_from_memory(data, len);
     return s_loaded;
 }
 

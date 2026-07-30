@@ -41,3 +41,9 @@ spsa/__pycache__/
 # compressed web-net artifacts (measurement only, never checked in)
 *.web.nnue.br
 *.web.nnue.gz
+
+# wasm build artifacts (Makefile.wasm outputs)
+zugzwang.js
+zugzwang.wasm
+zugzwang-relaxed.js
+zugzwang-relaxed.wasm
