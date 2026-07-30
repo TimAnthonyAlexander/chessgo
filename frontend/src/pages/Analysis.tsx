@@ -485,6 +485,15 @@ export default function Analysis() {
         setDisplayCandidates((m) => ({ ...m, [nodeId]: localRace.candidate!.candidate }))
     }, [localEngineOn, localRace.candidate, current.id, current.bestDepth, current.bestPv, current.fen, displayCandidates])
 
+    // Local multi-PV move list. With the local engine on, the server is only
+    // asked for a cache lookup, so on a cache miss nothing else would populate
+    // the list — the board would show an eval and an arrow but no lines.
+    useEffect(() => {
+        if (!localEngineOn || !localRace.lines || localRace.lines.length === 0) return
+        setAnalysisLines(localRace.lines)
+        linesCache.current.set(current.id, { lines: localRace.lines, opening: null })
+    }, [localEngineOn, localRace.lines, current.id])
+
     // --- Live engine eval + best line: progressive ("streaming") deepening ---
     // We can't stream over the wire (no SSE behind Cloudflare), so we emulate it by
     // POLLING /analyze with an increasing depth and rendering each result as it

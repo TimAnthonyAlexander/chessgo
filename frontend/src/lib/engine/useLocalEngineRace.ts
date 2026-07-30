@@ -12,14 +12,75 @@
 // adapter in evalAdapter.ts — all pure and unit-tested. This file is the glue
 // that isn't practical to unit test (real effects, a real Worker/OPFS
 // boundary), so it stays as small as it can.
+import { Chess } from 'chess.js'
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import type { AnalysisLine } from '../../api/client'
 import { bigFileStorage } from './bigFileStorage'
 import { LOCAL_ENGINE_NET_URL, LOCAL_ENGINE_WORKER_URL } from './config'
 import { type DownloadState, INITIAL_DOWNLOAD_STATE, reduceDownloadState } from './downloadState'
 import { fromEngineInfo, type RaceCandidate } from './evalAdapter'
 import { type Feature, features } from './features'
 import { createLocalEngine, createWorkerUciModule, type LocalEngine } from './localEngine'
+import type { EngineInfo } from './protocol'
 import { useLocalEngineEnabled } from './settings'
+
+// Local search runs in two phases, mirroring ANALYSIS_LADDER's own shape: a
+// shallow multi-line pass that fills the move list, then a deep single-line
+// pass that settles the eval and the arrow.
+//
+// The split is not cosmetic. MultiPV costs 5-6x at width 5, measured on one
+// position with a cold table per cell:
+//
+//   depth   mpv=1    mpv=3    mpv=5
+//      14    145ms    550ms   1166ms
+//      16    436ms   1568ms   2742ms
+//      18    716ms   2586ms   5705ms
+//      20   1764ms   7850ms   9827ms
+//
+// So running width 5 all the way to the old DEFAULT_MAX_DEPTH of 30 would take
+// minutes, and even depth 20 would cost ~10s for an arrow that width 1 delivers
+// in under two. Lines are only useful at move-list depth anyway — the server
+// ladder stops its own multi-line rungs at 16 for exactly this reason.
+const LINES_MULTIPV = 5
+const LINES_DEPTH = 14
+const EVAL_DEPTH = 22
+
+/**
+ * MultiPV infos → the `AnalysisLine[]` shape the move list already renders.
+ *
+ * The engine speaks UCI and the list shows SAN, so each line's first move is
+ * converted here with chess.js (already a dependency, and the same library
+ * analysisTree.ts uses). The server supplies `san` itself, which is why this
+ * only exists on the local path.
+ *
+ * `opening` is deliberately absent: naming the opening a move leads to is an
+ * engine-side book lookup we have no table for in the browser. Absent rather
+ * than null, so the panel treats it as unknown instead of "unnamed".
+ */
+function toAnalysisLines(fen: string, bySlot: Map<number, EngineInfo>): AnalysisLine[] {
+    const out: AnalysisLine[] = []
+    for (const slot of [...bySlot.keys()].sort((a, b) => a - b)) {
+        const info = bySlot.get(slot)!
+        const uci = info.pv[0]
+        if (!uci) continue
+        let san = uci
+        try {
+            const chess = new Chess(fen)
+            const move = chess.move({
+                from: uci.slice(0, 2),
+                to: uci.slice(2, 4),
+                promotion: uci.length > 4 ? uci[4] : undefined,
+            })
+            if (move) san = move.san
+        } catch {
+            // Illegal/unparseable per chess.js — fall back to the raw UCI rather
+            // than dropping the line. The engine owns the rules; disagreeing with
+            // it here should degrade the label, not hide a real move.
+        }
+        out.push({ bestmove: uci, san, eval: info.score, pv: info.pv, depth: info.depth })
+    }
+    return out
+}
 
 export interface EngineCapability {
     available: boolean
@@ -62,6 +123,10 @@ export interface LocalEngineRaceState {
      * yet (not enabled, still loading, or nothing has streamed in for this
      * position). Reset to null whenever `fen` changes. */
     candidate: RaceCandidate | null
+    /** Multi-PV move list for the CURRENT `fen`, once the shallow wide phase
+     * finishes, or null before that. Lets the move list keep working while the
+     * server is only being asked for cache lookups. */
+    lines: AnalysisLine[] | null
 }
 
 export function useLocalEngineRace({ active, fen }: LocalEngineRaceOptions): LocalEngineRaceState {
@@ -73,6 +138,7 @@ export function useLocalEngineRace({ active, fen }: LocalEngineRaceOptions): Loc
     const capability = useMemo(() => computeCapability(features()), [])
     const [download, dispatch] = useReducer(reduceDownloadState, INITIAL_DOWNLOAD_STATE)
     const [candidate, setCandidate] = useState<RaceCandidate | null>(null)
+    const [lines, setLines] = useState<AnalysisLine[] | null>(null)
     const engineRef = useRef<LocalEngine | null>(null)
     // Bumped by retry() to force the lifecycle effect to run again after an
     // error, without needing `download` itself as a dependency (which would
@@ -132,19 +198,69 @@ export function useLocalEngineRace({ active, fen }: LocalEngineRaceOptions): Loc
     useEffect(() => {
         if (!active || download.status !== 'ready' || !engineRef.current) return
         setCandidate(null) // don't keep showing the PREVIOUS position's local eval
+        setLines(null)
         let cancelled = false
         const ac = new AbortController()
         const engine = engineRef.current
         void (async () => {
+            // A full local search streams hundreds of `info` lines (210 to depth
+            // 20 on one measured position). Turning every one into a setState
+            // means hundreds of React commits, each rebuilding the analysis tree
+            // via annotateEval — enough main-thread churn to make the board feel
+            // sluggish even though the search itself is fast. Coalesce to at most
+            // one update per interval, and always flush the last one so the final
+            // depth is never dropped. Lichess throttles their equivalent to 500ms;
+            // this is tighter, since our arrow is the only thing moving.
+            const EMIT_INTERVAL_MS = 200
+            let lastEmit = 0
+            let pending: RaceCandidate | null = null
+            const flush = () => {
+                if (!pending || cancelled) return
+                setCandidate(pending)
+                pending = null
+                lastEmit = Date.now()
+            }
+            // Deepest info seen per MultiPV slot during the lines phase, so the
+            // move list reflects one coherent depth rather than a mix.
+            const bySlot = new Map<number, EngineInfo>()
+            const consume = (info: EngineInfo) => {
+                // A bound-flagged score is an aspiration-window fail-high/low
+                // placeholder, not a settled value — protocol.ts's documented
+                // policy is to hold the last exact score rather than show it.
+                if (info.bound) return
+                const slot = info.multipv ?? 1
+                const prev = bySlot.get(slot)
+                if (!prev || info.depth >= prev.depth) bySlot.set(slot, info)
+                // Slot 1 is the principal line — the only one that drives the
+                // eval bar and the best-move arrow.
+                if (slot !== 1) return
+                pending = fromEngineInfo(info)
+                if (Date.now() - lastEmit >= EMIT_INTERVAL_MS) flush()
+            }
+
             try {
-                for await (const info of engine.analyze(fen, { multipv: 1, signal: ac.signal })) {
+                // Phase 1 — shallow and wide: fills the move list fast.
+                for await (const info of engine.analyze(fen, {
+                    multipv: LINES_MULTIPV,
+                    depth: LINES_DEPTH,
+                    signal: ac.signal,
+                })) {
                     if (cancelled) return
-                    // A bound-flagged score is an aspiration-window fail-high/low
-                    // placeholder, not a settled value — protocol.ts's documented
-                    // policy is to hold the last exact score rather than show it.
-                    if (info.bound) continue
-                    setCandidate(fromEngineInfo(info))
+                    consume(info)
                 }
+                flush()
+                setLines(toAnalysisLines(fen, bySlot))
+
+                // Phase 2 — deep and narrow: settles the eval and the arrow.
+                for await (const info of engine.analyze(fen, {
+                    multipv: 1,
+                    depth: EVAL_DEPTH,
+                    signal: ac.signal,
+                })) {
+                    if (cancelled) return
+                    consume(info)
+                }
+                flush()
             } catch {
                 // Local search errored mid-stream (worker crash, etc). The server
                 // ladder keeps going regardless — leave the last local result (if
@@ -162,6 +278,7 @@ export function useLocalEngineRace({ active, fen }: LocalEngineRaceOptions): Loc
         enabled,
         setEnabled,
         download,
+        lines,
         retry: () => setRetryTick((t) => t + 1),
         candidate,
     }

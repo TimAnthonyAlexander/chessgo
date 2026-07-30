@@ -277,21 +277,27 @@ export function createLocalEngine(opts: LocalEngineOptions): LocalEngine {
 // analyze() streaming
 // ---------------------------------------------------------------------------
 
-// Implemented as one bounded `go depth N` UCI call per depth rung (N = 1, 2,
-// 3, ... up to the requested depth), rather than a single `go depth
-// <maxDepth>` and letting the engine iteratively deepen on its own. This is
-// the ABORT boundary: the wasm build is single-threaded, so once a `go` is
-// sent there is no way to interrupt it before its `bestmove` — sending a UCI
-// `stop` command would require the worker to process an incoming message
-// while its own synchronous search loop is running, which a single-threaded
-// wasm instance cannot do. So `opts.signal` is checked only BETWEEN rungs,
-// right before the next `go` would be sent. That is an honest contract: abort
-// stops further deepening promptly (no more rungs get sent), but it does not
-// — cannot — kill whichever `go` is already in flight when it fires. Each
-// rung researches from ply 1, but the engine's own transposition table stays
-// warm across calls on the same position (same principle as the server's
-// stateless-but-TT-warm /analyze calls — see Analysis.tsx's ANALYSIS_LADDER
-// comment), so this is not N independent full searches in the naive sense.
+// Implemented as a handful of bounded `go depth N` calls at COARSE rungs, not
+// one per ply. The engine runs its own iterative deepening inside a single
+// `go` and streams an `info` line at every depth along the way, so stepping
+// N = 1,2,3,… bought no extra streaming granularity — it just re-ran the
+// search from ply 1 thirty times. Measured on one position: depth 20 took
+// 1305ms as per-ply rungs versus 345ms for a single `go depth 16`, so the
+// per-ply schedule was costing roughly 2x for nothing.
+//
+// Rungs still exist because they are the ABORT boundary: the wasm build is
+// single-threaded, so once a `go` is sent there is no way to interrupt it
+// before its `bestmove` — a UCI `stop` would need the worker to process an
+// incoming message while its own synchronous search loop is running, which a
+// single-threaded wasm instance cannot do. So `opts.signal` is checked only
+// BETWEEN rungs. That is an honest contract: abort stops further deepening
+// promptly, but it does not — cannot — kill the `go` already in flight.
+// Coarse rungs keep that worst-case wait bounded while cutting the waste.
+//
+// The engine's transposition table stays warm across calls on the same
+// position (same principle as the server's stateless-but-TT-warm /analyze
+// calls — see Analysis.tsx's ANALYSIS_LADDER comment).
+const DEPTH_RUNGS = [8, 14, 18, 22, 26, 30]
 async function* analyzeStream(
     getModule: () => UciModule | null,
     fen: string,
@@ -306,9 +312,18 @@ async function* analyzeStream(
     const multipv = opts.multipv ?? 1
 
     module.send(`position fen ${fen}`)
-    if (multipv > 1) module.send(`setoption name MultiPV value ${multipv}`)
+    // ALWAYS sent, including for multipv 1. `setoption` is sticky for the life
+    // of the module, so skipping it at width 1 left a previous wide search's
+    // MultiPV in place — the deep single-line phase silently ran at width 5 and
+    // took 17s instead of 2s.
+    module.send(`setoption name MultiPV value ${multipv}`)
 
-    for (let target = 1; target <= maxDepth; target++) {
+    // Every rung at or below maxDepth, plus maxDepth itself when it falls
+    // between two rungs — so an explicit `depth: 12` still ends exactly at 12.
+    const rungs = DEPTH_RUNGS.filter((d) => d < maxDepth)
+    rungs.push(maxDepth)
+
+    for (const target of rungs) {
         if (opts.signal?.aborted) return
 
         const infos = await runOneRung(module, target)
