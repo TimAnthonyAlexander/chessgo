@@ -15,6 +15,13 @@ json move(const json& body);
 json legal_moves(const json& body);
 json status(const json& body);
 json perft(const json& body);
+// Search-free opening NAME/ECO classification: a pure book-key table lookup
+// over `fen` + optional `history` (root->previous, same convention as
+// /analyze and /candidates). Exists so a PHP-side /analyze eval-cache hit can
+// still resolve the path-dependent opening name without paying for a full
+// search — see opening_key_line/opening_json in serve_handlers.cpp, which
+// this handler is just those two calls around parse_legal_or_throw.
+json opening(const json& body);
 
 // Search-backed endpoints. Each leases an independent Search::SearchGroup from
 // the pool (Search::GroupLease, search.h/.cpp) for the duration of its search.

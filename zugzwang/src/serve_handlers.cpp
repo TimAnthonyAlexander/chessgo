@@ -337,6 +337,22 @@ json perft(const json& body) {
     return json{{"nodes", run_perft(pos, depth)}};
 }
 
+// Search-free opening NAME/ECO classification — a pure book-key table lookup,
+// no Search::Context, no TT, no engine involvement at all. `history` is
+// root->previous FENs, exactly like /analyze and /candidates take it; absent
+// or empty means classify from `fen` alone. Exists so a PHP-side eval-cache
+// hit in front of /analyze can still resolve the path-dependent opening name
+// without falling back to a full search for it.
+json opening(const json& body) {
+    std::string fen = body.value("fen", "");
+    Position pos;
+    parse_legal_or_throw(fen, pos);
+
+    std::vector<std::string> historyFens = json_str_vec(body.value("history", json::array()));
+    std::vector<uint64_t> baseKeys = opening_key_line(historyFens, pos);
+    return json{{"opening", opening_json(baseKeys)}};
+}
+
 // ==================== search-backed handlers ====================
 
 json best_move(const json& body) {

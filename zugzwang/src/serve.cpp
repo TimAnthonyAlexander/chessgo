@@ -208,6 +208,7 @@ int serve_main(int argc, char** argv) {
     svr.Post("/legal-moves", wrap(Handlers::legal_moves));
     svr.Post("/status", wrap(Handlers::status));
     svr.Post("/perft", wrap(Handlers::perft));
+    svr.Post("/opening", wrap(Handlers::opening));
     svr.Post("/bestmove", wrap(Handlers::best_move));
     svr.Post("/candidates", wrap(Handlers::candidates));
     svr.Post("/analyze-game", wrap(Handlers::analyze_game));
