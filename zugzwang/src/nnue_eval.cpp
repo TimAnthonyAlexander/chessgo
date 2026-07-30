@@ -144,6 +144,13 @@ static inline float satsoft_k() {
     }();
     return k;
 }
+// Max number of still-live L1 lanes for which the soft pass still applies. 0 = only
+// total collapse (the strictly-constant case). Raising it trades byte-identity in more
+// positions for coverage of the near-blind ones.
+static inline int satsoft_live() {
+    static const int n = [] { const char* s = getenv("SATSOFTLIVE"); return s ? atoi(s) : 0; }();
+    return n;
+}
 // L2 leak slope (SATLEAK2, per-mille). L1 variation is useless if L2 clamps it away
 // again, so the two normally move together; kept separate to attribute the effect.
 static inline float sat_leak2_eps() {
@@ -551,7 +558,9 @@ int eval_from_halves(const int16_t* accW, const int16_t* accB, const Position& p
     if (satsoft_eps() > 0.0f) {
         int railed = 0;
         for (int o = 0; o < D2; ++o) railed += (l1[o] == 0.0f) | (l1[o] == 1.0f);
-        softNode = (railed == D2);
+        // SATSOFTLIVE (default 0) widens the gate past total collapse: a node with one
+        // surviving lane is nearly as blind as one with none (another ~5% of positions).
+        softNode = (railed >= D2 - satsoft_live());
     }
 
     // SATFIX/SATDIAG rail tally. Read off l1[] rather than instrumenting the loop
