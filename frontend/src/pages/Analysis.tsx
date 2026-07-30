@@ -35,11 +35,13 @@ import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import LocalEngineControl from '../components/LocalEngineControl'
 import MoveTree from '../components/MoveTree'
 import OpeningPanel from '../components/OpeningPanel'
+import { Chess } from 'chess.js'
 import {
     analyze,
     analyzeGameMoves,
     getGameAnalysis,
     sfAnalyze,
+    type Analysis as AnalysisResponse,
     type AnalysisLine,
     type GameAnalysis,
     type Opening,
@@ -68,6 +70,7 @@ import {
 } from '../lib/analysisTree'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { useAuth } from '../lib/auth'
+import { pickDeeper } from '../lib/engine/ownership'
 import { useLocalEngineRace } from '../lib/engine/useLocalEngineRace'
 
 // How long (ms) each auto-played move lingers before the next one.
@@ -120,6 +123,29 @@ const ANALYSIS_LADDER: { depth: number; ceilingMs: number; multipv: number }[] =
 ]
 
 type AutoMode = 'off' | 'play' | 'best'
+
+/** A cache hit as a displayable move list. Rows that stored a multi-PV set come
+ *  back with their lines intact; the rest (book rows, and anything stored from a
+ *  single-line search) carry only a PV, so the one line is rebuilt from it —
+ *  otherwise a deep cached eval would win the position and leave the move list
+ *  empty. `san` needs chess.js because the cache stores UCI. */
+function cacheLinesFrom(fen: string, r: AnalysisResponse): AnalysisLine[] | null {
+    if (r.lines && r.lines.length > 0) return r.lines
+    if (!r.eval || !r.bestmove) return null
+    let san = r.bestmove
+    try {
+        const chess = new Chess(fen)
+        const move = chess.move({
+            from: r.bestmove.slice(0, 2),
+            to: r.bestmove.slice(2, 4),
+            promotion: r.bestmove.length > 4 ? r.bestmove[4] : undefined,
+        })
+        if (move) san = move.san
+    } catch {
+        // Unparseable per chess.js — show the raw UCI rather than dropping the line.
+    }
+    return [{ bestmove: r.bestmove, san, eval: r.eval, pv: r.pv ?? [], depth: r.depth ?? 0 }]
+}
 
 // Duck Chess is REVIEW-ONLY on the analysis board — the client has no duck rules,
 // so there's no "game over" to compute locally; the board is non-interactive and we
@@ -488,32 +514,45 @@ export default function Analysis() {
     // exactly one source owns a position at a time (see below).
     const [evalSource, setEvalSource] = useState<Record<number, 'cache' | 'engine' | 'local'>>({})
 
-    // ONE SOURCE OWNS A POSITION. With the local engine on it is local; otherwise
-    // it is the server ladder. Whichever it is writes the eval, the arrow, the PV
-    // and the move list together, from a single result.
+    // The server's cache answer for the viewed node, held so the effect below can
+    // weigh it against local's. Cleared whenever the position changes.
+    const [cacheLines, setCacheLines] = useState<{ nodeId: number; lines: AnalysisLine[] } | null>(null)
+    useEffect(() => setCacheLines(null), [current.id])
+
+    // ONE SOURCE OWNS A POSITION, AND IT IS THE DEEPER ONE.
     //
-    // This replaced a scheme where the eval/arrow and the move list were written
-    // independently — by different searches, at different depths, sometimes by
-    // different engines — and reconciled after the fact by a precedence rule. It
-    // could and did put a best-move arrow for one move above a first engine line
-    // for another, and left the Cloud badge describing whichever write happened to
-    // land last. There is no reconciliation now because there is nothing to
-    // reconcile.
+    // With the local engine on, two answers can exist: the server's eval_cache
+    // (a stored Stockfish result, frequently depth 22 from the book and up to
+    // depth 90+ from an imported row) and local's own search, which tops out at
+    // EVAL_DEPTH. Whichever is deeper wins OUTRIGHT and supplies everything —
+    // eval, arrow, PV, the engine lines, the depth readout, and the Cloud chip
+    // when it is the cache. Nothing is ever mixed between them.
     //
-    // `lines[0]` IS the eval: same move, same depth, same search.
+    // That last part is the fix for the bug this replaced: the eval/arrow and the
+    // move list used to be written independently, by different searches at
+    // different depths, and reconciled after the fact. It could show a best-move
+    // arrow for one move above a first engine line for another. Picking a whole
+    // winner instead of merging per-slot makes that unrepresentable, while still
+    // letting a genuinely deeper cached eval beat local — which is the entire
+    // point of having the cache.
+    //
+    // `lines[0]` IS the eval: same move, same depth, same search, either way.
     useEffect(() => {
         if (!localEngineOn) return
-        const lines = localRace.lines
-        if (!lines || lines.length === 0) return
         const nodeId = current.id
-        const top = lines[0]
+        const mine = localRace.lines
+        const cached = cacheLines?.nodeId === nodeId ? cacheLines.lines : null
+        const winner = pickDeeper(cached, mine)
+        if (!winner) return
+
+        const top = winner.lines[0]
         const stm = current.fen.split(' ')[1] === 'b' ? 'b' : 'w'
         const white = stm === 'w' ? top.eval.value : -top.eval.value
-        setAnalysisLines(lines)
-        linesCache.current.set(nodeId, { lines, opening: null })
+        setAnalysisLines(winner.lines)
+        linesCache.current.set(nodeId, { lines: winner.lines, opening: null })
         setTree((t) => annotateEval(t, nodeId, { type: top.eval.type, white }, top.bestmove, top.pv, top.depth))
-        setEvalSource((m) => (m[nodeId] === 'local' ? m : { ...m, [nodeId]: 'local' }))
-    }, [localEngineOn, localRace.lines, current.id, current.fen])
+        setEvalSource((m) => (m[nodeId] === winner.source ? m : { ...m, [nodeId]: winner.source }))
+    }, [localEngineOn, localRace.lines, cacheLines, current.id, current.fen])
 
     // --- Live engine eval + best line: progressive ("streaming") deepening ---
     // We can't stream over the wire (no SSE behind Cloudflare), so we emulate it by
@@ -644,21 +683,17 @@ export default function Analysis() {
                     }
                     if (cancelled || r.source === 'miss' || !r.eval) return
 
-                    if (r.lines && r.lines.length > 0) {
-                        setAnalysisLines(r.lines)
-                        linesCache.current.set(nodeId, { lines: r.lines, opening: r.opening ?? null })
-                    }
                     // Absent `opening` means "no opinion" (the lookup could not run),
                     // so leave whatever name is already displayed alone.
                     if (r.opening !== undefined) setAnalysisOpening(r.opening ?? null)
 
-                    const got = r.depth ?? 0
-                    if (got <= achieved) return
-                    setEvalSource((m) => ({ ...m, [nodeId]: r.source === 'cache' ? 'cache' : 'engine' }))
-                    const white = stm === 'w' ? r.eval.value : -r.eval.value
-                    setTree((t) =>
-                        annotateEval(t, nodeId, { type: r.eval!.type, white }, r.bestmove, r.pv ?? [], got),
-                    )
+                    // Hand the answer to the owner-picking effect rather than writing
+                    // the board here. It is only the WINNER if it is deeper than what
+                    // local produces — and if it wins it supplies the whole display,
+                    // lines included, which is why a single-line row is expanded into
+                    // a one-entry move list rather than left empty.
+                    const lines = cacheLinesFrom(fen, r)
+                    if (lines) setCacheLines({ nodeId, lines })
                     return
                 }
 
