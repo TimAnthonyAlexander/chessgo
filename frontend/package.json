@@ -4,7 +4,11 @@
     "version": "0.1.0",
     "type": "module",
     "scripts": {
+        "sync-local-engine": "node scripts/sync-local-engine.mjs",
+        "verify-local-engine": "bun run scripts/verify-local-engine-worker.mjs",
+        "predev": "node scripts/sync-local-engine.mjs",
         "dev": "vite",
+        "prebuild": "node scripts/sync-local-engine.mjs",
         "build": "vite build",
         "preview": "vite preview",
         "typecheck": "tsc --noEmit",
