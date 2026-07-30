@@ -19,13 +19,23 @@ function evalText(type: 'cp' | 'mate', white: number): string {
     if (type === 'mate') return `${white < 0 ? '-' : ''}M${Math.abs(white)}`
     return (white > 0 ? '+' : '') + (white / 100).toFixed(2)
 }
+// flexShrink:0 is load-bearing. This sits in EngineLines's header flex row, and
+// once that row gained the local-engine control and the Cloud chip it got crowded
+// enough to compress the 34px track — while the knob kept its fixed 16px width at
+// left:16, so the knob hung out past the right-hand edge of its own track. The
+// track must never shrink. Spectate.tsx's Toggle had flexShrink:0 from the start.
 function Toggle({ on, onChange }: { on: boolean; onChange: () => void }) {
     return (
         <Box component="button" onClick={onChange} aria-label="Toggle engine"
-            sx={{ position:'relative', width:34, height:20, borderRadius:10, border:'none', cursor:'pointer',
+            sx={{ position:'relative', flexShrink:0, width:34, height:20, borderRadius:10, border:'none', cursor:'pointer',
                   bgcolor: on ? 'var(--accent)' : 'var(--surface-2)', transition:'background-color .2s', p:0 }}>
-            <Box sx={{ position:'absolute', top:2, left: on ? 16 : 2, width:16, height:16,
-                       borderRadius:'50%', bgcolor:'var(--text)', transition:'left .2s' }} />
+            {/* translateX, not `left`, so the knob is laid out once at the inset and
+                only transformed — a compositor-only animation, and it cannot be
+                re-resolved against a track whose width changed. */}
+            <Box sx={{ position:'absolute', top:2, left:2, width:16, height:16,
+                       borderRadius:'50%', bgcolor:'var(--text)',
+                       transform: on ? 'translateX(14px)' : 'translateX(0)',
+                       transition:'transform .2s' }} />
         </Box>
     )
 }
@@ -93,19 +103,22 @@ export default function EngineLines({
                 <Tooltip title={engineOn ? 'Turn engine off' : 'Turn engine on'} arrow placement="top">
                     <Toggle on={engineOn} onChange={onToggleEngine} />
                 </Tooltip>
-                <Typography sx={{ fontFamily:'var(--font-display)', fontSize:13, fontWeight:700, letterSpacing:1.8, textTransform:'uppercase', color:'var(--text)' }}>Engine</Typography>
-                <Box sx={{ flex:1 }} />
+                {/* No "Engine" label — the toggle's tooltip and the panel below say
+                    what it is. This spacer takes all the slack so nothing else in the
+                    row is ever asked to shrink (see the Toggle's comment). */}
+                <Box sx={{ flex:1, minWidth:0 }} />
                 {engineOn && headerExtra}
                 {engineOn && depth != null && sourceBadge === 'cache' && (
                     <Tooltip title="Served from the shared server cache — a stored evaluation, often far deeper than a fresh search would reach here" arrow placement="top">
                         <Typography sx={{ fontFamily:'var(--font-mono)', fontSize:9.5, fontWeight:700, letterSpacing:0.8, textTransform:'uppercase',
-                            color:'var(--text-dim)', border:'1px solid var(--line)', borderRadius:'4px', px:0.5, py:'1px', cursor:'default' }}>
+                            color:'var(--text-dim)', border:'1px solid var(--line)', borderRadius:'4px', px:0.5, py:'1px', cursor:'default',
+                            flexShrink:0, whiteSpace:'nowrap' }}>
                             Cloud
                         </Typography>
                     </Tooltip>
                 )}
                 {engineOn && depth != null && (
-                    <Box sx={{ display:'flex', alignItems:'baseline', gap:0.6 }}>
+                    <Box sx={{ display:'flex', alignItems:'baseline', gap:0.6, flexShrink:0 }}>
                         <Typography sx={{ fontSize:10, letterSpacing:1.2, textTransform:'uppercase', color:'var(--muted)' }}>depth</Typography>
                         <Typography sx={{ fontFamily:'var(--font-mono)', fontSize:13.5, fontWeight:700, color:'var(--text-dim)' }}>{depth}</Typography>
                     </Box>

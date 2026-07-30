@@ -31,6 +31,12 @@ const pillSx = {
     px: 0.7,
     py: '2px',
     cursor: 'pointer',
+    // This control shares EngineLines's header flex row with the engine toggle,
+    // the Cloud chip and the depth readout. Letting it shrink or wrap squeezes
+    // its neighbours — which is how the engine toggle's knob ended up outside
+    // its own track.
+    flexShrink: 0,
+    whiteSpace: 'nowrap' as const,
     transition: 'color .12s, background-color .12s, border-color .12s',
     '&:hover': { color: 'var(--accent)', borderColor: 'var(--accent-line)' },
 }
