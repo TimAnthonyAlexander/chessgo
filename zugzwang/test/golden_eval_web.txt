@@ -1,0 +1,29 @@
+# golden_eval_web.txt — NNUE::evaluate() stm-relative centipawns,
+# computed by test/nnue_web_format_test.cpp. Format: fen | eval
+# Byte-identical whether the net was loaded from the float32 export
+# or from the pre-quantized web format (src/nnue_web_format.h) — this
+# file is the reference a WASM build should reproduce exactly.
+rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1 | 69
+rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1 | -56
+r1bqkbnr/pppp1ppp/2n5/1B2p3/4P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3 | 33
+rnbqkb1r/pp2pppp/3p1n2/2p5/4P3/2N2N2/PPPP1PPP/R1BQKB1R w KQkq - 0 5 | 213
+r1bq1rk1/pp2bppp/2n1pn2/2pp4/3P1B2/2NBPN2/PPP2PPP/R2Q1RK1 w - - 0 8 | 6
+r2q1rk1/pp1bbppp/2np1n2/4p3/2B1P3/2NP1N2/PPP2PPP/R1BQ1RK1 w - - 0 9 | 475
+r1bqk2r/ppp2ppp/2np1n2/2b1p3/2B1P3/2NP1N2/PPP2PPP/R1BQK2R w KQkq - 0 6 | 39
+2rq1rk1/pp1bbppp/2np1n2/4p3/4P3/1NNP2P1/PPP1QPBP/R1B2RK1 b - - 0 11 | -323
+r3k2r/pbpnqppp/1p2pn2/3p4/2PP4/2NBPN2/PP1BQPPP/R3K2R w KQkq - 0 10 | 1086
+r1b1k2r/ppppnppp/2n2q2/2b5/3NP3/2P5/PP3PPP/RNBQKB1R w KQkq - 0 7 | -21
+rnbq1rk1/ppp1ppbp/3p1np1/8/2PPP3/2N2N2/PP2BPPP/R1BQK2R b KQ - 0 6 | -156
+r1bqr1k1/pp1nbppp/2p2n2/3p4/3P4/2NBPN2/PPQ2PPP/R1B2RK1 b - - 0 11 | -6
+r3r1k1/1pq2ppp/p1np1n2/2p1p3/4P3/1BPPBN2/PP1Q1PPP/R3R1K1 w - - 0 15 | 1235
+2r3k1/1p3ppp/p1n1p3/3pP3/1b1P4/2N1BN2/PP3PPP/2R3K1 w - - 0 18 | 1590
+6k1/5ppp/8/8/8/8/1R3PPP/6K1 w - - 0 40 | 1836
+r5k1/5ppp/8/8/8/8/5PPP/R5K1 w - - 0 35 | 1
+8/5ppk/8/8/8/8/1R3PPK/8 b - - 0 45 | -1988
+6k1/5ppp/8/8/3B4/8/5PPP/6K1 w - - 0 40 | 1736
+6k1/5ppp/8/3n4/8/8/5PPP/6K1 b - - 0 40 | 2204
+8/8/4k3/8/8/2B1N3/4K3/8 w - - 0 60 | 1487
+r3k2r/8/8/8/8/8/8/R3K2R w Kq - 0 1 | 2
+nbbrkrqn/pppppppp/8/8/8/8/PPPPPPPP/NBBRKRQN w KQkq - 0 1 | 69
+8/8/8/8/3k4/8/3N4/4K3 w - - 0 1 | 1
+rnbqkbnr/ppp1p1pp/8/3pPp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3 | 255

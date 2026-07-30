@@ -45,9 +45,24 @@ perft: src/perft.cpp src/position.cpp src/bitboard.cpp src/zobrist.cpp src/moveg
        src/nnue_net.cpp src/nnue_features.cpp src/nnue_eval.cpp src/nnue_accumulator.cpp
 	$(CXX) $(CXXFLAGS) -o perft_test $^
 
+# netweb_writer: converts the float32 net (net.nnue) into the pre-quantized web
+# format (src/nnue_web_format.h). Standalone — only needs the loader, not the
+# engine — so it does not disturb the main build. See tools/netweb_writer.cpp.
+#   Usage: ./tools/netweb_writer <input-float32-net> <output-prequantized-net>
+netweb: tools/netweb_writer.cpp src/nnue_net.cpp
+	$(CXX) $(CXXFLAGS) -Isrc -o tools/netweb_writer $^
+
+# nnue_web_format_test: proves the float32 and pre-quantized loaders produce a
+# byte-identical Net + identical eval on golden FENs, and that a corrupted
+# pre-quantized file is refused. See test/nnue_web_format_test.cpp.
+nnue_web_format_test: test/nnue_web_format_test.cpp src/position.cpp src/bitboard.cpp \
+       src/zobrist.cpp src/movegen.cpp src/rules.cpp src/weakening.cpp src/antichess.cpp \
+       src/nnue_net.cpp src/nnue_features.cpp src/nnue_eval.cpp src/nnue_accumulator.cpp
+	$(CXX) $(CXXFLAGS) -Isrc -o test/nnue_web_format_test $^
+
 clean:
-	rm -f $(TARGET) perft_test $(OBJ) $(DEP)
+	rm -f $(TARGET) perft_test $(OBJ) $(DEP) tools/netweb_writer test/nnue_web_format_test
 
 -include $(DEP)
 
-.PHONY: all clean perft
+.PHONY: all clean perft netweb nnue_web_format_test
