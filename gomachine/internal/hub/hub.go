@@ -39,10 +39,10 @@ type Hub struct {
 	playerGames map[string]*game      // identity id -> active game (for reconnect)
 	challenges  map[string]*challenge // pending private invites, keyed by short code
 	// sessions indexes every live player connection by identity id, so one
-	// account signed in on several devices (laptop + phone) is knowable. A game
-	// still has exactly ONE seat per side (game.player.client): the newest
-	// connection to ask takes it over. The extra connections exist only so the
-	// hub can tell them "you already have a game" — see notifyOtherSessions.
+	// account signed in on several devices (laptop + phone) is knowable. When a
+	// game starts, ALL of that account's connections are seated in it
+	// (joinOtherSessions) — a side is a set of sockets, not one — so the same
+	// game is playable from either device and stays in sync move by move.
 	sessions map[string]map[*Client]struct{}
 	// rematchWindows indexes finished games still eligible for a rematch
 	// (armed by armRematch at finish(), keyed by game id) so the ticker can
@@ -431,8 +431,8 @@ func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, r
 	}
 	g := &game{
 		id:        newID(),
-		white:     &player{client: white, id: white.id},
-		black:     &player{client: black, id: black.id},
+		white:     newPlayer(white),
+		black:     newPlayer(black),
 		state:     st,
 		tc:        tc,
 		pool:      pool,
@@ -454,8 +454,8 @@ func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, r
 	h.sendMatched(g, black, chess.Black)
 	// Any other device signed into either account is now stale — tell it, so its
 	// lobby offers to open the game instead of letting the player queue again.
-	h.notifyOtherSessions(g, white)
-	h.notifyOtherSessions(g, black)
+	h.joinOtherSessions(g, white)
+	h.joinOtherSessions(g, black)
 	return g
 }
 
@@ -538,16 +538,13 @@ func colorStr(c chess.Color) string {
 	return "w"
 }
 
-// broadcastPlayers sends to the two seated players only (not spectators). Offers
-// and chat are private to the participants. A bot side has a nil client, so the
-// offer simply goes unanswered — the frontend never learns the opponent is a bot.
+// broadcastPlayers sends to the two seated players only (not spectators) — every
+// device on each side. Offers and chat are private to the participants. A bot
+// side has no clients, so the offer simply goes unanswered — the frontend never
+// learns the opponent is a bot.
 func (h *Hub) broadcastPlayers(g *game, data []byte) {
-	if g.white.client != nil {
-		g.white.client.trySend(data)
-	}
-	if g.black.client != nil {
-		g.black.client.trySend(data)
-	}
+	g.white.send(data)
+	g.black.send(data)
 }
 
 func (h *Hub) drawOffer(c *Client) {
@@ -772,11 +769,13 @@ func (h *Hub) abortGame(g *game) {
 // terminal end broadcast has already reached spectators; detach them so a later
 // game lookup or unwatch is a no-op.
 func (h *Hub) teardown(g *game) {
-	if g.white.client != nil {
-		g.white.client.game = nil
-	}
-	if g.black.client != nil {
-		g.black.client.game = nil
+	// Clear each device's pointer to the game, but KEEP the per-side client sets:
+	// the rematch window (armRematch/startRematch) still needs to reach the
+	// participants after the game is gone from the indexes.
+	for _, p := range []*player{g.white, g.black} {
+		for c := range p.clients {
+			c.game = nil
+		}
 	}
 	for c := range g.spectators {
 		c.watching = nil
@@ -826,31 +825,36 @@ func (h *Hub) activeGameFor(c *Client) *game {
 	return g
 }
 
-// attachToGame seats c in g (taking the seat over from whatever connection held
-// it) and sends it a full resume, so the client can render the game from scratch.
-// Idempotent: re-attaching the connection that already holds the seat just
-// re-sends the snapshot.
+// attachToGame seats c in g ALONGSIDE whatever other devices this account
+// already has open on it, and sends it a full resume so it can render the game
+// from scratch. Every attached device then receives the same broadcasts, so a
+// move played on one shows up on the others immediately. Idempotent: attaching a
+// connection that is already seated just re-sends the snapshot.
 func (h *Hub) attachToGame(c *Client, g *game) {
 	color := g.colorForID(c.id.UserID)
-	g.playerFor(color).client = c
+	p := g.playerFor(color)
+	wasOffline := !p.connected()
+	p.attach(c)
 	g.online[color] = true
 	c.game = g
 	h.dequeue(c)       // a connection in a game is never also waiting in a pool
 	h.dropChallenge(c) // …nor holding a pending invite
 	c.trySend(mustJSON(h.resumeMsg(g, color)))
 
-	if opp := g.playerFor(color.Opposite()); g.online[color.Opposite()] && opp.client != nil {
-		opp.client.trySend(mustJSON(out("opponentBack", map[string]any{"gameId": g.id})))
+	// Only a genuine offline→online transition is news to the opponent; a second
+	// device joining a side that was already connected changes nothing for them.
+	if wasOffline && g.online[color.Opposite()] {
+		g.playerFor(color.Opposite()).send(mustJSON(out("opponentBack", map[string]any{"gameId": g.id})))
 	}
 }
 
-// notifyOtherSessions stands this identity's OTHER connections down when a game
-// starts on one of them (the phone, while you were matched on the laptop): each
-// is pulled out of any queue and loses any pending invite — otherwise it could
-// still be paired or bot-backfilled into a SECOND game — and is told a game is
-// running so its lobby can offer to open it. What it sends is a pointer, not a
-// resume: the seat stays where it is until that device asks for it with "resume".
-func (h *Hub) notifyOtherSessions(g *game, seat *Client) {
+// joinOtherSessions seats this identity's OTHER connections in the game that
+// just started on one of them — the phone, while you were matched on the laptop.
+// Each gets a full resume, so the game simply opens there too and stays in sync
+// from the first move. Attaching also pulls them out of any queue or pending
+// invite (attachToGame does that), which they must leave anyway: otherwise
+// matchmaking or bot backfill could drop them into a SECOND game moments later.
+func (h *Hub) joinOtherSessions(g *game, seat *Client) {
 	if g.filler {
 		return
 	}
@@ -858,13 +862,7 @@ func (h *Hub) notifyOtherSessions(g *game, seat *Client) {
 		if c == seat {
 			continue
 		}
-		h.dequeue(c)
-		h.dropChallenge(c)
-		c.trySend(mustJSON(out("activeGame", map[string]any{
-			"gameId":  g.id,
-			"pool":    g.pool,
-			"variant": g.variant,
-		})))
+		h.attachToGame(c, g)
 	}
 }
 
@@ -939,8 +937,10 @@ func (h *Hub) handleDisconnect(c *Client) {
 		return
 	}
 	color := g.colorForID(c.id.UserID)
-	if g.playerFor(color).client != c {
-		return // a newer connection already took over this seat
+	p := g.playerFor(color)
+	p.detach(c)
+	if p.connected() {
+		return // the account still has this game open on another device
 	}
 	g.online[color] = false
 	// Drop any pending offer so the still-connected player isn't left staring at a
@@ -953,18 +953,14 @@ func (h *Hub) handleDisconnect(c *Client) {
 		g.takebackPending = false
 		h.broadcastPlayers(g, mustJSON(out("takebackDeclined", map[string]any{"gameId": g.id})))
 	}
-	if opp := g.playerFor(color.Opposite()); g.online[color.Opposite()] && opp.client != nil {
-		opp.client.trySend(mustJSON(out("opponentGone", map[string]any{"gameId": g.id})))
+	if g.online[color.Opposite()] {
+		g.playerFor(color.Opposite()).send(mustJSON(out("opponentGone", map[string]any{"gameId": g.id})))
 	}
 }
 
 func (h *Hub) broadcast(g *game, data []byte) {
-	if g.white.client != nil {
-		g.white.client.trySend(data)
-	}
-	if g.black.client != nil {
-		g.black.client.trySend(data)
-	}
+	g.white.send(data)
+	g.black.send(data)
 	for c := range g.spectators {
 		c.trySend(data)
 	}

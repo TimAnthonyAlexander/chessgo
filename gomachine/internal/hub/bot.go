@@ -172,11 +172,11 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variantID string
 		humanColor = chess.Black
 	}
 	if humanColor == chess.White {
-		g.white = &player{client: human, id: human.id}
-		g.black = &player{id: bot, isBot: true, rating: displayed}
+		g.white = newPlayer(human)
+		g.black = newBotPlayer(bot, displayed)
 	} else {
-		g.white = &player{id: bot, isBot: true, rating: displayed}
-		g.black = &player{client: human, id: human.id}
+		g.white = newBotPlayer(bot, displayed)
+		g.black = newPlayer(human)
 	}
 
 	g.chat = newChatPersona() // one fixed chat character for this game
@@ -188,9 +188,9 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variantID string
 	h.activeGames.Add(1)
 
 	h.sendMatched(g, human, humanColor)
-	h.notifyOtherSessions(g, human) // stand this account's other devices down
-	h.scheduleBotMove(g)            // if the bot plays White, it moves first
-	h.maybeOpeningChat(g) // ...and it might open with a friendly "hi"
+	h.joinOtherSessions(g, human) // open it on this account's other devices too
+	h.scheduleBotMove(g)          // if the bot plays White, it moves first
+	h.maybeOpeningChat(g)         // ...and it might open with a friendly "hi"
 }
 
 // scheduleBotMove starts async move computation when it is a bot's turn. Works

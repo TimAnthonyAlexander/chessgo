@@ -10,7 +10,7 @@ import {
 } from '@mui/material'
 import { Cpu, Gauge, Skull, Swords, Target, Telescope, UserPlus } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { gameSocket, type ActiveGameNotice, type LiveGameState } from '../../lib/socket'
+import { gameSocket, type LiveGameState } from '../../lib/socket'
 import { useGameSocket } from '../../lib/useGameSocket'
 import { useAuth } from '../../lib/auth'
 import { getStats, type LobbyStats } from '../../api/client'
@@ -63,9 +63,9 @@ export function useHome() {
     const live = s.game
     const [search, setSearch] = useState<string | null>(null)
     const [challengeOpen, setChallengeOpen] = useState(false)
-    // Set while we're waiting for a game to land so we know to route into it —
-    // covers both "queued and got redirected into the game we already had" and
-    // "tapped the playing-elsewhere banner".
+    // Set while we're waiting for a game to land so we know to route into it.
+    // Covers the case where we asked to queue and the hub answered with a resume
+    // for the game this account already had open elsewhere.
     const [openWhenLive, setOpenWhenLive] = useState(false)
 
     // When the hub matches us, jump into the live game.
@@ -85,13 +85,6 @@ export function useHome() {
         setSearch(null)
         navigate(`/game/${live.id}`)
     }, [openWhenLive, live?.id, live?.ended, navigate])
-
-    /** Take over a game the account is playing elsewhere: the hub answers with a
-     * resume, and the effect above routes us to it. */
-    const openElsewhere = () => {
-        setOpenWhenLive(true)
-        gameSocket.requestResume()
-    }
 
     const queue = (label: string, pool: string, variant: Variant = 'standard') => {
         void gameSocket.queue(pool, variant)
@@ -141,7 +134,6 @@ export function useHome() {
         s,
         live,
         queue,
-        openElsewhere,
         searching,
         setSearch,
         challengeOpen,
@@ -173,13 +165,7 @@ export function HomeChrome({
                 }}
             >
                 {/* A game in progress is the most urgent thing on the page — for anyone. */}
-                {home.live && !home.live.ended ? (
-                    <ResumeBanner game={home.live} />
-                ) : (
-                    home.s.activeGame && (
-                        <ElsewhereBanner notice={home.s.activeGame} onOpen={home.openElsewhere} />
-                    )
-                )}
+                {home.live && !home.live.ended && <ResumeBanner game={home.live} />}
 
                 {children}
             </Box>
@@ -609,25 +595,7 @@ function ResumeBanner({ game }: { game: LiveGameState }) {
     )
 }
 
-/** The same banner for a game this tab isn't seated in — the account was matched
- * elsewhere (another tab, the phone). We only know its time control, so opening
- * it means asking the hub to hand the seat over; the resume that comes back is
- * what routes us to the board. */
-function ElsewhereBanner({ notice, onOpen }: { notice: ActiveGameNotice; onOpen: () => void }) {
-    const label =
-        notice.variant && notice.variant !== 'standard'
-            ? `${notice.variant} ${notice.pool}`
-            : notice.pool
-    return (
-        <GameBanner
-            subtitle={`Playing on another device${label ? ` · ${label}` : ''}`}
-            onOpen={onOpen}
-        />
-    )
-}
-
-/** The accent banner pinned above the lobby when a game is waiting for you —
- * either one this tab holds (Resume) or one the account is playing elsewhere. */
+/** The accent banner pinned above the lobby when a game is waiting for you. */
 function GameBanner({ subtitle, onOpen }: { subtitle: string; onOpen: () => void }) {
     return (
         <Box

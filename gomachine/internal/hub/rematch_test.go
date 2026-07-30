@@ -253,11 +253,11 @@ func TestRematchDoubleAcceptOnlyStartsOneGame(t *testing.T) {
 	g.pool = "3+2"
 	h.armRematch(g)
 
-	h.rematchOffer(white.client)
+	h.rematchOffer(white.any())
 	recv(t, whiteCh) // echo of our own standing offer
 	recv(t, blackCh)
 
-	h.rematchAccept(black.client)
+	h.rematchAccept(black.any())
 	if m := recv(t, whiteCh); m["type"] != "matched" {
 		t.Fatalf("type = %v, want matched", m["type"])
 	}
@@ -267,7 +267,7 @@ func TestRematchDoubleAcceptOnlyStartsOneGame(t *testing.T) {
 	}
 
 	// A second, racing accept must be a no-op: the window already closed.
-	h.rematchAccept(black.client)
+	h.rematchAccept(black.any())
 	select {
 	case data := <-whiteCh:
 		t.Fatalf("duplicate accept produced another message: %s", data)
@@ -288,7 +288,7 @@ func TestRematchOfferExpires(t *testing.T) {
 	g.over = true
 	h.armRematch(g)
 
-	h.rematchOffer(white.client)
+	h.rematchOffer(white.any())
 	recv(t, whiteCh)
 	recv(t, blackCh)
 
@@ -302,7 +302,7 @@ func TestRematchOfferExpires(t *testing.T) {
 	if m := recv(t, blackCh); m["type"] != "rematchExpired" {
 		t.Errorf("type = %v, want rematchExpired", m["type"])
 	}
-	if white.client.lastGame != nil || black.client.lastGame != nil {
+	if white.any().lastGame != nil || black.any().lastGame != nil {
 		t.Error("lastGame still set after the rematch window expired")
 	}
 	if _, ok := h.rematchWindows[g.id]; ok {
@@ -310,7 +310,7 @@ func TestRematchOfferExpires(t *testing.T) {
 	}
 
 	// The window is closed: a late offer must be a no-op.
-	h.rematchOffer(white.client)
+	h.rematchOffer(white.any())
 	select {
 	case data := <-whiteCh:
 		t.Fatalf("offer after expiry produced a message: %s", data)

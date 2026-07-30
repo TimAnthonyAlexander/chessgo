@@ -169,8 +169,8 @@ func (h *Hub) startFillerGame() {
 	}
 	g := &game{
 		id:    newID(),
-		white: &player{id: newBotIdentity(rW), isBot: true, rating: rW},
-		black: &player{id: newBotIdentity(rB), isBot: true, rating: rB},
+		white: newBotPlayer(newBotIdentity(rW), rW),
+		black: newBotPlayer(newBotIdentity(rB), rB),
 		state: st,
 		tc:    tc,
 		pool:  pool,

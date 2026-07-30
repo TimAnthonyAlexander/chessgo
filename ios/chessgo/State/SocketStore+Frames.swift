@@ -45,16 +45,6 @@ struct WsErrorFrame: Decodable, Sendable {
     let message: String
 }
 
-/// `activeGame` — the hub telling THIS connection that the account it belongs
-/// to is playing a game somewhere else (matched on the laptop while the phone
-/// sat in the lobby). A pointer only: `SocketStore.requestResume()` is what
-/// takes the seat over and brings back a full `resume`.
-struct WsActiveGame: Decodable, Sendable {
-    let gameId: String
-    @DefaultEmptyString var pool: String
-    @DefaultEmptyString var variant: String
-}
-
 // MARK: - LiveGameState builders
 
 /// `LiveGameState` (Models/LiveGame.swift) is never decoded directly off the

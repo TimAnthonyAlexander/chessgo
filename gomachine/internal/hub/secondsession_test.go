@@ -4,12 +4,24 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/coder/websocket"
 )
 
-// One account signed in twice (laptop + phone) must never end up in two games.
-// The second connection is told a game is running, and asking to queue on it
-// opens that game instead of starting another.
-func TestSecondSessionCannotQueueIntoSecondGame(t *testing.T) {
+// expectState asserts every named connection receives the same `state` frame.
+func expectState(t *testing.T, wantSAN string, conns map[string]*websocket.Conn) {
+	t.Helper()
+	for name, c := range conns {
+		if st := readType(t, c, "state"); st["san"] != wantSAN {
+			t.Errorf("%s saw san = %v, want %v", name, st["san"], wantSAN)
+		}
+	}
+}
+
+// One account signed in twice (laptop + phone) is ONE player in ONE game: the
+// second device is seated in the running game and stays in sync, and asking to
+// queue there opens that game rather than starting another.
+func TestSecondSessionJoinsTheSameGame(t *testing.T) {
 	h := New(testSecret)
 	go h.Run()
 	srv := httptest.NewServer(http.HandlerFunc(h.ServeWS))
@@ -31,17 +43,7 @@ func TestSecondSessionCannotQueueIntoSecondGame(t *testing.T) {
 	matched := readType(t, laptop, "matched")
 	readType(t, opp, "matched")
 
-	// The idle phone is told about the game it wasn't part of starting.
-	notice := readType(t, phone, "activeGame")
-	if notice["gameId"] != matched["gameId"] {
-		t.Errorf("activeGame gameId = %v, want %v", notice["gameId"], matched["gameId"])
-	}
-	if notice["pool"] != "3+0" {
-		t.Errorf("activeGame pool = %v, want 3+0", notice["pool"])
-	}
-
-	// Queueing on the phone opens the running game rather than starting a new one.
-	send(t, phone, map[string]any{"type": "queue", "pool": "10+0"})
+	// The idle phone is seated in the game it had no part in starting.
 	resumed := readType(t, phone, "resume")
 	if resumed["gameId"] != matched["gameId"] {
 		t.Errorf("resume gameId = %v, want %v", resumed["gameId"], matched["gameId"])
@@ -49,8 +51,103 @@ func TestSecondSessionCannotQueueIntoSecondGame(t *testing.T) {
 	if resumed["color"] != matched["color"] {
 		t.Errorf("resume color = %v, want %v", resumed["color"], matched["color"])
 	}
+
+	// Queueing on the phone re-opens the running game, never a second one.
+	send(t, phone, map[string]any{"type": "queue", "pool": "10+0"})
+	again := readType(t, phone, "resume")
+	if again["gameId"] != matched["gameId"] {
+		t.Errorf("re-resume gameId = %v, want %v", again["gameId"], matched["gameId"])
+	}
 	if len(h.games) != 1 {
 		t.Errorf("games = %d, want 1 — a second game was started", len(h.games))
+	}
+}
+
+// The point of seating both devices: a move made on either one reaches the
+// other (and the opponent) immediately, and either one can be the one to move.
+func TestBothDevicesStayInSync(t *testing.T) {
+	h := New(testSecret)
+	go h.Run()
+	srv := httptest.NewServer(http.HandlerFunc(h.ServeWS))
+	defer srv.Close()
+
+	laptop := dialAs(t, srv.URL, "alice", "id-alice")
+	defer laptop.CloseNow()
+	opp := dialAs(t, srv.URL, "bob", "id-bob")
+	defer opp.CloseNow()
+	readType(t, laptop, "hello")
+	readType(t, opp, "hello")
+
+	send(t, laptop, map[string]any{"type": "queue", "pool": "3+0"})
+	send(t, opp, map[string]any{"type": "queue", "pool": "3+0"})
+	ma := readType(t, laptop, "matched")
+	readType(t, opp, "matched")
+
+	// The phone connects mid-game and is resumed into the same side.
+	phone := dialAs(t, srv.URL, "alice", "id-alice")
+	defer phone.CloseNow()
+	readType(t, phone, "hello")
+	readType(t, phone, "resume")
+
+	// Whoever has white opens; alice's OTHER device must see the move too.
+	aliceIsWhite := ma["color"] == "w"
+	if aliceIsWhite {
+		send(t, laptop, map[string]any{"type": "move", "move": "e2e4"})
+	} else {
+		send(t, opp, map[string]any{"type": "move", "move": "e2e4"})
+	}
+	expectState(t, "e4", map[string]*websocket.Conn{"laptop": laptop, "phone": phone, "opponent": opp})
+
+	// …and the reply is accepted from the OTHER device of the same account,
+	// proving the phone isn't a read-only mirror.
+	if aliceIsWhite {
+		send(t, opp, map[string]any{"type": "move", "move": "e7e5"})
+	} else {
+		send(t, phone, map[string]any{"type": "move", "move": "e7e5"})
+	}
+	expectState(t, "e5", map[string]*websocket.Conn{"laptop": laptop, "phone": phone, "opponent": opp})
+}
+
+// Closing one device must NOT mark the side offline while the other is still
+// attached — the opponent should never see "opponent disconnected" for it.
+func TestClosingOneDeviceKeepsSideOnline(t *testing.T) {
+	h := New(testSecret)
+	go h.Run()
+	srv := httptest.NewServer(http.HandlerFunc(h.ServeWS))
+	defer srv.Close()
+
+	laptop := dialAs(t, srv.URL, "alice", "id-alice")
+	defer laptop.CloseNow()
+	opp := dialAs(t, srv.URL, "bob", "id-bob")
+	defer opp.CloseNow()
+	readType(t, laptop, "hello")
+	readType(t, opp, "hello")
+	send(t, laptop, map[string]any{"type": "queue", "pool": "3+0"})
+	send(t, opp, map[string]any{"type": "queue", "pool": "3+0"})
+	ma := readType(t, laptop, "matched")
+	readType(t, opp, "matched")
+
+	phone := dialAs(t, srv.URL, "alice", "id-alice")
+	readType(t, phone, "hello")
+	readType(t, phone, "resume")
+
+	phone.CloseNow()
+
+	// The opponent's next frame must be the move, not an opponentGone before it.
+	if ma["color"] == "w" {
+		send(t, laptop, map[string]any{"type": "move", "move": "e2e4"})
+	} else {
+		send(t, opp, map[string]any{"type": "move", "move": "e2e4"})
+	}
+	if st := readType(t, opp, "state"); st["san"] != "e4" {
+		t.Errorf("san = %v, want e4", st["san"])
+	}
+	g := h.playerGames["id-alice"]
+	if g == nil {
+		t.Fatal("alice's game vanished")
+	}
+	if color := g.colorForID("id-alice"); !g.online[color] {
+		t.Error("alice marked offline while the laptop is still attached")
 	}
 }
 
@@ -83,14 +180,14 @@ func TestSecondSessionQueuedIsStoodDown(t *testing.T) {
 	readType(t, laptop, "matched")
 	readType(t, opp, "matched")
 
-	readType(t, phone, "activeGame")
+	readType(t, phone, "resume")
 	if n := len(h.pools["15+10"]); n != 0 {
 		t.Errorf("phone still queued: pool holds %d client(s), want 0", n)
 	}
 }
 
-// The explicit "resume" request: a second device takes over the seat after an
-// activeGame notice, and a lone client with no game gets a plain idle back.
+// The explicit "resume" request: idle when there's nothing, and a re-report of
+// the queue (never a bare "idle") when the client is still waiting in one.
 func TestResumeRequest(t *testing.T) {
 	h := New(testSecret)
 	go h.Run()
@@ -103,44 +200,10 @@ func TestResumeRequest(t *testing.T) {
 	send(t, solo, map[string]any{"type": "resume"})
 	readType(t, solo, "idle")
 
-	// A queued client's resume probe must not wipe its searching state.
 	send(t, solo, map[string]any{"type": "queue", "pool": "5+0"})
 	readType(t, solo, "queued")
 	send(t, solo, map[string]any{"type": "resume"})
 	if q := readType(t, solo, "queued"); q["pool"] != "5+0" {
 		t.Errorf("re-reported pool = %v, want 5+0", q["pool"])
 	}
-	send(t, solo, map[string]any{"type": "cancel"})
-	readType(t, solo, "idle")
-
-	// Now play a game on one connection and take it over from a second one.
-	opp := dialAs(t, srv.URL, "bob", "id-bob")
-	defer opp.CloseNow()
-	readType(t, opp, "hello")
-	send(t, solo, map[string]any{"type": "queue", "pool": "3+0"})
-	send(t, opp, map[string]any{"type": "queue", "pool": "3+0"})
-	matched := readType(t, solo, "matched")
-	readType(t, opp, "matched")
-
-	phone := dialAs(t, srv.URL, "solo", "id-solo")
-	defer phone.CloseNow()
-	readType(t, phone, "hello")
-	// A fresh connection already resumes at register time; ask again explicitly
-	// to prove the request path is idempotent.
-	readType(t, phone, "resume")
-	send(t, phone, map[string]any{"type": "resume"})
-	again := readType(t, phone, "resume")
-	if again["gameId"] != matched["gameId"] {
-		t.Errorf("resume gameId = %v, want %v", again["gameId"], matched["gameId"])
-	}
-
-	// The phone now holds the seat, so it's the one that receives play — whoever
-	// has white opens, and both sides see the resulting state.
-	white := phone
-	if matched["color"] != "w" {
-		white = opp
-	}
-	send(t, white, map[string]any{"type": "move", "move": "e2e4"})
-	readType(t, phone, "state")
-	readType(t, opp, "state")
 }

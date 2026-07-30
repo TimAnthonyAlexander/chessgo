@@ -22,7 +22,7 @@ func newStdGame(t *testing.T, id string, white, black *player) *game {
 
 func humanPlayerWithSend(name string, buf int) (*player, chan []byte) {
 	ch := make(chan []byte, buf)
-	return &player{client: &Client{send: ch, id: auth.Identity{Name: name}}, id: auth.Identity{Name: name}}, ch
+	return newPlayer(&Client{send: ch, id: auth.Identity{Name: name}}), ch
 }
 
 func botPlayerNamed(name string, rating int) *player {

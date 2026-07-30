@@ -86,18 +86,20 @@ applied back via a channel.
   `drawOffer/Accept/Decline`, `takebackOffer/Accept/Decline`, `chat{text}`,
   `watch{gameId}`/`unwatch`, `createChallenge`/`joinChallenge`/`cancelChallenge`.
 - **hub → client:** `hello`, `queued`/`idle`, `matched`, `state`, `resume`, `end`,
-  `activeGame`, `opponentGone`/`opponentBack`, `error`, `drawOffered`/`drawDeclined`,
+  `opponentGone`/`opponentBack`, `error`, `drawOffered`/`drawDeclined`,
   `takebackOffered`/`takebackDeclined`, `chat`, `watching`, `watchEnd`,
   `challengeCreated`/`challengeExpired`.
 
-**One account, many devices.** Live games are indexed by *identity*, so an account
-is never in two at once: `queue`/`createChallenge`/`joinChallenge` from a second
-device answer with a full `resume` for the running game rather than starting a new
-one, and a game starting anywhere pulls that account's other connections out of
-their queues and pushes them an `activeGame` pointer. Each side of a game has one
-seat; the newest connection to register (or to send `resume`) holds it. Since a
-long-lived socket never re-registers, clients also send `resume` on foreground /
-tab focus.
+**One account, many devices.** A side of a game is a *set* of connections: every
+device signed into the account is seated on it, gets the same broadcasts, and may
+move, so play stays in sync across laptop and phone move by move. The side counts
+as online while any one of them is attached. Live games are indexed by *identity*,
+so an account is never in two at once — `queue`/`createChallenge`/`joinChallenge`
+from a second device answer with a full `resume` for the running game rather than
+starting a new one, and a game starting anywhere seats that account's other
+connections in it too (pulling them out of any queue, which would otherwise
+backfill them into a second game). Since a long-lived socket never re-registers,
+clients also send `resume` on foreground / tab focus.
 
 Clocks are server-authoritative (200 ms tick), start Lichess-style (untimed until
 both players' first moves), with a 30s first-move abort and FIDE 6.9 timeout-vs-

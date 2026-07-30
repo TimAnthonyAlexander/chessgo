@@ -45,14 +45,6 @@ struct HomeView: View {
 
                     if let liveGame, !liveGame.ended {
                         ResumeBanner(game: liveGame) { dismissedGameID = nil }
-                    } else if let elsewhere = socket.activeElsewhere {
-                        // Playing on another device on this account. Tapping
-                        // takes the seat over here (the hub answers with a full
-                        // resume, which opens the board).
-                        ElsewhereBanner(notice: elsewhere) {
-                            dismissedGameID = nil
-                            socket.requestResume()
-                        }
                     }
 
                     IdentityHeader { isPresentingAuthSheet = true }

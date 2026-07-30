@@ -57,7 +57,6 @@ extension SocketStore {
         case "challengeCreated": handleChallengeCreated(data)
         case "challengeExpired": handleChallengeExpired()
         case "resume": handleResume(data)
-        case "activeGame": handleActiveGame(data)
         case "state": handleState(data)
         case "end": handleEnd(data)
         case "opponentGone": handleOpponentPresence(data, online: false)
@@ -90,7 +89,6 @@ extension SocketStore {
     private func handleIdle() {
         resumeWaitTask?.cancel()
         lobby = .idle
-        activeElsewhere = nil
         // A definitive "you have no live game" — don't wait out the 1.5s
         // resume timeout, we already know.
         forceLocalGameEndedIfNeeded()
@@ -102,7 +100,6 @@ extension SocketStore {
         pendingIntent = nil
         challengeInfo = nil
         lobby = .idle
-        activeElsewhere = nil
         postGame = nil
         messages = []
         drawOfferState = .none
@@ -127,7 +124,6 @@ extension SocketStore {
         resumeWaitTask?.cancel()
         pendingIntent = nil
         lobby = .idle
-        activeElsewhere = nil
         // A resume for a DIFFERENT game than the one we were holding is a new
         // board: drop the old chat/offers rather than carrying them across.
         if game?.id != resume.gameId {
@@ -138,15 +134,6 @@ extension SocketStore {
         }
         game = .from(resume: resume)
         clockAt = Date()
-    }
-
-    /// The account is playing somewhere else. Ignore it if this connection is
-    /// already seated in that same game (a redundant notice is harmless, but
-    /// re-offering "open it" for the board on screen would be nonsense).
-    private func handleActiveGame(_ data: Data) {
-        guard let frame = try? decoder.decode(WsActiveGame.self, from: data) else { return }
-        if let current = game, current.id == frame.gameId, !current.ended { return }
-        activeElsewhere = ActiveGameNotice(id: frame.gameId, pool: frame.pool, variant: frame.variant)
     }
 
     private func handleState(_ data: Data) {

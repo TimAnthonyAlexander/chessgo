@@ -34,17 +34,6 @@ struct ChatLine: Identifiable, Sendable, Equatable {
     let text: String
 }
 
-/// A live game the hub says this ACCOUNT is in, reported to a connection that
-/// isn't seated in it — you got matched on the laptop while the phone sat in
-/// the lobby. Just a pointer; `requestResume()` takes the seat over and fills
-/// in `game`. Held separately from `game` so the lobby can offer to open it
-/// without pretending it already has the board.
-struct ActiveGameNotice: Equatable, Sendable {
-    let id: String
-    let pool: String
-    let variant: String
-}
-
 /// Snapshot of an open private-invite challenge you created.
 struct ChallengeInfo: Equatable, Sendable {
     let code: String
@@ -80,11 +69,6 @@ final class SocketStore {
     var lobby: LobbyState = .idle
     var challengeInfo: ChallengeInfo?
     var game: LiveGameState?
-
-    /// Set by an `activeGame` push when the account is playing on another
-    /// device. Cleared the moment this connection actually holds a game
-    /// (`resume`/`matched`) or the hub says there is none (`idle`).
-    var activeElsewhere: ActiveGameNotice?
     var messages: [ChatLine] = []
     var drawOfferState: OfferState = .none
     var takebackOfferState: OfferState = .none
@@ -148,7 +132,6 @@ final class SocketStore {
     /// the live-game screen calls this when the player taps back to lobby.
     func leaveGame() {
         game = nil
-        activeElsewhere = nil
         postGame = nil
         messages = []
         drawOfferState = .none

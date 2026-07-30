@@ -24,11 +24,10 @@ const rematchTTL = 5 * time.Minute
 // `lastGame` now points at it (their `.game` was already cleared by
 // teardown), and it's indexed for the TTL sweep. Called once, from finish().
 func (h *Hub) armRematch(g *game) {
-	if g.white.client != nil {
-		g.white.client.lastGame = g
-	}
-	if g.black.client != nil {
-		g.black.client.lastGame = g
+	for _, p := range []*player{g.white, g.black} {
+		for c := range p.clients {
+			c.lastGame = g
+		}
 	}
 	g.rematchArmedAt = time.Now()
 	h.rematchWindows[g.id] = g
@@ -38,11 +37,12 @@ func (h *Hub) armRematch(g *game) {
 // (any further rematch command against g is then a no-op) and g drops out of
 // the TTL index. Safe to call whether or not an offer was ever standing.
 func (h *Hub) disarmRematch(g *game) {
-	if g.white.client != nil && g.white.client.lastGame == g {
-		g.white.client.lastGame = nil
-	}
-	if g.black.client != nil && g.black.client.lastGame == g {
-		g.black.client.lastGame = nil
+	for _, p := range []*player{g.white, g.black} {
+		for c := range p.clients {
+			if c.lastGame == g {
+				c.lastGame = nil
+			}
+		}
 	}
 	g.rematchPending = false
 	delete(h.rematchWindows, g.id)
@@ -142,7 +142,9 @@ func (h *Hub) rematchCancel(c *Client) {
 // window first so a racing duplicate accept/offer is already a no-op by the
 // time it's processed.
 func (h *Hub) startRematch(g *game) {
-	white, black := g.black.client, g.white.client // swapped
+	// Either side may have several devices attached; startGameWith seats one of
+	// them and joinOtherSessions pulls the rest of that account in behind it.
+	white, black := g.black.any(), g.white.any() // swapped
 	h.disarmRematch(g)
 	if white == nil || black == nil {
 		return // a side has no client (shouldn't happen — disconnect already

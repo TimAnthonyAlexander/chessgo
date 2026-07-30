@@ -9,14 +9,63 @@ import (
 	"github.com/timanthonyalexander/gomachine/internal/variant"
 )
 
-// player is one side of a live game. A bot opponent has isBot=true and a nil
-// client (no socket); the hub plays its moves via the engine at `rating` (the
+// player is one side of a live game. A bot opponent has isBot=true and no
+// clients (no socket); the hub plays its moves via the engine at `rating` (the
 // rating-first ladder, engine.BestMoveForRating).
+//
+// `clients` is a SET, not a single socket: one account may have the same game
+// open on several devices at once (laptop + phone). Every one of them receives
+// the side's broadcasts and may move, so a move made on one appears on the other
+// immediately. The side is "online" while at least one is connected.
 type player struct {
-	client *Client
-	id     auth.Identity
-	isBot  bool
-	rating int // target Elo for a bot side (drives configForRating); unused for humans
+	clients map[*Client]struct{}
+	id      auth.Identity
+	isBot   bool
+	rating  int // target Elo for a bot side (drives configForRating); unused for humans
+}
+
+// newPlayer builds a human side seated on its first connection.
+func newPlayer(c *Client) *player {
+	return &player{clients: map[*Client]struct{}{c: {}}, id: c.id}
+}
+
+// newBotPlayer builds an engine side: an identity and a strength, no socket.
+func newBotPlayer(id auth.Identity, rating int) *player {
+	return &player{id: id, isBot: true, rating: rating}
+}
+
+func (p *player) attach(c *Client) {
+	if p.clients == nil {
+		p.clients = map[*Client]struct{}{}
+	}
+	p.clients[c] = struct{}{}
+}
+
+func (p *player) detach(c *Client) { delete(p.clients, c) }
+
+func (p *player) has(c *Client) bool {
+	_, ok := p.clients[c]
+	return ok
+}
+
+// connected reports whether any of this side's devices is still attached.
+func (p *player) connected() bool { return len(p.clients) > 0 }
+
+// send fans a pre-marshaled message out to every device on this side.
+func (p *player) send(data []byte) {
+	for c := range p.clients {
+		c.trySend(data)
+	}
+}
+
+// any returns one of this side's connections (nil if none). For the handful of
+// places that need *a* client rather than all of them — starting a rematch from
+// a finished game, say — where which one is arbitrary.
+func (p *player) any() *Client {
+	for c := range p.clients {
+		return c
+	}
+	return nil
 }
 
 // game is a single live game held entirely in memory. The clock is server-
@@ -202,20 +251,13 @@ func (g *game) botPlayer() (*player, chess.Color, bool) {
 }
 
 func (g *game) colorOf(c *Client) (chess.Color, bool) {
-	switch c {
-	case g.white.client:
+	if g.white.has(c) {
 		return chess.White, true
-	case g.black.client:
+	}
+	if g.black.has(c) {
 		return chess.Black, true
 	}
 	return 0, false
-}
-
-func (g *game) opponent(c *Client) *Client {
-	if g.white.client == c {
-		return g.black.client
-	}
-	return g.white.client
 }
 
 // clocksRunning reports whether the clocks have started. Lichess-style: neither

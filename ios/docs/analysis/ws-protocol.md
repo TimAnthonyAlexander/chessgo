@@ -41,7 +41,6 @@ Premoves: **NOT in the protocol** — client-side queue only; send as normal `mo
 | `challengeCreated` | {code,pool,color,rated,variant} |
 | `challengeExpired` | {code} |
 | `resume` | full replay (see below) |
-| `activeGame` | {gameId,pool,variant} — your account is playing where THIS connection isn't seated (see Multiple devices) |
 | `state` | after every move/takeback (see below) |
 | `end` | {gameId, result:"1-0"|"0-1"|"1/2-1/2"|null, reason, status, clock:{w,b}} |
 | `opponentGone`/`opponentBack` | {gameId} |
@@ -99,9 +98,10 @@ After `hello`, if no `resume` arrives within ~1.5s and you held a local game, tr
 - Resume is in-memory only; a hub restart loses live games.
 
 ## Multiple devices on one account
-- The hub indexes live games by **identity**, so one account is never in two games. `queue`/`createChallenge`/`joinChallenge` from a second device answer with a full `resume` for the game that's already running instead of starting another.
-- A game has ONE seat per side. The newest connection to register or send `resume` takes it over; the previous one stops receiving `state` (it can reclaim the seat the same way).
-- When a game starts, every OTHER connection on that account is pulled out of its queue/invite and gets an `activeGame` pointer — a hint, not a resume. The client shows "playing on another device" and sends `resume` if the player taps it.
+- A side of a game is a **set of connections**, not one socket. Every device signed into the account is seated on it, receives the same `state`/`end`/offer/chat broadcasts, and may move — so a move made on the phone lands on the laptop immediately, and either can play.
+- Live games are indexed by **identity**, so one account is never in two games. `queue`/`createChallenge`/`joinChallenge` from a second device answer with a full `resume` for the game already running instead of starting another.
+- When a game starts, every OTHER connection on that account is seated in it too and gets its own `resume` (leaving any queue/invite it was in, which it must — matchmaking or bot backfill would otherwise drop it into a second game).
+- The side is "online" while ANY device is attached: closing one doesn't send `opponentGone`, and a second device attaching to an already-online side doesn't send `opponentBack`.
 - A socket that stays open never re-registers, so clients also send `resume` on foreground / tab focus.
 
 ## Full-game state machine
