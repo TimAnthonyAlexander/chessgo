@@ -33,8 +33,8 @@ export interface EngineInfo {
     // a displayed eval can choose to hold the last exact score instead —
     // Stockfish's own GUIs do the same, since a fail-high number is a "maybe
     // bigger than this" placeholder, not the position's value. See
-    // precedence.ts / localEngine.ts for where that choice actually gets made;
-    // this module only surfaces the flag.
+    // useLocalEngineRace.ts for where that choice actually gets made; this module
+    // only surfaces the flag.
     bound?: 'lower' | 'upper'
     nodes?: number
     nps?: number

@@ -92,24 +92,29 @@ export function useLocalEngineOpponent(): LocalEngineOpponent {
         if (!engine) return null
 
         const depthLimited = typeof limit.depth === 'number' && limit.depth > 0
-        const deadline = depthLimited ? Infinity : Date.now() + (limit.movetime ?? 300)
         const targetDepth = depthLimited ? limit.depth! : MOVETIME_DEPTH_CEILING
 
         // Take the first move of the DEEPEST line seen. analyze() streams `info` per
         // deepening step, so this is the engine's latest opinion whether the search
         // ran to its depth target or was cut off by the clock.
+        //
+        // The clock is enforced by `budgetMs` INSIDE analyze, which clamps each chunk
+        // to the time remaining. Breaking out of this loop after the fact was not
+        // enough: the chunk that overran had already been paid for, so a 300ms budget
+        // really spent ~450ms and quietly gave this side half again as much thinking
+        // time as its server-side opponent.
         let deepest = -1
         let best: string | null = null
         try {
-            for await (const info of engine.analyze(fen, { multipv: 1, depth: targetDepth })) {
+            for await (const info of engine.analyze(fen, {
+                multipv: 1,
+                depth: targetDepth,
+                ...(depthLimited ? {} : { budgetMs: limit.movetime ?? 300 }),
+            })) {
                 if (info.pv.length > 0 && info.depth > deepest) {
                     deepest = info.depth
                     best = info.pv[0]
                 }
-                // Between chunks only — a single-threaded wasm search cannot be
-                // interrupted mid-flight, so the budget overshoots by at most one
-                // chunk. Same contract analyze() documents for its abort signal.
-                if (Date.now() >= deadline) break
             }
         } catch {
             return null

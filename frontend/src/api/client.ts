@@ -223,9 +223,9 @@ export interface Analysis {
     lines?: AnalysisLine[] // multi-PV lines when multipv > 1, same depth as the main result
     // Where this response came from: 'cache' (eval_cache hit) or 'engine' (fresh
     // search). Optional so older/mocked responses without it still typecheck —
-    // added for the local-engine racing feature (lib/engine/precedence.ts), which
-    // badges a displayed cache result until local analysis supersedes it. Purely
-    // informational: never used to gate ladder/polling logic.
+    // added for the in-browser engine feature, and read only to badge a displayed
+    // cache result as Cloud. Purely informational: never used to gate
+    // ladder/polling logic or to decide which engine owns a position.
     /** Where this came from: the server eval cache, a fresh engine search, or —
      *  only ever in reply to `cacheOnly` — nothing at all, meaning the server
      *  declined to search and `eval`/`depth` are null. */

@@ -68,8 +68,6 @@ import {
 } from '../lib/analysisTree'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { useAuth } from '../lib/auth'
-import { fromAnalysis } from '../lib/engine/evalAdapter'
-import { type EvalCandidate, isFirstEvalBetter } from '../lib/engine/precedence'
 import { useLocalEngineRace } from '../lib/engine/useLocalEngineRace'
 
 // How long (ms) each auto-played move lingers before the next one.
@@ -433,9 +431,9 @@ export default function Analysis() {
     }, [current.id])
 
     // --- Optional local (in-browser) engine ---
-    // Races a local WASM search against the server ladder below, Lichess-style:
-    // both run in parallel, and whichever result is deeper (precedence.ts's
-    // isFirstEvalBetter) wins the display. OFF by default (engine.enabled in
+    // When on, it OWNS the position outright: eval, arrow, PV and move list all
+    // come from its one result, and the server is asked only for a cache lookup.
+    // When off, the ladder below owns it. Never both. OFF by default (engine.enabled in
     // localStorage) — see useLocalEngineRace.ts for the full no-op-when-disabled
     // contract this depends on. `active` mirrors the ladder effect's own gates
     // below (not duck, not game-over, not still loading).
@@ -479,55 +477,43 @@ export default function Analysis() {
             return // mount, not a toggle — nothing stale to clear
         }
         linesCache.current.clear()
-        setDisplayCandidates({})
+        setEvalSource({})
         setAnalysisLines(null)
         setAnalysisOpening(null)
         setLinesLoading(true)
     }, [localEngineOn])
 
-    // What's currently displayed for a node, in precedence.ts's EvalCandidate
-    // shape — written by BOTH the ladder effect (server/cache results) and the
-    // local-race effect below (once local wins), so each can tell whether a
-    // new result is actually an improvement over whichever source is currently
-    // showing. Also what drives the Cloud badge, which is why it is populated
-    // even with the local engine off: a plain server cache hit has a source
-    // worth showing too.
-    const [displayCandidates, setDisplayCandidates] = useState<Record<number, EvalCandidate>>({})
+    // Which engine produced what is currently displayed for a node. Only the
+    // Cloud badge reads it — it is NOT part of deciding what to show, because
+    // exactly one source owns a position at a time (see below).
+    const [evalSource, setEvalSource] = useState<Record<number, 'cache' | 'engine' | 'local'>>({})
 
-    // Local engine won the race for the CURRENTLY VIEWED node: fold its result
-    // into the SAME tree fields (evalWhite/bestUci/bestPv/bestDepth) the ladder
-    // writes, via the SAME annotateEval — so the eval bar, arrow, and PV line
-    // all pick it up for free with no separate render path. Falls back to a
-    // synthesized candidate (from the tree's own bestDepth/bestPv) when no
-    // ladder response has been captured yet for this node — e.g. a persisted
-    // review node whose deep eval came from buildFromAnalysis, never a ladder
-    // rung.
+    // ONE SOURCE OWNS A POSITION. With the local engine on it is local; otherwise
+    // it is the server ladder. Whichever it is writes the eval, the arrow, the PV
+    // and the move list together, from a single result.
+    //
+    // This replaced a scheme where the eval/arrow and the move list were written
+    // independently — by different searches, at different depths, sometimes by
+    // different engines — and reconciled after the fact by a precedence rule. It
+    // could and did put a best-move arrow for one move above a first engine line
+    // for another, and left the Cloud badge describing whichever write happened to
+    // land last. There is no reconciliation now because there is nothing to
+    // reconcile.
+    //
+    // `lines[0]` IS the eval: same move, same depth, same search.
     useEffect(() => {
-        if (!localEngineOn || !localRace.candidate) return
+        if (!localEngineOn) return
+        const lines = localRace.lines
+        if (!lines || lines.length === 0) return
         const nodeId = current.id
-        const achieved: EvalCandidate = displayCandidates[nodeId] ?? {
-            depth: current.bestPv != null ? (current.bestDepth ?? 0) : 0,
-            nodes: 0,
-            pvCount: current.bestPv ? 1 : 0,
-            source: 'server',
-        }
-        if (!isFirstEvalBetter(localRace.candidate.candidate, achieved, 1)) return
-        const { display } = localRace.candidate
-        if (!display.eval) return
+        const top = lines[0]
         const stm = current.fen.split(' ')[1] === 'b' ? 'b' : 'w'
-        const white = stm === 'w' ? display.eval.value : -display.eval.value
-        setTree((t) => annotateEval(t, nodeId, { type: display.eval!.type, white }, display.bestmove, display.pv, display.depth))
-        setDisplayCandidates((m) => ({ ...m, [nodeId]: localRace.candidate!.candidate }))
-    }, [localEngineOn, localRace.candidate, current.id, current.bestDepth, current.bestPv, current.fen, displayCandidates])
-
-    // Local multi-PV move list. With the local engine on, the server is only
-    // asked for a cache lookup, so on a cache miss nothing else would populate
-    // the list — the board would show an eval and an arrow but no lines.
-    useEffect(() => {
-        if (!localEngineOn || !localRace.lines || localRace.lines.length === 0) return
-        setAnalysisLines(localRace.lines)
-        linesCache.current.set(current.id, { lines: localRace.lines, opening: null })
-    }, [localEngineOn, localRace.lines, current.id])
+        const white = stm === 'w' ? top.eval.value : -top.eval.value
+        setAnalysisLines(lines)
+        linesCache.current.set(nodeId, { lines, opening: null })
+        setTree((t) => annotateEval(t, nodeId, { type: top.eval.type, white }, top.bestmove, top.pv, top.depth))
+        setEvalSource((m) => (m[nodeId] === 'local' ? m : { ...m, [nodeId]: 'local' }))
+    }, [localEngineOn, localRace.lines, current.id, current.fen])
 
     // --- Live engine eval + best line: progressive ("streaming") deepening ---
     // We can't stream over the wire (no SSE behind Cloudflare), so we emulate it by
@@ -668,7 +654,7 @@ export default function Analysis() {
 
                     const got = r.depth ?? 0
                     if (got <= achieved) return
-                    setDisplayCandidates((m) => ({ ...m, [nodeId]: fromAnalysis(r).candidate }))
+                    setEvalSource((m) => ({ ...m, [nodeId]: r.source === 'cache' ? 'cache' : 'engine' }))
                     const white = stm === 'w' ? r.eval.value : -r.eval.value
                     setTree((t) =>
                         annotateEval(t, nodeId, { type: r.eval!.type, white }, r.bestmove, r.pv ?? [], got),
@@ -723,12 +709,10 @@ export default function Analysis() {
                     // walled position simply exhausts it.
                     if (got <= achieved) continue
 
-                    // Record this response's precedence shape (depth/pvCount/source) so
-                    // the local-engine race effect can tell whether a local result is
-                    // actually an improvement — see its comment above. Guarded by the
-                    // REF (not a dep — see above) so this costs the default-off majority
-                    // nothing: no extra setState, no extra re-render, unchanged rendering.
-                    setDisplayCandidates((m) => ({ ...m, [nodeId]: fromAnalysis(r).candidate }))
+                    // Records WHO answered, for the Cloud badge only — it plays no part
+                    // in deciding what to display (the ladder owns the position outright
+                    // whenever the local engine is off).
+                    setEvalSource((m) => ({ ...m, [nodeId]: r.source === 'cache' ? 'cache' : 'engine' }))
 
                     // Coalesce a null PV to [] so the node reads as "resolved, no line".
                     if (!r.eval) {
@@ -1180,7 +1164,7 @@ export default function Analysis() {
                         // overwritten with that result's own source.
                         evalDepth={current.bestDepth ?? null}
                         sourceBadge={
-                            !isDuck && displayCandidates[current.id]?.source === 'cache' ? 'cache' : null
+                            !isDuck && evalSource[current.id] === 'cache' ? 'cache' : null
                         }
                     />
 

@@ -167,6 +167,18 @@ export interface AnalyzeOptions {
      * then completes. */
     depth?: number
     multipv?: number
+    /**
+     * Total wall-clock budget in ms for the whole search. Each deepening chunk is
+     * capped to whatever remains, so the search stops AT the budget rather than
+     * overrunning it by a whole chunk.
+     *
+     * This matters wherever the budget is being compared against something else.
+     * Without it a 300ms budget ran a 150ms chunk, saw time left, then committed
+     * to a full 300ms one and spent ~450ms — 50% over, which in an engine-vs-engine
+     * match silently handed the local side half again as much thinking time as its
+     * opponent.
+     */
+    budgetMs?: number
     /** Stops further deepening. See file-level note in `analyzeStream` below
      * for exactly when this does and doesn't take effect — it is NOT able to
      * interrupt a search already in flight. */
@@ -335,13 +347,21 @@ async function* analyzeStream(
     // there finishing a depth-22 search of the position you just left.
     // The transposition table stays warm across chunks, so each one resumes
     // roughly where the last stopped instead of restarting the work.
-    const deadline = Date.now() + TOTAL_BUDGET_MS
+    // `budgetMs` is a HARD ceiling on the whole search; TOTAL_BUDGET_MS is the
+    // fallback backstop for callers that just want "deepen until it settles".
+    const deadline = Date.now() + (opts.budgetMs ?? TOTAL_BUDGET_MS)
     let reached = 0
     let chunkMs = CHUNK_START_MS
     while (reached < maxDepth && Date.now() < deadline) {
         if (opts.signal?.aborted) return
 
-        const infos = await runOneRung(module, fen, multipv, maxDepth, chunkMs, opts.signal)
+        // Never let a chunk run past the deadline. Without this clamp the ramp
+        // commits to its next full chunk whenever ANY time remains, so a 300ms
+        // budget spent ~450ms — the overrun is a whole chunk, which at short
+        // budgets is most of the budget again.
+        const remaining = deadline - Date.now()
+        if (remaining <= 0) return
+        const infos = await runOneRung(module, fen, multipv, maxDepth, Math.min(chunkMs, remaining), opts.signal)
         chunkMs = Math.min(chunkMs * 2, CHUNK_MAX_MS)
         for (const info of infos) {
             yield info
