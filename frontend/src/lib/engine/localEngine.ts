@@ -323,12 +323,10 @@ async function* analyzeStream(
     const maxDepth = opts.depth ?? DEFAULT_MAX_DEPTH
     const multipv = opts.multipv ?? 1
 
-    module.send(`position fen ${fen}`)
-    // ALWAYS sent, including for multipv 1. `setoption` is sticky for the life
-    // of the module, so skipping it at width 1 left a previous wide search's
-    // MultiPV in place — the deep single-line phase silently ran at width 5 and
-    // took 17s instead of 2s.
-    module.send(`setoption name MultiPV value ${multipv}`)
+    // `position` and `setoption` are sent per chunk inside runOneRung's lock,
+    // not once here — see its comment. MultiPV in particular is sticky for the
+    // life of the module, so a width-1 search following a wide one has to reset
+    // it or it silently inherits width 5 (which cost 17s instead of 2s).
 
     // Deepen in short wall-clock CHUNKS toward maxDepth, rather than one long
     // `go`. Each chunk is bounded by movetime, so the longest an abort can be
@@ -343,37 +341,86 @@ async function* analyzeStream(
     while (reached < maxDepth && Date.now() < deadline) {
         if (opts.signal?.aborted) return
 
-        const infos = await runOneRung(module, maxDepth, chunkMs)
+        const infos = await runOneRung(module, fen, multipv, maxDepth, chunkMs, opts.signal)
         chunkMs = Math.min(chunkMs * 2, CHUNK_MAX_MS)
         for (const info of infos) {
             yield info
             if (info.depth > reached) reached = info.depth
         }
-        // A chunk that produced no info at all means the engine has nothing more
-        // to say for this position (mate/stalemate, or an instant book answer) —
-        // looping would spin.
+        // A chunk that produced no info at all means either the engine has
+        // nothing more to say for this position (mate/stalemate, or an instant
+        // book answer) or it was dropped as aborted inside the lock. Either
+        // way, looping would spin.
         if (infos.length === 0) return
     }
 }
 
-/** Send one bounded `go depth N movetime M`, collect every `info` line with a
- * score until `bestmove` arrives, then resolve with them in arrival order.
+// One search at a time, per module.
+//
+// A UCI module is a single stream of output lines with nothing tying a line
+// back to the `go` that produced it. Two overlapping analyze() generators —
+// exactly what happens when you play a move while the previous position is
+// still searching — therefore corrupt each other in both directions: the new
+// generator's listener resolves on the OLD search's `bestmove` and reports the
+// old position's eval as the new one's (the best-move arrow showing the move
+// for the position you just left), and the new generator's `position fen`
+// lands between the old one's chunks, so the old search silently continues on
+// the new position.
+//
+// Serializing chunks fixes both. Each chunk also re-sends `position` and
+// `setoption` inside the critical section, so it is self-contained: nothing
+// another generator sends can change the position or the MultiPV width out
+// from under a search that is already running. Re-sending costs nothing next
+// to the search itself.
+let chainTail: Promise<unknown> = Promise.resolve()
+
+function serialize<T>(work: () => Promise<T>): Promise<T> {
+    const run = chainTail.then(work, work)
+    // Keep the chain alive even if a link rejects.
+    chainTail = run.then(
+        () => undefined,
+        () => undefined,
+    )
+    return run
+}
+
+/** Run one bounded chunk: set the position and width, `go depth N movetime M`,
+ * and collect every `info` line with a score until `bestmove` arrives.
  * `movetime` is what makes the call wall-clock bounded, and therefore what
  * bounds how long an abort has to wait — see analyzeStream. */
-function runOneRung(module: UciModule, targetDepth: number, movetimeMs: number): Promise<EngineInfo[]> {
-    return new Promise((resolve) => {
-        const infos: EngineInfo[] = []
-        const unsub = module.onLine((line) => {
-            const info = parseInfo(line)
-            if (info) {
-                infos.push(info)
-                return
-            }
-            if (parseBestmove(line)) {
-                unsub()
-                resolve(infos)
-            }
-        })
-        module.send(`go depth ${targetDepth} movetime ${movetimeMs}`)
-    })
+function runOneRung(
+    module: UciModule,
+    fen: string,
+    multipv: number,
+    targetDepth: number,
+    movetimeMs: number,
+    signal: AbortSignal | undefined,
+): Promise<EngineInfo[]> {
+    return serialize(
+        () =>
+            new Promise<EngineInfo[]>((resolve) => {
+                // Re-checked INSIDE the lock: this chunk may have been queued
+                // behind another position's search for its whole lifetime, and
+                // by now nobody wants it.
+                if (signal?.aborted) {
+                    resolve([])
+                    return
+                }
+                const infos: EngineInfo[] = []
+                const unsub = module.onLine((line) => {
+                    const info = parseInfo(line)
+                    if (info) {
+                        infos.push(info)
+                        return
+                    }
+                    if (parseBestmove(line)) {
+                        unsub()
+                        resolve(infos)
+                    }
+                })
+                module.send(`position fen ${fen}`)
+                module.send(`setoption name MultiPV value ${multipv}`)
+                module.send(`go depth ${targetDepth} movetime ${movetimeMs}`)
+            }),
+    )
 }

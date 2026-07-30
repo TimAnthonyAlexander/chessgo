@@ -27,9 +27,16 @@ const FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
  */
 const DEPTH_PER_CHUNK = 6
 
+/** Score the fake reports for a given position, so a test can tell whose
+ * output it is looking at. */
+export function fakeScoreFor(fen: string): number {
+    return fen.length
+}
+
 function createFakeAsyncModule(): { factory: UciModuleFactory; sentCommands: string[] } {
     const sentCommands: string[] = []
     let reachedDepth = 0
+    let currentFen = ''
     const factory: UciModuleFactory = (_net: U8) =>
         new Promise<UciModule>((resolveModule) => {
             // The module itself "comes alive" on a later macrotask too, like a
@@ -44,7 +51,9 @@ function createFakeAsyncModule(): { factory: UciModuleFactory; sentCommands: str
                 resolveModule({
                     send(command) {
                         sentCommands.push(command)
-                        if (command === 'uci') {
+                        if (command.startsWith('position fen ')) {
+                            currentFen = command.slice('position fen '.length)
+                        } else if (command === 'uci') {
                             emitAsync('uciok')
                         } else if (command === 'isready') {
                             emitAsync('readyok')
@@ -58,7 +67,7 @@ function createFakeAsyncModule(): { factory: UciModuleFactory; sentCommands: str
                             if (m) {
                                 const target = Number(m[1])
                                 reachedDepth = Math.min(reachedDepth + DEPTH_PER_CHUNK, target)
-                                emitAsync(`info depth ${reachedDepth} score cp ${reachedDepth} pv e2e4`)
+                                emitAsync(`info depth ${reachedDepth} score cp ${fakeScoreFor(currentFen)} pv e2e4`)
                                 emitAsync('bestmove e2e4')
                             }
                         }
@@ -199,19 +208,60 @@ describe('createLocalEngine — analyze()', () => {
         expect(depths).toEqual([6])
     })
 
-    test('exercises the async fake-worker boundary end to end: position + two bounded go calls', async () => {
+    test('exercises the async fake-worker boundary end to end: two self-contained chunks', async () => {
         const { factory, sentCommands } = createFakeAsyncModule()
         const engine = createLocalEngine(baseOptions(factory, async () => FAKE_NET))
         await engine.init()
         sentCommands.length = 0 // drop the handshake commands, isolate analyze()'s own
 
-        const scores: number[] = []
+        const depths: number[] = []
         for await (const info of engine.analyze(FEN, { depth: 12 })) {
-            scores.push(info.score.value)
+            depths.push(info.depth)
         }
 
-        expect(scores).toEqual([6, 12])
-        expect(sentCommands.length).toBe(4) // position, setoption, two chunks
+        expect(depths).toEqual([6, 12])
+        // Every chunk re-sends position + width before its `go`, so nothing another
+        // overlapping search sends can move the position or the width out from
+        // under it. See runOneRung's serialization comment.
+        expect(sentCommands).toEqual([
+            `position fen ${FEN}`,
+            'setoption name MultiPV value 1',
+            'go depth 12 movetime 150',
+            `position fen ${FEN}`,
+            'setoption name MultiPV value 1',
+            'go depth 12 movetime 300',
+        ])
+    })
+
+    test('overlapping searches never see each other\'s output — the stale-arrow bug', async () => {
+        const { factory } = createFakeAsyncModule()
+        const engine = createLocalEngine(baseOptions(factory, async () => FAKE_NET))
+        await engine.init()
+
+        const FEN_B = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1'
+        const ac = new AbortController()
+        const aScores: number[] = []
+        const bScores: number[] = []
+
+        // Start A and let its first chunk actually get in flight...
+        const runA = (async () => {
+            for await (const i of engine.analyze(FEN, { depth: 30, signal: ac.signal })) aScores.push(i.score.value)
+        })()
+        await new Promise((r) => setTimeout(r, 5))
+        // ...then "play a move": abort A and start B while A is still going.
+        ac.abort()
+        const runB = (async () => {
+            for await (const i of engine.analyze(FEN_B, { depth: 12 })) bScores.push(i.score.value)
+        })()
+        await Promise.all([runA, runB])
+
+        // The fake tags every info with the position it was told to search, so
+        // this is a direct assertion that neither generator consumed the other's
+        // output. Before serialization B's first result was A's in-flight search:
+        // A's eval, for A's position, painted as B's best-move arrow.
+        expect(bScores.length > 0).toBeTrue()
+        for (const s of bScores) expect(s).toBe(fakeScoreFor(FEN_B))
+        for (const s of aScores) expect(s).toBe(fakeScoreFor(FEN))
     })
 
     test('analyze() before a successful init() fails loudly rather than hanging silently', async () => {
