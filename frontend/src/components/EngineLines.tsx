@@ -87,10 +87,10 @@ export default function EngineLines({
                 <Box sx={{ flex:1 }} />
                 {engineOn && headerExtra}
                 {engineOn && depth != null && sourceBadge === 'cache' && (
-                    <Tooltip title="This evaluation came from the shared server cache, not a fresh search" arrow placement="top">
+                    <Tooltip title="Served from the shared server cache — a stored evaluation, often far deeper than a fresh search would reach here" arrow placement="top">
                         <Typography sx={{ fontFamily:'var(--font-mono)', fontSize:9.5, fontWeight:700, letterSpacing:0.8, textTransform:'uppercase',
                             color:'var(--text-dim)', border:'1px solid var(--line)', borderRadius:'4px', px:0.5, py:'1px', cursor:'default' }}>
-                            Cache
+                            Cloud
                         </Typography>
                     </Tooltip>
                 )}

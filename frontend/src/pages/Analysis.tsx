@@ -441,22 +441,32 @@ export default function Analysis() {
     })
     const localEngineOn = localRace.enabled
 
-    // Read inside the ladder effect via a REF, not a dependency — the ladder
-    // effect must not restart (re-fetch from depth 1) just because the user
-    // flipped the local-engine toggle mid-search, same reasoning the ladder
-    // effect already documents for excluding historyFens/bestPv/bestDepth.
-    const localEngineOnRef = useRef(localEngineOn)
+    // Toggling the local engine swaps which engine produced everything currently
+    // on screen — the move list, the badge, the per-node source map, and the
+    // cached lines behind a revisit. Keeping any of it across the switch shows
+    // one engine's output labelled as the other's, which is exactly the "stale
+    // state after toggling" people notice first. Drop it all and let the ladder
+    // effect (which re-keys on localEngineOn) repopulate from scratch.
+    const firstToggleRender = useRef(true)
     useEffect(() => {
-        localEngineOnRef.current = localEngineOn
+        if (firstToggleRender.current) {
+            firstToggleRender.current = false
+            return // mount, not a toggle — nothing stale to clear
+        }
+        linesCache.current.clear()
+        setDisplayCandidates({})
+        setAnalysisLines(null)
+        setAnalysisOpening(null)
+        setLinesLoading(true)
     }, [localEngineOn])
 
     // What's currently displayed for a node, in precedence.ts's EvalCandidate
     // shape — written by BOTH the ladder effect (server/cache results) and the
     // local-race effect below (once local wins), so each can tell whether a
     // new result is actually an improvement over whichever source is currently
-    // showing. Only ever populated while the local engine is on (see the
-    // ladder effect's `localEngineOnRef.current` guard) — stays `{}` forever
-    // for the default-off majority, so this costs them nothing.
+    // showing. Also what drives the Cloud badge, which is why it is populated
+    // even with the local engine off: a plain server cache hit has a source
+    // worth showing too.
     const [displayCandidates, setDisplayCandidates] = useState<Record<number, EvalCandidate>>({})
 
     // Local engine won the race for the CURRENTLY VIEWED node: fold its result
@@ -682,10 +692,7 @@ export default function Analysis() {
                     // actually an improvement — see its comment above. Guarded by the
                     // REF (not a dep — see above) so this costs the default-off majority
                     // nothing: no extra setState, no extra re-render, unchanged rendering.
-                    if (localEngineOnRef.current) {
-                        const rc = fromAnalysis(r)
-                        setDisplayCandidates((m) => ({ ...m, [nodeId]: rc.candidate }))
-                    }
+                    setDisplayCandidates((m) => ({ ...m, [nodeId]: fromAnalysis(r).candidate }))
 
                     // Coalesce a null PV to [] so the node reads as "resolved, no line".
                     if (!r.eval) {
@@ -1126,9 +1133,11 @@ export default function Analysis() {
                                 />
                             ) : undefined
                         }
-                        // Disappears the instant a local result supersedes the cached one —
-                        // displayCandidates[node] is overwritten with source:'local' by the
-                        // race effect above the moment that happens.
+                        // Shown whenever the DISPLAYED eval came from the server's
+                        // eval cache rather than a search — with the local engine on
+                        // or off. Disappears the instant a local (or fresher server)
+                        // result supersedes it, since displayCandidates[node] is
+                        // overwritten with that result's own source.
                         sourceBadge={
                             !isDuck && displayCandidates[current.id]?.source === 'cache' ? 'cache' : null
                         }

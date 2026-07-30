@@ -158,6 +158,15 @@ export function useLocalEngineRace({ active, fen }: LocalEngineRaceOptions): Loc
     // re-trigger — and restart the download — on every progress tick).
     const [retryTick, setRetryTick] = useState(0)
 
+    // Toggling drops any result the engine produced. The fen tag alone is not
+    // enough here: turn the engine off and back on while sitting on the same
+    // position and the tagged value would still match, so the old result would
+    // reappear as though it were fresh.
+    useEffect(() => {
+        setCandidate(null)
+        setLines(null)
+    }, [enabled])
+
     // --- Engine lifecycle: resolve the net (cache hit or download), spin up
     // the module, complete the UCI handshake. The whole body is a no-op
     // unless BOTH `enabled` and `capability.available` are true. ---
@@ -291,9 +300,10 @@ export function useLocalEngineRace({ active, fen }: LocalEngineRaceOptions): Loc
         enabled,
         setEnabled,
         download,
-        // Never hand out a result computed for a different position.
-        lines: lines?.fen === fen ? lines.value : null,
+        // Never hand out a result computed for a different position, or one from
+        // before the engine was switched off.
+        lines: enabled && lines?.fen === fen ? lines.value : null,
         retry: () => setRetryTick((t) => t + 1),
-        candidate: candidate?.fen === fen ? candidate.value : null,
+        candidate: enabled && candidate?.fen === fen ? candidate.value : null,
     }
 }
