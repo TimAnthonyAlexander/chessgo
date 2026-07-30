@@ -46,8 +46,8 @@ spsa/__pycache__/
 *.web.nnue.br
 *.web.nnue.gz
 
-# wasm build artifacts (Makefile.wasm outputs)
-zugzwang.js
-zugzwang.wasm
-zugzwang-relaxed.js
-zugzwang-relaxed.wasm
+# wasm build artifacts (Makefile.wasm outputs) are deliberately COMMITTED, not
+# ignored — see the note in Makefile.wasm. They total ~765 KB, change only when
+# the engine source changes, and committing them is what keeps emscripten off
+# the production box: the deploy just needs `git pull`. The 94 MB net is a
+# different matter and stays generated (tools/netweb_writer).

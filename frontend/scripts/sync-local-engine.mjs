@@ -19,8 +19,15 @@
 //     same env var explicitly (see printed instructions) rather than rely
 //     on this script running on the deploy box.
 //
-// Fails loudly (non-zero exit, clear message) if the wasm build or the net
-// haven't been generated yet — never lets a build silently ship without them.
+// If the wasm build or the net are absent, this SKIPS the local engine and
+// exits 0 rather than failing the build. A deploy box without the emscripten
+// toolchain still has to produce a working site — it just produces one where
+// the in-browser engine isn't on offer. It clears VITE_LOCAL_ENGINE_NET_URL in
+// that case so the build cannot bake a URL that 404s; config.ts turns the empty
+// value into LOCAL_ENGINE_AVAILABLE=false and the toggle explains itself.
+//
+// Hard-failing here wedged a prod deploy once: `prebuild` exited 1 on a box with
+// no emcc, taking the entire site build down with it over an optional feature.
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
@@ -35,11 +42,29 @@ const PUBLIC_NET_DIR = path.join(PUBLIC_LOCAL_ENGINE_DIR, 'net')
 const ENV_FILE = path.join(FRONTEND_DIR, '.env')
 
 const WASM_ARTIFACTS = ['zugzwang.js', 'zugzwang.wasm', 'zugzwang-relaxed.js', 'zugzwang-relaxed.wasm']
+
+/** Set (or clear, with '') VITE_LOCAL_ENGINE_NET_URL in frontend/.env. Vite
+ *  bakes this at build time, so clearing it is what makes a net-less build
+ *  report the engine as unavailable instead of serving a dead URL. */
+function writeEnvNetUrl(netUrlPath) {
+    const line = `VITE_LOCAL_ENGINE_NET_URL=${netUrlPath}`
+    let content = fs.existsSync(ENV_FILE) ? fs.readFileSync(ENV_FILE, 'utf8') : ''
+    if (content.length > 0 && !content.endsWith('\n')) content += '\n'
+    if (/^VITE_LOCAL_ENGINE_NET_URL=.*$/m.test(content)) {
+        content = content.replace(/^VITE_LOCAL_ENGINE_NET_URL=.*$/m, line)
+    } else {
+        content += `${line}\n`
+    }
+    fs.writeFileSync(ENV_FILE, content)
+}
 const NET_SRC = path.join(ZUGZWANG_DIR, 'net.web.nnue')
 
-function fail(message) {
-    console.error(`\n[sync-local-engine] ${message}\n`)
-    process.exit(1)
+/** Skip the local engine for this build: clear the baked net URL and exit 0. */
+function skip(message) {
+    console.warn(`\n[sync-local-engine] SKIPPING local engine — ${message}\n`)
+    writeEnvNetUrl('')
+    console.warn('[sync-local-engine] the site will build; the in-browser engine will be offered as unavailable.\n')
+    process.exit(0)
 }
 
 function log(message) {
@@ -50,9 +75,9 @@ function log(message) {
 
 const missingWasm = WASM_ARTIFACTS.filter((name) => !fs.existsSync(path.join(ZUGZWANG_DIR, name)))
 if (missingWasm.length > 0) {
-    fail(
+    skip(
         `missing wasm build output(s): ${missingWasm.join(', ')}\n` +
-            `Build them first:\n` +
+            `Build them with:\n` +
             `  source ~/emsdk/emsdk_env.sh && cd zugzwang && make -f Makefile.wasm all`,
     )
 }
@@ -66,9 +91,9 @@ log(`copied ${WASM_ARTIFACTS.join(', ')} -> public/local-engine/`)
 // --- 2. the net: content-hash name it, copy, precompress -------------------
 
 if (!fs.existsSync(NET_SRC)) {
-    fail(
+    skip(
         `missing ${NET_SRC}\n` +
-            `Generate it:\n` +
+            `Generate it with:\n` +
             `  cd zugzwang && make netweb && ./tools/netweb_writer net.nnue net.web.nnue`,
     )
 }
@@ -117,16 +142,8 @@ for (const entry of fs.readdirSync(PUBLIC_NET_DIR)) {
 
 // --- 3. wire VITE_LOCAL_ENGINE_NET_URL into frontend/.env (gitignored) -----
 
-const envLine = `VITE_LOCAL_ENGINE_NET_URL=${netUrlPath}`
-let envContent = fs.existsSync(ENV_FILE) ? fs.readFileSync(ENV_FILE, 'utf8') : ''
-if (envContent.length > 0 && !envContent.endsWith('\n')) envContent += '\n'
-if (/^VITE_LOCAL_ENGINE_NET_URL=.*$/m.test(envContent)) {
-    envContent = envContent.replace(/^VITE_LOCAL_ENGINE_NET_URL=.*$/m, envLine)
-} else {
-    envContent += `${envLine}\n`
-}
-fs.writeFileSync(ENV_FILE, envContent)
-log(`frontend/.env: ${envLine}`)
+writeEnvNetUrl(netUrlPath)
+log(`frontend/.env: VITE_LOCAL_ENGINE_NET_URL=${netUrlPath}`)
 
 log(
     `\ndone. net URL: ${netUrlPath}\n` +

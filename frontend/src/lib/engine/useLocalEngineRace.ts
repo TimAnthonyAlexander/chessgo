@@ -16,7 +16,7 @@ import { Chess } from 'chess.js'
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type { AnalysisLine } from '../../api/client'
 import { bigFileStorage } from './bigFileStorage'
-import { LOCAL_ENGINE_NET_URL, LOCAL_ENGINE_WORKER_URL } from './config'
+import { LOCAL_ENGINE_AVAILABLE, LOCAL_ENGINE_NET_URL, LOCAL_ENGINE_WORKER_URL } from './config'
 import { type DownloadState, INITIAL_DOWNLOAD_STATE, reduceDownloadState } from './downloadState'
 import { fromEngineInfo, type RaceCandidate } from './evalAdapter'
 import { type Feature, features } from './features'
@@ -98,6 +98,11 @@ export interface EngineCapability {
 function computeCapability(feat: ReadonlySet<Feature>): EngineCapability {
     if (!feat.has('wasm')) {
         return { available: false, reason: "This browser doesn't support WebAssembly, which the local engine needs." }
+    }
+    // No net was shipped with this build (see LOCAL_ENGINE_AVAILABLE). Offering
+    // the toggle would start a download that 404s.
+    if (!LOCAL_ENGINE_AVAILABLE) {
+        return { available: false, reason: 'The in-browser engine is not available on this server yet.' }
     }
     return { available: true }
 }

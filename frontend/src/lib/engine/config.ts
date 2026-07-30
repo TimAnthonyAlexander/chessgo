@@ -17,7 +17,19 @@
  * net change.
  */
 export const LOCAL_ENGINE_NET_URL: string =
-    (import.meta.env.VITE_LOCAL_ENGINE_NET_URL as string | undefined) || '/local-engine/net/kb-mirror-PLACEHOLDER.bin'
+    (import.meta.env.VITE_LOCAL_ENGINE_NET_URL as string | undefined) ?? ''
+
+/**
+ * Whether this build actually has a net to download.
+ *
+ * `sync-local-engine.mjs` sets VITE_LOCAL_ENGINE_NET_URL when the wasm build
+ * and the generated net are both present, and deliberately leaves it unset
+ * otherwise — a deploy box without the emscripten toolchain still has to
+ * produce a working site, just one where the local engine isn't on offer. The
+ * toggle reads this and explains itself instead of handing the user a download
+ * that 404s.
+ */
+export const LOCAL_ENGINE_AVAILABLE = LOCAL_ENGINE_NET_URL !== ''
 
 /**
  * The worker script the compiled engine runs in (see localEngine.ts's
