@@ -5,7 +5,7 @@ complained about.  Runs both the losing side AND the winning side, since the
 net rails on both."""
 import chess, os, subprocess, sys
 
-ENGINE = "/Users/tim.alexander/chessgo/zugzwang/zugzwang"
+ENGINE = os.environ.get("ENG", "/Users/tim.alexander/chessgo/zugzwang/zugzwang")
 MT     = int(os.environ.get("MT", "300"))
 VAL    = {chess.PAWN:100, chess.KNIGHT:320, chess.BISHOP:330, chess.ROOK:500, chess.QUEEN:900}
 
@@ -66,6 +66,7 @@ class Eng:
 
 e = Eng()
 rows = hangs = tot = 0
+byrole, nrole = {}, {}
 worst = []
 for role, side in (("LOSING", chess.BLACK), ("WINNING", chess.WHITE)):
     # role LOSING: black is stripped and black moves.  role WINNING: black is
@@ -93,9 +94,14 @@ for role, side in (("LOSING", chess.BLACK), ("WINNING", chess.WHITE)):
             after = free_material(b3)
             hung = max(0, after - before - won)
             rows += 1; tot += hung
+            byrole[role] = byrole.get(role, 0) + hung
+            nrole[role]  = nrole.get(role, 0) + 1
             if hung >= 300:
                 hangs += 1
                 worst.append((role, hung, mv, fen))
+for r in ("LOSING","WINNING"):
+    if nrole.get(r):
+        print("   %-8s %3d positions   hung %5dcp   avg %5.1fcp" % (r, nrole[r], byrole[r], byrole[r]/nrole[r]))
 print("SATFIX=%s  positions=%d   hung>=300cp: %d (%.1f%%)   total hung: %dcp   avg: %.1fcp"
       % (os.environ.get("SATFIX", "0"), rows, hangs, 100.0*hangs/max(rows,1), tot, tot/max(rows,1)))
 for role, hung, mv, fen in worst[:8]:

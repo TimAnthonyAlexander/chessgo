@@ -181,6 +181,33 @@ reference-free.
 Note the suite has run-to-run variance at fixed movetime (baseline measured 5760 cp and
 4580 cp on two runs), so read the ~10x gap, not the exact percentage.
 
+## 4d. The symptom is CONVERSION, not defence
+
+Splitting the 144-position suite by which side the engine is actually playing changes
+the whole framing. Clean build, three independent baseline runs (fixed movetime is
+nondeterministic, so the spread is real):
+
+| config | LOSING side (72 pos) | WINNING side (72 pos) |
+|---|---|---|
+| baseline | 950 / 720 / 950 cp | **4840 / 4030 / 3600 cp** |
+| `SATSOFT=1000` | 250 / 220 cp | **910 / 690 cp** |
+
+**The engine gives away roughly 4.8x more material when it is winning than when it is
+lost.** The reported queen-hang is the vivid case but it is the minor half of the bug;
+the dominant failure is sloppy conversion, which is exactly the complaint that the eval
+bar reads +14 and the suggested moves are bad. `SATSOFT` cuts the winning-side loss by
+about 81%.
+
+This also reframes the `HCEBLEND` lesson. Restricting the blend to the losing side was
+treating the *smaller* half of the problem as the whole problem. Note that a losing-side
+gate still helps conversion, because inside a winning-side search the opponent is to move
+at every other ply and those nodes are "losing side" — which is why `SATFIX=3` reduces
+winning-side hangs despite never firing at the root.
+
+And it explains the SPRT nulls. Hanging a rook while up a queen does not change the
+result against an opponent that converts anyway, so fastchess cannot see it; against a
+human it hands the game back. Elo is the wrong instrument, exactly as predicted.
+
 ## 4c. The tuning-co-adaptation question (open, and bigger than this fix)
 
 Every search flag default and all 8 SPSA margins were accepted by SPRT against an eval
@@ -201,6 +228,39 @@ correctly fitted to the eval the engine actually has — but it does mean:
 - **`test/golden_eval.txt` currently freezes rail constants (1086, 1235, 1235) as the
   reference values**, so the golden gate will actively resist any eval fix. Re-freeze it
   once the eval is settled.
+
+## 4e. SATSOFT — recover the gradient from the net, not from a hand eval
+
+Every `SATFIX` mode substitutes a weaker function, which is why they all cost Elo. But
+the clamp, not the layer, is what destroys the information: black down Q+B+R and down
+Q+B+2R both evaluate to exactly -1062 while the largest L1 pre-activation overshoot
+moves 2.95 -> 3.65. The extra rook is visible to the net; `screlu` discards it
+(`SATDIAG=1` now reports the overshoot).
+
+`SATSOFT` continues the activation linearly past both rails so that variation survives,
+using the net's own weights. Three measured constraints shaped it:
+
+1. **It cannot be global.** 14 of 16 lanes rail even in the starting position — SCReLU
+   sparsity is the normal operating mode — so an ungated leak rewrites every eval and
+   fails the golden gate 0/38. It is gated on TOTAL collapse, the only regime where the
+   output is a constant.
+2. **Leaking L2 alone does nothing** (66% broken, unchanged), because its inputs are the
+   constant. L1 is where the information dies.
+3. **The raw soft output is ~7x out of scale** (+7549 for up one bishop). Used directly
+   it would disturb every eval margin and put nonsense on the eval bar. So the soft pass
+   supplies DIRECTION only: the constant remains the anchor and `SATSOFTK` (per-mille,
+   default 120) of the deviation is added back.
+
+| `SATSOFTK` | broken ladder steps | material hung |
+|---|---|---|
+| off | 21/32 (66%) | 5670 cp |
+| 60 | 13/32 (41%) | 1240 cp |
+| **120** | **5/32 (16%)** | **780 cp** |
+| 250 | 4/32 (12%) | 1360 cp |
+
+Two ladder steps stay inverted — the extrapolation is not perfectly monotone, since
+those weights were never trained past the rails. `SATSOFTK` is an SPSA candidate.
+Off is byte-identical; the second tail pass runs only at the ~6.6% collapsed nodes.
 
 ## 5. Next
 
