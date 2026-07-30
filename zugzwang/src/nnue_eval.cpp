@@ -127,10 +127,15 @@ static inline float sat_leak_eps() {
 // SATSOFT (per-mille): leak slope applied ONLY at fully-collapsed nodes. 1000 = the
 // activation continues linearly past both rails (no clamp at all). This is the shipping
 // form of the idea; SATLEAK/SATLEAK2 are the ungated versions kept for attribution.
+//
+// DEFAULT ON (1000) since 2026-07-30. Normal-play SPRT -0.58 +/- 6.31 over 3000 games
+// (costs nothing), while over the 6.6% of positions where the eval is blind it halves
+// the centipawn loss judged by SF18 (45 -> 22 cp overall, 62 -> 27 on the winning side)
+// and cuts material given away from ~4200 to 825 cp. SATSOFT=0 is the kill-switch.
 static inline float satsoft_eps() {
     static const float e = [] {
         const char* s = getenv("SATSOFT");
-        return s ? static_cast<float>(atoi(s)) / 1000.0f : 0.0f;
+        return s ? static_cast<float>(atoi(s)) / 1000.0f : 1.0f;
     }();
     return e;
 }
