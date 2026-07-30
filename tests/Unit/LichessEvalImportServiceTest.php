@@ -13,7 +13,7 @@ use PHPUnit\Framework\TestCase;
 /**
  * LichessEvalImportService — the Lichess CC0 eval-dump importer's core logic.
  *
- * DB tests share the real dev `eval_cache`/`game`/`bot_game` tables (see
+ * DB tests share the real dev `eval_cache_test`/`game`/`bot_game` tables (see
  * EvalCacheServiceTest's doc comment for why: DB_DRIVER=mysql in .env
  * overrides phpunit.xml's sqlite env for this project). Unlike
  * EvalCacheServiceTest (which wipes the whole eval_cache table), this suite
@@ -37,13 +37,19 @@ class LichessEvalImportServiceTest extends TestCase
     {
         parent::setUp();
 
+        // Redirect the model at a scratch table. PHPUnit runs against the real
+        // dev MySQL (.env's DB_DRIVER beats phpunit.xml's sqlite), and this
+        // suite clears its table in setUp — against the live `eval_cache`, one
+        // test run would wipe the seeded book and any imported evals.
+        EvalCache::$table = 'eval_cache_test';
+
         App::boot(dirname(__DIR__, 2));
 
         $pdo = App::db()->getConnection()->pdo();
-        // Mirrors the CREATE TABLE `eval_cache` migration exactly — see
+        // Mirrors the CREATE TABLE `eval_cache_test` migration exactly — see
         // EvalCacheServiceTest for why this defensive fallback exists.
         $pdo->exec(
-            "CREATE TABLE IF NOT EXISTS `eval_cache` (\n"
+            "CREATE TABLE IF NOT EXISTS `eval_cache_test` (\n"
             . "  `fen_key` VARCHAR(255) NOT NULL DEFAULT '',\n"
             . "  `depth` INT NOT NULL DEFAULT 0,\n"
             . "  `multipv` INT NOT NULL DEFAULT 1,\n"
@@ -58,7 +64,11 @@ class LichessEvalImportServiceTest extends TestCase
             . "  `id` VARCHAR(36) NOT NULL DEFAULT '',\n"
             . "  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n"
             . "  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n"
-            . "  PRIMARY KEY (`id`)\n"
+            . "  PRIMARY KEY (`id`),\n"
+            // The real table gets this via a separate ALTER in the migration;
+            // without it the importers' ON DUPLICATE KEY UPDATE has nothing to
+            // collide on and re-importing a row silently duplicates it.
+            . "  UNIQUE KEY `uniq_eval_cache_test_fen_key` (`fen_key`)\n"
             . ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         );
 
@@ -69,7 +79,7 @@ class LichessEvalImportServiceTest extends TestCase
     {
         if ($this->evalCacheIdsToClean !== []) {
             $placeholders = implode(',', array_fill(0, count($this->evalCacheIdsToClean), '?'));
-            App::db()->exec("DELETE FROM eval_cache WHERE id IN ({$placeholders})", $this->evalCacheIdsToClean);
+            App::db()->exec("DELETE FROM eval_cache_test WHERE id IN ({$placeholders})", $this->evalCacheIdsToClean);
         }
         foreach ($this->botGameIdsToClean as $id) {
             BotGame::find($id)?->delete();
@@ -78,6 +88,7 @@ class LichessEvalImportServiceTest extends TestCase
             Game::find($id)?->delete();
         }
 
+        EvalCache::$table = null;
         parent::tearDown();
     }
 
@@ -360,7 +371,7 @@ class LichessEvalImportServiceTest extends TestCase
         // Re-import the identical row a second time.
         $this->service->writeBatch([$row]);
 
-        $rows = App::db()->raw('SELECT id FROM eval_cache WHERE fen_key = ?', [$key]);
+        $rows = App::db()->raw('SELECT id FROM eval_cache_test WHERE fen_key = ?', [$key]);
         $this->assertCount(1, $rows, 're-importing the same record must not create a duplicate row');
 
         $second = EvalCache::firstWhere('fen_key', '=', $key);
@@ -571,7 +582,7 @@ class LichessEvalImportServiceTest extends TestCase
     private function writeRow(array $row): void
     {
         $this->service->writeBatch([$row]);
-        $id = App::db()->scalar('SELECT id FROM eval_cache WHERE fen_key = ?', [$row['fen_key']]);
+        $id = App::db()->scalar('SELECT id FROM eval_cache_test WHERE fen_key = ?', [$row['fen_key']]);
         if (is_string($id)) {
             $this->evalCacheIdsToClean[] = $id;
         }

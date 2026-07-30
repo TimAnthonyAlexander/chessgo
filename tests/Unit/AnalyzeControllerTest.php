@@ -5,6 +5,7 @@ namespace App\Tests\Unit;
 use App\Controllers\AnalyzeController;
 use App\Services\AnticheatService;
 use App\Services\EngineSelector;
+use App\Models\EvalCache;
 use App\Services\EvalCacheService;
 use BaseApi\App;
 use PHPUnit\Framework\TestCase;
@@ -20,7 +21,7 @@ use PHPUnit\Framework\TestCase;
  * `resolveAnalysis()` is exercised directly (not `post()`) so these tests
  * need no HTTP harness, no session, and no `$this->request` — it depends only
  * on the injected `EngineSelector` (faked below, so nothing hits a real
- * engine) and `EvalCacheService` (real, against the same `eval_cache` table
+ * engine) and `EvalCacheService` (real, against the same `eval_cache_test` table
  * EvalCacheServiceTest uses).
  */
 class AnalyzeControllerTest extends TestCase
@@ -31,13 +32,19 @@ class AnalyzeControllerTest extends TestCase
     {
         parent::setUp();
 
+        // Redirect the model at a scratch table. PHPUnit runs against the real
+        // dev MySQL (.env's DB_DRIVER beats phpunit.xml's sqlite), and this
+        // suite clears its table in setUp — against the live `eval_cache`, one
+        // test run would wipe the seeded book and any imported evals.
+        EvalCache::$table = 'eval_cache_test';
+
         App::boot(dirname(__DIR__, 2));
 
         $pdo = App::db()->getConnection()->pdo();
-        // Mirrors the CREATE TABLE `eval_cache` migration exactly — see
+        // Mirrors the CREATE TABLE `eval_cache_test` migration exactly — see
         // EvalCacheServiceTest for why this defensive fallback exists.
         $pdo->exec(
-            "CREATE TABLE IF NOT EXISTS `eval_cache` (\n"
+            "CREATE TABLE IF NOT EXISTS `eval_cache_test` (\n"
             . "  `fen_key` VARCHAR(255) NOT NULL DEFAULT '',\n"
             . "  `depth` INT NOT NULL DEFAULT 0,\n"
             . "  `multipv` INT NOT NULL DEFAULT 1,\n"
@@ -52,12 +59,22 @@ class AnalyzeControllerTest extends TestCase
             . "  `id` VARCHAR(36) NOT NULL DEFAULT '',\n"
             . "  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n"
             . "  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n"
-            . "  PRIMARY KEY (`id`)\n"
+            . "  PRIMARY KEY (`id`),\n"
+            // The real table gets this via a separate ALTER in the migration;
+            // without it the importers' ON DUPLICATE KEY UPDATE has nothing to
+            // collide on and re-importing a row silently duplicates it.
+            . "  UNIQUE KEY `uniq_eval_cache_test_fen_key` (`fen_key`)\n"
             . ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         );
-        $pdo->exec('DELETE FROM eval_cache');
+        $pdo->exec('DELETE FROM eval_cache_test');
 
         $this->cache = new EvalCacheService();
+    }
+
+    protected function tearDown(): void
+    {
+        EvalCache::$table = null;
+        parent::tearDown();
     }
 
     private const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';

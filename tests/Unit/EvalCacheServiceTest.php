@@ -19,7 +19,7 @@ use PHPUnit\Framework\TestCase;
  * test in this repo exercises the DB (they're all pure-logic unit tests), so
  * there's no established isolation pattern to follow here.
  *
- * That means this test runs against the REAL `eval_cache` table this task
+ * That means this test runs against the REAL `eval_cache_test` table this task
  * created via `php mason migrate:generate` + `migrate:apply -y` (see the
  * report). The CREATE TABLE below is a defensive fallback only — `IF NOT
  * EXISTS`, byte-identical to that migration's SQL — so this test file is
@@ -35,13 +35,19 @@ class EvalCacheServiceTest extends TestCase
     {
         parent::setUp();
 
+        // Redirect the model at a scratch table. PHPUnit runs against the real
+        // dev MySQL (.env's DB_DRIVER beats phpunit.xml's sqlite), and this
+        // suite clears its table in setUp — against the live `eval_cache`, one
+        // test run would wipe the seeded book and any imported evals.
+        EvalCache::$table = 'eval_cache_test';
+
         App::boot(dirname(__DIR__, 2));
 
         $pdo = App::db()->getConnection()->pdo();
-        // Mirrors the CREATE TABLE `eval_cache` migration exactly (MySQL/InnoDB
+        // Mirrors the CREATE TABLE `eval_cache_test` migration exactly (MySQL/InnoDB
         // doesn't allow a DEFAULT on TEXT columns, hence no default there).
         $pdo->exec(
-            "CREATE TABLE IF NOT EXISTS `eval_cache` (\n"
+            "CREATE TABLE IF NOT EXISTS `eval_cache_test` (\n"
             . "  `fen_key` VARCHAR(255) NOT NULL DEFAULT '',\n"
             . "  `depth` INT NOT NULL DEFAULT 0,\n"
             . "  `multipv` INT NOT NULL DEFAULT 1,\n"
@@ -56,12 +62,22 @@ class EvalCacheServiceTest extends TestCase
             . "  `id` VARCHAR(36) NOT NULL DEFAULT '',\n"
             . "  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n"
             . "  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n"
-            . "  PRIMARY KEY (`id`)\n"
+            . "  PRIMARY KEY (`id`),\n"
+            // The real table gets this via a separate ALTER in the migration;
+            // without it the importers' ON DUPLICATE KEY UPDATE has nothing to
+            // collide on and re-importing a row silently duplicates it.
+            . "  UNIQUE KEY `uniq_eval_cache_test_fen_key` (`fen_key`)\n"
             . ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         );
-        $pdo->exec('DELETE FROM eval_cache');
+        $pdo->exec('DELETE FROM eval_cache_test');
 
         $this->service = new EvalCacheService();
+    }
+
+    protected function tearDown(): void
+    {
+        EvalCache::$table = null;
+        parent::tearDown();
     }
 
     private const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';

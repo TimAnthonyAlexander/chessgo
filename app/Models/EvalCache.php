@@ -24,6 +24,21 @@ use BaseApi\Models\BaseModel;
  */
 class EvalCache extends BaseModel
 {
+    /**
+     * Table name. Null means the framework default (`eval_cache`), which is
+     * what production always uses — this is public purely so the test suite can
+     * redirect itself to a scratch table.
+     *
+     * That matters more than it sounds: PHPUnit runs against the real dev MySQL
+     * (`.env`'s DB_DRIVER wins over phpunit.xml's sqlite, since config/app.php
+     * prefers DB_DRIVER over DB_CONNECTION), and these tests clear the table in
+     * setUp. With a seeded cache — 5,428 book rows, and potentially millions of
+     * imported Lichess rows — a single `phpunit` run would otherwise destroy the
+     * lot. See BaseAPI's convention note in CLAUDE.md: overriding the table is
+     * done via exactly this property.
+     */
+    public static ?string $table = null;
+
     /** Normalized position key (piece placement + side to move + castling + en
      *  passant only). Unique — one row per position. */
     public string $fen_key = '';

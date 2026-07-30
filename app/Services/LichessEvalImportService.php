@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Models\EvalCache;
+
 use App\Models\BotGame;
 use App\Models\Game;
 use BaseApi\App;
@@ -282,7 +284,7 @@ class LichessEvalImportService
         $keys = array_column($rows, 'fen_key');
         $placeholders = implode(',', array_fill(0, count($keys), '?'));
         $existingRows = App::db()->raw(
-            "SELECT `fen_key`, `depth`, `multipv`, `nodes` FROM `eval_cache` WHERE `fen_key` IN ({$placeholders})",
+            'SELECT `fen_key`, `depth`, `multipv`, `nodes` FROM `' . EvalCache::table() . "` WHERE `fen_key` IN ({$placeholders})",
             $keys,
         );
 
@@ -342,7 +344,10 @@ class LichessEvalImportService
             . ' OR VALUES(`depth`) > `depth`'
             . ' OR (VALUES(`depth`) = `depth` AND VALUES(`nodes`) > `nodes`))';
 
-        $sql = 'INSERT INTO `eval_cache` (' . implode(',', $quotedCols) . ') VALUES '
+        // Resolved from the model, not hardcoded, so the test suite's scratch-table
+        // redirect (EvalCache::$table) applies here too — otherwise the importer
+        // writes to the real table while the tests read the scratch one.
+        $sql = 'INSERT INTO `' . EvalCache::table() . '` (' . implode(',', $quotedCols) . ') VALUES '
             . implode(',', array_fill(0, count($rows), $placeholder))
             . ' ON DUPLICATE KEY UPDATE '
             . "`depth` = IF({$isBetterSql}, VALUES(`depth`), `depth`), "
