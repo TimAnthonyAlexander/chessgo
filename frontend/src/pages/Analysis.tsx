@@ -531,6 +531,22 @@ export default function Analysis() {
         // node missing its PV is treated as depth 0 so we always fetch a line for it.
         let achieved = current.bestPv != null ? (current.bestDepth ?? 0) : 0
 
+        // The depth the MOVE LIST has reached, tracked separately from `achieved`
+        // (the eval's depth) because the two can diverge sharply.
+        //
+        // On a book position the engine answers from book.bin instantly and reports
+        // a canned top-level depth (22 for the start position) while the multi-PV
+        // lines it returns are searched only to the REQUESTED rung depth. So rung 1
+        // (target 6) yields lines at depth 6 but sets `achieved` to 22, after which
+        // every remaining multi-line rung (9/12/14/16) fails `target <= achieved`
+        // and is skipped. The move list then sits at depth 6 forever, no matter how
+        // long you wait — visible on 1.e4 and every other opening move.
+        //
+        // Gating multi-PV rungs on the LINES depth instead lets the list keep
+        // deepening to LINES_MAX_DEPTH while `achieved` still protects the eval
+        // from being downgraded by a shallower rung.
+        let linesAchieved = linesCache.current.get(nodeId)?.lines[0]?.depth ?? 0
+
         // `achieved` guards the EVAL from being downgraded, but it must not be
         // allowed to starve the MOVE LIST. A revisited node can carry a depth-22
         // stored eval and no cached lines, in which case every rung is `<= achieved`
@@ -564,7 +580,12 @@ export default function Analysis() {
                     if (cancelled) return
                     // i === 0 may be the backfill rung above, which is deliberately
                     // at-or-below `achieved` — let that one through.
-                    if (target <= achieved && !(i === 0 && rungs.length > ANALYSIS_LADDER.length)) continue
+                    // Multi-PV rungs feed the move list, so they answer to the list's
+                    // own depth; single-line rungs feed the eval and answer to
+                    // `achieved`. See the linesAchieved comment above for why
+                    // conflating the two froze the list at depth 6 on book positions.
+                    const gate = multipv > 1 ? linesAchieved : achieved
+                    if (target <= gate && !(i === 0 && rungs.length > ANALYSIS_LADDER.length)) continue
 
                     let r: Awaited<ReturnType<typeof analyze>>
                     try {
@@ -585,6 +606,10 @@ export default function Analysis() {
                         // Cache under the node, not the FEN: transpositions are rare here
                         // and the node id is what the navigation effect above looks up.
                         linesCache.current.set(nodeId, { lines: r.lines, opening: r.opening ?? null })
+                        // Per-line depth, not the top-level one — on a book position the
+                        // latter is a canned value unrelated to how deep the lines were
+                        // actually searched.
+                        linesAchieved = Math.max(linesAchieved, r.lines[0]?.depth ?? target)
                     }
                     if (r.opening !== undefined) {
                         setAnalysisOpening(r.opening ?? null)

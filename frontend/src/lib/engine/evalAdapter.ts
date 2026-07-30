@@ -46,7 +46,14 @@ export function fromAnalysis(a: Analysis): RaceCandidate {
     const pvCount = a.lines && a.lines.length > 0 ? a.lines.length : a.bestmove ? 1 : 0
     const source: EvalSource = a.source === 'cache' ? 'cache' : 'server'
     return {
-        candidate: { depth, nodes: 0, pvCount, source },
+        // nodes: Number.MAX_SAFE_INTEGER, NOT 0. /analyze does not report a node
+        // count, and isFirstEvalBetter breaks depth ties on nodes — so scoring a
+        // server result as 0 nodes made the local engine win EVERY tie, letting
+        // its shallow early results (depth 6 lands in well under a second)
+        // overwrite an equally-deep server result and pin the displayed depth.
+        // A server result of equal depth is never worse, so it holds the tie and
+        // local must be strictly deeper to take over.
+        candidate: { depth, nodes: Number.MAX_SAFE_INTEGER, pvCount, source },
         display: { source, depth, eval: a.eval ?? null, bestmove: a.bestmove ?? null, pv: a.pv ?? [] },
     }
 }

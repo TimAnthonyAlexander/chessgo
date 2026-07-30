@@ -68,8 +68,11 @@ describe('fromAnalysis', () => {
         expect(rc.display.pv).toEqual(['g1f3', 'g8f6'])
     })
 
-    test('nodes is always 0 — the server /analyze response carries no node count', () => {
-        expect(fromAnalysis(analysis({})).candidate.nodes).toBe(0)
+    test('nodes saturates high — /analyze carries no node count, so it must hold depth ties', () => {
+        // Scoring the server as 0 nodes made the local engine win every depth tie
+        // (isFirstEvalBetter breaks ties on nodes), so local's shallow early results
+        // overwrote equally-deep server ones and pinned the displayed depth.
+        expect(fromAnalysis(analysis({})).candidate.nodes).toBe(Number.MAX_SAFE_INTEGER)
     })
 })
 
@@ -122,19 +125,23 @@ describe('isRaceCandidateBetter / pickDisplayed', () => {
         expect(pickDisplayed(cached, deepLocal, 1)).toBe(deepLocal)
     })
 
-    test('a fresh engine search at equal depth beats local at equal depth only if it has more nodes', () => {
-        const server = fromAnalysis(analysis({ source: 'engine', depth: 20 }))
+    test('a server result at equal depth holds the display against local, whatever local searched', () => {
+        const server = fromAnalysis(analysis({ source: 'engine', depth: 20, bestmove: 'e2e4' }))
         const localMoreNodes = fromEngineInfo(info({ depth: 20, nodes: 999_999 }))
-        const localFewerNodes = fromEngineInfo(info({ depth: 20, nodes: 0 }))
-        // server.candidate.nodes is always 0 (server /analyze carries no node count)
-        expect(isRaceCandidateBetter(server, localMoreNodes, 1)).toBeTrue()
-        expect(isRaceCandidateBetter(server, localFewerNodes, 1)).toBeFalse() // 0 vs 0 — a tie, not an improvement
+        // Local must be STRICTLY deeper to take over. The node counts are not
+        // comparable across the two sources anyway — /analyze reports none — so
+        // letting them decide a tie was arbitrary, and in practice always handed
+        // the display to whichever local result arrived at the same depth.
+        expect(isRaceCandidateBetter(server, localMoreNodes, 1)).toBeFalse()
+        expect(isRaceCandidateBetter(server, fromEngineInfo(info({ depth: 21 })), 1)).toBeTrue()
     })
 
-    test('source never affects the decision on its own — depth/nodes/pvCount do', () => {
+    test('source never affects the decision on its own — depth and pvCount do', () => {
         const local = fromEngineInfo(info({ depth: 15 }))
-        const cache = fromAnalysis(analysis({ source: 'cache', depth: 15 }))
-        expect(isRaceCandidateBetter(local, cache, 1)).toBeFalse()
+        const cache = fromAnalysis(analysis({ source: 'cache', depth: 15, bestmove: 'e2e4' }))
+        // Equal depth: local does not displace the server-side result...
         expect(isRaceCandidateBetter(cache, local, 1)).toBeFalse()
+        // ...and a deeper local one does, regardless of which side it came from.
+        expect(isRaceCandidateBetter(cache, fromEngineInfo(info({ depth: 16 })), 1)).toBeTrue()
     })
 })
