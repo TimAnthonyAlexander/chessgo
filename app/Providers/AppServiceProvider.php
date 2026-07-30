@@ -19,6 +19,7 @@ use App\Services\HubClient;
 use App\Services\Glicko2Service;
 use App\Services\AnticheatService;
 use App\Services\StreakService;
+use App\Services\EvalCacheService;
 use BaseApi\Auth\UserProvider;
 
 /**
@@ -64,6 +65,9 @@ class AppServiceProvider extends ServiceProvider
 
         // "The Flame" daily-activity streak roll logic (single source of truth)
         $container->singleton(StreakService::class);
+
+        // Server-side position-eval cache in front of /analyze (SPEC §6)
+        $container->singleton(EvalCacheService::class);
 
         // Example: Register a custom service with manual configuration
         // $container->singleton(SomeService::class, function (ContainerInterface $c) {
