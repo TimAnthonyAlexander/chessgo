@@ -186,6 +186,59 @@ class AnalyzeControllerTest extends TestCase
         $this->assertSame(20, $cached->depth);
     }
 
+    // --- cacheOnly: the mode the board uses once the local engine is searching ---
+    //
+    // The whole point is that a client running its own engine must not make the
+    // server run one too. If any of these ever invoke a search, the local engine
+    // becomes a net COST to the server rather than a saving.
+
+    public function test_cache_only_miss_returns_miss_and_never_searches(): void
+    {
+        $engine = new FakeAnalyzeEngine();
+        $controller = $this->makeController($engine);
+
+        $result = $controller->resolveAnalysis(self::START_FEN, 1500, 0, 5, [], cacheOnly: true);
+
+        $this->assertSame('miss', $result['source']);
+        $this->assertNull($result['eval']);
+        $this->assertNull($result['depth']);
+        $this->assertSame([], $engine->analyzeCalls, 'cacheOnly must never start a search');
+    }
+
+    public function test_cache_only_hit_returns_the_cached_eval(): void
+    {
+        $this->putResult(self::START_FEN, depth: 24);
+
+        $engine = new FakeAnalyzeEngine();
+        $engine->openingResult = ['ok' => true, 'opening' => ['eco' => 'B00', 'name' => "King's Pawn Game"]];
+        $controller = $this->makeController($engine);
+
+        $result = $controller->resolveAnalysis(self::START_FEN, 1500, 20, 0, [], cacheOnly: true);
+
+        $this->assertSame('cache', $result['source']);
+        $this->assertSame(24, $result['depth']);
+        $this->assertSame(['eco' => 'B00', 'name' => "King's Pawn Game"], $result['opening']);
+        $this->assertSame([], $engine->analyzeCalls);
+    }
+
+    public function test_cache_only_hit_omits_opening_when_lookup_fails_rather_than_searching(): void
+    {
+        $this->putResult(self::START_FEN, depth: 24);
+
+        $engine = new FakeAnalyzeEngine();
+        $engine->openingResult = ['ok' => false, 'opening' => null];
+        $controller = $this->makeController($engine);
+
+        $result = $controller->resolveAnalysis(self::START_FEN, 1500, 20, 0, [], cacheOnly: true);
+
+        $this->assertSame('cache', $result['source']);
+        $this->assertSame(24, $result['depth']);
+        // ABSENT, not null: the client reads a missing key as "no opinion" and
+        // keeps the name it is already showing. An explicit null would blank it.
+        $this->assertArrayNotHasKey('opening', $result);
+        $this->assertSame([], $engine->analyzeCalls, 'a failed opening lookup must not fall through to a search');
+    }
+
     private function makeController(EngineSelector $engine): AnalyzeController
     {
         $anticheat = new class extends AnticheatService {

@@ -576,6 +576,45 @@ export default function Analysis() {
             // it does NOT mean "lines landed", just that this position's ladder run
             // is done asking.
             try {
+                // Local engine is doing the searching: ask the server for a cache
+                // LOOKUP only, once, and stop. Running the full depth ladder here
+                // would make a client with its own engine cost the server MORE CPU
+                // than one without — the exact opposite of why the local engine
+                // exists. Anything the cache already knows is free depth and still
+                // worth having (it lands instantly, before local has warmed up);
+                // anything it doesn't, local computes.
+                if (localEngineOn) {
+                    let r: Awaited<ReturnType<typeof analyze>>
+                    try {
+                        r = await analyze(fen, {
+                            multipv: 5,
+                            history: historyFens,
+                            cacheOnly: true,
+                            signal: ac.signal,
+                        })
+                    } catch {
+                        return
+                    }
+                    if (cancelled || r.source === 'miss' || !r.eval) return
+
+                    if (r.lines && r.lines.length > 0) {
+                        setAnalysisLines(r.lines)
+                        linesCache.current.set(nodeId, { lines: r.lines, opening: r.opening ?? null })
+                    }
+                    // Absent `opening` means "no opinion" (the lookup could not run),
+                    // so leave whatever name is already displayed alone.
+                    if (r.opening !== undefined) setAnalysisOpening(r.opening ?? null)
+
+                    const got = r.depth ?? 0
+                    if (got <= achieved) return
+                    setDisplayCandidates((m) => ({ ...m, [nodeId]: fromAnalysis(r).candidate }))
+                    const white = stm === 'w' ? r.eval.value : -r.eval.value
+                    setTree((t) =>
+                        annotateEval(t, nodeId, { type: r.eval!.type, white }, r.bestmove, r.pv ?? [], got),
+                    )
+                    return
+                }
+
                 for (const [i, { depth: target, ceilingMs, multipv }] of rungs.entries()) {
                     if (cancelled) return
                     // i === 0 may be the backfill rung above, which is deliberately
@@ -683,7 +722,11 @@ export default function Analysis() {
         // from OpeningPanel's own fetch deps (OpeningPanel.tsx): it's a fresh array on
         // every tree annotation even though its content only changes with current.id,
         // which IS a dep — so this is redundant, not stale.
-    }, [engineOn, isDuck, loading, current.id, current.fen, over.over, over.checkmate, sideToMove])
+        // `localEngineOn` IS a dependency, unlike the ref used further down: flipping
+        // the toggle has to switch between the search ladder and the cache-only
+        // lookup right away, otherwise turning the local engine on leaves the
+        // current position still hammering /analyze until you navigate away.
+    }, [engineOn, localEngineOn, isDuck, loading, current.id, current.fen, over.over, over.checkmate, sideToMove])
 
     // --- Stockfish second-opinion best move (optional arrow) ---
     // One full-strength Stockfish call per viewed position, only while the toggle

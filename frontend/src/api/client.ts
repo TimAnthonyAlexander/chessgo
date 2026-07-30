@@ -220,7 +220,10 @@ export interface Analysis {
     // added for the local-engine racing feature (lib/engine/precedence.ts), which
     // badges a displayed cache result until local analysis supersedes it. Purely
     // informational: never used to gate ladder/polling logic.
-    source?: 'cache' | 'engine'
+    /** Where this came from: the server eval cache, a fresh engine search, or —
+     *  only ever in reply to `cacheOnly` — nothing at all, meaning the server
+     *  declined to search and `eval`/`depth` are null. */
+    source?: 'cache' | 'engine' | 'miss'
 }
 
 export interface AnalysisLine {
@@ -251,14 +254,27 @@ export function analyze(
         depth?: number
         multipv?: number
         history?: string[] // prior-position FENs (root→previous), for deepest-match opening naming
+        /** Look the position up in the server's eval cache and NEVER start a
+         *  search — `source: 'miss'` with a null eval when it isn't there. Sent
+         *  once the user's local in-browser engine is doing the searching, so
+         *  running one costs the server a row lookup instead of a depth ladder. */
+        cacheOnly?: boolean
         signal?: AbortSignal
     },
 ): Promise<Analysis> {
-    const body: { fen: string; movetime?: number; depth?: number; multipv?: number; history?: string[] } = { fen }
+    const body: {
+        fen: string
+        movetime?: number
+        depth?: number
+        multipv?: number
+        history?: string[]
+        cacheOnly?: boolean
+    } = { fen }
     if (opts?.movetime) body.movetime = opts.movetime
     if (opts?.depth) body.depth = opts.depth
     if (opts?.multipv) body.multipv = opts.multipv
     if (opts?.history && opts.history.length > 0) body.history = opts.history
+    if (opts?.cacheOnly) body.cacheOnly = true
     // `signal` lets a caller abort an in-flight request when it's no longer wanted —
     // the analysis board cancels the previous position's deepening when you move, so
     // the trailing deep call doesn't hog a browser connection / engine worker.

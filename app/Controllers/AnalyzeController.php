@@ -71,6 +71,20 @@ class AnalyzeController extends Controller
     /** @var array<int, mixed> Prior-position FENs, root→previous (opening naming only). */
     public array $history = [];
 
+    /**
+     * Cache-lookup-only: serve `eval_cache` if it has something deep enough, and
+     * NEVER start a search on a miss (`source: 'miss'`, no eval).
+     *
+     * This is what the analysis board sends once the user's local in-browser
+     * engine is doing the searching. Without it, a client running its own engine
+     * would still make the server run the full depth ladder for every position —
+     * costing MORE server CPU than before the local engine existed, which is the
+     * opposite of the point. Lichess gets this for free because their cloud eval
+     * is a cache lookup; ours shares an endpoint with a real search, so the
+     * distinction has to be explicit.
+     */
+    public bool $cacheOnly = false;
+
     public function __construct(
         private readonly EngineSelector $engine,
         private readonly AnticheatService $anticheat,
@@ -106,7 +120,7 @@ class AnalyzeController extends Controller
         // can't parse, so a junk element degrades the opening NAME, never the search.
         $history = array_values(array_map('strval', $this->history));
 
-        $result = $this->resolveAnalysis($this->fen, $movetime, $depth, $multipv, $history);
+        $result = $this->resolveAnalysis($this->fen, $movetime, $depth, $multipv, $history, $this->cacheOnly);
 
         return JsonResponse::ok($result);
     }
@@ -141,8 +155,14 @@ class AnalyzeController extends Controller
      * @param list<string> $history Prior-position FENs, root->previous.
      * @return array<string, mixed> {eval, bestmove, pv, depth, opening, lines}
      */
-    public function resolveAnalysis(string $fen, int $movetime, int $depth, int $multipv, array $history): array
-    {
+    public function resolveAnalysis(
+        string $fen,
+        int $movetime,
+        int $depth,
+        int $multipv,
+        array $history,
+        bool $cacheOnly = false,
+    ): array {
         $cacheable = $this->evalCache->isCacheable($fen, $history);
 
         if ($cacheable) {
@@ -150,22 +170,56 @@ class AnalyzeController extends Controller
             $cached = $this->evalCache->get($fen, $minDepth, max(1, $multipv));
             if ($cached instanceof EvalCache) {
                 $opening = $this->resolveCachedOpening($fen, $history);
-                if ($opening['ok']) {
-                    $lines = $cached->getLines();
+                $lines = $cached->getLines();
+                $hit = [
+                    'eval' => ['type' => $cached->eval_type, 'value' => $cached->eval_value],
+                    'bestmove' => $cached->bestmove,
+                    'pv' => $cached->getPv(),
+                    'depth' => $cached->depth,
+                    'lines' => $lines !== [] ? $lines : null,
+                    'source' => 'cache',
+                ];
 
-                    return [
-                        'eval' => ['type' => $cached->eval_type, 'value' => $cached->eval_value],
-                        'bestmove' => $cached->bestmove,
-                        'pv' => $cached->getPv(),
-                        'depth' => $cached->depth,
-                        'opening' => $opening['opening'],
-                        'lines' => $lines !== [] ? $lines : null,
-                        'source' => 'cache',
-                    ];
+                if ($opening['ok']) {
+                    $hit['opening'] = $opening['opening'];
+
+                    return $hit;
                 }
-                // Opening resolution failed — fall through to a full search
-                // below, which resolves `opening` itself as it does today.
+
+                // Opening resolution failed. Normally we fall through to a full
+                // search, which resolves `opening` itself. Under cacheOnly we
+                // must not — searching is the one thing the caller asked us not
+                // to do. Return the eval and OMIT `opening` entirely: the client
+                // treats an absent key as "no opinion" and keeps whatever name it
+                // is already showing, whereas an explicit null would blank it.
+                if ($cacheOnly) {
+                    return $hit;
+                }
+            } elseif ($cacheOnly) {
+                // Miss, and we are forbidden from searching. Say so plainly; the
+                // client's local engine supplies the eval.
+                return [
+                    'eval' => null,
+                    'bestmove' => null,
+                    'pv' => null,
+                    'depth' => null,
+                    'lines' => null,
+                    'source' => 'miss',
+                ];
             }
+        }
+
+        if ($cacheOnly) {
+            // Not cacheable at all (repetition / near the 50-move rule, where the
+            // key cannot represent the position). Still no search.
+            return [
+                'eval' => null,
+                'bestmove' => null,
+                'pv' => null,
+                'depth' => null,
+                'lines' => null,
+                'source' => 'miss',
+            ];
         }
 
         $res = $this->engine->analyze($fen, $movetime, $depth, $multipv, $history);
