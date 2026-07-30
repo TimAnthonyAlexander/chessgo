@@ -134,6 +134,16 @@ static inline float satsoft_eps() {
     }();
     return e;
 }
+// Fraction of the soft-vs-clamped difference that is kept (SATSOFTK, per-mille).
+// The raw soft output is monotone but ~7x out of scale, so it is used for DIRECTION
+// only, with the clamped constant remaining the anchor. SPSA candidate.
+static inline float satsoft_k() {
+    static const float k = [] {
+        const char* s = getenv("SATSOFTK");
+        return s ? static_cast<float>(atoi(s)) / 1000.0f : 0.12f;
+    }();
+    return k;
+}
 // L2 leak slope (SATLEAK2, per-mille). L1 variation is useless if L2 clamps it away
 // again, so the two normally move together; kept separate to attribute the effect.
 static inline float sat_leak2_eps() {
@@ -529,16 +539,19 @@ int eval_from_halves(const int16_t* accW, const int16_t* accB, const Position& p
     // Gate it on total collapse instead: only when ALL D2 lanes are railed is the
     // output a constant, and only then is the soft extrapolation strictly more
     // informative than what it replaces. Every other position stays byte-identical.
+    //
+    // The raw soft output is monotone but wildly out of scale — up one bishop reads
+    // +7549 where the clamped constant reads +1086 and the truth is about +330. Feeding
+    // 7000-13000 cp into the search would disturb every eval margin, aspiration window
+    // and time-management rule, and would show nonsense on the eval bar. So the soft
+    // pass supplies only a DIRECTION: the constant stays the anchor and a scaled
+    // fraction of the soft deviation is added back (SATSOFTK, per-mille). That keeps
+    // the eval on the scale everything else was tuned against while restoring ordering.
+    bool softNode = false;
     if (satsoft_eps() > 0.0f) {
         int railed = 0;
         for (int o = 0; o < D2; ++o) railed += (l1[o] == 0.0f) | (l1[o] == 1.0f);
-        if (railed == D2) {
-            leakEps = satsoft_eps();
-            for (int o = 0; o < D2; ++o) {
-                int32_t d = dot_u8i8(aq, L1W + static_cast<std::size_t>(o) * H, H);
-                l1[o] = screlu_leak(static_cast<float>(d) * L1Inv + L1B[o], leakEps);
-            }
-        }
+        softNode = (railed == D2);
     }
 
     // SATFIX/SATDIAG rail tally. Read off l1[] rather than instrumenting the loop
@@ -588,6 +601,27 @@ int eval_from_halves(const int16_t* accW, const int16_t* accB, const Position& p
     float y1[1];
     gemv_f32(y1, 1, l2, D3, g_net.OW.data(), NB, bk);
     float y = g_net.OB[bk] + y1[0];
+
+    // SATSOFT second pass: `y` above is the collapsed CONSTANT. Re-run L1/L2/output with
+    // the leaky activation to get a value that still varies with the position, then keep
+    // only a scaled fraction of the difference so the result stays on the net's own
+    // scale. Costs a second tail only at the ~6.6% of nodes that are fully collapsed.
+    if (softNode) {
+        const float eps = satsoft_eps();
+        float s1[D2];
+        for (int o = 0; o < D2; ++o) {
+            int32_t d = dot_u8i8(aq, L1W + static_cast<std::size_t>(o) * H, H);
+            s1[o] = screlu_leak(static_cast<float>(d) * L1Inv + L1B[o], eps);
+        }
+        float s2[D3];
+        gemv_f32(s2, D3, s1, D2, g_net.L2W.data(), NB * D3, bk * D3);
+        for (int o = 0; o < D3; ++o) s2[o] = screlu_leak(s2[o] + L2B[o], eps);
+        float sy1[1];
+        gemv_f32(sy1, 1, s2, D3, g_net.OW.data(), NB, bk);
+        const float softY = g_net.OB[bk] + sy1[0];
+        y += (softY - y) * satsoft_k();
+    }
+
     float scaled = y * CpScale;  // float32 multiply, then widen for the round
 
     // ROUNDFAST: std::round(double) lowers to a libm `roundf32`/`round` call
