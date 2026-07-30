@@ -529,12 +529,17 @@ class GomachineClient
     /**
      * POST JSON and decode the response.
      *
+     * Protected (not private) so {@see \App\Services\ZugzwangClient} can reuse
+     * it for zugzwang-only endpoints (e.g. `opening()`) that have no
+     * equivalent on this base class — same baseUrl/timeout plumbing, no
+     * duplicated curl setup.
+     *
      * @param array<string, mixed> $body
      * @param int|null $timeoutMs Override the default request timeout (e.g. for
      *   long full-game analysis); null uses the configured default.
      * @return array<string, mixed>
      */
-    private function post(string $path, array $body, ?int $timeoutMs = null): array
+    protected function post(string $path, array $body, ?int $timeoutMs = null): array
     {
         $ch = curl_init($this->baseUrl . $path);
         curl_setopt_array($ch, [

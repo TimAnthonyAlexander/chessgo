@@ -259,4 +259,21 @@ class EngineSelector extends GomachineClient
     {
         return $this->primary->healthy();
     }
+
+    /**
+     * Search-free opening-name lookup — always zugzwang, never gomachine: the
+     * `/opening` endpoint (a pure table lookup, {@see ZugzwangClient::opening()})
+     * only exists on zugzwang, added alongside the eval-cache work. No
+     * `primaryOnly`/`gomachineOnly` routing needed since there's nothing on the
+     * gomachine side to route to (mirrors `stockfishMove()`'s always-zugzwang
+     * shape). Never throws — see `ZugzwangClient::opening()` for the ok/opening
+     * contract callers must check.
+     *
+     * @param list<string> $history Prior-position FENs, root->previous.
+     * @return array{ok: bool, opening: array<string, mixed>|null}
+     */
+    public function opening(string $fen, array $history = []): array
+    {
+        return $this->zugzwang->opening($fen, $history);
+    }
 }

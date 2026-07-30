@@ -1,0 +1,263 @@
+<?php
+
+namespace App\Tests\Unit;
+
+use App\Controllers\AnalyzeController;
+use App\Services\AnticheatService;
+use App\Services\EngineSelector;
+use App\Services\EvalCacheService;
+use BaseApi\App;
+use PHPUnit\Framework\TestCase;
+
+/**
+ * AnalyzeController::resolveAnalysis() — the cache-vs-search decision that
+ * previously only ran when `history === []` (see EvalCacheServiceTest's doc
+ * comment for the DB-bootstrap rationale this file shares). This suite covers
+ * the rework that makes the cache usable for non-empty `history` too, by
+ * resolving `opening` through a search-free engine lookup separate from the
+ * cached eval.
+ *
+ * `resolveAnalysis()` is exercised directly (not `post()`) so these tests
+ * need no HTTP harness, no session, and no `$this->request` — it depends only
+ * on the injected `EngineSelector` (faked below, so nothing hits a real
+ * engine) and `EvalCacheService` (real, against the same `eval_cache` table
+ * EvalCacheServiceTest uses).
+ */
+class AnalyzeControllerTest extends TestCase
+{
+    private EvalCacheService $cache;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        App::boot(dirname(__DIR__, 2));
+
+        $pdo = App::db()->getConnection()->pdo();
+        // Mirrors the CREATE TABLE `eval_cache` migration exactly — see
+        // EvalCacheServiceTest for why this defensive fallback exists.
+        $pdo->exec(
+            "CREATE TABLE IF NOT EXISTS `eval_cache` (\n"
+            . "  `fen_key` VARCHAR(255) NOT NULL DEFAULT '',\n"
+            . "  `depth` INT NOT NULL DEFAULT 0,\n"
+            . "  `multipv` INT NOT NULL DEFAULT 1,\n"
+            . "  `eval_type` VARCHAR(255) NOT NULL DEFAULT 'cp',\n"
+            . "  `eval_value` INT NOT NULL DEFAULT 0,\n"
+            . "  `bestmove` VARCHAR(255),\n"
+            . "  `pv` TEXT,\n"
+            . "  `lines` TEXT,\n"
+            . "  `source` VARCHAR(255) NOT NULL DEFAULT 'zugzwang',\n"
+            . "  `nodes` INT NOT NULL DEFAULT 0,\n"
+            . "  `used_at` TEXT,\n"
+            . "  `id` VARCHAR(36) NOT NULL DEFAULT '',\n"
+            . "  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n"
+            . "  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n"
+            . "  PRIMARY KEY (`id`)\n"
+            . ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+        );
+        $pdo->exec('DELETE FROM eval_cache');
+
+        $this->cache = new EvalCacheService();
+    }
+
+    private const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+    private const AFTER_E4_FEN = 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1';
+
+    // --- cache HIT, non-empty history, opening resolution succeeds ---
+
+    public function test_cache_hit_with_history_resolves_opening_via_client(): void
+    {
+        $this->putResult(self::AFTER_E4_FEN, depth: 20);
+
+        $engine = new FakeAnalyzeEngine();
+        $engine->openingResult = ['ok' => true, 'opening' => ['eco' => 'B00', 'name' => "King's Pawn Game"]];
+        $controller = $this->makeController($engine);
+
+        $result = $controller->resolveAnalysis(self::AFTER_E4_FEN, 1500, 20, 0, [self::START_FEN]);
+
+        $this->assertSame(['eco' => 'B00', 'name' => "King's Pawn Game"], $result['opening']);
+        $this->assertSame(['type' => 'cp', 'value' => 25], $result['eval']);
+        $this->assertSame('e2e4', $result['bestmove']);
+        $this->assertSame([], $engine->analyzeCalls, 'a cache hit must not trigger a search');
+        $this->assertCount(1, $engine->openingCalls);
+        $this->assertSame(self::AFTER_E4_FEN, $engine->openingCalls[0]['fen']);
+        $this->assertSame([self::START_FEN], $engine->openingCalls[0]['history']);
+    }
+
+    // --- cache HIT, engine legitimately reports no named opening ---
+
+    public function test_cache_hit_with_no_named_opening_returns_null_without_search(): void
+    {
+        $this->putResult(self::AFTER_E4_FEN, depth: 20);
+
+        $engine = new FakeAnalyzeEngine();
+        $engine->openingResult = ['ok' => true, 'opening' => null];
+        $controller = $this->makeController($engine);
+
+        $result = $controller->resolveAnalysis(self::AFTER_E4_FEN, 1500, 20, 0, [self::START_FEN]);
+
+        $this->assertNull($result['opening']);
+        $this->assertSame(['type' => 'cp', 'value' => 25], $result['eval']);
+        $this->assertSame([], $engine->analyzeCalls, 'a legitimate "no opening" answer must not trigger a search');
+    }
+
+    // --- cache HIT, opening resolution FAILS (endpoint missing/unreachable/malformed) ---
+
+    public function test_cache_hit_opening_resolution_failure_falls_through_to_search(): void
+    {
+        $this->putResult(self::AFTER_E4_FEN, depth: 20);
+
+        $engine = new FakeAnalyzeEngine();
+        $engine->openingResult = ['ok' => false, 'opening' => null];
+        $engine->analyzeResult = [
+            'eval' => ['type' => 'cp', 'value' => 999],
+            'bestmove' => 'g1f3',
+            'pv' => ['g1f3', 'g8f6'],
+            'depth' => 22,
+            'opening' => ['eco' => 'B00', 'name' => "King's Pawn Game"],
+            'lines' => null,
+        ];
+        $controller = $this->makeController($engine);
+
+        $result = $controller->resolveAnalysis(self::AFTER_E4_FEN, 1500, 20, 0, [self::START_FEN]);
+
+        $this->assertCount(1, $engine->analyzeCalls, 'opening-resolution failure must fall through to a full search');
+        $this->assertSame(self::AFTER_E4_FEN, $engine->analyzeCalls[0]['fen']);
+        $this->assertSame([self::START_FEN], $engine->analyzeCalls[0]['history']);
+        $this->assertSame($engine->analyzeResult['eval'], $result['eval']);
+        $this->assertSame($engine->analyzeResult['bestmove'], $result['bestmove']);
+        $this->assertSame($engine->analyzeResult['opening'], $result['opening']);
+    }
+
+    // --- cache HIT, empty history: no regression from the pre-existing behavior ---
+
+    public function test_cache_hit_with_empty_history_returns_null_opening_without_calling_client(): void
+    {
+        $this->putResult(self::START_FEN, depth: 20);
+
+        $engine = new FakeAnalyzeEngine();
+        $controller = $this->makeController($engine);
+
+        $result = $controller->resolveAnalysis(self::START_FEN, 1500, 20, 0, []);
+
+        $this->assertNull($result['opening']);
+        $this->assertSame([], $engine->openingCalls, 'empty history is a pure FEN function — no engine round trip needed');
+        $this->assertSame([], $engine->analyzeCalls);
+    }
+
+    // --- cache MISS: unchanged — search, then put() ---
+
+    public function test_cache_miss_searches_and_stores_result(): void
+    {
+        $engine = new FakeAnalyzeEngine();
+        $engine->analyzeResult = [
+            'eval' => ['type' => 'cp', 'value' => 40],
+            'bestmove' => 'e2e4',
+            'pv' => ['e2e4'],
+            'depth' => 20,
+            'opening' => null,
+            'lines' => null,
+            'nodes' => 12345,
+        ];
+        $controller = $this->makeController($engine);
+
+        $result = $controller->resolveAnalysis(self::START_FEN, 1500, 20, 0, []);
+
+        $this->assertCount(1, $engine->analyzeCalls);
+        $this->assertSame(40, $result['eval']['value']);
+
+        $cached = $this->cache->get(self::START_FEN, 20, 1);
+        $this->assertNotNull($cached, 'a miss must populate the cache');
+        $this->assertSame(20, $cached->depth);
+    }
+
+    private function makeController(EngineSelector $engine): AnalyzeController
+    {
+        $anticheat = new class extends AnticheatService {
+            public function __construct()
+            {
+                // Deliberately skip the real constructor — resolveAnalysis()
+                // never touches AnticheatService, so no real dependencies needed.
+            }
+        };
+
+        return new AnalyzeController($engine, $anticheat, $this->cache);
+    }
+
+    /**
+     * Build a minimal /analyze-shaped result array and put() it — mirrors
+     * EvalCacheServiceTest::putResult().
+     */
+    private function putResult(string $fen, int $depth): void
+    {
+        $this->cache->put($fen, [
+            'eval' => ['type' => 'cp', 'value' => 25],
+            'bestmove' => 'e2e4',
+            'pv' => ['e2e4', 'e7e5'],
+            'depth' => $depth,
+            'nodes' => 100,
+            'lines' => [],
+        ]);
+    }
+}
+
+/**
+ * Fakes the engine boundary for AnalyzeControllerTest: records every
+ * analyze()/opening() call and returns whatever the test configured, so
+ * these tests never touch a real zugzwang process. Deliberately skips
+ * EngineSelector::__construct() (which requires real GomachineClient /
+ * ZugzwangClient instances) — every method AnalyzeController calls on this
+ * class is overridden below, so the parent's client properties are never
+ * read.
+ */
+class FakeAnalyzeEngine extends EngineSelector
+{
+    /** @var list<array{fen: string, movetime: int, depth: int, multipv: int, history: list<string>}> */
+    public array $analyzeCalls = [];
+
+    /** @var list<array{fen: string, history: list<string>}> */
+    public array $openingCalls = [];
+
+    /** @var array<string, mixed> */
+    public array $analyzeResult = [
+        'eval' => ['type' => 'cp', 'value' => 0],
+        'bestmove' => null,
+        'pv' => [],
+        'depth' => 1,
+        'opening' => null,
+        'lines' => null,
+    ];
+
+    /** @var array{ok: bool, opening: array<string, mixed>|null} */
+    public array $openingResult = ['ok' => true, 'opening' => null];
+
+    public function __construct()
+    {
+    }
+
+    public function analyze(
+        string $fen,
+        int $movetimeMs = 1500,
+        int $depth = 0,
+        int $multipv = 0,
+        array $history = [],
+    ): array {
+        $this->analyzeCalls[] = [
+            'fen' => $fen,
+            'movetime' => $movetimeMs,
+            'depth' => $depth,
+            'multipv' => $multipv,
+            'history' => $history,
+        ];
+
+        return $this->analyzeResult;
+    }
+
+    public function opening(string $fen, array $history = []): array
+    {
+        $this->openingCalls[] = ['fen' => $fen, 'history' => $history];
+
+        return $this->openingResult;
+    }
+}

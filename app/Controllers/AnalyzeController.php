@@ -99,54 +99,90 @@ class AnalyzeController extends Controller
         // can't parse, so a junk element degrades the opening NAME, never the search.
         $history = array_values(array_map('strval', $this->history));
 
-        // `opening` is resolved by the engine from `history` (the DEEPEST named
-        // position along the line — see the class doc comment) and is NOT stored
-        // in eval_cache; the model deliberately has no `opening` field. A cache
-        // hit therefore has nothing to answer `opening` with. Returning null on
-        // every hit would be a visible regression for any call that legitimately
-        // gets a non-null opening back — and the analysis board's ladder
-        // (frontend/src/pages/Analysis.tsx) always sends `history` for every
-        // non-root position, so "non-null opening" and "history non-empty"
-        // coincide for all but a stray direct-FEN caller. So: only read from /
-        // write to the cache when `history` is empty. That's still the single
-        // highest-value case (every session's root/start-position lookups), and
-        // it makes the cached `opening: null` provably correct rather than a
-        // guess — with an empty history the engine's own opening lookup is a
-        // pure function of the FEN, so it's stable across calls and, in
-        // practice, null for anything that isn't itself a book position.
-        $cacheable = $history === [] && $this->evalCache->isCacheable($this->fen, $history);
+        $result = $this->resolveAnalysis($this->fen, $movetime, $depth, $multipv, $history);
+
+        return JsonResponse::ok($result);
+    }
+
+    /**
+     * The actual cache-or-search decision, factored out of {@see post()} so it
+     * can be unit-tested without an HTTP harness (no `$this->request`, no
+     * anticheat call — just the cache + engine dependencies). Public for that
+     * reason; `post()` is still the only real caller.
+     *
+     * Cache HIT: `opening` is not stored in `eval_cache` (it's path-dependent —
+     * the DEEPEST named position along `history` — and the cache key is a bare
+     * position), so it has to be resolved separately:
+     *   - `history === []` — a pure function of the FEN, and (matching every
+     *     prior behavior when this was the ONLY cacheable case) always null.
+     *     No engine call needed, no regression risk.
+     *   - `history !== []` — ask the engine's search-free `/opening` lookup
+     *     ({@see EngineSelector::opening()}). `ok: false` (endpoint missing on
+     *     an older deployed engine, unreachable, malformed) must NOT surface as
+     *     `opening: null` — that would blank out a correct name — so it falls
+     *     through to a full search instead, exactly like a cache miss. Before
+     *     the engine ships `/opening`, this makes every non-empty-history hit
+     *     fall through, which is byte-identical to today's behavior (non-empty
+     *     history was never cacheable at all until this change).
+     *
+     * Cache MISS: unchanged — search, then `put()`.
+     *
+     * @param list<string> $history Prior-position FENs, root->previous.
+     * @return array<string, mixed> {eval, bestmove, pv, depth, opening, lines}
+     */
+    public function resolveAnalysis(string $fen, int $movetime, int $depth, int $multipv, array $history): array
+    {
+        $cacheable = $this->evalCache->isCacheable($fen, $history);
 
         if ($cacheable) {
             $minDepth = $depth > 0 ? $depth : self::TIME_BUDGETED_CACHE_MIN_DEPTH;
-            $cached = $this->evalCache->get($this->fen, $minDepth, max(1, $multipv));
+            $cached = $this->evalCache->get($fen, $minDepth, max(1, $multipv));
             if ($cached instanceof EvalCache) {
-                $lines = $cached->getLines();
+                $opening = $this->resolveCachedOpening($fen, $history);
+                if ($opening['ok']) {
+                    $lines = $cached->getLines();
 
-                return JsonResponse::ok([
-                    'eval' => ['type' => $cached->eval_type, 'value' => $cached->eval_value],
-                    'bestmove' => $cached->bestmove,
-                    'pv' => $cached->getPv(),
-                    'depth' => $cached->depth,
-                    'opening' => null,
-                    'lines' => $lines !== [] ? $lines : null,
-                ]);
+                    return [
+                        'eval' => ['type' => $cached->eval_type, 'value' => $cached->eval_value],
+                        'bestmove' => $cached->bestmove,
+                        'pv' => $cached->getPv(),
+                        'depth' => $cached->depth,
+                        'opening' => $opening['opening'],
+                        'lines' => $lines !== [] ? $lines : null,
+                    ];
+                }
+                // Opening resolution failed — fall through to a full search
+                // below, which resolves `opening` itself as it does today.
             }
         }
 
-        $res = $this->engine->analyze($this->fen, $movetime, $depth, $multipv, $history);
+        $res = $this->engine->analyze($fen, $movetime, $depth, $multipv, $history);
 
         if ($cacheable) {
-            $this->evalCache->put($this->fen, $res);
+            $this->evalCache->put($fen, $res);
         }
 
-        return JsonResponse::ok([
+        return [
             'eval' => $res['eval'] ?? null,
             'bestmove' => $res['bestmove'] ?? null,
             'pv' => $res['pv'] ?? null,
             'depth' => $res['depth'] ?? null,
             'opening' => $res['opening'] ?? null,
             'lines' => $res['lines'] ?? null,
-        ]);
+        ];
+    }
+
+    /**
+     * @param list<string> $history
+     * @return array{ok: bool, opening: array<string, mixed>|null}
+     */
+    private function resolveCachedOpening(string $fen, array $history): array
+    {
+        if ($history === []) {
+            return ['ok' => true, 'opening' => null];
+        }
+
+        return $this->engine->opening($fen, $history);
     }
 
     /**
