@@ -83,6 +83,20 @@ class EngineMatchController extends Controller
 
     public bool $book = false;
 
+    /**
+     * A move the CALLER already chose, in UCI. When set, no engine is asked for
+     * one — the server only validates and applies it, returning the same shape as
+     * a normal ply.
+     *
+     * This is what lets the in-browser wasm engine ("zugzwang-local") take a side:
+     * it searches on the client, then its move is applied through this identical
+     * path, so both sides of a match are adjudicated by the same rules code and
+     * the resulting FEN/status/SAN are produced exactly as they are for a
+     * server-side engine. Required when `side` is zugzwang-local, since there is
+     * no server-side engine of that name to fall back on.
+     */
+    public string $move = '';
+
     public function __construct(
         private readonly GomachineClient $gomachine,
         private readonly ZugzwangClient $zugzwang,
@@ -98,12 +112,26 @@ class EngineMatchController extends Controller
 
         $this->validate([
             'fen' => 'required|string',
-            'side' => 'in:gomachine,zugzwang,stockfish',
+            'side' => 'in:gomachine,zugzwang,zugzwang-local,stockfish',
             'variant' => 'in:standard,chess960,crazyhouse,duck,antichess',
             'aggr' => 'integer|min:0|max:100',
             'nodes' => 'integer|min:0',
             'depth' => 'integer|min:0',
+            'move' => 'string',
         ]);
+
+        // The in-browser engine searched on the client; there is no server-side
+        // engine by that name, so a move is mandatory and the variant must be one
+        // the wasm build actually plays (it ships standard movegen only — chess960
+        // rides the same path, FEN-driven).
+        if ($this->side === 'zugzwang-local') {
+            if ($this->move === '') {
+                return JsonResponse::error('zugzwang-local requires a client-computed `move`', 422);
+            }
+            if ($this->variant !== 'standard' && $this->variant !== 'chess960') {
+                return JsonResponse::error("zugzwang-local cannot play variant '{$this->variant}'", 422);
+            }
+        }
 
         // Engine↔variant compatibility. standard is open to all three engines;
         // every other variant is gomachine/zugzwang only (Stockfish is a bare UCI
@@ -127,7 +155,14 @@ class EngineMatchController extends Controller
             return $this->playVariant($depth, $nodes, $movetime);
         }
 
-        if ($this->side === 'stockfish') {
+        if ($this->move !== '') {
+            // Caller-supplied move (the in-browser engine): apply it, search nothing.
+            // Validation is the same `move()` call every other branch ends with, so an
+            // illegal move is rejected identically rather than trusted because it came
+            // from our own client.
+            $best = ['bestmove' => $this->move, 'eval' => null];
+            $engine = $this->zugzwang;
+        } elseif ($this->side === 'stockfish') {
             // Stockfish is driven exclusively through the zugzwang client, which
             // spawns its own Stockfish subprocess per call. It never receives the
             // aggression/nodes/book knobs; depth wins over movetime when set.

@@ -129,7 +129,13 @@ export type EngineVsVariant = 'standard' | 'chess960' | 'crazyhouse' | 'duck' | 
  * currently stubbed server-side. */
 export function engineVsMove(params: {
     fen: string
-    side: EngineSide
+    /** 'zugzwang-local' is the in-browser wasm engine — it has no server-side
+     *  counterpart, so it must be paired with a `move` the client already chose. */
+    side: EngineSide | 'zugzwang-local'
+    /** A UCI move the CALLER already picked. When set the server searches nothing
+     *  and only validates + applies it, returning the usual fen/san/status shape.
+     *  Required for side 'zugzwang-local'. */
+    move?: string
     variant?: EngineVsVariant // default 'standard'; chess960 rides the standard path
     duck?: string // Duck Chess only: the duck's current square ("" if unplaced)
     rating?: number

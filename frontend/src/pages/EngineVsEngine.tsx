@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
     Box,
     Button,
+    MenuItem,
+    Select,
     Slider,
     TextField,
     ToggleButton,
@@ -12,6 +14,7 @@ import {
     Bot,
     Cpu,
     FlipVertical2,
+    Laptop,
     Pause,
     Play,
     RotateCcw,
@@ -57,6 +60,7 @@ import {
     UNLOSABLE_RATING,
     UNLOSABLE_SLOT,
 } from '../lib/botSettings'
+import { useLocalEngineOpponent } from '../lib/engine/useLocalEngineOpponent'
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 // Crazyhouse's canonical start carries an empty pocket "[]".
@@ -70,12 +74,18 @@ const EVE_VARIANTS: EngineVsVariant[] = ['standard', 'chess960', 'crazyhouse', '
 const SELF_VARIANTS: EngineVsVariant[] = ['crazyhouse', 'duck', 'antichess']
 const isSelfVariant = (v: EngineVsVariant) => SELF_VARIANTS.includes(v)
 
-// Engine↔variant compatibility. Standard is playable by all three engines; every
-// other variant is gomachine/zugzwang only (Stockfish is a bare UCI proxy — no
-// Chess960 castling, no fairy variants). Mirrors the server-side guard in
-// EngineMatchController so the UI never offers a pairing the backend rejects.
-const enginesForVariant = (v: EngineVsVariant): EngineSide[] =>
-    v === 'standard' ? ['gomachine', 'zugzwang', 'stockfish'] : ['gomachine', 'zugzwang']
+// Engine↔variant compatibility. Standard is playable by everything; chess960 adds
+// zugzwang-local (the wasm build ships the same generalized castling movegen, and
+// the position is FEN-driven); the fairy variants are gomachine/zugzwang only —
+// Stockfish is a bare UCI proxy and the wasm build has no variant rules compiled
+// in. Mirrors the server-side guard in EngineMatchController so the UI never
+// offers a pairing the backend rejects.
+const enginesForVariant = (v: EngineVsVariant): EngineKind[] =>
+    v === 'standard'
+        ? ['gomachine', 'zugzwang', 'zugzwang-local', 'stockfish']
+        : v === 'chess960'
+          ? ['gomachine', 'zugzwang', 'zugzwang-local']
+          : ['gomachine', 'zugzwang']
 
 // The starting FEN for a fresh game of each variant (chess960 reshuffles each time).
 const startFenForVariant = (v: EngineVsVariant): string =>
@@ -125,7 +135,13 @@ const DEPTH_MAX = 30
 const NODES_MIN = 1_000
 const NODES_MAX = 50_000_000
 
-type EngineKind = EngineSide // 'gomachine' | 'zugzwang' | 'stockfish'
+// 'zugzwang-local' is the in-browser wasm build. It is NOT a server-side engine:
+// it searches in this tab and its move is sent to the same admin endpoint purely
+// to be applied, so both sides of a match are adjudicated by identical rules code.
+// That makes zugzwang vs zugzwang-local a direct check that the wasm build plays
+// like the native one.
+type EngineKind = EngineSide | 'zugzwang-local'
+const isLocalEngine = (k: EngineKind): boolean => k === 'zugzwang-local'
 type LimitKind = 'movetime' | 'nodes' | 'depth' // stockfish uses movetime | depth only
 
 // One side's full configuration. gomachine/zugzwang fields (rating/aggr/book) and
@@ -182,9 +198,11 @@ function coerceSide(p: Partial<SideConfig> | undefined, def: SideConfig): SideCo
         engine:
             p.engine === 'stockfish'
                 ? 'stockfish'
-                : p.engine === 'zugzwang'
-                  ? 'zugzwang'
-                  : 'gomachine',
+                : p.engine === 'zugzwang-local'
+                  ? 'zugzwang-local'
+                  : p.engine === 'zugzwang'
+                    ? 'zugzwang'
+                    : 'gomachine',
         rating:
             typeof p.rating === 'number'
                 ? p.rating <= UNLOSABLE_RATING
@@ -234,7 +252,14 @@ function paramsForSide(
     fen: string,
     variant: EngineVsVariant,
     duck: string,
+    localMove?: string,
 ): MoveParams {
+    if (isLocalEngine(cfg.engine)) {
+        // The move was already chosen in this tab. The server searches nothing —
+        // it validates and applies, so the resulting FEN/SAN/status come out of the
+        // same rules code that adjudicates every other engine's ply.
+        return { fen, side: 'zugzwang-local', variant, move: localMove ?? '' }
+    }
     if (cfg.engine === 'stockfish') {
         // Stockfish is standard-only here (the engine picker enforces it), so no
         // variant/duck is ever sent on this branch.
@@ -258,13 +283,22 @@ function paramsForSide(
 // EvE is the one page that keeps the raw engine identifiers as labels (not the
 // site-wide "Zugzwang" rebrand) — this is an admin tool for comparing the actual
 // engines, so it names them literally.
-const engineName = (k: EngineKind) => (k === 'stockfish' ? 'Stockfish' : k)
+const engineName = (k: EngineKind) =>
+    k === 'stockfish' ? 'Stockfish' : k === 'zugzwang-local' ? 'zugzwang LOCAL' : k
 function sideDetail(cfg: SideConfig): string {
-    return cfg.engine === 'stockfish' ? sfLabel(cfg.sfElo) : ratingLabel(cfg.rating)
+    if (cfg.engine === 'stockfish') return sfLabel(cfg.sfElo)
+    // The wasm build has no rating ladder wired up — it always plays full strength,
+    // so reporting a rating here would be a lie. Show the budget instead, which is
+    // the only knob that actually changes how it plays.
+    if (isLocalEngine(cfg.engine)) {
+        return cfg.limitKind === 'depth' ? `depth ${cfg.depth}` : `${cfg.movetime} ms`
+    }
+    return ratingLabel(cfg.rating)
 }
 function engineIcon(k: EngineKind) {
     if (k === 'gomachine') return <Cpu size={16} />
     if (k === 'zugzwang') return <Zap size={16} />
+    if (k === 'zugzwang-local') return <Laptop size={16} />
     return <Bot size={16} />
 }
 
@@ -324,6 +358,14 @@ export default function EngineVsEngine() {
     // still fire (they're played in the loop, not gated on the viewed ply).
     const [viewIndex, setViewIndex] = useState<number | null>(null)
     const thinkingRef = useRef(false)
+    // The in-browser engine, when either side is set to zugzwang-local. Loading is
+    // deferred until a local side is actually selected — nobody watching two server
+    // engines should pay a 36 MB download.
+    const local = useLocalEngineOpponent()
+    const wantsLocal = isLocalEngine(white.engine) || isLocalEngine(black.engine)
+    useEffect(() => {
+        if (wantsLocal) local.load()
+    }, [wantsLocal, local])
 
     const ply = moves.length
     const over = status !== 'ongoing'
@@ -393,6 +435,13 @@ export default function EngineVsEngine() {
             setResult('1/2-1/2')
             return
         }
+        // A local side can't move until its net is downloaded and the module booted.
+        // Hold the loop rather than starting the ply and failing — `local.download`
+        // is a dependency, so the loop resumes by itself the moment it's ready.
+        if (isLocalEngine(moverCfg.engine) && local.download.status !== 'ready') {
+            local.load() // no-op once started
+            return
+        }
         let cancelled = false
         const id = setTimeout(async () => {
             thinkingRef.current = true
@@ -402,7 +451,26 @@ export default function EngineVsEngine() {
                 // engine truly plays (a "gomachine" pick never quietly becomes
                 // zugzwang). The variant bestmove endpoints return the move already
                 // applied, so one call per ply drives standard AND every variant.
-                const res = await engineVsMove(paramsForSide(moverCfg, fen, variant, duck))
+                // A local side searches HERE, in this tab, and then hands the move to
+                // the same endpoint purely to be applied — so the two engines are
+                // adjudicated identically and the comparison stays honest.
+                let localMove: string | undefined
+                if (isLocalEngine(moverCfg.engine)) {
+                    const chosen = await local.bestMove(
+                        fen,
+                        moverCfg.limitKind === 'depth'
+                            ? { depth: moverCfg.depth }
+                            : { movetime: moverCfg.movetime },
+                    )
+                    if (cancelled) return
+                    if (!chosen) {
+                        setRunning(false)
+                        setError('local engine returned no move')
+                        return
+                    }
+                    localMove = chosen
+                }
+                const res = await engineVsMove(paramsForSide(moverCfg, fen, variant, duck, localMove))
                 if (cancelled) return
                 if (!res.bestmove || !res.fen) {
                     setRunning(false)
@@ -459,7 +527,10 @@ export default function EngineVsEngine() {
             cancelled = true
             clearTimeout(id)
         }
-    }, [running, ply, over, fen, sideToMove, moverCfg, duck, variant])
+        // `local` is a dependency so the loop resumes on its own once the in-browser
+        // engine finishes loading — otherwise a match with a local side would stall
+        // at the first ply until something else happened to re-render.
+    }, [running, ply, over, fen, sideToMove, moverCfg, duck, variant, local])
 
     // Eval bar = ONE consistent evaluator: the site's primary analysis engine at
     // full strength (plain /analyze, no `side` — engine-agnostic, see api/client.ts),
@@ -886,32 +957,35 @@ function SideControls({
                 boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
             }}
         >
-            {/* Engine picker — only the engines the active variant can actually
-                play (Stockfish appears in standard only). */}
-            <ToggleButtonGroup
-                exclusive
-                fullWidth
-                size="small"
-                value={cfg.engine}
-                onChange={(_, v) => {
-                    if (!v) return
-                    // Switching to Stockfish: coerce a nodes budget (SF has no nodes
-                    // mode) to movetime so the sent budget stays valid.
-                    if (v === 'stockfish' && cfg.limitKind === 'nodes') {
-                        onChange({ engine: 'stockfish', limitKind: 'movetime' })
-                    } else {
-                        onChange({ engine: v as EngineKind })
-                    }
-                }}
-                disabled={disabled}
-                sx={{ ...toggleSx, mt: 0 }}
-            >
-                {allowedEngines.map((e) => (
-                    <ToggleButton key={e} value={e}>
-                        {engineName(e)}
-                    </ToggleButton>
-                ))}
-            </ToggleButtonGroup>
+            {/* Engine picker — only the engines the active variant can actually play
+                (Stockfish appears in standard only). A dropdown rather than a toggle
+                row: with four engines the buttons no longer fit the card and spilled
+                out its right edge. */}
+            <Box>
+                <Label>Engine</Label>
+                <Select
+                    fullWidth
+                    size="small"
+                    value={cfg.engine}
+                    disabled={disabled}
+                    onChange={(e) => {
+                        const v = e.target.value as EngineKind
+                        // Neither Stockfish nor the wasm build has a nodes mode, so a
+                        // nodes budget carried over from gomachine/zugzwang would be
+                        // invalid — coerce it to movetime as we switch.
+                        const needsMovetime =
+                            (v === 'stockfish' || isLocalEngine(v)) && cfg.limitKind === 'nodes'
+                        onChange(needsMovetime ? { engine: v, limitKind: 'movetime' } : { engine: v })
+                    }}
+                    sx={selectSx}
+                >
+                    {allowedEngines.map((e) => (
+                        <MenuItem key={e} value={e} sx={menuItemSx}>
+                            {engineName(e)}
+                        </MenuItem>
+                    ))}
+                </Select>
+            </Box>
 
             {isRatingEngine ? (
                 <>
@@ -1178,6 +1252,27 @@ const sliderSx = {
     '& .MuiSlider-rail': { opacity: 0.4, bgcolor: 'var(--line)' },
     '& .MuiSlider-track': { border: 'none' },
     '& .MuiSlider-thumb': { width: 16, height: 16, bgcolor: '#f3eee2' },
+}
+
+// Matches the number field's outlined look so the engine dropdown reads as part of
+// the same control set rather than stock MUI.
+const selectSx = {
+    mt: 0.5,
+    color: 'var(--text)',
+    fontFamily: 'var(--font-display)',
+    fontWeight: 600,
+    fontSize: 13.5,
+    borderRadius: '10px',
+    '& .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--line)' },
+    '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--accent)' },
+    '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--accent)' },
+    '& .MuiSelect-icon': { color: 'var(--muted)' },
+}
+
+const menuItemSx = {
+    fontFamily: 'var(--font-display)',
+    fontWeight: 600,
+    fontSize: 13.5,
 }
 
 const numberSx = {
