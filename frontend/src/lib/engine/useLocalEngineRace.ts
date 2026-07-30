@@ -122,6 +122,10 @@ export interface LocalEngineRaceOptions {
      *  or server result, 0 if none). Local search stops short of re-deriving an
      *  answer it cannot beat — see the EVAL_DEPTH check in the analysis effect. */
     achievedDepth?: number
+    /** How many lines to search for. Defaults to LINES_MULTIPV. Changing it
+     *  re-runs the search, because the width is what the user actually asked for
+     *  — slicing a narrower result to fit just shows fewer lines. */
+    multipv?: number
 }
 
 export interface LocalEngineRaceState {
@@ -147,7 +151,12 @@ export interface LocalEngineRaceState {
     lines: AnalysisLine[] | null
 }
 
-export function useLocalEngineRace({ active, fen, achievedDepth = 0 }: LocalEngineRaceOptions): LocalEngineRaceState {
+export function useLocalEngineRace({
+    active,
+    fen,
+    achievedDepth = 0,
+    multipv = LINES_MULTIPV,
+}: LocalEngineRaceOptions): LocalEngineRaceState {
     const [enabled, setEnabled] = useLocalEngineEnabled()
     // features() is a memoized, synchronous, side-effect-free probe (no
     // network/storage) — safe to compute even while `enabled` is false, which
@@ -281,7 +290,7 @@ export function useLocalEngineRace({ active, fen, achievedDepth = 0 }: LocalEngi
             try {
                 // Phase 1 — shallow and wide: fills the move list fast.
                 for await (const info of engine.analyze(fen, {
-                    multipv: LINES_MULTIPV,
+                    multipv,
                     depth: LINES_DEPTH,
                     signal: ac.signal,
                 })) {
@@ -313,7 +322,9 @@ export function useLocalEngineRace({ active, fen, achievedDepth = 0 }: LocalEngi
             cancelled = true
             ac.abort()
         }
-    }, [active, download.status, fen])
+        // `multipv` re-keys the effect: asking for more lines has to re-run the
+        // search, not just re-render what a narrower one already produced.
+    }, [active, download.status, fen, multipv])
 
     return {
         capability,

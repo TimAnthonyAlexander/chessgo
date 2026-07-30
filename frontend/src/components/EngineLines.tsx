@@ -5,14 +5,15 @@ import { MoveSan } from './MoveSan'
 import type { AnalysisLine } from '../api/client'
 import type { WhiteEval } from './EvalBar'
 
-const LS_KEY = 'chessgo.analysis.multipvLines'
+export const LINE_COUNT_KEY = 'chessgo.analysis.multipvLines'
+const LS_KEY = LINE_COUNT_KEY
 const DEFAULT_LINES = 3
 
-function loadLineCount(): number {
+export function loadLineCount(): number {
     try { const v = parseInt(localStorage.getItem(LS_KEY) ?? '', 10); if (v >= 1 && v <= 5) return v } catch { /* ignore */ }
     return DEFAULT_LINES
 }
-function saveLineCount(n: number): void {
+export function saveLineCount(n: number): void {
     try { localStorage.setItem(LS_KEY, String(n)) } catch { /* ignore */ }
 }
 function evalText(type: 'cp' | 'mate', white: number): string {
@@ -42,7 +43,7 @@ function Toggle({ on, onChange }: { on: boolean; onChange: () => void }) {
 
 export default function EngineLines({
     engineOn, onToggleEngine, onPlayLine, onHoverMove, lines, fen, isDuck, mainSan,
-    headerExtra, sourceBadge, evalDepth,
+    headerExtra, sourceBadge, evalDepth, numLines: numLinesProp, onNumLinesChange,
 }: {
     engineOn: boolean; onToggleEngine: () => void; onPlayLine: (pvUci: string[]) => void
     onHoverMove?: (uci: string | null) => void; lines: AnalysisLine[] | null; fen: string
@@ -58,8 +59,23 @@ export default function EngineLines({
     /** Depth of the currently displayed EVAL (the tree node's bestDepth), which
      *  is what the depth readout and its source badge describe. */
     evalDepth?: number | null
+    /** How many lines to show. Optional: when the parent passes it, the parent
+     *  OWNS it and is expected to search for that many. Left uncontrolled this
+     *  component keeps its own count and merely slices what it was given —
+     *  which is wrong wherever the count should change what gets searched. */
+    numLines?: number
+    onNumLinesChange?: (n: number) => void
 }) {
-    const [numLines, setNumLines] = useState(loadLineCount)
+    // Controlled when the parent supplies a count, uncontrolled otherwise. The
+    // analysis board controls it, because asking for 3 lines has to make the
+    // ENGINE produce 3 — slicing a 1-line answer to 3 just shows 1, which is
+    // exactly what a cache-owned position did.
+    const [ownNumLines, setOwnNumLines] = useState(loadLineCount)
+    const numLines = numLinesProp ?? ownNumLines
+    const setNumLines = (n: number) => {
+        setOwnNumLines(n)
+        onNumLinesChange?.(n)
+    }
 
     const shown = lines?.slice(0, numLines) ?? []
     // The header depth describes the DISPLAYED EVAL — the number the source

@@ -30,7 +30,7 @@ import BlunderRewind, { BlunderRewindBanner } from '../components/BlunderRewind'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DuckFreeBoard from '../components/DuckFreeBoard'
 import BoardPage from '../components/BoardPage'
-import EngineLines from '../components/EngineLines'
+import EngineLines, { loadLineCount, saveLineCount } from '../components/EngineLines'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import LocalEngineControl from '../components/LocalEngineControl'
 import MoveTree from '../components/MoveTree'
@@ -456,6 +456,15 @@ export default function Analysis() {
         setLinesLoading(!hit)
     }, [current.id])
 
+    // How many engine lines the user asked for. Owned HERE, not inside EngineLines,
+    // because it has to change what gets SEARCHED — both the width of the local
+    // engine's multi-PV and how many lines a cache row must hold to be usable.
+    // While it lived as component state it only sliced whatever had already been
+    // fetched, so a cache-owned position (one line) stayed at one line no matter
+    // what you picked, and only started obeying you after a move happened to land
+    // on a position local owned.
+    const [numLines, setNumLines] = useState(loadLineCount)
+
     // --- Optional local (in-browser) engine ---
     // When on, it OWNS the position outright: eval, arrow, PV and move list all
     // come from its one result, and the server is asked only for a cache lookup.
@@ -467,6 +476,7 @@ export default function Analysis() {
         active: engineOn && !isDuck && !over.over && !loading,
         fen: current.fen,
         achievedDepth: current.bestDepth ?? 0,
+        multipv: numLines,
     })
     const localEngineOn = localRace.enabled
     // The local engine is warming up (fetching the net, booting the wasm module).
@@ -515,9 +525,11 @@ export default function Analysis() {
     const [evalSource, setEvalSource] = useState<Record<number, 'cache' | 'engine' | 'local'>>({})
 
     // The server's cache answer for the viewed node, held so the effect below can
-    // weigh it against local's. Cleared whenever the position changes.
+    // weigh it against local's. Cleared whenever the position changes, and when
+    // the requested width changes — the held answer was fetched for the old width
+    // and may no longer be wide enough to own the position.
     const [cacheLines, setCacheLines] = useState<{ nodeId: number; lines: AnalysisLine[] } | null>(null)
-    useEffect(() => setCacheLines(null), [current.id])
+    useEffect(() => setCacheLines(null), [current.id, numLines])
 
     // ONE SOURCE OWNS A POSITION, AND IT IS THE DEEPER ONE.
     //
@@ -667,13 +679,13 @@ export default function Analysis() {
                     let r: Awaited<ReturnType<typeof analyze>>
                     try {
                         r = await analyze(fen, {
-                            // multipv 1, not 5. The cache only serves an entry
-                            // holding at least as many lines as asked for, so
-                            // requesting 5 missed every single-line row — and
-                            // with the local engine on, the move list comes from
-                            // local anyway. A stored multi-line entry still
-                            // returns its lines, so asking narrow costs nothing.
-                            multipv: 1,
+                            // Ask for exactly what the user wants to see. The cache
+                            // only serves an entry holding at least this many lines,
+                            // so a single-line book row can own a 1-line view (deep,
+                            // instant, badged Cloud) but correctly loses a 3-line
+                            // one to local — it cannot answer that question, and
+                            // owning it would leave the list one line short.
+                            multipv: numLines,
                             history: historyFens,
                             cacheOnly: true,
                             signal: ac.signal,
@@ -1198,6 +1210,14 @@ export default function Analysis() {
                         // result supersedes it, since displayCandidates[node] is
                         // overwritten with that result's own source.
                         evalDepth={current.bestDepth ?? null}
+                        // Controlled here: the count decides what gets SEARCHED, so
+                        // it has to reach the local engine and the cache lookup, not
+                        // just slice the result.
+                        numLines={numLines}
+                        onNumLinesChange={(n) => {
+                            setNumLines(n)
+                            saveLineCount(n)
+                        }}
                         sourceBadge={
                             !isDuck && evalSource[current.id] === 'cache' ? 'cache' : null
                         }
