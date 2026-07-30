@@ -208,6 +208,38 @@ And it explains the SPRT nulls. Hanging a rook while up a queen does not change 
 result against an opponent that converts anyway, so fastchess cannot see it; against a
 human it hands the game back. Elo is the wrong instrument, exactly as predicted.
 
+## 4f. Every Elo instrument returns null — including against a fallible opponent
+
+The obvious objection to a normal SPRT is that being down a piece against a perfect
+converter is lost whatever you play, so better defence cannot show up. That is correct,
+and it was tested three ways. All three are null.
+
+| instrument | measures | result |
+|---|---|---|
+| normal-play SPRT, `SATFIX=3` | do-no-harm | −3.71 ± 5.97 (3000 g) |
+| knight-odds SPRT, `SATFIX=3` | the 67%-blind regime | **−1.03 ± 3.88** (2022 g) |
+| weak-opponent gauntlet, `SATFIX=3` | a *fallible* opponent | see below |
+| A/A control (`SATFIX=9`) | harness noise floor | +3.25 ± 7.41 (1926 g) |
+
+The gauntlet is the one designed to escape the "lost is lost" objection: both arms play
+the identical 10000-node opponent from the knight-odds book, calibrated so the
+down-a-knight half scores near 50% (maximum sensitivity — at 1200 nodes the strong side
+still scored 83% down a knight, a ceiling where nothing can show).
+
+| arm | down a knight | up a knight |
+|---|---|---|
+| cand (`SATFIX=3`) | 49.93% (W549 L551 D400) | 95.20% |
+| base | 49.53% (W533 L547 D420) | 95.23% |
+
+**+0.40 ± 1.83pp defending, −0.03 ± 0.78pp converting.** Null in both halves, against an
+opponent that demonstrably *can* be handed a game back.
+
+Conclusion: game-outcome Elo is the wrong instrument for this defect, and no variant of
+it will do better. Use `tools/blundersuite.py` split by role as the primary evidence and
+keep SPRT purely as a do-no-harm gate — which is why the neutrality bounds are [-5, 0]
+rather than [0, 5]. Note also the A/A: never SPRT one to a bound, since a true Elo of 0
+sits exactly on `elo1=0` and can never terminate.
+
 ## 4c. The tuning-co-adaptation question (open, and bigger than this fix)
 
 Every search flag default and all 8 SPSA margins were accepted by SPRT against an eval
