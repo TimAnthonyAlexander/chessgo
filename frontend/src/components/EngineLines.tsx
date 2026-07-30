@@ -32,10 +32,19 @@ function Toggle({ on, onChange }: { on: boolean; onChange: () => void }) {
 
 export default function EngineLines({
     engineOn, onToggleEngine, onPlayLine, onHoverMove, lines, fen, isDuck, mainSan,
+    headerExtra, sourceBadge,
 }: {
     engineOn: boolean; onToggleEngine: () => void; onPlayLine: (pvUci: string[]) => void
     onHoverMove?: (uci: string | null) => void; lines: AnalysisLine[] | null; fen: string
     isDuck?: boolean; mainSan?: string | null
+    // Optional slot for the local-engine control (toggle/download readout) —
+    // rendered in the header, left of the depth chip. Undefined by default, so
+    // every existing render (local engine untouched) is byte-identical.
+    headerExtra?: React.ReactNode
+    // 'cache' badges the depth readout as a server eval_cache hit, per Lichess's
+    // CLOUD badge — see Analysis.tsx for how the source is tracked. Undefined/
+    // null renders nothing.
+    sourceBadge?: 'cache' | null
 }) {
     const [numLines, setNumLines] = useState(loadLineCount)
 
@@ -76,6 +85,15 @@ export default function EngineLines({
                 </Tooltip>
                 <Typography sx={{ fontFamily:'var(--font-display)', fontSize:13, fontWeight:700, letterSpacing:1.8, textTransform:'uppercase', color:'var(--text)' }}>Engine</Typography>
                 <Box sx={{ flex:1 }} />
+                {engineOn && headerExtra}
+                {engineOn && depth != null && sourceBadge === 'cache' && (
+                    <Tooltip title="This evaluation came from the shared server cache, not a fresh search" arrow placement="top">
+                        <Typography sx={{ fontFamily:'var(--font-mono)', fontSize:9.5, fontWeight:700, letterSpacing:0.8, textTransform:'uppercase',
+                            color:'var(--text-dim)', border:'1px solid var(--line)', borderRadius:'4px', px:0.5, py:'1px', cursor:'default' }}>
+                            Cache
+                        </Typography>
+                    </Tooltip>
+                )}
                 {engineOn && depth != null && (
                     <Box sx={{ display:'flex', alignItems:'baseline', gap:0.6 }}>
                         <Typography sx={{ fontSize:10, letterSpacing:1.2, textTransform:'uppercase', color:'var(--muted)' }}>depth</Typography>

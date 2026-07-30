@@ -32,6 +32,7 @@ import DuckFreeBoard from '../components/DuckFreeBoard'
 import BoardPage from '../components/BoardPage'
 import EngineLines from '../components/EngineLines'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
+import LocalEngineControl from '../components/LocalEngineControl'
 import MoveTree from '../components/MoveTree'
 import OpeningPanel from '../components/OpeningPanel'
 import {
@@ -67,6 +68,9 @@ import {
 } from '../lib/analysisTree'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { useAuth } from '../lib/auth'
+import { fromAnalysis } from '../lib/engine/evalAdapter'
+import { type EvalCandidate, isFirstEvalBetter } from '../lib/engine/precedence'
+import { useLocalEngineRace } from '../lib/engine/useLocalEngineRace'
 
 // How long (ms) each auto-played move lingers before the next one.
 const AUTO_DELAY = 700
@@ -424,6 +428,63 @@ export default function Analysis() {
         setLinesLoading(!hit)
     }, [current.id])
 
+    // --- Optional local (in-browser) engine ---
+    // Races a local WASM search against the server ladder below, Lichess-style:
+    // both run in parallel, and whichever result is deeper (precedence.ts's
+    // isFirstEvalBetter) wins the display. OFF by default (engine.enabled in
+    // localStorage) — see useLocalEngineRace.ts for the full no-op-when-disabled
+    // contract this depends on. `active` mirrors the ladder effect's own gates
+    // below (not duck, not game-over, not still loading).
+    const localRace = useLocalEngineRace({
+        active: engineOn && !isDuck && !over.over && !loading,
+        fen: current.fen,
+    })
+    const localEngineOn = localRace.enabled
+
+    // Read inside the ladder effect via a REF, not a dependency — the ladder
+    // effect must not restart (re-fetch from depth 1) just because the user
+    // flipped the local-engine toggle mid-search, same reasoning the ladder
+    // effect already documents for excluding historyFens/bestPv/bestDepth.
+    const localEngineOnRef = useRef(localEngineOn)
+    useEffect(() => {
+        localEngineOnRef.current = localEngineOn
+    }, [localEngineOn])
+
+    // What's currently displayed for a node, in precedence.ts's EvalCandidate
+    // shape — written by BOTH the ladder effect (server/cache results) and the
+    // local-race effect below (once local wins), so each can tell whether a
+    // new result is actually an improvement over whichever source is currently
+    // showing. Only ever populated while the local engine is on (see the
+    // ladder effect's `localEngineOnRef.current` guard) — stays `{}` forever
+    // for the default-off majority, so this costs them nothing.
+    const [displayCandidates, setDisplayCandidates] = useState<Record<number, EvalCandidate>>({})
+
+    // Local engine won the race for the CURRENTLY VIEWED node: fold its result
+    // into the SAME tree fields (evalWhite/bestUci/bestPv/bestDepth) the ladder
+    // writes, via the SAME annotateEval — so the eval bar, arrow, and PV line
+    // all pick it up for free with no separate render path. Falls back to a
+    // synthesized candidate (from the tree's own bestDepth/bestPv) when no
+    // ladder response has been captured yet for this node — e.g. a persisted
+    // review node whose deep eval came from buildFromAnalysis, never a ladder
+    // rung.
+    useEffect(() => {
+        if (!localEngineOn || !localRace.candidate) return
+        const nodeId = current.id
+        const achieved: EvalCandidate = displayCandidates[nodeId] ?? {
+            depth: current.bestPv != null ? (current.bestDepth ?? 0) : 0,
+            nodes: 0,
+            pvCount: current.bestPv ? 1 : 0,
+            source: 'server',
+        }
+        if (!isFirstEvalBetter(localRace.candidate.candidate, achieved, 1)) return
+        const { display } = localRace.candidate
+        if (!display.eval) return
+        const stm = current.fen.split(' ')[1] === 'b' ? 'b' : 'w'
+        const white = stm === 'w' ? display.eval.value : -display.eval.value
+        setTree((t) => annotateEval(t, nodeId, { type: display.eval!.type, white }, display.bestmove, display.pv, display.depth))
+        setDisplayCandidates((m) => ({ ...m, [nodeId]: localRace.candidate!.candidate }))
+    }, [localEngineOn, localRace.candidate, current.id, current.bestDepth, current.bestPv, current.fen, displayCandidates])
+
     // --- Live engine eval + best line: progressive ("streaming") deepening ---
     // We can't stream over the wire (no SSE behind Cloudflare), so we emulate it by
     // POLLING /analyze with an increasing depth and rendering each result as it
@@ -536,6 +597,16 @@ export default function Analysis() {
                     // the readout at ~16.) The loop is bounded by the ladder, so a truly
                     // walled position simply exhausts it.
                     if (got <= achieved) continue
+
+                    // Record this response's precedence shape (depth/pvCount/source) so
+                    // the local-engine race effect can tell whether a local result is
+                    // actually an improvement — see its comment above. Guarded by the
+                    // REF (not a dep — see above) so this costs the default-off majority
+                    // nothing: no extra setState, no extra re-render, unchanged rendering.
+                    if (localEngineOnRef.current) {
+                        const rc = fromAnalysis(r)
+                        setDisplayCandidates((m) => ({ ...m, [nodeId]: rc.candidate }))
+                    }
 
                     // Coalesce a null PV to [] so the node reads as "resolved, no line".
                     if (!r.eval) {
@@ -959,6 +1030,25 @@ export default function Analysis() {
                         fen={current.fen}
                         isDuck={isDuck}
                         mainSan={isDuck ? (current.bestSan ?? null) : null}
+                        // Local engine has no duck rules (same reason the Stockfish arrow
+                        // is duck-gated above) — omit the control entirely for duck review.
+                        headerExtra={
+                            !isDuck ? (
+                                <LocalEngineControl
+                                    capability={localRace.capability}
+                                    enabled={localEngineOn}
+                                    onToggle={() => localRace.setEnabled(!localEngineOn)}
+                                    download={localRace.download}
+                                    onRetry={localRace.retry}
+                                />
+                            ) : undefined
+                        }
+                        // Disappears the instant a local result supersedes the cached one —
+                        // displayCandidates[node] is overwritten with source:'local' by the
+                        // race effect above the moment that happens.
+                        sourceBadge={
+                            !isDuck && displayCandidates[current.id]?.source === 'cache' ? 'cache' : null
+                        }
                     />
 
                     <MoveTree tree={tree} currentId={currentId} onSelect={selectNode} />

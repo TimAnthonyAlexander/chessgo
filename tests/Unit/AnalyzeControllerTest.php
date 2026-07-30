@@ -130,20 +130,34 @@ class AnalyzeControllerTest extends TestCase
         $this->assertSame($engine->analyzeResult['opening'], $result['opening']);
     }
 
-    // --- cache HIT, empty history: no regression from the pre-existing behavior ---
+    // --- cache HIT, empty history: STILL resolves the opening via the engine ---
 
-    public function test_cache_hit_with_empty_history_returns_null_opening_without_calling_client(): void
+    /**
+     * Regression guard. Empty history was once shortcut to `opening: null` on
+     * the assumption that a name needs history to resolve. It does not:
+     * Openings::classify keys on the current position's own Zobrist, so a named
+     * position resolves from the FEN alone. Verified against the live engine —
+     * /analyze on the Italian Game with no history returns {C50, Italian Game}
+     * on the search path, so the shortcut silently blanked the name on every
+     * cache hit for that position.
+     */
+    public function test_cache_hit_with_empty_history_still_resolves_opening_via_client(): void
     {
         $this->putResult(self::START_FEN, depth: 20);
 
         $engine = new FakeAnalyzeEngine();
+        $engine->openingResult = ['ok' => true, 'opening' => ['eco' => 'C50', 'name' => 'Italian Game']];
         $controller = $this->makeController($engine);
 
         $result = $controller->resolveAnalysis(self::START_FEN, 1500, 20, 0, []);
 
-        $this->assertNull($result['opening']);
-        $this->assertSame([], $engine->openingCalls, 'empty history is a pure FEN function — no engine round trip needed');
-        $this->assertSame([], $engine->analyzeCalls);
+        $this->assertSame(['eco' => 'C50', 'name' => 'Italian Game'], $result['opening']);
+        $this->assertSame(
+            [['fen' => self::START_FEN, 'history' => []]],
+            $engine->openingCalls,
+            'a cache hit must resolve the opening even with no history',
+        );
+        $this->assertSame([], $engine->analyzeCalls, 'a cache hit must not trigger a search');
     }
 
     // --- cache MISS: unchanged — search, then put() ---

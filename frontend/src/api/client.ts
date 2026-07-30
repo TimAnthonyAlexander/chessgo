@@ -215,6 +215,12 @@ export interface Analysis {
     depth: number | null
     opening?: Opening | null // the CURRENT position's opening (pure book lookup, no search)
     lines?: AnalysisLine[] // multi-PV lines when multipv > 1, same depth as the main result
+    // Where this response came from: 'cache' (eval_cache hit) or 'engine' (fresh
+    // search). Optional so older/mocked responses without it still typecheck —
+    // added for the local-engine racing feature (lib/engine/precedence.ts), which
+    // badges a displayed cache result until local analysis supersedes it. Purely
+    // informational: never used to gate ladder/polling logic.
+    source?: 'cache' | 'engine'
 }
 
 export interface AnalysisLine {

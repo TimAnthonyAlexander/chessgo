@@ -16,7 +16,14 @@ use App\Services\EvalCacheService;
  * any game's bot difficulty.
  *
  *   POST /analyze   { fen, movetime?: <ms>, depth?: <ply>, multipv?, history?: ["<FEN>"...] }
- *   → { eval: {type:"cp"|"mate", value}, bestmove, pv: [uci...], depth, opening, lines }
+ *   → { eval: {type:"cp"|"mate", value}, bestmove, pv: [uci...], depth, opening, lines, source }
+ *
+ * `source` tells a caller whether this response was served from `eval_cache`
+ * ("cache") or a fresh engine search ("engine") — added for the in-browser
+ * local-engine feature (frontend/src/lib/engine/), which races a local search
+ * against this endpoint and badges a displayed cache result until local
+ * analysis supersedes it (see precedence.ts). Purely informational: it does
+ * not affect the cache-or-search decision itself.
  *
  * `history` is the prior-position FENs (root→previous). It buys no search
  * strength — it is what lets the engine NAME the opening (its native-Zobrist
@@ -112,18 +119,22 @@ class AnalyzeController extends Controller
      *
      * Cache HIT: `opening` is not stored in `eval_cache` (it's path-dependent —
      * the DEEPEST named position along `history` — and the cache key is a bare
-     * position), so it has to be resolved separately:
-     *   - `history === []` — a pure function of the FEN, and (matching every
-     *     prior behavior when this was the ONLY cacheable case) always null.
-     *     No engine call needed, no regression risk.
-     *   - `history !== []` — ask the engine's search-free `/opening` lookup
-     *     ({@see EngineSelector::opening()}). `ok: false` (endpoint missing on
-     *     an older deployed engine, unreachable, malformed) must NOT surface as
-     *     `opening: null` — that would blank out a correct name — so it falls
-     *     through to a full search instead, exactly like a cache miss. Before
-     *     the engine ships `/opening`, this makes every non-empty-history hit
-     *     fall through, which is byte-identical to today's behavior (non-empty
-     *     history was never cacheable at all until this change).
+     * position), so it is always resolved via the engine's search-free
+     * `/opening` lookup ({@see EngineSelector::opening()}), for empty and
+     * non-empty history alike.
+     *
+     * Do NOT shortcut `history === []` to `opening: null`. That looks safe and
+     * is not: `Openings::classify` keys on the CURRENT position's own Zobrist,
+     * so a named position resolves from the FEN alone with no history at all.
+     * Measured against the live engine — /analyze on the Italian Game with no
+     * history returns {C50, Italian Game} on the search path, so shortcutting
+     * blanked the name on every cache hit.
+     *
+     * `ok: false` (endpoint missing on an older deployed engine, unreachable,
+     * malformed) must NOT surface as `opening: null` — that would blank out a
+     * correct name — so it falls through to a full search instead, exactly like
+     * a cache miss. Against an engine without `/opening` that degrades to
+     * today's behavior rather than serving a wrong field.
      *
      * Cache MISS: unchanged — search, then `put()`.
      *
@@ -149,6 +160,7 @@ class AnalyzeController extends Controller
                         'depth' => $cached->depth,
                         'opening' => $opening['opening'],
                         'lines' => $lines !== [] ? $lines : null,
+                        'source' => 'cache',
                     ];
                 }
                 // Opening resolution failed — fall through to a full search
@@ -169,6 +181,7 @@ class AnalyzeController extends Controller
             'depth' => $res['depth'] ?? null,
             'opening' => $res['opening'] ?? null,
             'lines' => $res['lines'] ?? null,
+            'source' => 'engine',
         ];
     }
 
@@ -178,10 +191,6 @@ class AnalyzeController extends Controller
      */
     private function resolveCachedOpening(string $fen, array $history): array
     {
-        if ($history === []) {
-            return ['ok' => true, 'opening' => null];
-        }
-
         return $this->engine->opening($fen, $history);
     }
 
