@@ -3,6 +3,8 @@
 #include "search.h"
 #include "eval.h"
 #include "nnue.h"
+#include "nnue_internal.h"   // SATDIAG rail counters, reported by the `eval` command
+#include "nnue_arch.h"
 #include "tt.h"
 #include "bitboard.h"
 #include "zobrist.h"
@@ -462,7 +464,15 @@ int uci_main() {
         } else if (cmd == "bench") {
             bench();
         } else if (cmd == "eval") {
-            std::cout << "eval " << Eval::evaluate(pos) << std::endl;
+            std::cout << "eval " << Eval::evaluate(pos);
+            // SATDIAG=1 also reports how many tail SCReLU lanes railed (see
+            // nnue_internal.h): "sat l1 lo/hi of 16, l2 lo/hi of 32". All-rails ==
+            // the tail output is a constant and the eval says nothing about the board.
+            if (NNUE::satdiag_enabled())
+                std::cout << " sat l1 " << NNUE::g_satdiag.l1lo << "/" << NNUE::g_satdiag.l1hi
+                          << " of " << NNUE::D2 << "  l2 " << NNUE::g_satdiag.l2lo << "/"
+                          << NNUE::g_satdiag.l2hi << " of " << NNUE::D3;
+            std::cout << std::endl;
         } else if (cmd == "d") {
             std::cout << pos.fen() << std::endl;
         }

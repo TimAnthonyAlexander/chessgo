@@ -18,4 +18,16 @@ namespace NNUE {
 // nnue_eval.cpp (where the pairwise/int8-dot/GEMV kernels live).
 int eval_from_halves(const int16_t* accW, const int16_t* accB, const Position& pos);
 
+// SATDIAG (default OFF, see nnue_eval.cpp): per-eval count of SCReLU pre-activations
+// that landed on a rail (<=0 -> "lo", >=1 -> "hi") in the L1 (D2=16) and L2 (D3=32)
+// tail layers. All-rails means the tail output is a constant and the eval carries no
+// information about the position — the mechanism behind the flat lost-position eval.
+// `l1live` (= D2 - l1lo - l1hi) is the load-bearing field and is maintained on every
+// eval, not just under SATDIAG: zero live lanes means the tail output is a constant.
+// The l2* counters are diagnostics only and are filled only when SATDIAG=1.
+struct SatDiag { int l1lo = 0, l1hi = 0, l1live = 0, l2lo = 0, l2hi = 0; };
+extern thread_local SatDiag g_satdiag;
+bool satdiag_enabled();
+bool sattrack_enabled();   // true iff SATFIX or SATDIAG wants the tally maintained
+
 } // namespace NNUE

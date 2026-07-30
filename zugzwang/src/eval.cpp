@@ -1,6 +1,7 @@
 #include "eval.h"
 #include "bitboard.h"
 #include "nnue.h"
+#include "nnue_internal.h"   // SATFIX reads the L1 rail count (g_satdiag.l1live)
 #include "nnue_accumulator.h"
 #include <cstdlib>
 #include <cmath>
@@ -421,6 +422,65 @@ int hce_blend(const Position& pos, int netEval) {
     return contrib * wnum / span;
 }
 
+// ---- SATFIX: rail-collapse detection + HCE substitution (SATFIX=1) ------------
+// MEASURED root cause of the "hangs everything when the game is decided" bug, and the
+// reason MATGRAD/HCEBLEND above cannot fix it.
+//
+// The tail's L1 layer is only D2=16 wide and its activation is SCReLU
+// (clamp(x,0,1)^2). In a balanced position 14 of those 16 lanes are already pinned at
+// a rail, i.e. the entire eval rides on ~2 live lanes. Once either side is up about a
+// queen, ALL 16 rail: l1[] becomes a fixed 0/1 vector, so the L2 GEMV and the output
+// GEMV are applied to a constant input, and the eval degenerates into a table lookup
+// keyed only by (output bucket, rail pattern). Five structurally unrelated
+// down-a-queen positions — different openings, different pawn structures, one with an
+// extra black rook and bishop — all evaluate to EXACTLY -887. Not compressed: constant.
+// With zero eval gradient the search cannot distinguish "keep the queen" from "hang
+// the queen too", so move choice among losing moves is arbitrary. Symmetric: the
+// winning side rails just as hard (constant +1086), which is why play is also sloppy
+// when far ahead.
+//
+// MATGRAD/HCEBLEND both ramp their correction on |net eval| over [800,1600]. But the
+// railed constant IS the net eval (-887 in bucket 7), so (a) the ramp weight is pinned
+// near 11% and the correction is worth ~30-40 cp against a 900 cp blunder, and (b) the
+// gate variable is itself a constant, so it carries no information about how lost the
+// position is. Correcting an eval by a fraction that is keyed to that same dead eval
+// cannot work at any constant setting.
+//
+// SATFIX gates on the actual information loss instead: `l1live`, the number of L1 lanes
+// still off their rails (maintained on every eval in nnue_eval.cpp). live > 0 means the
+// net is still saying something about this position, so it is used untouched — normal
+// play is byte-identical. live == 0 means the net's output is a constant, so it is
+// replaced outright by the hand-crafted eval, which is a linear sum and therefore
+// monotone in material at full piece values and never saturates. The substitution is
+// close to continuous at the boundary by construction (railing sets in around a queen,
+// where the HCE reads about -900 and the railed constant is -887), so neighbouring
+// netted and substituted nodes stay on the same scale for RFP/futility/razoring.
+// SATFIX=1 substitutes the HCE outright. That restores the gradient but also moves the
+// SCALE: the railed constant is inflated relative to the hand eval (up one bishop rails
+// to +1086 while the HCE reads +443), so a railed node and a still-live neighbour end up
+// on different scales, which the eval-margin heuristics (RFP, razoring, futility, time
+// management) do read. SATFIX=2 keeps the net's constant as the ANCHOR and adds only the
+// HCE's deviation from the value it typically shows at rail onset — so the eval stays on
+// the net's scale where the rails begin, and every further material change moves it by a
+// full piece value. Continuity check: up a bishop -> 1086 + (443 - 450) = 1079.
+// SatHceRef is the onset baseline, overridable for tuning (SPSA candidate).
+static inline int satfix_mode() {
+    static const int mode = [] { const char* e = getenv("SATFIX"); return e ? atoi(e) : 0; }();
+    return mode;
+}
+static inline int sat_hce_ref() {
+    static const int r = [] { const char* e = getenv("SATHCEREF"); return e ? atoi(e) : 450; }();
+    return r;
+}
+
+// stm-relative replacement eval for a node whose net output has railed to a constant.
+int sat_substitute(const Position& pos, int raw, int mode) {
+    const int hce = hce_evaluate(pos);
+    if (mode == 1) return hce;                                  // pure HCE
+    const int ref = raw >= 0 ? sat_hce_ref() : -sat_hce_ref();  // mode 2: anchored
+    return raw + (hce - ref);
+}
+
 } // namespace
 
 // NNUE dispatch: route the static eval through the loaded net when present,
@@ -432,6 +492,11 @@ int Eval::evaluate(const Position& pos) {
     NNUE::AccStack* a = pos.nnue_acc();
     int v = a ? a->eval(pos) : NNUE::evaluate(pos);
     const int raw = v;   // gate both correction terms on the raw net eval
+    // SATFIX (see above): every L1 lane railed => the net output is a constant with no
+    // gradient, so hand this node to the never-saturating hand eval.
+    const int satMode = satfix_mode();
+    if (satMode != 0 && NNUE::g_satdiag.l1live == 0)
+        return sat_substitute(pos, raw, satMode);
     if (matgrad_enabled())  v += material_gradient(pos, raw);
     if (hceblend_enabled()) v += hce_blend(pos, raw);
     return v;

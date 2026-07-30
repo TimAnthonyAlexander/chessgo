@@ -95,6 +95,7 @@ static inline float screlu(float x) {
     return x * x;
 }
 
+
 // pairwiseU8Scalar (kernels.go:250-267): the int8-path pairwise FT activation for
 // one output. a=clamp(lo,0,ftQA), b=clamp(hi,0,ftQA); u8 = (a*b + ftRound) >> ftShift.
 // With ftQA=255, ftRound=256, ftShift=9 the max is (255*255+256)>>9 = 127, so the
@@ -403,6 +404,31 @@ static void build_acc_half(int16_t* acc, const Features& f) {
 
 } // namespace
 
+// ---- SATDIAG: SCReLU rail-saturation diagnostics (default OFF) ----------------
+// The single-output net loses ALL resolution in decisive positions: past roughly a
+// queen the tail's SCReLU pre-activations all land on the rails (<=0 or >=1), so the
+// activation vector becomes a fixed 0/1 pattern and the output collapses to a
+// per-(bucket, sign) CONSTANT — five structurally unrelated down-a-queen positions
+// all evaluate to exactly -887. These counters measure where that collapse happens
+// (L1: D2=16 lanes, L2: D3=32 lanes) so a blend gate can be driven by the actual
+// information loss instead of by |eval|, which is itself constant once collapsed.
+// Purely observational; gated so the hot path is untouched unless SATDIAG=1.
+thread_local SatDiag g_satdiag{};
+bool satdiag_enabled() {
+    static const bool on = [] { const char* e = getenv("SATDIAG"); return e && e[0] == '1'; }();
+    return on;
+}
+// Maintain the rail tally only if something consumes it — SATFIX (the eval fix) or
+// SATDIAG (reporting). Off by default, so the shipped build is byte-identical AND
+// pays nothing.
+bool sattrack_enabled() {
+    static const bool on = [] {
+        const char* f = getenv("SATFIX");
+        return satdiag_enabled() || (f && f[0] != '0' && f[0] != '\0');
+    }();
+    return on;
+}
+
 // eval_from_halves: the multilayer forward pass over two prebuilt FT accumulator
 // halves (accW = White-perspective, accB = Black-perspective), oriented to the side to
 // move. Shared by the from-scratch evaluate() below and the incremental AccStack (see
@@ -447,12 +473,31 @@ int eval_from_halves(const int16_t* accW, const int16_t* accB, const Position& p
         l1[o] = screlu(static_cast<float>(d) * L1Inv + L1B[o]);
     }
 
+    // SATFIX/SATDIAG rail tally. Read off l1[] rather than instrumenting the loop
+    // above, so the hot path stays untouched: screlu maps (0,1) strictly into (0,1),
+    // so l1[o] == 0.0f exactly when the pre-activation was <= 0 and l1[o] == 1.0f
+    // exactly when it was >= 1 — the rail state is recoverable losslessly, and the
+    // whole tally is skipped when neither feature is on.
+    const bool track = sattrack_enabled();
+    const bool diag  = satdiag_enabled();
+    if (track) {
+        int l1lo = 0, l1hi = 0;
+        for (int o = 0; o < D2; ++o) { l1lo += (l1[o] == 0.0f); l1hi += (l1[o] == 1.0f); }
+        g_satdiag.l1lo   = l1lo;
+        g_satdiag.l1hi   = l1hi;
+        g_satdiag.l1live = D2 - l1lo - l1hi;
+        if (diag) { g_satdiag.l2lo = g_satdiag.l2hi = 0; }
+    }
+
     // (3) L2 float GEMV (input-major, D2 -> D3) -> +bias -> SCReLU.
     float l2[D3];
     gemv_f32(l2, D3, l1, D2, g_net.L2W.data(), NB * D3, bk * D3);
     const float* L2B = g_net.L2B.data() + static_cast<std::size_t>(bk) * D3;
-    for (int o = 0; o < D3; ++o)
-        l2[o] = screlu(l2[o] + L2B[o]);
+    for (int o = 0; o < D3; ++o) {
+        const float x = l2[o] + L2B[o];
+        l2[o] = screlu(x);
+        if (diag) { if (x <= 0.0f) ++g_satdiag.l2lo; else if (x >= 1.0f) ++g_satdiag.l2hi; }
+    }
 
     // (4) output GEMV (D3 -> 1) -> +bias -> scale -> round-half-away-from-zero.
     float y1[1];
