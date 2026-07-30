@@ -240,6 +240,27 @@ keep SPRT purely as a do-no-harm gate — which is why the neutrality bounds are
 rather than [0, 5]. Note also the A/A: never SPRT one to a bound, since a true Elo of 0
 sits exactly on `elo1=0` and can never terminate.
 
+## 4g. Independent confirmation: centipawn loss judged by Stockfish
+
+Everything above measures zugzwang with zugzwang-derived metrics. `tools/cploss_sf.py`
+removes that circularity: for each collapsed position it asks SF18 to score its own best
+move and then to score zug's move via `searchmoves`, and takes the difference. That is
+standard ACPL with an oracle that has a linear psqt head and does not collapse in
+ordinary up/down-a-piece positions. 131 collapsed positions, zug at 300 ms, SF18 at
+600 ms:
+
+| | ALL | LOSING | WINNING |
+|---|---|---|---|
+| baseline | 45 cp | 31 cp | **62 cp** |
+| `SATSOFT=1000` | **22 cp** | 18 cp | **27 cp** |
+
+SATSOFT halves the quality gap overall and cuts the winning-side gap by 56%. Note this
+reproduces the conversion finding (4d) from a completely independent instrument: the
+baseline plays twice as badly when winning as when losing.
+
+(Exact-move agreement with SF18 moves 21.4% -> 26.7% on the same set, but that is a weak
+metric in decided positions where several moves are equally winning — `tools/agree_sf.py`.)
+
 ## 4c. The tuning-co-adaptation question (open, and bigger than this fix)
 
 Every search flag default and all 8 SPSA margins were accepted by SPRT against an eval
