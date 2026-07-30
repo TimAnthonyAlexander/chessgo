@@ -84,6 +84,50 @@ class EvalCacheServiceTest extends TestCase
 
     // --- normalizeKey() ---
 
+    /**
+     * Producers disagree about the en-passant field: zugzwang (like Stockfish)
+     * only writes it when the capture is actually available, chess.js and the
+     * frontend write it after every double push. Keying on the raw field meant
+     * the same position arrived under two keys and every post-double-push
+     * position missed — measured on the exported book, only 18 of 5,428
+     * positions carry a live ep square, so this was most of the opening.
+     */
+    public function test_normalize_key_drops_a_dead_en_passant_square(): void
+    {
+        $boardSpelling = 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1';
+        $engineSpelling = 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1';
+
+        $this->assertSame(
+            $this->service->normalizeKey($engineSpelling),
+            $this->service->normalizeKey($boardSpelling),
+            'both spellings of the same position must produce one key',
+        );
+        $this->assertStringEndsWith(' -', $this->service->normalizeKey($boardSpelling));
+    }
+
+    public function test_normalize_key_keeps_a_live_en_passant_square(): void
+    {
+        // Black pawn on d4 sits beside the e-pawn that just pushed to e4, so the
+        // ep capture is genuinely on and the position is NOT the same as one
+        // without ep rights.
+        $fen = 'rnbqkbnr/ppp1pppp/8/8/3pP3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 2';
+        $this->assertStringEndsWith(' e3', $this->service->normalizeKey($fen));
+    }
+
+    public function test_normalize_key_en_passant_disagreement_degrades_to_a_miss_not_a_wrong_eval(): void
+    {
+        // The adjacency test is deliberately not a legality test — a pinned
+        // capturer would make the engine drop the square while we keep it. That
+        // direction costs a cache miss. The opposite direction (we drop it, the
+        // engine kept it) would serve an eval computed without ep rights for a
+        // position that has them, and must never happen: whenever an adjacent
+        // enemy pawn exists we keep the square.
+        $withCapturer = 'rnbqkbnr/ppp1pppp/8/8/3pP3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 2';
+        $withoutCapturer = 'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1';
+        $this->assertStringEndsWith(' e3', $this->service->normalizeKey($withCapturer));
+        $this->assertStringEndsWith(' -', $this->service->normalizeKey($withoutCapturer));
+    }
+
     public function test_normalize_key_strips_halfmove_and_fullmove(): void
     {
         $key = $this->service->normalizeKey(self::START_FEN);

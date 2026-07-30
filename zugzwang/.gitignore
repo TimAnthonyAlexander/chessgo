@@ -33,6 +33,10 @@ tools/netweb_writer
 test/nnue_web_format_test
 test/.tmp_web_net*.bin
 
+# tools/book_export build artifact — built by `make book_export`, never
+# checked in (mirrors tools/netweb_writer above).
+tools/book_export
+
 # SPSA runtime checkpoint (spsa/tune.py) — resumable state, not source
 spsa/state.json
 spsa/state.json.tmp

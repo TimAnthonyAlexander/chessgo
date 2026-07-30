@@ -38,7 +38,92 @@ class EvalCacheService
         $fields = preg_split('/\s+/', $fen) ?: [];
         $fields = array_slice($fields, 0, 4);
 
+        if (isset($fields[3])) {
+            $fields[3] = $this->canonicalEnPassant($fields[0] ?? '', $fields[1] ?? 'w', $fields[3]);
+        }
+
         return implode(' ', $fields);
+    }
+
+    /**
+     * Canonicalize the en-passant field to `-` when no enemy pawn is even
+     * positioned to make the capture.
+     *
+     * Producers disagree about this field. zugzwang (like Stockfish) only
+     * writes an ep square when the capture is actually available; chess.js and
+     * the frontend write it after every double pawn push regardless. So the
+     * same position arrives spelled two ways — `... b KQkq e3` from the board,
+     * `... b KQkq -` from the engine — and keys on the raw field never match.
+     * Measured on the exported book: only 18 of 5,428 positions carry a live ep
+     * square, so without this every position right after a double push missed
+     * the cache. That is most of the opening.
+     *
+     * This is an adjacency test on the piece placement, NOT a legality test —
+     * deliberately. A full test would have to exclude a pinned capturer, which
+     * is chess rules, and the engine owns those. The asymmetry is chosen so
+     * that any disagreement is safe: if the capturer is pinned we keep the ep
+     * square while the engine dropped it, which costs a cache MISS. We never
+     * go the other way and serve an eval computed without ep rights for a
+     * position that has them.
+     */
+    private function canonicalEnPassant(string $placement, string $sideToMove, string $ep): string
+    {
+        if ($ep === '-' || strlen($ep) !== 2) {
+            return '-';
+        }
+
+        $file = ord($ep[0]) - ord('a');   // 0..7
+        $rank = (int) $ep[1];             // 1..8
+        if ($file < 0 || $file > 7) {
+            return '-';
+        }
+
+        // The capturing pawn sits beside the pushed pawn's landing square: one
+        // rank toward the mover from the ep square.
+        $capturer = $sideToMove === 'w' ? 'P' : 'p';
+        $capturerRank = $sideToMove === 'w' ? $rank - 1 : $rank + 1;
+        if ($capturerRank < 1 || $capturerRank > 8) {
+            return '-';
+        }
+
+        foreach ([$file - 1, $file + 1] as $adjFile) {
+            if ($adjFile < 0 || $adjFile > 7) {
+                continue;
+            }
+            if ($this->pieceAt($placement, $adjFile, $capturerRank) === $capturer) {
+                return $ep;
+            }
+        }
+
+        return '-';
+    }
+
+    /** Piece letter at (file 0..7, rank 1..8) in a FEN placement field, or '' if empty/out of range. */
+    private function pieceAt(string $placement, int $file, int $rank): string
+    {
+        $rows = explode('/', $placement);
+        // FEN ranks run 8 down to 1, so rank 8 is rows[0].
+        $row = $rows[8 - $rank] ?? null;
+        if ($row === null) {
+            return '';
+        }
+
+        $f = 0;
+        foreach (str_split($row) as $ch) {
+            if (ctype_digit($ch)) {
+                $f += (int) $ch;
+                continue;
+            }
+            if ($f === $file) {
+                return $ch;
+            }
+            $f++;
+            if ($f > $file) {
+                return '';
+            }
+        }
+
+        return '';
     }
 
     /**

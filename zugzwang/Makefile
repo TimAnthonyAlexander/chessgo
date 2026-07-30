@@ -52,6 +52,16 @@ perft: src/perft.cpp src/position.cpp src/bitboard.cpp src/zobrist.cpp src/moveg
 netweb: tools/netweb_writer.cpp src/nnue_net.cpp
 	$(CXX) $(CXXFLAGS) -Isrc -o tools/netweb_writer $^
 
+# book_export: BFS-walks from the start position + gomachine's opening suites,
+# probing book.bin (keys-only, no FENs stored) at each node to recover the
+# FEN for every reachable book entry. Standalone tool for the eval_cache bulk
+# import (scripts/import_book_evals.php). See tools/book_export.cpp.
+#   Usage: ./tools/book_export [--book=book.bin] [--max-ply=40] [--max-nodes=N] [-o out.tsv] [seed.epd ...]
+book_export: tools/book_export.cpp src/book.cpp src/position.cpp src/bitboard.cpp \
+       src/zobrist.cpp src/movegen.cpp src/rules.cpp src/weakening.cpp src/antichess.cpp \
+       src/nnue_net.cpp src/nnue_features.cpp src/nnue_eval.cpp src/nnue_accumulator.cpp
+	$(CXX) $(CXXFLAGS) -Isrc -o tools/book_export $^
+
 # nnue_web_format_test: proves the float32 and pre-quantized loaders produce a
 # byte-identical Net + identical eval on golden FENs, and that a corrupted
 # pre-quantized file is refused. See test/nnue_web_format_test.cpp.
@@ -61,8 +71,8 @@ nnue_web_format_test: test/nnue_web_format_test.cpp src/position.cpp src/bitboar
 	$(CXX) $(CXXFLAGS) -Isrc -o test/nnue_web_format_test $^
 
 clean:
-	rm -f $(TARGET) perft_test $(OBJ) $(DEP) tools/netweb_writer test/nnue_web_format_test
+	rm -f $(TARGET) perft_test $(OBJ) $(DEP) tools/netweb_writer test/nnue_web_format_test tools/book_export
 
 -include $(DEP)
 
-.PHONY: all clean perft netweb nnue_web_format_test
+.PHONY: all clean perft netweb nnue_web_format_test book_export
