@@ -7,23 +7,19 @@ import SwiftUI
 /// locally-played analysis move (`AnalysisDriver.submit`) has nothing to show
 /// but its own UCI string otherwise.
 ///
-/// Built entirely on the app's existing permissive pseudo-legal geometry
-/// (`premoveTargets`, `Chess/Premove.swift`) — the same generator
-/// `AnalysisDriver.permissiveLegalMoves` already uses for the move list —
-/// since there is no full legal-move generator on the client (that's the
-/// server's job). `premoveTargets` ignores pins and whose turn it is, which
-/// makes two things here approximate rather than exact:
-///   - **Disambiguation** can occasionally be over-eager: a same-kind piece
-///     that's pseudo-legally able to reach the destination but is actually
-///     pinned (so not a real alternative) still forces a disambiguator a
-///     strict SAN generator wouldn't need.
-///   - **Mate detection ("#")** is approximate: it looks for any pseudo-legal
-///     reply that leaves the mover's own king unattacked, without separately
-///     verifying that reply is itself fully legal (e.g. a pinned piece
-///     "capturing" the checker). This can occasionally under-report "#" as
-///     "+". Plain check ("+") is exact given a correct attack calculation.
-/// Both are acceptable trade-offs for display text — the app has no other
-/// source of truth here.
+/// Built on `Attacks` (`Chess/Attacks.swift`), NOT on `premoveTargets`.
+/// `premoveTargets` is the permissive PREMOVE generator: its rays pass through
+/// the first blocker and its pawns "target" the squares they push to. Used as
+/// an attack map it reports check almost everywhere — an x-rayed rook or a pawn
+/// sitting one square below the king both count as attackers — which is exactly
+/// the bug this file used to have: every suggested move came out with a "+".
+///
+/// With real attack geometry, "+" is exact and "#" is exact apart from
+/// castling, which `Attacks.hasLegalMove` omits from the escape search (a king
+/// may never castle out of check, so it can never be the move that refutes a
+/// mate). Disambiguation is exact apart from pins: a same-kind piece that could
+/// reach the destination but is pinned still forces a disambiguator a strict
+/// generator wouldn't need. Acceptable for display text.
 enum SAN {
     /// Format a UCI move as SAN, using the position it is played FROM.
     /// Falls back to the raw UCI string if it doesn't parse or the origin
@@ -64,14 +60,14 @@ enum SAN {
     }
 
     /// Minimal disambiguator: empty if no other piece of the same kind/color
-    /// could also reach the destination (per `premoveTargets`); otherwise
+    /// could also reach the destination (pseudo-legally); otherwise
     /// origin file if that alone distinguishes it from every such piece,
     /// else origin rank, else the full origin square.
     private static func disambiguator(move: Move, mover: Piece, board: ChessBoard) -> String {
         let others = Square.all.filter { square in
             square != move.from
                 && board.piece(at: square) == mover
-                && premoveTargets(from: square, board: board).contains(move.to)
+                && Attacks.pseudoLegalTargets(from: square, board: board).contains(move.to)
         }
         guard !others.isEmpty else { return "" }
 
@@ -90,37 +86,10 @@ enum SAN {
 
     private static func checkSuffix(afterApplying uci: String, board: ChessBoard) -> String {
         let after = board.applying(uci)
-        guard let enemyKing = kingSquare(color: after.sideToMove, board: after),
-              isAttacked(square: enemyKing, by: after.sideToMove.opposite, board: after)
-        else { return "" }
-        return hasEscape(board: after) ? "+" : "#"
-    }
-
-    private static func kingSquare(color: PieceColor, board: ChessBoard) -> Square? {
-        Square.all.first { board.piece(at: $0) == Piece(color: color, kind: .king) }
-    }
-
-    /// A piece "attacks" a square if that square is among its `premoveTargets`
-    /// (per the task's stated pseudo-legal definition — see file header).
-    private static func isAttacked(square: Square, by color: PieceColor, board: ChessBoard) -> Bool {
-        Square.all.contains { attacker in
-            board.piece(at: attacker)?.color == color && premoveTargets(from: attacker, board: board).contains(square)
-        }
-    }
-
-    /// True if the side to move on `board` has any pseudo-legal move after
-    /// which their own king is no longer attacked. Approximate — see file
-    /// header — but good enough to tell "+" from "#" in the common cases.
-    private static func hasEscape(board: ChessBoard) -> Bool {
-        for square in Square.all {
-            guard let piece = board.piece(at: square), piece.color == board.sideToMove else { continue }
-            for target in premoveTargets(from: square, board: board) {
-                let resulting = board.applying(Move(from: square, to: target).uci)
-                guard let king = kingSquare(color: board.sideToMove, board: resulting) else { continue }
-                if !isAttacked(square: king, by: board.sideToMove.opposite, board: resulting) { return true }
-            }
-        }
-        return false
+        // `applying` flips the side to move, so `after.sideToMove` is the side
+        // that just got moved against — the one whose king may now be attacked.
+        guard Attacks.isInCheck(after.sideToMove, board: after) else { return "" }
+        return Attacks.hasLegalMove(after.sideToMove, board: after) ? "+" : "#"
     }
 }
 
@@ -136,6 +105,9 @@ enum SANSelfCheck {
         checkPromotion()
         checkDisambiguationByFile()
         checkPlainCheck()
+        checkBlockedRayIsNotCheck()
+        checkPawnPushIsNotCheck()
+        checkMate()
     }
 
     private static func checkQuietPawnMove() {
@@ -177,6 +149,27 @@ enum SANSelfCheck {
         // (undefended), so this is check, not mate.
         let board = ChessBoard(fen: "4k3/8/8/8/8/8/4Q3/K7 w - - 0 1")
         assert(SAN.format(uci: "e2e7", board: board) == "Qe7+")
+    }
+
+    /// Regression: a rook whose line to the enemy king is BLOCKED gives no
+    /// check. The premove generator used to say otherwise (its rays see through
+    /// the first blocker), which put a "+" on essentially every move.
+    private static func checkBlockedRayIsNotCheck() {
+        let board = ChessBoard(fen: "4k3/8/8/4p3/8/8/8/4R2K w - - 0 1")
+        assert(SAN.format(uci: "h1g1", board: board) == "Kg1")
+    }
+
+    /// Regression: a pawn attacks diagonally, never the square it pushes to —
+    /// a pawn directly below the enemy king is not giving check.
+    private static func checkPawnPushIsNotCheck() {
+        let board = ChessBoard(fen: "4k3/4P3/8/8/8/8/8/K7 w - - 0 1")
+        assert(SAN.format(uci: "a1a2", board: board) == "Ka2")
+    }
+
+    /// The other side of it: a real back-rank mate must still read "#".
+    private static func checkMate() {
+        let board = ChessBoard(fen: "6k1/5ppp/8/8/8/8/8/R3K3 w Q - 0 1")
+        assert(SAN.format(uci: "a1a8", board: board) == "Ra8#")
     }
 }
 #endif

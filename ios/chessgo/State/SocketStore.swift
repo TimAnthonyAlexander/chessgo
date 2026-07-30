@@ -143,7 +143,10 @@ final class SocketStore {
         do {
             let ticket = try await WsTicketService.shared.fetch(anonId: KeychainHelper.shared.anonymousId)
             guard shouldStayConnected else { return }
-            Log.warn("WSDEBUG ticket sub=\(Self.ticketSub(ticket.ticket)) anon=\(ticket.identity.anon) name=\(ticket.identity.name) bearer=\(KeychainHelper.shared.token != nil)")
+            // The hub keys live games by this `sub`. An install-UUID sub while a
+            // token is held means /ws-ticket didn't honour the bearer — the bug
+            // that made the same account look like two players (rest-api.md).
+            Log.info("ws identity sub=\(Self.ticketSub(ticket.ticket)) anon=\(ticket.identity.anon) bearer=\(KeychainHelper.shared.token != nil)")
             openSocket(with: ticket)
         } catch {
             lastError = "Couldn't reach the realtime server."
@@ -152,8 +155,9 @@ final class SocketStore {
         }
     }
 
-    /// TEMP DEBUG: pull `sub` out of the ws-ticket's base64url payload so the
-    /// hub identity this device connects as can be compared with the browser's.
+    /// Pull `sub` out of the ws-ticket's base64url payload, so the hub identity
+    /// this device connects as is visible in the log and comparable with the
+    /// browser's.
     static func ticketSub(_ ticket: String) -> String {
         let part = ticket.split(separator: ".").first.map(String.init) ?? ""
         var b64 = part.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")

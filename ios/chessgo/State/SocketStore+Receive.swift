@@ -46,9 +46,6 @@ extension SocketStore {
 
     private func dispatch(_ data: Data) {
         guard let envelope = try? decoder.decode(WsEnvelope.self, from: data) else { return }
-        #if DEBUG
-        Log.warn("WSDEBUG in <- \(String(data: data, encoding: .utf8)?.prefix(300) ?? "")")
-        #endif
         switch envelope.type {
         case "hello": handleHello()
         case "queued": handleQueued(data)

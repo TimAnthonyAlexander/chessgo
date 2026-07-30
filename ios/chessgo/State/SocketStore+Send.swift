@@ -51,9 +51,9 @@ extension SocketStore {
     /// held it) or with `idle`/`queued`. A fresh connection is asked the same
     /// question at register time, so a closed socket just connects instead.
     ///
-    /// Sent on foreground and when the player taps the "playing elsewhere"
-    /// banner: a socket that has stayed open the whole time never re-registers,
-    /// so it would otherwise never learn about a game started on the laptop.
+    /// Sent on foreground: a socket that has stayed open the whole time never
+    /// re-registers, so it would otherwise never learn about a game started on
+    /// the laptop.
     func requestResume() {
         guard connection == .open else {
             connect()
@@ -130,12 +130,9 @@ extension SocketStore {
     private func send<T: Encodable>(_ frame: T) {
         guard let socketTask, connection == .open, let data = try? Self.encoder.encode(frame) else {
             // A dropped send looks identical to a hub that ignored us — say which.
-            Log.warn("WSDEBUG out DROPPED (conn=\(connection), task=\(socketTask != nil))")
+            Log.warn("socket send dropped (conn=\(connection), task=\(socketTask != nil))")
             return
         }
-        #if DEBUG
-        Log.warn("WSDEBUG out -> \(String(data: data, encoding: .utf8) ?? "")")
-        #endif
         Task {
             try? await socketTask.send(.data(data))
         }
