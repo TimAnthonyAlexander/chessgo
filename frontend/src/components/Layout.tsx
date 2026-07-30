@@ -138,6 +138,14 @@ export default function Layout() {
     useEffect(() => {
         void gameSocket.connect()
         void authStore.init()
+        // A socket that stays open never re-registers with the hub, so a game
+        // started in another tab or on the phone would go unnoticed here. Re-ask
+        // every time this tab is looked at again.
+        const onVisible = () => {
+            if (document.visibilityState === 'visible') gameSocket.requestResume()
+        }
+        document.addEventListener('visibilitychange', onVisible)
+        return () => document.removeEventListener('visibilitychange', onVisible)
     }, [])
 
     return (

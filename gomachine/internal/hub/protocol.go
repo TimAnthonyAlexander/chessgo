@@ -7,10 +7,15 @@ import (
 	"github.com/timanthonyalexander/gomachine/internal/variant"
 )
 
-// inMsg is a message from a client. Type is one of: queue, cancel, move,
+// inMsg is a message from a client. Type is one of: queue, cancel, resume, move,
 // resign, watch, unwatch, drawOffer, drawAccept, drawDecline, takebackOffer,
 // takebackAccept, takebackDecline, chat, createChallenge, joinChallenge,
 // cancelChallenge, rematchOffer, rematchAccept, rematchDecline, rematchCancel.
+//
+// `resume` is the client asking "does my account have a live game?" — the hub
+// answers with a full `resume` (seating this connection) or `idle`/`queued`. A
+// second device uses it to take over after an `activeGame` notice; a long-lived
+// connection uses it to re-check on foreground without reconnecting.
 type inMsg struct {
 	Type   string `json:"type"`
 	Pool   string `json:"pool,omitempty"`   // time control, e.g. "3+0" (queue, createChallenge)

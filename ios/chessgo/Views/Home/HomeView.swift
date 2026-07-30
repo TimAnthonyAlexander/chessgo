@@ -20,6 +20,7 @@ import SwiftUI
 struct HomeView: View {
     @Environment(SocketStore.self) private var socket
     @Environment(AuthStore.self) private var authStore
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var isPresentingChallenge = false
     @State private var isPresentingAuthSheet = false
@@ -44,6 +45,14 @@ struct HomeView: View {
 
                     if let liveGame, !liveGame.ended {
                         ResumeBanner(game: liveGame) { dismissedGameID = nil }
+                    } else if let elsewhere = socket.activeElsewhere {
+                        // Playing on another device on this account. Tapping
+                        // takes the seat over here (the hub answers with a full
+                        // resume, which opens the board).
+                        ElsewhereBanner(notice: elsewhere) {
+                            dismissedGameID = nil
+                            socket.requestResume()
+                        }
                     }
 
                     IdentityHeader { isPresentingAuthSheet = true }
@@ -74,7 +83,16 @@ struct HomeView: View {
             // at the top of the screen. Pushed destinations keep their own bars.
             .toolbar(.hidden, for: .navigationBar)
         }
-        .onAppear { socket.connect() }
+        .onAppear {
+            socket.connect()
+            socket.requestResume()
+        }
+        // A socket that stays open never re-registers, so it never hears about a
+        // game started on another device. Re-ask every time the app comes back to
+        // the foreground — that's when the phone can have gone stale.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { socket.requestResume() }
+        }
         .task { await pollStats() }
         .sheet(isPresented: $isPresentingChallenge) {
             ChallengeSheet(socket: socket)

@@ -38,6 +38,12 @@ type Hub struct {
 	games       map[string]*game
 	playerGames map[string]*game      // identity id -> active game (for reconnect)
 	challenges  map[string]*challenge // pending private invites, keyed by short code
+	// sessions indexes every live player connection by identity id, so one
+	// account signed in on several devices (laptop + phone) is knowable. A game
+	// still has exactly ONE seat per side (game.player.client): the newest
+	// connection to ask takes it over. The extra connections exist only so the
+	// hub can tell them "you already have a game" — see notifyOtherSessions.
+	sessions map[string]map[*Client]struct{}
 	// rematchWindows indexes finished games still eligible for a rematch
 	// (armed by armRematch at finish(), keyed by game id) so the ticker can
 	// reclaim them after rematchTTL — see rematch.go.
@@ -197,6 +203,7 @@ func New(secret string) *Hub {
 		games:          map[string]*game{},
 		playerGames:    map[string]*game{},
 		challenges:     map[string]*challenge{},
+		sessions:       map[string]map[*Client]struct{}{},
 		rematchWindows: map[string]*game{},
 		botMoves:       make(chan botMoveResult, 64),
 		botChats:       make(chan botChatResult, 64),
@@ -281,6 +288,8 @@ func (h *Hub) handle(cmd command) {
 	case "cancel":
 		h.dequeue(c)
 		c.trySend(mustJSON(out("idle", nil)))
+	case "resume":
+		h.resumeRequest(c)
 	case "move":
 		h.move(c, cmd.msg.Move)
 	case "resign":
@@ -323,6 +332,14 @@ func (h *Hub) handle(cmd command) {
 // --- matchmaking ---
 
 func (h *Hub) queue(c *Client, pool, variant string) {
+	// Already playing — on THIS connection or on another device signed into the
+	// same account. Never start a second game: seat this connection in the game
+	// that's already running and resume it, which is what the player actually
+	// wants when they hit "play" on their phone mid-laptop-game.
+	if g := h.activeGameFor(c); g != nil {
+		h.attachToGame(c, g)
+		return
+	}
 	if c.game != nil {
 		h.sendErr(c, "already in a game")
 		return
@@ -435,6 +452,10 @@ func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, r
 	h.activeGames.Add(1)
 	h.sendMatched(g, white, chess.White)
 	h.sendMatched(g, black, chess.Black)
+	// Any other device signed into either account is now stale — tell it, so its
+	// lobby offers to open the game instead of letting the player queue again.
+	h.notifyOtherSessions(g, white)
+	h.notifyOtherSessions(g, black)
 	return g
 }
 
@@ -779,19 +800,94 @@ func (h *Hub) handleRegister(c *Client) {
 	if key == "" {
 		return
 	}
-	g := h.playerGames[key]
-	if g == nil || g.over {
-		return
+	if h.sessions[key] == nil {
+		h.sessions[key] = map[*Client]struct{}{}
 	}
-	color := g.colorForID(key)
+	h.sessions[key][c] = struct{}{}
+
+	if g := h.activeGameFor(c); g != nil {
+		h.attachToGame(c, g)
+	}
+}
+
+// activeGameFor returns the live game this connection's IDENTITY is already
+// playing (not just this connection: the same account on another device counts),
+// or nil. This is the single "am I already in a game?" question — asking
+// `c.game != nil` only sees the one connection and lets a second device queue
+// into a second game while the first is still running.
+func (h *Hub) activeGameFor(c *Client) *game {
+	if c.spectator || c.id.UserID == "" {
+		return nil
+	}
+	g := h.playerGames[c.id.UserID]
+	if g == nil || g.over {
+		return nil
+	}
+	return g
+}
+
+// attachToGame seats c in g (taking the seat over from whatever connection held
+// it) and sends it a full resume, so the client can render the game from scratch.
+// Idempotent: re-attaching the connection that already holds the seat just
+// re-sends the snapshot.
+func (h *Hub) attachToGame(c *Client, g *game) {
+	color := g.colorForID(c.id.UserID)
 	g.playerFor(color).client = c
 	g.online[color] = true
 	c.game = g
+	h.dequeue(c)       // a connection in a game is never also waiting in a pool
+	h.dropChallenge(c) // …nor holding a pending invite
 	c.trySend(mustJSON(h.resumeMsg(g, color)))
 
 	if opp := g.playerFor(color.Opposite()); g.online[color.Opposite()] && opp.client != nil {
 		opp.client.trySend(mustJSON(out("opponentBack", map[string]any{"gameId": g.id})))
 	}
+}
+
+// notifyOtherSessions stands this identity's OTHER connections down when a game
+// starts on one of them (the phone, while you were matched on the laptop): each
+// is pulled out of any queue and loses any pending invite — otherwise it could
+// still be paired or bot-backfilled into a SECOND game — and is told a game is
+// running so its lobby can offer to open it. What it sends is a pointer, not a
+// resume: the seat stays where it is until that device asks for it with "resume".
+func (h *Hub) notifyOtherSessions(g *game, seat *Client) {
+	if g.filler {
+		return
+	}
+	for c := range h.sessions[seat.id.UserID] {
+		if c == seat {
+			continue
+		}
+		h.dequeue(c)
+		h.dropChallenge(c)
+		c.trySend(mustJSON(out("activeGame", map[string]any{
+			"gameId":  g.id,
+			"pool":    g.pool,
+			"variant": g.variant,
+		})))
+	}
+}
+
+// resumeRequest answers a client's explicit "do I have a game?" — used by a
+// second device to take the seat over after an activeGame notice, and as a
+// cheap re-check when an app comes back to the foreground on a socket that has
+// been open (and therefore un-registered) the whole time.
+func (h *Hub) resumeRequest(c *Client) {
+	if g := h.activeGameFor(c); g != nil {
+		h.attachToGame(c, g)
+		return
+	}
+	// No game — report what the client IS doing rather than a blanket "idle",
+	// which would otherwise wipe a waiting client's own searching/invite UI.
+	if c.pool != "" {
+		tcPool, variant := splitQueueKey(c.pool)
+		c.trySend(mustJSON(out("queued", map[string]any{"pool": tcPool, "variant": variant})))
+		return
+	}
+	if c.challengeCode != "" {
+		return
+	}
+	c.trySend(mustJSON(out("idle", nil)))
 }
 
 func (h *Hub) resumeMsg(g *game, color chess.Color) map[string]any {
@@ -828,6 +924,12 @@ func (h *Hub) resumeMsg(g *game, color chess.Color) map[string]any {
 // offline so they can reconnect and resume. The clock keeps running, so an
 // absent player still flags normally.
 func (h *Hub) handleDisconnect(c *Client) {
+	if key := c.id.UserID; key != "" && h.sessions[key] != nil {
+		delete(h.sessions[key], c)
+		if len(h.sessions[key]) == 0 {
+			delete(h.sessions, key)
+		}
+	}
 	h.dequeue(c)
 	h.dropChallenge(c)          // tear down any pending private invite this client created
 	h.unwatchGame(c)            // a spectator (or a player who was also watching) leaving

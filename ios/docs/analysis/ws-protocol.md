@@ -18,6 +18,7 @@ Fields: `type, pool, move, gameId, text, color, rated, code, variant`.
 |---|---|---|
 | `queue` | pool, variant | join matchmaking |
 | `cancel` | — | leave queue |
+| `resume` | — | "does my account have a live game?" → `resume` (seats this connection) or `idle`/`queued` |
 | `move` | move (UCI; promo `e7e8q`; duck `e2e4:e5`) | your turn |
 | `resign` | — | forfeit |
 | `drawOffer`/`drawAccept`/`drawDecline` | — | draw (offer twice = accept) |
@@ -40,6 +41,7 @@ Premoves: **NOT in the protocol** — client-side queue only; send as normal `mo
 | `challengeCreated` | {code,pool,color,rated,variant} |
 | `challengeExpired` | {code} |
 | `resume` | full replay (see below) |
+| `activeGame` | {gameId,pool,variant} — your account is playing where THIS connection isn't seated (see Multiple devices) |
 | `state` | after every move/takeback (see below) |
 | `end` | {gameId, result:"1-0"|"0-1"|"1/2-1/2"|null, reason, status, clock:{w,b}} |
 | `opponentGone`/`opponentBack` | {gameId} |
@@ -95,6 +97,12 @@ After `hello`, if no `resume` arrives within ~1.5s and you held a local game, tr
 - Disconnect does NOT end the game; clock keeps running (you can flag while away). Opponent gets `opponentGone`/`opponentBack`.
 - Spectators never resume — re-send `watch{gameId}`.
 - Resume is in-memory only; a hub restart loses live games.
+
+## Multiple devices on one account
+- The hub indexes live games by **identity**, so one account is never in two games. `queue`/`createChallenge`/`joinChallenge` from a second device answer with a full `resume` for the game that's already running instead of starting another.
+- A game has ONE seat per side. The newest connection to register or send `resume` takes it over; the previous one stops receiving `state` (it can reclaim the seat the same way).
+- When a game starts, every OTHER connection on that account is pulled out of its queue/invite and gets an `activeGame` pointer — a hint, not a resume. The client shows "playing on another device" and sends `resume` if the player taps it.
+- A socket that stays open never re-registers, so clients also send `resume` on foreground / tab focus.
 
 ## Full-game state machine
 connect → hello → (resume if live game) → queue → queued → matched → [move ↔ state]* → end → back to lobby.

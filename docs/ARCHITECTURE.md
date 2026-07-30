@@ -82,13 +82,22 @@ auto-reconnect. The hub mutates all shared state on **one goroutine** (no locks)
 clients talk to it over channels, and bot search runs off-goroutine (zugzwang call)
 applied back via a channel.
 
-- **client → hub:** `queue{pool}`, `cancel`, `move{move}`, `resign`,
+- **client → hub:** `queue{pool}`, `cancel`, `resume`, `move{move}`, `resign`,
   `drawOffer/Accept/Decline`, `takebackOffer/Accept/Decline`, `chat{text}`,
   `watch{gameId}`/`unwatch`, `createChallenge`/`joinChallenge`/`cancelChallenge`.
 - **hub → client:** `hello`, `queued`/`idle`, `matched`, `state`, `resume`, `end`,
-  `opponentGone`/`opponentBack`, `error`, `drawOffered`/`drawDeclined`,
+  `activeGame`, `opponentGone`/`opponentBack`, `error`, `drawOffered`/`drawDeclined`,
   `takebackOffered`/`takebackDeclined`, `chat`, `watching`, `watchEnd`,
   `challengeCreated`/`challengeExpired`.
+
+**One account, many devices.** Live games are indexed by *identity*, so an account
+is never in two at once: `queue`/`createChallenge`/`joinChallenge` from a second
+device answer with a full `resume` for the running game rather than starting a new
+one, and a game starting anywhere pulls that account's other connections out of
+their queues and pushes them an `activeGame` pointer. Each side of a game has one
+seat; the newest connection to register (or to send `resume`) holds it. Since a
+long-lived socket never re-registers, clients also send `resume` on foreground /
+tab focus.
 
 Clocks are server-authoritative (200 ms tick), start Lichess-style (untimed until
 both players' first moves), with a 30s first-move abort and FIDE 6.9 timeout-vs-

@@ -42,6 +42,12 @@ func (h *Hub) createChallenge(c *Client, pool, color string, rated bool, variant
 	if c.spectator {
 		return // spectators don't play
 	}
+	// Already playing here or on another device on this account — open that game
+	// instead of minting an invite that could never be honoured (see Hub.queue).
+	if g := h.activeGameFor(c); g != nil {
+		h.attachToGame(c, g)
+		return
+	}
 	if c.game != nil {
 		h.sendErr(c, "already in a game")
 		return
@@ -90,6 +96,10 @@ func (h *Hub) joinChallenge(c *Client, code string) {
 	if c.spectator {
 		return
 	}
+	if g := h.activeGameFor(c); g != nil {
+		h.attachToGame(c, g)
+		return
+	}
 	if c.game != nil {
 		h.sendErr(c, "already in a game")
 		return
@@ -104,7 +114,7 @@ func (h *Hub) joinChallenge(c *Client, code string) {
 		h.sendErr(c, "that's your own challenge")
 		return
 	}
-	if creator.game != nil {
+	if creator.game != nil || h.activeGameFor(creator) != nil {
 		// Creator already started another game — the invite is stale.
 		h.removeChallenge(ch)
 		h.sendErr(c, "challenge no longer available")

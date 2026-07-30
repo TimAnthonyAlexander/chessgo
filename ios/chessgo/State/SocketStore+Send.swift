@@ -46,6 +46,22 @@ extension SocketStore {
         replayableSend(OutgoingFrame(type: "joinChallenge", code: code))
     }
 
+    /// "Does my account have a live game?" The hub answers with a full `resume`
+    /// (seating this connection, taking the seat over from whichever device
+    /// held it) or with `idle`/`queued`. A fresh connection is asked the same
+    /// question at register time, so a closed socket just connects instead.
+    ///
+    /// Sent on foreground and when the player taps the "playing elsewhere"
+    /// banner: a socket that has stayed open the whole time never re-registers,
+    /// so it would otherwise never learn about a game started on the laptop.
+    func requestResume() {
+        guard connection == .open else {
+            connect()
+            return
+        }
+        send(OutgoingFrame(type: "resume"))
+    }
+
     func cancelChallenge() {
         pendingIntent = nil
         challengeInfo = nil

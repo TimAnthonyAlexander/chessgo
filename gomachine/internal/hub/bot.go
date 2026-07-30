@@ -124,6 +124,12 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variantID string
 	if human.game != nil {
 		return
 	}
+	// The account may have started a game on another device while this connection
+	// waited in the pool — back it out rather than backfilling a second game.
+	if g := h.activeGameFor(human); g != nil {
+		h.attachToGame(human, g) // also drops it from the pool
+		return
+	}
 	variantID = normalizeVariant(variantID)
 	// Anchor the bot near the human's rating in this category so a one-sided rated
 	// game is fair: the bot's displayed rating (what the human's Elo moves against)
@@ -182,7 +188,8 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variantID string
 	h.activeGames.Add(1)
 
 	h.sendMatched(g, human, humanColor)
-	h.scheduleBotMove(g)  // if the bot plays White, it moves first
+	h.notifyOtherSessions(g, human) // stand this account's other devices down
+	h.scheduleBotMove(g)            // if the bot plays White, it moves first
 	h.maybeOpeningChat(g) // ...and it might open with a friendly "hi"
 }
 

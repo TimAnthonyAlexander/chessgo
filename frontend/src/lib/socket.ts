@@ -60,11 +60,23 @@ export interface ChallengeState {
     variant: Variant
 }
 
+/** A live game the hub says this ACCOUNT is in, reported to a connection that
+ * isn't seated in it — you got matched in another tab or on the phone. A pointer
+ * only (no board); `gameSocket.requestResume()` takes the seat over and brings
+ * back a full resume. */
+export interface ActiveGameNotice {
+    id: string
+    pool: string
+    variant: Variant
+}
+
 export interface SocketState {
     conn: 'closed' | 'connecting' | 'open'
     status: 'idle' | 'queued' | 'matched'
     pool: string | null
     game: LiveGameState | null
+    /** Set while the account is playing somewhere this connection isn't seated. */
+    activeGame: ActiveGameNotice | null
     challenge: ChallengeState | null
     error: string | null
 }
@@ -154,6 +166,7 @@ class GameSocket {
         status: 'idle',
         pool: null,
         game: null,
+        activeGame: null,
         challenge: null,
         error: null,
     }
@@ -247,6 +260,17 @@ class GameSocket {
         this.wantQueue = null
         this.rawSend({ type: 'cancel' })
         this.set({ status: 'idle', pool: null })
+    }
+
+    /** Ask the hub whether this ACCOUNT has a live game — it answers with a full
+     * `resume` (seating this connection) or `idle`/`queued`. A fresh connection is
+     * asked the same thing at register time, so a closed socket just connects. Used
+     * to take over after an `activeGame` notice and to re-check on tab focus, since
+     * a socket that stays open never re-registers and so never hears about a game
+     * started elsewhere. */
+    requestResume() {
+        if (this.ws?.readyState === WebSocket.OPEN) this.rawSend({ type: 'resume' })
+        else void this.connect()
     }
 
     // --- private "challenge a friend" invites ---
@@ -369,7 +393,14 @@ class GameSocket {
         this.wantQueue = null
         this.wantChallenge = null
         this.wantJoin = null
-        this.set({ status: 'idle', pool: null, game: null, challenge: null, error: null })
+        this.set({
+            status: 'idle',
+            pool: null,
+            game: null,
+            activeGame: null,
+            challenge: null,
+            error: null,
+        })
     }
 
     /** Re-open the socket so a fresh ws-ticket (new account identity) is minted —
@@ -410,7 +441,20 @@ class GameSocket {
                 this.set({ status: 'queued', pool: msg.pool })
                 break
             case 'idle':
-                this.set({ status: 'idle', pool: null, challenge: null })
+                this.set({ status: 'idle', pool: null, challenge: null, activeGame: null })
+                break
+            case 'activeGame':
+                // The account is playing where this connection isn't seated
+                // (another tab, the phone). Offer to open it rather than letting
+                // the lobby queue us into a second game.
+                if (!this.state.game || this.state.game.ended || this.state.game.id !== msg.gameId)
+                    this.set({
+                        activeGame: {
+                            id: msg.gameId,
+                            pool: msg.pool ?? '',
+                            variant: (msg.variant as Variant) ?? 'standard',
+                        },
+                    })
                 break
             case 'matched':
                 // A game started (public match or accepted private challenge): all
@@ -422,6 +466,7 @@ class GameSocket {
                     status: 'matched',
                     pool: msg.pool,
                     game: buildGame(msg),
+                    activeGame: null,
                     challenge: null,
                     error: null,
                 })
@@ -524,7 +569,19 @@ class GameSocket {
         // Carry the in-memory chat across a reconnect to the same game (offers are
         // transient and intentionally reset — the hub drops them on disconnect).
         if (prev && prev.id === game.id) game.messages = prev.messages
-        this.set({ game, error: null })
+        // A resume also ANSWERS a queue attempt: the hub redirects us into the game
+        // we already had instead of pairing a second one, so clear the waiting state.
+        this.wantQueue = null
+        this.wantChallenge = null
+        this.wantJoin = null
+        this.set({
+            game,
+            status: 'idle',
+            pool: null,
+            activeGame: null,
+            challenge: null,
+            error: null,
+        })
     }
 
     private setOpponentOnline(online: boolean) {
