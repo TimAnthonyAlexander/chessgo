@@ -80,7 +80,9 @@
     background: rgba(0, 0, 0, var(--board-dim, 0));
 }
 
-.sq.interactive {
+/* Grab hint only where there's something to pick up — an empty interactive
+ * square has no piece to drag, so it stays a plain cursor. */
+.sq.interactive:has(.piece) {
     cursor: grab;
 }
 .board.dragging,
@@ -92,10 +94,26 @@
     transition: none;
 }
 
-/* Square currently under the dragged piece */
+/* Square currently under the dragged piece. White (not the theme accent) so
+ * it reads as a neutral cursor mark on every board, including photographic
+ * ones — see --square-hover. */
 .sq.over {
-    box-shadow: inset 0 0 0 4px var(--select);
+    box-shadow: inset 0 0 0 2px var(--square-hover);
     z-index: 1;
+}
+
+/* Plain mouse hover, no drag: same ring as `.sq.over`, but only over a piece
+ * (nothing to pick up on an empty square, so nothing to ring — matches the
+ * grab-cursor rule above). Real pointers only (`pointer: fine`) — never
+ * touch, or a tap would leave a stale ring stuck on a mobile square. Suppressed
+ * while `.board` is `.dragging` so this doesn't fight the real drag-over ring
+ * on the target square, and excludes `.focus-ring` so the keyboard cursor
+ * always wins on the square it's on. */
+@media (hover: hover) and (pointer: fine) {
+    .board:not(.dragging) .sq:hover:has(.piece):not(.focus-ring) {
+        box-shadow: inset 0 0 0 2px var(--square-hover);
+        z-index: 1;
+    }
 }
 
 /* Keyboard roving-tabindex cursor: a ring (box-shadow), distinct from the
@@ -109,17 +127,24 @@
     z-index: 2;
 }
 
-/* The piece that follows the cursor during a drag */
+/* The piece that follows the cursor during a drag. Board.tsx's DragGhost owns
+   `transform` outright, rewriting it every frame with BOTH the pointer position
+   and the spring-driven tilt — position via translate3d rather than left/top so
+   a drag stays a composite and never dirties layout under the 64 squares. The
+   value here is only what's painted before the first rAF tick (top-left corner,
+   off behind the page); one frame later the loop takes over. */
 .drag-ghost {
     position: fixed;
+    left: 0;
+    top: 0;
     z-index: 1000;
     transform: translate(-50%, -50%);
     background-repeat: no-repeat;
     background-position: center;
-    background-size: 88%;
+    background-size: 94%;
     pointer-events: none;
     filter: drop-shadow(0 6px 9px rgba(0, 0, 0, 0.5));
-    will-change: left, top;
+    will-change: transform;
 }
 
 .sq {
@@ -179,14 +204,14 @@
     pointer-events: none;
 }
 
-/* cburnett vector pieces, sized to ~88% of the square and centered. */
+/* cburnett vector pieces, sized to ~94% of the square and centered. */
 .piece {
     position: absolute;
     inset: 0;
     z-index: 2;
     background-repeat: no-repeat;
     background-position: center;
-    background-size: 88%;
+    background-size: 94%;
     /* Duration follows the Piece animation preference (--piece-anim, set on
      * <html> by settings.ts). 0ms = effectively no animation. */
     animation: pieceIn var(--piece-anim, 0.16s) ease;
@@ -226,7 +251,7 @@
     z-index: 3;
     background-repeat: no-repeat;
     background-position: center;
-    background-size: 88%;
+    background-size: 94%;
     pointer-events: none;
     will-change: transform;
 }
@@ -251,13 +276,16 @@
     height: 30%;
     border-radius: 50%;
     background: var(--dot);
-    /* Subtle light halo so the dot separates from board texture (e.g. wood grain
-       on photographic themes); inert-looking on flat light themes. */
-    box-shadow: 0 0 0.5cqi 0.1cqi var(--dot-halo);
     pointer-events: none;
+    /* Scales about its own center (see .sq centering below) when a drag
+       hovers this square — grow the shape itself, not a halo around it. */
+    transition: transform 0.12s ease;
 }
 .sq.light .dot {
     background: var(--dot-light);
+}
+.sq.dragTarget .dot {
+    transform: scale(1.5);
 }
 .ring {
     position: absolute;
@@ -265,11 +293,20 @@
     inset: 7%;
     border-radius: 50%;
     border: 0.6cqi solid var(--dot);
-    box-shadow: 0 0 0.4cqi var(--dot-halo);
     pointer-events: none;
+    transition: transform 0.12s ease;
 }
 .sq.light .ring {
     border-color: var(--dot-light);
+}
+.sq.dragTarget .ring {
+    transform: scale(1.15);
+}
+@media (prefers-reduced-motion: reduce) {
+    .dot,
+    .ring {
+        transition: none;
+    }
 }
 
 /* Admin best-move hint: a thin accent border ringing the from + to squares. Only

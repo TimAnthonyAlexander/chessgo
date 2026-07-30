@@ -47,12 +47,12 @@
     --board-frame: #0e0f13;
     --last-move: rgba(188, 203, 128, 0.62); /* soft olive/yellow-green */
     --select: rgba(174, 196, 110, 0.72);
+    /* Drag-over / mouse-hover square ring. Deliberately white (not tinted per
+       theme like --select) — it has to read as a neutral cursor mark on every
+       board, including photographic ones, so it stays the same everywhere. */
+    --square-hover: rgba(255, 255, 255, 0.9);
     --dot: rgba(40, 54, 64, 0.3);
     --dot-light: rgba(40, 54, 64, 0.22);
-    /* Soft light glow ringing legal-move dots so they read against textured
-       (photographic) boards; near-invisible on flat light themes. Global (never
-       set per-theme) so it can't leak when switching themes. */
-    --dot-halo: rgba(248, 246, 240, 0.4);
     --check: rgba(202, 74, 74, 0.66);
     /* Keyboard focus ring (roving-tabindex cursor square) — a cool blue, deliberately
        far from the warm olive select/last-move tint and the red check glow so all

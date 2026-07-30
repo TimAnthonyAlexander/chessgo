@@ -281,14 +281,150 @@ function brushFor(
     return ARROW_COLORS.filter((c) => c !== base)[slot - 1]
 }
 
+// The pointer's live position is deliberately NOT in here: it changes on every
+// pointermove, and putting it in state re-rendered all 64 squares ~120x/second
+// just to move one absolutely-positioned ghost. It lives in a ref that DragGhost
+// reads inside its own rAF loop instead, so this state only changes when `over`
+// crosses into a different square — a few times per drag, not a few hundred.
 interface DragState {
     from: Square
     piece: string
-    x: number
-    y: number
     over: Square | null
     size: number
     reselect: boolean
+}
+
+// Tuning for the drag-ghost tilt (chess.com-style "picked up piece" feel).
+// Numbers are chosen by eye, not measured — a normal drag should read as a
+// gentle lean, a fast flick should just kiss the clamp.
+const DRAG_TILT_MAX_DEG = 18 // clamp: even a wild flick never looks silly
+const DRAG_TILT_GAIN = 12 // deg per (px/ms) of smoothed pointer velocity
+const DRAG_VELOCITY_SMOOTHING_MS = 60 // low-pass time constant on raw pointer velocity
+const DRAG_SPRING_STIFFNESS = 260 // how hard the angle is pulled toward its target
+const DRAG_SPRING_DAMPING = 20 // < critical (2*sqrt(stiffness)) → slight overshoot, then settles
+
+function clampAngle(deg: number): number {
+    return Math.max(-DRAG_TILT_MAX_DEG, Math.min(DRAG_TILT_MAX_DEG, deg))
+}
+
+// The dragged piece behaves like it's pinned at the cursor and swinging under
+// its own weight: horizontal pointer speed sets a target lean, and a damped
+// spring chases that target instead of snapping to it — so the rotation
+// accelerates in, overshoots a touch, and settles, both on pickup and on
+// stopping. Everything below writes `transform` straight to the DOM via a
+// ref, never through React state, so a 120Hz pointer doesn't force a
+// board-wide re-render once per frame.
+function DragGhost({
+    posRef,
+    size,
+    backgroundImage,
+}: {
+    posRef: { current: { x: number; y: number } }
+    size: number
+    backgroundImage: string
+}) {
+    const elRef = useRef<HTMLSpanElement>(null)
+
+    // Place it before the browser's first paint of this mount, or the ghost
+    // flashes at the top-left corner for the one frame before rAF takes over.
+    // Deliberately NOT a `transform` in the style prop below: React would then
+    // own the property and could stomp a frame of the loop's output on any
+    // re-render (`over` changing mid-drag), which reads as a jitter.
+    useLayoutEffect(() => {
+        const el = elRef.current
+        if (el)
+            el.style.transform = `translate3d(${posRef.current.x}px, ${posRef.current.y}px, 0) translate(-50%, -50%)`
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
+
+    useEffect(() => {
+        // Rotation only — position still tracks the pointer either way, so this
+        // can't early-return out of the loop. A CSS media query can't reach the
+        // tilt since it's driven inline, hence the JS check.
+        const tilt = !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
+        let raf = 0
+        let angle = 0
+        let angularVelocity = 0
+        let smoothedVx = 0
+        let lastX = posRef.current.x
+        let lastTime: number | null = null
+
+        // Position and rotation ride on ONE transform (never left/top): a
+        // transform-only change is composited, so dragging never dirties layout
+        // for the 64 squares sitting under the ghost.
+        const paint = () => {
+            const el = elRef.current
+            if (!el) return
+            const { x, y } = posRef.current
+            el.style.transform = `translate3d(${x}px, ${y}px, 0) translate(-50%, -50%) rotate(${angle.toFixed(2)}deg)`
+        }
+
+        const tick = (now: number) => {
+            raf = requestAnimationFrame(tick)
+            if (lastTime === null) {
+                // First frame just establishes a baseline — nothing to integrate yet.
+                lastTime = now
+                lastX = posRef.current.x
+                paint()
+                return
+            }
+            // Clamp dt so resuming from a backgrounded/stalled tab can't
+            // whip the spring with one giant timestep.
+            const dtMs = Math.min(now - lastTime, 50)
+            lastTime = now
+            if (dtMs <= 0) return
+
+            const curX = posRef.current.x
+            const rawVx = (curX - lastX) / dtMs // px/ms
+            lastX = curX
+
+            if (!tilt) {
+                paint() // still follows the pointer, just never leans
+                return
+            }
+
+            // Low-pass the raw velocity: consecutive rAF samples are noisy
+            // (sub-pixel deltas), and unfiltered that noise reads as a jitter
+            // in the tilt instead of a clean lean.
+            const smoothing = 1 - Math.exp(-dtMs / DRAG_VELOCITY_SMOOTHING_MS)
+            smoothedVx += (rawVx - smoothedVx) * smoothing
+
+            // Moving left (negative vx) should trail the bottom of the piece
+            // to the right, like a pendulum lagging behind the hand that's
+            // carrying it — same sign as vx does exactly that under CSS's
+            // rotate() convention, so no extra negation here.
+            const target = clampAngle(smoothedVx * DRAG_TILT_GAIN)
+
+            // Damped spring toward `target`: zeta ≈ 0.62 (underdamped), so the
+            // angle accelerates toward the target, overshoots slightly, and
+            // settles back — never an instant snap.
+            const dtSec = dtMs / 1000
+            const accel = DRAG_SPRING_STIFFNESS * (target - angle) - DRAG_SPRING_DAMPING * angularVelocity
+            angularVelocity += accel * dtSec
+            angle += angularVelocity * dtSec
+
+            paint()
+        }
+
+        raf = requestAnimationFrame(tick)
+        return () => cancelAnimationFrame(raf)
+        // Mounts/unmounts with the drag itself (the parent only renders this
+        // component while `drag` is non-null) — that's also what gives every
+        // new drag a fresh angle/velocity of 0, for free.
+    }, [])
+
+    return (
+        <span
+            ref={elRef}
+            className="drag-ghost"
+            style={{
+                width: size,
+                height: size,
+                backgroundImage,
+            }}
+        />
+    )
 }
 
 export default function Board({
@@ -332,6 +468,9 @@ export default function Board({
     const [selected, setSelected] = useState<Square | null>(null)
     const [promo, setPromo] = useState<{ from: Square; to: Square; options: string[] } | null>(null)
     const [drag, setDrag] = useState<DragState | null>(null)
+    // Live pointer position during a drag — see DragState's comment for why this
+    // is a ref and not part of that state.
+    const dragPosRef = useRef({ x: 0, y: 0 })
     // Right-click drawn annotations + the one currently being dragged out.
     const [shapes, setShapes] = useState<Shape[]>([])
     const [drawing, setDrawing] = useState<Shape | null>(null)
@@ -517,6 +656,14 @@ export default function Board({
     const checkKing = useMemo(
         () => (inCheck && prefs.highlightCheck ? kingSquare(board, sideToMove === 'w') : null),
         [inCheck, prefs.highlightCheck, board, sideToMove],
+    )
+    // The dragged piece's legal destinations, built ONCE per drag instead of
+    // per square: the drag-over highlight and the grow-on-hover marker both
+    // need this set, so calling destsFor() inline in the square loop meant 128
+    // Set constructions on every single re-render.
+    const dragDests = useMemo(
+        () => (drag ? destsFor(drag.from) : null),
+        [drag?.from, interactive, legalMoves, board, rookCastles],
     )
 
     // Live-region announcement: piece selection (armed to move — from ANY input,
@@ -838,11 +985,10 @@ export default function Board({
                 } catch {
                     /* ignore */
                 }
+                dragPosRef.current = { x: e.clientX, y: e.clientY }
                 setDrag({
                     from: sq,
                     piece: board[sq],
-                    x: e.clientX,
-                    y: e.clientY,
                     over: sq,
                     size,
                     reselect: selected === sq,
@@ -864,12 +1010,13 @@ export default function Board({
             return
         }
         if (!drag) return
-        setDrag({
-            ...drag,
-            x: e.clientX,
-            y: e.clientY,
-            over: squareFromPoint(e.clientX, e.clientY),
-        })
+        // The ghost reads this ref in its own rAF loop — no state, no re-render.
+        dragPosRef.current = { x: e.clientX, y: e.clientY }
+        // Only the square the pointer is OVER is React's business, and only when
+        // it actually changes: that's the difference between re-rendering the
+        // board a handful of times per drag and doing it on every pointer sample.
+        const over = squareFromPoint(e.clientX, e.clientY)
+        if (over !== drag.over) setDrag({ ...drag, over })
     }
 
     function onPointerUp(e: ReactPointerEvent<HTMLDivElement>) {
@@ -1030,11 +1177,12 @@ export default function Board({
                                 (lastMove.from === sq || lastMove.to === sq)
                             const isPremove = !!premoves?.some((p) => p.from === sq || p.to === sq)
                             const isDragOrigin = !!drag && drag.from === sq
-                            const isOver =
-                                prefs.highlightDragOver &&
-                                !!drag &&
-                                drag.over === sq &&
-                                destsFor(drag.from).has(sq)
+                            // Dot/ring grow-on-drag-over. `isOver` is the same condition
+                            // PLUS the highlightDragOver pref gate — the marker growing
+                            // isn't the opt-in "square ring" preference, it's feedback on
+                            // a marker that's already shown.
+                            const dragTarget = !!drag && drag.over === sq && !!dragDests?.has(sq)
+                            const isOver = dragTarget && prefs.highlightDragOver
                             const isCursor = cursor === sq
                             const classes = [
                                 'sq',
@@ -1044,6 +1192,7 @@ export default function Board({
                                 isLast ? 'last' : '',
                                 isPremove ? 'premove' : '',
                                 isOver ? 'over' : '',
+                                dragTarget ? 'dragTarget' : '',
                                 checkKing === sq ? 'check' : '',
                                 keyboardBoard && isCursor && gridFocused ? 'focus-ring' : '',
                             ]
@@ -1402,18 +1551,11 @@ export default function Board({
             )}
 
             {drag && (
-                <span
-                    className="drag-ghost"
-                    style={{
-                        left: drag.x,
-                        top: drag.y,
-                        width: drag.size,
-                        height: drag.size,
-                        // Blindfold hides the ghost image too, so a drag can't reveal the piece.
-                        backgroundImage: prefs.blindfold
-                            ? 'none'
-                            : `url(${pieceImageUrl(drag.piece)})`,
-                    }}
+                <DragGhost
+                    posRef={dragPosRef}
+                    size={drag.size}
+                    // Blindfold hides the ghost image too, so a drag can't reveal the piece.
+                    backgroundImage={prefs.blindfold ? 'none' : `url(${pieceImageUrl(drag.piece)})`}
                 />
             )}
 
