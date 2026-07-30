@@ -109,6 +109,10 @@ export interface LocalEngineRaceOptions {
      * runs once this AND the persisted setting AND a ready net are all true. */
     active: boolean
     fen: string
+    /** Depth of whatever eval is currently displayed for this position (a cached
+     *  or server result, 0 if none). Local search stops short of re-deriving an
+     *  answer it cannot beat — see the EVAL_DEPTH check in the analysis effect. */
+    achievedDepth?: number
 }
 
 export interface LocalEngineRaceState {
@@ -129,7 +133,7 @@ export interface LocalEngineRaceState {
     lines: AnalysisLine[] | null
 }
 
-export function useLocalEngineRace({ active, fen }: LocalEngineRaceOptions): LocalEngineRaceState {
+export function useLocalEngineRace({ active, fen, achievedDepth = 0 }: LocalEngineRaceOptions): LocalEngineRaceState {
     const [enabled, setEnabled] = useLocalEngineEnabled()
     // features() is a memoized, synchronous, side-effect-free probe (no
     // network/storage) — safe to compute even while `enabled` is false, which
@@ -153,6 +157,10 @@ export function useLocalEngineRace({ active, fen }: LocalEngineRaceOptions): Loc
     const [candidate, setCandidate] = useState<{ fen: string; value: RaceCandidate } | null>(null)
     const [lines, setLines] = useState<{ fen: string; value: AnalysisLine[] } | null>(null)
     const engineRef = useRef<LocalEngine | null>(null)
+    // Via a ref, not a dependency: this changes every time a result lands, and
+    // as a dep it would restart the search on each one.
+    const achievedDepthRef = useRef(achievedDepth)
+    achievedDepthRef.current = achievedDepth
     // Bumped by retry() to force the lifecycle effect to run again after an
     // error, without needing `download` itself as a dependency (which would
     // re-trigger — and restart the download — on every progress tick).
@@ -274,6 +282,15 @@ export function useLocalEngineRace({ active, fen }: LocalEngineRaceOptions): Loc
                 setLines({ fen, value: toAnalysisLines(fen, bySlot) })
 
                 // Phase 2 — deep and narrow: settles the eval and the arrow.
+                //
+                // Skipped when something deeper is already on screen. A cached
+                // book row is Stockfish at depth 22, which local cannot beat at
+                // its own depth-22 ceiling, so running this would spend the
+                // user's CPU (and battery) re-deriving a worse answer that
+                // precedence.ts would then correctly refuse to display. Phase 1
+                // still runs regardless — cached rows carry no move list, so the
+                // lines have to come from somewhere.
+                if (achievedDepthRef.current >= EVAL_DEPTH) return
                 for await (const info of engine.analyze(fen, {
                     multipv: 1,
                     depth: EVAL_DEPTH,

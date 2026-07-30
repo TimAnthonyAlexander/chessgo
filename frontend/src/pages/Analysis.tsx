@@ -438,6 +438,7 @@ export default function Analysis() {
     const localRace = useLocalEngineRace({
         active: engineOn && !isDuck && !over.over && !loading,
         fen: current.fen,
+        achievedDepth: current.bestDepth ?? 0,
     })
     const localEngineOn = localRace.enabled
 
@@ -1138,6 +1139,7 @@ export default function Analysis() {
                         // or off. Disappears the instant a local (or fresher server)
                         // result supersedes it, since displayCandidates[node] is
                         // overwritten with that result's own source.
+                        evalDepth={current.bestDepth ?? null}
                         sourceBadge={
                             !isDuck && displayCandidates[current.id]?.source === 'cache' ? 'cache' : null
                         }

@@ -32,7 +32,7 @@ function Toggle({ on, onChange }: { on: boolean; onChange: () => void }) {
 
 export default function EngineLines({
     engineOn, onToggleEngine, onPlayLine, onHoverMove, lines, fen, isDuck, mainSan,
-    headerExtra, sourceBadge,
+    headerExtra, sourceBadge, evalDepth,
 }: {
     engineOn: boolean; onToggleEngine: () => void; onPlayLine: (pvUci: string[]) => void
     onHoverMove?: (uci: string | null) => void; lines: AnalysisLine[] | null; fen: string
@@ -45,11 +45,21 @@ export default function EngineLines({
     // CLOUD badge — see Analysis.tsx for how the source is tracked. Undefined/
     // null renders nothing.
     sourceBadge?: 'cache' | null
+    /** Depth of the currently displayed EVAL (the tree node's bestDepth), which
+     *  is what the depth readout and its source badge describe. */
+    evalDepth?: number | null
 }) {
     const [numLines, setNumLines] = useState(loadLineCount)
 
     const shown = lines?.slice(0, numLines) ?? []
-    const depth = shown[0]?.depth ?? null
+    // The header depth describes the DISPLAYED EVAL — the number the source
+    // badge is attached to — not the move list. The two can differ sharply:
+    // with the local engine on, a cached book row supplies the eval at depth 22
+    // while the move list comes from local MultiPV at depth 14, and reading the
+    // list's depth here printed "Cloud · depth 14", labelling a local number as
+    // a cloud result. Falls back to the list only when there is no eval depth
+    // (e.g. a revisited node with cached lines and no eval yet).
+    const depth = evalDepth ?? shown[0]?.depth ?? null
 
     // Convert each line's UCI PV to SAN tokens.
     const allTokens = useMemo(() => shown.map((l): { tokens: { text: string; num: boolean; firstMove?: boolean }[]; ev: WhiteEval } => {
