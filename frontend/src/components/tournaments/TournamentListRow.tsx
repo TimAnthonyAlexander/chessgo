@@ -1,12 +1,39 @@
 import { Box, Typography } from '@mui/material'
-import { Users } from 'lucide-react'
 import type { TournamentSummary } from '../../api/client'
 import { VARIANT_LABEL } from '../../lib/variants'
-import { timingText } from './timing'
+import {
+    clockTime,
+    formatMinutes,
+    isFeaturedSeries,
+    parseStartsAt,
+    restrictionText,
+    stateText,
+    STARTING_SOON_MS,
+} from './timing'
 
-/** One row in the tournament list: name + terms on the first line, pool /
- * player count / live timing on the second. Wraps naturally rather than
- * using a fixed grid, so it never needs a horizontal scroll at 375px. */
+/** The schedule's column grid — one template shared by the header and every
+ * row so they always line up. Narrower at `xs`: variant and duration drop
+ * (they're the least decision-relevant columns), everything else stays put
+ * so the table never forces a sideways scroll on the page at 375px. */
+export const ROW_GRID_SX = {
+    display: 'grid',
+    gridTemplateColumns: {
+        xs: '46px minmax(0,1fr) 50px 34px 76px',
+        sm: '58px minmax(0,1fr) 84px 56px 50px 46px 112px',
+    },
+    gridTemplateAreas: {
+        xs: '"time name clock players state"',
+        sm: '"time name variant clock duration players state"',
+    },
+    columnGap: { xs: 8, sm: 12 },
+    alignItems: 'center',
+} as const
+
+const num = { fontVariantNumeric: 'tabular-nums', fontFamily: 'var(--font-mono)' } as const
+
+/** One row of the schedule table: a fixed 5–7 column grid (see
+ * {@link ROW_GRID_SX}), the whole row clickable, tight enough to read as a
+ * broadcast schedule rather than a stack of cards. */
 export default function TournamentListRow({
     t,
     now,
@@ -16,6 +43,12 @@ export default function TournamentListRow({
     now: number
     onClick: () => void
 }) {
+    const featured = isFeaturedSeries(t.series)
+    const restriction = restrictionText(t)
+    const startsAt = parseStartsAt(t.starts_at)
+    const soon = t.status === 'scheduled' && startsAt - now <= STARTING_SOON_MS
+    const live = t.status === 'running'
+
     return (
         <Box
             onClick={onClick}
@@ -29,88 +62,104 @@ export default function TournamentListRow({
                 }
             }}
             sx={{
-                display: 'flex',
-                flexWrap: 'wrap',
-                alignItems: 'baseline',
-                columnGap: 10,
-                rowGap: 4,
-                px: 1.5,
-                py: 1.1,
+                ...ROW_GRID_SX,
+                px: { xs: 1, sm: 1.5 },
+                py: featured ? { xs: 0.85, sm: 0.95 } : { xs: 0.5, sm: 0.55 },
                 cursor: 'pointer',
+                borderTop: '1px solid var(--line-soft)',
                 '&:hover': { bgcolor: 'var(--surface-2)' },
                 '&:focus-visible': { outline: '2px solid var(--accent)', outlineOffset: '-2px' },
             }}
         >
+            <Typography sx={{ ...num, gridArea: 'time', fontSize: 12, color: 'var(--text-dim)' }}>
+                {clockTime(t.status === 'finished' ? t.ends_at_ms : startsAt)}
+            </Typography>
+
+            <Box sx={{ gridArea: 'name', display: 'flex', alignItems: 'baseline', gap: 0.6, minWidth: 0 }}>
+                <Typography
+                    sx={{
+                        fontFamily: 'var(--font-display)',
+                        fontWeight: featured ? 700 : 500,
+                        fontSize: featured ? { xs: 13.5, sm: 14.5 } : { xs: 12.5, sm: 13 },
+                        color: featured ? 'var(--text)' : 'var(--text-dim)',
+                        minWidth: 0,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                    }}
+                >
+                    {t.name}
+                </Typography>
+                {restriction && (
+                    <Box
+                        component="span"
+                        sx={{
+                            flexShrink: 0,
+                            fontSize: 10,
+                            fontWeight: 700,
+                            letterSpacing: '0.03em',
+                            color: 'var(--muted)',
+                            border: '1px solid var(--line)',
+                            borderRadius: '5px',
+                            px: 0.5,
+                            py: '1px',
+                        }}
+                    >
+                        {restriction}
+                    </Box>
+                )}
+            </Box>
+
             <Typography
                 sx={{
-                    fontFamily: 'var(--font-display)',
-                    fontWeight: 700,
-                    fontSize: 14.5,
-                    minWidth: 0,
+                    gridArea: 'variant',
+                    display: { xs: 'none', sm: 'block' },
+                    fontSize: 12,
+                    color: 'var(--muted)',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
                 }}
             >
-                {t.name}
+                {VARIANT_LABEL[t.variant]}
             </Typography>
-            {t.variant !== 'standard' && <Tag label={VARIANT_LABEL[t.variant]} />}
-            <Tag label={t.rated ? 'Rated' : 'Casual'} accent={t.rated} />
 
-            {/* Forces the meta row below the title row inside the wrapping flexbox. */}
-            <Box sx={{ flexBasis: '100%', height: 0 }} />
-
-            <Typography
-                sx={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, color: 'var(--text-dim)' }}
-            >
+            <Typography sx={{ ...num, gridArea: 'clock', fontSize: 12, color: 'var(--text-dim)' }}>
                 {t.pool}
             </Typography>
-            <Box
-                component="span"
-                sx={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 0.4,
-                    fontSize: 12.5,
-                    color: 'var(--text-dim)',
-                }}
-            >
-                <Users size={12} /> {t.player_count}
-            </Box>
+
             <Typography
                 sx={{
-                    ml: 'auto',
-                    fontSize: 12.5,
-                    fontWeight: 600,
-                    color: t.status === 'running' ? 'var(--accent)' : 'var(--text-dim)',
-                    whiteSpace: 'nowrap',
+                    ...num,
+                    gridArea: 'duration',
+                    display: { xs: 'none', sm: 'block' },
+                    fontSize: 12,
+                    color: 'var(--muted)',
+                    textAlign: 'right',
                 }}
             >
-                {timingText(t, now)}
+                {formatMinutes(t.duration_minutes)}
             </Typography>
-        </Box>
-    )
-}
 
-function Tag({ label, accent }: { label: string; accent?: boolean }) {
-    return (
-        <Box
-            component="span"
-            sx={{
-                fontSize: 10.5,
-                fontWeight: 700,
-                letterSpacing: '0.06em',
-                textTransform: 'uppercase',
-                color: accent ? 'var(--accent)' : 'var(--muted)',
-                border: '1px solid',
-                borderColor: accent ? 'var(--accent-line)' : 'var(--line)',
-                borderRadius: '5px',
-                px: 0.6,
-                py: '1px',
-                flexShrink: 0,
-            }}
-        >
-            {label}
+            <Typography
+                sx={{ ...num, gridArea: 'players', fontSize: 12, color: 'var(--text-dim)', textAlign: 'right' }}
+            >
+                {t.player_count}
+            </Typography>
+
+            <Typography
+                sx={{
+                    ...num,
+                    gridArea: 'state',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    textAlign: 'right',
+                    whiteSpace: 'nowrap',
+                    color: live || soon ? 'var(--accent)' : 'var(--text-dim)',
+                }}
+            >
+                {stateText(t, now)}
+            </Typography>
         </Box>
     )
 }

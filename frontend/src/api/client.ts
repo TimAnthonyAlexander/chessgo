@@ -1512,6 +1512,19 @@ export type TournamentVariant = 'standard' | 'chess960' | 'duck' | 'crazyhouse' 
 
 export type TournamentStatus = 'scheduled' | 'running' | 'finished'
 
+/** The automated rota a tournament was spawned from, or `null` for a
+ * hand-created one-off (TournamentController::summaryRow's `series`). Used
+ * purely for display weight (a named/rare event vs. hourly furniture) — never
+ * as a per-series color. */
+export type TournamentSeries =
+    | 'hourly'
+    | 'variant-hourly'
+    | 'daily'
+    | 'weekly'
+    | 'titled-tuesday'
+    | 'monthly'
+    | null
+
 /** One tournament's public summary — the shape both the list and the detail's
  * own `tournament` field share (TournamentController::summaryRow). `starts_at`
  * is a "Y-m-d H:i:s" string in UTC (see Tournament::$starts_at); `ends_at_ms`
@@ -1528,6 +1541,10 @@ export interface TournamentSummary {
     status: TournamentStatus
     ends_at_ms: number
     player_count: number
+    series: TournamentSeries
+    min_rating: number | null
+    max_rating: number | null
+    titled_only: boolean
 }
 
 /** Upcoming + running + recently-finished tournaments, hub-sorted (running
