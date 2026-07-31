@@ -3,27 +3,28 @@ import SkeletonBar from '../home/SkeletonBar'
 import { Panel } from '../home/Panel'
 
 /** Loading placeholder shaped like the real profile dashboard (hero band +
- * two-column body), so the layout doesn't jump when data arrives. */
+ * two-column body), so the layout doesn't jump when data arrives. Mirrors the
+ * real layout's chrome: the hero and sidebar sections are plain (a hairline,
+ * no card), only the games column gets a bordered placeholder, since that's
+ * the one real card on the page. */
 export default function ProfileSkeleton() {
     return (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
-            {/* Hero: identity-only now (avatar + name + joined date). */}
+            {/* Hero: identity-only (avatar + name + joined date), hairline below. */}
             <Box
                 sx={{
-                    bgcolor: 'var(--surface)',
-                    border: '1px solid var(--line-soft)',
-                    borderRadius: '16px',
-                    p: { xs: 2.5, md: 2.75 },
                     display: 'flex',
                     alignItems: 'center',
                     gap: 2,
+                    pb: { xs: 2, md: 2.5 },
+                    borderBottom: '1px solid var(--line-soft)',
                 }}
             >
                 <Box
                     sx={{
-                        width: 62,
-                        height: 62,
-                        borderRadius: '16px',
+                        width: 58,
+                        height: 58,
+                        borderRadius: '14px',
                         bgcolor: 'var(--surface-2)',
                         flexShrink: 0,
                     }}
@@ -44,17 +45,17 @@ export default function ProfileSkeleton() {
                 }}
             >
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
-                    <Panel>
+                    <Box>
                         <SkeletonBar w={80} h={14} />
                         <SkeletonBar w="60%" h={28} sx={{ mt: 1.5 }} />
-                        <SkeletonBar h={10} sx={{ mt: 1.5, borderRadius: '999px' }} />
-                    </Panel>
-                    <Panel>
+                        <SkeletonBar h={8} sx={{ mt: 1.5, borderRadius: '999px' }} />
+                    </Box>
+                    <Box sx={{ pt: 2.5, borderTop: '1px solid var(--line-soft)' }}>
                         <SkeletonBar w={80} h={14} sx={{ mb: 2 }} />
                         {Array.from({ length: 4 }).map((_, i) => (
                             <SkeletonBar key={i} h={28} sx={{ mb: 1, borderRadius: '10px' }} />
                         ))}
-                    </Panel>
+                    </Box>
                 </Box>
                 <Panel>
                     <SkeletonBar w={80} h={14} sx={{ mb: 2 }} />

@@ -11,7 +11,7 @@ import {
     Typography,
 } from '@mui/material'
 import { ApiError, updateMyProfile, type ProfileUpdateResult } from '../../api/client'
-import { COUNTRY_NAMES } from './shared'
+import { COUNTRY_NAMES, OUTCOME_STYLE } from './shared'
 
 const BIO_MAX = 300
 
@@ -71,7 +71,7 @@ export default function EditProfileDialog({
                     <Typography
                         sx={{
                             fontSize: 11,
-                            color: bio.length >= BIO_MAX ? '#ca4a4a' : 'var(--muted)',
+                            color: bio.length >= BIO_MAX ? OUTCOME_STYLE.loss.color : 'var(--muted)',
                             textAlign: 'right',
                             mt: 0.5,
                         }}
@@ -99,7 +99,9 @@ export default function EditProfileDialog({
                 </TextField>
 
                 {error && (
-                    <Typography sx={{ fontSize: 12.5, color: '#ca4a4a' }}>{error}</Typography>
+                    <Typography sx={{ fontSize: 12.5, color: OUTCOME_STYLE.loss.color }}>
+                        {error}
+                    </Typography>
                 )}
             </DialogContent>
             <DialogActions sx={{ px: 3, pb: 2 }}>

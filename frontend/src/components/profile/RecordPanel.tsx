@@ -1,22 +1,32 @@
 import { Box, Typography } from '@mui/material'
 import type { ProfileRecord } from '../../api/client'
-import { Panel, PanelHead } from '../home/Panel'
+import { OUTCOME_STYLE } from './shared'
 
-const WIN = '#5b9e5b'
-const LOSS = '#ca4a4a'
-const DRAW = 'var(--line)'
+const WIN = OUTCOME_STYLE.win.color
+const LOSS = OUTCOME_STYLE.loss.color
 
 /** The player's overall record: a big win-rate headline over a single
- * proportional W/L/D bar (replaces the old five-pill row — same data, read at a
- * glance instead of by mental arithmetic). */
+ * proportional W/L/D bar (replaces the old five-pill row — same data, read at
+ * a glance instead of by mental arithmetic). Plain section, no card border —
+ * it's read-only, so a bounded box would just be chrome around text. */
 export default function RecordPanel({ record }: { record: ProfileRecord }) {
     const { wins, losses, draws, total } = record
     const winRate = total > 0 ? Math.round((wins / total) * 100) : 0
     const pct = (n: number) => (total > 0 ? (n / total) * 100 : 0)
 
     return (
-        <Panel>
-            <PanelHead title="Record" />
+        <Box>
+            <Typography
+                sx={{
+                    fontFamily: 'var(--font-display)',
+                    fontSize: 18,
+                    fontWeight: 700,
+                    lineHeight: 1.1,
+                    mb: 1.5,
+                }}
+            >
+                Record
+            </Typography>
 
             <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mb: 1.5 }}>
                 <Typography
@@ -26,6 +36,7 @@ export default function RecordPanel({ record }: { record: ProfileRecord }) {
                         fontWeight: 700,
                         lineHeight: 1,
                         color: 'var(--accent)',
+                        fontVariantNumeric: 'tabular-nums',
                     }}
                 >
                     {winRate}%
@@ -39,7 +50,7 @@ export default function RecordPanel({ record }: { record: ProfileRecord }) {
             <Box
                 sx={{
                     display: 'flex',
-                    height: 10,
+                    height: 8,
                     borderRadius: '999px',
                     overflow: 'hidden',
                     bgcolor: 'var(--surface-2)',
@@ -48,7 +59,7 @@ export default function RecordPanel({ record }: { record: ProfileRecord }) {
                 {total > 0 ? (
                     <>
                         <Box sx={{ width: `${pct(wins)}%`, bgcolor: WIN }} />
-                        <Box sx={{ width: `${pct(draws)}%`, bgcolor: DRAW }} />
+                        <Box sx={{ width: `${pct(draws)}%`, bgcolor: 'var(--line)' }} />
                         <Box sx={{ width: `${pct(losses)}%`, bgcolor: LOSS }} />
                     </>
                 ) : null}
@@ -60,7 +71,7 @@ export default function RecordPanel({ record }: { record: ProfileRecord }) {
                 <Legend color="var(--text-dim)" label="Draws" value={draws} />
                 <Legend color={LOSS} label="Losses" value={losses} />
             </Box>
-        </Panel>
+        </Box>
     )
 }
 
@@ -70,7 +81,12 @@ function Legend({ color, label, value }: { color: string; label: string; value: 
             <Box sx={{ width: 8, height: 8, borderRadius: '2px', bgcolor: color, flexShrink: 0 }} />
             <Typography
                 component="span"
-                sx={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 700 }}
+                sx={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 13,
+                    fontWeight: 700,
+                    fontVariantNumeric: 'tabular-nums',
+                }}
             >
                 {value}
             </Typography>

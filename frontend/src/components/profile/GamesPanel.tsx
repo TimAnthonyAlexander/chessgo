@@ -128,9 +128,6 @@ export default function GamesPanel({
             ) : (
                 <Box
                     sx={{
-                        border: '1px solid var(--line-soft)',
-                        borderRadius: '12px',
-                        overflow: 'hidden',
                         opacity: loading ? 0.5 : 1,
                         transition: 'opacity .12s ease',
                     }}
@@ -490,9 +487,14 @@ function GameRow({
                         <Box
                             component="span"
                             title="Duck Chess"
-                            sx={{ display: 'inline-flex', fontSize: 16, flexShrink: 0 }}
+                            sx={{
+                                display: 'inline-flex',
+                                fontSize: 16,
+                                flexShrink: 0,
+                                color: 'var(--muted)',
+                            }}
                         >
-                            <DuckGlyph />
+                            <DuckGlyph mono />
                         </Box>
                     )}
                     {game.variant === 'crazyhouse' && (
@@ -503,7 +505,7 @@ function GameRow({
                                 display: 'inline-flex',
                                 fontSize: 15,
                                 flexShrink: 0,
-                                color: 'var(--accent)',
+                                color: 'var(--muted)',
                             }}
                         >
                             ⇄
@@ -516,7 +518,7 @@ function GameRow({
                             sx={{
                                 display: 'inline-flex',
                                 flexShrink: 0,
-                                color: 'var(--text-dim)',
+                                color: 'var(--muted)',
                             }}
                         >
                             <Skull size={14} />
@@ -531,8 +533,8 @@ function GameRow({
                                 fontFamily: 'var(--font-mono)',
                                 fontSize: 9.5,
                                 fontWeight: 700,
-                                color: 'var(--accent)',
-                                border: '1px solid var(--accent-line)',
+                                color: 'var(--muted)',
+                                border: '1px solid var(--line-soft)',
                                 borderRadius: '4px',
                                 px: 0.4,
                                 py: '1px',
@@ -558,7 +560,13 @@ function GameRow({
                         fontFamily: 'var(--font-mono)',
                         fontSize: 12.5,
                         fontWeight: 600,
-                        color: delta > 0 ? '#5b9e5b' : delta < 0 ? '#ca4a4a' : 'var(--muted)',
+                        fontVariantNumeric: 'tabular-nums',
+                        color:
+                            delta > 0
+                                ? OUTCOME_STYLE.win.color
+                                : delta < 0
+                                  ? OUTCOME_STYLE.loss.color
+                                  : 'var(--muted)',
                     }}
                 >
                     {delta > 0 ? '+' : ''}

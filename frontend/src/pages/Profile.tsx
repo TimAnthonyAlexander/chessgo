@@ -15,7 +15,12 @@ import RecordPanel from '../components/profile/RecordPanel'
 import RatingsPanel from '../components/profile/RatingsPanel'
 import GamesPanel from '../components/profile/GamesPanel'
 import ProfileSkeleton from '../components/profile/ProfileSkeleton'
-import { primaryCategory, type CatFilter, type ResultFilter } from '../components/profile/shared'
+import {
+    OUTCOME_STYLE,
+    primaryCategory,
+    type CatFilter,
+    type ResultFilter,
+} from '../components/profile/shared'
 
 export default function Profile() {
     const { name = '' } = useParams<{ name: string }>()
@@ -254,7 +259,10 @@ function Centered({ children, tone }: { children: React.ReactNode; tone?: 'error
             sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', p: 4 }}
         >
             <Typography
-                sx={{ fontSize: 14, color: tone === 'error' ? '#ca4a4a' : 'var(--text-dim)' }}
+                sx={{
+                    fontSize: 14,
+                    color: tone === 'error' ? OUTCOME_STYLE.loss.color : 'var(--text-dim)',
+                }}
             >
                 {children}
             </Typography>
