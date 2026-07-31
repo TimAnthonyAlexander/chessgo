@@ -214,6 +214,69 @@ opens a separate spectator WS (`spectateSocket`) with live board and clocks, plu
 an admin-only eval bar and best-move arrow. Ply scrubbing is
 `docs/tasks/open/spectate-ply-scrubbing.md`.
 
+**Social graph.** `FriendLink` (`friend_link`) holds requester/addressee/status;
+`GET /friends` returns accepted friends with a `linkId` (for unfriending), the
+friend's `userId`, title, rating and an `online` flag resolved through
+`HubClient::onlineSubs()` → the hub's `GET /internal/online`. Requests, accept,
+decline and cancel are the `/friends/*` routes; a mutual pending request
+auto-accepts. UI is `pages/Friends.tsx` + `components/friends/`.
+
+**Notifications** are `Notification` (`notification`, JSON `payload` as a
+`?string` with accessors) pushed via `NotificationService::push()` for
+`friend_request`, `friend_accepted`, `challenge`, `challenge_accepted`,
+`challenge_declined`. The nav bell (`components/notifications/`) polls
+`GET /notifications` every 20s, pauses on a hidden tab, and acts inline — accept
+on a challenge returns a code and lands you in the game.
+
+**Two challenge systems, deliberately.** The hub's ephemeral 6-char code
+(`challenge.go`) is the anonymous share-a-link flow. `Challenge` (`challenge`) is
+the persistent user-to-user one: it survives both players being offline, notifies
+the opponent, and on accept mints a code through
+`HubClient::createServerChallenge()` → the hub's `POST /internal/challenge`,
+which registers a challenge restricted to exactly two identity subs
+(`serverchallenge.go`). The first of the two to arrive parks as `waitingClient`
+and gets `challengeWaiting`; a parked waiter whose socket died re-attaches on
+reconnect via the same session index live-game resume uses.
+
+**Custom start positions.** A challenge may carry a `fen`; the hub validates it
+through `variant.New()` at registration (rejecting chess960 + FEN) and **forces
+the game casual**. `ChallengeDialog` takes a `startFen` prop and the Editor has a
+"Challenge a player from here" exit. `Game` stores `start_fen`.
+
+**Arena tournaments.** `Tournament` + `TournamentPlayer`; status is derived from
+`starts_at` + `duration_minutes` by `reconcileStatus()`, never a cron. Scoring
+happens in `GameResultController` when the hub persists a game carrying
+`tournamentId`: win 2, draw 1, and 4 per win once a player is on 2+ consecutive
+wins. It is wrapped so a scoring failure can never block the game persist. The
+hub polls `GET /internal/arenas/active` every 5s into a Run-goroutine cache
+(`arena.go`), takes `joinArena`/`leaveArena` over WS, pairs by **closest score**
+(not rating), avoids an immediate rematch when a third player is free, and
+returns both players to the pool when a game ends. UI: `pages/Tournaments.tsx`,
+`pages/Tournament.tsx`.
+
+**Titles.** `User::displayTitle()` returns the stored `title` or `'AM'` (Admin
+Master) for admins — `AM` is derived, never stored. `components/TitleBadge.tsx`
+renders it as a **solid red chip with white text**; that styling is a deliberate
+user decision, so place the badge, don't restyle it. Controllers that hand-build
+player rows use `User::titleMapFor()` / `Game::summaryRowsWithTitles()` to batch
+the lookup. Live games, watch and spectate get it from an optional `title` claim
+on the WS ticket → `auth.Identity.Title` → the hub's opponent/hello/lobby
+payloads.
+
+**Profile identity.** `User` carries `bio` (≤300 chars) and `country` (ISO-3166
+alpha-2, whitelisted on the model), edited through `POST /me/profile` and
+rendered on your own profile behind an edit dialog. Country shows as a name in
+text, no flags.
+
+**Timed bot games.** `BotGame` gained `time_control`, `white_ms`, `black_ms` and
+`last_move_at` (stored as **epoch milliseconds**, not the usual datetime string,
+so a bullet clock doesn't drift a second a move). Clocks are enforced entirely
+server-side in `BotGameService` on each move: charge the human's elapsed time,
+flag if it hits zero, add increment, time the engine call and charge the bot,
+then restamp. `botMovetimeMs()` caps engine think time by the bot's remaining
+clock. Untimed (`time_control` null) is the default and unchanged. Undo is
+refused on a timed game.
+
 **PGN/FEN** live in `frontend/src/lib/pgn.ts` (`toPgn`/`fromPgn`/`downloadPgn`,
 tolerant of comments/NAGs/`%clk`/`%eval`/RAV), wired into `AnalysisAside.tsx`
 (import, copy, download, copy link, copy/paste FEN) and `BoardActions.tsx`
@@ -221,8 +284,10 @@ tolerant of comments/NAGs/`%clk`/`%eval`/RAV), wired into `AnalysisAside.tsx`
 
 ## Status / next
 
-Live: engine cutover to zugzwang (standard + 3 variants + SF), live human play
+Live: engine cutover to zugzwang (standard + 4 variants + SF), live human play
 (rating-proximity matchmaking, server clocks, reconnect/resume), bot backfill,
-accounts, per-time-control Glicko-2, game persistence, puzzles, premoves.
+accounts, per-time-control Glicko-2, game persistence, puzzles, premoves,
+friends + notifications + directed challenges, arena tournaments, player titles,
+timed bot games, and challenges from a custom position.
 Backlog is per-item under **`docs/tasks/open/`**; banked milestones in
 **`docs/tasks/done/`**.
