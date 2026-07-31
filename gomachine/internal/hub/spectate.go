@@ -133,6 +133,20 @@ type gameSummary struct {
 	filler bool // server-side ordering only; not serialized (unexported)
 }
 
+// moreInteresting reports whether a "most interesting first" listing of live
+// games should sort game a ahead of game b: real (non-filler) games before
+// fillers, then higher combined rating first ("top games"). This is the
+// Watch lobby's ordering (publishLobby, below); arena-games reuses it
+// verbatim (arena.go's doArenaGames) rather than inventing a second notion of
+// "interesting" — arena games are never fillers, so for them it reduces to
+// combined rating descending.
+func moreInteresting(aFiller bool, aRating int, bFiller bool, bRating int) bool {
+	if aFiller != bFiller {
+		return !aFiller // real games first
+	}
+	return aRating > bRating
+}
+
 // publishLobby rebuilds the top-N live-game snapshot and publishes it as JSON for
 // the HTTP handler. Run-goroutine only. Real games sort ahead of fillers, and
 // higher combined rating first ("top games").
@@ -163,10 +177,7 @@ func (h *Hub) publishLobby() {
 	}
 	sort.SliceStable(summaries, func(i, j int) bool {
 		a, b := summaries[i], summaries[j]
-		if a.filler != b.filler {
-			return !a.filler // real games first
-		}
-		return a.White.Rating+a.Black.Rating > b.White.Rating+b.Black.Rating
+		return moreInteresting(a.filler, a.White.Rating+a.Black.Rating, b.filler, b.White.Rating+b.Black.Rating)
 	})
 	if len(summaries) > lobbyMax {
 		summaries = summaries[:lobbyMax]

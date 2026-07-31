@@ -865,6 +865,14 @@ export interface ProfileGame {
     ply: number
 }
 
+/** "Playing now" — surfaced on the profile when the realtime hub reports this
+ * account in a live game (ProfileController::liveGame()). */
+export interface ProfileLiveGame {
+    gameId: string
+    pool: string
+    opponent: { name: string; title: Title | null; rating: number }
+}
+
 export interface Profile {
     id: string
     name: string
@@ -886,6 +894,9 @@ export interface Profile {
     // Antichess rating tile — likewise its own isolated pool.
     antichess: RatingTile
     record: ProfileRecord
+    // Present iff the hub reports this account in a live game right now (null
+    // otherwise, including whenever the hub is unreachable — never an error).
+    live_game: ProfileLiveGame | null
     // First page of game history + the total count, so the paginator can render
     // page numbers without a second request on load.
     games: ProfileGame[]
@@ -1595,4 +1606,29 @@ export function joinTournament(id: string): Promise<{ joined: boolean }> {
 /** Withdraw from a tournament — a no-op (not an error) if never joined. */
 export function withdrawTournament(id: string): Promise<{ withdrawn: boolean }> {
     return request(`/tournaments/${encodeURIComponent(id)}/withdraw`, { method: 'POST' })
+}
+
+/** One side of a live in-tournament game (TournamentGamesController — no
+ * `bot` flag, that's server-side only). */
+export interface ArenaGameSide {
+    name: string | null
+    rating: number | null
+    title: Title | null
+}
+
+/** One live game currently being played inside a tournament, most-interesting
+ * first, capped at 20 by the hub. */
+export interface ArenaGame {
+    gameId: string
+    pool: string
+    variant: TournamentVariant
+    ply: number
+    white: ArenaGameSide
+    black: ArenaGameSide
+}
+
+/** Games in progress inside one tournament right now — proxies the realtime
+ * hub, empty (never an error) if it's unreachable or nothing is live. */
+export function getTournamentGames(id: string): Promise<{ games: ArenaGame[] }> {
+    return request(`/tournaments/${encodeURIComponent(id)}/games`)
 }

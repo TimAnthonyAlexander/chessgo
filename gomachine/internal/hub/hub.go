@@ -61,6 +61,11 @@ type Hub struct {
 	// h.sessions is likewise Run-goroutine-only state.
 	onlineQueries chan onlineQuery
 
+	// arenaGamesQueries funnels a "what's live in this tournament right now"
+	// lookup (ArenaGames) onto the Run goroutine — h.games is likewise
+	// Run-goroutine-only state (see arena.go's doArenaGames).
+	arenaGamesQueries chan arenaGamesQuery
+
 	// Arena tournaments (arena.go): BaseAPI is the source of truth for which
 	// tournaments are running and who's in them; the hub only ever PAIRS
 	// participants and plays the games. arenaClient polls BaseAPI off the Run
@@ -132,17 +137,52 @@ type Hub struct {
 	lobby atomic.Pointer[[]byte]
 
 	// livePlayers indexes non-bot identities that are currently in a live,
-	// non-filler game, so an out-of-band caller (BaseAPI anti-cheat) can ask "is
-	// this user playing right now, and what's their board?" without touching the
-	// Run goroutine's maps. Written on the Run goroutine alongside playerGames
-	// (markLive/unmarkLive); read via LivePlayer from the HTTP goroutine.
-	livePlayers sync.Map // key: identity UserID (string) -> current board FEN (string)
+	// non-filler game, so an out-of-band caller (BaseAPI anti-cheat, a profile
+	// page's "playing now" link) can ask "is this user playing right now, and
+	// what's their board/game/opponent?" without touching the Run goroutine's
+	// maps. Written on the Run goroutine alongside playerGames (markLive/
+	// unmarkLive); read via LivePlayer/LivePlayerDetail from the HTTP goroutine.
+	livePlayers sync.Map // key: identity UserID (string) -> livePlayerEntry
+}
+
+// livePlayerEntry is the sync.Map value backing the live-player index: the
+// current board FEN (the original anti-cheat probe's payload) plus the game
+// id, pool, and opponent identity a profile page's "playing now" link needs.
+// Stored per human side at markLive time; refreshLive only ever touches fen.
+type livePlayerEntry struct {
+	fen      string
+	gameID   string
+	pool     string
+	opponent LivePlayerOpponent
+}
+
+// LivePlayerOpponent is the opposing side of a LivePlayerDetail's game — the
+// zero value (empty name/title, 0 rating) whenever the subject isn't live.
+type LivePlayerOpponent struct {
+	Name   string `json:"name"`
+	Title  string `json:"title"`
+	Rating int    `json:"rating"`
+}
+
+// LivePlayerDetail is what GET /internal/live-player reports about an
+// identity's current game: Live/FEN are the original anti-cheat probe's
+// fields, unchanged; GameID/Pool/Opponent are additive, for a profile page's
+// "playing now" link. The zero value (Live: false) is what an identity not
+// currently in a live, non-filler game gets.
+type LivePlayerDetail struct {
+	Live     bool
+	FEN      string
+	GameID   string
+	Pool     string
+	Opponent LivePlayerOpponent
 }
 
 // LivePlayer reports whether the identity id is currently in a live, non-filler
 // game and, if so, that game's current board FEN. Safe to call from any
 // goroutine (backed by a sync.Map). The FEN lets the caller distinguish "used
 // the analysis board" from "analyzed the exact position they are playing".
+// Kept exactly as-is (signature and behavior) — see LivePlayerDetail for the
+// richer, additive lookup.
 func (h *Hub) LivePlayer(id string) (live bool, fen string) {
 	if id == "" {
 		return false, ""
@@ -151,8 +191,30 @@ func (h *Hub) LivePlayer(id string) (live bool, fen string) {
 	if !ok {
 		return false, ""
 	}
-	s, _ := v.(string)
-	return true, s
+	e, _ := v.(livePlayerEntry)
+	return true, e.fen
+}
+
+// LivePlayerDetail reports everything LivePlayer does (Live/FEN, unchanged)
+// plus the game id, pool, and opponent identity — enough for a profile page's
+// "playing now" link. Safe to call from any goroutine (same sync.Map).
+func (h *Hub) LivePlayerDetail(id string) LivePlayerDetail {
+	if id == "" {
+		return LivePlayerDetail{}
+	}
+	v, ok := h.livePlayers.Load(id)
+	if !ok {
+		return LivePlayerDetail{}
+	}
+	e, _ := v.(livePlayerEntry)
+	return LivePlayerDetail{Live: true, FEN: e.fen, GameID: e.gameID, Pool: e.pool, Opponent: e.opponent}
+}
+
+// opponentInfoFor is the LivePlayerOpponent view of a game's other side, used
+// by markLive to seat each human's live-player entry with the OTHER side's
+// identity (white's entry carries black's info, and vice versa).
+func opponentInfoFor(p *player, cat string) LivePlayerOpponent {
+	return LivePlayerOpponent{Name: p.id.Name, Title: p.id.Title, Rating: p.id.RatingFor(cat)}
 }
 
 // markLive records both non-bot sides of g as in-game. Called on the Run
@@ -162,28 +224,38 @@ func (h *Hub) markLive(g *game) {
 		return
 	}
 	fen := g.boardFEN()
+	cat := categoryFor(g.pool, g.variant)
 	if !g.white.isBot {
-		h.livePlayers.Store(g.white.id.UserID, fen)
+		h.livePlayers.Store(g.white.id.UserID, livePlayerEntry{
+			fen: fen, gameID: g.id, pool: g.pool, opponent: opponentInfoFor(g.black, cat),
+		})
 	}
 	if !g.black.isBot {
-		h.livePlayers.Store(g.black.id.UserID, fen)
+		h.livePlayers.Store(g.black.id.UserID, livePlayerEntry{
+			fen: fen, gameID: g.id, pool: g.pool, opponent: opponentInfoFor(g.white, cat),
+		})
 	}
 }
 
 // refreshLive updates the stored board FEN for g's live sides after a move.
+// gameID/pool/opponent never change mid-game, so only fen is touched.
 func (h *Hub) refreshLive(g *game) {
 	if g.filler {
 		return
 	}
 	fen := g.boardFEN()
 	if !g.white.isBot {
-		if _, ok := h.livePlayers.Load(g.white.id.UserID); ok {
-			h.livePlayers.Store(g.white.id.UserID, fen)
+		if v, ok := h.livePlayers.Load(g.white.id.UserID); ok {
+			e, _ := v.(livePlayerEntry)
+			e.fen = fen
+			h.livePlayers.Store(g.white.id.UserID, e)
 		}
 	}
 	if !g.black.isBot {
-		if _, ok := h.livePlayers.Load(g.black.id.UserID); ok {
-			h.livePlayers.Store(g.black.id.UserID, fen)
+		if v, ok := h.livePlayers.Load(g.black.id.UserID); ok {
+			e, _ := v.(livePlayerEntry)
+			e.fen = fen
+			h.livePlayers.Store(g.black.id.UserID, e)
 		}
 	}
 }
@@ -283,6 +355,7 @@ func New(secret string) *Hub {
 
 		registerChallenges: make(chan registerChallengeReq),
 		onlineQueries:      make(chan onlineQuery),
+		arenaGamesQueries:  make(chan arenaGamesQuery),
 
 		arenaSnapshotCh: make(chan []ArenaSnapshot, 1),
 		arenas:          map[string]*arenaState{},
@@ -351,6 +424,8 @@ func (h *Hub) Run() {
 			req.result <- h.doRegisterServerChallenge(req)
 		case q := <-h.onlineQueries:
 			q.result <- h.doOnline(q.subs)
+		case q := <-h.arenaGamesQueries:
+			q.result <- h.doArenaGames(q.tournamentID)
 		case snaps := <-h.arenaSnapshotCh:
 			h.applyArenaSnapshots(snaps)
 		case <-ticker.C:

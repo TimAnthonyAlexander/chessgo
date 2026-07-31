@@ -11,8 +11,13 @@ use BaseApi\Models\BaseModel;
  * durable record for history + ratings. Bot-fill games are stored too (rated
  * is false for them, so they never move Elo). See docs/SPEC.md §8, §10.
  *
- * Per-side `*_user_id` is set only for real accounts (null for anonymous and
- * bot opponents); `*_uid` keeps the raw hub identity for reference. As with
+ * Per-side `*_user_id` is set whenever the side's uid resolves to a real
+ * `user` row — a seeded bot account (role='bot') included, so its arena games
+ * show up on its own profile — and stays null for anonymous sides and the
+ * hub's ordinary fill-in bots (bot-<random> uids, no account to resolve to).
+ * `*_uid` keeps the raw hub identity for reference. This is independent of
+ * Elo: {@see \App\Controllers\GameResultController::resolveAccount()} still
+ * returns null for any bot side there, so ratings are unaffected. As with
  * BotGame, JSON-shaped move data lives in TEXT columns (the array cast does not
  * encode on write) and is round-tripped via the accessors below.
  */

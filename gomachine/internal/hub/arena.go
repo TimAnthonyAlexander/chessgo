@@ -815,6 +815,108 @@ func (h *Hub) returnToArenaPool(g *game) {
 	}
 }
 
+// --- live games in a tournament (GET /internal/arena-games) ---
+
+// arenaGamesCap bounds how many live games the /internal/arena-games feed
+// reports for one tournament — enough to give a sense of what's being played
+// without the payload growing with a large arena.
+const arenaGamesCap = 20
+
+// ArenaGameSummary is one live game row for the /internal/arena-games feed —
+// a tournament page's "watch what's being played right now", next to
+// standings.
+type ArenaGameSummary struct {
+	GameID  string           `json:"gameId"`
+	Pool    string           `json:"pool"`
+	Variant string           `json:"variant"`
+	Ply     int              `json:"ply"`
+	White   ArenaSideSummary `json:"white"`
+	Black   ArenaSideSummary `json:"black"`
+}
+
+// ArenaSideSummary is the public view of one side of an ArenaGameSummary.
+// Title is a *string (null on the wire, not omitted) so the caller can tell
+// "no title" apart from a field that was never sent.
+type ArenaSideSummary struct {
+	Name   string  `json:"name"`
+	Rating int     `json:"rating"`
+	Title  *string `json:"title"`
+	Bot    bool    `json:"bot"`
+}
+
+// arenaGamesQuery is one "what's live in this tournament" lookup funneled
+// onto the Run goroutine — see Hub.ArenaGames and Hub.arenaGamesQueries.
+type arenaGamesQuery struct {
+	tournamentID string
+	result       chan []ArenaGameSummary
+}
+
+// ArenaGames reports the currently-live (not yet over) games tagged with
+// tournamentID, ordered "most interesting first" exactly like the Watch
+// lobby (moreInteresting — real games first, then higher combined rating),
+// capped at arenaGamesCap. Safe to call from any goroutine (funnels onto Run
+// over arenaGamesQueries, same shape as Online). An unknown or already-ended
+// tournament id — nothing currently live carries that arenaID — returns an
+// empty slice, never an error.
+func (h *Hub) ArenaGames(tournamentID string) []ArenaGameSummary {
+	resultCh := make(chan []ArenaGameSummary, 1)
+	h.arenaGamesQueries <- arenaGamesQuery{tournamentID: tournamentID, result: resultCh}
+	return <-resultCh
+}
+
+// arenaSideSummaryFor is the ArenaSideSummary view of one game side.
+func arenaSideSummaryFor(p *player, cat string) ArenaSideSummary {
+	var title *string
+	if p.id.Title != "" {
+		t := p.id.Title
+		title = &t
+	}
+	return ArenaSideSummary{Name: p.id.Name, Rating: p.id.RatingFor(cat), Title: title, Bot: p.isBot}
+}
+
+// arenaGameRow pairs an ArenaGameSummary with its combined rating so the two
+// travel together through the sort below (a bare index-parallel slice would
+// desync the moment sort.SliceStable swaps one but not the other).
+type arenaGameRow struct {
+	summary ArenaGameSummary
+	rating  int
+}
+
+// doArenaGames runs on the Run goroutine: h.games is otherwise touched only
+// there (exactly like doOnline/h.sessions). Filters to live games tagged with
+// tournamentID, then orders and caps them like the Watch lobby.
+func (h *Hub) doArenaGames(tournamentID string) []ArenaGameSummary {
+	var rows []arenaGameRow
+	if tournamentID != "" {
+		for _, g := range h.games {
+			if g.over || g.arenaID != tournamentID {
+				continue
+			}
+			cat := categoryFor(g.pool, g.variant)
+			white := arenaSideSummaryFor(g.white, cat)
+			black := arenaSideSummaryFor(g.black, cat)
+			rows = append(rows, arenaGameRow{
+				summary: ArenaGameSummary{
+					GameID: g.id, Pool: g.pool, Variant: g.variant, Ply: len(g.moves),
+					White: white, Black: black,
+				},
+				rating: white.Rating + black.Rating,
+			})
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		return moreInteresting(false, rows[i].rating, false, rows[j].rating)
+	})
+	if len(rows) > arenaGamesCap {
+		rows = rows[:arenaGamesCap]
+	}
+	games := make([]ArenaGameSummary, len(rows))
+	for i, r := range rows {
+		games[i] = r.summary
+	}
+	return games
+}
+
 // --- small helpers ---
 
 // arenaFreeHas reports whether c is (still) in ar's free pool.

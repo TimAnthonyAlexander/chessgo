@@ -181,9 +181,33 @@ func cmdHub(args []string) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		live, fen := h.LivePlayer(r.URL.Query().Get("sub"))
+		d := h.LivePlayerDetail(r.URL.Query().Get("sub"))
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"live": live, "fen": fen})
+		// live/fen are the original anti-cheat probe's fields, byte-identical to
+		// before this endpoint carried anything else. gameId/pool/opponent are
+		// additive — present only when live (nothing meaningful to report
+		// otherwise) — for a profile page's "playing now" link.
+		body := map[string]any{"live": d.Live, "fen": d.FEN}
+		if d.Live {
+			body["gameId"] = d.GameID
+			body["pool"] = d.Pool
+			body["opponent"] = map[string]any{"name": d.Opponent.Name, "title": d.Opponent.Title, "rating": d.Opponent.Rating}
+		}
+		_ = json.NewEncoder(w).Encode(body)
+	})
+	// Live games currently being played inside a running tournament
+	// (secret-gated, no ticket): a tournament page's "watch what's being
+	// played right now" next to standings. Only live (not over) games whose
+	// arenaID matches id; an unknown/ended tournament id returns an empty
+	// list, never an error. See hub.ArenaGames.
+	mux.HandleFunc("GET /internal/arena-games", func(w http.ResponseWriter, r *http.Request) {
+		if secret != "" && r.Header.Get("X-Hub-Secret") != secret {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		games := h.ArenaGames(r.URL.Query().Get("id"))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"games": games})
 	})
 	// Server-side private challenge registration (secret-gated, no ticket):
 	// BaseAPI pre-registers an already-accepted user-to-user challenge with no

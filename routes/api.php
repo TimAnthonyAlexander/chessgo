@@ -56,6 +56,7 @@ use App\Controllers\ChallengeController;
 use App\Controllers\ChallengeAcceptController;
 use App\Controllers\ChallengeDeclineController;
 use App\Controllers\TournamentController;
+use App\Controllers\TournamentGamesController;
 use App\Controllers\TournamentJoinController;
 use App\Controllers\TournamentWithdrawController;
 use App\Controllers\ArenaInternalController;
@@ -564,6 +565,10 @@ $router->post('/tournaments', [
 $router->get('/tournaments/{id}', [
     RateLimitMiddleware::class => ['limit' => '600/1m'],
     TournamentController::class,
+]);
+$router->get('/tournaments/{id}/games', [
+    RateLimitMiddleware::class => ['limit' => '600/1m'],
+    TournamentGamesController::class,
 ]);
 $router->post('/tournaments/{id}/join', [
     CombinedAuthMiddleware::class,

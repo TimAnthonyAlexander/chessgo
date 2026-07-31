@@ -8,6 +8,7 @@ use App\Models\Game;
 use App\Models\PuzzleAttempt;
 use App\Models\User;
 use App\Services\Glicko2Service;
+use App\Services\HubClient;
 
 /**
  * Public player profile, keyed by display name (the natural key the UI holds —
@@ -22,6 +23,9 @@ use App\Services\Glicko2Service;
  * light rows (no move blobs —
  * the board opens them via the analysis endpoint). Game pagination lives on the
  * sibling {@see ProfileGamesController} ("load more").
+ *
+ * `live_game` asks the realtime hub ({@see HubClient::livePlayer()}) whether
+ * this account is in a game right now — null when not (or the hub is down).
  */
 class ProfileController extends Controller
 {
@@ -38,6 +42,10 @@ class ProfileController extends Controller
 
     /** Bound from path {name}. */
     public string $name = '';
+
+    public function __construct(private readonly HubClient $hub)
+    {
+    }
 
     public function get(): JsonResponse
     {
@@ -109,6 +117,7 @@ class ProfileController extends Controller
                 'rated_at' => $user->rated_at_antichess,
             ],
             'record' => $this->record($id),
+            'live_game' => $this->liveGame($id),
             'games' => $rows,
             'gamesTotal' => $paged->total,
             'gamesPerPage' => self::RECENT_GAMES,
@@ -164,6 +173,34 @@ class ProfileController extends Controller
             'losses' => $losses,
             'draws' => $draws,
             'total' => $wins + $losses + $draws,
+        ];
+    }
+
+    /**
+     * "Playing now" — asks the realtime hub whether this account is currently
+     * in a live game and, if so, what to link to. Fail-soft: any hub error or
+     * unreachable hub (already handled inside {@see HubClient::livePlayer()},
+     * which keeps a sub-second timeout) yields null here, never an exception —
+     * a hub blip must never break or slow down the profile page.
+     *
+     * @return array{gameId: string, pool: string, opponent: array{name: string, title: ?string, rating: int}}|null
+     */
+    private function liveGame(string $id): ?array
+    {
+        try {
+            $probe = $this->hub->livePlayer($id);
+        } catch (\Throwable) {
+            return null;
+        }
+
+        if (!($probe['live'] ?? false) || $probe['gameId'] === null || $probe['opponent'] === null) {
+            return null;
+        }
+
+        return [
+            'gameId' => $probe['gameId'],
+            'pool' => (string) ($probe['pool'] ?? ''),
+            'opponent' => $probe['opponent'],
         ];
     }
 

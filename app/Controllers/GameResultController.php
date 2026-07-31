@@ -101,14 +101,26 @@ class GameResultController extends Controller
         $game->ply = count($game->getMoves());
 
         // Resolve real accounts (anon ids and bot-… ids won't match a user).
+        // This is the ELO path only — resolveAccount() deliberately returns null
+        // for any bot side, so Elo/streak/anticheat below are untouched.
         $whiteUser = $this->resolveAccount($white);
         $blackUser = $this->resolveAccount($black);
-        if ($whiteUser instanceof User) {
-            $game->white_user_id = $whiteUser->id;
+
+        // white_user_id/black_user_id, however, attach whenever the side's uid
+        // resolves to a REAL user row, bot account or not — a seeded bot account
+        // (role='bot', a real `user` row) needs its arena games to show up on its
+        // own profile. Reuses resolveAccountForScoring() (the arena-scoring
+        // resolver, which already doesn't exclude bots — only anon sides) rather
+        // than adding a third resolver. The hub's ordinary backfill bots
+        // (bot-<random> uids) still resolve to nothing here, same as before.
+        $whiteAccount = $this->resolveAccountForScoring($white);
+        $blackAccount = $this->resolveAccountForScoring($black);
+        if ($whiteAccount instanceof User) {
+            $game->white_user_id = $whiteAccount->id;
         }
 
-        if ($blackUser instanceof User) {
-            $game->black_user_id = $blackUser->id;
+        if ($blackAccount instanceof User) {
+            $game->black_user_id = $blackAccount->id;
         }
 
         // Elo updates for rated games: symmetric between two accounts, or
@@ -136,10 +148,9 @@ class GameResultController extends Controller
         // returns null for any bot side, exactly as before). Best-effort + never
         // allowed to break the persist path above (an unknown tournament id, an
         // unresolvable id, or a side that never joined, just means that side
-        // isn't scored — the game record itself is unaffected).
-        $whiteScoringUser = $this->resolveAccountForScoring($white);
-        $blackScoringUser = $this->resolveAccountForScoring($black);
-        $this->applyTournamentScoring($game, $whiteScoringUser, $blackScoringUser, $result);
+        // isn't scored — the game record itself is unaffected). Reuses the same
+        // $whiteAccount/$blackAccount resolved above for white_user_id/black_user_id.
+        $this->applyTournamentScoring($game, $whiteAccount, $blackAccount, $result);
 
         // Post-game anti-cheat review: the CHEAP signals only (rating velocity +
         // move-time anomaly). Self-contained + best-effort — a flag never blocks

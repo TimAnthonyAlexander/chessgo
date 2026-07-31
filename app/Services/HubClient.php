@@ -24,17 +24,23 @@ class HubClient
     /**
      * Anti-cheat probe: is identity `$sub` currently in a live, non-filler game,
      * and if so, what board are they on? Secret-gated on the hub (X-Hub-Secret).
+     * Also used by ProfileController to surface "playing now" — when live, the
+     * hub additionally carries the game id, pool, and opponent (name/title/
+     * rating, no `bot` flag on this side).
      *
      * FAIL-OPEN by design: any error / unreachable hub returns ['live' => false]
      * so a hub blip can never (a) block the analysis response or (b) raise a
      * false flag. A missed flag is acceptable; a false one is not.
      *
-     * @return array{live: bool, fen: string}
+     * @return array{live: bool, fen: string, gameId: ?string, pool: ?string,
+     *     opponent: ?array{name: string, title: ?string, rating: int}}
      */
     public function livePlayer(string $sub): array
     {
+        $empty = ['live' => false, 'fen' => '', 'gameId' => null, 'pool' => null, 'opponent' => null];
+
         if ($sub === '') {
-            return ['live' => false, 'fen' => ''];
+            return $empty;
         }
 
         $url = $this->baseUrl . '/internal/live-player?sub=' . rawurlencode($sub);
@@ -49,18 +55,75 @@ class HubClient
         $code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
 
         if (!is_string($raw) || $code !== 200) {
-            return ['live' => false, 'fen' => ''];
+            return $empty;
         }
 
         $decoded = json_decode($raw, true);
         if (!is_array($decoded)) {
-            return ['live' => false, 'fen' => ''];
+            return $empty;
         }
+
+        $opponent = $decoded['opponent'] ?? null;
 
         return [
             'live' => (bool) ($decoded['live'] ?? false),
             'fen' => (string) ($decoded['fen'] ?? ''),
+            'gameId' => isset($decoded['gameId']) ? (string) $decoded['gameId'] : null,
+            'pool' => isset($decoded['pool']) ? (string) $decoded['pool'] : null,
+            'opponent' => is_array($opponent) ? [
+                'name' => (string) ($opponent['name'] ?? ''),
+                // Hub sends "" (not null/absent) for a titleless opponent — normalize
+                // to null so this matches every other title field in the API (e.g.
+                // User::displayTitle()), never an empty-string placeholder.
+                'title' => (($t = (string) ($opponent['title'] ?? '')) !== '') ? $t : null,
+                'rating' => (int) ($opponent['rating'] ?? 0),
+            ] : null,
         ];
+    }
+
+    /**
+     * Live games for one Arena tournament, most-interesting first, capped at 20
+     * by the hub — for the "Games in progress" section on the tournament page.
+     * Secret-gated (X-Hub-Secret) since it hits the hub's /internal namespace.
+     *
+     * Each row still carries a `bot` flag per side straight from the hub — this
+     * is a thin pass-through, same as {@see games()}. Bot-ness is server-side
+     * only, so any caller that forwards these rows to the browser (e.g.
+     * TournamentGamesController) must strip `bot` before responding.
+     *
+     * Fail-soft: an unreachable hub or an unknown tournament id both return an
+     * empty list, never an error — a hub blip must never break the tournament
+     * page.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function arenaGames(string $tournamentId): array
+    {
+        if ($tournamentId === '') {
+            return [];
+        }
+
+        $url = $this->baseUrl . '/internal/arena-games?id=' . rawurlencode($tournamentId);
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT_MS => 800,
+            CURLOPT_CONNECTTIMEOUT_MS => 500,
+            CURLOPT_HTTPHEADER => ['X-Hub-Secret: ' . $this->secret],
+        ]);
+        $raw = curl_exec($ch);
+        $code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+
+        if (!is_string($raw) || $code !== 200) {
+            return [];
+        }
+
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded) || !isset($decoded['games']) || !is_array($decoded['games'])) {
+            return [];
+        }
+
+        return array_values($decoded['games']);
     }
 
     /**

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Box, IconButton, Typography } from '@mui/material'
 import { Pencil } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import type { Profile, ProfileUpdateResult } from '../../api/client'
 import TitleBadge from '../TitleBadge'
 import EditProfileDialog from './EditProfileDialog'
@@ -105,6 +106,28 @@ export default function IdentityHero({
                     )}
                     {countryName && <Box component="span"> · {countryName}</Box>}
                 </Typography>
+                {profile.live_game && (
+                    <Typography
+                        component={Link}
+                        to={`/watch/${profile.live_game.gameId}`}
+                        sx={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 0.5,
+                            mt: 0.6,
+                            fontSize: 12.5,
+                            fontWeight: 600,
+                            color: 'var(--accent)',
+                            textDecoration: 'none',
+                            width: 'fit-content',
+                            '&:hover': { textDecoration: 'underline' },
+                        }}
+                    >
+                        Playing now — vs
+                        <TitleBadge title={profile.live_game.opponent.title} />
+                        {profile.live_game.opponent.name}
+                    </Typography>
+                )}
                 {profile.bio && (
                     <Typography
                         sx={{

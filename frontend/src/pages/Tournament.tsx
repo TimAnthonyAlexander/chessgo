@@ -5,11 +5,14 @@ import { useNavigate, useOutletContext, useParams } from 'react-router-dom'
 import {
     ApiError,
     getTournament,
+    getTournamentGames,
     joinTournament,
     withdrawTournament,
+    type ArenaGame,
     type TournamentDetail,
 } from '../api/client'
 import type { LayoutOutletContext } from '../components/Layout'
+import ArenaGamesList from '../components/tournaments/ArenaGamesList'
 import StandingsTable from '../components/tournaments/StandingsTable'
 import { timingText, useNow } from '../components/tournaments/timing'
 import { useAuth } from '../lib/auth'
@@ -67,6 +70,33 @@ export default function Tournament() {
         }, POLL_MS)
         return () => window.clearInterval(timer)
         // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [id, detail?.tournament.status])
+
+    // "Games in progress": only meaningful while the arena is actually running
+    // (scheduled = nothing started yet, finished = nothing left live). Polled
+    // independently of standings so a hub hiccup on one never blocks the other.
+    const [games, setGames] = useState<ArenaGame[] | null>(null)
+    useEffect(() => {
+        if (detail?.tournament.status !== 'running') {
+            setGames(null)
+            return
+        }
+        let cancelled = false
+        const poll = () => {
+            getTournamentGames(id)
+                .then((r) => {
+                    if (!cancelled) setGames(r.games)
+                })
+                .catch(() => {}) // fail soft — keep whatever we last had
+        }
+        poll()
+        const timer = window.setInterval(() => {
+            if (document.visibilityState === 'visible') poll()
+        }, POLL_MS)
+        return () => {
+            cancelled = true
+            window.clearInterval(timer)
+        }
     }, [id, detail?.tournament.status])
 
     // A pairing landed: enter the game exactly like any other match.
@@ -279,6 +309,17 @@ export default function Tournament() {
                 Standings
             </Typography>
             <StandingsTable standings={detail.standings} currentUserId={user?.id} />
+
+            {t.status === 'running' && (
+                <Box sx={{ mt: 3 }}>
+                    <Typography
+                        sx={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 16, mb: 1.25 }}
+                    >
+                        Games in progress
+                    </Typography>
+                    <ArenaGamesList games={games} />
+                </Box>
+            )}
         </Box>
     )
 }
