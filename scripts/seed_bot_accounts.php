@@ -17,12 +17,17 @@ declare(strict_types=1);
  *     log in (no code path hands out or accepts a password for them)
  *
  * Deterministic + idempotent: account #i always gets email botNNN@bot.local
- * and (via a per-index seed) the same name/ratings/title on every run, so
- * re-running with the same --count is a total no-op (every email already
- * exists → skipped). Running with a larger --count only adds the new indices.
+ * and (via a per-index seed) the same name/title on every run. An index that
+ * already exists is never recreated — but its BOT_CATEGORIES ratings ARE
+ * recomputed and corrected in place every run (see correctBotRatings()), so
+ * re-running is a total no-op only once ratings already match the current
+ * TITLE_RATING_BANDS; a run right after a band change fixes every existing
+ * account, and a run after that changes nothing. Running with a larger
+ * --count only adds the new indices on top.
  *
  * Ratings are seeded across ALL 8 Glicko-2 categories (bullet, blitz, rapid,
- * classical, puzzle, duck, crazyhouse, antichess) spread ~900-2400, with a
+ * classical, puzzle, duck, crazyhouse, antichess) — see TITLE_RATING_BANDS for
+ * the titled bands and skewedBotRating() for the untitled range — with a
  * fixed subset given a real chess title (see TITLED_SLOTS) so a titled_only
  * arena has a real field to draw from.
  *
@@ -116,14 +121,33 @@ function titleForIndex(int $i): ?string
     return TITLE_CYCLE[$cyclePos];
 }
 
-/** @var array<string, array{0:int,1:int}> title => [min,max] base-rating band */
+/**
+ * title => [min,max] base-rating band.
+ *
+ * Anchored to the owner's spec: platform GMs read as 2700-3000 in both rapid
+ * and blitz (not "rapid lower than blitz" — the two categories get independent
+ * +/-100 jitter off the same base, see computeBotCategoryRatings()), roughly
+ * FIDE 2500+ scaled up so the platform doesn't read as a weaker ladder than
+ * real chess. A handful of GMs stand out further into 3050-3300 (Carlsen/
+ * Kasparov territory) — see the standout roll in computeBotCategoryRatings().
+ *
+ * Ordering is by MEDIAN, strictly GM > {IM,WGM} > {FM,WIM} > NM, with women's
+ * titles folded into the open title one tier down (not a separate ladder) per
+ * spec: WGM ~ IM strength, WIM ~ FM strength. Bands overlap at the edges on
+ * purpose (real ladders do) — WGM's top (2620) reaches into IM's range and
+ * WIM's top (2380) reaches into FM's, but medians never invert.
+ *
+ * NM's floor (2020) sits just above skewedBotRating()'s new untitled ceiling
+ * (~2000, see below) so only the extreme untitled tail overlaps the weakest
+ * titled band — "a few strong untitled players", not a systemic inversion.
+ */
 const TITLE_RATING_BANDS = [
-    'GM' => [2300, 2400],
-    'IM' => [2150, 2300],
-    'FM' => [2000, 2150],
-    'WGM' => [2100, 2250],
-    'WIM' => [1950, 2100],
-    'NM' => [1900, 2000],
+    'GM' => [2700, 3000],
+    'IM' => [2450, 2650],
+    'FM' => [2200, 2400],
+    'WGM' => [2420, 2620],
+    'WIM' => [2180, 2380],
+    'NM' => [2020, 2180],
 ];
 
 // --- CLI args -------------------------------------------------------------
@@ -227,17 +251,99 @@ function makeBotHandle(int $i, array $chessAdjs, array $chessNouns): string
     return $handle;
 }
 
-/** Skewed sample across [900, 2400], biased toward the middle (avg of 3 uniforms). */
+/**
+ * Skewed sample across [900, 2000] for UNTITLED bots, biased toward the middle
+ * (avg of 3 uniforms). Ceiling deliberately lowered from the old 2400: raising
+ * the titled bands (see TITLE_RATING_BANDS) without lowering this would leave
+ * a big untitled population out-rating half the titled ladder. The spec is
+ * explicit that the fix is "titled bands move up", not "untitled ceiling
+ * follows them up" — so untitled stays put and only its extreme tail (rare,
+ * since the 3-uniform average concentrates near 1450) grazes NM's 2020 floor.
+ */
 function skewedBotRating(): int
 {
     $u = ((mt_rand() / mt_getrandmax()) + (mt_rand() / mt_getrandmax()) + (mt_rand() / mt_getrandmax())) / 3.0;
 
-    return (int) round(900 + 1500 * $u);
+    return (int) round(900 + 1100 * $u);
 }
 
+/** Raised ceiling from 2400 to 3400 so a standout GM base (up to 3300) plus a
+ * +100 per-category jitter never gets silently clipped back down. */
 function clampBotRating(int $r): int
 {
-    return max(900, min(2400, $r));
+    return max(900, min(3400, $r));
+}
+
+/**
+ * Deterministic per-category ratings for bot index $i with the given $title
+ * (null = untitled). Reseeds mt_rand() itself, so it produces the exact same
+ * numbers no matter who calls it — the CREATE path (brand-new bot) and the
+ * CORRECT path (an already-seeded bot re-run after a band change) derive
+ * byte-identical results for the same ($i, $title). That identity is what
+ * makes the correction path idempotent: recomputing twice always yields the
+ * same target, so a second run has nothing left to write.
+ *
+ * @return array<string,int> BOT_CATEGORIES => rating
+ */
+function computeBotCategoryRatings(int $i, ?string $title): array
+{
+    mt_srand($i * 32452867 + 11);
+
+    if ($title !== null && isset(TITLE_RATING_BANDS[$title])) {
+        [$lo, $hi] = TITLE_RATING_BANDS[$title];
+        $base = mt_rand($lo, $hi);
+
+        // A few GMs stand out toward the very top of the real-world scale
+        // (2800-3300) instead of clustering at the 2700-3000 floor — ~1-in-4
+        // GMs, so 2-3 of the pool's 10, matching "a few...toward 3300".
+        if ($title === 'GM' && mt_rand(1, 100) <= 25) {
+            $base = mt_rand(3050, 3300);
+        }
+    } else {
+        $base = skewedBotRating();
+    }
+
+    $ratings = [];
+    foreach (BOT_CATEGORIES as $cat) {
+        $ratings[$cat] = clampBotRating($base + mt_rand(-100, 100));
+    }
+
+    return $ratings;
+}
+
+/**
+ * In-place correction for an already-seeded bot: recompute this index's
+ * intended per-category ratings under the CURRENT bands and overwrite only
+ * the rating_<cat> columns that actually differ. Never touches name, email,
+ * id, or title (the band lookup reads the EXISTING stored title rather than
+ * re-deriving it, so this can never silently change who's titled what) and
+ * never touches games_<cat>/rd_<cat>/vol_<cat>/rated_at_<cat> (owned by
+ * seed_bot_history.php, whose numbers key off real self-played rows).
+ *
+ * Idempotent by construction: computeBotCategoryRatings($i, $title) is a pure
+ * function of its inputs, so a second call against an already-corrected row
+ * computes the same targets, finds no column different, and writes nothing.
+ *
+ * @return bool true if any rating_<cat> column was changed.
+ */
+function correctBotRatings(User $existing, int $i): bool
+{
+    $ratings = computeBotCategoryRatings($i, $existing->title);
+
+    $changed = false;
+    foreach ($ratings as $cat => $rating) {
+        $field = 'rating_' . $cat;
+        if ($existing->{$field} !== $rating) {
+            $existing->{$field} = $rating;
+            $changed = true;
+        }
+    }
+
+    if ($changed) {
+        $existing->save();
+    }
+
+    return $changed;
 }
 
 // Uniqueness guard: the word pool is finite, so two indices could in theory
@@ -256,14 +362,26 @@ foreach (App::db()->raw("SELECT name FROM user WHERE role = 'bot'") as $row) {
 $now = date('Y-m-d H:i:s');
 $created = 0;
 $skipped = 0;
+$corrected = 0;
 $titledCreated = 0;
 
 for ($i = 1; $i <= $count; $i++) {
     $email = sprintf('bot%03d@%s', $i, BOT_DOMAIN);
 
-    // Idempotency: skip if this seeded bot already exists.
-    if (User::firstWhere('email', '=', $email) instanceof User) {
-        $skipped++;
+    $existing = User::firstWhere('email', '=', $email);
+
+    // Correction path: this index was already seeded (an earlier run, maybe
+    // under an older/incoherent title->rating mapping). Recompute its ratings
+    // under the CURRENT bands and write only what changed — see
+    // correctBotRatings() for exactly what it does and does not touch. This
+    // is what makes a band change (like this one) reach accounts that already
+    // exist, instead of silently being skipped forever by the email check.
+    if ($existing instanceof User) {
+        if (correctBotRatings($existing, $i)) {
+            $corrected++;
+        } else {
+            $skipped++;
+        }
         continue;
     }
 
@@ -275,14 +393,7 @@ for ($i = 1; $i <= $count; $i++) {
     $usedNames[$handle] = true;
 
     $title = titleForIndex($i);
-
-    mt_srand($i * 32452867 + 11);
-    if ($title !== null) {
-        [$lo, $hi] = TITLE_RATING_BANDS[$title];
-        $base = mt_rand($lo, $hi);
-    } else {
-        $base = skewedBotRating();
-    }
+    $ratings = computeBotCategoryRatings($i, $title);
 
     $user = new User();
     $user->name = $handle;
@@ -295,12 +406,10 @@ for ($i = 1; $i <= $count; $i++) {
     $user->title = $title;
 
     foreach (BOT_CATEGORIES as $cat) {
-        $rating = clampBotRating($base + mt_rand(-100, 100));
-
         // Skill rating only — games/RD/rated_at start FRESH. seed_bot_history.php
         // is what earns these down to a real, reconciled games_<cat> + RD once it
         // has actually self-played + persisted the history.
-        $user->{'rating_' . $cat} = $rating;
+        $user->{'rating_' . $cat} = $ratings[$cat];
         $user->{'rd_' . $cat} = Glicko2Service::START_RD;
         $user->{'vol_' . $cat} = Glicko2Service::START_VOL;
         $user->{'games_' . $cat} = 0;
@@ -330,8 +439,11 @@ for ($i = 1; $i <= $count; $i++) {
     }
 }
 
-fwrite(STDOUT, "created: $created  skipped (already existed): $skipped  titled: $titledCreated\n");
-fwrite(STDOUT, "Bot accounts marked role='bot', email @" . BOT_DOMAIN . ", skill ratings ~900-2400 across "
-    . implode(', ', BOT_CATEGORIES) . " (games/RD start fresh — run seed_bot_history.php to back them "
-    . "with real games). duck/crazyhouse/antichess stay at User's fresh defaults.\n");
+fwrite(STDOUT, "created: $created  corrected: $corrected  skipped (already correct): $skipped  titled created: $titledCreated\n");
+fwrite(STDOUT, "Bot accounts marked role='bot', email @" . BOT_DOMAIN . ", skill ratings ~900-2000 untitled / "
+    . "2020-3300 titled (GM anchored 2700-3000, a few standouts to 3300) across "
+    . implode(', ', BOT_CATEGORIES) . " (games/RD start fresh for NEW accounts only — run seed_bot_history.php "
+    . "to back them with real games). duck/crazyhouse/antichess stay at User's fresh defaults. Re-running "
+    . "always corrects any existing bot's ratings to match the current bands (name/email/id/title untouched); "
+    . "games/RD/rated_at on existing accounts are left exactly as they are.\n");
 fwrite(STDOUT, "Delete with: php scripts/seed_bot_accounts.php --delete\n");
