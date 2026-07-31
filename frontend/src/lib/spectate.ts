@@ -35,6 +35,8 @@ export interface SpectateGame {
     result: string | null
     reason: string | null
     over: boolean
+    // Set when this game was paired from a running arena; absent/"" otherwise.
+    tournamentId: string | null
 }
 
 export interface SpectateState {
@@ -76,6 +78,7 @@ function buildWatching(m: Msg): SpectateGame {
         result: null,
         reason: null,
         over: !!m.over,
+        tournamentId: typeof m.tournamentId === 'string' && m.tournamentId !== '' ? m.tournamentId : null,
     }
 }
 

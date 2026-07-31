@@ -68,7 +68,7 @@ func (h *Hub) unwatchGame(c *Client) {
 func (h *Hub) spectateMsg(g *game) map[string]any {
 	st := g.status()
 	cat := categoryFor(g.pool, g.variant)
-	return out("watching", map[string]any{
+	payload := map[string]any{
 		"gameId":      g.id,
 		"pool":        g.pool,
 		"rated":       g.rated,
@@ -87,7 +87,11 @@ func (h *Hub) spectateMsg(g *game) map[string]any {
 		"ply":         len(g.moves),
 		"startPly":    g.startPly(), // half-move offset for a mid-game seed (filler); 0 from the opening
 		"over":        g.over,
-	})
+	}
+	if g.arenaID != "" {
+		payload["tournamentId"] = g.arenaID
+	}
+	return out("watching", payload)
 }
 
 // sideInfo is the public view of a player for spectators. It deliberately omits
@@ -129,6 +133,10 @@ type gameSummary struct {
 	Ply        int         `json:"ply"`
 	ClockW     int64       `json:"clockW"`
 	ClockB     int64       `json:"clockB"`
+	// TournamentID is "" (omitted) for an ordinary game — set when the game was
+	// paired from a running arena, so the Watch lobby can offer "Back to
+	// tournament" too if a tournament game is opened from here.
+	TournamentID string `json:"tournamentId,omitempty"`
 
 	filler bool // server-side ordering only; not serialized (unexported)
 }
@@ -159,20 +167,21 @@ func (h *Hub) publishLobby() {
 		cat := categoryFor(g.pool, g.variant)
 		st := g.status()
 		summaries = append(summaries, gameSummary{
-			ID:         g.id,
-			Pool:       g.pool,
-			Rated:      g.rated,
-			Variant:    g.variant,
-			White:      sideSummary{g.white.id.Name, g.white.id.RatingFor(cat), g.white.id.Anon, g.white.id.Title},
-			Black:      sideSummary{g.black.id.Name, g.black.id.RatingFor(cat), g.black.id.Anon, g.black.id.Title},
-			FEN:        g.boardFEN(),
-			Duck:       g.duckSquare(),
-			SideToMove: st.SideToMove,
-			LastMove:   g.lastUci(),
-			Ply:        len(g.moves),
-			ClockW:     g.remainingMs(chess.White),
-			ClockB:     g.remainingMs(chess.Black),
-			filler:     g.filler,
+			ID:           g.id,
+			Pool:         g.pool,
+			Rated:        g.rated,
+			Variant:      g.variant,
+			White:        sideSummary{g.white.id.Name, g.white.id.RatingFor(cat), g.white.id.Anon, g.white.id.Title},
+			Black:        sideSummary{g.black.id.Name, g.black.id.RatingFor(cat), g.black.id.Anon, g.black.id.Title},
+			FEN:          g.boardFEN(),
+			Duck:         g.duckSquare(),
+			SideToMove:   st.SideToMove,
+			LastMove:     g.lastUci(),
+			Ply:          len(g.moves),
+			ClockW:       g.remainingMs(chess.White),
+			ClockB:       g.remainingMs(chess.Black),
+			TournamentID: g.arenaID,
+			filler:       g.filler,
 		})
 	}
 	sort.SliceStable(summaries, func(i, j int) bool {

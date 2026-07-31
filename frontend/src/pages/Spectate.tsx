@@ -56,6 +56,12 @@ export default function Spectate() {
     const isAdmin = user?.role === 'admin'
     const s = useSpectate()
     const g = s.game
+    // Came here from a tournament? Then "back" means back to the tournament
+    // (also how you pick up your own next pairing) rather than the general
+    // Watch lobby. Unknown until the game's initial state arrives, so this
+    // stays "Back to Watch" until then.
+    const backTo = g?.tournamentId ? `/tournaments/${g.tournamentId}` : '/watch'
+    const backLabel = g?.tournamentId ? 'Back to tournament' : 'Back to Watch'
     const [sound, setSound] = useState(soundEnabled())
     const prefs = usePrefs()
 
@@ -161,8 +167,8 @@ export default function Spectate() {
                 <Typography sx={{ color: 'var(--text-dim)' }}>
                     {s.error ? 'This game is no longer available.' : 'Connecting to the game…'}
                 </Typography>
-                <Button variant="contained" onClick={() => navigate('/watch')}>
-                    Back to Watch
+                <Button variant="contained" onClick={() => navigate(backTo)}>
+                    {backLabel}
                 </Button>
             </Box>
         )
@@ -315,9 +321,9 @@ export default function Spectate() {
                                 fullWidth
                                 variant="contained"
                                 startIcon={<ArrowLeft size={16} />}
-                                onClick={() => navigate('/watch')}
+                                onClick={() => navigate(backTo)}
                             >
-                                Back to Watch
+                                {backLabel}
                             </Button>
                         </Box>
                     ) : (
@@ -332,10 +338,10 @@ export default function Spectate() {
                                 fullWidth
                                 color="inherit"
                                 startIcon={<ArrowLeft size={15} />}
-                                onClick={() => navigate('/watch')}
+                                onClick={() => navigate(backTo)}
                                 sx={{ color: 'var(--text-dim)', justifyContent: 'center' }}
                             >
-                                Back to Watch
+                                {backLabel}
                             </Button>
                         </Box>
                     )}
