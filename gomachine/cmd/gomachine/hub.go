@@ -52,6 +52,7 @@ func cmdHub(args []string) {
 	zugzwangTimeoutFlag := fs.Duration("zugzwang-timeout", 5*time.Second, "per-attempt HTTP timeout for a zugzwang /bestmove call (one retry on failure)")
 	emergencyInProc := fs.Bool("emergency-inproc", true, "fall back to gomachine's in-process engine if zugzwang is unreachable after retrying (logged loudly each time); zugzwang is the routine backend — this is a last-resort safety net so a live game never freezes. Disable to hard-fail (drop the move) instead of silently degrading to in-process search")
 	arenas := fs.Bool("arenas", true, "poll BaseAPI for running Arena tournaments and pair their participants")
+	arenaBotWorkers := fs.Int("arena-bot-workers", 3, "dedicated engine workers for arena bot-vs-bot moves — its OWN pool, separate from -watch-filler-workers, so a large tournament field can't crowd out (or be crowded out by) the Watch page")
 	pprofAddr := fs.String("pprof", "", "if set (e.g. 127.0.0.1:6481), serve net/http/pprof on this address for profiling the Run goroutine")
 	_ = fs.Parse(args)
 
@@ -102,8 +103,9 @@ func cmdHub(args []string) {
 		fmt.Printf("watch fillers on: up to %d shown games, padded by self-play on %d dedicated workers (only while watched)\n", *watchTarget, *watchWorkers)
 	}
 	if *arenas {
+		h.EnableArenaBotEngines(*arenaBotWorkers, 8, 1)
 		h.SetArenaClient(baseURL, secret)
-		fmt.Println("arena tournaments on: polling BaseAPI's active-arenas feed every 5s and pairing participants")
+		fmt.Printf("arena tournaments on: polling BaseAPI's active-arenas feed every 5s and pairing participants (%d dedicated bot-vs-bot workers)\n", *arenaBotWorkers)
 	}
 	go h.Run()
 

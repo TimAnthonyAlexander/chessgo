@@ -211,15 +211,23 @@ func (h *Hub) scheduleBotMove(g *game) {
 	engines := h.engines
 	moveTimeCap := time.Duration(0) // human bot-fill: full rating ladder
 	depthCap := 0                   // human bot-fill: honest strength (SPRT-gated, untouched)
-	// A Watch-lobby filler OR an arena bot-vs-bot game both use the same cheap,
-	// dedicated filler engine pool so neither can ever starve human bot-fill —
-	// the only difference between the two is g.filler, which additionally
-	// skips persistence/Elo (an arena bot-vs-bot game IS persisted, so both
-	// bots score; see arena.go's topUpArenaBotVsBot).
-	if g.filler || (g.arenaID != "" && g.white.isBot && g.black.isBot) {
+	switch {
+	case g.filler:
+		// Watch-lobby cosmetic self-play: cheap, on its own dedicated pool so
+		// it can never starve (or be starved by) anything else.
 		engines = h.fillerEngines
-		moveTimeCap = fillerMoveTimeCap // cosmetic self-play: cheap, capped think time
-		depthCap = fillerSearchDepth    // ...and a shallow rank so search never dominates the delay
+		moveTimeCap = fillerMoveTimeCap
+		depthCap = fillerSearchDepth
+	case g.arenaID != "" && g.white.isBot && g.black.isBot:
+		// Arena bot-vs-bot: also cheap, but its OWN dedicated pool
+		// (h.arenaBotEngines, never h.fillerEngines) — see arena.go's
+		// EnableArenaBotEngines doc for why the two must never share one. A
+		// notch deeper/longer than a cosmetic filler since this game is real,
+		// persisted, and rated (moves the standings) — see
+		// arenaBotMoveTimeCap/arenaBotSearchDepth's doc.
+		engines = h.arenaBotEngines
+		moveTimeCap = arenaBotMoveTimeCap
+		depthCap = arenaBotSearchDepth
 	}
 	if engines == nil {
 		return // the relevant pool isn't enabled

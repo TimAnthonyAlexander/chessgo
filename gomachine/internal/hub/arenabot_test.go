@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -207,7 +208,7 @@ func TestArenaFillArenaWithBotNoneAvailable(t *testing.T) {
 
 func TestArenaBotVsBotCapped(t *testing.T) {
 	h := New(testSecret)
-	h.EnableSpectatorFillers(2, 2, 8, 1) // populates h.fillerEngines
+	h.EnableArenaBotEngines(2, 8, 1) // populates h.arenaBotEngines
 
 	ar := &arenaState{
 		id: "ARENA-BVB", pool: "3+0", variant: variantStandard, rated: true,
@@ -222,8 +223,10 @@ func TestArenaBotVsBotCapped(t *testing.T) {
 	}
 	h.arenas[ar.id] = ar
 
-	// Simulate several ticks — with 4 idle bots and a cap of 2, exactly two
-	// games should start (using all four bots) and no more.
+	// Simulate several ticks — with 4 idle bots, arenaBotVsBotCapForField(4)
+	// == 2, so exactly two games should start (using all four bots) and no
+	// more.
+	wantCap := arenaBotVsBotCapForField(4)
 	for i := 0; i < 5; i++ {
 		h.topUpArenaBotVsBot(ar)
 	}
@@ -241,8 +244,8 @@ func TestArenaBotVsBotCapped(t *testing.T) {
 			t.Error("an arena bot-vs-bot game must NOT be marked filler — it has to be persisted")
 		}
 	}
-	if live != arenaBotVsBotCap {
-		t.Errorf("live bot-vs-bot games = %d, want exactly the cap (%d)", live, arenaBotVsBotCap)
+	if live != wantCap {
+		t.Errorf("live bot-vs-bot games = %d, want exactly the cap (%d)", live, wantCap)
 	}
 
 	busy := 0
@@ -251,14 +254,14 @@ func TestArenaBotVsBotCapped(t *testing.T) {
 			busy++
 		}
 	}
-	if want := arenaBotVsBotCap * 2; busy != want {
+	if want := wantCap * 2; busy != want {
 		t.Errorf("busy bots = %d, want %d (two per capped game)", busy, want)
 	}
 }
 
 func TestArenaBotVsBotNeedsTwoIdle(t *testing.T) {
 	h := New(testSecret)
-	h.EnableSpectatorFillers(2, 2, 8, 1)
+	h.EnableArenaBotEngines(2, 8, 1)
 
 	ar := &arenaState{
 		id: "ARENA-BVB-ONE", pool: "3+0", variant: variantStandard, rated: true,
@@ -335,6 +338,43 @@ func TestArenaGamePersistsBotRealIdentity(t *testing.T) {
 	}
 }
 
+// TestArenaAbortReturnsBotsToPool covers the OTHER terminal game path besides
+// finish() — abortGame, fired by checkClocks' 30s stalled-first-move guard
+// (e.g. zugzwang unreachable and the emergency in-process fallback also
+// failing/disabled, so no bot move ever lands). Before this fix abortGame
+// never called returnToArenaPool, so an aborted arena bot-vs-bot game would
+// leak both bots permanently stuck in ar.botBusy — never picked again for the
+// rest of the tournament.
+func TestArenaAbortReturnsBotsToPool(t *testing.T) {
+	h := New(testSecret)
+	ar := &arenaState{
+		id: "ARENA-ABORT", pool: "3+0", variant: variantStandard, rated: true,
+		players: map[string]*arenaPlayerState{
+			"bot-x": {score: 10, bot: true, name: "BotX", rating: 1500},
+			"bot-y": {score: 10, bot: true, name: "BotY", rating: 1500},
+		},
+		lastOpponent: map[string]string{},
+		botBusy:      map[string]bool{},
+	}
+	h.arenas[ar.id] = ar
+
+	idX := auth.Identity{UserID: "bot-x", Name: "BotX", Rating: 1500}
+	idY := auth.Identity{UserID: "bot-y", Name: "BotY", Rating: 1500}
+	white, black := newBotPlayer(idX, 1500), newBotPlayer(idY, 1500)
+	g := h.newArenaGame(ar, white, black)
+	if g == nil {
+		t.Fatal("newArenaGame returned nil")
+	}
+	ar.botBusy["bot-x"] = true
+	ar.botBusy["bot-y"] = true
+
+	h.abortGame(g)
+
+	if ar.botBusy["bot-x"] || ar.botBusy["bot-y"] {
+		t.Error("aborting a stalled arena game must free both bots' busy markers, not leak them forever")
+	}
+}
+
 // --- no new bot games are ever added for an arena that has ended ---
 
 func countLiveGamesForArena(h *Hub, arenaID string) int {
@@ -349,7 +389,7 @@ func countLiveGamesForArena(h *Hub, arenaID string) int {
 
 func TestArenaNoNewBotGamesAfterEnd(t *testing.T) {
 	h := New(testSecret)
-	h.EnableSpectatorFillers(2, 2, 8, 1)
+	h.EnableArenaBotEngines(2, 8, 1)
 
 	ar := &arenaState{
 		id: "ARENA-END-BVB", pool: "3+0", variant: variantStandard, rated: true,
@@ -384,5 +424,146 @@ func TestArenaNoNewBotGamesAfterEnd(t *testing.T) {
 
 	if liveAfter := countLiveGamesForArena(h, ar.id); liveAfter != liveBefore {
 		t.Errorf("live games for the ended arena changed: before=%d after=%d", liveBefore, liveAfter)
+	}
+}
+
+// --- arenaBotVsBotCapForField: concurrency scales with the field, bounded by
+// the dedicated engine pool's real throughput ---
+
+func TestArenaBotVsBotCapScalesWithField(t *testing.T) {
+	cases := []struct{ bots, want int }{
+		{0, 1}, // never zero — a tiny/empty field still gets a floor of 1
+		{1, 1}, // no possible pair yet either way
+		{2, 1}, // exactly one pair possible
+		{3, 1}, // 1 pair possible, one bot always sits out a round
+		{4, 2}, // two full pairs
+		{8, 4}, // scales linearly while under the ceiling
+		{11, 5},
+		{12, 6}, // hits arenaBotVsBotCapMax exactly
+	}
+	for _, c := range cases {
+		if got := arenaBotVsBotCapForField(c.bots); got != c.want {
+			t.Errorf("arenaBotVsBotCapForField(%d) = %d, want %d", c.bots, got, c.want)
+		}
+	}
+}
+
+// TestArenaBotVsBotCapRespectsEnginePoolBound asserts the cap PLATEAUS at
+// arenaBotVsBotCapMax no matter how large BaseAPI's enrolled bot field gets —
+// this is what keeps a 50- or 200-bot arena from ever demanding more
+// concurrent searches than the dedicated arenaBotEngines pool can sustain
+// without visible move-latency creep (see arenaBotVsBotCapMax's doc for the
+// throughput reasoning).
+func TestArenaBotVsBotCapRespectsEnginePoolBound(t *testing.T) {
+	for _, bots := range []int{13, 20, 50, 200, 100_000} {
+		if got := arenaBotVsBotCapForField(bots); got != arenaBotVsBotCapMax {
+			t.Errorf("arenaBotVsBotCapForField(%d) = %d, want the ceiling %d", bots, got, arenaBotVsBotCapMax)
+		}
+	}
+}
+
+// --- twoIdleArenaBots: least-played bias breaks the "same two forever" bug ---
+
+// TestTwoIdleArenaBotsPrefersLeastPlayedOnTiedScore reproduces the real
+// starvation bug: with every bot tied at the same score (as they all are at a
+// tournament's start), a pure closest-score pick always resolves to the same
+// alphabetically-first pair (sort.Strings' deterministic order), which then
+// re-idles and gets re-picked every single tick forever — every OTHER bot
+// stays at zero games for the tournament's entire life. Anchoring on
+// games-played fixes it: the never-played bot must be included.
+func TestTwoIdleArenaBotsPrefersLeastPlayedOnTiedScore(t *testing.T) {
+	ar := &arenaState{
+		players: map[string]*arenaPlayerState{
+			"bot-a": {score: 0, bot: true}, // alphabetically first — would always win a pure score tiebreak
+			"bot-b": {score: 0, bot: true},
+			"bot-c": {score: 0, bot: true}, // never played — must be picked
+		},
+		botBusy:        map[string]bool{},
+		botGamesPlayed: map[string]int{"bot-a": 5, "bot-b": 3, "bot-c": 0},
+	}
+	a, b, ok := twoIdleArenaBots(ar)
+	if !ok {
+		t.Fatal("expected a pair")
+	}
+	if a != "bot-c" && b != "bot-c" {
+		t.Errorf("pair = (%s, %s), want the never-played bot-c included", a, b)
+	}
+	// The anchor itself should be the strict minimum, bot-c.
+	if a != "bot-c" {
+		t.Errorf("anchor (first return value) = %q, want the least-played bot-c", a)
+	}
+}
+
+// TestTwoIdleArenaBotsStillScoreSensibleAmongEquallyPlayed confirms the bias
+// doesn't override score-sensible pairing when games-played is already equal
+// (the common case after the field evens out) — closest score still wins.
+func TestTwoIdleArenaBotsStillScoreSensibleAmongEquallyPlayed(t *testing.T) {
+	ar := &arenaState{
+		players: map[string]*arenaPlayerState{
+			"bot-1": {score: 10, bot: true},
+			"bot-2": {score: 12, bot: true},
+			"bot-3": {score: 500, bot: true},
+		},
+		botBusy:        map[string]bool{},
+		botGamesPlayed: map[string]int{"bot-1": 2, "bot-2": 2, "bot-3": 2},
+	}
+	a, b, ok := twoIdleArenaBots(ar)
+	if !ok {
+		t.Fatal("expected a pair")
+	}
+	if (a != "bot-1" || b != "bot-2") && (a != "bot-2" || b != "bot-1") {
+		t.Errorf("pair = (%s, %s), want the closest-score pair (bot-1, bot-2)", a, b)
+	}
+}
+
+// TestArenaBotVsBotEveryoneGetsPairedOverTicks is the end-to-end rotation
+// check: a field of 20 bots with arenaBotVsBotCapForField(20) == 6 games (12
+// bots busy at once, 8 always idle) must still get every single bot a game
+// within a handful of rounds — the least-played bias in twoIdleArenaBots
+// draining the "never played" backlog before touching anyone who's already
+// played, rather than the same 12 bots looping forever.
+func TestArenaBotVsBotEveryoneGetsPairedOverTicks(t *testing.T) {
+	h := New(testSecret)
+	h.EnableArenaBotEngines(2, 8, 1)
+
+	const nBots = 20
+	players := map[string]*arenaPlayerState{}
+	for i := 0; i < nBots; i++ {
+		sub := fmt.Sprintf("bot-%02d", i)
+		players[sub] = &arenaPlayerState{score: 0, bot: true, name: sub, rating: 1500}
+	}
+	ar := &arenaState{
+		id: "ARENA-ROTATION", pool: "3+0", variant: variantStandard, rated: true,
+		players:      players,
+		lastOpponent: map[string]string{},
+		botBusy:      map[string]bool{},
+	}
+	h.arenas[ar.id] = ar
+
+	fieldCap := arenaBotVsBotCapForField(nBots)
+	if fieldCap != arenaBotVsBotCapMax {
+		t.Fatalf("test assumes a 20-bot field is above the ceiling (fieldCap=%d, want %d)", fieldCap, arenaBotVsBotCapMax)
+	}
+
+	for round := 0; round < 6; round++ {
+		// Ramp up to the cap (topUpArenaBotVsBot starts at most one game per
+		// call, mirroring the real per-tick ramp).
+		for i := 0; i < fieldCap; i++ {
+			h.topUpArenaBotVsBot(ar)
+		}
+		// Simulate every one of this round's games finishing immediately (a
+		// fast bullet game) so both bots return to the idle pool for the next
+		// round — mirrors returnToArenaPool's real bot-busy-clearing path.
+		for _, g := range h.games {
+			if !g.over && g.arenaID == ar.id {
+				h.finish(g, "1-0", "test")
+			}
+		}
+	}
+
+	for sub := range players {
+		if ar.botGamesPlayed[sub] == 0 {
+			t.Errorf("bot %s never got a single game after 6 rounds — rotation is still starving it", sub)
+		}
 	}
 }

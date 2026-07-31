@@ -13,6 +13,7 @@ import (
 
 	"github.com/timanthonyalexander/gomachine/internal/auth"
 	"github.com/timanthonyalexander/gomachine/internal/chess"
+	"github.com/timanthonyalexander/gomachine/internal/engine"
 	"github.com/timanthonyalexander/gomachine/internal/variant"
 )
 
@@ -102,6 +103,16 @@ type arenaState struct {
 	// returnToArenaPool once its game ends, so the same bot is never
 	// double-booked into two games at once.
 	botBusy map[string]bool
+
+	// botGamesPlayed counts, per bot sub, how many arena games (human-fill or
+	// bot-vs-bot) it has been SEATED into so far — incremented the instant a
+	// bot is picked, in topUpArenaBotVsBot/startArenaBotFillGame. It survives
+	// every applyArenaSnapshots refresh (players/botBusy are rebuilt from
+	// scratch each poll; this map is not — only pruned, like botBusy, for a
+	// sub that fell off the roster entirely). twoIdleArenaBots reads it to
+	// anchor pairing on whoever has played least, so a large field can't get
+	// stuck cycling the same handful of bots forever (see its doc).
+	botGamesPlayed map[string]int
 }
 
 // --- BaseAPI polling (off the Run goroutine) ---
@@ -222,7 +233,11 @@ func (h *Hub) applyArenaSnapshots(snaps []ArenaSnapshot) {
 
 		ar := h.arenas[s.ID]
 		if ar == nil {
-			ar = &arenaState{id: s.ID, players: map[string]*arenaPlayerState{}, lastOpponent: map[string]string{}, botBusy: map[string]bool{}}
+			ar = &arenaState{
+				id: s.ID, players: map[string]*arenaPlayerState{},
+				lastOpponent: map[string]string{}, botBusy: map[string]bool{},
+				botGamesPlayed: map[string]int{},
+			}
 			h.arenas[s.ID] = ar
 		}
 		ar.pool = s.Pool
@@ -240,10 +255,16 @@ func (h *Hub) applyArenaSnapshots(snaps []ArenaSnapshot) {
 		ar.players = players
 		// A bot that fell out of the roster entirely no longer needs a busy
 		// marker — prune it so a long-running tournament's map doesn't hold
-		// stale entries for bots that are gone for good.
+		// stale entries for bots that are gone for good. Same for its
+		// games-played count.
 		for sub := range ar.botBusy {
 			if _, ok := ar.players[sub]; !ok {
 				delete(ar.botBusy, sub)
+			}
+		}
+		for sub := range ar.botGamesPlayed {
+			if _, ok := ar.players[sub]; !ok {
+				delete(ar.botGamesPlayed, sub)
 			}
 		}
 
@@ -492,11 +513,13 @@ func (h *Hub) startArenaGame(ar *arenaState, a, b *Client) {
 //     roster's closest-score idle bot — mirrors bot.go's own matchmaking
 //     backfill (same h.engines pool, same botThinkDelay pacing), just picking
 //     from the arena's own bots instead of inventing a fresh identity.
-//  2. topUpArenaBotVsBot: a small, capped number of bot-vs-bot games run per
-//     arena so the standings move even with nobody free to pair. These use
-//     the SEPARATE, cheap filler engine pool (h.fillerEngines) — the same one
-//     the Watch page's self-play games run on — so they can never contend
-//     with h.engines, the human-facing pool. Unlike a Watch filler, they ARE
+//  2. topUpArenaBotVsBot: a capped number of bot-vs-bot games run per arena,
+//     the cap SCALING with how many bots are enrolled (arenaBotVsBotCapForField)
+//     so the standings move even with nobody free to pair, and no lone bot is
+//     forced to wait the whole tournament out. These use their OWN dedicated
+//     engine pool (h.arenaBotEngines) — never h.fillerEngines (the Watch
+//     page's self-play pool) and never h.engines (the human-facing pool) — so
+//     neither can ever crowd the other out. Unlike a Watch filler, they ARE
 //     persisted (g.filler stays false) so both bots score.
 //
 // A bot side has no *Client, so it can't be tracked in ar.free the way a
@@ -614,16 +637,108 @@ func (h *Hub) startArenaBotFillGame(ar *arenaState, human *Client, botSub string
 		return
 	}
 	ar.botBusy[botSub] = true
+	bumpBotGamesPlayed(ar, botSub)
 	human.game = g
 	h.sendMatched(g, human, humanColor)
 	h.joinOtherSessions(g, human)
 	h.scheduleBotMove(g) // if the bot plays White, it moves first
 }
 
-// arenaBotVsBotCap bounds how many bot-vs-bot games run concurrently per
-// arena — enough that the standings keep moving even with no humans around,
-// small enough that the shared filler engine pool never gets crowded.
-const arenaBotVsBotCap = 2
+// EnableArenaBotEngines turns on the DEDICATED engine pool arena bot-vs-bot
+// games compute their moves on (topUpArenaBotVsBot) — deliberately its own
+// pool, separate from h.fillerEngines (the Watch page's cosmetic self-play)
+// and h.engines (human-facing bot-fill), so a big tournament field can never
+// queue behind — or crowd out — either of those. `workers` pooled engines
+// (each `ttMB` of TT, `searchThreads` Lazy SMP threads/move — irrelevant once
+// zugzwang is the compute backend, kept only for the emergency in-process
+// fallback) bound concurrent arena bot-move computation; see
+// arenaBotVsBotCapMax's doc for how that bounds the per-arena game cap. Call
+// before Run, like the other Enable*/Set* wiring calls (and after
+// SetTablebase, so every engine here probes endgames too).
+func (h *Hub) EnableArenaBotEngines(workers, ttMB, searchThreads int) {
+	if workers < 1 {
+		workers = 1
+	}
+	h.arenaBotEngines = make(chan *engineHandle, workers)
+	for range workers {
+		e := engine.NewWithThreads(ttMB, searchThreads)
+		e.SetTablebase(h.tb)
+		h.arenaBotEngines <- e
+	}
+}
+
+// arenaBotMoveTimeCap/arenaBotSearchDepth bound an arena bot-vs-bot move's
+// search — read by scheduleBotMove (bot.go) for any game where g.arenaID != ""
+// and both sides are bots. Deliberately a notch above the cosmetic Watch
+// filler's (fillerMoveTimeCap=250ms/fillerSearchDepth=8): unlike a filler,
+// this is a REAL, PERSISTED, RATED game that moves the tournament standings,
+// so it earns a little more search for the cost — while staying far below the
+// human-facing ladder's uncapped budget, since it still has to run
+// comfortably within arenaBotEngines' small dedicated pool (see
+// arenaBotVsBotCapMax's doc for the throughput this leaves headroom for).
+const (
+	arenaBotMoveTimeCap = 350 * time.Millisecond
+	arenaBotSearchDepth = 10
+)
+
+// arenaBotVsBotCapMax is the per-arena ceiling arenaBotVsBotCapForField
+// plateaus at once the field is large. It's sized off arenaBotEngines'
+// throughput at the FASTEST pool in the rota (1+0 bullet, the worst case):
+// botThinkDelay paces a bullet bot-vs-bot move roughly every 0.3-0.7s, and an
+// arenaBotSearchDepth=10 search against a arenaBotMoveTimeCap=350ms ceiling
+// costs well under that per request — so a handful of dedicated workers can
+// comfortably sustain several times this many concurrent bullet games without
+// visible queueing. Above it, more concurrent games would still work (a
+// request just waits its turn for a free worker — nothing breaks), but move
+// latency would start creeping up across EVERY arena sharing the pool, which
+// is the tradeoff this ceiling is deliberately avoiding rather than accepting
+// silently.
+const arenaBotVsBotCapMax = 6
+
+// arenaBotVsBotCapForField returns how many bot-vs-bot games may run
+// concurrently in one arena, given botCount — the number of that arena's
+// enrolled, non-withdrawn bot participants. It scales LINEARLY with the field
+// (half the field, rounded down — the most concurrency structurally possible,
+// since each game consumes two bots) up to arenaBotVsBotCapMax, where it
+// plateaus: a small field (a handful of bots) gets to run almost entirely
+// concurrently so nobody waits on a queue at all, while a large field (BaseAPI
+// can enroll dozens) is bounded by the dedicated engine pool's real throughput
+// instead of scaling without limit. Combined with twoIdleArenaBots' least-
+// played bias and the 200ms pairing tick, a field larger than 2×capMax still
+// cycles everyone through over the tournament's life — it just can't do it
+// all at the exact same instant.
+func arenaBotVsBotCapForField(botCount int) int {
+	n := botCount / 2
+	if n < 1 {
+		n = 1
+	}
+	if n > arenaBotVsBotCapMax {
+		n = arenaBotVsBotCapMax
+	}
+	return n
+}
+
+// arenaBotCount reports how many of ar's enrolled participants are bots that
+// haven't withdrawn — the field size arenaBotVsBotCapForField scales against.
+func arenaBotCount(ar *arenaState) int {
+	n := 0
+	for _, p := range ar.players {
+		if p.bot && !p.withdrawn {
+			n++
+		}
+	}
+	return n
+}
+
+// bumpBotGamesPlayed lazily initializes ar.botGamesPlayed (a hand-built
+// arenaState in a test, or any future caller, may not have) before
+// incrementing sub's count by one.
+func bumpBotGamesPlayed(ar *arenaState, sub string) {
+	if ar.botGamesPlayed == nil {
+		ar.botGamesPlayed = map[string]int{}
+	}
+	ar.botGamesPlayed[sub]++
+}
 
 // countArenaBotVsBot reports how many of THIS arena's own games are currently
 // a live bot-vs-bot pairing — the same "count what's already running" shape
@@ -643,17 +758,19 @@ func (h *Hub) countArenaBotVsBot(ar *arenaState) int {
 
 // topUpArenaBotVsBot starts one bot-vs-bot game (at most one per tick, the
 // same gentle ramp checkFillers uses) between two of this arena's own idle
-// bot participants whenever fewer than arenaBotVsBotCap are already running.
-// Runs on the SEPARATE, cheap filler engine pool (h.fillerEngines) — never
-// h.engines, the human-facing pool — so it can't starve human bot-fill; gated
-// on that pool existing at all (EnableSpectatorFillers), same as any other
-// caller of it. Unlike a Watch filler, the resulting game IS persisted
-// (g.filler stays false) so both bots score.
+// bot participants whenever fewer than arenaBotVsBotCapForField(field size)
+// are already running. Runs on the DEDICATED arena bot-vs-bot engine pool
+// (h.arenaBotEngines) — never h.fillerEngines (the Watch page's pool) or
+// h.engines (the human-facing pool) — so it can neither starve nor be
+// starved by either; gated on that pool existing at all
+// (EnableArenaBotEngines), same as any other caller of it. Unlike a Watch
+// filler, the resulting game IS persisted (g.filler stays false) so both
+// bots score.
 func (h *Hub) topUpArenaBotVsBot(ar *arenaState) {
-	if h.fillerEngines == nil {
-		return // filler pool not enabled — nothing cheap to run bot-vs-bot on
+	if h.arenaBotEngines == nil {
+		return // dedicated arena-bot pool not enabled — nothing to run bot-vs-bot on
 	}
-	if h.countArenaBotVsBot(ar) >= arenaBotVsBotCap {
+	if h.countArenaBotVsBot(ar) >= arenaBotVsBotCapForField(arenaBotCount(ar)) {
 		return
 	}
 	subA, subB, ok := twoIdleArenaBots(ar)
@@ -673,14 +790,29 @@ func (h *Hub) topUpArenaBotVsBot(ar *arenaState) {
 	}
 	ar.botBusy[subA] = true
 	ar.botBusy[subB] = true
+	bumpBotGamesPlayed(ar, subA)
+	bumpBotGamesPlayed(ar, subB)
 	h.scheduleBotMove(g)
 }
 
 // twoIdleArenaBots picks two distinct idle bot participants (enrolled, not
 // withdrawn, not already seated in another live game) from ar's roster to
-// play each other — closest in score, the same spirit as closestArenaPair but
-// over the roster's bot rows instead of ar.free. Returns ok=false if fewer
-// than two are currently idle.
+// play each other. Returns ok=false if fewer than two are currently idle.
+//
+// Pairing is ANCHORED on whoever has played the fewest arena games so far
+// (ar.botGamesPlayed), not on score alone. A pure closest-score pick is fine
+// competitively, but with many bots tied at the same score (every bot starts
+// at 0) it always resolves to the exact same pair — idle[0] and idle[1] in
+// sort.Strings order never change, and as soon as their game ends they're
+// idle again and get picked again, forever, while every other bot sits at
+// zero games for the tournament's entire life (the real bug behind entrants
+// stuck on 0 games while others are on 4+). Anchoring on games-played breaks
+// that: once the anchor plays, its count rises above zero, so a DIFFERENT
+// bot becomes the least-played next time — the pool of "never played yet"
+// bots drains instead of the same two looping. The PARTNER for that anchor is
+// still picked by closest score (ties broken toward the partner's own
+// games-played), so pairings stay score-sensible — only which bot anchors the
+// pairing is fairness-biased, not who it's matched against.
 func twoIdleArenaBots(ar *arenaState) (subA, subB string, ok bool) {
 	var idle []string
 	for sub, ps := range ar.players {
@@ -692,16 +824,28 @@ func twoIdleArenaBots(ar *arenaState) (subA, subB string, ok bool) {
 		return "", "", false
 	}
 	sort.Strings(idle) // deterministic scan order — map iteration isn't
-	bestI, bestJ, bestGap := -1, -1, 0
-	for i := 0; i < len(idle); i++ {
-		for j := i + 1; j < len(idle); j++ {
-			gap := absInt(ar.players[idle[i]].score - ar.players[idle[j]].score)
-			if bestI < 0 || gap < bestGap {
-				bestI, bestJ, bestGap = i, j, gap
-			}
+
+	anchor := idle[0]
+	for _, sub := range idle[1:] {
+		if ar.botGamesPlayed[sub] < ar.botGamesPlayed[anchor] {
+			anchor = sub
 		}
 	}
-	return idle[bestI], idle[bestJ], true
+
+	bestSub := ""
+	bestGap, bestPlayed := 0, 0
+	anchorScore := ar.players[anchor].score
+	for _, sub := range idle {
+		if sub == anchor {
+			continue
+		}
+		gap := absInt(ar.players[sub].score - anchorScore)
+		played := ar.botGamesPlayed[sub]
+		if bestSub == "" || gap < bestGap || (gap == bestGap && played < bestPlayed) {
+			bestSub, bestGap, bestPlayed = sub, gap, played
+		}
+	}
+	return anchor, bestSub, true
 }
 
 // newArenaGame builds and registers a game between white and black — either

@@ -126,6 +126,14 @@ type Hub struct {
 	fillerFensCh      chan []string      // delivers a fetched FEN pool to the Run goroutine
 	lastWatchActivity atomic.Int64       // unix-nano of the most recent watch poll/connect
 
+	// Arena bot-vs-bot engine pool (arena.go's topUpArenaBotVsBot): its OWN
+	// dedicated pool, separate from fillerEngines above, so a large/fast-
+	// moving tournament field can never queue behind (or crowd out) the
+	// Watch page's cosmetic self-play, and separate from `engines` (human
+	// bot-fill) so it can't compete with a real waiting human's move either.
+	// nil until EnableArenaBotEngines is called (mirrors fillerEngines' doc).
+	arenaBotEngines chan *engineHandle
+
 	// Live lobby counters. Written only on the Run goroutine (paired with the
 	// register/unregister and startGame/finish lifecycle), read via atomics from
 	// the /stats HTTP handler on another goroutine.
@@ -986,6 +994,15 @@ func (h *Hub) abortGame(g *game) {
 		"clock":  map[string]int64{"w": g.remainingMs(chess.White), "b": g.remainingMs(chess.Black)},
 	})))
 	h.teardown(g)
+	// This is the OTHER terminal path besides finish() (a stalled first move —
+	// e.g. zugzwang unreachable with the emergency fallback also failing/
+	// disabled), and just as much needs to hand an arena game's sides back:
+	// a bot side has no *Client, so without this an aborted arena bot-vs-bot
+	// (or human-fill) game would leak its bot(s) permanently stuck in
+	// ar.botBusy — never picked again by topUpArenaBotVsBot/
+	// closestIdleArenaBot for the rest of the tournament. No-op for
+	// g.arenaID == "".
+	h.returnToArenaPool(g)
 }
 
 // teardown detaches both clients and removes the game from all indexes. The
