@@ -83,9 +83,14 @@ type arenaState struct {
 
 	// free holds present, currently-unpaired connections waiting to be paired,
 	// in join/return order (so pairing among equal gaps is deterministic).
-	// A connection is added here by joinArena or (post-game) returnToArenaPool,
-	// and removed the moment it's paired, it leaves, it disconnects, or it's
-	// dropped for having withdrawn / fallen off the roster.
+	// A connection is added here by joinArena (confirmed immediately, or later
+	// via resolveArenaPending), and removed the moment it's paired, it leaves,
+	// it disconnects, or it's dropped for having withdrawn / fallen off the
+	// roster. A HUMAN side is deliberately NOT re-added here when its arena
+	// game ends (see returnToArenaPool) — only a fresh joinArena puts it back,
+	// so the result of that game stays on screen until the player chooses to
+	// continue (the tournament page sends joinArena itself when they return to
+	// it). A bot side was never tracked here at all (see botBusy below).
 	free []*Client
 
 	// lastOpponent records each sub's most recently paired opponent, so the
@@ -101,7 +106,9 @@ type arenaState struct {
 	// ar.free the way a human is; this is the bot equivalent of that removal,
 	// set when fillArenaWithBot/topUpArenaBotVsBot seat one and cleared by
 	// returnToArenaPool once its game ends, so the same bot is never
-	// double-booked into two games at once.
+	// double-booked into two games at once. Unlike a human side, a bot IS
+	// still auto-freed the instant its game ends — it has no page to go back
+	// to, and the arena must stay busy.
 	botBusy map[string]bool
 
 	// botGamesPlayed counts, per bot sub, how many arena games (human-fill or
@@ -729,8 +736,9 @@ const (
 
 // randomArenaBotFillDelay returns a uniformly random wait in
 // [arenaBotFillDelayMin, arenaBotFillDelayMax], assigned whenever a
-// connection enters an arena's free pool (joinArena, and again on every
-// return via returnToArenaPool).
+// connection enters an arena's free pool (joinArena, confirmed immediately or
+// later via resolveArenaPending — a human is no longer auto-added back to
+// ar.free when its own arena game ends, see returnToArenaPool).
 func randomArenaBotFillDelay() time.Duration {
 	span := arenaBotFillDelayMax - arenaBotFillDelayMin
 	return arenaBotFillDelayMin + time.Duration(mrand.Int64N(int64(span)+1))
@@ -1097,19 +1105,47 @@ func (h *Hub) newArenaGame(ar *arenaState, white, black *player) *game {
 // came from an arena, g.arenaID == ""). It reads directly off g.white/g.black
 // — which always reflect whichever connections are CURRENTLY attached, having
 // survived any mid-game reconnect — rather than any per-connection arenaID,
-// so a player who reconnected mid-game is still correctly returned to the
-// pool. Each human side that is still a valid (registered, non-withdrawn)
-// participant of a still-running arena goes back into its free pool and a
-// pairing pass is attempted immediately; anyone else (arena ended, or they
-// withdrew mid-game) is simply told arenaLeft instead. A bot side is instead
-// freed up for reuse (see the isBot branch below) — it has no *Client and so
-// was never in ar.free to begin with.
+// so a player who reconnected mid-game is handled correctly either way.
+//
+// A HUMAN side is deliberately NEVER put back in the pairing pool here —
+// that's the whole point of this function post-2026-07-31 (Lichess-style
+// arenas: the result of a just-finished game stays on screen until the player
+// chooses to continue). It only ever gets one of two messages instead:
+//
+//   - arenaLeft, if it's no longer a genuine participant to come back to at
+//     all — the arena disappeared/ended while the game was running, or the
+//     roster now shows this sub withdrawn. Reusing arenaLeft here is
+//     deliberate: to the client (frontend/src/lib/socket.ts) arenaLeft has
+//     always meant only "you're out of the pool, stop auto-rejoining on
+//     reconnect" (it clears the local wait-state and the replayed-on-reconnect
+//     join intent) — it has never meant "you withdrew from the tournament"
+//     (that's a REST-level fact the client tracks separately, from the
+//     standings row). So this is the same situation arenaLeft already
+//     describes elsewhere (drainArena, the withdrawn-while-free sweep in
+//     applyArenaSnapshots): nothing to go back to.
+//   - arenaGameEnded, if the arena is still running and this sub is still a
+//     valid, non-withdrawn participant — a genuinely NEW situation arenaLeft
+//     was never used for, so it gets its own message rather than being folded
+//     in: "your game just ended, you're no longer in the pairing pool, but
+//     you're still in this tournament — ask to be paired again whenever
+//     you're ready" (the tournament page does this by sending joinArena the
+//     moment the player is back on it). Conflating this with arenaLeft would
+//     leave the client unable to tell "come back and rejoin" apart from
+//     "there's nothing left to come back to."
+//
+// Either way, standings/score/participant membership are BaseAPI's alone —
+// this function never touches ar.players, so a human's row is untouched by
+// their game ending.
+//
+// A bot side is freed up for reuse instead (see the isBot branch below) — it
+// has no *Client and so was never in ar.free to begin with, and it has no
+// page to go back to: bots keep auto-returning exactly as before, so the
+// arena stays busy.
 func (h *Hub) returnToArenaPool(g *game) {
 	if g.arenaID == "" {
 		return
 	}
 	ar := h.arenas[g.arenaID]
-	var returned []*Client
 	for _, p := range []*player{g.white, g.black} {
 		if p.isBot {
 			// A bot side has no *Client to re-seat in ar.free — instead it just
@@ -1128,25 +1164,15 @@ func (h *Hub) returnToArenaPool(g *game) {
 			if ar != nil {
 				ps = ar.players[sub]
 			}
+			// Defensive, not load-bearing: pairArena already cleared arenaID
+			// the moment this game was started, and a human is never re-added
+			// to ar.free below — but never leave a stale value behind.
+			c.arenaID = ""
 			if ar == nil || ps == nil || ps.withdrawn {
-				c.arenaID = ""
 				c.trySend(mustJSON(out("arenaLeft", map[string]any{"tournamentId": g.arenaID})))
 				continue
 			}
-			c.arenaID = ar.id
-			c.arenaJoinedAt = time.Now()
-			c.arenaBotFillDelay = randomArenaBotFillDelay()
-			ar.free = append(ar.free, c)
-			returned = append(returned, c)
-		}
-	}
-	if ar == nil || len(returned) == 0 {
-		return
-	}
-	h.pairArena(ar)
-	for _, c := range returned {
-		if arenaFreeHas(ar, c) {
-			c.trySend(mustJSON(out("arenaWaiting", map[string]any{"tournamentId": ar.id})))
+			c.trySend(mustJSON(out("arenaGameEnded", map[string]any{"tournamentId": g.arenaID})))
 		}
 	}
 }

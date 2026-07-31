@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"testing"
 	"time"
 
@@ -433,82 +432,199 @@ func TestArenaJoinRejectsDuplicateIdentity(t *testing.T) {
 
 // --- WS-integration: return-to-pool after a game, avoiding an immediate rematch ---
 
-func TestArenaReturnToPoolAvoidsRematch(t *testing.T) {
+// TestArenaGameEndLeavesHumanOutOfPoolButStillParticipant is the core of the
+// Lichess-style change: a human's arena game ending must NOT put them back in
+// ar.free (only a fresh joinArena does that now — see returnToArenaPool), it
+// must tell them so with the NEW arenaGameEnded message (not arenaLeft — see
+// that function's doc for why the two must stay distinct), and it must never
+// touch their roster row (ar.players) — that's the standings source of
+// truth, and BaseAPI's alone to change.
+func TestArenaGameEndLeavesHumanOutOfPoolButStillParticipant(t *testing.T) {
 	h := New(testSecret)
-	go h.Run()
-	srv := httptest.NewServer(http.HandlerFunc(h.ServeWS))
-	defer srv.Close()
 
-	var mu sync.Mutex
-	var reports []FinishedGame
-	h.OnFinish(func(g FinishedGame) {
-		mu.Lock()
-		reports = append(reports, g)
-		mu.Unlock()
-	})
-
-	const arenaID = "ARENA-R"
-	h.SetArenaSnapshots([]ArenaSnapshot{{
-		ID: arenaID, Pool: "3+0", Variant: "standard", Rated: true,
-		EndsAtMs: time.Now().Add(time.Hour).UnixMilli(),
-		Players: []ArenaPlayerSnapshot{
-			{Sub: "id-r-alice", Score: 10},
-			{Sub: "id-r-bob", Score: 10},
-			{Sub: "id-r-carol", Score: 500}, // far in score — must still be preferred over a rematch
+	ar := &arenaState{
+		id: "ARENA-NOAUTO", pool: "3+0", variant: variantStandard, rated: true,
+		players: map[string]*arenaPlayerState{
+			"id-alice-na": {score: 10},
+			"id-bob-na":   {score: 12},
 		},
-	}})
+		lastOpponent: map[string]string{},
+		botBusy:      map[string]bool{},
+	}
+	h.arenas[ar.id] = ar
 
-	alice := dialAccount(t, srv.URL, "alice", "id-r-alice", 1500)
-	defer alice.CloseNow()
-	bob := dialAccount(t, srv.URL, "bob", "id-r-bob", 1500)
-	defer bob.CloseNow()
-	carol := dialAccount(t, srv.URL, "carol", "id-r-carol", 1500)
-	defer carol.CloseNow()
-	readType(t, alice, "hello")
-	readType(t, bob, "hello")
-	readType(t, carol, "hello")
+	alice := mkArenaClient("id-alice-na")
+	bob := mkArenaClient("id-bob-na")
+	g := h.newArenaGame(ar, newPlayer(alice), newPlayer(bob))
+	if g == nil {
+		t.Fatal("newArenaGame returned nil")
+	}
+	alice.game, bob.game = g, g
 
-	joinArenaEventually(t, alice, arenaID)
-	readType(t, alice, "arenaWaiting")
+	h.finish(g, "1-0", "resign")
 
-	send(t, bob, map[string]any{"type": "joinArena", "tournamentId": arenaID})
-	readType(t, bob, "arenaJoined")
-	ma := readType(t, alice, "matched")
-	mb := readType(t, bob, "matched")
-	if ma["tournamentId"] != arenaID || mb["tournamentId"] != arenaID {
-		t.Fatalf("matched missing tournamentId: alice=%v bob=%v", ma["tournamentId"], mb["tournamentId"])
+	for _, c := range []*Client{alice, bob} {
+		end := readQueued(t, c) // the ordinary game-end broadcast comes first
+		if end["type"] != "end" {
+			t.Fatalf("client %s first message = %v, want end", c.id.UserID, end["type"])
+		}
+		msg := readQueued(t, c)
+		if msg["type"] != "arenaGameEnded" {
+			t.Errorf("client %s second message = %v, want arenaGameEnded", c.id.UserID, msg["type"])
+		}
+		if msg["tournamentId"] != ar.id {
+			t.Errorf("tournamentId = %v, want %v", msg["tournamentId"], ar.id)
+		}
+		if c.arenaID != "" {
+			t.Errorf("client %s arenaID = %q, want empty", c.id.UserID, c.arenaID)
+		}
+	}
+	if len(ar.free) != 0 {
+		t.Errorf("ar.free = %v, want empty — a human must not auto-return", ar.free)
+	}
+	if ps := ar.players["id-alice-na"]; ps == nil || ps.withdrawn || ps.score != 10 {
+		t.Errorf("alice's roster row changed: %+v", ps)
+	}
+	if ps := ar.players["id-bob-na"]; ps == nil || ps.withdrawn || ps.score != 12 {
+		t.Errorf("bob's roster row changed: %+v", ps)
+	}
+}
+
+// TestArenaRejoinAfterGameEnd confirms the other half of the same story: a
+// human left out of the pool by their game ending is still a full participant
+// and can ask to be paired again with an ordinary joinArena — exactly what
+// the tournament page sends the moment the player navigates back to it.
+func TestArenaRejoinAfterGameEnd(t *testing.T) {
+	h := New(testSecret)
+
+	ar := &arenaState{
+		id: "ARENA-REJOIN", pool: "3+0", variant: variantStandard, rated: true,
+		players: map[string]*arenaPlayerState{
+			"id-alice-rj": {score: 10},
+			"id-bob-rj":   {score: 10},
+		},
+		lastOpponent: map[string]string{},
+		botBusy:      map[string]bool{},
+	}
+	h.arenas[ar.id] = ar
+
+	alice := mkArenaClient("id-alice-rj")
+	bob := mkArenaClient("id-bob-rj")
+	g := h.newArenaGame(ar, newPlayer(alice), newPlayer(bob))
+	alice.game, bob.game = g, g
+	h.finish(g, "1-0", "resign")
+	readQueued(t, alice) // end
+	readQueued(t, alice) // arenaGameEnded
+	readQueued(t, bob)   // end
+	readQueued(t, bob)   // arenaGameEnded
+
+	// alice is done reviewing the result and asks to be paired again.
+	h.joinArena(alice, ar.id)
+	joined := readQueued(t, alice)
+	if joined["type"] != "arenaJoined" {
+		t.Fatalf("type = %v, want arenaJoined", joined["type"])
+	}
+	if len(ar.free) != 1 || ar.free[0] != alice {
+		t.Fatalf("ar.free = %v, want just alice", ar.free)
+	}
+	// Nobody else is free (bob hasn't rejoined), so alice just waits.
+	waiting := readQueued(t, alice)
+	if waiting["type"] != "arenaWaiting" {
+		t.Errorf("type = %v, want arenaWaiting", waiting["type"])
+	}
+}
+
+// TestArenaBotFreedImmediatelyAfterGameEnds covers a human-vs-bot arena game:
+// the human is left out of the pool exactly like the human-vs-human case
+// above, but the bot side — unlike a human — has no page to go back to, so it
+// must be immediately re-pairable the instant the game ends (botBusy
+// cleared), keeping the arena busy.
+func TestArenaBotFreedImmediatelyAfterGameEnds(t *testing.T) {
+	h := New(testSecret)
+
+	ar := &arenaState{
+		id: "ARENA-BOTFREE", pool: "3+0", variant: variantStandard, rated: true,
+		players: map[string]*arenaPlayerState{
+			"id-human-bf2": {score: 10},
+			"id-bot-bf2":   {score: 10, bot: true, name: "RookRoamer", rating: 1500},
+		},
+		lastOpponent: map[string]string{},
+		botBusy:      map[string]bool{},
+	}
+	h.arenas[ar.id] = ar
+
+	human := mkArenaClient("id-human-bf2")
+	botIdentity := auth.Identity{UserID: "id-bot-bf2", Name: "RookRoamer", Rating: 1500}
+	g := h.newArenaGame(ar, newPlayer(human), newBotPlayer(botIdentity, 1500))
+	human.game = g
+	ar.botBusy["id-bot-bf2"] = true
+
+	h.finish(g, "0-1", "resign")
+
+	readQueued(t, human) // end
+	msg := readQueued(t, human)
+	if msg["type"] != "arenaGameEnded" {
+		t.Errorf("type = %v, want arenaGameEnded", msg["type"])
+	}
+	if len(ar.free) != 0 {
+		t.Errorf("ar.free = %v, want empty — the human must not auto-return", ar.free)
+	}
+	if ar.botBusy["id-bot-bf2"] {
+		t.Error("the bot's busy marker should have been cleared")
+	}
+	// Immediately re-pairable: closestIdleArenaBot must find it with no delay
+	// or extra step, unlike the human side.
+	sub, ok := closestIdleArenaBot(ar, ar.players["id-human-bf2"])
+	if !ok || sub != "id-bot-bf2" {
+		t.Errorf("closestIdleArenaBot = (%q, %v), want (id-bot-bf2, true)", sub, ok)
+	}
+}
+
+// TestArenaWithdrawnMidGameCannotRejoin covers a player who withdrew from the
+// tournament while their game was still in progress (a fresher roster poll
+// landed mid-game, marking ar.players[sub].withdrawn — see
+// applyArenaSnapshots' free-pool sweep, which this mirrors for a client that
+// wasn't in ar.free because it was mid-game): the game-end message must be
+// the real arenaLeft (they're genuinely not coming back), and a subsequent
+// joinArena must still be rejected.
+func TestArenaWithdrawnMidGameCannotRejoin(t *testing.T) {
+	h := New(testSecret)
+
+	ar := &arenaState{
+		id: "ARENA-WDMID", pool: "3+0", variant: variantStandard, rated: true,
+		players: map[string]*arenaPlayerState{
+			"id-wd-mid": {score: 10},
+			"id-opp-wd": {score: 10},
+		},
+		lastOpponent: map[string]string{},
+		botBusy:      map[string]bool{},
+	}
+	h.arenas[ar.id] = ar
+
+	withdrawing := mkArenaClient("id-wd-mid")
+	opp := mkArenaClient("id-opp-wd")
+	g := h.newArenaGame(ar, newPlayer(withdrawing), newPlayer(opp))
+	withdrawing.game, opp.game = g, g
+
+	// The roster catches up mid-game: this sub has withdrawn.
+	ar.players["id-wd-mid"].withdrawn = true
+
+	h.finish(g, "0-1", "resign")
+
+	readQueued(t, withdrawing) // end
+	msg := readQueued(t, withdrawing)
+	if msg["type"] != "arenaLeft" {
+		t.Errorf("type = %v, want arenaLeft for a withdrawn participant", msg["type"])
+	}
+	if len(ar.free) != 0 {
+		t.Errorf("ar.free = %v, want empty", ar.free)
 	}
 
-	white, black := alice, bob
-	if ma["color"] == "b" {
-		white, black = bob, alice
+	h.joinArena(withdrawing, ar.id)
+	rejected := readQueued(t, withdrawing)
+	if rejected["type"] != "error" {
+		t.Errorf("type = %v, want error", rejected["type"])
 	}
-
-	// Carol joins while alice/bob are mid-game — nobody free to pair her with yet.
-	send(t, carol, map[string]any{"type": "joinArena", "tournamentId": arenaID})
-	readType(t, carol, "arenaJoined")
-	readType(t, carol, "arenaWaiting")
-
-	send(t, white, map[string]any{"type": "resign"})
-	readType(t, white, "end")
-	readType(t, black, "end")
-
-	mu.Lock()
-	if len(reports) != 1 || reports[0].TournamentID != arenaID {
-		t.Errorf("finished report = %+v, want exactly one with TournamentID=%s", reports, arenaID)
-	}
-	mu.Unlock()
-
-	// Both alice and bob return to the pool automatically; carol is also free,
-	// so pairing must favor a NON-repeat pair (white-carol) over an immediate
-	// alice-bob rematch, even though alice/bob's score gap is far closer.
-	m1 := readType(t, carol, "matched")
-	m2 := readType(t, white, "matched")
-	if m1["tournamentId"] != arenaID || m2["tournamentId"] != arenaID {
-		t.Errorf("re-pairing missing tournamentId: carol=%v white=%v", m1["tournamentId"], m2["tournamentId"])
-	}
-	// black is left waiting rather than immediately rematched with white.
-	readType(t, black, "arenaWaiting")
 }
 
 // --- WS-integration: drain on arena end ---

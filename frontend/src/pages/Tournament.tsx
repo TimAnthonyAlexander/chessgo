@@ -168,6 +168,35 @@ export default function Tournament() {
     // this arena) is gone, even if the effects above somehow didn't catch it.
     useEffect(() => clearArenaRetryTimer, [])
 
+    // A tournament game we were just playing ended: since 2026-07-31 the hub
+    // does NOT re-seat us in the pairing pool for that on its own (see
+    // gomachine/internal/hub/arena.go returnToArenaPool + socket.ts's
+    // arenaGameEnded handling) — landing back on this page is what's supposed
+    // to ask again. But `askedToPlay` below was written for a FIRST join: it's
+    // armed the moment we send joinArena and only ever disarmed by `joined`
+    // flipping false, an arenaError, or this component remounting (a fresh
+    // `id`) — never by a plain successful join. If this same mounted instance
+    // already completed one join (e.g. it never navigated away, or navigated
+    // back mid-game via the board's own "back to tournament" link and stayed
+    // mounted through the rest of the game), the guard is still armed from
+    // that first join and would silently swallow the re-join forever. Reset it
+    // once per finished tournament game (keyed by game id, so this can't loop)
+    // so the effect below is free to ask again.
+    const rejoinedAfterGameId = useRef<string | null>(null)
+    useEffect(() => {
+        if (
+            s.game?.tournamentId === id &&
+            s.game.ended &&
+            rejoinedAfterGameId.current !== s.game.id
+        ) {
+            rejoinedAfterGameId.current = s.game.id
+            askedToPlay.current = false
+            setArenaGaveUp(false)
+            clearArenaRetryTimer()
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [s.game?.tournamentId, s.game?.ended, s.game?.id, id])
+
     useEffect(() => {
         if (!joined || t?.status !== 'running') return
         if (s.arena?.tournamentId === id) return // already joined/waiting
@@ -541,17 +570,24 @@ export default function Tournament() {
                                     >
                                         Withdraw
                                     </Button>
-                                    {t.status === 'scheduled' && (
-                                        <Typography
-                                            sx={{
-                                                fontSize: 11.5,
-                                                color: 'var(--muted)',
-                                                textAlign: { xs: 'left', md: 'right' },
-                                            }}
-                                        >
-                                            You'll be paired automatically once it starts.
-                                        </Typography>
-                                    )}
+                                    {/* joined + running + not (yet) waiting/retrying/stuck only
+                                        ever happens for a moment — either before the arena has
+                                        started, or in the brief gap while the auto-join effect's
+                                        joinArena is in flight (including right after a finished
+                                        tournament game, which no longer re-seats us on its own).
+                                        Never leave that gap looking like plain "withdrawable, no
+                                        context" — say what's about to happen either way. */}
+                                    <Typography
+                                        sx={{
+                                            fontSize: 11.5,
+                                            color: 'var(--muted)',
+                                            textAlign: { xs: 'left', md: 'right' },
+                                        }}
+                                    >
+                                        {t.status === 'scheduled'
+                                            ? "You'll be paired automatically once it starts."
+                                            : 'Rejoining the pool…'}
+                                    </Typography>
                                 </Box>
                             ) : (
                                 <Box

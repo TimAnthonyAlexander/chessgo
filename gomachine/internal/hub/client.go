@@ -46,17 +46,20 @@ type Client struct {
 	lastGame *game
 	// arenaID is the tournament id this connection currently holds a slot in
 	// an arena's WAITING pool for ("" if not currently waiting there). It is
-	// set by joinArena and cleared the moment this connection is paired into a
-	// game, leaves explicitly, disconnects, or the arena drains/ends — see
-	// arena.go. It does NOT track "currently playing an arena game" — that's
-	// carried on the game itself (game.arenaID), which survives reconnects
-	// (this field, being per-connection, would not).
+	// set by joinArena (confirmed immediately, or later via
+	// resolveArenaPending) and cleared the moment this connection is paired
+	// into a game, leaves explicitly, disconnects, or the arena drains/ends —
+	// see arena.go. It does NOT track "currently playing an arena game" —
+	// that's carried on the game itself (game.arenaID), which survives
+	// reconnects (this field, being per-connection, would not). A human side
+	// is deliberately NOT re-set here when its arena game ends
+	// (returnToArenaPool) — only a fresh joinArena puts it back in the pool.
 	arenaID string
 	// arenaJoinedAt/arenaBotFillDelay are the arena analogue of
 	// queuedAt/botFillDelay above: stamped whenever this connection enters an
-	// arena's free pool (joinArena, and again on each return via
-	// returnToArenaPool), so fillArenaWithBot can tell a lone long-waiter (no
-	// human opponent found by pairArena) from one that just arrived.
+	// arena's free pool via joinArena, so fillArenaWithBot can tell a lone
+	// long-waiter (no human opponent found by pairArena) from one that just
+	// arrived.
 	arenaJoinedAt     time.Time
 	arenaBotFillDelay time.Duration
 	// arenaPendingID is the tournament id a joinArena for this connection is

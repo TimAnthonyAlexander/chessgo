@@ -203,12 +203,10 @@ func TestArenaGamesReportsLiveGameThenClearsOnFinish(t *testing.T) {
 
 	originalID := row.GameID
 
-	// Finish the game. With only these two participants in the arena and no
-	// third free player, returnToArenaPool's pairing pass repairs them
-	// instantly (arena.go: a repeat pair is only avoided when a third free
-	// player is available) — so the live listing may show a BRAND NEW game
-	// right away. What must never happen is the FINISHED game still being
-	// reported as live.
+	// Finish the game. Both sides are human, so neither auto-returns to the
+	// pairing pool anymore (arena.go: returnToArenaPool only auto-frees a bot
+	// side) — no new game starts here. What must never happen is the FINISHED
+	// game still being reported as live.
 	send(t, alice, map[string]any{"type": "resign"})
 	readType(t, alice, "end")
 	readType(t, bob, "end")

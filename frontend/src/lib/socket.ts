@@ -84,11 +84,19 @@ export interface ChallengeWaitingState {
 }
 
 // This client asked to be paired in a running arena tournament (joinArena) and
-// hasn't yet been matched into a game or told arenaLeft. `waiting` is false in
-// the brief window between sending joinArena and the hub's first pairing
-// attempt (arenaJoined), true once the hub confirms we're actually parked
-// (arenaWaiting) — a page can treat either as "show the waiting UI", the
-// distinction is only there for fidelity to the two wire messages.
+// hasn't yet been matched into a game or told arenaLeft/arenaGameEnded.
+// `waiting` is false in the brief window between sending joinArena and the
+// hub's first pairing attempt (arenaJoined), true once the hub confirms we're
+// actually parked (arenaWaiting) — a page can treat either as "show the
+// waiting UI", the distinction is only there for fidelity to the two wire
+// messages.
+//
+// Note what this state does NOT track: whether we're still a tournament
+// PARTICIPANT. That's a BaseAPI/standings fact a page reads separately (see
+// Tournament.tsx's `joined`). This is only ever "are we currently sitting in
+// the hub's pairing pool" — cleared the instant a game starts (`matched`)
+// and, since 2026-07-31, NOT re-set automatically when that game ends
+// (arenaGameEnded below) — only an explicit joinArena puts it back.
 export interface ArenaState {
     tournamentId: string
     waiting: boolean
@@ -604,6 +612,25 @@ class GameSocket {
                 })
                 break
             case 'arenaLeft':
+                // Nothing to come back to (arena ended / we fell off the roster /
+                // withdrew) — stop treating ourselves as pool-eligible, and don't
+                // replay joinArena on a future reconnect.
+                this.wantArena = null
+                this.set({ arena: null, arenaError: null })
+                break
+            case 'arenaGameEnded':
+                // Our arena game just ended. Since 2026-07-31 the hub does NOT
+                // re-seat us in the pairing pool for this (see
+                // gomachine/internal/hub/arena.go returnToArenaPool) — we're still
+                // a participant (standings are BaseAPI's, untouched by this), but
+                // only rejoin once we explicitly ask again, which the tournament
+                // page does the moment we land back on it. This is NOT a
+                // withdrawal and must never be shown as one: it's handled
+                // identically to arenaLeft here (stop being pool-eligible, don't
+                // auto-rejoin on reconnect) purely because neither case leaves us
+                // waiting in a pool right now — the distinction that matters (are
+                // we still a participant with a next game to return to) lives on
+                // `game.tournamentId` + BaseAPI's standings, not here.
                 this.wantArena = null
                 this.set({ arena: null, arenaError: null })
                 break

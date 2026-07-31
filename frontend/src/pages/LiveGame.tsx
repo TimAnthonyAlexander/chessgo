@@ -7,6 +7,7 @@ import {
     Flag,
     FlipVertical2,
     Handshake,
+    Trophy,
     Undo2,
     User,
     Volume2,
@@ -525,6 +526,43 @@ export default function LiveGame() {
                         width: '100%',
                     }}
                 >
+                    {/* This game is one of a tournament's pairings — a prominent,
+                        always-reachable way back, since the arena only pairs us
+                        again once we ask from that page (never automatically).
+                        Deliberately not gated on zen mode: it's the reason this
+                        game exists, not incidental chrome, and stays reachable
+                        mid-game as well as after. */}
+                    {g.tournamentId && (
+                        <Box
+                            component="button"
+                            onClick={() => navigate(`/tournaments/${g.tournamentId}`)}
+                            sx={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 0.75,
+                                width: '100%',
+                                px: 1.75,
+                                py: 0.85,
+                                border: 'none',
+                                borderBottom: '1px solid var(--accent-line)',
+                                bgcolor: 'var(--accent-soft)',
+                                color: 'var(--accent)',
+                                cursor: 'pointer',
+                                fontFamily: 'var(--font-mono)',
+                                fontSize: 11.5,
+                                fontWeight: 700,
+                                letterSpacing: '0.06em',
+                                textTransform: 'uppercase',
+                                transition: 'background-color .15s',
+                                '&:hover': { bgcolor: 'var(--accent-line)' },
+                            }}
+                        >
+                            <Trophy size={13} />
+                            Tournament
+                            <ChevronRight size={14} style={{ marginLeft: 'auto' }} />
+                        </Box>
+                    )}
+
                     {/* Opponent */}
                     <PlayerBar
                         name={g.opponent.name}
@@ -740,6 +778,21 @@ export default function LiveGame() {
                                     No blunders this game.
                                 </Typography>
                             )}
+                            {/* A tournament game: the arena won't pair us again on
+                                its own (see socket.ts's arenaGameEnded handling) —
+                                say plainly that going back is how the next game
+                                happens, since nothing else on screen implies it. */}
+                            {g.tournamentId && (
+                                <Typography
+                                    sx={{
+                                        fontSize: 12.5,
+                                        color: 'var(--text-dim)',
+                                        textAlign: 'center',
+                                    }}
+                                >
+                                    Head back to the tournament for your next pairing.
+                                </Typography>
+                            )}
                             {g.rematchOffer === 'theirs' && (
                                 <OfferBanner
                                     label="Opponent wants a rematch"
@@ -748,6 +801,14 @@ export default function LiveGame() {
                                 />
                             )}
                             <Box sx={{ display: 'flex', gap: 1 }}>
+                                {g.tournamentId && (
+                                    <ActionBtn
+                                        tone="primary"
+                                        icon={<Trophy size={15} />}
+                                        label="Back to tournament"
+                                        onClick={() => navigate(`/tournaments/${g.tournamentId}`)}
+                                    />
+                                )}
                                 {g.rematchOffer === 'mine' ? (
                                     <ActionBtn
                                         tone="primary"
@@ -776,14 +837,16 @@ export default function LiveGame() {
                                         navigate('/')
                                     }}
                                 />
-                                <ActionBtn
-                                    tone="primary"
-                                    label="New game"
-                                    onClick={() => {
-                                        gameSocket.queue(g.pool)
-                                        navigate('/')
-                                    }}
-                                />
+                                {!g.tournamentId && (
+                                    <ActionBtn
+                                        tone="primary"
+                                        label="New game"
+                                        onClick={() => {
+                                            gameSocket.queue(g.pool)
+                                            navigate('/')
+                                        }}
+                                    />
+                                )}
                             </Box>
                             {/* Post-game only — carry the finished game/position into
                                 analysis, the editor, a bot game, or an engine match.
