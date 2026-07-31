@@ -61,6 +61,20 @@ type Hub struct {
 	// h.sessions is likewise Run-goroutine-only state.
 	onlineQueries chan onlineQuery
 
+	// Arena tournaments (arena.go): BaseAPI is the source of truth for which
+	// tournaments are running and who's in them; the hub only ever PAIRS
+	// participants and plays the games. arenaClient polls BaseAPI off the Run
+	// goroutine (nil until SetArenaClient); each poll's result (or a direct
+	// test injection) arrives over arenaSnapshotCh, always non-nil so it's
+	// safe to select on whether or not arenas are enabled at all. h.arenas is
+	// the Run-goroutine-only cache (tournament id -> live pairing state) built
+	// from the latest snapshot — a BaseAPI outage simply stops refreshing it;
+	// the hub keeps pairing/serving off the last known snapshot rather than
+	// crashing or stalling.
+	arenaClient     *arenaClient
+	arenaSnapshotCh chan []ArenaSnapshot
+	arenas          map[string]*arenaState
+
 	// Bot backfill: if a player waits longer than a randomized per-player delay
 	// (see randomBotFillDelay; botDelay is now only a legacy on/off default) with no human match,
 	// pair them with an engine-driven opponent. Moves are computed off the Run
@@ -244,6 +258,11 @@ type FinishedGame struct {
 	// non-standard for Chess960 and a custom-FEN challenge — a replay/PGN
 	// consumer that assumes the classic start otherwise is safe to ignore it.
 	StartFEN string
+	// TournamentID is the running arena this game was paired from, "" for an
+	// ordinary game. The persistence caller (cmd/gomachine/hub.go's
+	// persistGame) only adds the field to BaseAPI's request body when this is
+	// non-empty, so an ordinary game's POST is byte-identical to before.
+	TournamentID string
 }
 
 // New creates a Hub authenticating tickets with the given shared secret.
@@ -264,6 +283,9 @@ func New(secret string) *Hub {
 
 		registerChallenges: make(chan registerChallengeReq),
 		onlineQueries:      make(chan onlineQuery),
+
+		arenaSnapshotCh: make(chan []ArenaSnapshot, 1),
+		arenas:          map[string]*arenaState{},
 	}
 }
 
@@ -329,6 +351,8 @@ func (h *Hub) Run() {
 			req.result <- h.doRegisterServerChallenge(req)
 		case q := <-h.onlineQueries:
 			q.result <- h.doOnline(q.subs)
+		case snaps := <-h.arenaSnapshotCh:
+			h.applyArenaSnapshots(snaps)
 		case <-ticker.C:
 			h.checkClocks()
 			h.matchWaiting()
@@ -336,6 +360,7 @@ func (h *Hub) Run() {
 			h.checkFillers()
 			h.checkChallenges()
 			h.checkRematches()
+			h.checkArenas()
 			h.publishLobby()
 		}
 	}
@@ -387,6 +412,10 @@ func (h *Hub) handle(cmd command) {
 		h.rematchDecline(c)
 	case "rematchCancel":
 		h.rematchCancel(c)
+	case "joinArena":
+		h.joinArena(c, cmd.msg.TournamentID)
+	case "leaveArena":
+		h.leaveArena(c)
 	}
 }
 
@@ -454,15 +483,21 @@ func (h *Hub) startGame(a, b *Client, tc timeControl, pool, variant string) {
 	// Public pairing is rated only if both sides are accounts; startGameWith further
 	// gates by variant (standard → time-control pools, duck → the duck pool, 960
 	// unrated). The queue key carries the variant through (standard threads bare).
-	h.startGameWith(white, black, tc, pool, !white.id.Anon && !black.id.Anon, variant, "", "")
+	h.startGameWith(white, black, tc, pool, !white.id.Anon && !black.id.Anon, variant, "", "", "")
 }
 
 // startGameWith creates a game between two clients with explicit colors and a
 // caller-decided rated flag. Shared by public matchmaking (random colors, rated
 // iff both accounts), private challenges (creator's color/rated preference,
-// optionally a custom fen) and an accepted rematch (rematchOf carries the
-// finished game's id forward, "" otherwise). Returns the new game.
-func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, rated bool, variantID string, rematchOf string, fen string) *game {
+// optionally a custom fen), an accepted rematch (rematchOf carries the
+// finished game's id forward, "" otherwise) and arena pairing (arenaID names
+// the running tournament this game was paired from, "" for every other
+// caller — a rematch of an arena game is deliberately NOT tagged: rematches
+// are a separate feature, and a tournament's own pairing loop already
+// re-pairs its participants after every game). Returns the new game — the
+// arenaID is set on it BEFORE sendMatched below, so "matched" carries the
+// tournament id from the very first wire message.
+func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, rated bool, variantID string, rematchOf string, fen string, arenaID string) *game {
 	// Starting any new game retires whatever rematch window either side's
 	// previous finished game still held open — offering a rematch to someone
 	// who already started playing again makes no sense, and leaving the
@@ -515,6 +550,7 @@ func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, r
 		startFen:  startFen,
 		variant:   variantID,
 		rematchOf: rematchOf,
+		arenaID:   arenaID,
 	}
 	white.game, black.game = g, g
 	h.games[g.id] = g
@@ -550,6 +586,9 @@ func (h *Hub) sendMatched(g *game, c *Client, color chess.Color) {
 		"opponent":    map[string]any{"name": opp.Name, "rating": opp.RatingFor(categoryFor(g.pool, g.variant)), "anon": opp.Anon},
 		"legalMoves":  g.legalMoves(),
 		"rematch":     g.rematchOf != "", // true iff this game was created by an accepted rematch
+	}
+	if g.arenaID != "" {
+		payload["tournamentId"] = g.arenaID
 	}
 	g.addExtras(payload)
 	c.trySend(mustJSON(out("matched", payload)))
@@ -816,8 +855,14 @@ func (h *Hub) finish(g *game, result, reason string) {
 			WhiteBot: g.white.isBot, BlackBot: g.black.isBot,
 			Result: result, Reason: reason, Moves: g.moves, SANs: g.sans,
 			MoveTimes: g.moveTimes, StartFEN: g.startFen,
+			TournamentID: g.arenaID,
 		})
 	}
+
+	// An arena game's two human sides go back into that arena's pairing pool
+	// automatically (if the arena is still running) rather than needing to
+	// re-send joinArena — see arena.go. A no-op for g.arenaID == "".
+	h.returnToArenaPool(g)
 }
 
 // abortGame ends a game with no result (first-move timeout). Aborted games are
@@ -986,6 +1031,9 @@ func (h *Hub) resumeMsg(g *game, color chess.Color) map[string]any {
 		"lastMove":       g.lastUci(),
 		"opponentOnline": g.online[color.Opposite()],
 	}
+	if g.arenaID != "" {
+		payload["tournamentId"] = g.arenaID
+	}
 	g.addExtras(payload)
 	return out("resume", payload)
 }
@@ -1004,6 +1052,11 @@ func (h *Hub) handleDisconnect(c *Client) {
 	h.dropChallenge(c)          // tear down any pending private invite this client created
 	h.unwatchGame(c)            // a spectator (or a player who was also watching) leaving
 	h.retireRematch(c.lastGame) // no one left to offer/accept a rematch with
+	// Drop this connection from whatever arena WAITING pool it's parked in
+	// (never touches a currently-playing arena game — that's g.arenaID, and
+	// finish() re-derives who to return to the pool from the game's own
+	// clients, which survive a reconnect; this per-connection field would not).
+	h.clearArenaMembership(c)
 	g := c.game
 	if g == nil || g.over {
 		return

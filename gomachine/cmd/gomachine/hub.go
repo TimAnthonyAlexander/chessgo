@@ -51,6 +51,7 @@ func cmdHub(args []string) {
 	zugzwangURL := fs.String("zugzwang-url", envOr("ZUGZWANG_URL", "http://127.0.0.1:6476"), "zugzwang engine base URL — the routine bot-move + watch-filler compute backend (env ZUGZWANG_URL)")
 	zugzwangTimeoutFlag := fs.Duration("zugzwang-timeout", 5*time.Second, "per-attempt HTTP timeout for a zugzwang /bestmove call (one retry on failure)")
 	emergencyInProc := fs.Bool("emergency-inproc", true, "fall back to gomachine's in-process engine if zugzwang is unreachable after retrying (logged loudly each time); zugzwang is the routine backend — this is a last-resort safety net so a live game never freezes. Disable to hard-fail (drop the move) instead of silently degrading to in-process search")
+	arenas := fs.Bool("arenas", true, "poll BaseAPI for running Arena tournaments and pair their participants")
 	pprofAddr := fs.String("pprof", "", "if set (e.g. 127.0.0.1:6481), serve net/http/pprof on this address for profiling the Run goroutine")
 	_ = fs.Parse(args)
 
@@ -60,6 +61,12 @@ func cmdHub(args []string) {
 	if secret == "" {
 		secret = "dev-insecure-secret"
 		fmt.Fprintln(os.Stderr, "warning: WS_TICKET_SECRET not set; using an insecure dev secret")
+	}
+	// Needed before Run (SetArenaClient) as well as after (persistence/bot-chat/
+	// filler-FEN fetches below), so resolve it once, up front.
+	baseURL := os.Getenv("BASEAPI_URL")
+	if baseURL == "" {
+		baseURL = "http://127.0.0.1:6464"
 	}
 
 	h := hub.New(secret)
@@ -94,14 +101,14 @@ func cmdHub(args []string) {
 		h.EnableSpectatorFillers(*watchTarget, *watchWorkers, 8, 1)
 		fmt.Printf("watch fillers on: up to %d shown games, padded by self-play on %d dedicated workers (only while watched)\n", *watchTarget, *watchWorkers)
 	}
+	if *arenas {
+		h.SetArenaClient(baseURL, secret)
+		fmt.Println("arena tournaments on: polling BaseAPI's active-arenas feed every 5s and pairing participants")
+	}
 	go h.Run()
 
 	// Persist finished games via BaseAPI (it owns MySQL + ratings). Fire-and-forget
 	// off the hub goroutine so a slow/failed POST never stalls live play.
-	baseURL := os.Getenv("BASEAPI_URL")
-	if baseURL == "" {
-		baseURL = "http://127.0.0.1:6464"
-	}
 	h.OnFinish(func(g hub.FinishedGame) {
 		fmt.Printf("game %s done: %s (%s) pool=%s rated=%v moves=%d\n",
 			g.ID, g.Result, g.Reason, g.Pool, g.Rated, len(g.Moves))
@@ -249,7 +256,7 @@ func cmdHub(args []string) {
 // authenticated by the shared hub secret. Runs in its own goroutine; errors are
 // logged, never fatal (the live game is already over and broadcast).
 func persistGame(baseURL, secret string, g hub.FinishedGame) {
-	body, err := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"id":        g.ID,
 		"pool":      g.Pool,
 		"rated":     g.Rated,
@@ -266,7 +273,14 @@ func persistGame(baseURL, secret string, g hub.FinishedGame) {
 		// BaseAPI's current GameResultController ignores unknown body fields, so
 		// this is a forward-compatible addition, not a contract break.
 		"startFen": g.StartFEN,
-	})
+	}
+	// tournamentId is added ONLY for an arena game — an ordinary game's body is
+	// byte-identical to before this field existed (key simply absent, not just
+	// empty), per the fixed hub/BaseAPI arena contract.
+	if g.TournamentID != "" {
+		payload["tournamentId"] = g.TournamentID
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "persist game %s: marshal: %v\n", g.ID, err)
 		return

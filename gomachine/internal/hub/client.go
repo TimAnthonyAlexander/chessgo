@@ -44,6 +44,14 @@ type Client struct {
 	// closes: a rematch starts, either side leaves, the window times out, or
 	// this client starts any other new game.
 	lastGame *game
+	// arenaID is the tournament id this connection currently holds a slot in
+	// an arena's WAITING pool for ("" if not currently waiting there). It is
+	// set by joinArena and cleared the moment this connection is paired into a
+	// game, leaves explicitly, disconnects, or the arena drains/ends — see
+	// arena.go. It does NOT track "currently playing an arena game" — that's
+	// carried on the game itself (game.arenaID), which survives reconnects
+	// (this field, being per-connection, would not).
+	arenaID string
 }
 
 func (c *Client) readPump() {

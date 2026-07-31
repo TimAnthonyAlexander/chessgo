@@ -177,7 +177,7 @@ func (h *Hub) joinChallenge(c *Client, code string) {
 	h.removeChallenge(ch)
 	h.dequeue(creator) // make sure neither side lingers in a public pool
 	h.dequeue(c)
-	h.startGameWith(white, black, ch.tc, ch.pool, rated, ch.variant, "", ch.fen)
+	h.startGameWith(white, black, ch.tc, ch.pool, rated, ch.variant, "", ch.fen, "")
 }
 
 // joinServerChallenge handles a joinChallenge against a challenge BaseAPI
@@ -237,7 +237,7 @@ func (h *Hub) joinServerChallenge(c *Client, ch *challenge) {
 	h.removeChallenge(ch)
 	h.dequeue(waiting)
 	h.dequeue(c)
-	h.startGameWith(white, black, ch.tc, ch.pool, rated, ch.variant, "", ch.fen)
+	h.startGameWith(white, black, ch.tc, ch.pool, rated, ch.variant, "", ch.fen, "")
 }
 
 // assignColors resolves a "w"/"b"/"random" preference into concrete white/black

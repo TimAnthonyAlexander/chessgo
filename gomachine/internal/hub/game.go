@@ -117,6 +117,15 @@ type game struct {
 	// no Elo). It exists only to populate the spectator lobby.
 	filler bool
 
+	// arenaID is the running arena tournament this game was paired FROM, ""
+	// for an ordinary game (public matchmaking, private challenge, rematch, or
+	// bot fill). Set once at creation (arena.go's startArenaGame) and never
+	// changed. finish() uses it to (a) tag the persisted game with the
+	// tournament id and (b) return both human sides to that arena's pairing
+	// pool automatically, rather than the game's own `.game`/`.clients`
+	// bookkeeping needing any arena-specific field.
+	arenaID string
+
 	// spectators are read-only watchers of this game. They receive the same
 	// state/end broadcasts as players but never affect the game; a slow one is
 	// dropped by trySend like any client. Lazily allocated on first watcher.

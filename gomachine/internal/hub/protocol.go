@@ -10,7 +10,8 @@ import (
 // inMsg is a message from a client. Type is one of: queue, cancel, resume, move,
 // resign, watch, unwatch, drawOffer, drawAccept, drawDecline, takebackOffer,
 // takebackAccept, takebackDecline, chat, createChallenge, joinChallenge,
-// cancelChallenge, rematchOffer, rematchAccept, rematchDecline, rematchCancel.
+// cancelChallenge, rematchOffer, rematchAccept, rematchDecline, rematchCancel,
+// joinArena, leaveArena.
 //
 // `resume` is the client asking "does my account have a live game?" — the hub
 // answers with a full `resume` (seating this connection) or `idle`/`queued`. A
@@ -35,6 +36,8 @@ type inMsg struct {
 	// (whose own randomized start always wins over any custom FEN). A game
 	// started from a custom FEN is always forced casual, regardless of Rated.
 	Fen string `json:"fen,omitempty"`
+	// TournamentID names the running arena to join (joinArena) — see arena.go.
+	TournamentID string `json:"tournamentId,omitempty"`
 }
 
 // timeControl is a base time + per-move increment, both in milliseconds.

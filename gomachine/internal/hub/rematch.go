@@ -154,7 +154,7 @@ func (h *Hub) startRematch(g *game) {
 		// disarms the window — but never assume; a bot side never gets here
 		// either, since it never has a client to send rematchAccept from)
 	}
-	h.startGameWith(white, black, g.tc, g.pool, g.rated, g.variant, g.id, "")
+	h.startGameWith(white, black, g.tc, g.pool, g.rated, g.variant, g.id, "", "")
 }
 
 // checkRematches reclaims rematch windows past rematchTTL each tick — whether
