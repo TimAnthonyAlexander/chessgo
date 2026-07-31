@@ -15,13 +15,12 @@ use App\Models\BotGame;
 class BotGameService
 {
     /**
-     * Human-facing bot strength bounds — the FIDE/human scale the picker + Glicko use.
-     * The zugzwang engine's `limits.rating` ladder is calibrated on this same
-     * engine's own scale (RatingMin=700 .. RatingMax=3500 = full engine strength,
-     * ~3500 CCRL), so this rating is forwarded to the engine as-is — no conversion.
+     * Bot strength bounds. These live on the model (it owns `rating` and the
+     * handicap curves that floor at RATING_MIN); aliased here so the service's
+     * own clamping reads naturally.
      */
-    public const RATING_MIN = 700;
-    public const RATING_MAX = 3500;
+    public const RATING_MIN = BotGame::RATING_MIN;
+    public const RATING_MAX = BotGame::RATING_MAX;
 
     public function __construct(private readonly EngineSelector $engine)
     {
@@ -360,45 +359,17 @@ class BotGameService
     /**
      * The rating the bot plays this move at. Standard, Chess960, and Double Move
      * forward the game's stored `rating` unchanged (Double Move's handicap is the
-     * turn order, not strength). fading and glassjaw instead derive a per-move
-     * rating from the move history, both floored at RATING_MIN so they always take
-     * the bestMove path (never the rating<=0 worst-move sentinel):
+     * turn order, not strength); fading and glassjaw derive theirs from the move
+     * history.
      *
-     *  - fading: full strength (RATING_MAX) on the bot's first move, decaying 100
-     *    Elo per bot move already played.
-     *  - glassjaw: full strength, decaying 300 Elo (cumulative, permanent) per
-     *    check the human has delivered so far — including one just delivered on
-     *    the move the bot is now replying to.
+     * The curves live on the model (BotGame::effectiveRating) because the same
+     * number is serialized to the client — computing it twice was how the UI ended
+     * up advertising a static "~3500 Elo" for opponents that were already hundreds
+     * of Elo weaker. One definition, both callers.
      */
     private function effectiveBotRating(BotGame $game): int
     {
-        return match ($game->variant) {
-            'fading' => max(self::RATING_MIN, self::RATING_MAX - 100 * $this->botMovesPlayed($game)),
-            'glassjaw' => max(self::RATING_MIN, self::RATING_MAX - 300 * $this->humanCheckingMovesCount($game)),
-            default => $game->rating,
-        };
-    }
-
-    /** Count of bot moves already recorded in the game's move history. */
-    private function botMovesPlayed(BotGame $game): int
-    {
-        return count(array_filter(
-            $game->getMoves(),
-            static fn (array $move): bool => ($move['by'] ?? null) === 'bot',
-        ));
-    }
-
-    /** Count of human moves in the history whose SAN gave check ('+') or mate ('#'). */
-    private function humanCheckingMovesCount(BotGame $game): int
-    {
-        return count(array_filter($game->getMoves(), static function (array $move): bool {
-            if (($move['by'] ?? null) !== 'human') {
-                return false;
-            }
-            $san = is_string($move['san'] ?? null) ? $move['san'] : '';
-
-            return $san !== '' && (str_ends_with($san, '+') || str_ends_with($san, '#'));
-        }));
+        return $game->effectiveRating();
     }
 
     /**

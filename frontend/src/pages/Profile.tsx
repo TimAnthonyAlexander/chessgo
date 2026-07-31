@@ -14,7 +14,7 @@ import RecordPanel from '../components/profile/RecordPanel'
 import RatingsPanel from '../components/profile/RatingsPanel'
 import GamesPanel from '../components/profile/GamesPanel'
 import ProfileSkeleton from '../components/profile/ProfileSkeleton'
-import { primaryRating, type CatFilter, type ResultFilter } from '../components/profile/shared'
+import { primaryCategory, type CatFilter, type ResultFilter } from '../components/profile/shared'
 
 export default function Profile() {
     const { name = '' } = useParams<{ name: string }>()
@@ -157,11 +157,10 @@ export default function Profile() {
         return cats
     }, [data])
 
-    // Reconstruct the per-category rating trend from the first page of games,
-    // and pick the player's headline (most-played) rating for the hero call-out.
+    // The player's most-played pool — the row RatingsPanel highlights.
     const primary = useMemo(() => {
         if (!data) return null
-        return primaryRating(data)
+        return primaryCategory(data)
     }, [data])
 
     return (
@@ -184,7 +183,6 @@ export default function Profile() {
                         <IdentityHero
                             profile={data}
                             isSelf={user?.id === data.id}
-                            primary={primary}
                             lastActive={data.games[0]?.created_at ?? null}
                         />
 
@@ -211,7 +209,7 @@ export default function Profile() {
                                 }}
                             >
                                 <RecordPanel record={data.record} />
-                                <RatingsPanel profile={data} primaryKey={primary?.key ?? null} />
+                                <RatingsPanel profile={data} primaryKey={primary} />
                             </Box>
 
                             {/* Main: server-filtered, paginated game history. */}

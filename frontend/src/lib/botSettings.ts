@@ -14,6 +14,11 @@ const RATING_MIN = 700
 // Full engine strength — the engine's own ceiling (~3500 CCRL; zugzwang RatingMax).
 // The engine owns the rating→strength curve; the top notch plays at full strength.
 const RATING_MAX = 3500
+
+/** Full engine strength, exported so the handicap modes (fading, glassjaw) can
+ *  show how far below their starting ceiling they've fallen. Mirrors
+ *  BotGameService::RATING_MAX. */
+export const FULL_STRENGTH_RATING = RATING_MAX
 const VARIANTS: readonly Variant[] = [
     'standard',
     'chess960',

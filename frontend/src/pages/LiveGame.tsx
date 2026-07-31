@@ -542,27 +542,6 @@ export default function LiveGame() {
                         zen={zen}
                     />
 
-                    {s.conn !== 'open' && !g.ended && (
-                        <Box
-                            sx={{
-                                px: 1.75,
-                                py: 0.75,
-                                bgcolor: 'var(--accent-soft)',
-                                borderBottom: '1px solid var(--accent-line)',
-                            }}
-                        >
-                            <Typography
-                                sx={{
-                                    fontSize: 12.5,
-                                    color: 'var(--accent)',
-                                    fontFamily: 'var(--font-mono)',
-                                }}
-                            >
-                                Reconnecting…
-                            </Typography>
-                        </Box>
-                    )}
-
                     {/* Moves — a FIXED 7 rows: padded with empty rows when the game is
                         shorter and scrolling (auto-following the latest move) once it's
                         longer, so the panel height never jumps mid-game. Hidden under
@@ -912,6 +891,11 @@ export default function LiveGame() {
                     onCancel={confirmMove.cancel}
                 />
             )}
+
+            {/* The ONLY connection-state indicator. The side panel used to carry a
+                second "Reconnecting…" banner under the same condition — same message,
+                same form, twice on screen, and its appearing/disappearing shifted the
+                panel's height mid-game. This overlay is unmissable; don't re-add it. */}
             {s.conn !== 'open' && !g.ended && (
                 <Box
                     sx={{

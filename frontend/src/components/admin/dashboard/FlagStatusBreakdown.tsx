@@ -6,9 +6,10 @@ import { STATUS_META, STATUS_ORDER } from './labels'
 type ByStatus = AdminDashboard['anticheat']['by_status']
 
 /** The flagged-user review pipeline: how many accounts sit at each verdict
- * status. Rendered as color-coded chips so the open/actionable count stands out. */
+ * status. Rendered as color-coded chips so the open/actionable count stands out.
+ * No total here — DashboardStats' "Flagged" tile is the single source for the
+ * headline count; summing statuses client-side could drift from it. */
 export default function FlagStatusBreakdown({ data }: { data: ByStatus }) {
-    const total = STATUS_ORDER.reduce((sum, s) => sum + data[s], 0)
     return (
         <Panel>
             <PanelHead title="Review queue" sub="Flagged users by verdict status" />
@@ -63,9 +64,6 @@ export default function FlagStatusBreakdown({ data }: { data: ByStatus }) {
                     )
                 })}
             </Box>
-            <Typography sx={{ fontSize: 11.5, color: 'var(--muted)', mt: 1.25 }}>
-                {total} flagged {total === 1 ? 'account' : 'accounts'} total
-            </Typography>
         </Panel>
     )
 }

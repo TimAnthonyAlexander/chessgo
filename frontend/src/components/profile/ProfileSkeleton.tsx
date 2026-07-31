@@ -7,36 +7,31 @@ import { Panel } from '../home/Panel'
 export default function ProfileSkeleton() {
     return (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
-            {/* Hero */}
+            {/* Hero: identity-only now (avatar + name + joined date). */}
             <Box
                 sx={{
                     bgcolor: 'var(--surface)',
                     border: '1px solid var(--line-soft)',
                     borderRadius: '16px',
-                    p: { xs: 2.5, md: 3 },
+                    p: { xs: 2.5, md: 2.75 },
                     display: 'flex',
-                    flexDirection: { xs: 'column', md: 'row' },
-                    alignItems: { md: 'center' },
-                    justifyContent: 'space-between',
-                    gap: 2.5,
+                    alignItems: 'center',
+                    gap: 2,
                 }}
             >
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    <Box
-                        sx={{
-                            width: 62,
-                            height: 62,
-                            borderRadius: '16px',
-                            bgcolor: 'var(--surface-2)',
-                            flexShrink: 0,
-                        }}
-                    />
-                    <Box>
-                        <SkeletonBar w={160} h={22} />
-                        <SkeletonBar w={120} h={11} sx={{ mt: 1 }} />
-                    </Box>
+                <Box
+                    sx={{
+                        width: 62,
+                        height: 62,
+                        borderRadius: '16px',
+                        bgcolor: 'var(--surface-2)',
+                        flexShrink: 0,
+                    }}
+                />
+                <Box>
+                    <SkeletonBar w={160} h={22} />
+                    <SkeletonBar w={120} h={11} sx={{ mt: 1 }} />
                 </Box>
-                <SkeletonBar w={220} h={72} sx={{ borderRadius: '14px' }} />
             </Box>
 
             {/* Two columns */}

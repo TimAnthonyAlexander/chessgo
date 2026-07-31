@@ -1,8 +1,8 @@
-// Shared profile helpers: result perspective, date formatting, per-category
-// rating series (for the hero sparkline), and identity monograms. Kept
-// framework-free so every profile widget composes on the same primitives.
+// Shared profile helpers: result perspective, date formatting, rating trends,
+// and identity monograms. Kept framework-free so every profile widget composes
+// on the same primitives.
 import type { Profile, ProfileGame, RatingCategory } from '../../api/client'
-import { CATEGORY_META, type Category } from '../../lib/timeControl'
+import { type Category } from '../../lib/timeControl'
 
 export type Outcome = 'win' | 'loss' | 'draw'
 
@@ -77,46 +77,29 @@ export function fmtRelative(iso: string): string {
     return fmtDate(iso)
 }
 
-export interface PrimaryRating {
-    key: RatingCategory
-    label: Category
-    color: string
-    rating: number
-    provisional: boolean
-    games: number
-    series: number[]
-    delta: number | null
+/** Net rating change across a history window (oldest -> newest), or null when
+ * there aren't two points to compare. Shared so the ratings panel's per-row
+ * trend and anything else reading a trend can't drift on the definition. */
+export function seriesDelta(series: number[]): number | null {
+    return series.length >= 2 ? series[series.length - 1] - series[0] : null
 }
 
-// The player's "headline" rating: the most-played time control. Drives the big
-// call-out in the hero. Returns null only if the profile has no ratings at all.
-export function primaryRating(profile: Profile): PrimaryRating | null {
-    let best: { key: RatingCategory; label: Category } | null = null
+/** The player's most-played time control. Its only job now is telling
+ * `RatingsPanel` which row to highlight — this used to return a whole rating
+ * bundle (number, colour, series, delta) for a hero call-out that duplicated
+ * that very row, so everything but the key went with it. Null only if the
+ * profile has no time-control ratings at all. */
+export function primaryCategory(profile: Profile): RatingCategory | null {
+    let best: RatingCategory | null = null
     let bestGames = -1
     for (const c of TC_CATEGORIES) {
         const g = profile.ratings[c.key].games
         if (g > bestGames) {
             bestGames = g
-            best = c
+            best = c.key
         }
     }
-    if (!best) return null
-
-    const tile = profile.ratings[best.key]
-    // The server already caps this at HISTORY_POINTS, oldest -> newest.
-    const window = profile.ratingHistory[best.key] ?? []
-    const delta = window.length >= 2 ? window[window.length - 1] - window[0] : null
-
-    return {
-        key: best.key,
-        label: best.label,
-        color: CATEGORY_META[best.label].color,
-        rating: tile.rating,
-        provisional: tile.provisional,
-        games: tile.games,
-        series: window,
-        delta,
-    }
+    return best
 }
 
 const MONO_COLORS = ['#5e84c0', '#6f9e54', '#d8a657', '#e0844a', '#b06fb0', '#4aa7a0']

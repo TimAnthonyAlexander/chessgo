@@ -19,6 +19,15 @@ use BaseApi\Models\BaseModel;
  */
 class BotGame extends BaseModel
 {
+    /**
+     * Human-facing bot strength bounds — the FIDE/human scale the picker + Glicko use.
+     * The zugzwang engine's `limits.rating` ladder is calibrated on this same
+     * engine's own scale (RatingMin=700 .. RatingMax=3500 = full engine strength,
+     * ~3500 CCRL), so this rating is forwarded to the engine as-is — no conversion.
+     */
+    public const RATING_MIN = 700;
+    public const RATING_MAX = 3500;
+
     /** AI strength as a target Elo (RatingMin..RatingMax ≈ 700..2900). The
      *  engine maps this to a weakening config; see gomachine internal/engine
      *  rating.go. Replaces the old 0..10 level. */
@@ -110,7 +119,58 @@ class BotGame extends BaseModel
     }
 
     /**
-     * Expose `moves` as a decoded array and hide the internal repetition history.
+     * The Elo the bot will play its NEXT move at.
+     *
+     * For every variant except the two handicap modes this is just the stored
+     * `rating`. fading and glassjaw derive it from the move history instead, so
+     * their stored rating is only a full-strength sentinel and says nothing about
+     * how strong the opponent currently is:
+     *
+     *  - fading: RATING_MAX minus 100 Elo per bot move already played.
+     *  - glassjaw: RATING_MAX minus 300 Elo (cumulative, permanent) per check the
+     *    human has delivered so far.
+     *
+     * Both floor at RATING_MIN so they never hit the rating<=0 worst-move path.
+     * Evaluated against the CURRENT history, which is why serializing after a move
+     * yields the strength that applies to the reply the player is about to face.
+     */
+    public function effectiveRating(): int
+    {
+        $moves = $this->getMoves();
+
+        return match ($this->variant) {
+            'fading' => max(
+                self::RATING_MIN,
+                self::RATING_MAX - 100 * count(array_filter(
+                    $moves,
+                    static fn (array $m): bool => ($m['by'] ?? null) === 'bot',
+                )),
+            ),
+            'glassjaw' => max(
+                self::RATING_MIN,
+                self::RATING_MAX - 300 * count(array_filter(
+                    $moves,
+                    static function (array $m): bool {
+                        if (($m['by'] ?? null) !== 'human') {
+                            return false;
+                        }
+                        $san = is_string($m['san'] ?? null) ? $m['san'] : '';
+
+                        return $san !== '' && (str_ends_with($san, '+') || str_ends_with($san, '#'));
+                    },
+                )),
+            ),
+            default => $this->rating,
+        };
+    }
+
+    /**
+     * Expose `moves` as a decoded array, publish the per-move effective rating,
+     * and hide the internal repetition history.
+     *
+     * `effective_rating` ships on every variant (where it equals `rating`) so the
+     * client has one field to render and never has to reimplement the handicap
+     * curves to know how strong the opponent is right now.
      *
      * @return array<string, mixed>
      */
@@ -120,6 +180,7 @@ class BotGame extends BaseModel
         $data = parent::jsonSerialize();
         unset($data['history_fens']);
         $data['moves'] = $this->getMoves();
+        $data['effective_rating'] = $this->effectiveRating();
 
         return $data;
     }

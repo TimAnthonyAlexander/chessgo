@@ -107,8 +107,7 @@ export default function UserDetailHeader({
                         }}
                     >
                         <AlertTriangle size={15} />
-                        Flagged — review {rollup.total_flags} event
-                        {rollup.total_flags === 1 ? '' : 's'}
+                        Flagged — review events
                     </Box>
                 )}
             </Box>

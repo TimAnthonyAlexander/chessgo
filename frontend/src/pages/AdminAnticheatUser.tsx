@@ -84,9 +84,12 @@ export default function AdminAnticheatUser() {
                     >
                         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
                             <Panel>
+                                {/* No count here: `events` may be a truncated slice of the
+                                 * full history, so it can't be trusted to match the header's
+                                 * `total_flags` pill — describe order only. */}
                                 <PanelHead
                                     title="Flag timeline"
-                                    sub={`${detail.events.length} event${detail.events.length === 1 ? '' : 's'}, newest first — expand a row for evidence`}
+                                    sub="Newest first — expand a row for evidence"
                                 />
                                 <FlagEventTimeline userId={detail.user_id} events={detail.events} />
                             </Panel>

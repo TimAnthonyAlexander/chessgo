@@ -1,16 +1,19 @@
 import { Box, Typography } from '@mui/material'
 import { Infinity as InfinityIcon } from 'lucide-react'
 import { type Variant, VARIANT_LABEL } from '../lib/variants'
-import { ratingLabel, UNLOSABLE_RATING } from '../lib/botSettings'
-import NewBadge from './NewBadge'
-
-// Fading/Glass Jaw strength varies per move (backend-computed), so the setup
-// rating stored for them is meaningless — show a mode descriptor instead of
-// "~N Elo".
-const FIXED_STRENGTH_VARIANTS: Variant[] = ['fading', 'glassjaw']
+import { UNLOSABLE_RATING } from '../lib/botSettings'
 
 /** Left-side game-mode card. Untimed, casual play vs the engine; the headline
- * reflects the chosen variant (Standard → "Casual", otherwise the variant name). */
+ * reflects the chosen variant (Standard → "Casual", otherwise the variant name).
+ *
+ * Deliberately says nothing about WHO is playing: the opponent's name and rating
+ * live in the MovePanel header, the one place they're wired to the zenMode /
+ * showOpponentRating preferences. Repeating them here duplicated that readout
+ * and ignored those preferences — don't re-add it.
+ *
+ * It also stays off the variant BLURB: this card renders beside the setup panel
+ * while no game exists, and VariantPicker already prints the selected variant's
+ * blurb there. Two copies of the same sentence, side by side. */
 export default function GameModeCard({
     rating,
     variant = 'standard',
@@ -62,31 +65,6 @@ export default function GameModeCard({
             >
                 {title}
             </Typography>
-
-            <Box sx={{ borderTop: '1px solid var(--line-soft)', mt: 2.25, pt: 2.25 }}>
-                <Typography
-                    sx={{
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: 10.5,
-                        letterSpacing: '0.16em',
-                        textTransform: 'uppercase',
-                        color: 'var(--muted)',
-                        mb: 0.75,
-                    }}
-                >
-                    Opponent
-                </Typography>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                    <Typography sx={{ fontWeight: 600, fontSize: 16 }}>Zugzwang</Typography>
-                    <NewBadge />
-                </Box>
-                <Typography sx={{ color: 'var(--text-dim)', fontSize: 13.5 }}>
-                    Engine ·{' '}
-                    {FIXED_STRENGTH_VARIANTS.includes(variant)
-                        ? 'Full strength'
-                        : ratingLabel(rating)}
-                </Typography>
-            </Box>
         </Box>
     )
 }

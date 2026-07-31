@@ -32,9 +32,9 @@ class ProfileController extends Controller
     private const HISTORY_POINTS = 20;
 
     /** Rating pools backed by a `Game.category` value (time controls + the
-     *  isolated Duck/Antichess pools). Puzzle history comes from PuzzleAttempt
-     *  instead, since puzzles aren't Game rows. */
-    private const HISTORY_CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'duck', 'antichess'];
+     *  isolated Duck/Crazyhouse/Antichess pools). Puzzle history comes from
+     *  PuzzleAttempt instead, since puzzles aren't Game rows. */
+    private const HISTORY_CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'duck', 'crazyhouse', 'antichess'];
 
     /** Bound from path {name}. */
     public string $name = '';
@@ -89,6 +89,15 @@ class ProfileController extends Controller
                 'games' => $user->games_duck,
                 'provisional' => ((float) $user->rd_duck) > Glicko2Service::PROVISIONAL_RD,
                 'rated_at' => $user->rated_at_duck,
+            ],
+            // Crazyhouse is likewise its own isolated pool, surfaced separately from
+            // the time-control rating tiles.
+            'crazyhouse' => [
+                'rating' => $user->rating_crazyhouse,
+                'rd' => $user->rd_crazyhouse,
+                'games' => $user->games_crazyhouse,
+                'provisional' => ((float) $user->rd_crazyhouse) > Glicko2Service::PROVISIONAL_RD,
+                'rated_at' => $user->rated_at_crazyhouse,
             ],
             // Antichess is likewise its own isolated pool, surfaced separately from
             // the time-control rating tiles.
@@ -160,7 +169,8 @@ class ProfileController extends Controller
 
     /**
      * Per-pool rating history for the sparklines: one series per time-control /
-     * Duck / Antichess pool (from Game rows) plus puzzle (from PuzzleAttempt).
+     * Duck / Crazyhouse / Antichess pool (from Game rows) plus puzzle (from
+     * PuzzleAttempt).
      * No schema change — every series is reconstructed from already-stored
      * rating-after values on the last HISTORY_POINTS rated results.
      *

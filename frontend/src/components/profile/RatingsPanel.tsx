@@ -6,13 +6,17 @@ import { CATEGORY_META } from '../../lib/timeControl'
 import { DuckGlyph } from '../DuckGlyph'
 import { Panel, PanelHead } from '../home/Panel'
 import RatingSparkline from './RatingSparkline'
-import { TC_CATEGORIES } from './shared'
+import { seriesDelta, TC_CATEGORIES } from './shared'
 
 /** Compact ratings list for the sidebar: one row per pool (denser + more
  * scannable than the old six-tile grid), with the player's primary category
- * subtly highlighted, and puzzle/duck surfaced as accent rows below. Every
- * pool gets its own small trend sparkline (from `profile.ratingHistory`), not
- * just the primary one the hero shows. */
+ * subtly highlighted, and puzzle/duck/crazyhouse/antichess surfaced as accent
+ * rows below. Every pool gets its own small trend sparkline (from
+ * `profile.ratingHistory`).
+ *
+ * This is the ONE place the profile shows ratings — the hero above used to
+ * repeat the primary pool's number and sparkline, which was the same row twice
+ * in two styles. Keep it that way. */
 export default function RatingsPanel({
     profile,
     primaryKey,
@@ -69,6 +73,24 @@ export default function RatingsPanel({
                     accent
                 />
                 <RatingRow
+                    icon={
+                        <Box
+                            component="span"
+                            sx={{ fontSize: 14, lineHeight: 1, display: 'flex' }}
+                            aria-hidden
+                        >
+                            ⇄
+                        </Box>
+                    }
+                    color="var(--accent)"
+                    label="Crazyhouse"
+                    rating={profile.crazyhouse.rating}
+                    provisional={profile.crazyhouse.provisional}
+                    sub={`${profile.crazyhouse.games} ${profile.crazyhouse.games === 1 ? 'game' : 'games'}`}
+                    series={profile.ratingHistory.crazyhouse ?? []}
+                    accent
+                />
+                <RatingRow
                     icon={<Skull size={14} />}
                     color="var(--accent)"
                     label="Antichess"
@@ -104,6 +126,7 @@ function RatingRow({
     primary?: boolean
     accent?: boolean
 }) {
+    const delta = seriesDelta(series)
     return (
         <Box
             sx={{
@@ -122,7 +145,25 @@ function RatingRow({
                 <Typography sx={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text)' }}>
                     {label}
                 </Typography>
-                <Typography sx={{ fontSize: 11, color: 'var(--muted)' }}>{sub}</Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                    <Typography sx={{ fontSize: 11, color: 'var(--muted)' }}>{sub}</Typography>
+                    {/* Net change across the sparkline's window. The sparkline shows
+                        direction; this is the magnitude the hero's old call-out used
+                        to carry, kept here so removing that call-out lost nothing. */}
+                    {delta != null && delta !== 0 && (
+                        <Typography
+                            sx={{
+                                fontFamily: 'var(--font-mono)',
+                                fontSize: 11,
+                                fontWeight: 700,
+                                color: delta > 0 ? '#5b9e5b' : '#ca4a4a',
+                            }}
+                        >
+                            {delta > 0 ? '+' : ''}
+                            {delta}
+                        </Typography>
+                    )}
+                </Box>
             </Box>
             <Box sx={{ width: 44, height: 20, flexShrink: 0, display: 'flex', alignItems: 'center' }}>
                 <RatingSparkline series={series} color={color} width={44} height={20} />

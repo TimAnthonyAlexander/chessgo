@@ -1165,7 +1165,11 @@ function StatusCard({
                     <NavBtn small label={sound ? 'Mute' : 'Unmute'} onClick={toggleSound}>
                         {sound ? <Volume2 size={18} /> : <VolumeX size={18} />}
                     </NavBtn>
-                    <Chip>{themeLabel(theme)}</Chip>
+                    {/* Mobile-only: the desktop aside already shows this chip, so it's
+                        hidden here past md to avoid rendering the theme twice. */}
+                    <Box sx={{ display: { xs: 'block', md: 'none' } }}>
+                        <Chip>{themeLabel(theme)}</Chip>
+                    </Box>
                 </Box>
             </Box>
 

@@ -34,7 +34,14 @@ export interface MoveEntry {
 
 export interface BotGame {
     id: string
+    // The strength the game was SET UP at. For fading/glassjaw this is only a
+    // full-strength sentinel — read `effective_rating` to know how strong the
+    // opponent actually is right now.
     rating: number
+    // The Elo the bot will play its next move at, recomputed server-side from the
+    // move history each time the game is serialized. Equals `rating` on every
+    // variant except fading (−100 per bot move) and glassjaw (−300 per check).
+    effective_rating: number
     human_color: Color
     variant: Variant
     fen: string
@@ -840,6 +847,8 @@ export interface Profile {
     puzzle: PuzzleProfile
     // Duck Chess rating tile (isolated pool, surfaced separately from time controls).
     duck: RatingTile
+    // Crazyhouse rating tile — likewise its own isolated pool.
+    crazyhouse: RatingTile
     // Antichess rating tile — likewise its own isolated pool.
     antichess: RatingTile
     record: ProfileRecord
@@ -849,8 +858,8 @@ export interface Profile {
     gamesTotal: number
     gamesPerPage: number
     // Per-pool rating trend (oldest -> newest ratings-after), keyed by
-    // RatingCategory plus 'puzzle' | 'duck' | 'antichess'. Feeds every sparkline
-    // in the ratings panel + the hero call-out.
+    // RatingCategory plus 'puzzle' | 'duck' | 'crazyhouse' | 'antichess'. Feeds
+    // every sparkline in the ratings panel.
     ratingHistory: Record<string, number[]>
 }
 

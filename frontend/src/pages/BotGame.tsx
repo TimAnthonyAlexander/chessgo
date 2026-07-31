@@ -62,6 +62,7 @@ import {
     RATING_SLIDER_MIN,
     saveBotSettings,
     UNLOSABLE_RATING,
+    FULL_STRENGTH_RATING,
 } from '../lib/botSettings'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { useAuth } from '../lib/auth'
@@ -638,7 +639,7 @@ export default function BotGame() {
                                 // Fading/Glass Jaw are always full-force — the backend
                                 // overrides strength per move regardless of the stored
                                 // rating, but keep it a real (full-strength) value so
-                                // GameModeCard's rating readout reads sensibly.
+                                // the MovePanel header's rating readout reads sensibly.
                                 if (FIXED_STRENGTH_VARIANTS.includes(v)) setRating(3500)
                             }}
                             onStart={newGame}
@@ -827,6 +828,15 @@ function MovePanel({
         }
     }, [ongoing, game.id, game.variant, game.moves, gameStartFen, human, blunderInfo])
 
+    // How strong the opponent is for the move you're about to face, and how far
+    // that has fallen from full strength. The server recomputes effective_rating
+    // from the move history on every serialization, so this tracks the handicap
+    // live; `rating` is only the fallback for a payload predating the field.
+    const effectiveRating = game.effective_rating ?? game.rating ?? rating
+    const handicapDrop = FIXED_STRENGTH_VARIANTS.includes(game.variant)
+        ? FULL_STRENGTH_RATING - effectiveRating
+        : 0
+
     // A linear tree of the game so far, so the engine-owned OpeningPanel can name
     // the opening (and show candidate lines) for the live position during play.
     const book = useMemo(
@@ -887,10 +897,30 @@ function MovePanel({
                     </Box>
                     {/* Zen mode hides the rating chrome (distraction-free play); the
                         showOpponentRating preference gates it independently, same as
-                        LiveGame's opponent rating readout. */}
+                        LiveGame's opponent rating readout.
+
+                        Always the server's effective_rating, never the stored one:
+                        Fading and Glass Jaw keep a full-strength sentinel in `rating`
+                        and weaken per move, so `rating` would advertise a frozen
+                        "~3500 Elo" for an opponent that is already far weaker. The
+                        drop from full strength rides alongside it, so the handicap is
+                        something you can watch happen rather than infer. */}
                     {!zen && showOpponentRating && (
                         <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
-                            Engine · {ratingLabel(game.rating ?? rating)}
+                            Engine · {ratingLabel(effectiveRating)}
+                            {handicapDrop > 0 && (
+                                <Box
+                                    component="span"
+                                    sx={{
+                                        fontFamily: 'var(--font-mono)',
+                                        fontWeight: 700,
+                                        color: '#ca4a4a',
+                                        ml: 0.75,
+                                    }}
+                                >
+                                    −{handicapDrop}
+                                </Box>
+                            )}
                         </Typography>
                     )}
                 </Box>
