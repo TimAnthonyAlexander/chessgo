@@ -186,6 +186,16 @@ func (h *Hub) joinChallenge(c *Client, code string) {
 // to arrive parks as the waiting side — exactly like a WS creator waits for a
 // joiner — so it is NOT ok for one of them to "pair" with itself via a second
 // tab or device: arriving again while still parked is rejected outright.
+//
+// A parked player's socket can drop (network blip, backgrounded tab) without
+// ever unwinding its slot — the frontend just opens a new connection and
+// replays the same joinChallenge. If we rejected that on sub match alone, the
+// player would be stuck holding a challenge they can never re-enter (and the
+// OTHER named player would end up paired against a closed connection). So:
+// same sub arriving while parked is only rejected if the parked connection is
+// still genuinely live (sessionLive, the exact index handleDisconnect/
+// handleRegister already maintain for live-game reconnects); if it's dead,
+// this new connection re-attaches into the waiting slot instead.
 func (h *Hub) joinServerChallenge(c *Client, ch *challenge) {
 	sub := c.id.UserID
 	if sub == "" || (sub != ch.creatorSub && sub != ch.opponentSub) {
@@ -208,9 +218,26 @@ func (h *Hub) joinServerChallenge(c *Client, ch *challenge) {
 		return
 	}
 	if ch.waitingSub == sub {
-		// The same identity, a second tab/device, trying to join again before
-		// the OTHER named player has arrived — never pair a player with itself.
-		h.sendErr(c, "already waiting on this challenge")
+		if h.sessionLive(sub, ch.waitingClient) {
+			// The same identity, a second tab/device — or this exact connection
+			// replaying the join — while the parked connection is still live.
+			// Never pair a player with itself: reject either way.
+			h.sendErr(c, "already waiting on this challenge")
+			return
+		}
+		// The parked connection dropped (or was replaced by a newer session for
+		// this identity) without ever clearing its slot. Re-attach: this new
+		// connection takes over the waiting seat so the player can recover.
+		ch.waitingClient = c
+		c.challengeCode = ch.code
+		c.trySend(mustJSON(out("challengeWaiting", map[string]any{
+			"code":    ch.code,
+			"pool":    ch.pool,
+			"color":   ch.color,
+			"rated":   ch.rated,
+			"variant": ch.variant,
+			"fen":     ch.fen,
+		})))
 		return
 	}
 

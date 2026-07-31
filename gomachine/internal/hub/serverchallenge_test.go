@@ -263,6 +263,146 @@ func TestServerChallengeCustomFENForcesCasual(t *testing.T) {
 	}
 }
 
+// TestServerChallengeReconnectReattaches covers the core bug: the parked
+// side's socket drops (network blip / backgrounded tab) without ever clearing
+// its waiting slot, and the frontend reconnects and replays the same
+// joinChallenge. That must re-attach the new connection into the waiting
+// seat, not reject it as "already waiting" — the parked identity's OLD
+// connection is dead, so it can no longer be "the same live connection".
+func TestServerChallengeReconnectReattaches(t *testing.T) {
+	h := New(testSecret)
+	go h.Run()
+	srv := httptest.NewServer(http.HandlerFunc(h.ServeWS))
+	defer srv.Close()
+
+	if err := h.RegisterServerChallenge(ServerChallengeRequest{
+		Code: "RECON1", Pool: "5+0", Color: "w", Rated: true,
+		Variant: "standard", CreatorSub: "id-alice", OpponentSub: "id-bob",
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	alice1 := dialAccount(t, srv.URL, "alice", "id-alice", 1500)
+	readType(t, alice1, "hello")
+	send(t, alice1, map[string]any{"type": "joinChallenge", "code": "RECON1"})
+	readType(t, alice1, "challengeWaiting")
+
+	// Alice's tab dies without ever telling the challenge it's leaving.
+	alice1.CloseNow()
+	time.Sleep(60 * time.Millisecond) // let handleDisconnect process the drop
+
+	// She reconnects and the frontend replays the same join.
+	alice2 := dialAccount(t, srv.URL, "alice", "id-alice", 1500)
+	defer alice2.CloseNow()
+	readType(t, alice2, "hello")
+	send(t, alice2, map[string]any{"type": "joinChallenge", "code": "RECON1"})
+	readType(t, alice2, "challengeWaiting") // re-attached, not rejected
+
+	// Proof the waiting slot really moved to alice2 (not just an isolated
+	// "you're fine" reply): alice2 is now the live parked connection, so a
+	// second join from IT is rejected exactly like the pre-existing
+	// same-live-connection case.
+	send(t, alice2, map[string]any{"type": "joinChallenge", "code": "RECON1"})
+	if msg := readType(t, alice2, "error"); msg["message"] == nil {
+		t.Error("expected an error re-joining while alice2 itself is the live parked connection")
+	}
+}
+
+// TestServerChallengeLiveSecondTabStillRejected makes sure the reattach fix
+// above didn't loosen the self-pairing guard: while the parked connection is
+// still genuinely live, a second connection for the same identity must still
+// be rejected outright.
+func TestServerChallengeLiveSecondTabStillRejected(t *testing.T) {
+	h := New(testSecret)
+	go h.Run()
+	srv := httptest.NewServer(http.HandlerFunc(h.ServeWS))
+	defer srv.Close()
+
+	if err := h.RegisterServerChallenge(ServerChallengeRequest{
+		Code: "LIVE1", Pool: "5+0", Color: "w", Rated: true,
+		Variant: "standard", CreatorSub: "id-alice", OpponentSub: "id-bob",
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	alice1 := dialAccount(t, srv.URL, "alice-tab1", "id-alice", 1500)
+	defer alice1.CloseNow()
+	alice2 := dialAccount(t, srv.URL, "alice-tab2", "id-alice", 1500)
+	defer alice2.CloseNow()
+	readType(t, alice1, "hello")
+	readType(t, alice2, "hello")
+
+	send(t, alice1, map[string]any{"type": "joinChallenge", "code": "LIVE1"})
+	readType(t, alice1, "challengeWaiting")
+
+	// alice1 is still open (never closed) — a second tab must be rejected.
+	send(t, alice2, map[string]any{"type": "joinChallenge", "code": "LIVE1"})
+	if msg := readType(t, alice2, "error"); msg["message"] == nil {
+		t.Error("expected an error — the parked connection is still live")
+	}
+
+	// The waiting slot must still belong to alice1: bob joining now pairs
+	// against it, proving it was never displaced by alice2's rejected join.
+	bob := dialAccount(t, srv.URL, "bob", "id-bob", 1500)
+	defer bob.CloseNow()
+	readType(t, bob, "hello")
+	send(t, bob, map[string]any{"type": "joinChallenge", "code": "LIVE1"})
+	ma := readType(t, alice1, "matched")
+	mb := readType(t, bob, "matched")
+	if ma["color"] != "w" || mb["color"] != "b" {
+		t.Errorf("colors = %v/%v, want w/b", ma["color"], mb["color"])
+	}
+}
+
+// TestServerChallengeReattachThenPair proves the reattach isn't just cosmetic:
+// after the parked side's dead connection is replaced, the OTHER named player
+// joining still pairs correctly (and pairs with the NEW connection, not the
+// dead one).
+func TestServerChallengeReattachThenPair(t *testing.T) {
+	h := New(testSecret)
+	go h.Run()
+	srv := httptest.NewServer(http.HandlerFunc(h.ServeWS))
+	defer srv.Close()
+
+	if err := h.RegisterServerChallenge(ServerChallengeRequest{
+		Code: "PAIR1", Pool: "5+0", Color: "w", Rated: true,
+		Variant: "standard", CreatorSub: "id-alice", OpponentSub: "id-bob",
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	alice1 := dialAccount(t, srv.URL, "alice", "id-alice", 1500)
+	readType(t, alice1, "hello")
+	send(t, alice1, map[string]any{"type": "joinChallenge", "code": "PAIR1"})
+	readType(t, alice1, "challengeWaiting")
+
+	alice1.CloseNow()
+	time.Sleep(60 * time.Millisecond)
+
+	alice2 := dialAccount(t, srv.URL, "alice", "id-alice", 1500)
+	defer alice2.CloseNow()
+	readType(t, alice2, "hello")
+	send(t, alice2, map[string]any{"type": "joinChallenge", "code": "PAIR1"})
+	readType(t, alice2, "challengeWaiting")
+
+	bob := dialAccount(t, srv.URL, "bob", "id-bob", 1500)
+	defer bob.CloseNow()
+	readType(t, bob, "hello")
+	send(t, bob, map[string]any{"type": "joinChallenge", "code": "PAIR1"})
+
+	ma := readType(t, alice2, "matched")
+	mb := readType(t, bob, "matched")
+	if ma["color"] != "w" {
+		t.Errorf("creatorSub (alice, reattached) color = %v, want w", ma["color"])
+	}
+	if mb["color"] != "b" {
+		t.Errorf("opponentSub (bob) color = %v, want b", mb["color"])
+	}
+	if _, exists := h.challenges["PAIR1"]; exists {
+		t.Error("challenge should be removed once the game starts")
+	}
+}
+
 func TestOnline(t *testing.T) {
 	h := New(testSecret)
 	go h.Run()

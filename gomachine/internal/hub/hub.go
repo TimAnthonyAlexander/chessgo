@@ -942,6 +942,23 @@ func (h *Hub) activeGameFor(c *Client) *game {
 	return g
 }
 
+// sessionLive reports whether c is still a live, hub-known connection for
+// identity sub — the SAME question activeGameFor/attachToGame answer for a
+// live game's "am I still connected, or did this device drop?" (multi-device
+// resume), and the same index handleRegister adds a connection to and
+// handleDisconnect removes it from. A parked server-side challenge slot
+// (challenge.waitingClient) reuses this rather than inventing a second
+// liveness signal: once handleDisconnect has processed a connection's drop,
+// it is gone from h.sessions and this reports false; a still-open connection
+// (including the exact one being asked about) reports true.
+func (h *Hub) sessionLive(sub string, c *Client) bool {
+	if sub == "" || c == nil {
+		return false
+	}
+	_, ok := h.sessions[sub][c]
+	return ok
+}
+
 // attachToGame seats c in g ALONGSIDE whatever other devices this account
 // already has open on it, and sends it a full resume so it can render the game
 // from scratch. Every attached device then receives the same broadcasts, so a
