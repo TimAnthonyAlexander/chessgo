@@ -58,6 +58,39 @@ final class TournamentSchedule
     }
 
     /**
+     * The longest `duration_minutes` anywhere in the rota (currently the
+     * monthly championship at 240). Computed by actually walking
+     * {@see self::occurrencesAtHour()} over a window long enough to be sure
+     * every rota entry fires at least once — including the once-a-month
+     * one — rather than hardcoding a number that would silently go stale the
+     * next time someone adds a longer-running event.
+     *
+     * Callers use this to size how far back they need to look for
+     * occurrences that started in the past but haven't ended yet (a cold
+     * start / gap in the scheduler timer). Pure function of the rota, no I/O.
+     */
+    public static function maxDurationMinutes(): int
+    {
+        // 40 days comfortably covers every recurrence period in the rota
+        // (hourly/daily/weekly all repeat well within a week; "last Sunday of
+        // the month" repeats at most every ~31 days), regardless of which
+        // date we start scanning from.
+        $anchor = gmmktime(0, 0, 0, 1, 1, 2024);
+        $windowHours = 40 * 24;
+
+        $max = 0;
+        for ($i = 0; $i < $windowHours; $i++) {
+            foreach (self::occurrencesAtHour($anchor + $i * 3600) as $occ) {
+                if ($occ['duration_minutes'] > $max) {
+                    $max = $occ['duration_minutes'];
+                }
+            }
+        }
+
+        return $max;
+    }
+
+    /**
      * @return list<array{
      *   schedule_key:string, series:string, name:string, variant:string,
      *   pool:string, starts_at:string, duration_minutes:int, rated:bool,

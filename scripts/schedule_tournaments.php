@@ -5,8 +5,17 @@ declare(strict_types=1);
 /**
  * Keeps the tournament calendar populated: computes every occurrence the
  * recurring rota ({@see \App\Services\TournamentSchedule}) says should exist
- * between now and now+horizon, and inserts whichever ones don't already
- * exist yet (matched by the unique `schedule_key`).
+ * between now+horizon and far enough in the past to cover any occurrence
+ * still running (the lookback is {@see \App\Services\TournamentSchedule::maxDurationMinutes()},
+ * the rota's own longest event — currently the 240-minute monthly), then
+ * drops anything that's already finished and inserts whichever of what's left
+ * doesn't already exist (matched by the unique `schedule_key`).
+ *
+ * That backward slice is what keeps something *currently running* at all
+ * times, including right after a cold start or a gap in the timer: without
+ * it, an occurrence that should have started 20 minutes ago and would still
+ * be live for another 40 would never get created — the next occurrence is
+ * always at the next hour boundary forward.
  *
  * Idempotent by construction: `schedule_key` is one-per-occurrence
  * (e.g. "hourly-bullet-2026-08-01T14:00:00Z"), so a re-run only ever inserts
@@ -44,10 +53,29 @@ foreach (array_slice($argv, 1) as $arg) {
     }
 }
 
-$from = time();
-$to = $from + $horizonHours * 3600;
+$now = time();
+$to = $now + $horizonHours * 3600;
+
+// Look back far enough to catch occurrences that started in the recent past
+// but are still running — e.g. after a cold start or a gap in the timer, the
+// arena that started 20 minutes ago and runs for another 40 would otherwise
+// never get created (occurrencesBetween($now, ...) only ever sees the *next*
+// hour boundary forward). The lookback is sized to the rota's own longest
+// event, not a hardcoded guess, so it can't rot when someone adds a longer one.
+$backfillSeconds = TournamentSchedule::maxDurationMinutes() * 60;
+$from = $now - $backfillSeconds;
 
 $occurrences = TournamentSchedule::occurrencesBetween($from, $to);
+
+// Drop anything that already ended before "now" — a cold start backfills
+// what's still in progress, never yesterday's finished arenas.
+$occurrences = array_values(array_filter($occurrences, static function (array $occ) use ($now): bool {
+    $startsAt = strtotime($occ['starts_at'] . ' UTC');
+    $endsAt = $startsAt !== false ? $startsAt + $occ['duration_minutes'] * 60 : 0;
+
+    return $endsAt > $now;
+}));
+
 $total = count($occurrences);
 
 if ($total === 0) {
