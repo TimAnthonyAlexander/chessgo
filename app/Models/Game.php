@@ -39,6 +39,13 @@ class Game extends BaseModel
     /** Final result: '1-0' | '0-1' | '1/2-1/2'. */
     public string $result = '';
 
+    /** Owning {@see Tournament} id, or null for an ordinary (non-arena) game. */
+    public ?string $tournament_id = null;
+
+    /** Custom starting FEN the hub played from, or null for the normal start
+     *  position. The hub sends this as `startFen` on POST /internal/games. */
+    public ?string $start_fen = null;
+
     /** How it ended: checkmate | stalemate | resign | timeout | draw-* | … */
     public string $reason = '';
 
@@ -107,6 +114,7 @@ class Game extends BaseModel
         'black_user_id' => 'index',
         'category' => 'index',
         'ac_scanned' => 'index',
+        'tournament_id' => 'index',
     ];
 
     /**
@@ -216,6 +224,35 @@ class Game extends BaseModel
             'black_rating_after' => $this->black_rating_after,
             'ply' => $this->ply,
         ];
+    }
+
+    /**
+     * Batch {@see summaryRow} for a list of games, with each side's display
+     * title attached (white_title/black_title) via ONE User::titleMapFor
+     * lookup across every white_user_id/black_user_id in the set — never a
+     * per-row query. Games store denormalized name strings, not a User
+     * reference, so the title has to be joined in separately; player rows
+     * built from live User rows (leaderboard, admin list, …) get it for free.
+     *
+     * @param list<Game> $games
+     * @return list<array<string, mixed>>
+     */
+    public static function summaryRowsWithTitles(array $games): array
+    {
+        $ids = [];
+        foreach ($games as $g) {
+            $ids[] = $g->white_user_id;
+            $ids[] = $g->black_user_id;
+        }
+        $titles = User::titleMapFor($ids);
+
+        return array_map(static function (Game $g) use ($titles): array {
+            $row = $g->summaryRow();
+            $row['white_title'] = $g->white_user_id !== null ? ($titles[$g->white_user_id] ?? null) : null;
+            $row['black_title'] = $g->black_user_id !== null ? ($titles[$g->black_user_id] ?? null) : null;
+
+            return $row;
+        }, $games);
     }
 
     /**

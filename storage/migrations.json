@@ -1089,6 +1089,114 @@
             "table": "eval_cache_test",
             "operation": "drop_table",
             "warning": null
+        },
+        {
+            "id": "mig_8d5f032aafb1",
+            "sql": "CREATE TABLE `tournament` (\n  `name` VARCHAR(255) NOT NULL DEFAULT '',\n  `variant` VARCHAR(255) NOT NULL DEFAULT 'standard',\n  `pool` VARCHAR(255) NOT NULL DEFAULT '',\n  `starts_at` VARCHAR(255) NOT NULL DEFAULT '',\n  `duration_minutes` INT NOT NULL DEFAULT 30,\n  `rated` TINYINT(1) NOT NULL DEFAULT 1,\n  `status` VARCHAR(255) NOT NULL DEFAULT 'scheduled',\n  `created_by` VARCHAR(255) NOT NULL DEFAULT '',\n  `id` VARCHAR(36) NOT NULL DEFAULT '',\n  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:26:22+00:00",
+            "table": "tournament",
+            "operation": "create_table",
+            "warning": null
+        },
+        {
+            "id": "mig_b35ffff9f099",
+            "sql": "CREATE TABLE `tournament_player` (\n  `tournament_id` VARCHAR(36) NOT NULL DEFAULT '',\n  `user_id` VARCHAR(36) NOT NULL DEFAULT '',\n  `score` INT NOT NULL DEFAULT 0,\n  `games` INT NOT NULL DEFAULT 0,\n  `streak` INT NOT NULL DEFAULT 0,\n  `withdrawn` TINYINT(1) NOT NULL DEFAULT 0,\n  `id` VARCHAR(36) NOT NULL DEFAULT '',\n  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:26:22+00:00",
+            "table": "tournament_player",
+            "operation": "create_table",
+            "warning": null
+        },
+        {
+            "id": "mig_95fc6e4673e7",
+            "sql": "ALTER TABLE `game` ADD COLUMN `tournament_id` VARCHAR(36)",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:26:22+00:00",
+            "table": "game",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_23f63934b980",
+            "sql": "ALTER TABLE `game` ADD COLUMN `start_fen` VARCHAR(255)",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:26:22+00:00",
+            "table": "game",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_2585d43012e2",
+            "sql": "ALTER TABLE `tournament` ADD INDEX `idx_tournament_status` (`status`)",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:26:22+00:00",
+            "table": "tournament",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_c9144b5cb746",
+            "sql": "ALTER TABLE `tournament` ADD INDEX `idx_tournament_starts_at` (`starts_at`)",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:26:22+00:00",
+            "table": "tournament",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_36cb98cfceb0",
+            "sql": "ALTER TABLE `tournament_player` ADD UNIQUE KEY `uniq_tournament_player_tournament_id_user_id` (`tournament_id`, `user_id`)",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:26:22+00:00",
+            "table": "tournament_player",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_4ede6ed1b614",
+            "sql": "ALTER TABLE `tournament_player` ADD INDEX `idx_tournament_player_tournament_id_score` (`tournament_id`, `score`)",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:26:22+00:00",
+            "table": "tournament_player",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_994ebca72299",
+            "sql": "ALTER TABLE `game` ADD INDEX `idx_game_tournament_id` (`tournament_id`)",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:26:22+00:00",
+            "table": "game",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_69005673917a",
+            "sql": "ALTER TABLE `tournament_player` ADD CONSTRAINT `fk_tournament_player_tournament_id` FOREIGN KEY (`tournament_id`) REFERENCES `tournament` (`id`) ON DELETE CASCADE ON UPDATE CASCADE",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:26:22+00:00",
+            "table": "tournament_player",
+            "operation": "add_fk",
+            "warning": null
+        },
+        {
+            "id": "mig_f81d20062f3c",
+            "sql": "ALTER TABLE `tournament_player` ADD CONSTRAINT `fk_tournament_player_user_id` FOREIGN KEY (`user_id`) REFERENCES `user` (`id`) ON DELETE CASCADE ON UPDATE CASCADE",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:26:22+00:00",
+            "table": "tournament_player",
+            "operation": "add_fk",
+            "warning": null
+        },
+        {
+            "id": "mig_b189029ac6de",
+            "sql": "ALTER TABLE `game` ADD CONSTRAINT `fk_game_tournament_id` FOREIGN KEY (`tournament_id`) REFERENCES `tournament` (`id`) ON DELETE CASCADE ON UPDATE CASCADE",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:26:22+00:00",
+            "table": "game",
+            "operation": "add_fk",
+            "warning": null
         }
     ]
 }

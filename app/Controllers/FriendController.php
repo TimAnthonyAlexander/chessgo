@@ -12,9 +12,11 @@ use App\Services\NotificationService;
 /**
  * Friends list + friend requests (SPEC: friends/notifications/challenges).
  *
- *   GET    /friends          accepted friends: id, name, title, best rating, online
+ *   GET    /friends          accepted friends: linkId, userId, name, title, best rating, online
  *   POST   /friends          { name } — send a request (or auto-accept a mutual one)
- *   DELETE /friends/{id}      unfriend, or cancel your own outgoing request
+ *   DELETE /friends/{id}      unfriend, or cancel your own outgoing request — {id}
+ *                             is the FriendLink row id (GET /friends' `linkId`),
+ *                             never the friend's own user id.
  *
  * The incoming/outgoing pending lists live on the sibling
  * {@see FriendRequestsController} (GET /friends/requests); accept/decline
@@ -54,9 +56,15 @@ class FriendController extends Controller
             })
             ->get();
 
+        // Map friend user id => FriendLink row id. DELETE /friends/{id} expects
+        // the LINK id (not the friend's user id), so the row below must carry
+        // both, unambiguously named — see FriendRow in frontend/src/api/client.ts.
+        $linkIdByFriendId = [];
         $friendIds = [];
         foreach ($links as $link) {
-            $friendIds[] = $link->requester_id === $me ? $link->addressee_id : $link->requester_id;
+            $fid = $link->requester_id === $me ? $link->addressee_id : $link->requester_id;
+            $linkIdByFriendId[$fid] = $link->id;
+            $friendIds[] = $fid;
         }
         $friendIds = array_values(array_unique($friendIds));
 
@@ -80,7 +88,8 @@ class FriendController extends Controller
             }
             $best = $this->bestRating($u);
             $friends[] = [
-                'id' => $u->id,
+                'linkId' => $linkIdByFriendId[$fid] ?? '',
+                'userId' => $u->id,
                 'name' => $u->name,
                 'title' => $this->titleOf($u),
                 'rating' => $best['rating'],

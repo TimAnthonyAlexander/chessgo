@@ -8,6 +8,7 @@ import SkeletonBar from './SkeletonBar'
 import { DuckGlyph } from '../DuckGlyph'
 import { getLeaderboard, type LeaderboardEntry } from '../../api/client'
 import type { Category } from '../../lib/timeControl'
+import TitleBadge from '../TitleBadge'
 
 // Duck Chess and Antichess are isolated rating pools, not time controls — each
 // gets its own tab here.
@@ -179,20 +180,30 @@ export default function LeaderboardWidget() {
                             >
                                 {e.rank}
                             </Typography>
-                            <Typography
+                            <Box
                                 sx={{
                                     flex: 1,
                                     minWidth: 0,
-                                    fontSize: 14,
-                                    fontWeight: e.rank === 1 ? 600 : 400,
-                                    color: 'var(--text)',
-                                    overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                    whiteSpace: 'nowrap',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 0.6,
                                 }}
                             >
-                                {e.name}
-                            </Typography>
+                                <TitleBadge title={e.title} />
+                                <Typography
+                                    sx={{
+                                        minWidth: 0,
+                                        fontSize: 14,
+                                        fontWeight: e.rank === 1 ? 600 : 400,
+                                        color: 'var(--text)',
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap',
+                                    }}
+                                >
+                                    {e.name}
+                                </Typography>
+                            </Box>
                             <Typography
                                 sx={{
                                     fontFamily: 'var(--font-mono)',

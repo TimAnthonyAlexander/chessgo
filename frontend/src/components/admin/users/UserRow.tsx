@@ -4,6 +4,7 @@ import type { AdminUserRow } from '../../../api/client'
 import RoleChip from './RoleChip'
 import UserStatusChip from './UserStatusChip'
 import FlagBadge from './FlagBadge'
+import TitleBadge from '../../TitleBadge'
 import { fmtDate, gamesOf, ratingOf, RATING_COLS } from './shared'
 
 /** One directory row. The whole row navigates to the account detail; nested
@@ -24,19 +25,22 @@ export default function UserRow({ user }: { user: AdminUserRow }) {
             }}
         >
             <TableCell>
-                <Box
-                    component={RouterLink}
-                    to={to}
-                    onClick={(e) => e.stopPropagation()}
-                    sx={{
-                        fontSize: 13.5,
-                        fontWeight: 600,
-                        color: 'var(--text)',
-                        textDecoration: 'none',
-                        '&:hover': { color: 'var(--accent)' },
-                    }}
-                >
-                    {user.name}
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                    <TitleBadge title={user.title} />
+                    <Box
+                        component={RouterLink}
+                        to={to}
+                        onClick={(e) => e.stopPropagation()}
+                        sx={{
+                            fontSize: 13.5,
+                            fontWeight: 600,
+                            color: 'var(--text)',
+                            textDecoration: 'none',
+                            '&:hover': { color: 'var(--accent)' },
+                        }}
+                    >
+                        {user.name}
+                    </Box>
                 </Box>
             </TableCell>
 

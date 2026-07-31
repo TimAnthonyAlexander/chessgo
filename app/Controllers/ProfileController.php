@@ -58,10 +58,7 @@ class ProfileController extends Controller
             ->orWhere('black_user_id', '=', $id)
             ->orderByDesc('created_at')
             ->paginate(1, self::RECENT_GAMES, self::RECENT_GAMES, withTotal: true);
-        $rows = array_map(
-            static fn (Game $g): array => $g->summaryRow(),
-            $paged->data,
-        );
+        $rows = Game::summaryRowsWithTitles($paged->data);
 
         $puzzleSolved = PuzzleAttempt::query()
             ->where('user_id', '=', $id)

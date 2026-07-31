@@ -55,6 +55,10 @@ use App\Controllers\NotificationReadAllController;
 use App\Controllers\ChallengeController;
 use App\Controllers\ChallengeAcceptController;
 use App\Controllers\ChallengeDeclineController;
+use App\Controllers\TournamentController;
+use App\Controllers\TournamentJoinController;
+use App\Controllers\TournamentWithdrawController;
+use App\Controllers\ArenaInternalController;
 use BaseApi\Http\Middleware\RateLimitMiddleware;
 use BaseApi\Http\SessionStartMiddleware;
 use BaseApi\Permissions\PermissionsMiddleware;
@@ -540,6 +544,40 @@ $router->post('/challenges/{id}/decline', [
     CombinedAuthMiddleware::class,
     ChallengeDeclineController::class,
 ]);
+
+// ================================
+// Arena tournaments (Lichess-style) — SPEC Arena
+// ================================
+// Public list + detail (status is derived from starts_at/duration at read time,
+// see Tournament::reconcileStatus()); create is admin-only (AdminGuard, checked
+// inside TournamentController::post()); join/withdraw require an account.
+
+$router->get('/tournaments', [
+    RateLimitMiddleware::class => ['limit' => '600/1m'],
+    TournamentController::class,
+]);
+$router->post('/tournaments', [
+    CombinedAuthMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '60/1m'],
+    TournamentController::class,
+]);
+$router->get('/tournaments/{id}', [
+    RateLimitMiddleware::class => ['limit' => '600/1m'],
+    TournamentController::class,
+]);
+$router->post('/tournaments/{id}/join', [
+    CombinedAuthMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '60/1m'],
+    TournamentJoinController::class,
+]);
+$router->post('/tournaments/{id}/withdraw', [
+    CombinedAuthMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '60/1m'],
+    TournamentWithdrawController::class,
+]);
+
+// Internal: the hub polls this to drive Arena pairing (secret-gated, no session)
+$router->get('/internal/arenas/active', [ArenaInternalController::class]);
 
 // ================================
 // Development Only

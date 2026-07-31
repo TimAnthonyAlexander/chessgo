@@ -12,10 +12,12 @@ import {
     FlipVertical2,
     Microscope,
     RotateCcw,
+    UserPlus,
 } from 'lucide-react'
 import { Chess } from 'chess.js'
 import BoardEditor, { type Brush, EditorPalette } from '../components/BoardEditor'
 import BoardPage from '../components/BoardPage'
+import ChallengeDialog from '../components/ChallengeDialog'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import { ActionBtn } from '../components/PanelUI'
 import { analyze, type Color, nextPuzzle } from '../api/client'
@@ -62,6 +64,7 @@ export default function Editor() {
     const [pasteOpen, setPasteOpen] = useState(false)
     const [pasteVal, setPasteVal] = useState('')
     const [pasteErr, setPasteErr] = useState(false)
+    const [challengeOpen, setChallengeOpen] = useState(false)
 
     const active = activeOf(fen)
     const castling = castlingOf(fen)
@@ -141,6 +144,7 @@ export default function Editor() {
     const analyse = () => navigate('/analysis', { state: { startFen: fen } })
     const playBot = () => navigate('/bot', { state: { fen } })
     const engineVsEngine = () => navigate('/admin/engine-vs', { state: { fen } })
+    const challengePlayer = () => setChallengeOpen(true)
 
     return (
         <BoardPage
@@ -350,6 +354,15 @@ export default function Editor() {
                                 onClick={playBot}
                                 disabled={!valid.ok}
                             />
+                            {user && (
+                                <ActionBtn
+                                    tone="neutral"
+                                    icon={<UserPlus size={16} />}
+                                    label="Challenge a player from here"
+                                    onClick={challengePlayer}
+                                    disabled={!valid.ok}
+                                />
+                            )}
                             {user?.role === 'admin' && (
                                 <ActionBtn
                                     tone="neutral"
@@ -365,6 +378,13 @@ export default function Editor() {
             }
         >
             <BoardEditor fen={fen} orientation={orientation} brush={brush} onChange={setFen} />
+            {user && (
+                <ChallengeDialog
+                    open={challengeOpen}
+                    onClose={() => setChallengeOpen(false)}
+                    startFen={fen}
+                />
+            )}
         </BoardPage>
     )
 }

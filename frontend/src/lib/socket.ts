@@ -24,6 +24,11 @@ export interface LiveGameState {
     rated: boolean
     variant: Variant // 'standard' unless a variant (e.g. Chess960) was chosen
     pool: string
+    // The arena tournament this game was paired from, or null for every other
+    // game (public match, private challenge, rematch, bot game). Lets a page
+    // recognise "this live game is one of my tournament's pairings" (e.g. to
+    // navigate into it the moment a pairing arrives).
+    tournamentId: string | null
     timeControl: { base: number; inc: number }
     opponent: { name: string; rating: number; anon: boolean }
     fen: string
@@ -58,6 +63,33 @@ export interface ChallengeState {
     color: 'w' | 'b' | 'random'
     rated: boolean
     variant: Variant
+    fen: string | null
+}
+
+// This client joined a server-registered challenge (an accepted directed
+// challenge — see ChallengeAcceptController) before the OTHER named player
+// arrived: we're parked here, waiting for them, instead of pairing immediately.
+// The hub's `challengeWaiting` message carries the terms but not the other
+// player's identity, so there's no opponent name to show — just the code/link
+// and the game terms.
+export interface ChallengeWaitingState {
+    code: string
+    pool: string
+    color: 'w' | 'b' | 'random'
+    rated: boolean
+    variant: Variant
+    fen: string | null
+}
+
+// This client asked to be paired in a running arena tournament (joinArena) and
+// hasn't yet been matched into a game or told arenaLeft. `waiting` is false in
+// the brief window between sending joinArena and the hub's first pairing
+// attempt (arenaJoined), true once the hub confirms we're actually parked
+// (arenaWaiting) — a page can treat either as "show the waiting UI", the
+// distinction is only there for fidelity to the two wire messages.
+export interface ArenaState {
+    tournamentId: string
+    waiting: boolean
 }
 
 export interface SocketState {
@@ -66,7 +98,13 @@ export interface SocketState {
     pool: string | null
     game: LiveGameState | null
     challenge: ChallengeState | null
+    challengeWaiting: ChallengeWaitingState | null
+    arena: ArenaState | null
     error: string | null
+}
+
+function parseFen(fen: unknown): string | null {
+    return typeof fen === 'string' && fen !== '' ? fen : null
 }
 
 type Msg = Record<string, any>
@@ -81,6 +119,12 @@ function parseDuck(duck: unknown): string | null {
     return typeof duck === 'string' && duck !== '' ? duck : null
 }
 
+// The hub's arena tag: a tournament id string, or absent for every non-arena
+// game. Normalize the absent case to null.
+function parseTournamentId(id: unknown): string | null {
+    return typeof id === 'string' && id !== '' ? id : null
+}
+
 function buildGame(m: Msg): LiveGameState {
     return {
         id: m.gameId,
@@ -88,6 +132,7 @@ function buildGame(m: Msg): LiveGameState {
         rated: !!m.rated,
         variant: (m.variant as Variant) ?? 'standard',
         pool: m.pool,
+        tournamentId: parseTournamentId(m.tournamentId),
         timeControl: m.timeControl,
         opponent: m.opponent,
         fen: m.fen,
@@ -124,6 +169,7 @@ function buildResume(m: Msg): LiveGameState {
         rated: !!m.rated,
         variant: (m.variant as Variant) ?? 'standard',
         pool: m.pool,
+        tournamentId: parseTournamentId(m.tournamentId),
         timeControl: m.timeControl,
         opponent: m.opponent,
         fen: m.fen,
@@ -155,6 +201,8 @@ class GameSocket {
         pool: null,
         game: null,
         challenge: null,
+        challengeWaiting: null,
+        arena: null,
         error: null,
     }
     private ws: WebSocket | null = null
@@ -171,8 +219,18 @@ class GameSocket {
         color: 'w' | 'b' | 'random'
         rated: boolean
         variant: Variant
+        fen: string
     } | null = null
     private wantJoin: string | null = null
+    // The arena tournament we've asked to be paired in, replayed on (re)connect
+    // like the other lobby intents. Kept in sync with confirmed server state
+    // (arenaJoined/arenaWaiting re-set it, arenaLeft/leaveArena clear it) so a
+    // reconnect while WAITING (not yet paired) rejoins the pool — the hub drops
+    // a connection's pool membership on disconnect, so nothing else would.
+    // Deliberately NOT cleared on `matched`: replaying joinArena while already
+    // seated in a game is harmless (the hub just reattaches, see arena.go), and
+    // keeping it armed covers a disconnect that happens mid-game.
+    private wantArena: string | null = null
 
     getState = (): SocketState => this.state
 
@@ -220,6 +278,8 @@ class GameSocket {
                 else if (this.wantChallenge)
                     this.rawSend({ type: 'createChallenge', ...this.wantChallenge })
                 if (this.wantJoin) this.rawSend({ type: 'joinChallenge', code: this.wantJoin })
+                if (this.wantArena)
+                    this.rawSend({ type: 'joinArena', tournamentId: this.wantArena })
             }
             ws.onmessage = (e) => {
                 try {
@@ -238,7 +298,8 @@ class GameSocket {
 
     async queue(pool: string, variant: Variant = 'standard'): Promise<void> {
         this.wantQueue = { pool, variant }
-        this.set({ status: 'queued', pool, error: null, game: null })
+        this.wantArena = null
+        this.set({ status: 'queued', pool, error: null, game: null, arena: null })
         await this.connect()
         this.rawSend({ type: 'queue', pool, variant })
     }
@@ -247,6 +308,32 @@ class GameSocket {
         this.wantQueue = null
         this.rawSend({ type: 'cancel' })
         this.set({ status: 'idle', pool: null })
+    }
+
+    // --- arena tournaments ---
+
+    /** Ask the hub to seat us in a running arena's pairing pool. The hub
+     * replies `arenaJoined` (+ `arenaWaiting` if still unpaired a moment
+     * later) or an ordinary `matched` if a pairing was immediate. Only one of
+     * queue/challenge/arena can be pending at a time — this clears the others,
+     * mirroring the hub's own "one pending activity per client" rule. */
+    async joinArena(tournamentId: string): Promise<void> {
+        this.wantQueue = null
+        this.wantChallenge = null
+        this.wantJoin = null
+        this.wantArena = tournamentId
+        this.set({ arena: { tournamentId, waiting: false }, error: null })
+        await this.connect()
+        this.rawSend({ type: 'joinArena', tournamentId })
+    }
+
+    /** Stop waiting to be paired in whatever arena we're currently parked in
+     * (a no-op hub-side if we aren't waiting in one). Doesn't touch a game
+     * already in progress. */
+    leaveArena() {
+        this.wantArena = null
+        this.rawSend({ type: 'leaveArena' })
+        this.set({ arena: null })
     }
 
     /** Ask the hub whether this ACCOUNT has a live game — it answers with a full
@@ -262,39 +349,58 @@ class GameSocket {
     // --- private "challenge a friend" invites ---
 
     /** Create a private invite; the hub replies with `challengeCreated` carrying a
-     * shareable code. Only one of queue/challenge can be pending at a time. */
+     * shareable code. Only one of queue/challenge can be pending at a time. `fen`
+     * starts the game from a custom position (the hub forces such games casual
+     * and rejects it combined with chess960). */
     async createChallenge(
         pool: string,
         color: 'w' | 'b' | 'random',
         rated: boolean,
         variant: Variant = 'standard',
+        fen: string = '',
     ): Promise<void> {
         this.wantQueue = null
         this.wantJoin = null
-        this.wantChallenge = { pool, color, rated, variant }
-        this.set({ status: 'idle', pool: null, game: null, challenge: null, error: null })
+        this.wantArena = null
+        this.wantChallenge = { pool, color, rated, variant, fen }
+        this.set({
+            status: 'idle',
+            pool: null,
+            game: null,
+            challenge: null,
+            challengeWaiting: null,
+            arena: null,
+            error: null,
+        })
         await this.connect()
-        this.rawSend({ type: 'createChallenge', pool, color, rated, variant })
+        this.rawSend({ type: 'createChallenge', pool, color, rated, variant, fen })
     }
 
-    /** Join a friend's private invite by its code. On success the hub sends
-     * `matched`; an unknown/expired code yields an `error`. */
+    /** Join a friend's private invite by its code, or a server-registered
+     * challenge (an accepted directed challenge). On success the hub sends
+     * `matched` (paired immediately); if this is a server-registered challenge
+     * and the other named player hasn't arrived yet, it instead sends
+     * `challengeWaiting` and we park here. An unknown/expired/not-yours code
+     * yields an `error`. */
     async joinChallenge(code: string): Promise<void> {
         const c = code.trim().toUpperCase()
         if (!c) return
         this.wantQueue = null
         this.wantChallenge = null
+        this.wantArena = null
         this.wantJoin = c
-        this.set({ game: null, challenge: null, error: null })
+        this.set({ game: null, challenge: null, challengeWaiting: null, arena: null, error: null })
         await this.connect()
         this.rawSend({ type: 'joinChallenge', code: c })
     }
 
-    /** Withdraw our own pending invite. */
+    /** Withdraw our own pending invite (as its creator), or drop out of a
+     * server-registered challenge we were parked waiting on. */
     cancelChallenge() {
         this.wantChallenge = null
+        this.wantJoin = null
         this.rawSend({ type: 'cancelChallenge' })
-        this.set({ challenge: null })
+        this.set({ challenge: null, challengeWaiting: null })
     }
 
     /** Clear a transient lobby error (e.g. when reopening the challenge dialog). */
@@ -374,16 +480,25 @@ class GameSocket {
         this.set({ game: { ...g, [key]: val } })
     }
 
-    /** Leave a finished game and return to an idle lobby state. */
+    /** Leave a finished game and return to an idle lobby state. If that game
+     * was an arena pairing, the hub already returned us to its pool the moment
+     * it ended (returnToArenaPool) — tell it we're done so it stops trying to
+     * pair us again while we're back browsing the lobby. */
     leave() {
         this.wantQueue = null
         this.wantChallenge = null
         this.wantJoin = null
+        if (this.wantArena) {
+            this.wantArena = null
+            this.rawSend({ type: 'leaveArena' })
+        }
         this.set({
             status: 'idle',
             pool: null,
             game: null,
             challenge: null,
+            challengeWaiting: null,
+            arena: null,
             error: null,
         })
     }
@@ -426,11 +541,13 @@ class GameSocket {
                 this.set({ status: 'queued', pool: msg.pool })
                 break
             case 'idle':
-                this.set({ status: 'idle', pool: null, challenge: null })
+                this.set({ status: 'idle', pool: null, challenge: null, challengeWaiting: null })
                 break
             case 'matched':
-                // A game started (public match or accepted private challenge): all
-                // pending lobby intents are now resolved.
+                // A game started (public match, accepted private challenge, or an
+                // arena pairing): all pending lobby intents are now resolved. Arena
+                // `waiting` display clears too — wantArena itself stays armed (see
+                // its declaration) so a mid-game disconnect can still rejoin the pool.
                 this.wantQueue = null
                 this.wantChallenge = null
                 this.wantJoin = null
@@ -439,8 +556,22 @@ class GameSocket {
                     pool: msg.pool,
                     game: buildGame(msg),
                     challenge: null,
+                    challengeWaiting: null,
+                    arena: null,
                     error: null,
                 })
+                break
+            case 'arenaJoined':
+                this.wantArena = msg.tournamentId
+                this.set({ arena: { tournamentId: msg.tournamentId, waiting: false }, error: null })
+                break
+            case 'arenaWaiting':
+                this.wantArena = msg.tournamentId
+                this.set({ arena: { tournamentId: msg.tournamentId, waiting: true }, error: null })
+                break
+            case 'arenaLeft':
+                this.wantArena = null
+                this.set({ arena: null })
                 break
             case 'challengeCreated':
                 this.set({
@@ -450,13 +581,37 @@ class GameSocket {
                         color: msg.color,
                         rated: !!msg.rated,
                         variant: (msg.variant as Variant) ?? 'standard',
+                        fen: parseFen(msg.fen),
+                    },
+                    error: null,
+                })
+                break
+            case 'challengeWaiting':
+                // We joined a server-registered challenge before the other named
+                // player arrived — park here (mirrors how a client-created
+                // challenge's own creator waits).
+                this.set({
+                    challengeWaiting: {
+                        code: msg.code,
+                        pool: msg.pool,
+                        color: msg.color,
+                        rated: !!msg.rated,
+                        variant: (msg.variant as Variant) ?? 'standard',
+                        fen: parseFen(msg.fen),
                     },
                     error: null,
                 })
                 break
             case 'challengeExpired':
+                // Sent to a client-created challenge's creator AND/OR a
+                // server-registered challenge's currently-parked waiting side.
                 this.wantChallenge = null
-                this.set({ challenge: null, error: 'Your invite expired before anyone joined.' })
+                this.wantJoin = null
+                this.set({
+                    challenge: null,
+                    challengeWaiting: null,
+                    error: 'This challenge expired before it was completed.',
+                })
                 break
             case 'resume':
                 this.onResume(msg)
@@ -498,9 +653,13 @@ class GameSocket {
                 this.onChat(msg)
                 break
             case 'error':
-                // A failed join (bad/expired code) shouldn't be retried on reconnect.
+                // A failed join (bad/expired/not-yours code, a failed joinArena, or
+                // a second attempt while already parked waiting) shouldn't be
+                // retried on reconnect, and shouldn't leave a stale waiting screen
+                // showing.
                 this.wantJoin = null
-                this.set({ error: msg.message })
+                this.wantArena = null
+                this.set({ challengeWaiting: null, arena: null, error: msg.message })
                 break
             default:
                 break
@@ -550,6 +709,8 @@ class GameSocket {
             status: 'idle',
             pool: null,
             challenge: null,
+            challengeWaiting: null,
+            arena: null,
             error: null,
         })
     }

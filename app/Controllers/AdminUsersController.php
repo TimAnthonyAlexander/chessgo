@@ -114,6 +114,7 @@ class AdminUsersController extends Controller
             return [
                 'id' => $u->id,
                 'name' => $u->name,
+                'title' => $u->displayTitle(),
                 'email' => $u->email,
                 'role' => $u->role,
                 'active' => $u->active,
@@ -157,13 +158,14 @@ class AdminUsersController extends Controller
             ->limit(20)
             ->get();
 
-        $recent = array_map(static fn (Game $g): array => $g->summaryRow(), $games);
+        $recent = Game::summaryRowsWithTitles($games);
 
         return JsonResponse::ok([
             'user' => $user->jsonSerialize(), // strips the password hash
             'flag_rollup' => $rollup instanceof FlaggedUser ? [
                 'user_id' => $rollup->user_id,
                 'user_name' => $rollup->user_name,
+                'user_title' => $user->displayTitle(),
                 'total_flags' => $rollup->total_flags,
                 'counts' => $rollup->getCounts(),
                 'status' => $rollup->status,

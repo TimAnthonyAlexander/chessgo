@@ -2,11 +2,14 @@
 
 namespace App\Controllers;
 
+use Throwable;
 use BaseApi\App;
 use BaseApi\Controllers\Controller;
 use BaseApi\Http\JsonResponse;
 use App\Models\Game;
 use App\Models\User;
+use App\Models\Tournament;
+use App\Models\TournamentPlayer;
 use App\Services\Glicko2Service;
 use App\Services\AnticheatService;
 use App\Services\StreakService;
@@ -88,6 +91,10 @@ class GameResultController extends Controller
         $game->black_name = (string)($black['name'] ?? '');
         $game->white_is_bot = (bool)($white['bot'] ?? false);
         $game->black_is_bot = (bool)($black['bot'] ?? false);
+        $tournamentId = trim((string)($b['tournamentId'] ?? ''));
+        $game->tournament_id = $tournamentId !== '' ? $tournamentId : null;
+        $startFen = trim((string)($b['startFen'] ?? ''));
+        $game->start_fen = $startFen !== '' ? $startFen : null;
         $game->setMoves(array_map('strval', (array)($b['moves'] ?? [])));
         $game->setSans(array_map('strval', (array)($b['sans'] ?? [])));
         $game->setMoveTimes(array_map('intval', (array)($b['moveTimes'] ?? [])));
@@ -122,6 +129,11 @@ class GameResultController extends Controller
         if (!$game->save()) {
             return JsonResponse::error('failed to persist game', 500);
         }
+
+        // Arena scoring: best-effort + never allowed to break the persist path
+        // above (an unknown tournament id, or a side that never joined it, just
+        // means that side isn't scored — the game record itself is unaffected).
+        $this->applyTournamentScoring($game, $whiteUser, $blackUser, $result);
 
         // Post-game anti-cheat review: the CHEAP signals only (rating velocity +
         // move-time anomaly). Self-contained + best-effort — a flag never blocks
@@ -277,6 +289,74 @@ class GameResultController extends Controller
             $game->white_rating_before = $botRating;
             $game->white_rating_after = $botRating;
         }
+    }
+
+    /**
+     * Update Arena standings for a finished tournament game. Fully defensive:
+     * this endpoint is how every live game reaches the database, so a scoring
+     * bug (bad tournament id, a player who withdrew/never joined, a DB hiccup)
+     * must degrade to "no score change" rather than a 500 — wrapped in a
+     * catch-all on top of the individual null-checks below.
+     */
+    private function applyTournamentScoring(Game $game, ?User $whiteUser, ?User $blackUser, string $result): void
+    {
+        $tournamentId = $game->tournament_id;
+        if ($tournamentId === null || $tournamentId === '') {
+            return;
+        }
+
+        try {
+            $tournament = Tournament::find($tournamentId);
+            if (!$tournament instanceof Tournament) {
+                return;
+            }
+
+            [$whiteOutcome, $blackOutcome] = match ($result) {
+                '1-0' => ['win', 'loss'],
+                '0-1' => ['loss', 'win'],
+                default => ['draw', 'draw'],
+            };
+
+            if ($whiteUser instanceof User) {
+                $this->updateTournamentPlayer($tournamentId, $whiteUser->id, $whiteOutcome);
+            }
+
+            if ($blackUser instanceof User) {
+                $this->updateTournamentPlayer($tournamentId, $blackUser->id, $blackOutcome);
+            }
+        } catch (Throwable) {
+            // Swallow: scoring is best-effort, the game row is already saved.
+        }
+    }
+
+    /**
+     * Apply one outcome to one player's standing row. win = 2 (4 once already on
+     * a 2+ win streak), draw = 1, loss = 0; a draw/loss resets the streak. A user
+     * with no row for this tournament (never joined, or joined after this game
+     * started) is silently skipped rather than creating a phantom standing.
+     */
+    private function updateTournamentPlayer(string $tournamentId, string $userId, string $outcome): void
+    {
+        $player = TournamentPlayer::firstWhereConditions([
+            'tournament_id' => $tournamentId,
+            'user_id' => $userId,
+        ]);
+        if (!$player instanceof TournamentPlayer) {
+            return;
+        }
+
+        $player->games++;
+        if ($outcome === 'win') {
+            $player->score += $player->streak >= 2 ? 4 : 2;
+            $player->streak++;
+        } elseif ($outcome === 'draw') {
+            $player->score += 1;
+            $player->streak = 0;
+        } else {
+            $player->streak = 0;
+        }
+
+        $player->save();
     }
 
     /** RD for this category right now, grown for idle time since the last game. */

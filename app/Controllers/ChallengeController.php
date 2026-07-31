@@ -187,6 +187,7 @@ class ChallengeController extends Controller
             'id' => $c->id,
             'userId' => $otherId,
             'name' => $u instanceof User ? $u->name : null,
+            'title' => $u instanceof User ? $u->displayTitle() : null,
             'rating' => $u instanceof User ? $u->rating_blitz : null,
             'pool' => $c->pool,
             'color' => $c->color,

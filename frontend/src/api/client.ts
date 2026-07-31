@@ -848,6 +848,8 @@ export interface ProfileGame {
     reason: string
     white_name: string
     black_name: string
+    white_title: Title | null
+    black_title: Title | null
     white_user_id: string | null
     black_user_id: string | null
     white_is_bot: boolean
@@ -961,6 +963,7 @@ export interface LeaderboardEntry {
     rank: number
     id: string
     name: string
+    title: Title | null
     rating: number
     games: number
     provisional: boolean
@@ -1087,6 +1090,7 @@ export type AdminUserStatus = 'active' | 'banned'
 export interface AdminUserRow {
     id: string
     name: string
+    title: Title | null
     email: string
     role: string
     active: boolean
@@ -1204,6 +1208,7 @@ export type FlagSortKey = 'total_flags' | 'top_severity' | 'last_flagged_at'
 export interface FlaggedUserRollup {
     user_id: string
     user_name: string
+    user_title: Title | null
     total_flags: number
     counts: Record<string, number>
     status: FlagStatus
@@ -1238,6 +1243,7 @@ export interface FlaggedUsersPage {
 export interface FlaggedUserDetail {
     user_id: string
     user_name: string
+    user_title: Title | null
     total_flags: number
     counts: Record<string, number>
     status: FlagStatus
@@ -1325,3 +1331,247 @@ export function getGameAnticheat(id: string): Promise<GameAnticheat> {
 }
 
 export { ApiError }
+
+// --- Friends, notifications, directed challenges ---
+// See routes/api.php's "Friends, notifications, directed challenges" block +
+// the Friend/Notification/Challenge controllers for the exact server contract.
+
+/** One row of the accepted-friends list (`GET /friends`). `ratingCategory` is
+ * whichever time control the friend has played the most games in — the same
+ * category `rating` is drawn from. `linkId` is the FriendLink row id — pass it
+ * to {@link removeFriend} to unfriend. `userId` is the friend's own account id
+ * (for the profile link), never the same id space as `linkId`. */
+export interface FriendRow {
+    linkId: string
+    userId: string
+    name: string
+    title: Title | null
+    rating: number
+    ratingCategory: RatingCategory
+    online: boolean
+}
+
+export function getFriends(): Promise<{ friends: FriendRow[] }> {
+    return request<{ friends: FriendRow[] }>('/friends')
+}
+
+/** Send a friend request by username. The server auto-accepts a mutual pending
+ * request instead of creating a duplicate — read `status` to tell which
+ * happened ('pending' | 'accepted'). Throws ApiError on: not found (404),
+ * self-friend (400), already friends (409). */
+export function addFriend(name: string): Promise<{ status: 'pending' | 'accepted' }> {
+    return request('/friends', { method: 'POST', body: JSON.stringify({ name }) })
+}
+
+/** Unfriend an accepted link, or cancel your own outgoing request — same
+ * endpoint, keyed by the FriendLink id (not the other user's id). */
+export function removeFriend(linkId: string): Promise<{ deleted: boolean }> {
+    return request(`/friends/${encodeURIComponent(linkId)}`, { method: 'DELETE' })
+}
+
+/** One pending FriendLink, shaped for display (the OTHER side's identity). */
+export interface FriendRequestRow {
+    id: string
+    userId: string
+    name: string | null
+    title: Title | null
+    createdAt: string
+}
+
+export function getFriendRequests(): Promise<{
+    incoming: FriendRequestRow[]
+    outgoing: FriendRequestRow[]
+}> {
+    return request('/friends/requests')
+}
+
+/** Accept an incoming friend request — addressee only. */
+export function acceptFriendRequest(linkId: string): Promise<{ status: 'accepted' }> {
+    return request(`/friends/${encodeURIComponent(linkId)}/accept`, { method: 'POST' })
+}
+
+/** Decline an incoming friend request — addressee only. */
+export function declineFriendRequest(linkId: string): Promise<{ status: 'declined' }> {
+    return request(`/friends/${encodeURIComponent(linkId)}/decline`, { method: 'POST' })
+}
+
+/** In-app notification kinds — see Notification.php's docblock. */
+export type NotificationType =
+    | 'friend_request'
+    | 'friend_accepted'
+    | 'challenge'
+    | 'challenge_accepted'
+    | 'challenge_declined'
+
+/** Notification payload shapes, keyed by `type`. Every payload carries at
+ * least `userId` (who caused it); challenge-flavoured ones also carry
+ * `challengeId`, and `challenge_accepted` carries the join `code`. */
+export interface NotificationPayload {
+    userId?: string
+    challengeId?: string
+    pool?: string
+    variant?: Variant
+    code?: string
+}
+
+export interface NotificationItem {
+    id: string
+    user_id: string
+    type: NotificationType
+    payload: NotificationPayload
+    read_at: string | null
+    created_at: string
+}
+
+/** Recent notifications, newest first (capped server-side at 50) + an
+ * always-accurate unread count (not just of the capped page). */
+export function getNotifications(): Promise<{ items: NotificationItem[]; unread: number }> {
+    return request('/notifications')
+}
+
+/** Mark specific notifications read (ids the caller doesn't own are silently skipped). */
+export function markNotificationsRead(ids: string[]): Promise<{ updated: number }> {
+    return request('/notifications/read', { method: 'POST', body: JSON.stringify({ ids }) })
+}
+
+/** Mark every unread notification for the caller as read. */
+export function markAllNotificationsRead(): Promise<{ updated: number }> {
+    return request('/notifications/read-all', { method: 'POST' })
+}
+
+/** Directed-challenge variants (ChallengeController::VARIANTS). */
+export type ChallengeVariant = 'standard' | 'chess960' | 'duck' | 'crazyhouse' | 'antichess'
+
+/** One directed, persistent challenge, shaped for display (the OTHER side's
+ * identity + the game terms). */
+export interface ChallengeRow {
+    id: string
+    userId: string
+    name: string | null
+    rating: number | null
+    pool: string
+    color: 'w' | 'b' | 'random'
+    rated: boolean
+    variant: ChallengeVariant
+    fen: string | null
+    expiresAt: string
+    createdAt: string
+}
+
+/** Send a directed challenge to a specific username. Throws ApiError on: not
+ * found (404), self-challenge (400), invalid pool (400). */
+export function createChallenge(opts: {
+    name: string
+    pool: string
+    color?: 'w' | 'b' | 'random'
+    rated?: boolean
+    variant?: ChallengeVariant
+    fen?: string
+}): Promise<{ id: string }> {
+    return request('/challenges', {
+        method: 'POST',
+        body: JSON.stringify({
+            name: opts.name,
+            pool: opts.pool,
+            color: opts.color ?? 'random',
+            rated: opts.rated ?? true,
+            variant: opts.variant ?? 'standard',
+            ...(opts.fen ? { fen: opts.fen } : {}),
+        }),
+    })
+}
+
+export function getChallenges(): Promise<{ incoming: ChallengeRow[]; outgoing: ChallengeRow[] }> {
+    return request('/challenges')
+}
+
+/** Cancel a pending outgoing challenge — challenger only. */
+export function cancelChallenge(id: string): Promise<{ status: 'cancelled' }> {
+    return request(`/challenges/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+/** Accept an incoming challenge — opponent only. Mints a hub join code; the
+ * caller should navigate to `/challenge/{code}` with it. */
+export function acceptChallenge(id: string): Promise<{ code: string }> {
+    return request(`/challenges/${encodeURIComponent(id)}/accept`, { method: 'POST' })
+}
+
+/** Decline an incoming challenge — opponent only. */
+export function declineChallenge(id: string): Promise<{ status: 'declined' }> {
+    return request(`/challenges/${encodeURIComponent(id)}/decline`, { method: 'POST' })
+}
+
+// --- Arena tournaments (Lichess-style) ---
+
+/** Variants a tournament can run (TournamentController::VARIANTS). */
+export type TournamentVariant = 'standard' | 'chess960' | 'duck' | 'crazyhouse' | 'antichess'
+
+export type TournamentStatus = 'scheduled' | 'running' | 'finished'
+
+/** One tournament's public summary — the shape both the list and the detail's
+ * own `tournament` field share (TournamentController::summaryRow). `starts_at`
+ * is a "Y-m-d H:i:s" string in UTC (see Tournament::$starts_at); `ends_at_ms`
+ * is already a resolved epoch-ms integer, so prefer it over deriving an end
+ * time from starts_at + duration. */
+export interface TournamentSummary {
+    id: string
+    name: string
+    variant: TournamentVariant
+    pool: string
+    starts_at: string
+    duration_minutes: number
+    rated: boolean
+    status: TournamentStatus
+    ends_at_ms: number
+    player_count: number
+}
+
+/** Upcoming + running + recently-finished tournaments, hub-sorted (running
+ * first, then scheduled soonest-first, then finished most-recent-first). */
+export function getTournaments(): Promise<{ tournaments: TournamentSummary[] }> {
+    return request('/tournaments')
+}
+
+export interface TournamentStanding {
+    user_id: string
+    name: string | null
+    title: Title | null
+    score: number
+    games: number
+    withdrawn: boolean
+}
+
+export interface TournamentDetail {
+    tournament: TournamentSummary
+    standings: TournamentStanding[]
+}
+
+export function getTournament(id: string): Promise<TournamentDetail> {
+    return request(`/tournaments/${encodeURIComponent(id)}`)
+}
+
+/** Admin-only: create a scheduled arena. `starts_at` should be a full ISO
+ * datetime string (e.g. `new Date(...).toISOString()`) — the server parses it
+ * with `strtotime` (any timezone-qualified format works) and stores it back
+ * in its own UTC wall-clock form. */
+export function createTournament(opts: {
+    name: string
+    variant: TournamentVariant
+    pool: string
+    starts_at: string
+    duration_minutes: number
+    rated: boolean
+}): Promise<TournamentSummary> {
+    return request('/tournaments', { method: 'POST', body: JSON.stringify(opts) })
+}
+
+/** Join a scheduled or running tournament (idempotent; also clears a prior
+ * withdrawal). Requires auth. */
+export function joinTournament(id: string): Promise<{ joined: boolean }> {
+    return request(`/tournaments/${encodeURIComponent(id)}/join`, { method: 'POST' })
+}
+
+/** Withdraw from a tournament — a no-op (not an error) if never joined. */
+export function withdrawTournament(id: string): Promise<{ withdrawn: boolean }> {
+    return request(`/tournaments/${encodeURIComponent(id)}/withdraw`, { method: 'POST' })
+}

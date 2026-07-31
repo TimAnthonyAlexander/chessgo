@@ -87,10 +87,12 @@ class AdminGamesController extends Controller
 
         // Flag any shown seeded game so the client can badge it (never mutating the
         // shared summaryRow() — the flag is derived here from the hub_game_id prefix).
+        $summaries = Game::summaryRowsWithTitles($paged->data);
         $rows = array_map(
-            static fn (Game $g): array => $g->summaryRow()
+            static fn (Game $g, array $row): array => $row
                 + ['seeded' => str_starts_with($g->hub_game_id, 'seedgame-')],
             $paged->data,
+            $summaries,
         );
 
         return JsonResponse::ok([

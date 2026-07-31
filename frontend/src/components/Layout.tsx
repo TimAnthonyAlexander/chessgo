@@ -21,6 +21,7 @@ import Logo from './Logo'
 import NavStreak from './NavStreak'
 import Footer from './Footer'
 import MobileNavDrawer, { type MobileNavSection } from './MobileNavDrawer'
+import NotificationBell from './notifications/NotificationBell'
 import type { RatingCategory, User } from '../api/client'
 
 // Nav model. A `link` is a plain top-level destination; a `menu` is a hover
@@ -37,7 +38,7 @@ type NavItem =
     | { kind: 'link'; label: string; to: string }
     | { kind: 'menu'; label: string; to?: string; items: Leaf[] }
 
-function navItems(isAdmin: boolean): NavItem[] {
+function navItems(isAdmin: boolean, loggedIn: boolean): NavItem[] {
     const tools: Leaf[] = [
         { label: 'Analysis', to: '/analysis' },
         ...(isAdmin ? [{ label: 'Engine v Engine', to: '/admin/engine-vs' }] : []),
@@ -58,7 +59,9 @@ function navItems(isAdmin: boolean): NavItem[] {
             ],
         },
         { kind: 'link', label: 'Puzzles', to: '/puzzles' },
+        { kind: 'link', label: 'Tournaments', to: '/tournaments' },
         { kind: 'link', label: 'Watch', to: '/watch' },
+        ...(loggedIn ? [{ kind: 'link' as const, label: 'Friends', to: '/friends' }] : []),
         { kind: 'menu', label: 'Tools', items: tools },
         ...(isAdmin ? [{ kind: 'link' as const, label: 'Admin', to: '/admin' }] : []),
     ]
@@ -124,7 +127,7 @@ export default function Layout() {
     ])
 
     // The same nav model the desktop bar uses, flattened for the mobile drawer.
-    const sections: MobileNavSection[] = navItems(user?.role === 'admin').map((item) =>
+    const sections: MobileNavSection[] = navItems(user?.role === 'admin', !!user).map((item) =>
         item.kind === 'link'
             ? { label: item.label, to: item.to }
             : {
@@ -181,7 +184,7 @@ export default function Layout() {
                 </Link>
 
                 <Box sx={{ display: { xs: 'none', md: 'flex' }, alignItems: 'center', gap: 3 }}>
-                    {navItems(user?.role === 'admin').map((item) =>
+                    {navItems(user?.role === 'admin', !!user).map((item) =>
                         item.kind === 'link' ? (
                             <Box
                                 key={item.label}
@@ -199,6 +202,7 @@ export default function Layout() {
 
                 <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 1.5 }}>
                     <NavStreak />
+                    <NotificationBell />
                     <MobileNavDrawer
                         sections={sections}
                         user={user ? { name: user.name } : null}

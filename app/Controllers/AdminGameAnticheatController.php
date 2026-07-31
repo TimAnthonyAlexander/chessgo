@@ -49,7 +49,7 @@ class AdminGameAnticheatController extends Controller
             : null;
 
         return JsonResponse::ok([
-            'game' => $game->summaryRow(),
+            'game' => Game::summaryRowsWithTitles([$game])[0],
             'move_times' => $game->getMoveTimes(),
             'ac_scanned' => $game->ac_scanned,
             'analysis_summary' => $summary,

@@ -54,7 +54,7 @@ class FriendRequestsController extends Controller
                 'id' => $link->id,
                 'userId' => $otherId,
                 'name' => $u instanceof User ? $u->name : null,
-                'title' => $u instanceof User ? (property_exists($u, 'title') ? $u->title : null) : null,
+                'title' => $u instanceof User ? $u->displayTitle() : null,
                 'createdAt' => $link->created_at,
             ];
         };

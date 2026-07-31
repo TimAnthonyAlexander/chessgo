@@ -203,9 +203,12 @@ class AdminFlagsController extends Controller
             }
         }
 
+        $titles = User::titleMapFor(array_map(static fn (FlaggedUser $f): string => $f->user_id, $rows));
+
         $out = array_map(static fn (FlaggedUser $f): array => [
             'user_id' => $f->user_id,
             'user_name' => $f->user_name,
+            'user_title' => $titles[$f->user_id] ?? null,
             'total_flags' => $f->total_flags,
             'counts' => $f->getCounts(),
             'status' => $f->status,
@@ -246,9 +249,12 @@ class AdminFlagsController extends Controller
             'created_at' => $e->created_at,
         ], $events);
 
+        $title = User::titleMapFor([$row->user_id])[$row->user_id] ?? null;
+
         return JsonResponse::ok([
             'user_id' => $row->user_id,
             'user_name' => $row->user_name,
+            'user_title' => $title,
             'total_flags' => $row->total_flags,
             'counts' => $row->getCounts(),
             'status' => $row->status,

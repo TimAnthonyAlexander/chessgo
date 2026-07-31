@@ -11,7 +11,7 @@ use App\Services\Glicko2Service;
  * Public leaderboard — the top-rated players for one rating category.
  *
  *   GET /leaderboard?category=blitz&limit=10
- *   → { category, entries: [ { rank, id, name, rating, games, provisional }, ... ] }
+ *   → { category, entries: [ { rank, id, name, title, rating, games, provisional }, ... ] }
  *
  * Categories are the Glicko-2 pools on the User model: the four time controls
  * plus the isolated puzzle and duck pools. The category drives interpolated SQL column
@@ -48,7 +48,10 @@ class LeaderboardController extends Controller
         $rdCol = 'rd_' . $category;
         $gamesCol = 'games_' . $category;
 
-        $sql = "SELECT id, name, $ratingCol AS rating, $rdCol AS rd, $gamesCol AS games
+        // title + role are pulled in the same query (no per-row lookup) so the
+        // derived display title (a stored title, else "AM" for admins — see
+        // User::displayTitle()) can be computed inline below.
+        $sql = "SELECT id, name, title, role, $ratingCol AS rating, $rdCol AS rd, $gamesCol AS games
                 FROM user
                 WHERE $gamesCol > 0
                 ORDER BY $ratingCol DESC
@@ -58,10 +61,12 @@ class LeaderboardController extends Controller
         $entries = [];
         $rank = 1;
         foreach ($rows as $row) {
+            $title = $row['title'] ?? null;
             $entries[] = [
                 'rank' => $rank,
                 'id' => (string) ($row['id'] ?? ''),
                 'name' => (string) ($row['name'] ?? ''),
+                'title' => $title !== null && $title !== '' ? $title : (($row['role'] ?? '') === 'admin' ? 'AM' : null),
                 'rating' => (int) ($row['rating'] ?? 0),
                 'games' => (int) ($row['games'] ?? 0),
                 'provisional' => ((float) ($row['rd'] ?? 0.0)) > Glicko2Service::PROVISIONAL_RD,

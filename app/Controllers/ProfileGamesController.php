@@ -133,10 +133,7 @@ class ProfileGamesController extends Controller
             ->orderByDesc('created_at')
             ->paginate(max(1, $this->page), self::PER_PAGE, self::PER_PAGE, withTotal: true);
 
-        $rows = array_map(
-            static fn (Game $g): array => $g->summaryRow(),
-            $paged->data,
-        );
+        $rows = Game::summaryRowsWithTitles($paged->data);
 
         return JsonResponse::ok([
             'games' => $rows,

@@ -14,8 +14,11 @@ import RouteError, { NotFound } from './components/RouteError'
 // Heavy / rare routes are split into their own chunks so the critical path
 // (home, live game, layout) isn't gated on Analysis (~1.4k lines), the whole
 // /admin/* subtree, the editor, or chess.js (only pulled by analysis/editor).
+const Friends = lazy(() => import('./pages/Friends'))
 const BotGame = lazy(() => import('./pages/BotGame'))
 const Puzzles = lazy(() => import('./pages/Puzzles'))
+const Tournaments = lazy(() => import('./pages/Tournaments'))
+const TournamentPage = lazy(() => import('./pages/Tournament'))
 const Analysis = lazy(() => import('./pages/Analysis'))
 const Editor = lazy(() => import('./pages/Editor'))
 const EngineVsEngine = lazy(() => import('./pages/EngineVsEngine'))
@@ -79,6 +82,8 @@ const router = createBrowserRouter([
                     { path: '/', element: <Home /> },
                     { path: '/bot', element: suspended(<BotGame />) },
                     { path: '/puzzles', element: suspended(<Puzzles />) },
+                    { path: '/tournaments', element: suspended(<Tournaments />) },
+                    { path: '/tournaments/:id', element: suspended(<TournamentPage />) },
                     { path: '/guess-the-elo', element: suspended(<GuessTheElo />) },
                     { path: '/game/:id', element: <LiveGame /> },
                     { path: '/challenge/:code', element: <ChallengeJoin /> },
@@ -88,6 +93,7 @@ const router = createBrowserRouter([
                     { path: '/analysis/:id', element: suspended(<Analysis />) },
                     { path: '/editor', element: suspended(<Editor />) },
                     { path: '/@/:name', element: <Profile /> },
+                    { path: '/friends', element: suspended(<Friends />) },
                     { path: '/admin/engine-vs', element: suspended(<EngineVsEngine />) },
                     {
                         path: '/admin',

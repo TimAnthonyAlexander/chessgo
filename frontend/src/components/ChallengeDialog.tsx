@@ -10,7 +10,8 @@ import {
     TextField,
     Typography,
 } from '@mui/material'
-import { Check, Copy, Crown } from 'lucide-react'
+import { Check, Copy, Crown, Send } from 'lucide-react'
+import { createChallenge as createDirectedChallenge, type ChallengeVariant } from '../api/client'
 import { gameSocket } from '../lib/socket'
 import { useGameSocket } from '../lib/useGameSocket'
 import { useAuth } from '../lib/auth'
@@ -23,13 +24,35 @@ const PRESETS = ['1+0', '2+1', '3+0', '3+2', '5+0', '5+3', '10+0', '10+5', '15+1
 
 type ColorPref = 'w' | 'b' | 'random'
 
-/** "Challenge a friend" modal: create a private invite (time control, color,
- * rated) and share its code/link, or join a friend's game by code. Pairing and
- * the invite lifetime live entirely on the hub; this is just its UI. */
-export default function ChallengeDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+// Every variant this dialog offers. Chess960 drops out when a custom start FEN
+// is set — the hub rejects that combination (its own randomized start always
+// wins over a custom FEN).
+const ALL_VARIANTS: Variant[] = ['standard', 'chess960', 'duck', 'crazyhouse', 'antichess']
+const NO_960_VARIANTS: Variant[] = ['standard', 'duck', 'crazyhouse', 'antichess']
+
+/** "Challenge a friend" modal. Two independent axes:
+ *  - **Who**: leave the opponent field blank for the existing anonymous
+ *    code/link (anyone who has it can join); fill in a username to send that
+ *    player a persistent, directed challenge instead (they get a notification
+ *    and can accept later, even offline) — POST /challenges rather than a WS
+ *    invite.
+ *  - **From where**: an optional `startFen` challenges from that position
+ *    instead of the normal start. The hub always forces a custom-FEN game
+ *    casual and never combines it with chess960, so both are locked here too.
+ */
+export default function ChallengeDialog({
+    open,
+    onClose,
+    startFen,
+}: {
+    open: boolean
+    onClose: () => void
+    startFen?: string
+}) {
     const s = useGameSocket()
     const { user } = useAuth()
     const challenge = s.challenge
+    const fenLocked = !!startFen
 
     // Create-form state.
     const [custom, setCustom] = useState(false)
@@ -39,6 +62,13 @@ export default function ChallengeDialog({ open, onClose }: { open: boolean; onCl
     const [color, setColor] = useState<ColorPref>('random')
     const [rated, setRated] = useState(true)
     const [variant, setVariant] = useState<Variant>('standard')
+    const [opponent, setOpponent] = useState('')
+
+    // Directed-challenge (POST /challenges) send state — separate from the WS
+    // invite flow above, since it's a one-shot request, not a live socket wait.
+    const [sending, setSending] = useState(false)
+    const [sentTo, setSentTo] = useState<string | null>(null)
+    const [sendError, setSendError] = useState<string | null>(null)
 
     // Join-by-code state.
     const [joinCode, setJoinCode] = useState('')
@@ -52,6 +82,10 @@ export default function ChallengeDialog({ open, onClose }: { open: boolean; onCl
             setJoinCode('')
             setJoining(false)
             setCopied(null)
+            setOpponent('')
+            setSending(false)
+            setSentTo(null)
+            setSendError(null)
             gameSocket.clearError()
         }
     }, [open])
@@ -61,8 +95,18 @@ export default function ChallengeDialog({ open, onClose }: { open: boolean; onCl
         if (s.error) setJoining(false)
     }, [s.error])
 
+    // A custom start position is always casual, and chess960 can't combine with
+    // one — keep the form honest if a caller changes `startFen` under us.
+    useEffect(() => {
+        if (fenLocked) {
+            setRated(false)
+            setVariant((v) => (v === 'chess960' ? 'standard' : v))
+        }
+    }, [fenLocked])
+
     const loggedIn = !!user
-    const effectiveRated = loggedIn && rated
+    const effectiveRated = loggedIn && rated && !fenLocked
+    const directed = opponent.trim().length > 0
 
     const pool = custom ? `${parseInt(base || '0', 10)}+${parseInt(inc || '0', 10)}` : preset
     const poolValid = (() => {
@@ -88,8 +132,34 @@ export default function ChallengeDialog({ open, onClose }: { open: boolean; onCl
     }
 
     const create = () => {
-        if (!poolValid) return
-        void gameSocket.createChallenge(pool, color, effectiveRated, variant)
+        if (!poolValid || sending) return
+        if (directed) {
+            void sendDirected()
+        } else {
+            void gameSocket.createChallenge(pool, color, effectiveRated, variant, startFen)
+        }
+    }
+
+    const sendDirected = async () => {
+        const name = opponent.trim()
+        if (!name) return
+        setSending(true)
+        setSendError(null)
+        try {
+            await createDirectedChallenge({
+                name,
+                pool,
+                color,
+                rated: effectiveRated,
+                variant: variant as ChallengeVariant,
+                fen: startFen,
+            })
+            setSentTo(name)
+        } catch (e) {
+            setSendError(e instanceof Error ? e.message : 'Could not send the challenge.')
+        } finally {
+            setSending(false)
+        }
     }
 
     const join = () => {
@@ -139,6 +209,8 @@ export default function ChallengeDialog({ open, onClose }: { open: boolean; onCl
                         onCopyLink={() => copy('link', shareLink)}
                         onCancel={close}
                     />
+                ) : sentTo ? (
+                    <DirectSentView name={sentTo} onClose={close} />
                 ) : (
                     <>
                         <Typography
@@ -149,11 +221,25 @@ export default function ChallengeDialog({ open, onClose }: { open: boolean; onCl
                                 mb: 0.5,
                             }}
                         >
-                            Challenge a friend
+                            Challenge a {directed ? 'player' : 'friend'}
                         </Typography>
-                        <Typography sx={{ color: 'var(--text-dim)', fontSize: 13, mb: 2.5 }}>
-                            Create a private game and send your friend the link.
+                        <Typography sx={{ color: 'var(--text-dim)', fontSize: 13, mb: 2 }}>
+                            {directed
+                                ? "Send an invitation — they'll get a notification and can accept anytime, even offline."
+                                : 'Create a private game and send your friend the link.'}
+                            {fenLocked && ' Starts from the position you set up.'}
                         </Typography>
+
+                        {/* Opponent */}
+                        <Label text="Opponent (optional)" />
+                        <TextField
+                            value={opponent}
+                            onChange={(e) => setOpponent(e.target.value)}
+                            placeholder="Username — leave blank for a shareable link"
+                            size="small"
+                            fullWidth
+                            sx={{ mb: 2 }}
+                        />
 
                         {/* Time control */}
                         <Label text="Time control" />
@@ -239,7 +325,7 @@ export default function ChallengeDialog({ open, onClose }: { open: boolean; onCl
                         <VariantPicker
                             value={variant}
                             onChange={setVariant}
-                            only={['standard', 'chess960', 'duck', 'crazyhouse', 'antichess']}
+                            only={fenLocked ? NO_960_VARIANTS : ALL_VARIANTS}
                         />
 
                         {/* Rated */}
@@ -257,9 +343,11 @@ export default function ChallengeDialog({ open, onClose }: { open: boolean; onCl
                                     Rated
                                 </Typography>
                                 <Typography sx={{ fontSize: 12, color: 'var(--text-dim)' }}>
-                                    {loggedIn
-                                        ? "Affects both players' ratings"
-                                        : 'Log in to play rated'}
+                                    {fenLocked
+                                        ? 'Custom positions always start casual'
+                                        : loggedIn
+                                          ? "Affects both players' ratings"
+                                          : 'Log in to play rated'}
                                 </Typography>
                             </Box>
                             <Box sx={{ display: 'flex', gap: 0.75 }}>
@@ -268,13 +356,14 @@ export default function ChallengeDialog({ open, onClose }: { open: boolean; onCl
                                     active={!effectiveRated}
                                     onClick={() => setRated(false)}
                                     small
+                                    disabled={fenLocked}
                                 />
                                 <Chip
                                     label="Rated"
                                     active={effectiveRated}
-                                    onClick={() => loggedIn && setRated(true)}
+                                    onClick={() => loggedIn && !fenLocked && setRated(true)}
                                     small
-                                    disabled={!loggedIn}
+                                    disabled={!loggedIn || fenLocked}
                                 />
                             </Box>
                         </Box>
@@ -282,12 +371,29 @@ export default function ChallengeDialog({ open, onClose }: { open: boolean; onCl
                         <Button
                             variant="contained"
                             fullWidth
-                            disabled={!poolValid || s.conn === 'connecting'}
+                            disabled={!poolValid || s.conn === 'connecting' || sending}
                             onClick={create}
+                            startIcon={
+                                sending ? (
+                                    <CircularProgress size={14} color="inherit" />
+                                ) : directed ? (
+                                    <Send size={15} />
+                                ) : undefined
+                            }
                             sx={{ mt: 2.5, textTransform: 'none', fontWeight: 600 }}
                         >
-                            Create invite
+                            {directed ? 'Send challenge' : 'Create invite'}
                         </Button>
+
+                        {sendError && (
+                            <Alert
+                                severity="error"
+                                variant="outlined"
+                                sx={{ mt: 1.5, fontSize: 13 }}
+                            >
+                                {sendError}
+                            </Alert>
+                        )}
 
                         <Divider
                             sx={{
@@ -496,6 +602,51 @@ function InviteView({
                 sx={{ color: 'var(--text-dim)', textTransform: 'none' }}
             >
                 Cancel invite
+            </Button>
+        </Box>
+    )
+}
+
+// --- directed-challenge confirmation sub-view ---
+
+/** Shown after a directed challenge (POST /challenges) is sent — unlike the WS
+ * invite above, there's nothing to wait on here: the opponent's inbox has it
+ * and they can accept whenever they're next online. */
+function DirectSentView({ name, onClose }: { name: string; onClose: () => void }) {
+    return (
+        <Box sx={{ textAlign: 'center' }}>
+            <Box
+                sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: 48,
+                    height: 48,
+                    borderRadius: '50%',
+                    bgcolor: 'var(--surface-2)',
+                    border: '1px solid var(--accent-line)',
+                    color: 'var(--accent)',
+                    mx: 'auto',
+                    mb: 1.5,
+                }}
+            >
+                <Check size={22} />
+            </Box>
+            <Typography
+                sx={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 20, mb: 0.5 }}
+            >
+                Challenge sent
+            </Typography>
+            <Typography sx={{ color: 'var(--text-dim)', fontSize: 13, mb: 2.5 }}>
+                {name} will get a notification and can accept it anytime, even while offline.
+            </Typography>
+            <Button
+                variant="contained"
+                fullWidth
+                onClick={onClose}
+                sx={{ textTransform: 'none', fontWeight: 600 }}
+            >
+                Done
             </Button>
         </Box>
     )

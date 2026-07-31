@@ -268,4 +268,31 @@ class User extends BaseModel
     {
         return $this->hasMany(ApiToken::class);
     }
+
+    /**
+     * Batch-load display titles (id => title|null) for controllers that
+     * reference a user by id without hydrating the full row (e.g. a Game's
+     * denormalized white_user_id/black_user_id). One whereIn query for the
+     * whole set — never call per-row.
+     *
+     * @param list<string|null> $ids
+     * @return array<string, string|null>
+     */
+    public static function titleMapFor(array $ids): array
+    {
+        $ids = array_values(array_unique(array_filter(
+            $ids,
+            static fn (?string $id): bool => $id !== null && $id !== '',
+        )));
+        if ($ids === []) {
+            return [];
+        }
+
+        $map = [];
+        foreach (self::query()->whereIn('id', $ids)->get() as $u) {
+            $map[$u->id] = $u->displayTitle();
+        }
+
+        return $map;
+    }
 }
