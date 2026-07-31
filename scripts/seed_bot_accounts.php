@@ -33,6 +33,7 @@ declare(strict_types=1);
 
 use BaseApi\App;
 use App\Models\User;
+use App\Services\Glicko2Service;
 
 require_once __DIR__ . '/../vendor/autoload.php';
 
@@ -40,8 +41,25 @@ App::boot(dirname(__DIR__));
 
 const BOT_DOMAIN = 'bot.local';
 
-/** Every Glicko-2 category a bot needs a plausible rating in. */
-const BOT_CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'puzzle', 'duck', 'crazyhouse', 'antichess'];
+/**
+ * Categories a freshly-created bot gets a plausible SKILL rating in — these are
+ * the ones {@see scripts/seed_bot_history.php} can actually back with real,
+ * self-played Game rows (bullet/blitz/rapid/classical) or real puzzle_attempt
+ * rows (puzzle). `games_<cat>`/`rd_<cat>`/`rated_at_<cat>` start FRESH (0 /
+ * START_RD / null) here — seed_bot_history.php sets them from whatever it
+ * actually inserts. This is the fix for the old bug: this script used to stamp
+ * a random `games_<cat>` (20-400) onto every category with zero rows behind
+ * it, so a profile could read "276 bullet games" next to "0 games played" —
+ * every number contradicting every other one.
+ *
+ * duck/crazyhouse/antichess are deliberately NOT in this list: there's no
+ * batched self-play tool for those variants (gomachine gengames is standard-
+ * chess-only, and zugzwang doesn't even expose an antichess serve route yet),
+ * so a bot simply keeps User's own fresh defaults there (1500 / RD 350 / 0
+ * games) — an honest "never played this variant" rather than a fabricated
+ * history. See seed_bot_history.php's docblock for the full reasoning.
+ */
+const BOT_CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'puzzle'];
 
 /**
  * Fixed title assignment: 8 of the pool (by 1-based index, evenly spread so
@@ -193,22 +211,32 @@ for ($i = 1; $i <= $count; $i++) {
     foreach (BOT_CATEGORIES as $cat) {
         $rating = clampBotRating($base + mt_rand(-100, 100));
 
-        $games = mt_rand(20, 400);
-        $rd = 85.0 - ($games / 400.0) * 40.0 + mt_rand(-30, 30) / 10.0; // ~45..85, non-provisional
-        $rd = max(45.0, min(85.0, $rd));
-        $vol = mt_rand(550, 650) / 10000.0;
-
+        // Skill rating only — games/RD/rated_at start FRESH. seed_bot_history.php
+        // is what earns these down to a real, reconciled games_<cat> + RD once it
+        // has actually self-played + persisted the history.
         $user->{'rating_' . $cat} = $rating;
-        $user->{'rd_' . $cat} = round($rd, 4);
-        $user->{'vol_' . $cat} = round($vol, 5);
-        $user->{'games_' . $cat} = $games;
-        $user->{'rated_at_' . $cat} = $now;
+        $user->{'rd_' . $cat} = Glicko2Service::START_RD;
+        $user->{'vol_' . $cat} = Glicko2Service::START_VOL;
+        $user->{'games_' . $cat} = 0;
+        $user->{'rated_at_' . $cat} = null;
     }
+    // duck/crazyhouse/antichess are left at User's own fresh defaults
+    // (1500 / RD 350 / 0 games) — see BOT_CATEGORIES docblock above.
 
     if (!$user->save()) {
         fwrite(STDERR, "Failed to save bot '$handle' ($email)\n");
         continue;
     }
+
+    // Backdate created_at so the account predates any history
+    // seed_bot_history.php later backfills for it ("Member since" must read
+    // BEFORE the games, not the day the profile bug was noticed). Deterministic
+    // per index (like the rest of this script) so re-running with the same
+    // --count never shifts an existing bot's date — 180..730 days back.
+    mt_srand($i * 67867967 + 23);
+    $daysAgo = mt_rand(180, 730);
+    $createdAt = date('Y-m-d H:i:s', strtotime($now) - $daysAgo * 86400);
+    App::db()->exec('UPDATE user SET created_at = ? WHERE id = ?', [$createdAt, $user->id]);
 
     $created++;
     if ($title !== null) {
@@ -217,6 +245,7 @@ for ($i = 1; $i <= $count; $i++) {
 }
 
 fwrite(STDOUT, "created: $created  skipped (already existed): $skipped  titled: $titledCreated\n");
-fwrite(STDOUT, "Bot accounts marked role='bot', email @" . BOT_DOMAIN . ", ratings ~900-2400 across "
-    . implode(', ', BOT_CATEGORIES) . ".\n");
+fwrite(STDOUT, "Bot accounts marked role='bot', email @" . BOT_DOMAIN . ", skill ratings ~900-2400 across "
+    . implode(', ', BOT_CATEGORIES) . " (games/RD start fresh — run seed_bot_history.php to back them "
+    . "with real games). duck/crazyhouse/antichess stay at User's fresh defaults.\n");
 fwrite(STDOUT, "Delete with: php scripts/seed_bot_accounts.php --delete\n");
