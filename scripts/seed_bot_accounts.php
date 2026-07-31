@@ -153,22 +153,49 @@ if ($deleteMode) {
     exit(0);
 }
 
-// --- Handle generation (mirrors seed_leaderboard_users.php's style, so bot
-// names read exactly like the hub's existing fake matchmaking-bot names) ---
-$faker = \Faker\Factory::create();
-
+// --- Handle generation ------------------------------------------------------
+// PRODUCTION MUST NOT DEPEND ON fakerphp/faker: it's require-dev only, and prod
+// deploys `composer install --no-dev` — `\Faker\Factory` does not exist there
+// (this is exactly the fatal this script used to throw on prod). No dev
+// library, no fixture-only vocab file: this is a from-scratch generator in the
+// style of the hub's fakeUsername() (gomachine/internal/hub/bot.go) — small
+// hardcoded word lists, mt_srand-seeded per index, zero external dependency.
 $chessAdjs = [
     'sharp', 'positional', 'tactical', 'drawish', 'sound', 'dubious', 'romantic',
     'hypermodern', 'prophylactic', 'greedy', 'solid', 'speculative', 'quiet',
+    'swift', 'silent', 'iron', 'lazy', 'cosmic', 'grim', 'lucky', 'vivid',
+    'rusty', 'brave', 'sly', 'noble', 'wild', 'crimson', 'patient', 'reckless',
 ];
 $chessNouns = [
     'knight', 'bishop', 'rook', 'pawn', 'queen', 'king', 'fork', 'pin', 'skewer',
     'gambit', 'endgame', 'zugzwang', 'fianchetto', 'passer', 'tempo', 'zwischenzug',
-    'outpost', 'battery', 'discovery', 'sac', 'windmill', 'trap',
+    'outpost', 'battery', 'discovery', 'sac', 'windmill', 'trap', 'blunder',
+    'falcon', 'raven', 'otter', 'badger', 'comet', 'viper', 'phoenix', 'walrus',
+];
+
+// Small curated first/last-name pools standing in for Faker's name generator —
+// deliberately generic and global, not exhaustive; just enough entropy that
+// the ~30% "real player" style handles don't repeat across 150 accounts.
+const REAL_FIRST_NAMES = [
+    'james', 'john', 'robert', 'michael', 'david', 'william', 'richard', 'thomas',
+    'daniel', 'matthew', 'anthony', 'mark', 'paul', 'andrew', 'joshua', 'kevin',
+    'brian', 'george', 'edward', 'ronald', 'mary', 'jennifer', 'linda', 'elizabeth',
+    'susan', 'jessica', 'sarah', 'karen', 'nancy', 'lisa', 'emma', 'olivia', 'ava',
+    'sophia', 'mia', 'amelia', 'harper', 'ella', 'grace', 'chloe', 'victoria',
+    'alexei', 'ivan', 'dmitri', 'sergei', 'magnus', 'viktor', 'henrik', 'erik',
+    'wei', 'jian', 'hiroshi', 'kenji', 'arjun', 'ravi', 'priya', 'ananya',
+];
+const REAL_LAST_NAMES = [
+    'smith', 'johnson', 'williams', 'brown', 'jones', 'garcia', 'miller', 'davis',
+    'rodriguez', 'martinez', 'hernandez', 'lopez', 'gonzalez', 'wilson', 'anderson',
+    'thomas', 'taylor', 'moore', 'jackson', 'martin', 'lee', 'perez', 'thompson',
+    'white', 'harris', 'clark', 'lewis', 'robinson', 'walker', 'young', 'allen',
+    'king', 'wright', 'scott', 'torres', 'nguyen', 'hill', 'flores', 'green',
+    'petrov', 'ivanov', 'sokolov', 'volkov', 'kobayashi', 'tanaka', 'sharma', 'singh',
 ];
 
 /** Deterministic handle for index $i — same input always yields the same name. */
-function makeBotHandle(int $i, \Faker\Generator $faker, array $chessAdjs, array $chessNouns): string
+function makeBotHandle(int $i, array $chessAdjs, array $chessNouns): string
 {
     mt_srand($i * 7919 + 42);
     $pick = static fn(array $a): string => $a[array_rand($a)];
@@ -177,8 +204,8 @@ function makeBotHandle(int $i, \Faker\Generator $faker, array $chessAdjs, array 
     // the hub's fakeUsername() and seed_leaderboard_users.php already use.
     if (mt_rand(1, 100) <= 30) {
         mt_srand($i * 104729 + 7);
-        $first = strtolower($faker->firstName());
-        $last = strtolower($faker->lastName());
+        $first = $pick(REAL_FIRST_NAMES);
+        $last = $pick(REAL_LAST_NAMES);
         $sep = $pick(['', '_', '.']);
         $tail = mt_rand(1, 100) <= 50 ? (string) mt_rand(1, 99) : '';
 
@@ -213,6 +240,18 @@ function clampBotRating(int $r): int
     return max(900, min(2400, $r));
 }
 
+// Uniqueness guard: the word pool is finite, so two indices could in theory
+// produce the same handle. Track every name already in use — both pre-existing
+// bot rows (any earlier run, any --count) and names picked earlier in *this*
+// run — and deterministically disambiguate a collision by appending the index.
+// This never touches an existing account (those are skipped before a name is
+// even generated) and stays 100% reproducible: a fresh index's handle depends
+// only on that index plus the fixed set of names that came before it.
+$usedNames = [];
+foreach (App::db()->raw("SELECT name FROM user WHERE role = 'bot'") as $row) {
+    $usedNames[$row['name']] = true;
+}
+
 // --- Seed loop ------------------------------------------------------------
 $now = date('Y-m-d H:i:s');
 $created = 0;
@@ -229,7 +268,11 @@ for ($i = 1; $i <= $count; $i++) {
     }
 
     mt_srand($i * 15485863 + 3);
-    $handle = makeBotHandle($i, $faker, $chessAdjs, $chessNouns);
+    $handle = makeBotHandle($i, $chessAdjs, $chessNouns);
+    while (isset($usedNames[$handle])) {
+        $handle .= (string) $i;
+    }
+    $usedNames[$handle] = true;
 
     $title = titleForIndex($i);
 
