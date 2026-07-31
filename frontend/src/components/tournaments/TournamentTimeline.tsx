@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Box } from '@mui/material'
+import { Box, Typography, useMediaQuery } from '@mui/material'
 import type { TournamentSummary } from '../../api/client'
-import { GROUP_ORDER, laneGroupOf, packLanes, type LaneGroup } from './groups'
+import { GROUP_COLOR, TRACK_GROUP, TRACK_LABEL, TRACK_ORDER, packLanes, trackOf, type Track } from './groups'
 import { hhmm, parseStartsAt } from './timing'
 import TournamentBlock from './TournamentBlock'
 
-const PX_PER_MINUTE = 6
-const LANE_HEIGHT = 46
-const LANE_GAP = 6
+const PX_PER_MINUTE = 10
+const LANE_HEIGHT = 64
+const LANE_GAP = 8
 const TICK_MINUTES = 10
 const TICK_MS = TICK_MINUTES * 60_000
 const AXIS_HEIGHT = 30
@@ -15,6 +15,10 @@ const AXIS_HEIGHT = 30
 // right next to the first/last known tournament.
 const WINDOW_PAD_MS = 90 * 60_000
 const NOW_COLOR = '#ef6c00'
+// The sticky left-hand label gutter naming each row's track. Shrinks under
+// ~600px so it doesn't eat a phone screen's width.
+const GUTTER_WIDTH = 104
+const GUTTER_WIDTH_NARROW = 56
 
 function roundDown(ms: number): number {
     return Math.floor(ms / TICK_MS) * TICK_MS
@@ -24,10 +28,12 @@ function roundUp(ms: number): number {
     return Math.ceil(ms / TICK_MS) * TICK_MS
 }
 
-/** Lichess-style horizontal arena schedule: fixed-color lane groups (green
- * standard, green sub-bullet, purple restricted, brown variants — each only
- * rendered when it actually has blocks), one shared scroll container for the
- * time axis + every lane, auto-scrolled once on load so "now" starts centred. */
+/** Lichess-style horizontal arena schedule: one row per track (a speed class
+ * for standard play, one per variant, one for restricted), each fixed-color
+ * by its group (green standard, purple restricted, brown variant) and only
+ * rendered when it actually has blocks, a sticky label gutter naming each
+ * row, one shared scroll container for the time axis + every lane, and
+ * auto-scrolled once on load so "now" starts centred. */
 export default function TournamentTimeline({
     tournaments,
     now,
@@ -42,16 +48,22 @@ export default function TournamentTimeline({
     // A stable anchor for the visible window, taken once on mount — the window
     // itself shouldn't creep forward every tick just because `now` does.
     const [mountNow] = useState(() => Date.now())
+    const narrow = useMediaQuery('(max-width:600px)')
+    const gutterWidth = narrow ? GUTTER_WIDTH_NARROW : GUTTER_WIDTH
 
     const items = useMemo(
         () =>
             tournaments
-                .map((t) => ({
-                    t,
-                    start: parseStartsAt(t.starts_at),
-                    finish: t.ends_at_ms,
-                    group: laneGroupOf(t),
-                }))
+                .map((t) => {
+                    const track = trackOf(t)
+                    return {
+                        t,
+                        start: parseStartsAt(t.starts_at),
+                        finish: t.ends_at_ms,
+                        track,
+                        group: TRACK_GROUP[track],
+                    }
+                })
                 .sort((a, b) => a.start - b.start),
         [tournaments],
     )
@@ -67,13 +79,13 @@ export default function TournamentTimeline({
     const trackWidth = ((windowEnd - windowStart) / 60_000) * PX_PER_MINUTE
 
     const lanes = useMemo(() => {
-        const out: { group: LaneGroup; items: typeof items }[] = []
-        for (const g of GROUP_ORDER) {
-            const groupItems = items.filter((i) => i.group === g)
-            if (groupItems.length === 0) continue
-            for (const lane of packLanes(groupItems, (i) => i.start, (i) => i.finish)) {
-                out.push({ group: g, items: lane })
-            }
+        const out: { track: Track; items: typeof items; isFirstOfTrack: boolean }[] = []
+        for (const track of TRACK_ORDER) {
+            const trackItems = items.filter((i) => i.track === track)
+            if (trackItems.length === 0) continue
+            packLanes(trackItems, (i) => i.start, (i) => i.finish).forEach((lane, idx) => {
+                out.push({ track, items: lane, isFirstOfTrack: idx === 0 })
+            })
         }
         return out
     }, [items])
@@ -91,17 +103,19 @@ export default function TournamentTimeline({
 
     const nowX = ((now - windowStart) / 60_000) * PX_PER_MINUTE
 
-    // Auto-scroll so "now" starts centred — once, the first time there's a
-    // track to scroll. Later polls can extend the track (new tournaments
-    // appearing) without yanking the user's own scroll position around.
+    // Auto-scroll so "now" starts centred in the visible (non-gutter) area —
+    // once, the first time there's a track to scroll. Later polls can extend
+    // the track (new tournaments appearing) without yanking the user's own
+    // scroll position around.
     useEffect(() => {
         const el = scrollRef.current
         if (!el || centeredRef.current || trackWidth <= 0) return
         centeredRef.current = true
         const nowXAtMount = ((mountNow - windowStart) / 60_000) * PX_PER_MINUTE
-        const target = nowXAtMount - el.clientWidth / 2
-        el.scrollLeft = Math.max(0, Math.min(target, trackWidth - el.clientWidth))
-    }, [trackWidth, windowStart, mountNow])
+        const totalWidth = gutterWidth + trackWidth
+        const target = nowXAtMount - (el.clientWidth - gutterWidth) / 2
+        el.scrollLeft = Math.max(0, Math.min(target, totalWidth - el.clientWidth))
+    }, [trackWidth, windowStart, mountNow, gutterWidth])
 
     return (
         <Box
@@ -115,54 +129,67 @@ export default function TournamentTimeline({
                 bgcolor: 'var(--surface)',
             }}
         >
-            <Box sx={{ position: 'relative', width: trackWidth, minWidth: '100%' }}>
+            <Box sx={{ position: 'relative', width: gutterWidth + trackWidth, minWidth: '100%' }}>
                 {/* Time axis: a tick every 10 minutes, bold labels on the hour. */}
-                <Box sx={{ position: 'relative', height: AXIS_HEIGHT, borderBottom: '1px solid var(--line-soft)' }}>
-                    {ticks.map((tk) => (
-                        <Box
-                            key={tk.x}
-                            sx={{
-                                position: 'absolute',
-                                left: tk.x,
-                                top: 0,
-                                bottom: 0,
-                                transform: 'translateX(-50%)',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                alignItems: 'center',
-                                justifyContent: 'flex-end',
-                                pb: '3px',
-                            }}
-                        >
-                            {tk.hour && (
-                                <Box
-                                    component="span"
-                                    sx={{
-                                        fontFamily: 'var(--font-mono)',
-                                        fontSize: 11,
-                                        fontWeight: 700,
-                                        color: 'var(--text-dim)',
-                                        mb: '3px',
-                                        whiteSpace: 'nowrap',
-                                    }}
-                                >
-                                    {tk.label}
-                                </Box>
-                            )}
+                <Box sx={{ display: 'flex', position: 'relative', height: AXIS_HEIGHT, borderBottom: '1px solid var(--line-soft)' }}>
+                    <Box
+                        sx={{
+                            width: gutterWidth,
+                            flexShrink: 0,
+                            position: 'sticky',
+                            left: 0,
+                            zIndex: 3,
+                            bgcolor: 'var(--surface)',
+                            borderRight: '1px solid var(--line-soft)',
+                        }}
+                    />
+                    <Box sx={{ position: 'relative', width: trackWidth, flexShrink: 0 }}>
+                        {ticks.map((tk) => (
                             <Box
+                                key={tk.x}
                                 sx={{
-                                    width: '1px',
-                                    height: tk.hour ? 9 : 5,
-                                    bgcolor: tk.hour ? 'var(--muted)' : 'var(--line-soft)',
+                                    position: 'absolute',
+                                    left: tk.x,
+                                    top: 0,
+                                    bottom: 0,
+                                    transform: 'translateX(-50%)',
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    alignItems: 'center',
+                                    justifyContent: 'flex-end',
+                                    pb: '3px',
                                 }}
-                            />
-                        </Box>
-                    ))}
+                            >
+                                {tk.hour && (
+                                    <Box
+                                        component="span"
+                                        sx={{
+                                            fontFamily: 'var(--font-mono)',
+                                            fontSize: 11,
+                                            fontWeight: 700,
+                                            color: 'var(--text-dim)',
+                                            mb: '3px',
+                                            whiteSpace: 'nowrap',
+                                        }}
+                                    >
+                                        {tk.label}
+                                    </Box>
+                                )}
+                                <Box
+                                    sx={{
+                                        width: '1px',
+                                        height: tk.hour ? 9 : 5,
+                                        bgcolor: tk.hour ? 'var(--muted)' : 'var(--line-soft)',
+                                    }}
+                                />
+                            </Box>
+                        ))}
+                    </Box>
                 </Box>
 
-                {/* Lanes. */}
+                {/* Lanes, one row per track, each with a sticky label cell. */}
                 <Box sx={{ position: 'relative', height: lanesHeight }}>
-                    <NowMarker x={nowX} />
+                    <NowMarker x={gutterWidth + nowX} />
                     {lanes.map((lane, i) => (
                         <Box
                             key={i}
@@ -172,18 +199,52 @@ export default function TournamentTimeline({
                                 right: 0,
                                 top: i * (LANE_HEIGHT + LANE_GAP),
                                 height: LANE_HEIGHT,
+                                display: 'flex',
                             }}
                         >
-                            {lane.items.map(({ t, start, finish, group }) => (
-                                <TournamentBlock
-                                    key={t.id}
-                                    t={t}
-                                    group={group}
-                                    left={((start - windowStart) / 60_000) * PX_PER_MINUTE}
-                                    width={Math.max(4, ((finish - start) / 60_000) * PX_PER_MINUTE)}
-                                    onClick={() => onOpen(t.id)}
-                                />
-                            ))}
+                            <Box
+                                sx={{
+                                    width: gutterWidth,
+                                    flexShrink: 0,
+                                    position: 'sticky',
+                                    left: 0,
+                                    zIndex: 3,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    bgcolor: 'var(--surface)',
+                                    borderRight: '1px solid var(--line-soft)',
+                                    px: 1,
+                                }}
+                            >
+                                {lane.isFirstOfTrack && (
+                                    <Typography
+                                        noWrap
+                                        sx={{
+                                            fontFamily: 'var(--font-mono)',
+                                            fontSize: narrow ? 9 : 10.5,
+                                            fontWeight: 600,
+                                            letterSpacing: '0.06em',
+                                            textTransform: 'uppercase',
+                                            color: GROUP_COLOR[TRACK_GROUP[lane.track]],
+                                            opacity: 0.8,
+                                        }}
+                                    >
+                                        {TRACK_LABEL[lane.track]}
+                                    </Typography>
+                                )}
+                            </Box>
+                            <Box sx={{ position: 'relative', width: trackWidth, flexShrink: 0 }}>
+                                {lane.items.map(({ t, start, finish, group }) => (
+                                    <TournamentBlock
+                                        key={t.id}
+                                        t={t}
+                                        group={group}
+                                        left={((start - windowStart) / 60_000) * PX_PER_MINUTE}
+                                        width={Math.max(4, ((finish - start) / 60_000) * PX_PER_MINUTE)}
+                                        onClick={() => onOpen(t.id)}
+                                    />
+                                ))}
+                            </Box>
                         </Box>
                     ))}
                 </Box>

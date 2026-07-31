@@ -110,11 +110,24 @@ export default function Tournaments() {
                     No tournaments scheduled yet.
                 </Box>
             ) : (
-                <TournamentTimeline
-                    tournaments={tournaments}
-                    now={now}
-                    onOpen={(id) => navigate(`/tournaments/${id}`)}
-                />
+                // Full-bleed break-out: the page column is capped at 1160px, but the
+                // timeline wants every pixel it can get. `100vw` + a negative margin
+                // escapes the column without touching the shared Layout; the global
+                // `overflow-x: clip` backstop (styles.css) keeps this from ever
+                // producing a sideways page scrollbar.
+                <Box
+                    sx={{
+                        width: '100vw',
+                        marginLeft: 'calc(50% - 50vw)',
+                        px: { xs: 1.5, md: 3 },
+                    }}
+                >
+                    <TournamentTimeline
+                        tournaments={tournaments}
+                        now={now}
+                        onOpen={(id) => navigate(`/tournaments/${id}`)}
+                    />
+                </Box>
             )}
 
             <CreateTournamentDialog

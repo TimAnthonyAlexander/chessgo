@@ -64,8 +64,8 @@ export default function TournamentBlock({
                 height: '100%',
                 display: 'flex',
                 alignItems: 'center',
-                gap: 0.75,
-                px: 0.75,
+                gap: 1,
+                px: 1,
                 overflow: 'hidden',
                 cursor: 'pointer',
                 borderRadius: `${BLOCK_RADIUS}px`,
@@ -81,13 +81,13 @@ export default function TournamentBlock({
             <Box
                 sx={{
                     flexShrink: 0,
-                    width: 32,
-                    height: 32,
+                    width: 36,
+                    height: 36,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     color,
-                    fontSize: 20,
+                    fontSize: 22,
                     filter: past ? 'grayscale(1)' : 'none',
                 }}
             >
@@ -100,8 +100,8 @@ export default function TournamentBlock({
                     sx={{
                         fontFamily: 'var(--font-display)',
                         fontWeight: 700,
-                        fontSize: 12.5,
-                        lineHeight: 1.2,
+                        fontSize: 15,
+                        lineHeight: 1.25,
                         color: 'var(--text)',
                     }}
                 >
@@ -111,9 +111,9 @@ export default function TournamentBlock({
                     sx={{
                         display: 'flex',
                         alignItems: 'center',
-                        gap: 0.5,
+                        gap: 0.6,
                         fontFamily: 'var(--font-mono)',
-                        fontSize: 10.5,
+                        fontSize: 12,
                         color: 'var(--text-dim)',
                         whiteSpace: 'nowrap',
                         fontVariantNumeric: 'tabular-nums',
@@ -123,7 +123,7 @@ export default function TournamentBlock({
                         {limit}+{increment}
                     </span>
                     <span>{t.rated ? 'Rated' : 'Casual'}</span>
-                    <Users size={10} style={{ flexShrink: 0 }} />
+                    <Users size={11} style={{ flexShrink: 0 }} />
                     <span>{t.player_count}</span>
                 </Box>
             </Box>
@@ -145,14 +145,14 @@ function BlockIcon({ t }: { t: TournamentSummary }) {
             </Box>
         )
     }
-    if (t.variant === 'antichess') return <Skull size={18} />
+    if (t.variant === 'antichess') return <Skull size={20} />
     if (t.variant === 'chess960') {
         return (
             <Box
                 component="span"
                 sx={{
                     fontFamily: 'var(--font-mono)',
-                    fontSize: 9.5,
+                    fontSize: 10.5,
                     fontWeight: 700,
                     lineHeight: 1.3,
                     border: '1px solid currentColor',
@@ -166,8 +166,8 @@ function BlockIcon({ t }: { t: TournamentSummary }) {
     }
 
     const speed = poolSpeed(t.pool)
-    if (speed === 'bullet') return <Rabbit size={18} />
-    if (speed === 'blitz') return <Zap size={18} />
-    if (speed === 'rapid') return <Timer size={18} />
-    return <Crown size={18} />
+    if (speed === 'bullet') return <Rabbit size={20} />
+    if (speed === 'blitz') return <Zap size={20} />
+    if (speed === 'rapid') return <Timer size={20} />
+    return <Crown size={20} />
 }
