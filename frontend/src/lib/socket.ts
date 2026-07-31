@@ -94,6 +94,18 @@ export interface ArenaState {
     waiting: boolean
 }
 
+// A `joinArena` we sent came back refused. The hub polls BaseAPI for arena
+// rosters every 5s, so a join sent right after the REST join can arrive
+// before the hub knows we're a participant yet — that specific refusal
+// ("you're not a participant in this arena") is a race, worth retrying.
+// Every other refusal (not signed in, already seated elsewhere, withdrawn,
+// unknown tournament) is a real answer and `retryable` is false.
+export interface ArenaJoinError {
+    tournamentId: string
+    message: string
+    retryable: boolean
+}
+
 export interface SocketState {
     conn: 'closed' | 'connecting' | 'open'
     status: 'idle' | 'queued' | 'matched'
@@ -102,6 +114,7 @@ export interface SocketState {
     challenge: ChallengeState | null
     challengeWaiting: ChallengeWaitingState | null
     arena: ArenaState | null
+    arenaError: ArenaJoinError | null
     error: string | null
 }
 
@@ -205,6 +218,7 @@ class GameSocket {
         challenge: null,
         challengeWaiting: null,
         arena: null,
+        arenaError: null,
         error: null,
     }
     private ws: WebSocket | null = null
@@ -301,7 +315,7 @@ class GameSocket {
     async queue(pool: string, variant: Variant = 'standard'): Promise<void> {
         this.wantQueue = { pool, variant }
         this.wantArena = null
-        this.set({ status: 'queued', pool, error: null, game: null, arena: null })
+        this.set({ status: 'queued', pool, error: null, game: null, arena: null, arenaError: null })
         await this.connect()
         this.rawSend({ type: 'queue', pool, variant })
     }
@@ -324,7 +338,7 @@ class GameSocket {
         this.wantChallenge = null
         this.wantJoin = null
         this.wantArena = tournamentId
-        this.set({ arena: { tournamentId, waiting: false }, error: null })
+        this.set({ arena: { tournamentId, waiting: false }, arenaError: null, error: null })
         await this.connect()
         this.rawSend({ type: 'joinArena', tournamentId })
     }
@@ -335,7 +349,7 @@ class GameSocket {
     leaveArena() {
         this.wantArena = null
         this.rawSend({ type: 'leaveArena' })
-        this.set({ arena: null })
+        this.set({ arena: null, arenaError: null })
     }
 
     /** Ask the hub whether this ACCOUNT has a live game — it answers with a full
@@ -372,6 +386,7 @@ class GameSocket {
             challenge: null,
             challengeWaiting: null,
             arena: null,
+            arenaError: null,
             error: null,
         })
         await this.connect()
@@ -391,7 +406,14 @@ class GameSocket {
         this.wantChallenge = null
         this.wantArena = null
         this.wantJoin = c
-        this.set({ game: null, challenge: null, challengeWaiting: null, arena: null, error: null })
+        this.set({
+            game: null,
+            challenge: null,
+            challengeWaiting: null,
+            arena: null,
+            arenaError: null,
+            error: null,
+        })
         await this.connect()
         this.rawSend({ type: 'joinChallenge', code: c })
     }
@@ -501,6 +523,7 @@ class GameSocket {
             challenge: null,
             challengeWaiting: null,
             arena: null,
+            arenaError: null,
             error: null,
         })
     }
@@ -560,20 +583,29 @@ class GameSocket {
                     challenge: null,
                     challengeWaiting: null,
                     arena: null,
+                    arenaError: null,
                     error: null,
                 })
                 break
             case 'arenaJoined':
                 this.wantArena = msg.tournamentId
-                this.set({ arena: { tournamentId: msg.tournamentId, waiting: false }, error: null })
+                this.set({
+                    arena: { tournamentId: msg.tournamentId, waiting: false },
+                    arenaError: null,
+                    error: null,
+                })
                 break
             case 'arenaWaiting':
                 this.wantArena = msg.tournamentId
-                this.set({ arena: { tournamentId: msg.tournamentId, waiting: true }, error: null })
+                this.set({
+                    arena: { tournamentId: msg.tournamentId, waiting: true },
+                    arenaError: null,
+                    error: null,
+                })
                 break
             case 'arenaLeft':
                 this.wantArena = null
-                this.set({ arena: null })
+                this.set({ arena: null, arenaError: null })
                 break
             case 'challengeCreated':
                 this.set({
@@ -654,15 +686,31 @@ class GameSocket {
             case 'chat':
                 this.onChat(msg)
                 break
-            case 'error':
-                // A failed join (bad/expired/not-yours code, a failed joinArena, or
-                // a second attempt while already parked waiting) shouldn't be
-                // retried on reconnect, and shouldn't leave a stale waiting screen
-                // showing.
+            case 'error': {
+                // A `joinArena` we sent is still pending exactly when wantArena
+                // holds the tournament id we asked for (set by joinArena(),
+                // cleared only by success/leaveArena/this branch) — that's how we
+                // tell an arena refusal apart from a queue/challenge error that
+                // happens to share the same bare `error` wire message. Route it
+                // to arenaError (not the generic error) so a caller can tell a
+                // retryable roster-lag race from a real refusal, and so it
+                // doesn't leak into unrelated error UI (lobby/challenge dialogs).
+                const pendingArena = this.wantArena
+                if (pendingArena) {
+                    this.wantArena = null
+                    const retryable = msg.message === "you're not a participant in this arena"
+                    this.set({
+                        arena: null,
+                        arenaError: { tournamentId: pendingArena, message: msg.message, retryable },
+                    })
+                    break
+                }
+                // A failed join (bad/expired/not-yours code) shouldn't be retried
+                // on reconnect, and shouldn't leave a stale waiting screen showing.
                 this.wantJoin = null
-                this.wantArena = null
-                this.set({ challengeWaiting: null, arena: null, error: msg.message })
+                this.set({ challengeWaiting: null, error: msg.message })
                 break
+            }
             default:
                 break
         }
@@ -713,6 +761,7 @@ class GameSocket {
             challenge: null,
             challengeWaiting: null,
             arena: null,
+            arenaError: null,
             error: null,
         })
     }

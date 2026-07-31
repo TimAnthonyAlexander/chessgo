@@ -119,25 +119,94 @@ export default function Tournament() {
     const mine = detail?.standings.find((row) => row.user_id === user?.id) ?? null
     const joined = !!mine && !mine.withdrawn
 
-    // Once joined and running, ask the hub to start pairing us — guarded so a
-    // re-render or the 5s poll doesn't resend it once we're already
-    // waiting/playing. Resets whenever we stop being joined (withdrew) or the
-    // tournament id changes, so a later re-join asks again.
+    // Bounded, backed-off retry for `joinArena`. The hub polls BaseAPI for the
+    // arena roster every 5s, so a join sent right after the REST join
+    // frequently loses that race and comes back "you're not a participant in
+    // this arena" — that one refusal is retried (capped) rather than being
+    // terminal. Any other refusal (already withdrawn, already seated
+    // elsewhere, …) isn't retried; the pool joins itself back after
+    // ARENA_JOIN_MAX_ATTEMPTS to require an explicit retry instead of quietly
+    // hammering the hub forever.
+    const ARENA_JOIN_MAX_ATTEMPTS = 5
+    const ARENA_JOIN_BACKOFF_MS = [1000, 2000, 4000, 6000, 8000]
+
+    // True while a `joinArena` send is outstanding — either awaiting the
+    // hub's reply or a scheduled retry — so a re-render or the 5s poll never
+    // sends a second one on top of it. Resets whenever we stop being joined
+    // (withdrew) or the tournament id changes, so a later re-join asks again.
     const askedToPlay = useRef(false)
-    useEffect(() => {
+    const arenaRetryTimer = useRef<number | null>(null)
+    const [arenaAttempt, setArenaAttempt] = useState(0)
+    // Set once retries are exhausted (or the refusal wasn't retryable in the
+    // first place) — stops the auto-join effect until the user explicitly
+    // asks to try again.
+    const [arenaGaveUp, setArenaGaveUp] = useState(false)
+
+    const clearArenaRetryTimer = () => {
+        if (arenaRetryTimer.current !== null) {
+            window.clearTimeout(arenaRetryTimer.current)
+            arenaRetryTimer.current = null
+        }
+    }
+
+    const resetArenaJoinState = () => {
         askedToPlay.current = false
+        setArenaAttempt(0)
+        setArenaGaveUp(false)
+        clearArenaRetryTimer()
+    }
+
+    useEffect(() => {
+        resetArenaJoinState()
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [id])
     useEffect(() => {
-        if (!joined) askedToPlay.current = false
+        if (!joined) resetArenaJoinState()
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [joined])
+    // Belt-and-braces: a scheduled retry must never fire after this page (or
+    // this arena) is gone, even if the effects above somehow didn't catch it.
+    useEffect(() => clearArenaRetryTimer, [])
+
     useEffect(() => {
         if (!joined || t?.status !== 'running') return
-        if (s.arena?.tournamentId === id) return
-        if (s.game && !s.game.ended) return
-        if (askedToPlay.current) return
+        if (s.arena?.tournamentId === id) return // already joined/waiting
+        if (s.game && !s.game.ended) return // already paired
+        if (arenaGaveUp) return // needs an explicit retry now
+        if (askedToPlay.current) return // a send or a scheduled retry is already outstanding
         askedToPlay.current = true
         void gameSocket.joinArena(id)
-    }, [joined, t?.status, id, s.arena, s.game])
+    }, [joined, t?.status, id, s.arena, s.game, arenaGaveUp])
+
+    // The hub answered a joinArena we sent. On the known roster-lag race,
+    // back off and retry (bounded); anything else — or running out of
+    // retries — surfaces as a refusal the user has to act on.
+    useEffect(() => {
+        if (!s.arenaError || s.arenaError.tournamentId !== id) return
+        askedToPlay.current = false
+        if (s.arenaError.retryable && joined && t?.status === 'running' && arenaAttempt < ARENA_JOIN_MAX_ATTEMPTS) {
+            const delay = ARENA_JOIN_BACKOFF_MS[Math.min(arenaAttempt, ARENA_JOIN_BACKOFF_MS.length - 1)]
+            clearArenaRetryTimer()
+            askedToPlay.current = true
+            arenaRetryTimer.current = window.setTimeout(() => {
+                arenaRetryTimer.current = null
+                setArenaAttempt((n) => n + 1)
+                void gameSocket.joinArena(id)
+            }, delay)
+        } else {
+            setArenaGaveUp(true)
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [s.arenaError, id, joined, t?.status])
+
+    /** Explicit user-triggered retry once the bounded auto-retry gave up. */
+    const retryJoinArena = () => {
+        clearArenaRetryTimer()
+        setArenaAttempt(0)
+        setArenaGaveUp(false)
+        askedToPlay.current = true
+        void gameSocket.joinArena(id)
+    }
 
     const doJoin = async () => {
         setBusy(true)
@@ -153,12 +222,22 @@ export default function Tournament() {
     }
 
     const doWithdraw = async () => {
+        // Kill any scheduled auto-retry synchronously, before the await below —
+        // otherwise a retry queued a moment ago could fire mid-withdraw and ask
+        // the hub to seat us again while our withdrawal is still in flight.
+        clearArenaRetryTimer()
         setBusy(true)
         setActionError(null)
         try {
             await withdrawTournament(id)
+            // Deliberately NOT resetting askedToPlay/arenaGaveUp here: `joined`
+            // is still derived from the stale pre-withdraw `detail` until load()
+            // resolves, and the pairing-ask effect re-runs the instant
+            // leaveArena() changes `s.arena` — resetting the guard now would let
+            // it fire again and re-request a seat we just gave up, before the
+            // fresh standings catch up and flip `joined` to false itself (which
+            // resets the guard for real, via the effect above).
             gameSocket.leaveArena()
-            askedToPlay.current = false
             load()
         } catch (e) {
             setActionError(e instanceof ApiError ? e.message : 'Could not withdraw.')
@@ -197,6 +276,15 @@ export default function Tournament() {
     }
 
     const waiting = s.arena?.tournamentId === id
+    // A joinArena we sent for THIS tournament came back refused. Distinguish
+    // "still retrying" (spinner, same shape as `waiting`) from "stuck" (needs
+    // the user to press Try again) so the UI never shows the same state for
+    // "you're in the pool" and "your join didn't take".
+    const arenaError = s.arenaError?.tournamentId === id ? s.arenaError : null
+    const arenaRetrying =
+        joined && t.status === 'running' && !waiting && !!arenaError && arenaError.retryable && !arenaGaveUp
+    const arenaStuck =
+        joined && t.status === 'running' && !waiting && !!arenaError && (!arenaError.retryable || arenaGaveUp)
     const restriction = restrictionText(t)
     const showGames = t.status === 'running'
 
@@ -370,28 +458,128 @@ export default function Tournament() {
                                         Withdraw
                                     </Button>
                                 </Box>
-                            ) : joined ? (
-                                <Button
-                                    variant="outlined"
-                                    onClick={doWithdraw}
-                                    disabled={busy}
+                            ) : arenaRetrying ? (
+                                // The hub hasn't picked up our roster entry yet (it polls
+                                // BaseAPI every 5s) — this is a transient race, not a
+                                // refusal, so keep it looking like ordinary waiting rather
+                                // than an error.
+                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, flexWrap: 'wrap' }}>
+                                    <CircularProgress size={16} sx={{ color: 'var(--accent)' }} />
+                                    <Typography sx={{ fontSize: 13.5, color: 'var(--text-dim)' }}>
+                                        Joining the pool…
+                                    </Typography>
+                                    <Button
+                                        size="small"
+                                        onClick={doWithdraw}
+                                        disabled={busy}
+                                        sx={{ textTransform: 'none', color: 'var(--text-dim)' }}
+                                    >
+                                        Withdraw
+                                    </Button>
+                                </Box>
+                            ) : arenaStuck ? (
+                                // A real refusal, or the retries ran out — never leave this
+                                // looking like "In the pool": say plainly that the join
+                                // didn't take and offer a way to try again.
+                                <Box
                                     sx={{
-                                        textTransform: 'none',
-                                        borderColor: 'var(--line)',
-                                        color: 'var(--text-dim)',
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        alignItems: { xs: 'stretch', md: 'flex-end' },
+                                        gap: 0.75,
                                     }}
                                 >
-                                    Withdraw
-                                </Button>
-                            ) : (
-                                <Button
-                                    variant="contained"
-                                    onClick={doJoin}
-                                    disabled={busy}
-                                    sx={{ textTransform: 'none', fontWeight: 600 }}
+                                    <Typography
+                                        sx={{
+                                            fontSize: 12.5,
+                                            color: 'var(--danger)',
+                                            textAlign: { xs: 'left', md: 'right' },
+                                        }}
+                                    >
+                                        {arenaError!.retryable
+                                            ? "Couldn't join the pairing pool — the server hasn't caught up yet."
+                                            : arenaError!.message.charAt(0).toUpperCase() + arenaError!.message.slice(1)}
+                                    </Typography>
+                                    <Box sx={{ display: 'flex', gap: 1 }}>
+                                        <Button
+                                            size="small"
+                                            variant="contained"
+                                            onClick={retryJoinArena}
+                                            disabled={busy}
+                                            sx={{ textTransform: 'none', fontWeight: 600 }}
+                                        >
+                                            Try again
+                                        </Button>
+                                        <Button
+                                            size="small"
+                                            onClick={doWithdraw}
+                                            disabled={busy}
+                                            sx={{ textTransform: 'none', color: 'var(--text-dim)' }}
+                                        >
+                                            Withdraw
+                                        </Button>
+                                    </Box>
+                                </Box>
+                            ) : joined ? (
+                                <Box
+                                    sx={{
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        alignItems: { xs: 'stretch', md: 'flex-end' },
+                                        gap: 0.5,
+                                    }}
                                 >
-                                    {mine?.withdrawn ? 'Rejoin' : 'Join'}
-                                </Button>
+                                    <Button
+                                        variant="outlined"
+                                        onClick={doWithdraw}
+                                        disabled={busy}
+                                        sx={{
+                                            textTransform: 'none',
+                                            borderColor: 'var(--line)',
+                                            color: 'var(--text-dim)',
+                                        }}
+                                    >
+                                        Withdraw
+                                    </Button>
+                                    {t.status === 'scheduled' && (
+                                        <Typography
+                                            sx={{
+                                                fontSize: 11.5,
+                                                color: 'var(--muted)',
+                                                textAlign: { xs: 'left', md: 'right' },
+                                            }}
+                                        >
+                                            You'll be paired automatically once it starts.
+                                        </Typography>
+                                    )}
+                                </Box>
+                            ) : (
+                                <Box
+                                    sx={{
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        alignItems: { xs: 'stretch', md: 'flex-end' },
+                                        gap: 0.5,
+                                    }}
+                                >
+                                    <Button
+                                        variant="contained"
+                                        onClick={doJoin}
+                                        disabled={busy}
+                                        sx={{ textTransform: 'none', fontWeight: 600 }}
+                                    >
+                                        {mine?.withdrawn ? 'Rejoin' : 'Join'}
+                                    </Button>
+                                    <Typography
+                                        sx={{
+                                            fontSize: 11.5,
+                                            color: 'var(--muted)',
+                                            textAlign: { xs: 'left', md: 'right' },
+                                        }}
+                                    >
+                                        You'll be paired automatically and dropped into a game.
+                                    </Typography>
+                                </Box>
                             )}
                         </Box>
                     </Box>

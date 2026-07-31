@@ -120,35 +120,39 @@ func TestClosestArenaPairNeverSelfPairs(t *testing.T) {
 func TestArenaJoinValidation(t *testing.T) {
 	const arenaID = "ARENA-V"
 
+	baseSnapshot := []ArenaSnapshot{{
+		ID: arenaID, Pool: "3+0", Variant: "standard", Rated: true,
+		EndsAtMs: time.Now().Add(time.Hour).UnixMilli(),
+		Players: []ArenaPlayerSnapshot{
+			{Sub: "id-carol", Score: 5},
+			{Sub: "id-dave", Score: 5, Withdrawn: true},
+		},
+	}}
+
 	// setup registers one arena with a valid participant (id-carol), a
 	// withdrawn one (id-dave), and syncs on carol's join (SetArenaSnapshots is
 	// delivered asynchronously) before handing control to the sub-test, then
 	// has carol leave so she doesn't occupy the pool for the real assertion.
-	setup := func(t *testing.T) string {
+	// Returns the Hub too, so a sub-test can re-deliver snapshots itself (e.g.
+	// to exhaust a pending join's grace period).
+	setup := func(t *testing.T) (*Hub, string) {
 		t.Helper()
 		h := New(testSecret)
 		go h.Run()
 		srv := httptest.NewServer(http.HandlerFunc(h.ServeWS))
 		t.Cleanup(srv.Close)
-		h.SetArenaSnapshots([]ArenaSnapshot{{
-			ID: arenaID, Pool: "3+0", Variant: "standard", Rated: true,
-			EndsAtMs: time.Now().Add(time.Hour).UnixMilli(),
-			Players: []ArenaPlayerSnapshot{
-				{Sub: "id-carol", Score: 5},
-				{Sub: "id-dave", Score: 5, Withdrawn: true},
-			},
-		}})
+		h.SetArenaSnapshots(baseSnapshot)
 		canary := dialAccount(t, srv.URL, "carol", "id-carol", 1500)
 		readType(t, canary, "hello")
 		joinArenaEventually(t, canary, arenaID)
 		send(t, canary, map[string]any{"type": "leaveArena"})
 		readType(t, canary, "arenaLeft")
 		canary.CloseNow()
-		return srv.URL
+		return h, srv.URL
 	}
 
 	t.Run("anonymous client rejected", func(t *testing.T) {
-		url := setup(t)
+		_, url := setup(t)
 		c := dial(t, url, "anon")
 		defer c.CloseNow()
 		readType(t, c, "hello")
@@ -159,7 +163,7 @@ func TestArenaJoinValidation(t *testing.T) {
 	})
 
 	t.Run("spectator rejected", func(t *testing.T) {
-		url := setup(t)
+		_, url := setup(t)
 		c := dialSpectate(t, url)
 		defer c.CloseNow()
 		readType(t, c, "hello")
@@ -169,19 +173,32 @@ func TestArenaJoinValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("non-participant rejected", func(t *testing.T) {
-		url := setup(t)
+	t.Run("non-participant parks pending then rejected after the grace period", func(t *testing.T) {
+		h, url := setup(t)
 		c := dialAccount(t, url, "eve", "id-eve", 1500) // a real account, just not entered
 		defer c.CloseNow()
 		readType(t, c, "hello")
 		send(t, c, map[string]any{"type": "joinArena", "tournamentId": arenaID})
+		// The hub can't yet tell "genuinely not a participant" apart from "the
+		// roster just hasn't caught up" — see arena.go's pending doc — so it
+		// parks pending and acks exactly like an ordinary join, instead of
+		// rejecting outright.
+		if msg := readType(t, c, "arenaJoined"); msg["tournamentId"] != arenaID {
+			t.Fatalf("arenaJoined tournamentId = %v, want %v", msg["tournamentId"], arenaID)
+		}
+		// Re-deliver the SAME roster (still no eve) enough times to exhaust
+		// arenaPendingGraceCycles — only then does it learn the truth.
+		for range arenaPendingGraceCycles {
+			h.SetArenaSnapshots(baseSnapshot)
+			time.Sleep(20 * time.Millisecond) // let the Run goroutine drain it before the next one supersedes
+		}
 		if msg := readType(t, c, "error"); msg["message"] == nil {
-			t.Error("expected an error for a sub that isn't a participant")
+			t.Error("expected an error for a sub that isn't a participant, after the grace period")
 		}
 	})
 
 	t.Run("withdrawn participant rejected", func(t *testing.T) {
-		url := setup(t)
+		_, url := setup(t)
 		c := dialAccount(t, url, "dave", "id-dave", 1500)
 		defer c.CloseNow()
 		readType(t, c, "hello")
@@ -192,7 +209,7 @@ func TestArenaJoinValidation(t *testing.T) {
 	})
 
 	t.Run("unknown tournament id rejected", func(t *testing.T) {
-		url := setup(t)
+		_, url := setup(t)
 		c := dialAccount(t, url, "carol", "id-carol", 1500) // valid participant, wrong id
 		defer c.CloseNow()
 		readType(t, c, "hello")
@@ -203,7 +220,7 @@ func TestArenaJoinValidation(t *testing.T) {
 	})
 
 	t.Run("valid participant joins and waits alone", func(t *testing.T) {
-		url := setup(t)
+		_, url := setup(t)
 		c := dialAccount(t, url, "carol", "id-carol", 1500)
 		defer c.CloseNow()
 		readType(t, c, "hello")
@@ -213,6 +230,137 @@ func TestArenaJoinValidation(t *testing.T) {
 		}
 		readType(t, c, "arenaWaiting")
 	})
+}
+
+// TestArenaPendingJoinAdmittedOnConfirmation is the actual bug fix: a
+// joinArena that arrives before the hub's roster knows the joiner must park
+// pending (not hard-reject), and get admitted into the pool — and paired —
+// the moment a later snapshot confirms them.
+func TestArenaPendingJoinAdmittedOnConfirmation(t *testing.T) {
+	h := New(testSecret)
+	go h.Run()
+	srv := httptest.NewServer(http.HandlerFunc(h.ServeWS))
+	defer srv.Close()
+
+	const arenaID = "ARENA-PEND"
+	// The arena exists and already has one participant (bob), but the
+	// snapshot doesn't know about alice yet — exactly the REST-join/poll race
+	// from production: alice's join already landed in BaseAPI, the hub just
+	// hasn't polled it yet.
+	h.SetArenaSnapshots([]ArenaSnapshot{{
+		ID: arenaID, Pool: "3+0", Variant: "standard", Rated: true,
+		EndsAtMs: time.Now().Add(time.Hour).UnixMilli(),
+		Players:  []ArenaPlayerSnapshot{{Sub: "id-pend-bob", Score: 5}},
+	}})
+
+	bob := dialAccount(t, srv.URL, "bob", "id-pend-bob", 1500)
+	defer bob.CloseNow()
+	readType(t, bob, "hello")
+	joinArenaEventually(t, bob, arenaID)
+	readType(t, bob, "arenaWaiting")
+
+	alice := dialAccount(t, srv.URL, "alice", "id-pend-alice", 1500)
+	defer alice.CloseNow()
+	readType(t, alice, "hello")
+	send(t, alice, map[string]any{"type": "joinArena", "tournamentId": arenaID})
+	// Parked pending, not rejected — she still gets the ordinary ack.
+	if msg := readType(t, alice, "arenaJoined"); msg["tournamentId"] != arenaID {
+		t.Fatalf("arenaJoined tournamentId = %v, want %v", msg["tournamentId"], arenaID)
+	}
+
+	// The next poll confirms her — she must be admitted into the pool and,
+	// since bob is free too, paired immediately.
+	h.SetArenaSnapshots([]ArenaSnapshot{{
+		ID: arenaID, Pool: "3+0", Variant: "standard", Rated: true,
+		EndsAtMs: time.Now().Add(time.Hour).UnixMilli(),
+		Players: []ArenaPlayerSnapshot{
+			{Sub: "id-pend-bob", Score: 5},
+			{Sub: "id-pend-alice", Score: 5},
+		},
+	}})
+
+	ma := readType(t, alice, "matched")
+	mb := readType(t, bob, "matched")
+	if ma["tournamentId"] != arenaID || mb["tournamentId"] != arenaID {
+		t.Errorf("matched missing tournamentId: alice=%v bob=%v", ma["tournamentId"], mb["tournamentId"])
+	}
+}
+
+// TestArenaPendingJoinCleanedUpOnDisconnect guards against a leaked pending
+// entry: a connection that disconnects (or explicitly leaves) while still
+// pending must be dropped from arenaState.pending, never later admitted as a
+// stale *Client.
+func TestArenaPendingJoinCleanedUpOnDisconnect(t *testing.T) {
+	h := New(testSecret)
+	go h.Run()
+	srv := httptest.NewServer(http.HandlerFunc(h.ServeWS))
+	defer srv.Close()
+
+	const arenaID = "ARENA-PEND-DC"
+	snap := []ArenaSnapshot{{
+		ID: arenaID, Pool: "3+0", Variant: "standard", Rated: true,
+		EndsAtMs: time.Now().Add(time.Hour).UnixMilli(),
+		Players:  []ArenaPlayerSnapshot{{Sub: "id-pdc-anchor", Score: 5}},
+	}}
+	h.SetArenaSnapshots(snap)
+
+	anchor := dialAccount(t, srv.URL, "anchor", "id-pdc-anchor", 1500)
+	defer anchor.CloseNow()
+	readType(t, anchor, "hello")
+	joinArenaEventually(t, anchor, arenaID)
+	readType(t, anchor, "arenaWaiting")
+	send(t, anchor, map[string]any{"type": "leaveArena"})
+	readType(t, anchor, "arenaLeft")
+
+	// gone joins pending (not yet on the roster), then disconnects outright.
+	gone := dialAccount(t, srv.URL, "gone", "id-pdc-gone", 1500)
+	readType(t, gone, "hello")
+	send(t, gone, map[string]any{"type": "joinArena", "tournamentId": arenaID})
+	readType(t, gone, "arenaJoined")
+	gone.CloseNow()
+
+	// staying joins pending too, then explicitly leaves instead of disconnecting.
+	staying := dialAccount(t, srv.URL, "staying", "id-pdc-staying", 1500)
+	defer staying.CloseNow()
+	readType(t, staying, "hello")
+	send(t, staying, map[string]any{"type": "joinArena", "tournamentId": arenaID})
+	readType(t, staying, "arenaJoined")
+	send(t, staying, map[string]any{"type": "leaveArena"})
+	readType(t, staying, "arenaLeft")
+
+	// Give the disconnect a moment to reach the Run goroutine, then confirm
+	// BOTH subs on the very next snapshot — if either pending entry leaked,
+	// this would try to admit/send to a stale or already-torn-down *Client.
+	time.Sleep(100 * time.Millisecond)
+	h.SetArenaSnapshots([]ArenaSnapshot{{
+		ID: arenaID, Pool: "3+0", Variant: "standard", Rated: true,
+		EndsAtMs: time.Now().Add(time.Hour).UnixMilli(),
+		Players: []ArenaPlayerSnapshot{
+			{Sub: "id-pdc-anchor", Score: 5},
+			{Sub: "id-pdc-gone", Score: 5},
+			{Sub: "id-pdc-staying", Score: 5},
+		},
+	}})
+
+	// A fresh connection for either identity must be free to join again — were
+	// the old pending entry still parked, this joinArena would hit the
+	// "already waiting on another connection" guard instead.
+	goneAgain := dialAccount(t, srv.URL, "gone-again", "id-pdc-gone", 1500)
+	defer goneAgain.CloseNow()
+	readType(t, goneAgain, "hello")
+	joinArenaEventually(t, goneAgain, arenaID)
+	readType(t, goneAgain, "arenaWaiting")
+	// Step out of the way again so stayingAgain also waits alone below — same
+	// score would otherwise pair the two of them immediately, which is a fine
+	// outcome too but would muddy this assertion.
+	send(t, goneAgain, map[string]any{"type": "leaveArena"})
+	readType(t, goneAgain, "arenaLeft")
+
+	stayingAgain := dialAccount(t, srv.URL, "staying-again", "id-pdc-staying", 1500)
+	defer stayingAgain.CloseNow()
+	readType(t, stayingAgain, "hello")
+	joinArenaEventually(t, stayingAgain, arenaID)
+	readType(t, stayingAgain, "arenaWaiting")
 }
 
 // TestArenaJoinRejectsIfBusy guards the "one pending activity per client"

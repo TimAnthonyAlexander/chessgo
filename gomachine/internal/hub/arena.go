@@ -113,7 +113,39 @@ type arenaState struct {
 	// anchor pairing on whoever has played least, so a large field can't get
 	// stuck cycling the same handful of bots forever (see its doc).
 	botGamesPlayed map[string]int
+
+	// pending holds connections whose joinArena arrived for this arena before
+	// the roster (players, above) confirmed them as a non-withdrawn
+	// participant — the REST-join/hub-poll race described at the top of this
+	// file (BaseAPI's join is synchronous; the hub's roster is up to
+	// arenaPollInterval stale). Each entry is admitted into free — exactly as
+	// if its joinArena had arrived after the roster already knew about it —
+	// the instant a later snapshot confirms the sub (applyArenaSnapshots'
+	// pending sweep, via resolveArenaPending), or told they're not a
+	// participant once arenaPendingGraceCycles snapshots have passed with
+	// still no confirmation. A sub the roster ALREADY explicitly lists as
+	// withdrawn is rejected immediately, without waiting out the grace period
+	// — that's authoritative information, not staleness. Cleared early, with
+	// no message, if the connection disconnects, leaves, or starts any other
+	// activity first (clearArenaPending).
+	pending []*arenaPendingJoin
 }
+
+// arenaPendingJoin is one connection parked in arenaState.pending.
+type arenaPendingJoin struct {
+	client     *Client
+	cyclesLeft int // decremented once per snapshot this arena is seen in; rejected at 0
+}
+
+// arenaPendingGraceCycles bounds how many snapshot applications a pending
+// join is allowed to go unconfirmed before it's told the truth: not a
+// participant. requestArenaRefresh means a genuine racing joiner is usually
+// confirmed on the FIRST cycle (within about a network round-trip, not the
+// full arenaPollInterval) — the second cycle exists purely as slack for a
+// slow/failed BaseAPI poll, so a real player never sees a false rejection,
+// while a genuinely bogus join still resolves in roughly one ordinary poll
+// interval rather than being stuck "waiting" forever.
+const arenaPendingGraceCycles = 2
 
 // --- BaseAPI polling (off the Run goroutine) ---
 
@@ -176,21 +208,66 @@ func (h *Hub) SetArenaClient(baseURL, secret string) {
 	go h.pollArenas()
 }
 
+// arenaRefreshMinGap bounds how often requestArenaRefresh may trigger an
+// EXTRA fetch beyond the normal arenaPollInterval cadence — however many
+// clients pend on an unknown participant in the same moment, actual BaseAPI
+// requests stay capped at one per this interval, so an unknown-participant
+// join can never turn into a fetch storm.
+const arenaRefreshMinGap = 1 * time.Second
+
 // pollArenas runs forever on its own goroutine, fetching the active-arenas
-// roster every arenaPollInterval and handing a successful result to the Run
-// goroutine. Never touches h.arenas or any other Run-goroutine-only state
-// directly.
+// roster on arenaPollInterval's own cadence AND (rate-limited by
+// arenaRefreshMinGap) whenever requestArenaRefresh asks for an early one, and
+// handing each successful result to the Run goroutine. Never touches
+// h.arenas or any other Run-goroutine-only state directly.
 func (h *Hub) pollArenas() {
-	for {
+	ticker := time.NewTicker(arenaPollInterval)
+	defer ticker.Stop()
+
+	var lastFetch time.Time
+	fetch := func() {
+		if since := time.Since(lastFetch); !lastFetch.IsZero() && since < arenaRefreshMinGap {
+			return // an early refresh landed just before this trigger — nothing new to gain yet
+		}
+		lastFetch = time.Now()
 		ctx, cancel := context.WithTimeout(context.Background(), arenaPollInterval)
 		snaps, err := h.arenaClient.fetch(ctx)
 		cancel()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "hub: arena poll failed (%v) — keeping the last known snapshot\n", err)
-		} else {
-			h.SetArenaSnapshots(snaps)
+			return
 		}
-		time.Sleep(arenaPollInterval)
+		h.SetArenaSnapshots(snaps)
+	}
+
+	fetch() // don't make the hub's first-ever roster wait out a whole interval
+	for {
+		select {
+		case <-ticker.C:
+			fetch()
+		case <-h.arenaRefreshCh:
+			fetch()
+		}
+	}
+}
+
+// requestArenaRefresh asks pollArenas to fetch BaseAPI's roster right away
+// instead of waiting out the rest of arenaPollInterval — called the moment a
+// joinArena parks pending on an unknown participant (beginArenaPending),
+// since that is exactly the race an extra few seconds of waiting would
+// otherwise cost a real player. Only ever called from the Run goroutine; a
+// non-blocking send on the depth-1 arenaRefreshCh means a burst of pends in
+// the same tick collapses to a single request, and pollArenas' own
+// arenaRefreshMinGap further bounds actual fetches — so this can never be
+// used to hammer BaseAPI. A no-op if arenas aren't wired up at all (nil
+// arenaClient, e.g. most tests).
+func (h *Hub) requestArenaRefresh() {
+	if h.arenaClient == nil {
+		return
+	}
+	select {
+	case h.arenaRefreshCh <- struct{}{}:
+	default: // a refresh is already queued; the next pollArenas iteration covers it
 	}
 }
 
@@ -282,7 +359,22 @@ func (h *Hub) applyArenaSnapshots(snaps []ArenaSnapshot) {
 		}
 		ar.free = kept
 
+		// Resolve every pending join against this fresher roster BEFORE
+		// pairing: a just-confirmed client is admitted straight into ar.free
+		// so it's eligible for this very pairing pass, exactly like an
+		// ordinary join that arrived a moment earlier would be.
+		admitted := h.resolveArenaPending(ar)
+
 		h.pairArena(ar)
+		// Give each just-admitted client the same "still waiting" ack an
+		// ordinary join gets when pairArena doesn't immediately seat it —
+		// arenaFreeHas is false here if it was just paired instead, in which
+		// case startArenaGame's own sendMatched already told it so.
+		for _, c := range admitted {
+			if arenaFreeHas(ar, c) {
+				c.trySend(mustJSON(out("arenaWaiting", map[string]any{"tournamentId": ar.id})))
+			}
+		}
 	}
 
 	// Anything previously known that wasn't in this snapshot (or just passed
@@ -294,6 +386,51 @@ func (h *Hub) applyArenaSnapshots(snaps []ArenaSnapshot) {
 		h.drainArena(ar)
 		delete(h.arenas, id)
 	}
+}
+
+// resolveArenaPending runs once per snapshot, on the Run goroutine, against
+// ar's JUST-REFRESHED roster: a pending connection whose sub the roster now
+// lists as a non-withdrawn participant is admitted into ar.free (stamped
+// exactly like an ordinary joinArena) and returned in admitted, for the
+// caller to ack once pairing has had its turn. A sub the roster now
+// EXPLICITLY lists as withdrawn is rejected immediately — that's
+// authoritative, not stale, so there's no reason to make it wait out the rest
+// of the grace period. Anything still simply unlisted gets one fewer grace
+// cycle, or — once arenaPendingGraceCycles runs out — the same "not a
+// participant" rejection joinArena would have given synchronously if the
+// roster had never been stale in the first place.
+func (h *Hub) resolveArenaPending(ar *arenaState) []*Client {
+	if len(ar.pending) == 0 {
+		return nil
+	}
+	var admitted []*Client
+	stillPending := ar.pending[:0]
+	for _, p := range ar.pending {
+		c := p.client
+		ps := ar.players[c.id.UserID]
+		switch {
+		case ps != nil && !ps.withdrawn:
+			c.arenaPendingID = ""
+			c.arenaID = ar.id
+			c.arenaJoinedAt = time.Now()
+			c.arenaBotFillDelay = randomArenaBotFillDelay()
+			ar.free = append(ar.free, c)
+			admitted = append(admitted, c)
+		case ps != nil && ps.withdrawn:
+			c.arenaPendingID = ""
+			h.sendErr(c, "you have withdrawn from this arena")
+		default:
+			p.cyclesLeft--
+			if p.cyclesLeft <= 0 {
+				c.arenaPendingID = ""
+				h.sendErr(c, "you're not a participant in this arena")
+			} else {
+				stillPending = append(stillPending, p)
+			}
+		}
+	}
+	ar.pending = stillPending
+	return admitted
 }
 
 // checkArenas runs on the hub's normal ticker cadence (mirrors
@@ -317,17 +454,22 @@ func (h *Hub) checkArenas() {
 	}
 }
 
-// drainArena empties ar's waiting pool, telling each client it's over.
-// In-flight arena games are never killed here — they finish naturally
-// (mirrors the filler-game philosophy: we only ever stop ADDING); their
-// finish() will find the arena gone from h.arenas and simply not return
-// their sides to a pool that no longer exists.
+// drainArena empties ar's waiting pool (confirmed AND pending), telling each
+// client it's over. In-flight arena games are never killed here — they
+// finish naturally (mirrors the filler-game philosophy: we only ever stop
+// ADDING); their finish() will find the arena gone from h.arenas and simply
+// not return their sides to a pool that no longer exists.
 func (h *Hub) drainArena(ar *arenaState) {
 	for _, c := range ar.free {
 		c.arenaID = ""
 		c.trySend(mustJSON(out("arenaLeft", map[string]any{"tournamentId": ar.id})))
 	}
 	ar.free = nil
+	for _, p := range ar.pending {
+		p.client.arenaPendingID = ""
+		p.client.trySend(mustJSON(out("arenaLeft", map[string]any{"tournamentId": ar.id})))
+	}
+	ar.pending = nil
 }
 
 // --- joinArena / leaveArena ---
@@ -360,7 +502,7 @@ func (h *Hub) joinArena(c *Client, tournamentID string) {
 		h.sendErr(c, "already queued")
 		return
 	}
-	if c.arenaID != "" {
+	if c.arenaID != "" || c.arenaPendingID != "" {
 		h.sendErr(c, "already waiting in an arena")
 		return
 	}
@@ -369,23 +511,34 @@ func (h *Hub) joinArena(c *Client, tournamentID string) {
 		h.sendErr(c, "arena not found or not running")
 		return
 	}
-	ps := ar.players[c.id.UserID]
-	if ps == nil {
-		h.sendErr(c, "you're not a participant in this arena")
-		return
-	}
-	if ps.withdrawn {
-		h.sendErr(c, "you have withdrawn from this arena")
-		return
-	}
-	// Never let the same identity occupy two slots in the pool at once (e.g. a
-	// second tab) — that could otherwise let closestArenaPair "pair" someone
-	// with themselves.
+	// Never let the same identity occupy two slots in this arena's pool at
+	// once (e.g. a second tab) — free OR pending — that could otherwise let
+	// closestArenaPair "pair" someone with themselves, or let two pending
+	// entries both later resolve to the same identity.
 	for _, x := range ar.free {
 		if x.id.UserID == c.id.UserID {
 			h.sendErr(c, "already waiting in this arena on another connection")
 			return
 		}
+	}
+	for _, p := range ar.pending {
+		if p.client.id.UserID == c.id.UserID {
+			h.sendErr(c, "already waiting in this arena on another connection")
+			return
+		}
+	}
+
+	ps := ar.players[c.id.UserID]
+	if ps == nil {
+		// The hub's roster doesn't (yet) know this identity as a participant —
+		// but it might just be stale (see the pending doc on arenaState): park
+		// rather than hard-reject, and let a fresher snapshot decide.
+		h.beginArenaPending(c, ar, tournamentID)
+		return
+	}
+	if ps.withdrawn {
+		h.sendErr(c, "you have withdrawn from this arena")
+		return
 	}
 
 	c.arenaID = tournamentID
@@ -399,17 +552,41 @@ func (h *Hub) joinArena(c *Client, tournamentID string) {
 	}
 }
 
-// leaveArena withdraws c from whatever arena pool it's currently waiting in
-// (a no-op if it isn't waiting in one). Does not touch a game already in
-// progress — resigning/finishing that is unrelated; leaving the pool just
-// means finish() won't put this connection back into it afterward (see
-// returnToArenaPool, which re-checks c.arenaID).
+// beginArenaPending parks c in ar's pending set: the hub's roster doesn't
+// (yet) list c's identity as a participant of this KNOWN, running arena. This
+// is the REST-join/hub-poll race described at the top of this file —
+// BaseAPI's join returns synchronously and the client immediately sends
+// joinArena, but the hub only learns new participants on its next
+// arenaPollInterval poll. Sends the SAME arenaJoined ack an ordinary join
+// gets: the frontend already treats arenaJoined/arenaWaiting as equivalent
+// "show the waiting UI" (see frontend/src/lib/socket.ts), so a legitimate
+// racing joiner sees no difference at all — only a genuinely bogus id or
+// non-participant ever notices, once the grace period in
+// applyArenaSnapshots' pending sweep runs out. Also asks for a fresh roster
+// right away (requestArenaRefresh) so that grace period is rarely needed in
+// full.
+func (h *Hub) beginArenaPending(c *Client, ar *arenaState, tournamentID string) {
+	c.arenaPendingID = tournamentID
+	ar.pending = append(ar.pending, &arenaPendingJoin{client: c, cyclesLeft: arenaPendingGraceCycles})
+	c.trySend(mustJSON(out("arenaJoined", map[string]any{"tournamentId": tournamentID})))
+	h.requestArenaRefresh()
+}
+
+// leaveArena withdraws c from whatever arena pool it's currently waiting in,
+// confirmed OR pending (a no-op if it's in neither). Does not touch a game
+// already in progress — resigning/finishing that is unrelated; leaving the
+// pool just means finish() won't put this connection back into it afterward
+// (see returnToArenaPool, which re-checks c.arenaID).
 func (h *Hub) leaveArena(c *Client) {
 	id := c.arenaID
+	if id == "" {
+		id = c.arenaPendingID
+	}
 	if id == "" {
 		return
 	}
 	h.clearArenaMembership(c)
+	h.clearArenaPending(c)
 	c.trySend(mustJSON(out("arenaLeft", map[string]any{"tournamentId": id})))
 }
 
@@ -425,6 +602,21 @@ func (h *Hub) clearArenaMembership(c *Client) {
 		ar.free = removeClient(ar.free, c)
 	}
 	c.arenaID = ""
+}
+
+// clearArenaPending removes c from whatever arena's pending-confirmation set
+// it's parked in (if any) and clears its arenaPendingID. Safe to call whether
+// or not c is currently pending. Mirrors clearArenaMembership for the
+// confirmed (ar.free) case; does not itself send a message — callers decide
+// whether/what to tell the client.
+func (h *Hub) clearArenaPending(c *Client) {
+	if c.arenaPendingID == "" {
+		return
+	}
+	if ar := h.arenas[c.arenaPendingID]; ar != nil {
+		ar.pending = removeArenaPending(ar.pending, c)
+	}
+	c.arenaPendingID = ""
 }
 
 // --- pairing ---
@@ -1078,6 +1270,18 @@ func arenaFreeHas(ar *arenaState, c *Client) bool {
 func removeClient(list []*Client, c *Client) []*Client {
 	for i, x := range list {
 		if x == c {
+			return append(list[:i], list[i+1:]...)
+		}
+	}
+	return list
+}
+
+// removeArenaPending returns list with the entry for c removed (or list
+// unchanged if c has none in it) — the arenaPendingJoin analogue of
+// removeClient.
+func removeArenaPending(list []*arenaPendingJoin, c *Client) []*arenaPendingJoin {
+	for i, p := range list {
+		if p.client == c {
 			return append(list[:i], list[i+1:]...)
 		}
 	}

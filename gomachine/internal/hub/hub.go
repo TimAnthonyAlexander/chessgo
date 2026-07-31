@@ -80,6 +80,15 @@ type Hub struct {
 	arenaClient     *arenaClient
 	arenaSnapshotCh chan []ArenaSnapshot
 	arenas          map[string]*arenaState
+	// arenaRefreshCh is a depth-1 "poll BaseAPI's arena roster right now"
+	// nudge — requestArenaRefresh sends on it (non-blocking) the moment a
+	// joinArena parks pending because the roster doesn't know the joiner yet,
+	// so that race resolves in about a round-trip instead of up to
+	// arenaPollInterval. Depth 1 + non-blocking send means any number of
+	// clients hitting this in the same instant collapses to one extra fetch;
+	// pollArenas further rate-limits actual fetches (arenaRefreshMinGap), so
+	// this can never be used to hammer BaseAPI.
+	arenaRefreshCh chan struct{}
 
 	// Bot backfill: if a player waits longer than a randomized per-player delay
 	// (see randomBotFillDelay; botDelay is now only a legacy on/off default) with no human match,
@@ -398,6 +407,7 @@ func New(secret string) *Hub {
 
 		arenaSnapshotCh: make(chan []ArenaSnapshot, 1),
 		arenas:          map[string]*arenaState{},
+		arenaRefreshCh:  make(chan struct{}, 1),
 	}
 }
 
@@ -555,6 +565,12 @@ func (h *Hub) queue(c *Client, pool, variant string) {
 	}
 	variant = normalizeVariant(variant)
 	h.dequeue(c)
+	// One pending activity per client (mirrors joinArena's own guards the other
+	// way): starting ordinary matchmaking must not leave this connection also
+	// parked in an arena's free pool or pending-confirmation set — either would
+	// otherwise leak until some unrelated arena event happened to notice it.
+	h.clearArenaMembership(c)
+	h.clearArenaPending(c)
 	now := time.Now()
 	c.queuedAt = now
 	c.botFillDelay = randomBotFillDelay()
@@ -1197,6 +1213,7 @@ func (h *Hub) handleDisconnect(c *Client) {
 	// finish() re-derives who to return to the pool from the game's own
 	// clients, which survive a reconnect; this per-connection field would not).
 	h.clearArenaMembership(c)
+	h.clearArenaPending(c) // ...and whatever arena it's parked PENDING confirmation in, if any
 	g := c.game
 	if g == nil || g.over {
 		return

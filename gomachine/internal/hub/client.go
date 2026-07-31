@@ -59,6 +59,19 @@ type Client struct {
 	// human opponent found by pairArena) from one that just arrived.
 	arenaJoinedAt     time.Time
 	arenaBotFillDelay time.Duration
+	// arenaPendingID is the tournament id a joinArena for this connection is
+	// PARKED PENDING confirmation for ("" if none) — set instead of arenaID
+	// when the hub's roster (ar.players) doesn't yet list this identity as a
+	// participant of an otherwise known, running arena: BaseAPI's REST
+	// POST /tournaments/{id}/join returns synchronously and the client
+	// immediately sends joinArena, but the hub only learns new participants on
+	// its next arenaPollInterval poll (up to 5s stale, worse on a failed
+	// poll). Mutually exclusive with arenaID — cleared (and arenaID set) the
+	// moment a later snapshot confirms them (applyArenaSnapshots' pending
+	// sweep), cleared with an error if the grace period runs out first, and
+	// cleared with no message at all if this connection disconnects, leaves,
+	// or starts any other activity first (clearArenaPending) — see arena.go.
+	arenaPendingID string
 }
 
 func (c *Client) readPump() {

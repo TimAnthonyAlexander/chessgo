@@ -97,9 +97,13 @@ func (h *Hub) createChallenge(c *Client, pool, color string, rated bool, variant
 			return
 		}
 	}
-	// One pending action per client: leave any queue and drop a prior challenge.
+	// One pending action per client: leave any queue and drop a prior challenge
+	// (and any arena free-pool/pending-confirmation slot — see queue's own
+	// identical guard in hub.go).
 	h.dequeue(c)
 	h.dropChallenge(c)
+	h.clearArenaMembership(c)
+	h.clearArenaPending(c)
 
 	code := h.newChallengeCode()
 	now := time.Now()
@@ -177,6 +181,8 @@ func (h *Hub) joinChallenge(c *Client, code string) {
 	h.removeChallenge(ch)
 	h.dequeue(creator) // make sure neither side lingers in a public pool
 	h.dequeue(c)
+	h.clearArenaMembership(c) // ...or an arena free-pool/pending-confirmation slot
+	h.clearArenaPending(c)
 	h.startGameWith(white, black, ch.tc, ch.pool, rated, ch.variant, "", ch.fen, "")
 }
 
