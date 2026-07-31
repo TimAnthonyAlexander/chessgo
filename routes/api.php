@@ -35,6 +35,7 @@ use App\Controllers\GameAnalysisController;
 use App\Controllers\GameMovesAnalysisController;
 use App\Controllers\ProfileController;
 use App\Controllers\ProfileGamesController;
+use App\Controllers\ProfileUpdateController;
 use App\Controllers\PuzzleController;
 use App\Controllers\DailyPuzzleController;
 use App\Controllers\LeaderboardController;
@@ -44,6 +45,16 @@ use App\Controllers\AdminDashboardController;
 use App\Controllers\AdminUsersController;
 use App\Controllers\AdminGamesController;
 use App\Controllers\AdminGameAnticheatController;
+use App\Controllers\FriendController;
+use App\Controllers\FriendRequestsController;
+use App\Controllers\FriendAcceptController;
+use App\Controllers\FriendDeclineController;
+use App\Controllers\NotificationController;
+use App\Controllers\NotificationReadController;
+use App\Controllers\NotificationReadAllController;
+use App\Controllers\ChallengeController;
+use App\Controllers\ChallengeAcceptController;
+use App\Controllers\ChallengeDeclineController;
 use BaseApi\Http\Middleware\RateLimitMiddleware;
 use BaseApi\Http\SessionStartMiddleware;
 use BaseApi\Permissions\PermissionsMiddleware;
@@ -367,6 +378,14 @@ $router->get('/me', [
     MeController::class,
 ]);
 
+// Self-service profile edit (bio + country only — title is staff-assigned,
+// never player-editable): { bio?: string|null, country?: string|null }
+$router->post('/me/profile', [
+    CombinedAuthMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '30/1m'],
+    ProfileUpdateController::class,
+]);
+
 // API token management (supports both session and API token)
 $router->get('/api-tokens', [
     CombinedAuthMiddleware::class,
@@ -434,6 +453,93 @@ $router->delete('/files', [
 // ]);
 // 
 // This would match permissions like 'export.*' or 'export.csv'
+
+// ================================
+// Friends, notifications, directed challenges
+// ================================
+// All authed (CombinedAuthMiddleware: session cookie OR bearer token).
+
+// Accepted friends list: id/name/title/rating/online — POST sends a request
+// (or auto-accepts a mutual pending one); DELETE unfriends or cancels an
+// outgoing request.
+$router->get('/friends', [
+    CombinedAuthMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '600/1m'],
+    FriendController::class,
+]);
+$router->post('/friends', [
+    CombinedAuthMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '60/1m'],
+    FriendController::class,
+]);
+$router->delete('/friends/{id}', [
+    CombinedAuthMiddleware::class,
+    FriendController::class,
+]);
+
+// Pending requests, split by direction: { incoming: [...], outgoing: [...] }
+$router->get('/friends/requests', [
+    CombinedAuthMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '600/1m'],
+    FriendRequestsController::class,
+]);
+
+// Accept/decline an incoming friend request — addressee only.
+$router->post('/friends/{id}/accept', [
+    CombinedAuthMiddleware::class,
+    FriendAcceptController::class,
+]);
+$router->post('/friends/{id}/decline', [
+    CombinedAuthMiddleware::class,
+    FriendDeclineController::class,
+]);
+
+// In-app notification feed (friend requests/accepts, challenges): { items, unread }
+$router->get('/notifications', [
+    CombinedAuthMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '600/1m'],
+    NotificationController::class,
+]);
+$router->post('/notifications/read', [
+    CombinedAuthMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '300/1m'],
+    NotificationReadController::class,
+]);
+$router->post('/notifications/read-all', [
+    CombinedAuthMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '300/1m'],
+    NotificationReadAllController::class,
+]);
+
+// Directed, persistent challenges — bound to a specific opponent from
+// creation (unlike the hub's ephemeral 6-char code link). GET splits pending,
+// non-expired challenges by direction; DELETE is the challenger cancelling.
+$router->post('/challenges', [
+    CombinedAuthMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '60/1m'],
+    ChallengeController::class,
+]);
+$router->get('/challenges', [
+    CombinedAuthMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '600/1m'],
+    ChallengeController::class,
+]);
+$router->delete('/challenges/{id}', [
+    CombinedAuthMiddleware::class,
+    ChallengeController::class,
+]);
+
+// Accept mints a hub join code and returns { code } (opponent only); decline
+// notifies the challenger (opponent only).
+$router->post('/challenges/{id}/accept', [
+    CombinedAuthMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '60/1m'],
+    ChallengeAcceptController::class,
+]);
+$router->post('/challenges/{id}/decline', [
+    CombinedAuthMiddleware::class,
+    ChallengeDeclineController::class,
+]);
 
 // ================================
 // Development Only

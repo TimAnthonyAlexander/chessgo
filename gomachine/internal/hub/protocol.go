@@ -29,6 +29,12 @@ type inMsg struct {
 	// "antichess" (createChallenge). Anything else is normalized to "standard"
 	// on the hub.
 	Variant string `json:"variant,omitempty"`
+	// Fen is an optional custom start position (createChallenge). "" (the
+	// default) starts from the variant's normal start. Rejected at creation if
+	// it doesn't parse for the chosen variant, or if paired with "chess960"
+	// (whose own randomized start always wins over any custom FEN). A game
+	// started from a custom FEN is always forced casual, regardless of Rated.
+	Fen string `json:"fen,omitempty"`
 }
 
 // timeControl is a base time + per-move increment, both in milliseconds.

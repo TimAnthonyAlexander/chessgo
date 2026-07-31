@@ -67,6 +67,36 @@ class BotGame extends BaseModel
     public ?string $history_fens = null;
 
     /**
+     * Clock time control as "<base minutes>+<increment seconds>", e.g. "5+0" or
+     * "3+2" — one of TIME_CONTROLS. Null (the default) = untimed; untimed games
+     * never touch white_ms/black_ms/last_move_at and behave exactly as before
+     * clocks existed. See parseTimeControl().
+     */
+    public ?string $time_control = null;
+
+    /** White's remaining clock time in ms. Null when untimed. */
+    public ?int $white_ms = null;
+
+    /** Black's remaining clock time in ms. Null when untimed. */
+    public ?int $black_ms = null;
+
+    /**
+     * The instant (epoch MILLISECONDS, as a string) from which the side to
+     * move's clock is currently counting down — deliberately NOT the app's usual
+     * 'Y-m-d H:i:s' format (see e.g. ApiToken::$last_used_at), because a
+     * bullet/blitz clock rounded to the nearest second would drift by up to a
+     * full second per move. Null when untimed. See BotGameService for the
+     * read/write points (a human move check-in and after every bot reply).
+     */
+    public ?string $last_move_at = null;
+
+    /** The time controls the "/bot" setup screen offers, in the same "<base
+     *  minutes>+<increment seconds>" shape parseTimeControl() expects. Untimed
+     *  (time_control === null) is the default and isn't in this list — it's
+     *  simply the absence of a time control, not a member of it. */
+    public const TIME_CONTROLS = ['1+0', '3+0', '3+2', '5+0', '10+0', '15+10'];
+
+    /**
      * @var array<string, string>
      */
     public static array $indexes = [
@@ -79,7 +109,30 @@ class BotGame extends BaseModel
     public static array $columns = [
         'moves' => ['type' => 'TEXT', 'nullable' => true],
         'history_fens' => ['type' => 'TEXT', 'nullable' => true],
+        'time_control' => ['type' => 'TEXT', 'nullable' => true],
+        'last_move_at' => ['type' => 'TEXT', 'nullable' => true],
     ];
+
+    /**
+     * Parse a "<base minutes>+<increment seconds>" time control into
+     * [baseMs, incMs], e.g. "5+0" -> [300000, 0], "3+2" -> [180000, 2000].
+     * Returns null for null/empty (untimed) or anything not in TIME_CONTROLS —
+     * callers should treat that the same as untimed rather than guess at a
+     * malformed value.
+     *
+     * @return array{0: int, 1: int}|null
+     */
+    public static function parseTimeControl(?string $timeControl): ?array
+    {
+        if ($timeControl === null || !in_array($timeControl, self::TIME_CONTROLS, true)) {
+            return null;
+        }
+        if (!preg_match('/^(\d+)\+(\d+)$/', $timeControl, $m)) {
+            return null;
+        }
+
+        return [((int) $m[1]) * 60_000, ((int) $m[2]) * 1000];
+    }
 
     /** @return list<array<string, mixed>> */
     public function getMoves(): array

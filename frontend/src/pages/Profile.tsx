@@ -7,6 +7,7 @@ import {
     getProfileGames,
     type Profile as ProfileData,
     type ProfileGame,
+    type ProfileUpdateResult,
 } from '../api/client'
 import { useAuth } from '../lib/auth'
 import IdentityHero from '../components/profile/IdentityHero'
@@ -163,6 +164,12 @@ export default function Profile() {
         return primaryCategory(data)
     }, [data])
 
+    // Merge a self-edit's result (bio/country) into the displayed profile
+    // without a full refetch of ratings/games/history.
+    const handleProfileUpdated = useCallback((result: ProfileUpdateResult) => {
+        setData((prev) => (prev ? { ...prev, bio: result.bio, country: result.country } : prev))
+    }, [])
+
     return (
         <Box
             sx={{
@@ -184,6 +191,7 @@ export default function Profile() {
                             profile={data}
                             isSelf={user?.id === data.id}
                             lastActive={data.games[0]?.created_at ?? null}
+                            onProfileUpdated={handleProfileUpdated}
                         />
 
                         <Box

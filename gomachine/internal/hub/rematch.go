@@ -140,7 +140,10 @@ func (h *Hub) rematchCancel(c *Client) {
 // normal pairing path (startGameWith + its "matched" push) so both clients
 // land in the new game exactly like any other match. Closes g's rematch
 // window first so a racing duplicate accept/offer is already a no-op by the
-// time it's processed.
+// time it's processed. A custom start fen is never carried forward into a
+// rematch (passed as "") — same as Chess960, which gets a fresh random start
+// each time rather than replaying the prior game's; a rematch from the exact
+// same hand-picked position would be an odd, not requested, behavior.
 func (h *Hub) startRematch(g *game) {
 	// Either side may have several devices attached; startGameWith seats one of
 	// them and joinOtherSessions pulls the rest of that account in behind it.
@@ -151,7 +154,7 @@ func (h *Hub) startRematch(g *game) {
 		// disarms the window — but never assume; a bot side never gets here
 		// either, since it never has a client to send rematchAccept from)
 	}
-	h.startGameWith(white, black, g.tc, g.pool, g.rated, g.variant, g.id)
+	h.startGameWith(white, black, g.tc, g.pool, g.rated, g.variant, g.id, "")
 }
 
 // checkRematches reclaims rematch windows past rematchTTL each tick — whether

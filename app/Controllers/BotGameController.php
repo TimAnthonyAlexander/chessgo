@@ -13,7 +13,8 @@ use App\Services\BotGameService;
  *
  *   POST /bot-games        { rating?: 0|700..3500, human_color?: "w"|"b", fen?: string,
  *                            variant?: "standard"|"chess960"|"duck"|"crazyhouse"|"antichess"|
- *                                      "fading"|"glassjaw"|"doublemove" }
+ *                                      "fading"|"glassjaw"|"doublemove",
+ *                            time_control?: "1+0"|"3+0"|"3+2"|"5+0"|"10+0"|"15+10" }
  *   GET  /bot-games/{id}
  *
  * `rating` is the bot's target Elo (the engine maps it to a weakening config).
@@ -23,7 +24,9 @@ use App\Services\BotGameService;
  * standard flow, while "duck", "crazyhouse", and "antichess" ignore `fen` and
  * start from the standard position. "fading", "glassjaw", and "doublemove" are
  * standard-rules handicap modes (see BotGameService) that also share the
- * standard flow.
+ * standard flow. `time_control` is omitted/empty for an untimed game (the
+ * default); otherwise the server owns the clock end to end (see
+ * BotGameService's clock rules) — the client clock is display only.
  */
 class BotGameController extends Controller
 {
@@ -36,6 +39,8 @@ class BotGameController extends Controller
     public string $fen = '';
 
     public string $variant = 'standard';
+
+    public string $time_control = '';
 
     public function __construct(private readonly BotGameService $games)
     {
@@ -64,6 +69,9 @@ class BotGameController extends Controller
             'human_color' => 'in:w,b',
             'fen' => 'string',
             'variant' => 'string|in:standard,chess960,duck,crazyhouse,antichess,fading,glassjaw,doublemove',
+            // Empty (untimed, the default) skips this check entirely — only a
+            // non-empty value is validated against the offered ladder.
+            'time_control' => 'string|in:1+0,3+0,3+2,5+0,10+0,15+10',
         ]);
 
         try {
@@ -72,6 +80,7 @@ class BotGameController extends Controller
                 $this->human_color,
                 $this->fen !== '' ? $this->fen : null,
                 $this->variant !== '' ? $this->variant : 'standard',
+                $this->time_control !== '' ? $this->time_control : null,
             );
         } catch (\InvalidArgumentException $e) {
             return JsonResponse::badRequest($e->getMessage());

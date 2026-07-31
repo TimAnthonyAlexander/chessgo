@@ -1,21 +1,32 @@
-import { Box, Typography } from '@mui/material'
-import { Crown } from 'lucide-react'
-import type { Profile } from '../../api/client'
-import { fmtDate, fmtRelative, initials, monogramColor } from './shared'
+import { useState } from 'react'
+import { Box, IconButton, Typography } from '@mui/material'
+import { Pencil } from 'lucide-react'
+import type { Profile, ProfileUpdateResult } from '../../api/client'
+import TitleBadge from '../TitleBadge'
+import EditProfileDialog from './EditProfileDialog'
+import { COUNTRY_NAMES, fmtDate, fmtRelative, initials, monogramColor } from './shared'
 
-/** The profile hero band: a quiet identity header (monogram + name + badges +
- * last-active). Ratings live in `RatingsPanel` below — the hero used to echo
- * the player's headline rating too, which just duplicated that panel. */
+/** The profile hero band: a quiet identity header (monogram + title + name +
+ * badges + last-active + bio/country). Ratings live in `RatingsPanel` below —
+ * the hero used to echo the player's headline rating too, which just
+ * duplicated that panel. */
 export default function IdentityHero({
     profile,
     isSelf,
     lastActive,
+    onProfileUpdated,
 }: {
     profile: Profile
     isSelf: boolean
     lastActive: string | null
+    /** Called with the server's response after a successful self-edit, so the
+     *  caller can merge the new bio/country into the displayed profile without
+     *  a full refetch. Only ever invoked when `isSelf`. */
+    onProfileUpdated?: (result: ProfileUpdateResult) => void
 }) {
     const color = monogramColor(profile.name)
+    const [editOpen, setEditOpen] = useState(false)
+    const countryName = profile.country ? (COUNTRY_NAMES[profile.country] ?? profile.country) : null
 
     return (
         <Box
@@ -76,8 +87,9 @@ export default function IdentityHero({
                     {initials(profile.name)}
                 </Box>
 
-                <Box sx={{ minWidth: 0 }}>
+                <Box sx={{ minWidth: 0, flex: 1 }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
+                        <TitleBadge title={profile.title} />
                         <Typography
                             sx={{
                                 fontFamily: 'var(--font-display)',
@@ -91,28 +103,6 @@ export default function IdentityHero({
                         >
                             {profile.name}
                         </Typography>
-                        {profile.role === 'admin' && (
-                            <Box
-                                sx={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: 0.5,
-                                    color: 'var(--accent)',
-                                }}
-                            >
-                                <Crown size={14} />
-                                <Typography
-                                    sx={{
-                                        fontSize: 10.5,
-                                        fontWeight: 700,
-                                        letterSpacing: '0.12em',
-                                        textTransform: 'uppercase',
-                                    }}
-                                >
-                                    Admin
-                                </Typography>
-                            </Box>
-                        )}
                         {isSelf && (
                             <Box
                                 sx={{
@@ -130,15 +120,49 @@ export default function IdentityHero({
                                 You
                             </Box>
                         )}
+                        {isSelf && (
+                            <IconButton
+                                aria-label="Edit profile"
+                                size="small"
+                                onClick={() => setEditOpen(true)}
+                                sx={{ color: 'var(--muted)', ml: 'auto' }}
+                            >
+                                <Pencil size={15} />
+                            </IconButton>
+                        )}
                     </Box>
                     <Typography sx={{ fontSize: 12.5, color: 'var(--muted)', mt: 0.6 }}>
                         Member since {fmtDate(profile.created_at)}
                         {lastActive && (
                             <Box component="span"> · Active {fmtRelative(lastActive)}</Box>
                         )}
+                        {countryName && <Box component="span"> · {countryName}</Box>}
                     </Typography>
+                    {profile.bio && (
+                        <Typography
+                            sx={{
+                                fontSize: 13,
+                                color: 'var(--text)',
+                                mt: 1,
+                                maxWidth: 480,
+                                overflowWrap: 'anywhere',
+                            }}
+                        >
+                            {profile.bio}
+                        </Typography>
+                    )}
                 </Box>
             </Box>
+
+            {isSelf && (
+                <EditProfileDialog
+                    open={editOpen}
+                    onClose={() => setEditOpen(false)}
+                    initialBio={profile.bio}
+                    initialCountry={profile.country}
+                    onSaved={(result) => onProfileUpdated?.(result)}
+                />
+            )}
         </Box>
     )
 }

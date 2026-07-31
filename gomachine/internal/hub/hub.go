@@ -50,6 +50,17 @@ type Hub struct {
 	rematchWindows map[string]*game
 	onFinish       func(FinishedGame)
 
+	// registerChallenges funnels a BaseAPI-registered server-side challenge
+	// (RegisterServerChallenge, serverchallenge.go) onto the Run goroutine:
+	// h.challenges is otherwise touched only there, so the "code already
+	// taken" check and the map write must happen together. The caller (an
+	// HTTP handler goroutine) blocks on the per-request result channel.
+	registerChallenges chan registerChallengeReq
+
+	// onlineQueries funnels a presence lookup (Online) onto the Run goroutine —
+	// h.sessions is likewise Run-goroutine-only state.
+	onlineQueries chan onlineQuery
+
 	// Bot backfill: if a player waits longer than a randomized per-player delay
 	// (see randomBotFillDelay; botDelay is now only a legacy on/off default) with no human match,
 	// pair them with an engine-driven opponent. Moves are computed off the Run
@@ -175,6 +186,44 @@ func (h *Hub) Stats() (online, games int64) {
 	return h.onlineClients.Load(), h.activeGames.Load()
 }
 
+// maxOnlineQuerySubs caps a single presence lookup so an oversized request list
+// can't make the hub goroutine do unbounded work per call.
+const maxOnlineQuerySubs = 200
+
+// onlineQuery is one presence lookup funneled onto the Run goroutine — see
+// Online and Hub.onlineQueries.
+type onlineQuery struct {
+	subs   []string
+	result chan []string
+}
+
+// Online reports the subset of subs that currently have at least one live
+// WebSocket connection (backs a friends list). Safe to call from any goroutine;
+// subs beyond maxOnlineQuerySubs are ignored. The lookup is a single O(len(subs))
+// pass over the existing session index (h.sessions), run inline in the Run
+// goroutine's select — cheap, and it can never block the hub loop for longer
+// than that one pass.
+func (h *Hub) Online(subs []string) []string {
+	if len(subs) > maxOnlineQuerySubs {
+		subs = subs[:maxOnlineQuerySubs]
+	}
+	resultCh := make(chan []string, 1)
+	h.onlineQueries <- onlineQuery{subs: subs, result: resultCh}
+	return <-resultCh
+}
+
+// doOnline runs on the Run goroutine: h.sessions is keyed by identity id, and a
+// non-empty connection set means that account has at least one live socket.
+func (h *Hub) doOnline(subs []string) []string {
+	online := make([]string, 0, len(subs))
+	for _, sub := range subs {
+		if conns := h.sessions[sub]; len(conns) > 0 {
+			online = append(online, sub)
+		}
+	}
+	return online
+}
+
 // FinishedGame is handed to the persistence hook when a game ends.
 type FinishedGame struct {
 	ID        string
@@ -190,6 +239,11 @@ type FinishedGame struct {
 	Moves     []string
 	SANs      []string
 	MoveTimes []int64 // ms spent per move (anti-cheat move-time telemetry), parallel to Moves
+	// StartFEN is the position the game began from: chess.StartFEN for a normal
+	// game, RandomChess960FEN() for Chess960, or a challenge's custom FEN. Only
+	// non-standard for Chess960 and a custom-FEN challenge — a replay/PGN
+	// consumer that assumes the classic start otherwise is safe to ignore it.
+	StartFEN string
 }
 
 // New creates a Hub authenticating tickets with the given shared secret.
@@ -207,6 +261,9 @@ func New(secret string) *Hub {
 		rematchWindows: map[string]*game{},
 		botMoves:       make(chan botMoveResult, 64),
 		botChats:       make(chan botChatResult, 64),
+
+		registerChallenges: make(chan registerChallengeReq),
+		onlineQueries:      make(chan onlineQuery),
 	}
 }
 
@@ -268,6 +325,10 @@ func (h *Hub) Run() {
 			// A fetched pool of realistic midgame FENs (from BaseAPI) — assigned on
 			// the Run goroutine so startFillerGame can read it lock-free.
 			h.fillerFens = fens
+		case req := <-h.registerChallenges:
+			req.result <- h.doRegisterServerChallenge(req)
+		case q := <-h.onlineQueries:
+			q.result <- h.doOnline(q.subs)
 		case <-ticker.C:
 			h.checkClocks()
 			h.matchWaiting()
@@ -313,7 +374,7 @@ func (h *Hub) handle(cmd command) {
 	case "unwatch":
 		h.unwatchGame(c)
 	case "createChallenge":
-		h.createChallenge(c, cmd.msg.Pool, cmd.msg.Color, cmd.msg.Rated, cmd.msg.Variant)
+		h.createChallenge(c, cmd.msg.Pool, cmd.msg.Color, cmd.msg.Rated, cmd.msg.Variant, cmd.msg.Fen)
 	case "joinChallenge":
 		h.joinChallenge(c, cmd.msg.Code)
 	case "cancelChallenge":
@@ -393,15 +454,15 @@ func (h *Hub) startGame(a, b *Client, tc timeControl, pool, variant string) {
 	// Public pairing is rated only if both sides are accounts; startGameWith further
 	// gates by variant (standard → time-control pools, duck → the duck pool, 960
 	// unrated). The queue key carries the variant through (standard threads bare).
-	h.startGameWith(white, black, tc, pool, !white.id.Anon && !black.id.Anon, variant, "")
+	h.startGameWith(white, black, tc, pool, !white.id.Anon && !black.id.Anon, variant, "", "")
 }
 
 // startGameWith creates a game between two clients with explicit colors and a
 // caller-decided rated flag. Shared by public matchmaking (random colors, rated
-// iff both accounts), private challenges (creator's color/rated preference) and
-// an accepted rematch (rematchOf carries the finished game's id forward, ""
-// otherwise). Returns the new game.
-func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, rated bool, variantID string, rematchOf string) *game {
+// iff both accounts), private challenges (creator's color/rated preference,
+// optionally a custom fen) and an accepted rematch (rematchOf carries the
+// finished game's id forward, "" otherwise). Returns the new game.
+func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, rated bool, variantID string, rematchOf string, fen string) *game {
 	// Starting any new game retires whatever rematch window either side's
 	// previous finished game still held open — offering a rematch to someone
 	// who already started playing again makes no sense, and leaving the
@@ -416,14 +477,25 @@ func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, r
 	// challenges, so gating rated here covers every started game.
 	rated = rated && (variantID == variantStandard || variantID == variantDuck ||
 		variantID == variantCrazyhouse || variantID == variantAntichess)
-	// The start position is the ONLY thing standard vs Chess960 changes: standard
-	// uses the classic start FEN, Chess960 a random Fischer-random start. g.startFen
-	// MUST be this FEN (not chess.StartFEN), or a takeback rebuild would replay from
-	// the wrong root. Duck begins from the standard start with the duck unplaced —
-	// variant.New handles that; g.state is the single source of board truth.
+	// The start position is the classic start FEN, a random Fischer-random start
+	// for Chess960, or (a private challenge only) a validated custom fen.
+	// g.startFen MUST be this FEN (not chess.StartFEN), or a takeback rebuild
+	// would replay from the wrong root. Duck begins from the standard start
+	// with the duck unplaced — variant.New handles that; g.state is the single
+	// source of board truth.
 	startFen := chess.StartFEN
-	if variantID == variantChess960 {
+	switch {
+	case variantID == variantChess960:
+		// Chess960's own randomized start always wins — a custom fen is never
+		// honoured here (callers must not offer one; validateCustomStartFEN
+		// already rejects that combination at creation/registration time, so
+		// this is a defensive belt-and-braces, not the primary guard).
 		startFen = chess.RandomChess960FEN()
+	case fen != "":
+		startFen = fen
+		// A custom start position must never move ratings — a hand-picked
+		// position isn't a fair skill signal, whatever was requested.
+		rated = false
 	}
 	st, err := variant.New(variantID, startFen)
 	if err != nil {
@@ -743,7 +815,7 @@ func (h *Hub) finish(g *game, result, reason string) {
 			White: g.white.id, Black: g.black.id,
 			WhiteBot: g.white.isBot, BlackBot: g.black.isBot,
 			Result: result, Reason: reason, Moves: g.moves, SANs: g.sans,
-			MoveTimes: g.moveTimes,
+			MoveTimes: g.moveTimes, StartFEN: g.startFen,
 		})
 	}
 }

@@ -936,6 +936,159 @@
             "table": "eval_cache",
             "operation": "add_index",
             "warning": null
+        },
+        {
+            "id": "mig_9ecd8ea558c2",
+            "sql": "CREATE TABLE `challenge` (\n  `challenger_id` VARCHAR(36) NOT NULL DEFAULT '',\n  `opponent_id` VARCHAR(36) NOT NULL DEFAULT '',\n  `pool` VARCHAR(255) NOT NULL DEFAULT '5+0',\n  `color` VARCHAR(255) NOT NULL DEFAULT 'random',\n  `rated` TINYINT(1) NOT NULL DEFAULT 1,\n  `variant` VARCHAR(255) NOT NULL DEFAULT 'standard',\n  `fen` VARCHAR(255),\n  `status` VARCHAR(255) NOT NULL DEFAULT 'pending',\n  `code` VARCHAR(255),\n  `expires_at` VARCHAR(255),\n  `id` VARCHAR(36) NOT NULL DEFAULT '',\n  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:06:50+00:00",
+            "table": "challenge",
+            "operation": "create_table",
+            "warning": null
+        },
+        {
+            "id": "mig_c995daab7b3f",
+            "sql": "CREATE TABLE `friend_link` (\n  `requester_id` VARCHAR(36) NOT NULL DEFAULT '',\n  `addressee_id` VARCHAR(36) NOT NULL DEFAULT '',\n  `status` VARCHAR(255) NOT NULL DEFAULT 'pending',\n  `id` VARCHAR(36) NOT NULL DEFAULT '',\n  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:06:50+00:00",
+            "table": "friend_link",
+            "operation": "create_table",
+            "warning": null
+        },
+        {
+            "id": "mig_3e115493c69a",
+            "sql": "CREATE TABLE `notification` (\n  `user_id` VARCHAR(36) NOT NULL DEFAULT '',\n  `type` VARCHAR(255) NOT NULL DEFAULT '',\n  `payload` TEXT,\n  `read_at` VARCHAR(255),\n  `id` VARCHAR(36) NOT NULL DEFAULT '',\n  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:06:50+00:00",
+            "table": "notification",
+            "operation": "create_table",
+            "warning": null
+        },
+        {
+            "id": "mig_6b4923deea00",
+            "sql": "ALTER TABLE `bot_game` ADD COLUMN `time_control` TEXT",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:06:50+00:00",
+            "table": "bot_game",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_579b45a4ed19",
+            "sql": "ALTER TABLE `bot_game` ADD COLUMN `white_ms` INT",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:06:50+00:00",
+            "table": "bot_game",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_e299c7c221ef",
+            "sql": "ALTER TABLE `bot_game` ADD COLUMN `black_ms` INT",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:06:50+00:00",
+            "table": "bot_game",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_5b91649c1d88",
+            "sql": "ALTER TABLE `bot_game` ADD COLUMN `last_move_at` TEXT",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:06:50+00:00",
+            "table": "bot_game",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_3db02030ef01",
+            "sql": "ALTER TABLE `user` ADD COLUMN `title` VARCHAR(255)",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:06:50+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_9ac5b30d1dd0",
+            "sql": "ALTER TABLE `user` ADD COLUMN `bio` TEXT",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:06:50+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_0f73f366c4b9",
+            "sql": "ALTER TABLE `user` ADD COLUMN `country` VARCHAR(255)",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:06:50+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_b9485f6d2108",
+            "sql": "ALTER TABLE `challenge` ADD INDEX `idx_challenge_challenger_id` (`challenger_id`)",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:06:50+00:00",
+            "table": "challenge",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_321c38f36901",
+            "sql": "ALTER TABLE `challenge` ADD INDEX `idx_challenge_opponent_id_status` (`opponent_id`, `status`)",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:06:50+00:00",
+            "table": "challenge",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_88ea47231a99",
+            "sql": "ALTER TABLE `friend_link` ADD UNIQUE KEY `uniq_friend_link_requester_id_addressee_id` (`requester_id`, `addressee_id`)",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:06:50+00:00",
+            "table": "friend_link",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_f480bb002218",
+            "sql": "ALTER TABLE `friend_link` ADD INDEX `idx_friend_link_addressee_id_status` (`addressee_id`, `status`)",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:06:50+00:00",
+            "table": "friend_link",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_3a13f52dc3fd",
+            "sql": "ALTER TABLE `notification` ADD INDEX `idx_notification_user_id_read_at` (`user_id`, `read_at`)",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:06:50+00:00",
+            "table": "notification",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_3712c65d0886",
+            "sql": "ALTER TABLE `notification` ADD CONSTRAINT `fk_notification_user_id` FOREIGN KEY (`user_id`) REFERENCES `user` (`id`) ON DELETE CASCADE ON UPDATE CASCADE",
+            "destructive": false,
+            "generated_at": "2026-07-31T13:06:50+00:00",
+            "table": "notification",
+            "operation": "add_fk",
+            "warning": null
+        },
+        {
+            "id": "mig_a768abaefaba",
+            "sql": "DROP TABLE IF EXISTS `eval_cache_test`",
+            "destructive": true,
+            "generated_at": "2026-07-31T13:06:50+00:00",
+            "table": "eval_cache_test",
+            "operation": "drop_table",
+            "warning": null
         }
     ]
 }

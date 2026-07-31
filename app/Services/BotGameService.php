@@ -22,6 +22,23 @@ class BotGameService
     public const RATING_MIN = BotGame::RATING_MIN;
     public const RATING_MAX = BotGame::RATING_MAX;
 
+    /**
+     * Below this per-move time slice (ms), the bot's remaining clock is the
+     * binding constraint and an explicit movetime cap is forwarded to the
+     * engine; at or above it, the clock has plenty of room and the engine's own
+     * rating-driven default budget is left alone (movetime 0). Keeps a bullet
+     * bot from thinking itself into a flag without slowing down games that
+     * still have ample time. See botMovetimeMs().
+     */
+    private const BOT_MOVETIME_CEILING_MS = 1500;
+
+    /**
+     * A plain divisor (NOT a real moves-to-go estimate) used to carve a
+     * per-move time slice out of the bot's remaining clock. Good enough to keep
+     * a bullet/blitz bot safe; see botMovetimeMs().
+     */
+    private const BOT_MOVETIME_DIVISOR = 20;
+
     public function __construct(private readonly EngineSelector $engine)
     {
     }
@@ -44,10 +61,17 @@ class BotGameService
      *   engine /move + /bestmove flow like Chess960, just with a per-move
      *   effective rating (fading/glassjaw) or an altered turn order
      *   (doublemove); see effectiveBotRating() and humanMove().
+     * @param string|null $timeControl One of BotGame::TIME_CONTROLS, or null/anything
+     *   else for untimed (the default) — see BotGame::parseTimeControl().
      * @throws \InvalidArgumentException if the custom FEN is invalid or already finished.
      */
-    public function create(int $rating, string $humanColor, ?string $startFen = null, string $variant = 'standard'): BotGame
-    {
+    public function create(
+        int $rating,
+        string $humanColor,
+        ?string $startFen = null,
+        string $variant = 'standard',
+        ?string $timeControl = null,
+    ): BotGame {
         $game = new BotGame();
         $game->variant = in_array($variant, [
             'standard', 'chess960', 'duck', 'crazyhouse', 'antichess',
@@ -60,6 +84,14 @@ class BotGameService
         $game->human_color = $humanColor === 'b' ? 'b' : 'w';
         $game->setMoves([]);
         $game->setHistory([]);
+
+        $parsedTc = BotGame::parseTimeControl($timeControl);
+        if ($parsedTc !== null) {
+            [$baseMs] = $parsedTc;
+            $game->time_control = $timeControl;
+            $game->white_ms = $baseMs;
+            $game->black_ms = $baseMs;
+        }
 
         if ($game->variant === 'duck') {
             // Duck Chess always starts from the standard position (the model
@@ -95,6 +127,14 @@ class BotGameService
             if ($game->status === 'ongoing' && $game->side_to_move !== $game->human_color) {
                 $this->playBot($game);
             }
+        }
+
+        // Rule: the first move of the game starts the clock. If the bot just
+        // opened, playXBot() above already set last_move_at (via
+        // settleBotClockAfterMove) once its reply landed — the guard here only
+        // covers the human-moves-first case, where nothing else would set it.
+        if ($this->isTimed($game) && $game->last_move_at === null) {
+            $game->last_move_at = (string) self::nowMs();
         }
 
         $game->save();
@@ -139,6 +179,16 @@ class BotGameService
             return ['ok' => false, 'error' => 'not your turn'];
         }
 
+        // Clock: charge the human's elapsed thinking time (since last_move_at)
+        // against their own clock BEFORE the submitted move is validated or
+        // applied at all. A flag here ends the game outright — whatever move
+        // they tried to submit is discarded, exactly like arriving too late.
+        if ($this->isTimed($game) && $this->flagHumanIfOutOfTime($game)) {
+            $game->save();
+
+            return ['ok' => true];
+        }
+
         if ($game->variant === 'duck') {
             $result = $this->engine->duckMove($game->fen, $game->duck ?? '', $move);
             if (empty($result['legal'])) {
@@ -146,6 +196,7 @@ class BotGameService
             }
 
             $this->applyDuck($game, $move, $result, 'human');
+            $this->addHumanIncrement($game);
 
             if ($game->status === 'ongoing') {
                 $this->playDuckBot($game);
@@ -165,6 +216,7 @@ class BotGameService
             }
 
             $this->apply($game, $move, $result, 'human');
+            $this->addHumanIncrement($game);
 
             if ($game->status === 'ongoing') {
                 $this->playCrazyhouseBot($game);
@@ -189,6 +241,7 @@ class BotGameService
             }
 
             $this->apply($game, $move, $result, 'human');
+            $this->addHumanIncrement($game);
 
             if ($game->status === 'ongoing') {
                 $this->playAntichessBot($game);
@@ -205,6 +258,7 @@ class BotGameService
         }
 
         $this->apply($game, $move, $result, 'human');
+        $this->addHumanIncrement($game);
 
         // Double Move: the human plays two plies per bot reply. After the FIRST ply
         // of the pair the bot normally passes — EXCEPT when that ply gave check.
@@ -275,6 +329,13 @@ class BotGameService
         if ($game->variant === 'doublemove') {
             return ['ok' => false, 'error' => 'undo is not available in Double Move'];
         }
+        // Timed games: rewinding moves would have to rewind the clock too (whose
+        // time was actually spent thinking on the undone moves?), so undo is
+        // simply disabled once a game has a time control — the least surprising
+        // rule available, and consistent with how real clocks work elsewhere.
+        if ($this->isTimed($game)) {
+            return ['ok' => false, 'error' => 'undo is not available in a timed game'];
+        }
 
         $moves = $game->getMoves();
         $history = $game->getHistory();
@@ -331,6 +392,7 @@ class BotGameService
         if ($game->status !== 'ongoing') {
             return;
         }
+        $botColor = $game->side_to_move;
         // The "Unlosable" bot (sentinel rating 0, the /bot slider's lowest stop) is
         // Standard rules with the engine playing the WORST move it can find; every
         // real rating (>=RATING_MIN) plays its advertised strength. fading and
@@ -338,13 +400,19 @@ class BotGameService
         // never take the worst-move path — only a stored sentinel rating of 0 on a
         // standard/chess960/doublemove game does.
         $rating = $this->effectiveBotRating($game);
+        $movetimeMs = $this->botMovetimeMs($game, $botColor);
+        $startedAt = microtime(true);
         $best = $rating <= 0
             ? $this->engine->worstMove($game->fen, $game->getHistory())
             : $this->engine->bestMove(
                 $game->fen,
                 $rating,
                 $game->getHistory(),
+                $movetimeMs,
             );
+        if ($this->isTimed($game) && $this->flagBotIfOutOfTime($game, $botColor, $startedAt)) {
+            return; // bot flagged — game already ended, no move applied
+        }
         $uci = $best['bestmove'] ?? null;
         if (!is_string($uci) || $uci === '') {
             return;
@@ -354,6 +422,155 @@ class BotGameService
             return;
         }
         $this->apply($game, $uci, $result, 'bot', $best);
+        $this->settleBotClockAfterMove($game, $botColor);
+    }
+
+    // --- Clocks -------------------------------------------------------------
+    //
+    // Server-authoritative; the client clock is display only. Rules:
+    //  1. A human move request first charges elapsed time (since last_move_at)
+    //     against the human's own clock. Hitting 0 ends the game immediately —
+    //     the submitted move is never applied (flagHumanIfOutOfTime()).
+    //  2. Otherwise the move is applied and the increment is added to the
+    //     human's clock (addHumanIncrement()).
+    //  3. The bot's own think time is measured (wall clock) and deducted from
+    //     its clock; hitting 0 ends the game without applying its candidate
+    //     move (flagBotIfOutOfTime()). Otherwise the move is applied and the
+    //     increment is added, and last_move_at resets so the human's clock
+    //     starts now (settleBotClockAfterMove()) — matching the rule that the
+    //     first move of the game starts the clock (create() sets it directly
+    //     when the human is to move first, since no bot move runs to do it).
+    //  4. The engine's requested think time is capped by the bot's remaining
+    //     clock (botMovetimeMs()) so it can't flag itself on a fast time
+    //     control.
+
+    private function isTimed(BotGame $game): bool
+    {
+        return $game->time_control !== null;
+    }
+
+    private function clockMs(BotGame $game, string $color): int
+    {
+        return $color === 'w' ? ($game->white_ms ?? 0) : ($game->black_ms ?? 0);
+    }
+
+    private function setClockMs(BotGame $game, string $color, int $ms): void
+    {
+        if ($color === 'w') {
+            $game->white_ms = $ms;
+        } else {
+            $game->black_ms = $ms;
+        }
+    }
+
+    /** Now, in epoch milliseconds — see BotGame::$last_move_at for why this is
+     *  ms rather than the app's usual second-resolution timestamp string. */
+    private static function nowMs(): int
+    {
+        return (int) round(microtime(true) * 1000);
+    }
+
+    /** End the game on a clock flag: `$color` ran out, so the OTHER color wins. */
+    private function flagTimeout(BotGame $game, string $color): void
+    {
+        $game->status = 'timeout';
+        $game->result = $color === 'w' ? '0-1' : '1-0';
+    }
+
+    /**
+     * Charge the human's elapsed thinking time (since last_move_at) against
+     * their own clock. Always resets last_move_at to "now" as of this check —
+     * whether or not it flags — so a later check (the next humanMove() call,
+     * including a Double Move second ply where no bot reply resets it) measures
+     * a fresh interval instead of double-charging the same elapsed time twice.
+     * Returns true if the clock is now empty (the human loses on time).
+     */
+    private function flagHumanIfOutOfTime(BotGame $game): bool
+    {
+        $color = $game->human_color;
+        $elapsed = $game->last_move_at !== null
+            ? max(0, self::nowMs() - (int) $game->last_move_at)
+            : 0;
+        $remaining = $this->clockMs($game, $color) - $elapsed;
+        $game->last_move_at = (string) self::nowMs();
+        if ($remaining <= 0) {
+            $this->setClockMs($game, $color, 0);
+            $this->flagTimeout($game, $color);
+
+            return true;
+        }
+        $this->setClockMs($game, $color, $remaining);
+
+        return false;
+    }
+
+    /** Add the time control's increment to the human's clock, once their move
+     *  has actually been applied (called after every successful human move). */
+    private function addHumanIncrement(BotGame $game): void
+    {
+        if (!$this->isTimed($game)) {
+            return;
+        }
+        [, $incMs] = BotGame::parseTimeControl($game->time_control) ?? [0, 0];
+        if ($incMs > 0) {
+            $this->setClockMs($game, $game->human_color, $this->clockMs($game, $game->human_color) + $incMs);
+        }
+    }
+
+    /**
+     * The movetime (ms) to forward to the engine for the bot's next move, given
+     * its remaining clock — 0 (untimed, or the engine's own rating-driven
+     * default) once the clock still affords more than
+     * BOT_MOVETIME_CEILING_MS per this rough per-move slice. See the class-level
+     * constants for why.
+     */
+    private function botMovetimeMs(BotGame $game, string $botColor): int
+    {
+        if (!$this->isTimed($game)) {
+            return 0;
+        }
+        $remaining = $this->clockMs($game, $botColor);
+        $slice = max(50, intdiv($remaining, self::BOT_MOVETIME_DIVISOR));
+
+        return $slice < self::BOT_MOVETIME_CEILING_MS ? $slice : 0;
+    }
+
+    /**
+     * Deduct the bot's just-spent think time (wall clock since $startedAt) from
+     * its own clock. Returns true and ends the game (status=timeout, no move
+     * applied) if that empties it; otherwise just updates the clock — the
+     * increment is added later, only once the move is actually applied
+     * (settleBotClockAfterMove), mirroring the human side's charge-then-apply order.
+     */
+    private function flagBotIfOutOfTime(BotGame $game, string $botColor, float $startedAt): bool
+    {
+        $thinkMs = (int) round((microtime(true) - $startedAt) * 1000);
+        $remaining = $this->clockMs($game, $botColor) - $thinkMs;
+        if ($remaining <= 0) {
+            $this->setClockMs($game, $botColor, 0);
+            $this->flagTimeout($game, $botColor);
+
+            return true;
+        }
+        $this->setClockMs($game, $botColor, $remaining);
+
+        return false;
+    }
+
+    /** Add the increment and restart the human's clock now that the bot's reply
+     *  has landed (last_move_at resets here, not on the human's turn — see the
+     *  class-level clock rules). No-op once the game is no longer ongoing (the
+     *  bot's move itself ended it — nothing left to time). */
+    private function settleBotClockAfterMove(BotGame $game, string $botColor): void
+    {
+        if (!$this->isTimed($game) || $game->status !== 'ongoing') {
+            return;
+        }
+        [, $incMs] = BotGame::parseTimeControl($game->time_control) ?? [0, 0];
+        if ($incMs > 0) {
+            $this->setClockMs($game, $botColor, $this->clockMs($game, $botColor) + $incMs);
+        }
+        $game->last_move_at = (string) self::nowMs();
     }
 
     /**
@@ -423,12 +640,19 @@ class BotGameService
         if ($game->status !== 'ongoing') {
             return;
         }
-        $best = $this->engine->crazyhouseBestMove($game->fen, $game->rating);
+        $botColor = $game->side_to_move;
+        $movetimeMs = $this->botMovetimeMs($game, $botColor);
+        $startedAt = microtime(true);
+        $best = $this->engine->crazyhouseBestMove($game->fen, $game->rating, $movetimeMs);
+        if ($this->isTimed($game) && $this->flagBotIfOutOfTime($game, $botColor, $startedAt)) {
+            return;
+        }
         $uci = $best['bestmove'] ?? null;
         if (!is_string($uci) || $uci === '') {
             return;
         }
         $this->apply($game, $uci, $best, 'bot', $best);
+        $this->settleBotClockAfterMove($game, $botColor);
     }
 
     /**
@@ -442,12 +666,19 @@ class BotGameService
         if ($game->status !== 'ongoing') {
             return;
         }
-        $best = $this->engine->antichessBestMove($game->fen, $game->rating);
+        $botColor = $game->side_to_move;
+        $movetimeMs = $this->botMovetimeMs($game, $botColor);
+        $startedAt = microtime(true);
+        $best = $this->engine->antichessBestMove($game->fen, $game->rating, $movetimeMs);
+        if ($this->isTimed($game) && $this->flagBotIfOutOfTime($game, $botColor, $startedAt)) {
+            return;
+        }
         $uci = $best['bestmove'] ?? null;
         if (!is_string($uci) || $uci === '') {
             return;
         }
         $this->apply($game, $uci, $best, 'bot', $best);
+        $this->settleBotClockAfterMove($game, $botColor);
     }
 
     /**
@@ -496,12 +727,19 @@ class BotGameService
         if ($game->status !== 'ongoing') {
             return;
         }
-        $best = $this->engine->duckBestMove($game->fen, $game->duck ?? '', $game->rating);
+        $botColor = $game->side_to_move;
+        $movetimeMs = $this->botMovetimeMs($game, $botColor);
+        $startedAt = microtime(true);
+        $best = $this->engine->duckBestMove($game->fen, $game->duck ?? '', $game->rating, $movetimeMs);
+        if ($this->isTimed($game) && $this->flagBotIfOutOfTime($game, $botColor, $startedAt)) {
+            return;
+        }
         $uci = $best['bestmove'] ?? null;
         if (!is_string($uci) || $uci === '') {
             return;
         }
         $this->applyDuck($game, $uci, $best, 'bot', $best);
+        $this->settleBotClockAfterMove($game, $botColor);
     }
 
     /**

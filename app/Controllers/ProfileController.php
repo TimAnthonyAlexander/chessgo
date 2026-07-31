@@ -72,6 +72,9 @@ class ProfileController extends Controller
             'id' => $id,
             'name' => $user->name,
             'role' => $user->role,
+            'title' => $user->displayTitle(),
+            'bio' => $user->bio,
+            'country' => $user->country,
             'created_at' => $user->created_at,
             'ratings' => $this->ratings($user),
             'puzzle' => [

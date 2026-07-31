@@ -132,6 +132,57 @@ class User extends BaseModel
     // New accounts start with one; consumed (not regenerated) when it saves a streak.
     public int $freeze_tokens = 1;
 
+    // Player title (Lichess-style), self-service via admin only — never
+    // player-editable. 'AM' ("Admin Master") is our own in-joke staff title and
+    // is NEVER stored here; it's derived for admins in displayTitle() instead.
+    public ?string $title = null;
+
+    /** Allowed values for {@see $title}. Real FIDE-style titles plus our own
+     *  admin joke title. Validate any write against this — never trust free text. */
+    public const array TITLES = ['GM', 'IM', 'FM', 'CM', 'NM', 'WGM', 'WIM', 'WFM', 'WCM', 'AM'];
+
+    // Short free-text bio, self-editable via POST /me/profile (nullable/clearable).
+    public ?string $bio = null;
+
+    // ISO-3166-1 alpha-2 country code, uppercase, self-editable (nullable/clearable).
+    public ?string $country = null;
+
+    /** Whitelist of ISO-3166-1 alpha-2 country codes accepted for {@see $country}.
+     *  Kept as a flat const so both the model and the controller validate against
+     *  the exact same list. */
+    public const array COUNTRIES = [
+        'AD', 'AE', 'AF', 'AG', 'AI', 'AL', 'AM', 'AO', 'AQ', 'AR', 'AS', 'AT', 'AU', 'AW', 'AX', 'AZ',
+        'BA', 'BB', 'BD', 'BE', 'BF', 'BG', 'BH', 'BI', 'BJ', 'BL', 'BM', 'BN', 'BO', 'BQ', 'BR', 'BS',
+        'BT', 'BV', 'BW', 'BY', 'BZ',
+        'CA', 'CC', 'CD', 'CF', 'CG', 'CH', 'CI', 'CK', 'CL', 'CM', 'CN', 'CO', 'CR', 'CU', 'CV', 'CW',
+        'CX', 'CY', 'CZ',
+        'DE', 'DJ', 'DK', 'DM', 'DO', 'DZ',
+        'EC', 'EE', 'EG', 'EH', 'ER', 'ES', 'ET',
+        'FI', 'FJ', 'FK', 'FM', 'FO', 'FR',
+        'GA', 'GB', 'GD', 'GE', 'GF', 'GG', 'GH', 'GI', 'GL', 'GM', 'GN', 'GP', 'GQ', 'GR', 'GS', 'GT',
+        'GU', 'GW', 'GY',
+        'HK', 'HM', 'HN', 'HR', 'HT', 'HU',
+        'ID', 'IE', 'IL', 'IM', 'IN', 'IO', 'IQ', 'IR', 'IS', 'IT',
+        'JE', 'JM', 'JO', 'JP',
+        'KE', 'KG', 'KH', 'KI', 'KM', 'KN', 'KP', 'KR', 'KW', 'KY', 'KZ',
+        'LA', 'LB', 'LC', 'LI', 'LK', 'LR', 'LS', 'LT', 'LU', 'LV', 'LY',
+        'MA', 'MC', 'MD', 'ME', 'MF', 'MG', 'MH', 'MK', 'ML', 'MM', 'MN', 'MO', 'MP', 'MQ', 'MR', 'MS',
+        'MT', 'MU', 'MV', 'MW', 'MX', 'MY', 'MZ',
+        'NA', 'NC', 'NE', 'NF', 'NG', 'NI', 'NL', 'NO', 'NP', 'NR', 'NU', 'NZ',
+        'OM',
+        'PA', 'PE', 'PF', 'PG', 'PH', 'PK', 'PL', 'PM', 'PN', 'PR', 'PS', 'PT', 'PW', 'PY',
+        'QA',
+        'RE', 'RO', 'RS', 'RU', 'RW',
+        'SA', 'SB', 'SC', 'SD', 'SE', 'SG', 'SH', 'SI', 'SJ', 'SK', 'SL', 'SM', 'SN', 'SO', 'SR', 'SS',
+        'ST', 'SV', 'SX', 'SY', 'SZ',
+        'TC', 'TD', 'TF', 'TG', 'TH', 'TJ', 'TK', 'TL', 'TM', 'TN', 'TO', 'TR', 'TT', 'TV', 'TW', 'TZ',
+        'UA', 'UG', 'UM', 'US', 'UY', 'UZ',
+        'VA', 'VC', 'VE', 'VG', 'VI', 'VN', 'VU',
+        'WF', 'WS',
+        'YE', 'YT',
+        'ZA', 'ZM', 'ZW',
+    ];
+
     /**
      * Define indexes for this model
      * @var array<string, string>
@@ -157,11 +208,25 @@ class User extends BaseModel
         'rated_at_antichess' => ['type' => 'TEXT', 'nullable' => true],
         // The Flame streak's last-qualifying UTC day, stored as 'YYYY-MM-DD' text.
         'last_active_date' => ['type' => 'TEXT', 'nullable' => true],
+        // Freeform, so it isn't clipped by the default VARCHAR(255); validated
+        // to <=300 chars at the controller.
+        'bio' => ['type' => 'TEXT', 'nullable' => true],
     ];
 
     public function checkPassword(string $password): bool
     {
         return password_verify($password, $this->password);
+    }
+
+    /**
+     * The title to display for this account: an explicit real title always
+     * wins; otherwise every admin shows the "AM" (Admin Master) joke title.
+     * Never backfilled into `$title` — computed on read so a role change takes
+     * effect immediately with no data migration.
+     */
+    public function displayTitle(): ?string
+    {
+        return $this->title ?? ($this->role === 'admin' ? 'AM' : null);
     }
 
     /** Categories carrying a Glicko-2 rating, including the isolated puzzle + duck + crazyhouse + antichess pools. */
@@ -180,6 +245,11 @@ class User extends BaseModel
     {
         $data = parent::jsonSerialize();
         unset($data['password']);
+
+        // Always the DERIVED title (a real title wins, otherwise admins show
+        // "AM") — never the raw column, so every payload agrees with
+        // displayTitle() without each caller re-deriving it.
+        $data['title'] = $this->displayTitle();
 
         // Derived per-category provisional flags (RD > 110): a rating shown with
         // a "?" until the system is confident enough. The frontend reads this

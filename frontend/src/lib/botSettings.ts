@@ -3,10 +3,41 @@ import type { Variant } from './variants'
 
 export type ColorChoice = Color | 'random'
 
+/** The "/bot" setup screen's time control choices. 'untimed' (the default) is
+ *  the absence of a time control — createBotGame() only sends time_control
+ *  when it's one of the real entries below. Mirrors BotGame::TIME_CONTROLS. */
+export type TimeControl = 'untimed' | '1+0' | '3+0' | '3+2' | '5+0' | '10+0' | '15+10'
+
 export interface BotSettings {
     rating: number
     colorChoice: ColorChoice
     variant: Variant
+    timeControl: TimeControl
+}
+
+export const TIME_CONTROLS: readonly TimeControl[] = [
+    'untimed',
+    '1+0',
+    '3+0',
+    '3+2',
+    '5+0',
+    '10+0',
+    '15+10',
+]
+
+/** Setup-screen label: "Untimed", or the time control itself (e.g. "5+0"). */
+export const timeControlLabel = (tc: TimeControl): string => (tc === 'untimed' ? 'Untimed' : tc)
+
+/**
+ * Parse a real (non-'untimed') time control into { baseMs, incMs } — used to
+ * size the Clock component's progress bar. Mirrors BotGame::parseTimeControl()
+ * on the server, which is the actual source of truth for the clock; this is
+ * display-only. Returns null for 'untimed'.
+ */
+export function parseTimeControl(tc: TimeControl): { baseMs: number; incMs: number } | null {
+    if (tc === 'untimed') return null
+    const [base, inc] = tc.split('+').map(Number)
+    return { baseMs: base * 60_000, incMs: inc * 1000 }
 }
 
 const KEY = 'botgame:settings'
@@ -64,6 +95,7 @@ export const DEFAULT_BOT_SETTINGS: BotSettings = {
     rating: 1500,
     colorChoice: 'w',
     variant: 'standard',
+    timeControl: 'untimed',
 }
 
 // Load the player's last-used bot-game setup. Every field is validated against
@@ -87,7 +119,10 @@ export function loadBotSettings(): BotSettings {
         const colorChoice = COLORS.includes(p.colorChoice as ColorChoice)
             ? (p.colorChoice as ColorChoice)
             : DEFAULT_BOT_SETTINGS.colorChoice
-        return { rating, colorChoice, variant }
+        const timeControl = TIME_CONTROLS.includes(p.timeControl as TimeControl)
+            ? (p.timeControl as TimeControl)
+            : DEFAULT_BOT_SETTINGS.timeControl
+        return { rating, colorChoice, variant, timeControl }
     } catch {
         return DEFAULT_BOT_SETTINGS
     }

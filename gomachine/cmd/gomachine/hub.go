@@ -10,6 +10,7 @@ import (
 	neturl "net/url"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/timanthonyalexander/gomachine/internal/auth"
@@ -177,6 +178,65 @@ func cmdHub(args []string) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"live": live, "fen": fen})
 	})
+	// Server-side private challenge registration (secret-gated, no ticket):
+	// BaseAPI pre-registers an already-accepted user-to-user challenge with no
+	// creator connected, so both named players can join independently, later,
+	// over the ordinary WS `joinChallenge` message. See
+	// hub.RegisterServerChallenge / hub.ServerChallengeRequest.
+	mux.HandleFunc("POST /internal/challenge", func(w http.ResponseWriter, r *http.Request) {
+		if secret != "" && r.Header.Get("X-Hub-Secret") != secret {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		var body struct {
+			Code        string `json:"code"`
+			Pool        string `json:"pool"`
+			Color       string `json:"color"`
+			Rated       bool   `json:"rated"`
+			Variant     string `json:"variant"`
+			Fen         string `json:"fen"`
+			CreatorSub  string `json:"creatorSub"`
+			OpponentSub string `json:"opponentSub"`
+			TTLSeconds  int64  `json:"ttlSeconds"`
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "bad json body"})
+			return
+		}
+		err := h.RegisterServerChallenge(hub.ServerChallengeRequest{
+			Code: body.Code, Pool: body.Pool, Color: body.Color, Rated: body.Rated,
+			Variant: body.Variant, FEN: body.Fen, CreatorSub: body.CreatorSub,
+			OpponentSub: body.OpponentSub, TTL: time.Duration(body.TTLSeconds) * time.Second,
+		})
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	})
+	// Presence lookup for a friends list (secret-gated, no ticket): which of the
+	// given identity subs currently have a live WebSocket connection.
+	mux.HandleFunc("GET /internal/online", func(w http.ResponseWriter, r *http.Request) {
+		if secret != "" && r.Header.Get("X-Hub-Secret") != secret {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		var subs []string
+		for _, s := range strings.Split(r.URL.Query().Get("subs"), ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				subs = append(subs, s)
+			}
+		}
+		online := h.Online(subs)
+		if online == nil {
+			online = []string{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string][]string{"online": online})
+	})
 
 	fmt.Printf("gomachine hub (realtime) listening on http://%s  (ws at /ws)\n", *addr)
 	if err := http.ListenAndServe(*addr, mux); err != nil {
@@ -201,6 +261,11 @@ func persistGame(baseURL, secret string, g hub.FinishedGame) {
 		"moves":     g.Moves,
 		"sans":      g.SANs,
 		"moveTimes": g.MoveTimes,
+		// startFen is the position the game began from — chess.StartFEN for a
+		// normal game, but non-standard for Chess960 or a custom-FEN challenge.
+		// BaseAPI's current GameResultController ignores unknown body fields, so
+		// this is a forward-compatible addition, not a contract break.
+		"startFen": g.StartFEN,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "persist game %s: marshal: %v\n", g.ID, err)

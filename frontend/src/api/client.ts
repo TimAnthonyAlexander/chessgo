@@ -21,6 +21,8 @@ export type GameStatus =
     | 'white_win'
     | 'black_win'
     | 'draw'
+    // Bot games only: a server-authoritative clock ran out (see BotGame.time_control).
+    | 'timeout'
 
 export interface MoveEntry {
     ply: number
@@ -52,6 +54,15 @@ export interface BotGame {
     legal_moves: string[]
     your_turn: boolean
     duck: string | null // Duck Chess: the duck's square, or null before the first placement
+    // Clock (server-authoritative; the client only ticks a local display between
+    // requests and re-syncs from these fields after every move). All null/absent
+    // for an untimed game — time_control is the field to gate the clock UI on.
+    time_control: string | null // e.g. "5+0", or null = untimed
+    white_ms: number | null
+    black_ms: number | null
+    // Epoch-ms string (NOT a formatted date) marking when the side-to-move's
+    // clock started counting down from white_ms/black_ms — see BotGame.php.
+    last_move_at: string | null
 }
 
 class ApiError extends Error {
@@ -84,11 +95,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 /** Create a bot game. `opts.fen` starts from a custom position (e.g. one carried
  * over from the analysis board); `opts.variant` selects a chess variant (default
- * standard). Omitting both = a standard game from the normal start. */
+ * standard); `opts.timeControl` is one of BotGame's TIME_CONTROLS (e.g. "5+0") —
+ * omitted = untimed, the default. Omitting all = a standard untimed game from
+ * the normal start. */
 export function createBotGame(
     rating: number,
     humanColor: Color,
-    opts?: { fen?: string; variant?: Variant },
+    opts?: { fen?: string; variant?: Variant; timeControl?: string },
 ): Promise<BotGame> {
     return request<BotGame>('/bot-games', {
         method: 'POST',
@@ -97,6 +110,7 @@ export function createBotGame(
             human_color: humanColor,
             ...(opts?.variant ? { variant: opts.variant } : {}),
             ...(opts?.fen ? { fen: opts.fen } : {}),
+            ...(opts?.timeControl ? { time_control: opts.timeControl } : {}),
         }),
     })
 }
@@ -730,11 +744,18 @@ export function getLiveGames(): Promise<LiveGamesResult> {
 
 export type RatingCategory = 'bullet' | 'blitz' | 'rapid' | 'classical'
 
+/** Player title (Lichess-style FIDE titles + our own "AM" staff joke title —
+ *  see {@link Profile.title}). */
+export type Title = 'GM' | 'IM' | 'FM' | 'CM' | 'NM' | 'WGM' | 'WIM' | 'WFM' | 'WCM' | 'AM'
+
 export interface User {
     id: string
     name: string
     email: string
     role: string
+    // The derived title (a real title wins; otherwise every admin shows "AM").
+    // Always present in every account payload the server serializes.
+    title: Title | null
     rating_bullet: number
     rating_blitz: number
     rating_rapid: number
@@ -842,6 +863,13 @@ export interface Profile {
     id: string
     name: string
     role: string
+    // Derived title (a real title wins; otherwise admins show "AM"). Never
+    // player-editable — see updateMyProfile() for the fields that are.
+    title: Title | null
+    bio: string | null
+    // ISO-3166-1 alpha-2 code, or null. Render as the country's name — see
+    // COUNTRY_NAMES in components/profile/shared.ts (no flags, text only).
+    country: string | null
     created_at: string
     ratings: Record<RatingCategory, RatingTile>
     puzzle: PuzzleProfile
@@ -903,6 +931,27 @@ export function getProfileGames(
     return request<ProfileGamesPage>(
         `/users/${encodeURIComponent(name)}/games?${params.toString()}`,
     )
+}
+
+export interface ProfileUpdateResult {
+    id: string
+    name: string
+    title: Title | null
+    bio: string | null
+    country: string | null
+}
+
+/** Self-service profile edit (the authenticated user only). Both fields are
+ * nullable/clearable — pass `null` (or omit) to clear one. `title` is never
+ * editable here; it's staff-assigned or derived for admins. */
+export function updateMyProfile(fields: {
+    bio?: string | null
+    country?: string | null
+}): Promise<ProfileUpdateResult> {
+    return request<ProfileUpdateResult>('/me/profile', {
+        method: 'POST',
+        body: JSON.stringify(fields),
+    })
 }
 
 // --- Leaderboard (per-category top players) ---

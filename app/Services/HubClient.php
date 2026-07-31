@@ -127,4 +127,85 @@ class HubClient
             'max' => (int)($decoded['max'] ?? 5),
         ];
     }
+
+    /**
+     * Mints a server-side, opponent-bound challenge on the hub so the
+     * challenger and opponent can both join it via its 6-char code — used by
+     * ChallengeController on accept. Unlike every other method on this
+     * client, this one does NOT fail soft: a hub blip here means there is no
+     * game to join, so the caller must surface it as an error rather than
+     * silently returning a code that goes nowhere.
+     *
+     * @param array{code: string, pool: string, color: string, rated: bool,
+     *     variant: string, fen: string, creatorSub: string, opponentSub: string,
+     *     ttlSeconds: int} $terms
+     */
+    public function createServerChallenge(array $terms): bool
+    {
+        $body = json_encode($terms);
+        if (!is_string($body)) {
+            return false;
+        }
+
+        $ch = curl_init($this->baseUrl . '/internal/challenge');
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT_MS => 1500,
+            CURLOPT_CONNECTTIMEOUT_MS => 800,
+            CURLOPT_CUSTOMREQUEST => 'POST',
+            CURLOPT_POSTFIELDS => $body,
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json',
+                'X-Hub-Secret: ' . $this->secret,
+            ],
+        ]);
+        $raw = curl_exec($ch);
+        $code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+
+        if (!is_string($raw) || $code !== 200) {
+            return false;
+        }
+
+        $decoded = json_decode($raw, true);
+
+        return is_array($decoded) && ($decoded['ok'] ?? false) === true;
+    }
+
+    /**
+     * Which of these account ids (hub "sub" identities) are currently
+     * connected to the hub. Fail-soft: an unreachable hub returns an empty
+     * set (nobody shows as online) rather than erroring the caller.
+     *
+     * @param list<string> $subs
+     * @return list<string>
+     */
+    public function onlineSubs(array $subs): array
+    {
+        $subs = array_values(array_filter($subs, static fn (string $s): bool => $s !== ''));
+        if ($subs === []) {
+            return [];
+        }
+
+        $url = $this->baseUrl . '/internal/online?subs=' . rawurlencode(implode(',', $subs));
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT_MS => 800,
+            CURLOPT_CONNECTTIMEOUT_MS => 500,
+            CURLOPT_HTTPHEADER => ['X-Hub-Secret: ' . $this->secret],
+        ]);
+        $raw = curl_exec($ch);
+        $code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+
+        if (!is_string($raw) || $code !== 200) {
+            return [];
+        }
+
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded) || !isset($decoded['online']) || !is_array($decoded['online'])) {
+            return [];
+        }
+
+        return array_values(array_map('strval', $decoded['online']));
+    }
 }

@@ -23,6 +23,7 @@ import {
     Zap,
 } from 'lucide-react'
 import Board from '../components/Board'
+import Clock from '../components/Clock'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveList from '../components/MoveList'
 import GameModeCard from '../components/GameModeCard'
@@ -61,6 +62,9 @@ import {
     RATING_SLIDER_MAX,
     RATING_SLIDER_MIN,
     saveBotSettings,
+    type TimeControl,
+    TIME_CONTROLS,
+    timeControlLabel,
     UNLOSABLE_RATING,
     FULL_STRENGTH_RATING,
 } from '../lib/botSettings'
@@ -98,6 +102,22 @@ const DUCK_REVEAL_MS = 550
 // The side to move encoded in a FEN's active-color field (defaults to White).
 const sideToMoveOf = (fen: string): Color => (fen.split(' ')[1] === 'b' ? 'b' : 'w')
 
+// Live remaining clock time (ms) for a color, ticking down locally between
+// requests — mirrors lib/socket.ts's liveRemaining for live games. The server
+// is authoritative: white_ms/black_ms/last_move_at are re-synced from its
+// response after every move (Clock's `getMs` closure is re-created each render,
+// which snaps the display to that fresh truth). Untimed games never call this
+// — the clock UI is gated on `game.time_control` and simply doesn't render.
+function remainingMs(g: Game, color: Color): number {
+    const ms = color === 'w' ? g.white_ms : g.black_ms
+    if (ms == null) return 0
+    let rem = ms
+    if (g.status === 'ongoing' && g.side_to_move === color && g.last_move_at) {
+        rem -= Date.now() - Number(g.last_move_at)
+    }
+    return Math.max(0, rem)
+}
+
 // Fading and Glass Jaw run the engine at a strength the BACKEND computes per move
 // (fading Elo / check-triggered Elo loss) — the setup slider has nothing to set,
 // so it's hidden for these two.
@@ -134,6 +154,7 @@ export default function BotGame() {
         navFen ? sideToMoveOf(navFen) : saved.colorChoice,
     )
     const [variant, setVariant] = useState<Variant>(saved.variant)
+    const [timeControl, setTimeControl] = useState<TimeControl>(saved.timeControl)
     const [creating, setCreating] = useState(false)
     const [thinking, setThinking] = useState(false)
     const [error, setError] = useState<string | null>(null)
@@ -172,8 +193,8 @@ export default function BotGame() {
 
     // Persist the setup whenever it changes, so it survives a refresh.
     useEffect(() => {
-        saveBotSettings({ rating, colorChoice, variant })
-    }, [rating, colorChoice, variant])
+        saveBotSettings({ rating, colorChoice, variant, timeControl })
+    }, [rating, colorChoice, variant, timeControl])
 
     const liveLen = game?.moves.length ?? 0
     const shownPly = viewIndex === null ? liveLen : Math.min(viewIndex, liveLen)
@@ -413,7 +434,11 @@ export default function BotGame() {
                   ? (startFen ?? undefined)
                   : undefined
         try {
-            const g = await createBotGame(rating, color, { variant, fen })
+            const g = await createBotGame(rating, color, {
+                variant,
+                fen,
+                timeControl: timeControl === 'untimed' ? undefined : timeControl,
+            })
             setGame(g)
             const opener = g.moves[g.moves.length - 1]
             if (opener) playForSan(opener.san, g.status !== 'ongoing')
@@ -440,6 +465,7 @@ export default function BotGame() {
         !thinking &&
         !isDuck &&
         game?.variant !== 'doublemove' &&
+        !game?.time_control &&
         !!game?.moves.some((m) => m.by === 'human')
     async function undo() {
         if (!game || thinking) return
@@ -491,7 +517,11 @@ export default function BotGame() {
         setFlipped(false)
         setViewIndex(null)
         const fen = variant === 'chess960' ? random960() : undefined
-        createBotGame(rating, other, { variant, fen })
+        createBotGame(rating, other, {
+            variant,
+            fen,
+            timeControl: timeControl === 'untimed' ? undefined : timeControl,
+        })
             .then((g) => {
                 setGame(g)
                 const opener = g.moves[g.moves.length - 1]
@@ -543,7 +573,10 @@ export default function BotGame() {
         : over
           ? resigned
               ? `You resigned · ${resultScore}`
-              : `${game ? statusLabel(game.status, { variant: game.variant, fen: game.fen }) : ''}${resultScore ? ` · ${resultScore}` : ''}`
+              : // 'timeout' isn't in lib/chess.ts's STATUS_LABEL map (it's specific to
+                // bot-game clocks) — label it directly rather than falling through to
+                // statusLabel's raw-status-string fallback.
+                `${game?.status === 'timeout' ? 'Time out' : game ? statusLabel(game.status, { variant: game.variant, fen: game.fen }) : ''}${resultScore ? ` · ${resultScore}` : ''}`
           : thinking
             ? 'Bot is thinking…'
             : game
@@ -595,6 +628,7 @@ export default function BotGame() {
                         game={game}
                         rating={rating}
                         ongoing={ongoing}
+                        thinking={thinking}
                         canUndo={canUndo}
                         shownPly={shownPly}
                         sound={sound}
@@ -625,10 +659,12 @@ export default function BotGame() {
                             rating={rating}
                             colorChoice={colorChoice}
                             variant={variant}
+                            timeControl={timeControl}
                             creating={creating}
                             customStart={!!startFen}
                             onRating={setRating}
                             onColor={setColorChoice}
+                            onTimeControl={setTimeControl}
                             onVariant={(v) => {
                                 setVariant(v)
                                 // "Unlosable" (worst-move) is a Standard-only strength;
@@ -725,6 +761,7 @@ function MovePanel({
     game,
     rating,
     ongoing,
+    thinking,
     canUndo,
     shownPly,
     sound,
@@ -752,6 +789,10 @@ function MovePanel({
     game: Game
     rating: number
     ongoing: boolean
+    /** A move request is in flight — both clocks freeze (re-synced from the
+     *  server's fresh values once it lands) rather than guess who's counting
+     *  down mid-request. */
+    thinking: boolean
     canUndo: boolean
     shownPly: number
     sound: boolean
@@ -927,6 +968,17 @@ function MovePanel({
                 {showCaptured && (
                     <MaterialStrip pieces={captured(opp)} color={human} adv={advantage(opp)} />
                 )}
+                {/* Bot's clock — only when this game has a time control at all; an
+                    untimed game renders none of this (no empty clock furniture). */}
+                {game.time_control && (
+                    <Box sx={{ ml: 'auto' }}>
+                        <Clock
+                            getMs={() => remainingMs(game, opp)}
+                            active={ongoing && !thinking && game.side_to_move === opp}
+                            running={ongoing}
+                        />
+                    </Box>
+                )}
             </Box>
 
             {error && <ErrorBanner>{error}</ErrorBanner>}
@@ -1013,6 +1065,13 @@ function MovePanel({
                     </Typography>
                     {showCaptured && (
                         <MaterialStrip pieces={captured(human)} color={opp} adv={advantage(human)} />
+                    )}
+                    {game.time_control && (
+                        <Clock
+                            getMs={() => remainingMs(game, human)}
+                            active={ongoing && !thinking && game.side_to_move === human}
+                            running={ongoing}
+                        />
                     )}
                     <Box sx={{ flex: 1 }} />
                     <Typography
@@ -1160,20 +1219,24 @@ function Setup({
     rating,
     colorChoice,
     variant,
+    timeControl,
     creating,
     customStart,
     onRating,
     onColor,
+    onTimeControl,
     onVariant,
     onStart,
 }: {
     rating: number
     colorChoice: ColorChoice
     variant: Variant
+    timeControl: TimeControl
     creating: boolean
     customStart: boolean
     onRating: (n: number) => void
     onColor: (c: ColorChoice) => void
+    onTimeControl: (tc: TimeControl) => void
     onVariant: (v: Variant) => void
     onStart: () => void
 }) {
@@ -1308,6 +1371,23 @@ function Setup({
                     <ToggleButton value="w">White</ToggleButton>
                     <ToggleButton value="b">Black</ToggleButton>
                     <ToggleButton value="random">Random</ToggleButton>
+                </ToggleButtonGroup>
+            </Box>
+
+            <Box>
+                <Label>Time control</Label>
+                <ToggleButtonGroup
+                    exclusive
+                    size="small"
+                    value={timeControl}
+                    onChange={(_, v) => v && onTimeControl(v as TimeControl)}
+                    sx={{ ...toggleSx, flexWrap: 'wrap' }}
+                >
+                    {TIME_CONTROLS.map((tc) => (
+                        <ToggleButton key={tc} value={tc}>
+                            {timeControlLabel(tc)}
+                        </ToggleButton>
+                    ))}
                 </ToggleButtonGroup>
             </Box>
 
