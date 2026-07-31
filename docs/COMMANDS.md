@@ -80,6 +80,64 @@ Puzzle seeding: download the Lichess CC0 CSV (`lichess_db_puzzle.csv.zst`, not
 committed), then `php scripts/import_puzzles.php lichess_db_puzzle.csv [--limit=N
 --min-rating --max-rating --themes=a,b]` (batched `INSERT IGNORE`, re-run safe).
 
+## Tournaments — recurring schedule
+
+**There must always be tournaments running.** `scripts/schedule_tournaments.php`
+keeps the calendar populated: it asks {@see App\Services\TournamentSchedule}
+(a pure function of time — no DB, no side effects) what should exist between
+now and now+horizon, and inserts whatever `schedule_key` isn't already a row.
+It never updates or deletes an existing tournament (someone may have joined
+it already), so it's safe to run as often as you like — a re-run with an
+unchanged window creates nothing.
+
+```sh
+php scripts/schedule_tournaments.php                    # populate the next 48h
+php scripts/schedule_tournaments.php --dry-run           # preview only, writes nothing
+php scripts/schedule_tournaments.php --horizon-hours=72  # wider window
+```
+
+The rota (all times UTC, all rated, ~37 tournaments/day, overlap is expected):
+
+| Series | When | Name | Pool | Duration | Restriction |
+|---|---|---|---|---|---|
+| `hourly` | every hour, rotating by `hour % 4` | Hourly Bullet/Blitz/Blitz/Rapid Arena | 1+0 / 3+0 / 5+0 / 10+0 | 27 / 57 / 57 / 117 min | — |
+| `variant-hourly` | every 3rd hour, rotating by `(hour/3) % 4` | Hourly Chess960/Crazyhouse/Duck/Antichess Arena | 3+0 / 3+0 / 5+0 / 3+0 | 57 min | — |
+| `daily` | 05:00 | Eastern Blitz Arena | 3+0 | 120 min | — |
+| `daily` | 17:00 | Daily Bullet Arena | 1+0 | 60 min | — |
+| `daily` | 18:00 | Daily Blitz Arena | 5+0 | 120 min | — |
+| `daily` | 19:00 | Daily Rapid Arena | 10+0 | 150 min | — |
+| `weekly` | Mon 17:00 | Weekly Bullet Arena | 1+0 | 180 min | — |
+| `weekly` | Tue 17:00 | Titled Tuesday Warm-up | 3+0 | 60 min | open to everyone |
+| `titled-tuesday` | Tue 18:00 | Titled Tuesday | 5+0 | 120 min | titled players only |
+| `weekly` | Wed 17:00 | Weekly Rapid Arena | 10+0 | 240 min | — |
+| `weekly` | Thu 19:00 | Thursday Thunder | 1+0 | 90 min | — |
+| `weekly` | Fri 17:00 | Weekly Chess960 Arena | 3+0 | 180 min | — |
+| `weekly` | Sat 17:00 | Elite Weekend Arena | 3+0 | 120 min | rating ≥ 2000 |
+| `weekly` | Sun 17:00 | Weekly Blitz Arena | 5+0 | 180 min | — |
+| `monthly` | last Sunday, 16:00 | Monthly Championship | 5+0 | 240 min | — |
+
+Entry restrictions (`min_rating`/`max_rating`/`titled_only` on {@see App\Models\Tournament})
+are enforced in {@see App\Controllers\TournamentJoinController} against the
+tournament's own rating category — a Duck/Crazyhouse/Antichess arena checks
+that isolated pool's rating, everything else checks the duration-derived
+bullet/blitz/rapid/classical category (same mapping `GameResultController`
+uses for Elo).
+
+To change the rota, edit the match arms in `TournamentSchedule` — it's a pure
+function, no migration or backfill needed; the next scheduler run picks up
+the new shape going forward (existing rows are never touched).
+
+**Deploy (systemd timer, every 10 min, mirrors `chessgo-queue@.service`'s
+`www-data`/`/var/www/chessgo` conventions):**
+
+```sh
+sudo cp deploy/chessgo-schedule-tournaments.service deploy/chessgo-schedule-tournaments.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now chessgo-schedule-tournaments.timer
+systemctl list-timers chessgo-schedule-tournaments.timer   # confirm next run
+journalctl -u chessgo-schedule-tournaments.service -f      # tail output
+```
+
 ## Health checks
 
 ```sh

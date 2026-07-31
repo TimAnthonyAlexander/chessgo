@@ -1197,6 +1197,60 @@
             "table": "game",
             "operation": "add_fk",
             "warning": null
+        },
+        {
+            "id": "mig_e2a291701a26",
+            "sql": "ALTER TABLE `tournament` ADD COLUMN `schedule_key` VARCHAR(255)",
+            "destructive": false,
+            "generated_at": "2026-07-31T14:21:56+00:00",
+            "table": "tournament",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_3a780c927f96",
+            "sql": "ALTER TABLE `tournament` ADD COLUMN `series` VARCHAR(255)",
+            "destructive": false,
+            "generated_at": "2026-07-31T14:21:56+00:00",
+            "table": "tournament",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_496278e37c8c",
+            "sql": "ALTER TABLE `tournament` ADD COLUMN `min_rating` INT",
+            "destructive": false,
+            "generated_at": "2026-07-31T14:21:56+00:00",
+            "table": "tournament",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_a1f1ccbef969",
+            "sql": "ALTER TABLE `tournament` ADD COLUMN `max_rating` INT",
+            "destructive": false,
+            "generated_at": "2026-07-31T14:21:56+00:00",
+            "table": "tournament",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_058e19a2a6d7",
+            "sql": "ALTER TABLE `tournament` ADD COLUMN `titled_only` TINYINT(1) NOT NULL DEFAULT 0",
+            "destructive": false,
+            "generated_at": "2026-07-31T14:21:56+00:00",
+            "table": "tournament",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_0e7e77316e02",
+            "sql": "ALTER TABLE `tournament` ADD UNIQUE KEY `uniq_tournament_schedule_key` (`schedule_key`)",
+            "destructive": false,
+            "generated_at": "2026-07-31T14:21:56+00:00",
+            "table": "tournament",
+            "operation": "add_index",
+            "warning": null
         }
     ]
 }

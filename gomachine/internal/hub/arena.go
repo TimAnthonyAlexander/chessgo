@@ -7,8 +7,13 @@ import (
 	mrand "math/rand/v2"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/timanthonyalexander/gomachine/internal/auth"
+	"github.com/timanthonyalexander/gomachine/internal/chess"
+	"github.com/timanthonyalexander/gomachine/internal/variant"
 )
 
 // Arena tournaments. BaseAPI is the single source of truth for which
@@ -24,11 +29,19 @@ import (
 // SetFillerFENs/fillerFensCh), and the live pairing state (h.arenas) is
 // touched only on the Run goroutine, exactly like h.pools/h.challenges.
 
-// ArenaPlayerSnapshot is one participant row from BaseAPI's arena feed.
+// ArenaPlayerSnapshot is one participant row from BaseAPI's arena feed. Bot
+// participants are real, BaseAPI-enrolled accounts with a stable identity
+// (Sub/Name/Rating/Title) — the hub seats them using that identity verbatim
+// rather than inventing one, so a bot's game and the arena standings always
+// agree on who played.
 type ArenaPlayerSnapshot struct {
 	Sub       string `json:"sub"`
 	Score     int    `json:"score"`
 	Withdrawn bool   `json:"withdrawn"`
+	Bot       bool   `json:"bot"`
+	Name      string `json:"name"`
+	Rating    int    `json:"rating"`
+	Title     string `json:"title"`
 }
 
 // ArenaSnapshot is one currently-running tournament, as reported by BaseAPI's
@@ -43,10 +56,18 @@ type ArenaSnapshot struct {
 }
 
 // arenaPlayerState is the hub's cached copy of one participant's roster row —
-// just enough to validate a joinArena and pick pairings by score.
+// just enough to validate a joinArena and pick pairings by score. bot/name/
+// rating/title are only meaningful when bot is true (BaseAPI always sends
+// them for a bot row) — they're the exact identity fillArenaWithBot/
+// topUpArenaBotVsBot seat a bot side with, so its game and the standings
+// agree on who it was.
 type arenaPlayerState struct {
 	score     int
 	withdrawn bool
+	bot       bool
+	name      string
+	rating    int
+	title     string
 }
 
 // arenaState is one running tournament's live pairing state — Run-goroutine-
@@ -72,6 +93,15 @@ type arenaState struct {
 	// pair whenever one exists; a repeat is only chosen when the free pool has
 	// exactly these two players and no alternative).
 	lastOpponent map[string]string
+
+	// botBusy marks which of this arena's own bot participants (by sub) are
+	// currently seated in a live game — either a human-fill or a bot-vs-bot
+	// pairing. A bot side has no *Client, so it can't be tracked by leaving
+	// ar.free the way a human is; this is the bot equivalent of that removal,
+	// set when fillArenaWithBot/topUpArenaBotVsBot seat one and cleared by
+	// returnToArenaPool once its game ends, so the same bot is never
+	// double-booked into two games at once.
+	botBusy map[string]bool
 }
 
 // --- BaseAPI polling (off the Run goroutine) ---
@@ -192,7 +222,7 @@ func (h *Hub) applyArenaSnapshots(snaps []ArenaSnapshot) {
 
 		ar := h.arenas[s.ID]
 		if ar == nil {
-			ar = &arenaState{id: s.ID, players: map[string]*arenaPlayerState{}, lastOpponent: map[string]string{}}
+			ar = &arenaState{id: s.ID, players: map[string]*arenaPlayerState{}, lastOpponent: map[string]string{}, botBusy: map[string]bool{}}
 			h.arenas[s.ID] = ar
 		}
 		ar.pool = s.Pool
@@ -202,9 +232,20 @@ func (h *Hub) applyArenaSnapshots(snaps []ArenaSnapshot) {
 
 		players := make(map[string]*arenaPlayerState, len(s.Players))
 		for _, p := range s.Players {
-			players[p.Sub] = &arenaPlayerState{score: p.Score, withdrawn: p.Withdrawn}
+			players[p.Sub] = &arenaPlayerState{
+				score: p.Score, withdrawn: p.Withdrawn,
+				bot: p.Bot, name: p.Name, rating: p.Rating, title: p.Title,
+			}
 		}
 		ar.players = players
+		// A bot that fell out of the roster entirely no longer needs a busy
+		// marker — prune it so a long-running tournament's map doesn't hold
+		// stale entries for bots that are gone for good.
+		for sub := range ar.botBusy {
+			if _, ok := ar.players[sub]; !ok {
+				delete(ar.botBusy, sub)
+			}
+		}
 
 		// A free (waiting) client whose sub withdrew or fell out of the roster
 		// is no longer eligible to be paired — drop them and tell them so.
@@ -250,6 +291,8 @@ func (h *Hub) checkArenas() {
 			continue
 		}
 		h.pairArena(ar)
+		h.fillArenaWithBot(ar)
+		h.topUpArenaBotVsBot(ar)
 	}
 }
 
@@ -325,6 +368,8 @@ func (h *Hub) joinArena(c *Client, tournamentID string) {
 	}
 
 	c.arenaID = tournamentID
+	c.arenaJoinedAt = time.Now()
+	c.arenaBotFillDelay = randomArenaBotFillDelay()
 	ar.free = append(ar.free, c)
 	c.trySend(mustJSON(out("arenaJoined", map[string]any{"tournamentId": tournamentID})))
 	h.pairArena(ar)
@@ -434,6 +479,282 @@ func (h *Hub) startArenaGame(ar *arenaState, a, b *Client) {
 	h.startGameWith(white, black, tc, ar.pool, ar.rated, ar.variant, "", "", ar.id)
 }
 
+// --- bot participants: fill-in (human-vs-bot) and bot-vs-bot ---
+//
+// An arena tournament must never feel empty. BaseAPI pre-enrolls a set of bot
+// accounts as ordinary participants (ArenaPlayerSnapshot.Bot) with a real,
+// stable identity (sub/name/rating/title) — the hub never invents one, so a
+// bot's game and the arena standings always agree on who played. Two
+// mechanisms keep the pool moving even with few or no humans around:
+//
+//  1. fillArenaWithBot: a lone human who has waited past a short randomized
+//     delay (no human opponent found by pairArena) is seated against the
+//     roster's closest-score idle bot — mirrors bot.go's own matchmaking
+//     backfill (same h.engines pool, same botThinkDelay pacing), just picking
+//     from the arena's own bots instead of inventing a fresh identity.
+//  2. topUpArenaBotVsBot: a small, capped number of bot-vs-bot games run per
+//     arena so the standings move even with nobody free to pair. These use
+//     the SEPARATE, cheap filler engine pool (h.fillerEngines) — the same one
+//     the Watch page's self-play games run on — so they can never contend
+//     with h.engines, the human-facing pool. Unlike a Watch filler, they ARE
+//     persisted (g.filler stays false) so both bots score.
+//
+// A bot side has no *Client, so it can't be tracked in ar.free the way a
+// human is; ar.botBusy is the bot equivalent — marking which bot participants
+// are currently seated in a game so the same one is never double-booked.
+
+// arenaBotFillDelayMin/Max bound a lone waiting human's randomized wait
+// before being seated against a bot participant — shorter than matchmaking's
+// own randomBotFillDelay (2-10s) since an arena's pool is inherently small
+// and a stalled tournament should feel alive again quickly.
+const (
+	arenaBotFillDelayMin = 1 * time.Second
+	arenaBotFillDelayMax = 3 * time.Second
+)
+
+// randomArenaBotFillDelay returns a uniformly random wait in
+// [arenaBotFillDelayMin, arenaBotFillDelayMax], assigned whenever a
+// connection enters an arena's free pool (joinArena, and again on every
+// return via returnToArenaPool).
+func randomArenaBotFillDelay() time.Duration {
+	span := arenaBotFillDelayMax - arenaBotFillDelayMin
+	return arenaBotFillDelayMin + time.Duration(mrand.Int64N(int64(span)+1))
+}
+
+// fillArenaWithBot promotes any free client that has waited past its own
+// randomized delay into a game against this arena's closest-score idle bot
+// participant, if one is available. Mirrors checkBotFill's "humans are
+// always preferred, only a lone long-waiter gets a bot" shape: pairArena
+// (called first, on every join/return AND every tick) always gets first
+// crack at pairing two humans, so this only ever picks up whoever it left
+// free. Gated on h.botFill — the same on/off switch as ordinary matchmaking
+// backfill — since a standard-chess bot side needs h.engines to ever move; a
+// self-search variant's bot (Duck/Crazyhouse/Antichess) doesn't need the
+// pool but is gated the same way for one consistent on/off signal.
+func (h *Hub) fillArenaWithBot(ar *arenaState) {
+	if !h.botFill {
+		return
+	}
+	now := time.Now()
+	var kept, promote []*Client
+	for _, c := range ar.free {
+		if now.Sub(c.arenaJoinedAt) >= c.arenaBotFillDelay {
+			promote = append(promote, c)
+		} else {
+			kept = append(kept, c)
+		}
+	}
+	ar.free = kept
+	for _, c := range promote {
+		sub, ok := closestIdleArenaBot(ar, ar.players[c.id.UserID])
+		if !ok {
+			// No idle bot right now (none enrolled in this arena, or every one
+			// is already busy in another game) — leave it free so a human
+			// opponent (pairArena) or a bot freeing up next tick can still take
+			// it; we'll try again on the next tick.
+			ar.free = append(ar.free, c)
+			continue
+		}
+		c.arenaID = ""
+		h.startArenaBotFillGame(ar, c, sub)
+	}
+}
+
+// closestIdleArenaBot finds the arena's own idle bot participant (enrolled,
+// not withdrawn, and not currently seated in another live game) whose score
+// is closest to ps's — the human-fill analogue of closestArenaPair, but
+// matched against the roster's bot rows instead of another free human.
+// Returns ok=false if this arena has no bot participants at all, or every one
+// is currently busy.
+func closestIdleArenaBot(ar *arenaState, ps *arenaPlayerState) (sub string, ok bool) {
+	if ps == nil {
+		return "", false
+	}
+	bestGap := 0
+	for s, p := range ar.players {
+		if !p.bot || p.withdrawn || ar.botBusy[s] {
+			continue
+		}
+		gap := absInt(p.score - ps.score)
+		if !ok || gap < bestGap {
+			sub, bestGap, ok = s, gap, true
+		}
+	}
+	return sub, ok
+}
+
+// startArenaBotFillGame seats a human who has waited past its own arena delay
+// against one of the arena's own pre-enrolled bot participants (botSub, its
+// REAL account id/name/rating/title from BaseAPI's roster — never invented),
+// tagged with the tournament id and persisted exactly like a human-vs-human
+// arena game. Uses the SAME rating-ladder engine pool (h.engines) and pacing
+// as ordinary matchmaking bot backfill — this is a real one-sided game for a
+// human, not cosmetic filler — via the ordinary scheduleBotMove/
+// computeBotMove path.
+func (h *Hub) startArenaBotFillGame(ar *arenaState, human *Client, botSub string) {
+	ps := ar.players[botSub]
+	if ps == nil {
+		return // defensive: closestIdleArenaBot only ever returns a currently-valid sub
+	}
+	botIdentity := auth.Identity{UserID: botSub, Anon: false, Name: ps.name, Rating: ps.rating, Title: ps.title}
+
+	humanColor := chess.White
+	if mrand.IntN(2) == 1 {
+		humanColor = chess.Black
+	}
+	var white, black *player
+	if humanColor == chess.White {
+		white, black = newPlayer(human), newBotPlayer(botIdentity, ps.rating)
+	} else {
+		white, black = newBotPlayer(botIdentity, ps.rating), newPlayer(human)
+	}
+
+	g := h.newArenaGame(ar, white, black)
+	if g == nil {
+		return
+	}
+	ar.botBusy[botSub] = true
+	human.game = g
+	h.sendMatched(g, human, humanColor)
+	h.joinOtherSessions(g, human)
+	h.scheduleBotMove(g) // if the bot plays White, it moves first
+}
+
+// arenaBotVsBotCap bounds how many bot-vs-bot games run concurrently per
+// arena — enough that the standings keep moving even with no humans around,
+// small enough that the shared filler engine pool never gets crowded.
+const arenaBotVsBotCap = 2
+
+// countArenaBotVsBot reports how many of THIS arena's own games are currently
+// a live bot-vs-bot pairing — the same "count what's already running" shape
+// checkFillers uses to pad the Watch lobby up to its own target.
+func (h *Hub) countArenaBotVsBot(ar *arenaState) int {
+	n := 0
+	for _, g := range h.games {
+		if g.over || g.arenaID != ar.id {
+			continue
+		}
+		if g.white.isBot && g.black.isBot {
+			n++
+		}
+	}
+	return n
+}
+
+// topUpArenaBotVsBot starts one bot-vs-bot game (at most one per tick, the
+// same gentle ramp checkFillers uses) between two of this arena's own idle
+// bot participants whenever fewer than arenaBotVsBotCap are already running.
+// Runs on the SEPARATE, cheap filler engine pool (h.fillerEngines) — never
+// h.engines, the human-facing pool — so it can't starve human bot-fill; gated
+// on that pool existing at all (EnableSpectatorFillers), same as any other
+// caller of it. Unlike a Watch filler, the resulting game IS persisted
+// (g.filler stays false) so both bots score.
+func (h *Hub) topUpArenaBotVsBot(ar *arenaState) {
+	if h.fillerEngines == nil {
+		return // filler pool not enabled — nothing cheap to run bot-vs-bot on
+	}
+	if h.countArenaBotVsBot(ar) >= arenaBotVsBotCap {
+		return
+	}
+	subA, subB, ok := twoIdleArenaBots(ar)
+	if !ok {
+		return
+	}
+	psA, psB := ar.players[subA], ar.players[subB]
+	idA := auth.Identity{UserID: subA, Anon: false, Name: psA.name, Rating: psA.rating, Title: psA.title}
+	idB := auth.Identity{UserID: subB, Anon: false, Name: psB.name, Rating: psB.rating, Title: psB.title}
+	white, black := newBotPlayer(idA, psA.rating), newBotPlayer(idB, psB.rating)
+	if mrand.IntN(2) == 1 {
+		white, black = black, white
+	}
+	g := h.newArenaGame(ar, white, black)
+	if g == nil {
+		return
+	}
+	ar.botBusy[subA] = true
+	ar.botBusy[subB] = true
+	h.scheduleBotMove(g)
+}
+
+// twoIdleArenaBots picks two distinct idle bot participants (enrolled, not
+// withdrawn, not already seated in another live game) from ar's roster to
+// play each other — closest in score, the same spirit as closestArenaPair but
+// over the roster's bot rows instead of ar.free. Returns ok=false if fewer
+// than two are currently idle.
+func twoIdleArenaBots(ar *arenaState) (subA, subB string, ok bool) {
+	var idle []string
+	for sub, ps := range ar.players {
+		if ps.bot && !ps.withdrawn && !ar.botBusy[sub] {
+			idle = append(idle, sub)
+		}
+	}
+	if len(idle) < 2 {
+		return "", "", false
+	}
+	sort.Strings(idle) // deterministic scan order — map iteration isn't
+	bestI, bestJ, bestGap := -1, -1, 0
+	for i := 0; i < len(idle); i++ {
+		for j := i + 1; j < len(idle); j++ {
+			gap := absInt(ar.players[idle[i]].score - ar.players[idle[j]].score)
+			if bestI < 0 || gap < bestGap {
+				bestI, bestJ, bestGap = i, j, gap
+			}
+		}
+	}
+	return idle[bestI], idle[bestJ], true
+}
+
+// newArenaGame builds and registers a game between white and black — either
+// side may be a bot (newBotPlayer, no *Client at all) or a human already
+// seated via newPlayer — using ar's own pool/variant/rated terms and tagging
+// it with the arena id. It's the *player-based sibling of startGameWith
+// (which takes two *Clients and so can't seat a bot): the rated-gating and
+// start-position logic mirror startGameWith exactly, just generalized over
+// *player. Callers handle anything client-specific themselves afterward
+// (sendMatched, joinOtherSessions, scheduling the first bot move), since that
+// differs by which side(s), if any, are real clients.
+func (h *Hub) newArenaGame(ar *arenaState, white, black *player) *game {
+	tc, ok := parseTimeControl(ar.pool)
+	if !ok {
+		return nil // defensive: applyArenaSnapshots already validates this pool
+	}
+	rated := ar.rated && (ar.variant == variantStandard || ar.variant == variantDuck ||
+		ar.variant == variantCrazyhouse || ar.variant == variantAntichess)
+	startFen := chess.StartFEN
+	if ar.variant == variantChess960 {
+		startFen = chess.RandomChess960FEN()
+	}
+	st, err := variant.New(ar.variant, startFen)
+	if err != nil {
+		return nil // defensive: our start FENs always parse
+	}
+	g := &game{
+		id:        newID(),
+		white:     white,
+		black:     black,
+		state:     st,
+		tc:        tc,
+		pool:      ar.pool,
+		rated:     rated,
+		clockMs:   [2]int64{tc.Base, tc.Base},
+		turnStart: time.Now(),
+		online:    [2]bool{true, true},
+		startFen:  startFen,
+		variant:   ar.variant,
+		arenaID:   ar.id,
+	}
+	h.games[g.id] = g
+	if !white.isBot {
+		h.playerGames[white.id.UserID] = g
+	}
+	if !black.isBot {
+		h.playerGames[black.id.UserID] = g
+	}
+	h.markLive(g)
+	h.activeGames.Add(1)
+	return g
+}
+
 // --- back to the pool after a game ---
 
 // returnToArenaPool runs at the end of every finished game (a no-op unless it
@@ -441,10 +762,12 @@ func (h *Hub) startArenaGame(ar *arenaState, a, b *Client) {
 // — which always reflect whichever connections are CURRENTLY attached, having
 // survived any mid-game reconnect — rather than any per-connection arenaID,
 // so a player who reconnected mid-game is still correctly returned to the
-// pool. Each side that is still a valid (registered, non-withdrawn)
+// pool. Each human side that is still a valid (registered, non-withdrawn)
 // participant of a still-running arena goes back into its free pool and a
 // pairing pass is attempted immediately; anyone else (arena ended, or they
-// withdrew mid-game) is simply told arenaLeft instead.
+// withdrew mid-game) is simply told arenaLeft instead. A bot side is instead
+// freed up for reuse (see the isBot branch below) — it has no *Client and so
+// was never in ar.free to begin with.
 func (h *Hub) returnToArenaPool(g *game) {
 	if g.arenaID == "" {
 		return
@@ -453,7 +776,15 @@ func (h *Hub) returnToArenaPool(g *game) {
 	var returned []*Client
 	for _, p := range []*player{g.white, g.black} {
 		if p.isBot {
-			continue // defensive: arena games are always human-vs-human
+			// A bot side has no *Client to re-seat in ar.free — instead it just
+			// frees up its busy marker, so fillArenaWithBot/topUpArenaBotVsBot
+			// are eligible to pick this SAME bot again for a fresh game on the
+			// next tick (a no-op if the arena is gone or the bot fell off the
+			// roster — nothing references it anymore either way).
+			if ar != nil {
+				delete(ar.botBusy, p.id.UserID)
+			}
+			continue
 		}
 		for c := range p.clients {
 			sub := c.id.UserID
@@ -467,6 +798,8 @@ func (h *Hub) returnToArenaPool(g *game) {
 				continue
 			}
 			c.arenaID = ar.id
+			c.arenaJoinedAt = time.Now()
+			c.arenaBotFillDelay = randomArenaBotFillDelay()
 			ar.free = append(ar.free, c)
 			returned = append(returned, c)
 		}

@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use BaseApi\Models\BaseModel;
+use App\Services\Glicko2Service;
 
 /**
  * An Arena-style tournament (Lichess "arena"). The realtime hub polls
@@ -42,11 +43,36 @@ class Tournament extends BaseModel
     public string $created_by = '';
 
     /**
+     * Idempotency key for a scheduled occurrence, e.g.
+     * "hourly-bullet-2026-08-01T14:00:00Z" (see {@see \App\Services\TournamentSchedule}
+     * and scripts/schedule_tournaments.php). Null for hand-created tournaments.
+     * Unique so a re-run of the scheduler can never double-insert the same slot.
+     */
+    public ?string $schedule_key = null;
+
+    /** Rota this occurrence belongs to ('hourly', 'variant-hourly', 'daily',
+     *  'weekly', 'titled-tuesday', 'monthly', …), or null for hand-created ones. */
+    public ?string $series = null;
+
+    /** Entry restriction: the joiner's rating (in this tournament's own
+     *  category, see TournamentJoinController) must be >= this, or null for none. */
+    public ?int $min_rating = null;
+
+    /** Entry restriction: the joiner's rating (in this tournament's own
+     *  category) must be <= this, or null for none. */
+    public ?int $max_rating = null;
+
+    /** Entry restriction: only accounts with a real title (see User::TITLES,
+     *  displayTitle()) may join when true. */
+    public bool $titled_only = false;
+
+    /**
      * @var array<int|string, mixed>
      */
     public static array $indexes = [
         ['status'],
         ['starts_at'],
+        ['schedule_key', 'type' => 'unique'],
     ];
 
     public function startsAtTimestamp(): int
@@ -77,6 +103,23 @@ class Tournament extends BaseModel
     public function isFinished(): bool
     {
         return time() >= $this->endsAtTimestamp();
+    }
+
+    /**
+     * The Glicko-2 rating category a joiner is judged against for this
+     * tournament's `min_rating`/`max_rating` restrictions. Mirrors
+     * GameResultController::post()'s category derivation: Duck/Crazyhouse/
+     * Antichess are each their own isolated pool regardless of clock; Standard
+     * and Chess960 fall back to the duration-derived time-control category.
+     */
+    public function ratingCategory(Glicko2Service $glicko): string
+    {
+        return match ($this->variant) {
+            'duck' => 'duck',
+            'crazyhouse' => 'crazyhouse',
+            'antichess' => 'antichess',
+            default => $glicko->categoryForPool($this->pool),
+        };
     }
 
     /**

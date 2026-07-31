@@ -51,9 +51,18 @@ class LeaderboardController extends Controller
         // title + role are pulled in the same query (no per-row lookup) so the
         // derived display title (a stored title, else "AM" for admins — see
         // User::displayTitle()) can be computed inline below.
+        //
+        // Bot accounts (role='bot', see scripts/seed_bot_accounts.php) are
+        // deliberately excluded here: they're seeded to fill out Arena rosters
+        // (ArenaInternalController), not to hold a permanent slot on the
+        // site-wide "best players" ranking. Their ratings never move (Elo is
+        // never applied to a bot side — see GameResultController), so a bot
+        // sitting on this board would be a frozen, non-competing entry forever
+        // — unlike an arena's own standings, which are legitimately meant to
+        // include whichever bots were seated in that specific tournament.
         $sql = "SELECT id, name, title, role, $ratingCol AS rating, $rdCol AS rd, $gamesCol AS games
                 FROM user
-                WHERE $gamesCol > 0
+                WHERE $gamesCol > 0 AND role != 'bot'
                 ORDER BY $ratingCol DESC
                 LIMIT $limit";
         $rows = App::db()->raw($sql, []);

@@ -52,6 +52,13 @@ type Client struct {
 	// carried on the game itself (game.arenaID), which survives reconnects
 	// (this field, being per-connection, would not).
 	arenaID string
+	// arenaJoinedAt/arenaBotFillDelay are the arena analogue of
+	// queuedAt/botFillDelay above: stamped whenever this connection enters an
+	// arena's free pool (joinArena, and again on each return via
+	// returnToArenaPool), so fillArenaWithBot can tell a lone long-waiter (no
+	// human opponent found by pairArena) from one that just arrived.
+	arenaJoinedAt     time.Time
+	arenaBotFillDelay time.Duration
 }
 
 func (c *Client) readPump() {

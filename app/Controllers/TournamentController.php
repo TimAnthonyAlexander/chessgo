@@ -50,6 +50,12 @@ class TournamentController extends Controller
 
     public bool $rated = true;
 
+    public ?int $min_rating = null;
+
+    public ?int $max_rating = null;
+
+    public bool $titled_only = false;
+
     public function get(): JsonResponse
     {
         return $this->id !== '' ? $this->show($this->id) : $this->list();
@@ -68,6 +74,9 @@ class TournamentController extends Controller
             'starts_at' => 'required|string',
             'duration_minutes' => 'int',
             'rated' => 'boolean',
+            'min_rating' => 'int',
+            'max_rating' => 'int',
+            'titled_only' => 'boolean',
         ]);
 
         if (!self::validPool($this->pool)) {
@@ -95,6 +104,9 @@ class TournamentController extends Controller
         $tournament->rated = $this->rated;
         $tournament->status = 'scheduled';
         $tournament->created_by = $me;
+        $tournament->min_rating = $this->min_rating;
+        $tournament->max_rating = $this->max_rating;
+        $tournament->titled_only = $this->titled_only;
 
         if (!$tournament->save()) {
             return JsonResponse::error('failed to create tournament', 500);
@@ -223,6 +235,10 @@ class TournamentController extends Controller
             'status' => $t->status,
             'ends_at_ms' => $t->endsAtMs(),
             'player_count' => $playerCount,
+            'series' => $t->series,
+            'min_rating' => $t->min_rating,
+            'max_rating' => $t->max_rating,
+            'titled_only' => $t->titled_only,
         ];
     }
 

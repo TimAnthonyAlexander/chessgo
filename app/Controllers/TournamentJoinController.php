@@ -6,6 +6,8 @@ use BaseApi\Controllers\Controller;
 use BaseApi\Http\JsonResponse;
 use App\Models\Tournament;
 use App\Models\TournamentPlayer;
+use App\Models\User;
+use App\Services\Glicko2Service;
 
 /**
  *   POST /tournaments/{id}/join
@@ -15,11 +17,21 @@ use App\Models\TournamentPlayer;
  * unique (tournament_id, user_id) index on {@see TournamentPlayer} makes that
  * the only safe shape). Requires auth (guests have no account to score
  * against); a finished tournament can no longer be joined.
+ *
+ * Entry restrictions (`min_rating`/`max_rating`/`titled_only`) are checked
+ * against the tournament's own rating category (see
+ * {@see Tournament::ratingCategory()}) — e.g. a Duck Chess tournament checks
+ * `rating_duck`, a "3+0" standard one checks `rating_blitz`.
  */
 class TournamentJoinController extends Controller
 {
     /** Bound from path {id}. */
     public string $id = '';
+
+    public function __construct(
+        private readonly Glicko2Service $glicko,
+    ) {
+    }
 
     public function post(): JsonResponse
     {
@@ -38,10 +50,46 @@ class TournamentJoinController extends Controller
             return JsonResponse::badRequest('tournament has already finished');
         }
 
-        $player = TournamentPlayer::firstWhereConditions([
-            'tournament_id' => $tournament->id,
-            'user_id' => $me,
-        ]);
+        if ($tournament->min_rating !== null || $tournament->max_rating !== null || $tournament->titled_only) {
+            $user = User::find($me);
+            if (!$user instanceof User) {
+                return JsonResponse::unauthorized();
+            }
+
+            if ($tournament->titled_only && $user->displayTitle() === null) {
+                return JsonResponse::badRequest('this tournament is titled players only');
+            }
+
+            $category = $tournament->ratingCategory($this->glicko);
+            $rating = (int) $user->{'rating_' . $category};
+
+            if ($tournament->min_rating !== null && $rating < $tournament->min_rating) {
+                return JsonResponse::badRequest(sprintf(
+                    'this tournament requires a %s rating of at least %d (yours is %d)',
+                    $category,
+                    $tournament->min_rating,
+                    $rating,
+                ));
+            }
+
+            if ($tournament->max_rating !== null && $rating > $tournament->max_rating) {
+                return JsonResponse::badRequest(sprintf(
+                    'this tournament requires a %s rating of at most %d (yours is %d)',
+                    $category,
+                    $tournament->max_rating,
+                    $rating,
+                ));
+            }
+        }
+
+        // NOT firstWhereConditions(['tournament_id' => ..., 'user_id' => ...]) —
+        // that helper expects a LIST of {column,operator,value} arrays, not a
+        // flat column=>value map; passed a flat map it throws. Chained
+        // where()->first() is the form the rest of this codebase uses safely.
+        $player = TournamentPlayer::query()
+            ->where('tournament_id', '=', $tournament->id)
+            ->where('user_id', '=', $me)
+            ->first();
 
         if ($player instanceof TournamentPlayer) {
             if ($player->withdrawn) {

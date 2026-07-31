@@ -32,10 +32,14 @@ class TournamentWithdrawController extends Controller
             return JsonResponse::notFound('tournament not found');
         }
 
-        $player = TournamentPlayer::firstWhereConditions([
-            'tournament_id' => $tournament->id,
-            'user_id' => $me,
-        ]);
+        // NOT firstWhereConditions(['tournament_id' => ..., 'user_id' => ...]) —
+        // that helper expects a LIST of {column,operator,value} arrays, not a
+        // flat column=>value map; passed a flat map it throws. Chained
+        // where()->first() is the form the rest of this codebase uses safely.
+        $player = TournamentPlayer::query()
+            ->where('tournament_id', '=', $tournament->id)
+            ->where('user_id', '=', $me)
+            ->first();
 
         if (!$player instanceof TournamentPlayer) {
             return JsonResponse::ok(['withdrawn' => true]);

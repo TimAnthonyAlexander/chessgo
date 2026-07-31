@@ -1,0 +1,16 @@
+[Unit]
+Description=chessgo tournament scheduler (keeps the next 48h of arenas populated)
+After=network.target mysql.service
+Wants=mysql.service
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/chessgo
+ExecStart=/usr/bin/php /var/www/chessgo/scripts/schedule_tournaments.php
+
+# logs go to journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=chessgo-schedule-tournaments

@@ -130,10 +130,16 @@ class GameResultController extends Controller
             return JsonResponse::error('failed to persist game', 500);
         }
 
-        // Arena scoring: best-effort + never allowed to break the persist path
-        // above (an unknown tournament id, or a side that never joined it, just
-        // means that side isn't scored — the game record itself is unaffected).
-        $this->applyTournamentScoring($game, $whiteUser, $blackUser, $result);
+        // Arena scoring resolves accounts SEPARATELY from Elo: a tournament bot
+        // side carries its real seeded account id (bot: true), so its arena
+        // points must still land — but Elo above is untouched (resolveAccount()
+        // returns null for any bot side, exactly as before). Best-effort + never
+        // allowed to break the persist path above (an unknown tournament id, an
+        // unresolvable id, or a side that never joined, just means that side
+        // isn't scored — the game record itself is unaffected).
+        $whiteScoringUser = $this->resolveAccountForScoring($white);
+        $blackScoringUser = $this->resolveAccountForScoring($black);
+        $this->applyTournamentScoring($game, $whiteScoringUser, $blackScoringUser, $result);
 
         // Post-game anti-cheat review: the CHEAP signals only (rating velocity +
         // move-time anomaly). Self-contained + best-effort — a flag never blocks
@@ -208,6 +214,33 @@ class GameResultController extends Controller
     private function resolveAccount(array $side): ?User
     {
         if (($side['bot'] ?? false) || ($side['anon'] ?? false)) {
+            return null;
+        }
+
+        $uid = (string)($side['uid'] ?? '');
+        if ($uid === '') {
+            return null;
+        }
+
+        $user = User::find($uid);
+
+        return $user instanceof User ? $user : null;
+    }
+
+    /**
+     * Resolve a hub side to a registered User FOR ARENA SCORING ONLY —
+     * unlike {@see resolveAccount()} this does NOT exclude bot sides. The hub
+     * sends a tournament bot's real seeded account id (from
+     * scripts/seed_bot_accounts.php) alongside `bot: true`, so its tournament
+     * points must be attributed to that account even though the very same
+     * flag keeps it out of Elo. Anonymous sides and unknown/unresolvable ids
+     * still resolve to null (nothing to score against).
+     *
+     * @param array<string, mixed> $side
+     */
+    private function resolveAccountForScoring(array $side): ?User
+    {
+        if ($side['anon'] ?? false) {
             return null;
         }
 
@@ -337,10 +370,15 @@ class GameResultController extends Controller
      */
     private function updateTournamentPlayer(string $tournamentId, string $userId, string $outcome): void
     {
-        $player = TournamentPlayer::firstWhereConditions([
-            'tournament_id' => $tournamentId,
-            'user_id' => $userId,
-        ]);
+        // NOT firstWhereConditions(['tournament_id' => ..., 'user_id' => ...]) —
+        // that helper expects a LIST of {column,operator,value} arrays, not a
+        // flat column=>value map; passed a flat map it throws (caught by the
+        // caller's catch-all, so this was silently never matching). Chained
+        // where()->first() is the form the rest of this codebase uses safely.
+        $player = TournamentPlayer::query()
+            ->where('tournament_id', '=', $tournamentId)
+            ->where('user_id', '=', $userId)
+            ->first();
         if (!$player instanceof TournamentPlayer) {
             return;
         }

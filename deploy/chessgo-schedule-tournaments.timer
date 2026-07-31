@@ -1,0 +1,14 @@
+[Unit]
+Description=Run chessgo-schedule-tournaments every 10 minutes
+
+[Timer]
+# Run shortly after boot, then every 10 minutes — matches
+# scripts/schedule_tournaments.php's default --horizon-hours=48, so a missed
+# run or two never lets the calendar run dry.
+OnBootSec=2min
+OnUnitActiveSec=10min
+Unit=chessgo-schedule-tournaments.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target
