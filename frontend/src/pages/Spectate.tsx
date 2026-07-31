@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Box, Button, Tooltip, Typography } from '@mui/material'
-import { ArrowLeft, Gauge, Target, User, Volume2, VolumeX } from 'lucide-react'
+import { ArrowLeft, FlipVertical2, Gauge, Target, User, Volume2, VolumeX } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router-dom'
 import Board from '../components/Board'
 import Clock, { ClockBar } from '../components/Clock'
@@ -12,7 +12,7 @@ import TitleBadge from '../components/TitleBadge'
 import BoardActions from '../components/BoardActions'
 import BoardPage from '../components/BoardPage'
 import SpectateInfoCard from '../components/SpectateInfoCard'
-import { analyze, type MoveEntry } from '../api/client'
+import { analyze, type Color, type MoveEntry } from '../api/client'
 import { pvToSan, START_FEN } from '../lib/analysisTree'
 import {
     type SpectateGame,
@@ -24,6 +24,7 @@ import { useSpectate } from '../lib/useSpectate'
 import { useAuth } from '../lib/auth'
 import { usePrefs } from '../lib/settings'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
+import { useShortcuts } from '../lib/shortcuts'
 
 // Admins get a full-strength eval bar + best-move arrow over the spectated board,
 // each independently toggleable (persisted in localStorage). Ordinary spectators
@@ -71,6 +72,18 @@ export default function Spectate() {
         setSoundEnabled(next)
         if (next) sounds.move()
     }
+
+    // Board orientation: spectators have no "own side", so White starts at the
+    // bottom by default. Flip is page state (like LiveGame's manual flip), not
+    // derived from the streamed game — it must survive `state`/`end` updates
+    // rather than reset on the next move.
+    const [flipped, setFlipped] = useState(false)
+    const orientation: Color = flipped ? 'b' : 'w'
+    const flipBoard = () => setFlipped((f) => !f)
+
+    useShortcuts('spectate', [
+        { keys: 'f', label: 'Flip board', group: 'Spectate', run: flipBoard },
+    ])
 
     // Admin-only engine overlay: an eval bar and a best-move arrow, each toggled
     // independently (like the Analysis board). We re-read the position at full
@@ -174,7 +187,8 @@ export default function Spectate() {
         )
     }
 
-    // White is shown at the bottom (spectators always view from White's side).
+    // White is shown at the bottom by default (spectators have no own side);
+    // flip toggles it via the button/`F` above.
     const moveEntries: MoveEntry[] = g.moves.map((m, i) => ({
         ply: i + 1,
         san: m.san,
@@ -188,7 +202,7 @@ export default function Spectate() {
             // Right card is compact by design (a fixed 7-row move list), so it shrinks
             // to its content and centres against the board — matching LiveGame.
             rightFit
-            evalBar={evalBarVisible ? <EvalBar ev={whiteEval} orientation="w" /> : undefined}
+            evalBar={evalBarVisible ? <EvalBar ev={whiteEval} orientation={orientation} /> : undefined}
             left={
                 <SpectateInfoCard
                     pool={g.pool}
@@ -258,20 +272,23 @@ export default function Spectate() {
                         onSelectPly={() => {}}
                     />
 
-                    {/* Sound sits under the move list, where LiveGame keeps its board
-                        controls. No flip (spectators always view from White) and no
-                        move-nav — this list isn't scrubbable yet, see
-                        docs/tasks/open/spectate-ply-scrubbing.md. */}
+                    {/* Flip + sound sit under the move list, where LiveGame keeps its
+                        board controls. No move-nav yet — this list isn't scrubbable,
+                        see docs/tasks/open/spectate-ply-scrubbing.md. */}
                     <Box
                         sx={{
                             display: 'flex',
                             alignItems: 'center',
+                            gap: 1,
                             px: 1.25,
                             py: 0.75,
                             borderTop: '1px solid var(--line-soft)',
                             bgcolor: 'var(--bg-2)',
                         }}
                     >
+                        <NavBtn small label="Flip board" onClick={flipBoard}>
+                            <FlipVertical2 size={18} />
+                        </NavBtn>
                         <NavBtn small label={sound ? 'Mute' : 'Unmute'} onClick={toggleSound}>
                             {sound ? <Volume2 size={18} /> : <VolumeX size={18} />}
                         </NavBtn>
@@ -360,7 +377,7 @@ export default function Spectate() {
         >
             <Board
                 fen={g.fen}
-                orientation="w"
+                orientation={orientation}
                 sideToMove={g.sideToMove}
                 legalMoves={[]}
                 lastMove={g.lastMove}
