@@ -3,13 +3,15 @@
 // never clobber the player's own live game. It opens with `?spectate=1` so the
 // hub skips the player reattach/resume path, then `watch`es a single game id.
 import { getWsTicket } from '../api/client'
-import type { Color } from '../api/client'
+import type { Color, Title } from '../api/client'
 import type { Variant } from './variants'
 
 export interface SpectateSide {
     name: string
     rating: number
     anon: boolean
+    // "" for bots/anon/titleless players — never a placeholder.
+    title?: Title | null
 }
 
 export interface SpectateGame {

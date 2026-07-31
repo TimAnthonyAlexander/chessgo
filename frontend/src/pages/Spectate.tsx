@@ -8,6 +8,7 @@ import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import MoveList from '../components/MoveList'
 import { MoveSan } from '../components/MoveSan'
 import { Avatar, NavBtn, PANEL_SHADOW } from '../components/PanelUI'
+import TitleBadge from '../components/TitleBadge'
 import BoardActions from '../components/BoardActions'
 import BoardPage from '../components/BoardPage'
 import SpectateInfoCard from '../components/SpectateInfoCard'
@@ -402,7 +403,8 @@ function PlayerBar({
                 <User size={15} />
             </Avatar>
             <Box sx={{ minWidth: 0 }}>
-                <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75 }}>
+                <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75, minWidth: 0 }}>
+                    <TitleBadge title={side.title} />
                     <Typography
                         sx={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14.5 }}
                         noWrap

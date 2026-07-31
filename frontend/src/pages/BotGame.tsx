@@ -30,6 +30,7 @@ import GameModeCard from '../components/GameModeCard'
 import NewBadge from '../components/NewBadge'
 import BoardPage from '../components/BoardPage'
 import { ActionBtn, Avatar, ErrorBanner, NavBtn } from '../components/PanelUI'
+import TitleBadge from '../components/TitleBadge'
 import ConfirmDialog from '../components/ConfirmDialog'
 import OpeningPanel from '../components/OpeningPanel'
 import {
@@ -40,6 +41,7 @@ import {
     createBotGame,
     type GameAnalysis,
     playMove,
+    type Title,
     undoMove,
 } from '../api/client'
 import { buildBlunderPuzzles } from '../lib/blunderRewind'
@@ -648,6 +650,7 @@ export default function BotGame() {
                         showMoveList={prefs.showMoveList}
                         zen={prefs.zenMode && ongoing}
                         isAdmin={isAdmin}
+                        humanTitle={user?.title}
                         bestFen={boardFen}
                         bestMyTurn={interactive && !isCrazyhouse}
                         onBestHint={setBestHint}
@@ -781,6 +784,7 @@ function MovePanel({
     showMoveList,
     zen,
     isAdmin,
+    humanTitle,
     bestFen,
     bestMyTurn,
     onBestHint,
@@ -814,6 +818,9 @@ function MovePanel({
     /** Zen mode active for this (ongoing) game — hide rating chrome. */
     zen: boolean
     isAdmin: boolean
+    /** The logged-in human's derived title (null for guests) — the bot side
+     *  never has one. */
+    humanTitle?: Title | null
     bestFen: string
     bestMyTurn: boolean
     onBestHint: (hint: { from: Square; to: Square; uci: string } | null) => void
@@ -1058,11 +1065,18 @@ function MovePanel({
                     <Avatar small>
                         <User size={15} />
                     </Avatar>
-                    <Typography
-                        sx={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14.5 }}
-                    >
-                        You
-                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                        <TitleBadge title={humanTitle} />
+                        <Typography
+                            sx={{
+                                fontFamily: 'var(--font-display)',
+                                fontWeight: 700,
+                                fontSize: 14.5,
+                            }}
+                        >
+                            You
+                        </Typography>
+                    </Box>
                     {showCaptured && (
                         <MaterialStrip pieces={captured(human)} color={opp} adv={advantage(human)} />
                     )}

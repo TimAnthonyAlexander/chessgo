@@ -4,6 +4,7 @@ import { Eye, Radio } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import MiniBoard from '../components/MiniBoard'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
+import TitleBadge from '../components/TitleBadge'
 import { analyze, getLiveGames, type LiveGameSummary, type LiveSide } from '../api/client'
 import { useAuth } from '../lib/auth'
 
@@ -328,13 +329,16 @@ function GameCard({
 
 function PlayerRow({ side, ms, active }: { side: LiveSide; ms: number; active: boolean }) {
     return (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 0.5, py: 0.25 }}>
-            <Typography
-                sx={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 13.5 }}
-                noWrap
-            >
-                {side.name}
-            </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 0.5, py: 0.25, minWidth: 0 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+                <TitleBadge title={side.title} />
+                <Typography
+                    sx={{ fontFamily: 'var(--font-display)', fontWeight: 600, fontSize: 13.5 }}
+                    noWrap
+                >
+                    {side.name}
+                </Typography>
+            </Box>
             {!side.anon && (
                 <Typography
                     sx={{

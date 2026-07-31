@@ -22,6 +22,7 @@ import NavStreak from './NavStreak'
 import Footer from './Footer'
 import MobileNavDrawer, { type MobileNavSection } from './MobileNavDrawer'
 import NotificationBell from './notifications/NotificationBell'
+import TitleBadge from './TitleBadge'
 import type { RatingCategory, User } from '../api/client'
 
 // Nav model. A `link` is a plain top-level destination; a `menu` is a hover
@@ -205,7 +206,7 @@ export default function Layout() {
                     <NotificationBell />
                     <MobileNavDrawer
                         sections={sections}
-                        user={user ? { name: user.name } : null}
+                        user={user ? { name: user.name, title: user.title } : null}
                         onLogin={() => openAuth('login')}
                         onLogout={() => void authStore.logout()}
                     />
@@ -439,13 +440,14 @@ function UserMenu({ user }: { user: User }) {
                     fontWeight: 600,
                     fontSize: 14,
                     px: 1.25,
+                    gap: 0.5,
                 }}
             >
+                <TitleBadge title={user.title} />
                 {user.name}
                 <Typography
                     component="span"
                     sx={{
-                        ml: 0.75,
                         fontFamily: 'var(--font-mono)',
                         fontSize: 12,
                         color: 'var(--text-dim)',

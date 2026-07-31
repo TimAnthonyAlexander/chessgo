@@ -72,6 +72,16 @@ class WsTicketController extends Controller
                 'rating' => $ratings['blitz'], // default shown when category is unknown
                 'ratings' => $ratings,
             ];
+            // Derived title (real title wins, otherwise admins show "AM"). $user
+            // always came from User::jsonSerialize() here (request->user,
+            // BearerAuth, or the session lookup below all resolve through
+            // UserProvider::byId / User::find()->jsonSerialize()), so
+            // $user['title'] is already the derived displayTitle() value — omit
+            // the claim entirely for a titleless account rather than sending
+            // null/empty, so it never reaches the hub as a placeholder.
+            if (is_string($user['title'] ?? null) && $user['title'] !== '') {
+                $identity['title'] = $user['title'];
+            }
         } else {
             // Anonymous: a stable browser id (sub) lets the hub reconnect/resume.
             $anonId = preg_replace('/[^A-Za-z0-9_-]/', '', $this->anon) ?? '';

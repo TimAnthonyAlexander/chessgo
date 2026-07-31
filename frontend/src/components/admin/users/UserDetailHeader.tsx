@@ -5,6 +5,7 @@ import type { AdminUserRecord, FlaggedUserRollup } from '../../../api/client'
 import { Panel } from '../../home/Panel'
 import RoleChip from './RoleChip'
 import UserStatusChip from './UserStatusChip'
+import TitleBadge from '../../TitleBadge'
 import { fmtDate, fmtRelative } from './shared'
 import { initials, monogramColor } from '../../profile/shared'
 
@@ -48,6 +49,7 @@ export default function UserDetailHeader({
 
                 <Box sx={{ minWidth: 0, flex: 1 }}>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                        <TitleBadge title={user.title} />
                         <Typography
                             sx={{
                                 fontFamily: 'var(--font-display)',

@@ -28,7 +28,7 @@ class WsTicketService
     }
 
     /**
-     * @param array{sub: string, anon: bool, name: string, rating: int} $identity
+     * @param array{sub: string, anon: bool, name: string, rating: int, ratings?: array<string, int>, title?: string} $identity
      * @throws JsonException
      */
     public function mint(array $identity): string

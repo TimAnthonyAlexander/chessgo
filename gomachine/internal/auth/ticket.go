@@ -22,7 +22,14 @@ type Identity struct {
 	Name    string         `json:"name"`              // display name
 	Rating  int            `json:"rating"`            // default Elo (0 if unrated/anon)
 	Ratings map[string]int `json:"ratings,omitempty"` // per-category Elo (bullet/blitz/rapid/classical)
-	Exp     int64          `json:"exp"`               // unix seconds; 0 = no expiry
+	// Title is the account's derived display title (real FIDE-style title, or
+	// "AM" for admins — see User::displayTitle() on the BaseAPI side). Empty for
+	// guests, anonymous players, and titleless accounts — never a placeholder.
+	// A ticket minted before this field existed simply decodes it as "" (Go's
+	// json.Unmarshal leaves missing fields at their zero value), so old
+	// in-flight tickets keep verifying exactly as before.
+	Title string `json:"title,omitempty"`
+	Exp   int64  `json:"exp"` // unix seconds; 0 = no expiry
 }
 
 // RatingFor returns the player's rating in a time-control category, falling back

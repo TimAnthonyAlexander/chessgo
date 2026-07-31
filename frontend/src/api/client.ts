@@ -712,6 +712,10 @@ export interface LiveSide {
     name: string
     rating: number
     anon: boolean
+    // Absent/empty for bots, anon players, and titleless accounts — never a
+    // placeholder. Optional so an older cached client that doesn't request it
+    // still types.
+    title?: Title | null
 }
 
 /** One row of the Watch lobby: a live game with enough to render a preview. */

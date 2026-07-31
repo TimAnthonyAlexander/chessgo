@@ -3,6 +3,7 @@
 // via useGameSocket (useSyncExternalStore). The browser auto-replies to the
 // server's ping frames (heartbeat), so we only implement reconnect here.
 import { getWsTicket } from '../api/client'
+import type { Title } from '../api/client'
 import type { Variant } from './variants'
 
 export type Color = 'w' | 'b'
@@ -30,7 +31,8 @@ export interface LiveGameState {
     // navigate into it the moment a pairing arrives).
     tournamentId: string | null
     timeControl: { base: number; inc: number }
-    opponent: { name: string; rating: number; anon: boolean }
+    // title is "" for bots/anon/titleless opponents — never a placeholder.
+    opponent: { name: string; rating: number; anon: boolean; title?: Title | null }
     fen: string
     sideToMove: Color
     lastMove: { from: string; to: string } | null

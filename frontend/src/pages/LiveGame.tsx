@@ -21,12 +21,14 @@ import Clock, { ClockBar } from '../components/Clock'
 import LiveModeCard from '../components/LiveModeCard'
 import MoveList from '../components/MoveList'
 import { ActionBtn, Avatar, NavBtn, PANEL_SHADOW } from '../components/PanelUI'
+import TitleBadge from '../components/TitleBadge'
 import {
     candidates,
     getGame,
     getGameAnalysis,
     type MoveEntry,
     type Opening,
+    type Title,
     type User as AuthUser,
 } from '../api/client'
 import { buildBlunderPuzzles } from '../lib/blunderRewind'
@@ -526,6 +528,7 @@ export default function LiveGame() {
                     {/* Opponent */}
                     <PlayerBar
                         name={g.opponent.name}
+                        title={g.opponent.title}
                         rating={
                             g.opponent.anon || !prefs.showOpponentRating
                                 ? null
@@ -825,6 +828,7 @@ export default function LiveGame() {
                     {/* You */}
                     <PlayerBar
                         name="You"
+                        title={user?.title}
                         rating={myRating}
                         getMs={() => liveRemaining(g, g.color)}
                         active={myTurn}
@@ -1054,6 +1058,7 @@ function CapturedPanel({
 
 function PlayerBar({
     name,
+    title,
     rating,
     getMs,
     active,
@@ -1066,6 +1071,7 @@ function PlayerBar({
     zen = false,
 }: {
     name: string
+    title?: Title | null
     rating: number | null
     getMs: () => number
     active: boolean
@@ -1104,7 +1110,8 @@ function PlayerBar({
                 <User size={15} />
             </Avatar>
             <Box sx={{ minWidth: 0 }}>
-                <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75 }}>
+                <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75, minWidth: 0 }}>
+                    {!zen && <TitleBadge title={title} />}
                     <Typography
                         sx={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14.5 }}
                         noWrap

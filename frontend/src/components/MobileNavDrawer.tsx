@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { Box, Drawer, IconButton, Typography, Divider } from '@mui/material'
 import { Link } from 'react-router-dom'
 import { Menu, X, LogOut, UserRound } from 'lucide-react'
+import TitleBadge from './TitleBadge'
+import type { Title } from '../api/client'
 
 // A presentational, prop-driven mobile nav. The parent Layout owns the nav model
 // + auth; this component only renders a hamburger (mobile-only) that toggles a
@@ -22,7 +24,7 @@ export interface MobileNavSection {
 
 export interface MobileNavDrawerProps {
     sections: MobileNavSection[]
-    user: { name: string } | null
+    user: { name: string; title?: Title | null } | null
     onLogin: () => void
     onLogout: () => void
 }
@@ -220,6 +222,7 @@ export default function MobileNavDrawer({
                                         }}
                                     >
                                         <UserRound size={16} color="var(--text-dim)" />
+                                        <TitleBadge title={user.title} />
                                         {user.name}
                                     </Box>
                                     <Box

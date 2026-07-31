@@ -583,7 +583,7 @@ func (h *Hub) sendMatched(g *game, c *Client, color chess.Color) {
 		"duck":        g.duckSquare(),
 		"timeControl": map[string]int64{"base": g.tc.Base, "inc": g.tc.Inc},
 		"clock":       map[string]int64{"w": g.clockMs[chess.White], "b": g.clockMs[chess.Black]},
-		"opponent":    map[string]any{"name": opp.Name, "rating": opp.RatingFor(categoryFor(g.pool, g.variant)), "anon": opp.Anon},
+		"opponent":    map[string]any{"name": opp.Name, "rating": opp.RatingFor(categoryFor(g.pool, g.variant)), "anon": opp.Anon, "title": opp.Title},
 		"legalMoves":  g.legalMoves(),
 		"rematch":     g.rematchOf != "", // true iff this game was created by an accepted rematch
 	}
@@ -1042,7 +1042,7 @@ func (h *Hub) resumeMsg(g *game, color chess.Color) map[string]any {
 		"check":          st.Check,
 		"timeControl":    map[string]int64{"base": g.tc.Base, "inc": g.tc.Inc},
 		"clock":          map[string]int64{"w": g.remainingMs(chess.White), "b": g.remainingMs(chess.Black)},
-		"opponent":       map[string]any{"name": opp.Name, "rating": opp.RatingFor(categoryFor(g.pool, g.variant)), "anon": opp.Anon},
+		"opponent":       map[string]any{"name": opp.Name, "rating": opp.RatingFor(categoryFor(g.pool, g.variant)), "anon": opp.Anon, "title": opp.Title},
 		"legalMoves":     g.legalMoves(),
 		"moves":          g.moveLog(),
 		"lastMove":       g.lastUci(),
@@ -1129,7 +1129,7 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	spectate := r.URL.Query().Get("spectate") == "1"
 	c := &Client{hub: h, conn: conn, id: id, send: make(chan []byte, sendBuffer), ctx: ctx, cancel: cancel, spectator: spectate}
 	go c.writePump()
-	c.trySend(mustJSON(out("hello", map[string]any{"name": id.Name, "anon": id.Anon, "rating": id.Rating})))
+	c.trySend(mustJSON(out("hello", map[string]any{"name": id.Name, "anon": id.Anon, "rating": id.Rating, "title": id.Title})))
 	h.register <- c // reattach + resume if this player has an active game
 
 	c.readPump() // blocks until the connection closes

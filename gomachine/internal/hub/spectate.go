@@ -98,6 +98,7 @@ func sideInfo(p *player, cat string) map[string]any {
 		"name":   p.id.Name,
 		"rating": p.id.RatingFor(cat),
 		"anon":   p.id.Anon,
+		"title":  p.id.Title, // "" for bots/anon/titleless accounts — never a placeholder
 	}
 }
 
@@ -107,6 +108,9 @@ type sideSummary struct {
 	Name   string `json:"name"`
 	Rating int    `json:"rating"`
 	Anon   bool   `json:"anon"`
+	// Title is "" for bots/anon/titleless accounts — omitted from the wire via
+	// omitempty rather than sent as a placeholder.
+	Title string `json:"title,omitempty"`
 }
 
 // gameSummary is one row of the Watch lobby. filler is used only to order real
@@ -145,8 +149,8 @@ func (h *Hub) publishLobby() {
 			Pool:       g.pool,
 			Rated:      g.rated,
 			Variant:    g.variant,
-			White:      sideSummary{g.white.id.Name, g.white.id.RatingFor(cat), g.white.id.Anon},
-			Black:      sideSummary{g.black.id.Name, g.black.id.RatingFor(cat), g.black.id.Anon},
+			White:      sideSummary{g.white.id.Name, g.white.id.RatingFor(cat), g.white.id.Anon, g.white.id.Title},
+			Black:      sideSummary{g.black.id.Name, g.black.id.RatingFor(cat), g.black.id.Anon, g.black.id.Title},
 			FEN:        g.boardFEN(),
 			Duck:       g.duckSquare(),
 			SideToMove: st.SideToMove,
