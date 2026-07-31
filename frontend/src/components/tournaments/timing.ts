@@ -50,42 +50,10 @@ export function timingText(t: TournamentSummary, now: number): string {
     return `Finished ${formatDuration(now - t.ends_at_ms)} ago`
 }
 
-/** The compact state-column readout for the schedule table — shorter than
- * {@link timingText} since it sits next to its own "start time" column
- * rather than standing alone. */
-export function stateText(t: TournamentSummary, now: number): string {
-    if (t.status === 'scheduled') {
-        const startsAt = parseStartsAt(t.starts_at)
-        return startsAt <= now ? 'Starting…' : `in ${formatDuration(startsAt - now)}`
-    }
-    if (t.status === 'running') {
-        return t.ends_at_ms <= now ? 'Ending…' : `${formatDuration(t.ends_at_ms - now)} left`
-    }
-    return `${formatDuration(now - t.ends_at_ms)} ago`
-}
-
-/** A tournament is "starting soon" once inside this window — the cutoff
- * between the live-countdown section and the plain schedule. */
-export const STARTING_SOON_MS = 15 * 60 * 1000
-
-/** Local wall-clock time for the table's leftmost column ("14:30"). */
-export function clockTime(ms: number): string {
-    return new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-}
-
-/** "Today" / "Tomorrow" / "Wed, Aug 5" — the day-group header inside the
- * schedule section, so a multi-day rota still reads as one scannable table
- * rather than an undifferentiated wall of hourly rows. */
-export function dayLabel(ms: number, now: number): string {
-    const d = new Date(ms)
-    const n = new Date(now)
-    const sameDay = (a: Date, b: Date) =>
-        a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
-    if (sameDay(d, n)) return 'Today'
-    const tomorrow = new Date(n)
-    tomorrow.setDate(n.getDate() + 1)
-    if (sameDay(d, tomorrow)) return 'Tomorrow'
-    return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+/** Local wall-clock time, always 24-hour ("16:00") regardless of locale — the
+ * timeline axis's hour labels and a block's hover tooltip. */
+export function hhmm(ms: number): string {
+    return new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
 /** "30m", "1h", "1h30m" — a tournament's fixed duration, distinct from
@@ -118,14 +86,6 @@ export function poolSpeed(pool: string): Speed {
     if (estimateSeconds < 480) return 'blitz'
     if (estimateSeconds < 1500) return 'rapid'
     return 'classical'
-}
-
-/** Automated hourly/variant-hourly rota entries are furniture — everything
- * else (hand-created, daily/weekly rota, Titled Tuesday, the monthly
- * championship) is a named event that should stand out by weight, never by
- * color. */
-export function isFeaturedSeries(series: TournamentSummary['series']): boolean {
-    return series !== 'hourly' && series !== 'variant-hourly'
 }
 
 /** Plain-language restriction line for a row — "Titled only", "2000+",
