@@ -21,12 +21,16 @@ use App\Services\Glicko2Service;
  *                 "players":[{"sub","score","withdrawn","bot","name","rating","title"}, ...]}, ...]}
  *
  * Only tournaments that are currently running (started, not yet ended) are
- * included. Deliberately does NOT call {@see Tournament::reconcileStatus()} —
- * that writes on every read, and this route is polled constantly; the
- * candidate filter below (status != 'finished' AND starts_at <= now) plus an
- * in-PHP `isRunning()` check gets the same correctness without a write per
- * poll. Every joined player is included with their current score — the hub,
- * not this endpoint, filters withdrawn players out of pairing.
+ * included. Doesn't bother with {@see Tournament::reconcileStatus()} — this
+ * route is polled every few seconds, so even though reconcileStatus() is now
+ * a pure in-memory refresh (no write, see that model's docblock), there's no
+ * reason to touch every row's PHP object just to throw it away; the
+ * candidate filter below (status != 'finished' AND starts_at <= now, where
+ * `status` is the best-effort cache kept fresh by
+ * {@see Tournament::reconcileAllStatuses()}) plus an in-PHP `isRunning()`
+ * check on the smaller candidate set gets the same correctness more cheaply.
+ * Every joined player is included with their current score — the hub, not
+ * this endpoint, filters withdrawn players out of pairing.
  *
  * Bot enrolment: a running tournament with no bot in its roster yet gets a
  * deterministic subset of the seeded bot pool (scripts/seed_bot_accounts.php)

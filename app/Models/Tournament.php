@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use BaseApi\App;
 use BaseApi\Models\BaseModel;
 use App\Services\Glicko2Service;
 
@@ -13,11 +14,16 @@ use App\Services\Glicko2Service;
  * owned by BaseAPI.
  *
  * `status` is normally 'scheduled' -> 'running' -> 'finished', but nothing
- * flips it on a timer. Instead {@see self::running()} / {@see self::finished()}
- * derive the true state from `starts_at` + `duration_minutes`, and
- * {@see self::reconcileStatus()} writes that derived state back onto
- * `status` at request time (called wherever a tournament is read or listed).
- * That keeps `status` correct without a cron.
+ * flips it on a timer, and (as of 2026-07-31) **nothing writes it on a GET
+ * either** — {@see self::isRunning()} / {@see self::isFinished()} derive the
+ * true state from `starts_at` + `duration_minutes`, and
+ * {@see self::reconcileStatus()} refreshes `$this->status` from that
+ * derivation **in memory only** so every response is correct regardless of
+ * what's stored. The stored `status` column is just a best-effort cache for
+ * cheaply pre-filtering candidates (see ArenaInternalController); it's kept
+ * approximately fresh by {@see self::reconcileAllStatuses()}, a single
+ * set-based UPDATE pair run periodically from the tournament scheduler
+ * (scripts/schedule_tournaments.php), never per-row and never on a read.
  */
 class Tournament extends BaseModel
 {
@@ -122,17 +128,54 @@ class Tournament extends BaseModel
         };
     }
 
+    /** Pure computation of the true status from wall-clock time. No I/O. */
+    public function effectiveStatus(): string
+    {
+        return $this->isFinished() ? 'finished' : ($this->isRunning() ? 'running' : 'scheduled');
+    }
+
     /**
-     * Recompute `status` from wall-clock time and persist it if it changed.
-     * Cheap (one strtotime + maybe one save); call whenever a tournament is
-     * read so `status` is never stale without needing a cron.
+     * Refresh `$this->status` from wall-clock time — **in memory only, never
+     * a write**. Call on every read (list/show/join) so the response is
+     * always correct even though the stored column may be stale. Cheap: one
+     * strtotime, no query.
      */
     public function reconcileStatus(): void
     {
-        $derived = $this->isFinished() ? 'finished' : ($this->isRunning() ? 'running' : 'scheduled');
-        if ($derived !== $this->status) {
-            $this->status = $derived;
-            $this->save();
-        }
+        $this->status = $this->effectiveStatus();
+    }
+
+    /**
+     * Set-based reconciliation of the stored `status` column for every row at
+     * once — two UPDATEs total, not a read+save per row, so cost doesn't
+     * scale with table size. This is the ONLY place `status` is persisted
+     * from a derived value; it exists solely to keep the stored column a
+     * reasonably fresh cache (used by ArenaInternalController to shrink its
+     * candidate set) and is meant to be called from the periodic scheduler
+     * run (scripts/schedule_tournaments.php), never from a request path.
+     *
+     * @return int total rows changed across both UPDATEs
+     */
+    public static function reconcileAllStatuses(): int
+    {
+        $db = App::db();
+        $table = static::table();
+
+        $toRunning = $db->exec(
+            "UPDATE `{$table}`
+                SET status = 'running'
+              WHERE status = 'scheduled'
+                AND starts_at <= UTC_TIMESTAMP()
+                AND DATE_ADD(starts_at, INTERVAL duration_minutes MINUTE) > UTC_TIMESTAMP()"
+        );
+
+        $toFinished = $db->exec(
+            "UPDATE `{$table}`
+                SET status = 'finished'
+              WHERE status IN ('scheduled', 'running')
+                AND DATE_ADD(starts_at, INTERVAL duration_minutes MINUTE) <= UTC_TIMESTAMP()"
+        );
+
+        return $toRunning + $toFinished;
     }
 }

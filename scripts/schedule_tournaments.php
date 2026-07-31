@@ -53,6 +53,15 @@ foreach (array_slice($argv, 1) as $arg) {
     }
 }
 
+// Refresh the stored `status` column for every tournament in one pair of
+// set-based UPDATEs. Reads derive status from the clock in memory and never
+// write it back (a GET must not issue an UPDATE), so this timer run is what
+// keeps the stored column a fresh-enough cache for ArenaInternalController's
+// candidate pre-filter. Skipped on --dry-run, which promises to change nothing.
+if (!$dryRun) {
+    Tournament::reconcileAllStatuses();
+}
+
 $now = time();
 $to = $now + $horizonHours * 3600;
 

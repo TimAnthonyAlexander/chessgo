@@ -4,4 +4,16 @@
 // BaseAPI Template Console Shim
 // This script forwards commands to the framework's console
 
+// `serve` spawns PHP's built-in server via passthru(), which inherits this
+// process's environment. That built-in server is single-worker by default,
+// so concurrent local requests (a page's own fetches, plus anything else
+// hitting :6464) queue up behind one another — see
+// docs/tasks/open/php-s-local-workers.md. Setting this here (before the
+// framework console boots) makes it visible to the spawned server without
+// needing it exported in the invoking shell. Dev-only; prod runs PHP-FPM,
+// which is already concurrent.
+if (in_array('serve', $argv, true) && getenv('PHP_CLI_SERVER_WORKERS') === false) {
+    putenv('PHP_CLI_SERVER_WORKERS=4');
+}
+
 require __DIR__ . '/vendor/bin/mason';

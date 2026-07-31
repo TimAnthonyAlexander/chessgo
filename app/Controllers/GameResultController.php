@@ -136,6 +136,25 @@ class GameResultController extends Controller
             } elseif ($blackUser instanceof User && $whiteBot) {
                 $this->applyEloVsBot($game, $blackUser, false, (int)($white['rating'] ?? 1500), $category, $result);
             }
+
+            // Bot sides never run through applyElo()/applyEloVsBot() above (both are
+            // gated on resolveAccount(), which deliberately returns null for any
+            // bot side so Elo never moves for one). But a seeded bot account
+            // ($whiteAccount/$blackAccount — resolved via resolveAccountForScoring(),
+            // which does NOT exclude bots) still has a real `user` row with its own
+            // profile, and that profile's per-category "N games" tile reads
+            // games_<category> — so it must be bumped here, or it drifts behind the
+            // account's actual game rows forever. Rating/RD/vol/rated_at are left
+            // untouched: this only mirrors writeRating()'s counter line, not its Elo
+            // side effects. A human side is already covered above (writeRating()),
+            // so only the bot-flagged side is bumped here to avoid double-counting.
+            if ($whiteAccount instanceof User && $whiteBot) {
+                $this->bumpGamesCounter($whiteAccount, $category);
+            }
+
+            if ($blackAccount instanceof User && $blackBot) {
+                $this->bumpGamesCounter($blackAccount, $category);
+            }
         }
 
         if (!$game->save()) {
@@ -406,6 +425,19 @@ class GameResultController extends Controller
         }
 
         $player->save();
+    }
+
+    /**
+     * Bump a bot account's own games_<category> counter, with no Elo/RD/volatility
+     * side effect. {@see writeRating()} is what bumps this same counter for a real
+     * (non-bot) account, as part of applying its Elo update; a bot side never goes
+     * through that path (Elo intentionally never moves for a bot), so its profile
+     * counter needs this narrower bump instead.
+     */
+    private function bumpGamesCounter(User $account, string $category): void
+    {
+        $account->{'games_' . $category} = (int)$account->{'games_' . $category} + 1;
+        $account->save();
     }
 
     /** RD for this category right now, grown for idle time since the last game. */

@@ -21,9 +21,11 @@ use App\Models\User;
  * {@see TournamentWithdrawController}. The hub's pairing feed is
  * {@see ArenaInternalController} (secret-gated, not this class).
  *
- * `status` is never cron-flipped — every read here calls
- * {@see Tournament::reconcileStatus()} first, deriving scheduled/running/
- * finished from `starts_at` + `duration_minutes` (see that model's docblock).
+ * `status` is never cron-flipped and never written from a GET — every read
+ * here calls {@see Tournament::reconcileStatus()} first, which refreshes
+ * `status` in memory from `starts_at` + `duration_minutes` (see that model's
+ * docblock). The stored column is a best-effort cache kept fresh elsewhere;
+ * responses are always correct regardless of it.
  */
 class TournamentController extends Controller
 {
