@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/timanthonyalexander/gomachine/internal/auth"
@@ -118,7 +119,9 @@ func TestMoveTimesCaptured(t *testing.T) {
 	}
 }
 
-// A bot side of a human-vs-bot game is not tracked (only the human is).
+// A bot side of a human-vs-bot game is not tracked (only the human is) when
+// the bot's identity carries the synthetic backfill prefix — no real account
+// behind it.
 func TestBotSideNotTracked(t *testing.T) {
 	h := New("secret")
 	g := makeHumanGame("hb1", "alice", "bot-9")
@@ -131,5 +134,71 @@ func TestBotSideNotTracked(t *testing.T) {
 	}
 	if live, _ := h.LivePlayer("bot-9"); live {
 		t.Fatal("the bot side should not be tracked")
+	}
+}
+
+// A seeded arena bot account (role='bot' on BaseAPI, a REAL user row — the
+// kind arena.go seats using the roster's own sub verbatim, e.g. via
+// startArenaBotFillGame/topUpArenaBotVsBot) must be reported live exactly
+// like a human, and cleared when its game ends — that's the whole point of
+// this task: a bot playing a visible tournament game must not show "no
+// current game" on its own profile.
+func TestRealAccountBotSideIsTracked(t *testing.T) {
+	h := New("secret")
+	g := makeHumanGame("ab1", "alice", "acct-bot-42") // "acct-bot-42" has no "bot-" prefix
+	g.black.isBot = true
+
+	h.markLive(g)
+
+	live, fen := h.LivePlayer("acct-bot-42")
+	if !live {
+		t.Fatal("a bot backed by a real account must be tracked as live")
+	}
+	if fen != chess.StartFEN {
+		t.Fatalf("live fen = %q, want start position", fen)
+	}
+	detail := h.LivePlayerDetail("acct-bot-42")
+	if detail.Opponent.Name == "" && g.white.id.Name != "" {
+		t.Fatal("opponent info should be populated")
+	}
+
+	// Ends like any other game — must be cleared, not stuck "playing now"
+	// forever. Exercise the real finish()/teardown() path, not unmarkLive
+	// directly, so every end path (finish, abort, disconnect) is covered by
+	// construction: they all funnel through teardown().
+	h.games[g.id] = g
+	h.playerGames[g.white.id.UserID] = g
+	h.playerGames[g.black.id.UserID] = g
+	h.finish(g, "1-0", "resign")
+
+	if live, _ := h.LivePlayer("acct-bot-42"); live {
+		t.Fatal("the bot side must be cleared from the live index once its game ends")
+	}
+	if _, ok := h.playerGames[g.black.id.UserID]; ok {
+		t.Fatal("teardown should also drop the bot's playerGames entry")
+	}
+}
+
+// A synthetic matchmaking-backfill bot identity (bot.go's newBotIdentity —
+// "bot-"+random, no BaseAPI account behind it at all) is never tracked, even
+// outside a filler game — there is no account for a profile page to ever ask
+// about.
+func TestSyntheticBackfillBotNotTracked(t *testing.T) {
+	h := New("secret")
+	bot := newBotIdentity(1500)
+	if !strings.HasPrefix(bot.UserID, syntheticBotIDPrefix) {
+		t.Fatalf("newBotIdentity should mint a %q-prefixed id, got %q", syntheticBotIDPrefix, bot.UserID)
+	}
+	g := makeHumanGame("sb1", "alice", bot.UserID)
+	g.black.id = bot
+	g.black.isBot = true
+
+	h.markLive(g)
+
+	if live, _ := h.LivePlayer("alice"); !live {
+		t.Fatal("the human side should still be live")
+	}
+	if live, _ := h.LivePlayer(bot.UserID); live {
+		t.Fatal("a synthetic backfill bot identity must never be tracked as live")
 	}
 }

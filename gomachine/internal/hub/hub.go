@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	mrand "math/rand/v2"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -217,20 +218,50 @@ func opponentInfoFor(p *player, cat string) LivePlayerOpponent {
 	return LivePlayerOpponent{Name: p.id.Name, Title: p.id.Title, Rating: p.id.RatingFor(cat)}
 }
 
-// markLive records both non-bot sides of g as in-game. Called on the Run
-// goroutine at game start (paired with the playerGames writes).
+// isRealAccountSide reports whether p should be registered in the
+// live-player index: every human side (unchanged — including anon guests,
+// which LivePlayer/LivePlayerDetail already no-op on via their empty-id
+// check), PLUS a bot side that is backed by a real BaseAPI account (arena
+// participants: fillArenaWithBot's human-vs-bot fill and
+// topUpArenaBotVsBot's bot-vs-bot pairing both seat bots using the roster's
+// own `sub` verbatim, per ArenaPlayerSnapshot's doc comment — "the hub seats
+// them using that identity verbatim rather than inventing one").
+//
+// Excluded: a bot side the hub invented itself — ordinary matchmaking
+// backfill (bot.go's newBotIdentity) and Watch-lobby engine-vs-engine
+// fillers — whose UserID carries syntheticBotIDPrefix ("bot-"+random) and has
+// no account behind it at all. Registering that id would be dead weight: no
+// profile page or anti-cheat probe can ever ask about an id nobody was ever
+// given. (Filler games are excluded earlier anyway, via g.filler in
+// markLive/refreshLive — this only matters for the non-filler backfill case.)
+//
+// This is also why registering a real-account bot can't create a false
+// anti-cheat signal: AnticheatService.checkAnalysisDuringGame only ever
+// probes livePlayer(sub) for a `sub` pulled from an authenticated BaseAPI
+// request's own session — a seeded bot account has no credentials and never
+// makes such a request, so its sub can never appear as the CALLER of that
+// probe. Anti-cheat's own post-game review (reviewSide/scanEngineCorrelation)
+// separately excludes bot sides via the DB's white_is_bot/black_is_bot flags,
+// unrelated to this index.
+func isRealAccountSide(p *player) bool {
+	return !p.isBot || !strings.HasPrefix(p.id.UserID, syntheticBotIDPrefix)
+}
+
+// markLive records both real-account sides of g as in-game (humans, plus a
+// bot side backed by a real account — see isRealAccountSide). Called on the
+// Run goroutine at game start (paired with the playerGames writes).
 func (h *Hub) markLive(g *game) {
 	if g.filler {
 		return
 	}
 	fen := g.boardFEN()
 	cat := categoryFor(g.pool, g.variant)
-	if !g.white.isBot {
+	if isRealAccountSide(g.white) {
 		h.livePlayers.Store(g.white.id.UserID, livePlayerEntry{
 			fen: fen, gameID: g.id, pool: g.pool, opponent: opponentInfoFor(g.black, cat),
 		})
 	}
-	if !g.black.isBot {
+	if isRealAccountSide(g.black) {
 		h.livePlayers.Store(g.black.id.UserID, livePlayerEntry{
 			fen: fen, gameID: g.id, pool: g.pool, opponent: opponentInfoFor(g.white, cat),
 		})
@@ -244,14 +275,14 @@ func (h *Hub) refreshLive(g *game) {
 		return
 	}
 	fen := g.boardFEN()
-	if !g.white.isBot {
+	if isRealAccountSide(g.white) {
 		if v, ok := h.livePlayers.Load(g.white.id.UserID); ok {
 			e, _ := v.(livePlayerEntry)
 			e.fen = fen
 			h.livePlayers.Store(g.white.id.UserID, e)
 		}
 	}
-	if !g.black.isBot {
+	if isRealAccountSide(g.black) {
 		if v, ok := h.livePlayers.Load(g.black.id.UserID); ok {
 			e, _ := v.(livePlayerEntry)
 			e.fen = fen

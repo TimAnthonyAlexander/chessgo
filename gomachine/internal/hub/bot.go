@@ -674,10 +674,20 @@ func uciDest(uci string) string {
 
 // --- fake identity ---
 
-// newBotIdentity builds a fill-in bot with a given displayed rating.
+// syntheticBotIDPrefix marks a bot identity the hub invented itself (ordinary
+// matchmaking backfill, Watch-lobby fillers) rather than one seated from a
+// real BaseAPI account (arena bot participants — see arena.go's
+// startArenaBotFillGame/topUpArenaBotVsBot, which use the roster's own sub
+// verbatim and never this prefix). See isRealAccountSide in hub.go: a bot
+// side is only registered in the live-player index when it does NOT carry
+// this prefix, i.e. there's an actual account for a profile page to show.
+const syntheticBotIDPrefix = "bot-"
+
+// newBotIdentity builds a fill-in bot with a given displayed rating. No real
+// account backs this identity — see syntheticBotIDPrefix.
 func newBotIdentity(rating int) auth.Identity {
 	return auth.Identity{
-		UserID: "bot-" + newID(),
+		UserID: syntheticBotIDPrefix + newID(),
 		Anon:   false, // rendered like an account so the rating shows
 		Name:   fakeUsername(),
 		Rating: rating,
