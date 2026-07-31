@@ -38,11 +38,23 @@ use App\Services\Glicko2Service;
  * runs the FIRST time a tournament is seen with an empty bot roster — every
  * later poll finds bots already present and skips straight to building the
  * response, so the 5s poll stays cheap.
+ *
+ * Field size scales with the event, not a flat number (see targetFieldSize()):
+ * an hourly bullet arena and a monthly championship aren't the same event, so
+ * they shouldn't draw the same-sized field. The pool (150 accounts as of
+ * 2026-07-31, scripts/seed_bot_accounts.php) is sized comfortably above the
+ * biggest field so different tournaments' deterministic crc32 orderings
+ * actually look different, not like the same ~100 names every time.
  */
 class ArenaInternalController extends Controller
 {
-    /** Target bot field size per arena (clamped down if fewer bots are eligible). */
-    private const BOT_FIELD_SIZE = 8;
+    /** Field-size floor: even the shortest hourly arena reads as a real event. */
+    private const MIN_FIELD_SIZE = 16;
+
+    /** Field-size ceiling: keeps the response bounded regardless of how long
+     *  a future rota entry runs, and keeps a big win/loss from being tied to
+     *  the exact size of the bot pool. */
+    private const MAX_FIELD_SIZE = 100;
 
     public function __construct(
         private readonly Glicko2Service $glicko,
@@ -211,7 +223,7 @@ class ArenaInternalController extends Controller
         $tournamentId = (string) $t->id;
         usort($eligible, static fn (User $a, User $b): int => crc32($tournamentId . ':' . $a->id) <=> crc32($tournamentId . ':' . $b->id));
 
-        $selected = array_slice($eligible, 0, self::BOT_FIELD_SIZE);
+        $selected = array_slice($eligible, 0, $this->targetFieldSize($t));
 
         $created = [];
         foreach ($selected as $bot) {
@@ -243,6 +255,31 @@ class ArenaInternalController extends Controller
         }
 
         return $created;
+    }
+
+    /**
+     * How many bots a tournament should try to field, scaled off what the
+     * event actually is rather than one flat number for every arena. Duration
+     * is the proxy: a 27-minute hourly bullet arena and a 240-minute monthly
+     * championship are not the same event, and `duration_minutes` already
+     * captures that distinction for every rota entry (see
+     * TournamentSchedule) without needing a `series`/`titled_only`-keyed
+     * lookup table that would silently miss a future rota addition.
+     * Restrictions (titled_only/min_rating/max_rating) aren't sized here —
+     * they can only shrink the field, and enrolBots()'s eligibility filter +
+     * array_slice already clamp the target down to however many bots
+     * actually qualify (e.g. Titled Tuesday's target is ~76 but the titled
+     * pool is 36, so it fields 36).
+     *
+     * Pure function of `duration_minutes`, clamped to
+     * [MIN_FIELD_SIZE, MAX_FIELD_SIZE]. Rota durations run 27..240 minutes,
+     * which this maps to a ~29..100 field.
+     */
+    private function targetFieldSize(Tournament $t): int
+    {
+        $scaled = self::MIN_FIELD_SIZE + intdiv($t->duration_minutes, 2);
+
+        return max(self::MIN_FIELD_SIZE, min(self::MAX_FIELD_SIZE, $scaled));
     }
 
     private function authorized(): bool

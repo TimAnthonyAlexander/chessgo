@@ -27,7 +27,7 @@ declare(strict_types=1);
  * arena has a real field to draw from.
  *
  * Usage:
- *   php scripts/seed_bot_accounts.php [--count=40]
+ *   php scripts/seed_bot_accounts.php [--count=150]
  *   php scripts/seed_bot_accounts.php --delete
  */
 
@@ -62,10 +62,11 @@ const BOT_DOMAIN = 'bot.local';
 const BOT_CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'puzzle'];
 
 /**
- * Fixed title assignment: 8 of the pool (by 1-based index, evenly spread so
- * they aren't clustered at the front) get a real title. Ratings for these
- * indices are drawn from a title-appropriate high band, not the general
- * spread, so a titled_only tournament's field looks credible.
+ * Legacy fixed title assignment for the original 40-account pool (by 1-based
+ * index, evenly spread so they aren't clustered at the front). Kept verbatim
+ * — these 40 accounts already exist and are skipped by the idempotency check
+ * below, but the mapping stays here so a from-scratch reseed of a fresh DB
+ * reproduces the exact same 8 legacy titled accounts.
  *
  * @var array<int, string>
  */
@@ -80,6 +81,41 @@ const TITLED_SLOTS = [
     36 => 'NM',
 ];
 
+/**
+ * The 8-title cycle TITLED_SLOTS walks every 5th index through, in order.
+ * Reused by {@see titleForIndex()} to keep assigning titles past index 40 on
+ * the same cycle, just at a tighter spacing (every 4th index instead of every
+ * 5th) so the titled SHARE of the pool goes up, not just the absolute count.
+ *
+ * @var list<string>
+ */
+const TITLE_CYCLE = ['GM', 'IM', 'GM', 'WGM', 'IM', 'FM', 'WIM', 'NM'];
+
+/**
+ * Title for bot index $i, or null for an untitled bot. Indices 1-40 use the
+ * legacy fixed TITLED_SLOTS mapping unchanged (see its docblock). Indices
+ * above 40 get a title every 4th index (41, 45, 49, ...), cycling through the
+ * same 8 titles TITLED_SLOTS uses — a ~25% titled share for the new range,
+ * up from the legacy pool's 1-in-5 (20%), so growing the pool raises the
+ * titled share as well as the absolute count (see task: "raise the titled
+ * share"). A titled_only event (Titled Tuesday) needs a credible field of
+ * real, differently-titled entrants, not 8 repeats.
+ */
+function titleForIndex(int $i): ?string
+{
+    if ($i <= 40) {
+        return TITLED_SLOTS[$i] ?? null;
+    }
+
+    if (($i - 41) % 4 !== 0) {
+        return null;
+    }
+
+    $cyclePos = intdiv($i - 41, 4) % count(TITLE_CYCLE);
+
+    return TITLE_CYCLE[$cyclePos];
+}
+
 /** @var array<string, array{0:int,1:int}> title => [min,max] base-rating band */
 const TITLE_RATING_BANDS = [
     'GM' => [2300, 2400],
@@ -93,7 +129,14 @@ const TITLE_RATING_BANDS = [
 // --- CLI args -------------------------------------------------------------
 $argvRest = array_slice($argv, 1);
 $deleteMode = in_array('--delete', $argvRest, true);
-$count = 40;
+// 150: the biggest scaled field (ArenaInternalController's monthly-championship
+// / weekly-long-arena target, ~100) needs a pool comfortably bigger than the
+// largest single field so different tournaments (different crc32(tournamentId)
+// orderings) draw visibly different subsets instead of the same ~100 every
+// time. 150 new-account indices at 4 self-play categories x 8 games each is
+// real engine self-play time (see seed_bot_history.php) — big enough to look
+// like a real site, not so big the backfill run balloons past an hour.
+$count = 150;
 foreach ($argvRest as $a) {
     if (str_starts_with($a, '--count=')) {
         $count = max(1, (int) substr($a, strlen('--count=')));
@@ -188,7 +231,7 @@ for ($i = 1; $i <= $count; $i++) {
     mt_srand($i * 15485863 + 3);
     $handle = makeBotHandle($i, $faker, $chessAdjs, $chessNouns);
 
-    $title = TITLED_SLOTS[$i] ?? null;
+    $title = titleForIndex($i);
 
     mt_srand($i * 32452867 + 11);
     if ($title !== null) {

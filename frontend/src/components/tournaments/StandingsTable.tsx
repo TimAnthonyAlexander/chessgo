@@ -3,11 +3,14 @@ import { Link } from 'react-router-dom'
 import type { TournamentStanding } from '../../api/client'
 import TitleBadge from '../TitleBadge'
 
-// Four narrow columns fit at 375px without a scroll container: rank, the name
+// Four columns fit at 375px without a scroll container: rank, the name
 // (which shrinks/ellipsises first), and two right-aligned tabular numbers.
+// The two numeric columns widen slightly on larger screens along with the
+// row padding — this is the primary surface on the detail page now, so it
+// gets room to breathe rather than staying pinned to its mobile minimum.
 const gridSx = {
     display: 'grid',
-    gridTemplateColumns: '22px 1fr 44px 34px',
+    gridTemplateColumns: { xs: '22px 1fr 44px 34px', md: '28px 1fr 60px 46px' },
     columnGap: 10,
     alignItems: 'center',
 } as const
@@ -52,7 +55,7 @@ export default function StandingsTable({
             <Box
                 sx={{
                     ...gridSx,
-                    px: 1.5,
+                    px: { xs: 1.5, md: 2 },
                     py: 0.85,
                     bgcolor: 'var(--surface-2)',
                     borderBottom: '1px solid var(--line-soft)',
@@ -69,22 +72,26 @@ export default function StandingsTable({
                 <span style={{ textAlign: 'right' }}>Pts</span>
                 <span style={{ textAlign: 'right' }}>Gms</span>
             </Box>
-            {standings.map((s, i) => (
+            {standings.map((s, i) => {
+                const mine = s.user_id === currentUserId
+                return (
                 <Box
                     key={s.user_id}
                     sx={{
                         ...gridSx,
-                        px: 1.5,
-                        py: 0.85,
+                        px: { xs: 1.5, md: 2 },
+                        py: { xs: 0.85, md: 1.05 },
                         borderBottom: i < standings.length - 1 ? '1px solid var(--line-soft)' : 'none',
-                        bgcolor: s.user_id === currentUserId ? 'var(--accent-soft)' : 'transparent',
+                        bgcolor: mine ? 'var(--accent-soft)' : 'transparent',
+                        boxShadow: mine ? 'inset 3px 0 0 var(--accent)' : 'none',
                     }}
                 >
                     <Typography
                         sx={{
                             fontFamily: 'var(--font-mono)',
                             fontSize: 12.5,
-                            color: 'var(--text-dim)',
+                            fontWeight: i < 3 ? 700 : 400,
+                            color: i === 0 ? 'var(--accent)' : 'var(--text-dim)',
                         }}
                     >
                         {i + 1}
@@ -96,8 +103,8 @@ export default function StandingsTable({
                                 component={Link}
                                 to={`/@/${encodeURIComponent(s.name)}`}
                                 sx={{
-                                    fontSize: 13.5,
-                                    fontWeight: 600,
+                                    fontSize: { xs: 13.5, md: 14 },
+                                    fontWeight: mine ? 700 : 600,
                                     color: s.withdrawn ? 'var(--muted)' : 'var(--text)',
                                     textDecoration: s.withdrawn ? 'line-through' : 'none',
                                     overflow: 'hidden',
@@ -112,7 +119,7 @@ export default function StandingsTable({
                         ) : (
                             <Typography
                                 sx={{
-                                    fontSize: 13.5,
+                                    fontSize: { xs: 13.5, md: 14 },
                                     fontWeight: 600,
                                     color: 'var(--muted)',
                                     overflow: 'hidden',
@@ -161,7 +168,8 @@ export default function StandingsTable({
                         {s.games}
                     </Typography>
                 </Box>
-            ))}
+                )
+            })}
         </Box>
     )
 }

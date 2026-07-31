@@ -128,14 +128,25 @@ final class TournamentSchedule
         return $occ;
     }
 
-    /** @return array{schedule_key:string, series:string, name:string, variant:string, pool:string, starts_at:string, duration_minutes:int, rated:bool, min_rating:?int, max_rating:?int, titled_only:bool} */
+    /**
+     * "Hourly" in a name is a promise: this event fits inside the hour it
+     * started in, so by the time the next hourly-slot event appears the
+     * previous one is gone. Bullet (27min) and Blitz (57min) keep that
+     * promise. A real 10+0 rapid game needs more than an hour to be worth
+     * playing, so its 117-minute slot can't keep it — we don't rename the
+     * duration down to a rushed non-rapid pairing window just to keep the
+     * word "Hourly"; we drop the word instead. It's still on the hourly
+     * rotation (hour%4===3), it just isn't advertised as finishing hourly.
+     *
+     * @return array{schedule_key:string, series:string, name:string, variant:string, pool:string, starts_at:string, duration_minutes:int, rated:bool, min_rating:?int, max_rating:?int, titled_only:bool}
+     */
     private static function hourly(int $ts, int $hour): array
     {
         [$name, $pool, $duration, $slug] = match ($hour % 4) {
             0 => ['Hourly Bullet Arena', '1+0', 27, 'bullet'],
             1 => ['Hourly Blitz Arena', '3+0', 57, 'blitz'],
             2 => ['Hourly Blitz Arena', '5+0', 57, 'blitz'],
-            3 => ['Hourly Rapid Arena', '10+0', 117, 'rapid'],
+            3 => ['Rapid Arena', '10+0', 117, 'rapid'],
         };
 
         return self::build('hourly', $slug, $ts, $name, 'standard', $pool, $duration);
