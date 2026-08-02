@@ -242,9 +242,9 @@ function arrowPolygon(a: { x: number; y: number }, b: { x: number; y: number }):
     ].join(' ')
 }
 
-// Lichess-style right-click annotations. A shape with from === to is a square
-// highlight (ring); otherwise it's an arrow. The modifier held while drawing
-// picks the brush colour.
+// Lichess-style right-click annotations. A shape with from === to tints the whole
+// square (behind the piece); otherwise it's an arrow. The modifier held while
+// drawing picks the brush colour.
 type Brush = 'green' | 'red' | 'blue' | 'yellow' | 'accent'
 const BRUSHES: Record<Brush, string> = {
     // Brighter, higher-chroma variants of the Lichess brushes so they read on both
@@ -716,6 +716,16 @@ export default function Board({
         [circle, center],
     )
     const circleColor = circle?.color ?? 'var(--accent)'
+    // Square annotations (right-click without dragging) are a full-square tint
+    // painted UNDER the piece, so they live on the square itself rather than in
+    // the arrow overlay — that SVG sits above the pieces.
+    const marks = useMemo(() => {
+        const m = new Map<Square, string>()
+        for (const s of drawing ? [...shapes, drawing] : shapes) {
+            if (s.from === s.to) m.set(s.from, BRUSHES[s.brush])
+        }
+        return m
+    }, [shapes, drawing])
 
     // Piece-slide animation: diff the previous board snapshot against this one
     // and play the resulting flights. Position-diff-based (see pieceAnimation.ts),
@@ -1263,6 +1273,13 @@ export default function Board({
                                             : undefined
                                     }
                                 >
+                                    {marks.has(sq) && (
+                                        <span
+                                            className="mark"
+                                            style={{ '--mark': marks.get(sq) } as CSSProperties}
+                                            aria-hidden
+                                        />
+                                    )}
                                     {/* Legal-move marker: a dot on an empty square, a ring
                                         around an occupied (capture) one. ALWAYS mounted and
                                         toggled with `.on`, never conditionally rendered —
@@ -1438,21 +1455,9 @@ export default function Board({
                         </defs>
                         {(drawing ? [...shapes, drawing] : shapes).map((s, i) => {
                             const color = BRUSHES[s.brush]
-                            if (s.from === s.to) {
-                                const c = center(s.from)
-                                return (
-                                    <circle
-                                        key={i}
-                                        cx={c.x}
-                                        cy={c.y}
-                                        r={4.3}
-                                        fill="none"
-                                        stroke={color}
-                                        strokeWidth={0.9}
-                                        opacity={0.85}
-                                    />
-                                )
-                            }
+                            // from === to is a square tint, drawn on the square itself
+                            // (see `marks`), not here.
+                            if (s.from === s.to) return null
                             const a = center(s.from)
                             const b = center(s.to)
                             // Knight (L) moves are drawn as cornered arrows, chess.com

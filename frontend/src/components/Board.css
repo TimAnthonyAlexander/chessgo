@@ -204,6 +204,18 @@
     pointer-events: none;
 }
 
+/* Right-click-in-place annotation: the whole square takes the brush colour.
+   z-index 1 puts it over the last-move/selection tints (which are ::after with
+   z-index auto) but under the piece (z-index 2), so the piece stays readable.
+   The colour comes in as --mark from Board.tsx's brush palette. */
+.sq .mark {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    background: color-mix(in srgb, var(--mark) 68%, transparent);
+    pointer-events: none;
+}
+
 /* cburnett vector pieces, sized to ~94% of the square and centered. */
 .piece {
     position: absolute;
