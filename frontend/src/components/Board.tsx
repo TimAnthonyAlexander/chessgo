@@ -719,13 +719,16 @@ export default function Board({
     // Square annotations (right-click without dragging) are a full-square tint
     // painted UNDER the piece, so they live on the square itself rather than in
     // the arrow overlay — that SVG sits above the pieces.
+    // Deliberately ignores `drawing`: an arrow starts life as from === to, so
+    // previewing it would flash the square tint under the pointer on every
+    // right-press. A square only tints once the press is RELEASED on it.
     const marks = useMemo(() => {
         const m = new Map<Square, string>()
-        for (const s of drawing ? [...shapes, drawing] : shapes) {
+        for (const s of shapes) {
             if (s.from === s.to) m.set(s.from, BRUSHES[s.brush])
         }
         return m
-    }, [shapes, drawing])
+    }, [shapes])
 
     // Piece-slide animation: diff the previous board snapshot against this one
     // and play the resulting flights. Position-diff-based (see pieceAnimation.ts),
