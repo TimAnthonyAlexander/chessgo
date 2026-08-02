@@ -60,18 +60,7 @@ class PuzzleController extends Controller
         $target = $user instanceof User ? $user->rating_puzzle : 1500;
         $theme = trim($this->theme);
 
-        $seen = [];
-        if ($user instanceof User) {
-            $rows = App::db()->raw(
-                'SELECT puzzle_id FROM puzzle_attempt WHERE user_id = ?',
-                [$user->id],
-            );
-            foreach ($rows as $r) {
-                $seen[$r['puzzle_id']] = true;
-            }
-        }
-
-        $puzzle = $this->pickPuzzle($target, $theme, $seen);
+        $puzzle = $this->pickPuzzle($target, $theme, $user instanceof User ? $user->id : null);
         if (!$puzzle instanceof Puzzle) {
             return JsonResponse::notFound('No puzzle available for that filter');
         }
@@ -251,30 +240,46 @@ class PuzzleController extends Controller
         return -$value; // cp: opponent POV → ours
     }
 
+    /** Rating half-windows tried in order. The last is deliberately huge: a theme
+     *  whose pool is exhausted near your rating must degrade to an easier puzzle,
+     *  never to a 404. (mateIn1 tops out at ~2400 and is thin above 1900 — a
+     *  2000-rated solver clears that tail in a couple of hundred puzzles.) */
+    private const RATING_WINDOWS = [300, 600, 1200, 10000];
+
     /**
      * Pick an unseen puzzle near $target. Uses a random rating pivot + indexed
      * range scan (NOT ORDER BY RAND(), which is O(n) at millions of rows),
      * widening the window until something unseen turns up.
      *
-     * @param array<string,bool> $seen
+     * "Unseen" is filtered in SQL, not in PHP: the scan walks outward from the
+     * pivot until it hits a puzzle this user has never attempted. Checking only
+     * the N rows nearest the pivot used to fail intermittently once the pool
+     * around the solver's rating was thinned out — most pivots landed in a fully
+     * solved stretch and the request 404'd even though hundreds of unseen
+     * puzzles sat a little further out.
      */
-    private function pickPuzzle(int $target, string $theme, array $seen): ?Puzzle
+    private function pickPuzzle(int $target, string $theme, ?string $userId): ?Puzzle
     {
-        $window = 300;
-        for ($i = 0; $i < 4; $i++, $window += 300) {
+        foreach (self::RATING_WINDOWS as $window) {
             $lo = max(0, $target - $window);
             $hi = $target + $window;
             $pivot = random_int($lo, $hi);
 
-            foreach ([['>=', 'ASC'], ['<=', 'DESC']] as [$cmp, $dir]) {
-                foreach ($this->candidateIds($theme, $lo, $hi, $pivot, $cmp, $dir) as $id) {
-                    if (isset($seen[$id])) {
-                        continue;
-                    }
-                    $p = Puzzle::find($id);
-                    if ($p instanceof Puzzle) {
-                        return $p;
-                    }
+            // Random direction first so repeated picks don't all clump on the
+            // same side of the pivot.
+            $dirs = [['>=', 'ASC'], ['<=', 'DESC']];
+            if (random_int(0, 1) === 1) {
+                $dirs = array_reverse($dirs);
+            }
+
+            foreach ($dirs as [$cmp, $dir]) {
+                $id = $this->nearestUnseenId($theme, $userId, $lo, $hi, $pivot, $cmp, $dir);
+                if ($id === null) {
+                    continue;
+                }
+                $p = Puzzle::find($id);
+                if ($p instanceof Puzzle) {
+                    return $p;
                 }
             }
         }
@@ -283,24 +288,44 @@ class PuzzleController extends Controller
     }
 
     /**
-     * @return list<string> candidate puzzle UUIDs. $cmp/$dir are fixed literals
-     *                      (never user input), safe to interpolate.
+     * Nearest puzzle to $pivot in the given direction that $userId has never
+     * attempted. $cmp/$dir are fixed literals (never user input), safe to
+     * interpolate; everything else is bound.
      */
-    private function candidateIds(string $theme, int $lo, int $hi, int $pivot, string $cmp, string $dir): array
+    private function nearestUnseenId(string $theme, ?string $userId, int $lo, int $hi, int $pivot, string $cmp, string $dir): ?string
     {
-        if ($theme !== '') {
-            $sql = "SELECT puzzle_id AS id FROM puzzle_theme
-                    WHERE theme = ? AND rating BETWEEN ? AND ? AND rating $cmp ?
-                    ORDER BY rating $dir LIMIT 30";
-            $rows = App::db()->raw($sql, [$theme, $lo, $hi, $pivot]);
-        } else {
-            $sql = "SELECT id FROM puzzle
-                    WHERE rating BETWEEN ? AND ? AND rating $cmp ?
-                    ORDER BY rating $dir LIMIT 30";
-            $rows = App::db()->raw($sql, [$lo, $hi, $pivot]);
+        $unseen = '';
+        $params = [];
+        $idCol = $theme !== '' ? 'p.puzzle_id' : 'p.id';
+
+        if ($userId !== null) {
+            $unseen = "AND NOT EXISTS (
+                         SELECT 1 FROM puzzle_attempt a
+                         WHERE a.user_id = ? AND a.puzzle_id = $idCol
+                       )";
         }
 
-        return array_values(array_column($rows, 'id'));
+        if ($theme !== '') {
+            $sql = "SELECT p.puzzle_id AS id FROM puzzle_theme p
+                    WHERE p.theme = ? AND p.rating BETWEEN ? AND ? AND p.rating $cmp ?
+                    $unseen
+                    ORDER BY p.rating $dir LIMIT 1";
+            $params = [$theme, $lo, $hi, $pivot];
+        } else {
+            $sql = "SELECT p.id AS id FROM puzzle p
+                    WHERE p.rating BETWEEN ? AND ? AND p.rating $cmp ?
+                    $unseen
+                    ORDER BY p.rating $dir LIMIT 1";
+            $params = [$lo, $hi, $pivot];
+        }
+
+        if ($userId !== null) {
+            $params[] = $userId;
+        }
+
+        $rows = App::db()->raw($sql, $params);
+
+        return isset($rows[0]['id']) ? (string) $rows[0]['id'] : null;
     }
 
     /**
