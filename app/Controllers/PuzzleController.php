@@ -45,6 +45,12 @@ class PuzzleController extends Controller
     /** Bound from ?theme= (get route only). Empty = any theme. */
     public string $theme = '';
 
+    /** Bound from ?exclude= (get route only). One puzzle id never to serve — the
+     *  setup screen shows a sample position before you start, and dealing that
+     *  exact puzzle as the first one would let you solve it before the clock runs.
+     *  Empty = no exclusion. */
+    public string $exclude = '';
+
     /** A puzzle's rating is a fixed, well-established opponent (tight RD). */
     private const PUZZLE_RD = 60.0;
 
@@ -60,7 +66,12 @@ class PuzzleController extends Controller
         $target = $user instanceof User ? $user->rating_puzzle : 1500;
         $theme = trim($this->theme);
 
-        $puzzle = $this->pickPuzzle($target, $theme, $user instanceof User ? $user->id : null);
+        $puzzle = $this->pickPuzzle(
+            $target,
+            $theme,
+            $user instanceof User ? $user->id : null,
+            trim($this->exclude),
+        );
         if (!$puzzle instanceof Puzzle) {
             return JsonResponse::notFound('No puzzle available for that filter');
         }
@@ -258,7 +269,7 @@ class PuzzleController extends Controller
      * solved stretch and the request 404'd even though hundreds of unseen
      * puzzles sat a little further out.
      */
-    private function pickPuzzle(int $target, string $theme, ?string $userId): ?Puzzle
+    private function pickPuzzle(int $target, string $theme, ?string $userId, string $exclude = ''): ?Puzzle
     {
         foreach (self::RATING_WINDOWS as $window) {
             $lo = max(0, $target - $window);
@@ -273,7 +284,7 @@ class PuzzleController extends Controller
             }
 
             foreach ($dirs as [$cmp, $dir]) {
-                $id = $this->nearestUnseenId($theme, $userId, $lo, $hi, $pivot, $cmp, $dir);
+                $id = $this->nearestUnseenId($theme, $userId, $lo, $hi, $pivot, $cmp, $dir, $exclude);
                 if ($id === null) {
                     continue;
                 }
@@ -292,36 +303,47 @@ class PuzzleController extends Controller
      * attempted. $cmp/$dir are fixed literals (never user input), safe to
      * interpolate; everything else is bound.
      */
-    private function nearestUnseenId(string $theme, ?string $userId, int $lo, int $hi, int $pivot, string $cmp, string $dir): ?string
-    {
-        $unseen = '';
+    private function nearestUnseenId(
+        string $theme,
+        ?string $userId,
+        int $lo,
+        int $hi,
+        int $pivot,
+        string $cmp,
+        string $dir,
+        string $exclude = '',
+    ): ?string {
+        $themed = $theme !== '';
+        $table = $themed ? 'puzzle_theme' : 'puzzle';
+        $idCol = $themed ? 'p.puzzle_id' : 'p.id';
+
+        // Conditions and params are appended together so their order can never drift.
+        $where = [];
         $params = [];
-        $idCol = $theme !== '' ? 'p.puzzle_id' : 'p.id';
-
-        if ($userId !== null) {
-            $unseen = "AND NOT EXISTS (
-                         SELECT 1 FROM puzzle_attempt a
-                         WHERE a.user_id = ? AND a.puzzle_id = $idCol
-                       )";
+        if ($themed) {
+            $where[] = 'p.theme = ?';
+            $params[] = $theme;
         }
-
-        if ($theme !== '') {
-            $sql = "SELECT p.puzzle_id AS id FROM puzzle_theme p
-                    WHERE p.theme = ? AND p.rating BETWEEN ? AND ? AND p.rating $cmp ?
-                    $unseen
-                    ORDER BY p.rating $dir LIMIT 1";
-            $params = [$theme, $lo, $hi, $pivot];
-        } else {
-            $sql = "SELECT p.id AS id FROM puzzle p
-                    WHERE p.rating BETWEEN ? AND ? AND p.rating $cmp ?
-                    $unseen
-                    ORDER BY p.rating $dir LIMIT 1";
-            $params = [$lo, $hi, $pivot];
+        $where[] = 'p.rating BETWEEN ? AND ?';
+        $params[] = $lo;
+        $params[] = $hi;
+        $where[] = "p.rating $cmp ?";
+        $params[] = $pivot;
+        if ($exclude !== '') {
+            $where[] = "$idCol <> ?";
+            $params[] = $exclude;
         }
-
         if ($userId !== null) {
+            $where[] = "NOT EXISTS (
+                          SELECT 1 FROM puzzle_attempt a
+                          WHERE a.user_id = ? AND a.puzzle_id = $idCol
+                        )";
             $params[] = $userId;
         }
+
+        $sql = "SELECT $idCol AS id FROM $table p
+                WHERE " . implode(' AND ', $where) . "
+                ORDER BY p.rating $dir LIMIT 1";
 
         $rows = App::db()->raw($sql, $params);
 

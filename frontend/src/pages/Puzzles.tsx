@@ -25,6 +25,7 @@ import BoardPage from '../components/BoardPage'
 import { ActionBtn, ErrorBanner, NavBtn } from '../components/PanelUI'
 import {
     analyze,
+    ApiError,
     type Color,
     nextPuzzle,
     type PuzzleMoveResult,
@@ -176,6 +177,9 @@ export default function Puzzles() {
     const [override, setOverride] = useState<BoardMap | null>(null)
     const [result, setResult] = useState<PuzzleMoveResult | null>(null)
     const [error, setError] = useState<string | null>(null)
+    // Whether the `empty` phase was a genuinely empty filter (404) or a server
+    // failure — they need different advice.
+    const [emptyIsFilter, setEmptyIsFilter] = useState(true)
     // In-memory (non-persisted) win/loss log for the CURRENT session, newest last.
     const [history, setHistory] = useState<Outcome[]>([])
 
@@ -195,6 +199,17 @@ export default function Puzzles() {
     const [hintLoading, setHintLoading] = useState(false)
     const [hintUsed, setHintUsed] = useState(false) // any hint shown during THIS attempt
     const hintCache = useRef<Map<string, string | null>>(new Map())
+
+    // The setup screen isn't a modal — it's the play screen with a real puzzle
+    // already on the board, so pressing Start deals a card instead of building the
+    // page. That sample is NEVER served during the session it opened (you'd have
+    // had unlimited time to work it out before the clock started), so its id rides
+    // along as `?exclude=` on every fetch for the rest of the session.
+    const [preview, setPreview] = useState<PuzzleNext | null>(null)
+    // `empty` separates "this filter has nothing left" (a 404 — changing the theme
+    // helps) from any other failure (engine down, API unreachable — it won't).
+    const [previewErr, setPreviewErr] = useState<{ message: string; empty: boolean } | null>(null)
+    const excludeRef = useRef<string | undefined>(undefined)
 
     // A retry replays the puzzle just failed from its start position. The server
     // already refuses to re-rate a repeat attempt at the same puzzle (see
@@ -275,9 +290,13 @@ export default function Puzzles() {
             setIsRetry(false) // a freshly-fetched puzzle is always a first (rated) attempt
             setPhase('loading')
             try {
-                beginPuzzle(await nextPuzzle(forTheme || undefined))
+                beginPuzzle(await nextPuzzle(forTheme || undefined, excludeRef.current))
             } catch (e) {
                 setData(null)
+                // A 404 is the only failure the theme is to blame for; everything
+                // else is the server, and saying "try another theme" would send the
+                // solver round a loop of themes that all fail the same way.
+                setEmptyIsFilter(e instanceof ApiError && e.status === 404)
                 setPhase('empty')
                 setError(e instanceof Error ? e.message : 'Could not load a puzzle.')
             }
@@ -298,9 +317,13 @@ export default function Puzzles() {
     const startSession = useCallback(
         // `seed` opens a specific puzzle (the daily) instead of fetching a fresh one;
         // seeded sessions don't overwrite the persisted theme/time preferences.
-        (limit: number | null, forTheme: string, seed?: PuzzleNext) => {
+        // `exclude` is the setup screen's previewed puzzle — withheld for the whole
+        // session, not just its first fetch, so a 1-minute sprint can't deal back the
+        // position you were free to study before the clock started.
+        (limit: number | null, forTheme: string, seed?: PuzzleNext, exclude?: string) => {
             clearTimers()
             lowTimeFiredRef.current = false
+            excludeRef.current = exclude
             setHistory([])
             setError(null)
             setIsRetry(false)
@@ -337,6 +360,7 @@ export default function Puzzles() {
     const location = useLocation()
     const navigate = useNavigate()
     const dailyConsumedRef = useRef(false)
+    const pendingDaily = !!(location.state as { dailyPuzzle?: PuzzleNext } | null)?.dailyPuzzle
     useEffect(() => {
         if (dailyConsumedRef.current) return
         const seed = (location.state as { dailyPuzzle?: PuzzleNext } | null)?.dailyPuzzle
@@ -345,6 +369,39 @@ export default function Puzzles() {
         navigate(location.pathname, { replace: true, state: null })
         startSession(null, '', seed)
     }, [location, navigate, startSession])
+
+    // Keep a real position on the setup board so the page opens as the thing it is
+    // rather than a dialog. Refetched on every theme change; skipped entirely when
+    // we're about to jump straight into the daily puzzle. The previous sample stays
+    // up while the next one loads, so switching theme never flashes an empty board.
+    useEffect(() => {
+        if (mode !== 'setup' || pendingDaily) return
+        let cancelled = false
+        setPreviewErr(null)
+        nextPuzzle(theme || undefined)
+            .then((p) => {
+                if (!cancelled) setPreview(p)
+            })
+            .catch((e) => {
+                if (cancelled) return
+                setPreview(null)
+                // Only a 404 means the filter is genuinely empty. Anything else (the
+                // engine being down, the API unreachable) has to say so — blaming the
+                // theme for a 500 sends you round a loop of themes that all fail.
+                const empty = e instanceof ApiError && e.status === 404
+                setPreviewErr({
+                    empty,
+                    message: empty
+                        ? 'No puzzles match this filter. Try another theme.'
+                        : e instanceof Error
+                          ? e.message
+                          : 'Could not load a puzzle.',
+                })
+            })
+        return () => {
+            cancelled = true
+        }
+    }, [mode, theme, pendingDaily])
 
     // Countdown: tick the displayed clock, warn at 10s, end the session at 0.
     useEffect(() => {
@@ -510,23 +567,48 @@ export default function Puzzles() {
     }
 
     if (mode === 'setup') {
+        // The board is the page, not a backdrop: a genuine puzzle from the current
+        // filter, played up to the solver's turn, inert until Start.
+        const previewColor: Color = preview?.color ?? 'w'
         return (
-            <CenteredScreen>
-                <SetupScreen
-                    theme={theme}
-                    limitSec={limitSec}
-                    user={userStats}
-                    onTheme={(t) => {
-                        setTheme(t)
-                        storeTheme(t)
-                    }}
-                    onLimit={(l) => {
-                        setLimitSec(l)
-                        storeLimit(l)
-                    }}
-                    onStart={() => startSession(limitSec, theme)}
+            <BoardPage
+                rightFit
+                leftFit
+                left={
+                    <Box sx={{ display: { xs: 'none', md: 'block' } }}>
+                        <SetupAside user={userStats} bestStreak={bestStreak} />
+                    </Box>
+                }
+                right={
+                    <SetupCard
+                        theme={theme}
+                        limitSec={limitSec}
+                        user={userStats}
+                        preview={preview}
+                        previewError={previewErr}
+                        onTheme={(t) => {
+                            setTheme(t)
+                            storeTheme(t)
+                        }}
+                        onLimit={(l) => {
+                            setLimitSec(l)
+                            storeLimit(l)
+                        }}
+                        onStart={() => startSession(limitSec, theme, undefined, preview?.id)}
+                    />
+                }
+            >
+                <Board
+                    fen={preview?.fen ?? START_FEN}
+                    orientation={previewColor}
+                    sideToMove={previewColor}
+                    legalMoves={[]}
+                    lastMove={preview ? splitUci(preview.opponent_move) : null}
+                    inCheck={false}
+                    interactive={false}
+                    onMove={() => {}}
                 />
-            </CenteredScreen>
+            </BoardPage>
         )
     }
 
@@ -575,6 +657,7 @@ export default function Puzzles() {
                 <>
                     <StatusCard
                         phase={phase}
+                        emptyIsFilter={emptyIsFilter}
                         orientation={orientation}
                         puzzleRating={data?.rating ?? null}
                         result={result}
@@ -657,29 +740,24 @@ function Card({ children, sx }: { children: ReactNode; sx?: object }) {
     )
 }
 
-function SetupScreen({
-    theme,
-    limitSec,
+// Desktop-only left rail on the setup screen. Deliberately the same shape as
+// RunningAside (title block, rating block, streak block) so pressing Start swaps
+// the contents of a stable page instead of replacing one screen with another.
+function SetupAside({
     user,
-    onTheme,
-    onLimit,
-    onStart,
+    bestStreak,
 }: {
-    theme: string
-    limitSec: number | null
     user: { rating: number; games: number; provisional: boolean } | null
-    onTheme: (t: string) => void
-    onLimit: (l: number | null) => void
-    onStart: () => void
+    bestStreak: number
 }) {
     return (
-        <Card sx={{ p: { xs: 3, md: 3.5 } }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+        <Card sx={{ p: 2.5 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
                 <Box
                     sx={{
-                        width: 40,
-                        height: 40,
-                        borderRadius: '12px',
+                        width: 34,
+                        height: 34,
+                        borderRadius: '10px',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -688,62 +766,164 @@ function SetupScreen({
                         color: 'var(--accent)',
                     }}
                 >
-                    <Target size={20} />
+                    <Target size={18} />
                 </Box>
-                <Box>
-                    <Typography
-                        sx={{
-                            fontFamily: 'var(--font-display)',
-                            fontWeight: 700,
-                            fontSize: 24,
-                            lineHeight: 1.1,
-                        }}
-                    >
-                        Puzzles
-                    </Typography>
-                    <Typography sx={{ fontSize: 13, color: 'var(--muted)' }}>
-                        Solve as many as you can before the clock runs out.
-                    </Typography>
-                </Box>
+                <Typography
+                    sx={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 22 }}
+                >
+                    Puzzles
+                </Typography>
             </Box>
 
-            <Box sx={{ mt: 3 }}>
+            <Typography sx={{ fontSize: 13, color: 'var(--muted)', mt: 1.25, lineHeight: 1.5 }}>
+                Solve as many as you can before the clock runs out.
+            </Typography>
+
+            <Box sx={{ borderTop: '1px solid var(--line-soft)', mt: 2.25, pt: 2.25 }}>
+                <Label>Your puzzle rating</Label>
+                {user ? (
+                    <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
+                        <Typography
+                            sx={{
+                                fontFamily: 'var(--font-mono)',
+                                fontSize: 30,
+                                fontWeight: 700,
+                                color: 'var(--accent)',
+                                lineHeight: 1,
+                            }}
+                        >
+                            {user.rating}
+                            {user.provisional ? '?' : ''}
+                        </Typography>
+                        <Typography sx={{ fontSize: 13, color: 'var(--muted)' }}>
+                            · {user.games} solved
+                        </Typography>
+                    </Box>
+                ) : (
+                    <Typography sx={{ fontSize: 13, color: 'var(--text-dim)' }}>
+                        Log in to track your rating.
+                    </Typography>
+                )}
+            </Box>
+
+            <Box sx={{ borderTop: '1px solid var(--line-soft)', mt: 2.25, pt: 2.25 }}>
+                <Label>Best streak</Label>
+                <Typography
+                    sx={{
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 22,
+                        fontWeight: 700,
+                        lineHeight: 1,
+                    }}
+                >
+                    {bestStreak}
+                </Typography>
+            </Box>
+        </Card>
+    )
+}
+
+function SetupCard({
+    theme,
+    limitSec,
+    user,
+    preview,
+    previewError,
+    onTheme,
+    onLimit,
+    onStart,
+}: {
+    theme: string
+    limitSec: number | null
+    user: { rating: number; games: number; provisional: boolean } | null
+    preview: PuzzleNext | null
+    previewError: { message: string; empty: boolean } | null
+    onTheme: (t: string) => void
+    onLimit: (l: number | null) => void
+    onStart: () => void
+}) {
+    const toMove = (preview?.color ?? 'w') === 'w' ? 'White' : 'Black'
+    return (
+        <Card sx={{ overflow: 'hidden' }}>
+            {/* Header mirrors StatusCard's clock strip so the card doesn't reflow
+                when the session starts and this becomes that. */}
+            <Box
+                sx={{
+                    px: 2.25,
+                    py: 1.75,
+                    borderBottom: '1px solid var(--line-soft)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 1,
+                }}
+            >
+                <Typography
+                    sx={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 20 }}
+                >
+                    New session
+                </Typography>
+                {preview && <Chip>Rated {preview.rating}</Chip>}
+            </Box>
+
+            <Box sx={{ px: 2.25, py: 2.25 }}>
                 <Label>Theme</Label>
                 <ThemeSelect value={theme} onChange={onTheme} />
+
+                <Box sx={{ mt: 2.5 }}>
+                    <Label>Time</Label>
+                    <TimeFormatPicker value={limitSec} onChange={onLimit} />
+                </Box>
             </Box>
 
-            <Box sx={{ mt: 2.75 }}>
-                <Label>Time</Label>
-                <TimeFormatPicker value={limitSec} onChange={onLimit} />
-            </Box>
-
-            <Box sx={{ mt: 3 }}>
+            <Box sx={{ px: 2.25, pb: 2.25, display: 'flex', flexDirection: 'column', gap: 1.25 }}>
                 <ActionBtn
                     tone="primary"
                     large
                     icon={<Play size={17} />}
                     label="Start session"
                     onClick={onStart}
+                    // Only an empty filter makes starting pointless. A transient
+                    // failure (engine restarting) shouldn't lock the button.
+                    disabled={previewError?.empty ?? false}
                 />
-            </Box>
 
-            <Typography sx={{ fontSize: 12.5, color: 'var(--muted)', mt: 2, textAlign: 'center' }}>
-                {user ? (
-                    <>
-                        Your puzzle rating{' '}
-                        <Box
-                            component="span"
-                            sx={{ fontFamily: 'var(--font-mono)', color: 'var(--accent)' }}
-                        >
-                            {user.rating}
-                            {user.provisional ? '?' : ''}
-                        </Box>{' '}
-                        · {user.games} solved
-                    </>
-                ) : (
-                    'Log in to track your puzzle rating.'
-                )}
-            </Typography>
+                {/* Says plainly what the board behind this card is, and that studying
+                    it buys nothing — the server withholds it for the whole session. */}
+                <Typography
+                    sx={{
+                        fontSize: 12.5,
+                        color: previewError ? '#e0796b' : 'var(--muted)',
+                        lineHeight: 1.5,
+                    }}
+                >
+                    {previewError?.message ??
+                        (preview
+                            ? `Sample position · ${toMove} to move. You'll be dealt a different puzzle.`
+                            : 'Loading a sample position…')}
+                </Typography>
+
+                {/* Mobile-only: the desktop rail already carries this. */}
+                <Typography
+                    sx={{ display: { xs: 'block', md: 'none' }, fontSize: 12.5, color: 'var(--muted)' }}
+                >
+                    {user ? (
+                        <>
+                            Your rating:{' '}
+                            <Box
+                                component="span"
+                                sx={{ fontFamily: 'var(--font-mono)', color: 'var(--text-dim)' }}
+                            >
+                                {user.rating}
+                                {user.provisional ? '?' : ''}
+                            </Box>{' '}
+                            · {user.games} solved
+                        </>
+                    ) : (
+                        'Log in to track your puzzle rating.'
+                    )}
+                </Typography>
+            </Box>
         </Card>
     )
 }
@@ -1064,6 +1244,7 @@ function RunningAside({
 
 function StatusCard({
     phase,
+    emptyIsFilter,
     orientation,
     puzzleRating,
     result,
@@ -1084,6 +1265,7 @@ function StatusCard({
     onStop,
 }: {
     phase: Phase
+    emptyIsFilter: boolean
     orientation: Color
     puzzleRating: number | null
     result: PuzzleMoveResult | null
@@ -1193,7 +1375,9 @@ function StatusCard({
                 )}
                 {phase === 'empty' && (
                     <Typography sx={{ fontSize: 15, color: 'var(--text-dim)' }}>
-                        No puzzle found for this filter. Try another theme.
+                        {emptyIsFilter
+                            ? 'No puzzle found for this filter. Try another theme.'
+                            : "Couldn't load a puzzle — the server didn't answer. Try again in a moment."}
                     </Typography>
                 )}
                 {(phase === 'intro' || phase === 'solving' || phase === 'checking') && (

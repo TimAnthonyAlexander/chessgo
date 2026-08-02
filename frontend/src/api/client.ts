@@ -649,10 +649,15 @@ export interface PuzzleMoveResult {
     rating?: PuzzleRating | null
 }
 
-/** Serve the next puzzle near the solver's rating; optional theme filter. */
-export function nextPuzzle(theme?: string): Promise<PuzzleNext> {
-    const q = theme ? `?theme=${encodeURIComponent(theme)}` : ''
-    return request<PuzzleNext>(`/puzzles/next${q}`)
+/** Serve the next puzzle near the solver's rating; optional theme filter.
+ *  `exclude` withholds one puzzle id — the setup screen previews a sample
+ *  position, and that one must never be dealt during the session it opened. */
+export function nextPuzzle(theme?: string, exclude?: string): Promise<PuzzleNext> {
+    const p = new URLSearchParams()
+    if (theme) p.set('theme', theme)
+    if (exclude) p.set('exclude', exclude)
+    const q = p.toString()
+    return request<PuzzleNext>(`/puzzles/next${q ? `?${q}` : ''}`)
 }
 
 /** Submit one player move (UCI) for validation against the hidden solution.
