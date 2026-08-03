@@ -6,6 +6,7 @@
 #include "uci.h"
 #include "serve.h"
 #include "crazyhouse.h"
+#include "ratingtest.h"
 #include <string>
 
 int main(int argc, char** argv) {
@@ -16,6 +17,11 @@ int main(int argc, char** argv) {
     // standalone validation tool (not part of UCI/serve); see crazyhouse.h.
     if (argc > 1 && std::string(argv[1]) == "zhperft") {
         return zh_perft_main(argc, argv);
+    }
+    // `./zugzwang ratingtest <probe|gauntlet|curve>` — the bot rating ladder's
+    // calibration harness (ratingtest.h). Not UCI, not serve.
+    if (argc > 1 && std::string(argv[1]) == "ratingtest") {
+        return ratingtest_main(argc, argv);
     }
     return uci_main();
 }

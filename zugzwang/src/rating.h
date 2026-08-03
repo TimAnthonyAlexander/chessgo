@@ -7,10 +7,12 @@
 // does its own strength math.
 //
 // Weakening model: below full strength every legal move is ranked at a
-// rating-scaled depth, then Weakening::pick() (win-prob softmax + severity cap)
-// chooses the move — see weakening.h. This REPLACES the old gomachine-ported
-// noise/blunder scheme (which is why this is no longer a "field-for-field port"
-// of rating.go — it is a deliberate redesign).
+// rating-scaled depth by ONE MultiPV search (so every move carries a score from
+// the same completed iteration — see root_scores), then Weakening::pick()
+// (centipawn-loss curve + absolute severity cap) chooses the move — see
+// weakening.h. This REPLACES the old gomachine-ported noise/blunder scheme
+// (which is why this is no longer a "field-for-field port" of rating.go — it is
+// a deliberate redesign).
 //
 // SCALE: the rating spans RatingMin..RatingMax on the engine's own (CCRL-ish)
 // ruler, where RatingMax is the engine's TRUE full strength (~3500 CCRL, see
@@ -24,23 +26,26 @@
 #include "position.h"
 #include "move.h"
 #include "search.h"
+#include "weakening.h"
 #include <cstdint>
 #include <vector>
 
 namespace Rating {
 
-constexpr int RatingMin = 700;   // weakest bot on the ladder (below this, clamp)
-constexpr int RatingMax = 3500;  // the engine's TRUE full strength (~3500 CCRL; clamp ceiling)
-constexpr int RatingFull = 2850; // at/above this, clean search (budget scales to full at RatingMax)
+// Re-exported from weakening.h so the standard ladder and the variant ladders
+// cannot drift apart. RatingMax is the engine's TRUE full strength (~3500 CCRL).
+constexpr int RatingMin = Weakening::RatingMin;
+constexpr int RatingMax = Weakening::RatingMax;
+constexpr int RatingFull = Weakening::RatingFull;
 
 struct LevelConfig {
-    int moveTimeMs = 0;       // total wall-clock budget for the weakened ranking pass
-    int cleanDepth = 0;       // depth for the clean (full-strength) search branch
-    int rankDepth = 0;        // per-move ranking search depth (weakened branch)
-    double sensitivity = 0.0; // Regan curve `s` (win-prob units) — the rating dial
-    double consistency = 1.0; // Regan curve `c` (exponent) — easy/hard error split
-    double capDelta = 1.0;    // severity cap (max win-prob below best) — blunder bound
-    bool clean = false;       // true => full-strength group search, no weakening
+    int moveTimeMs = 0;        // wall-clock COST CAP for the weakened ranking pass
+    int cleanDepth = 0;        // depth for the clean (full-strength) search branch
+    int rankDepth = 0;         // MultiPV ranking depth (weakened branch) — tactical sight
+    double windowCp = 0.0;     // Regan curve width in CENTIPAWNS — the rating dial
+    double consistency = 1.8;  // Regan curve `c` (exponent) — easy/hard error split
+    double capCp = 0.0;        // absolute severity cap in cp — the blunder bound
+    bool clean = false;        // true => full-strength group search, no weakening
 };
 
 // Map a target rating to its strength config (clamped to [RatingMin,RatingMax]).

@@ -56,9 +56,11 @@ Engine-vs-Engine all rely on this). Subcommands:
   engine API for the website. Default `-addr 127.0.0.1:6476`. Dev alias:
   `chessgo-zugzwang`.
 - `./zugzwang zhperft <fen> <depth> [divide]` — standalone Crazyhouse perft.
+- `./zugzwang ratingtest <curve|probe|gauntlet>` — bot-ladder calibration
+  (see §Bot strength ladder).
 
 `main.cpp` dispatches: `serve` → `serve_main`, `zhperft` → `zh_perft_main`,
-else → `uci_main`.
+`ratingtest` → `ratingtest_main`, else → `uci_main`.
 
 ## HTTP serve mode (`src/serve.cpp`, `src/serve_handlers.cpp`)
 
@@ -148,6 +150,50 @@ default-on, +2.82%), `APPLYPREFETCH` (prefetch next FT column, **amd64-default-o
 ~+6% amd64 NPS combined. Authoritative profile: `docs/PROFILING/amd/24Jul2026.md`; campaign +
 verdicts: `docs/tasks/open/pretrain-posttrain-campaign.md`. The dominant `apply_diff` threat-
 column bandwidth (19.3%) is the remaining prize — needs **int8-QAT (August retrain)**.
+
+## Bot strength ladder (`src/rating.cpp`, `src/weakening.cpp`)
+
+Every below-full-strength bot on the site — the `/bot` picker, hub matchmaking
+backfill, Watch fillers, arena bots, UCI `UCI_Elo` — passes ONE target rating and
+the **engine** decides how to play at that strength. No caller does strength math.
+
+- **Ranking.** `Rating::root_scores` scores every legal move with a *single
+  MultiPV search* at a rating-scaled `rankDepth` (1..8). MultiPV is required, not
+  an optimisation: selection compares moves in centipawns, which is only
+  meaningful if every move comes from the same completed iteration. An explicit
+  `depth`/`movetime` from the caller (Watch fillers pass 8 / 250ms) is a **cost
+  cap** — it can only make the ranking shallower, never stronger than the rating.
+- **Selection.** `Weakening::pick` drops any move losing more than `capCp`
+  outright (absolute, the "no free queen" guarantee) and samples the rest from
+  `exp(−(cpLoss/windowCp)^consistency)`.
+- **One curve, shared.** `Weakening::curve_for_rating` is the single ladder;
+  standard chess, Duck, Crazyhouse and Antichess all read it. Each engine used to
+  clone the formula, which is how one defect lived in four places.
+- **Selection is centipawn-based on purpose.** It previously measured error as a
+  *win-probability* gap, which saturates: past ~1200cp of advantage every legal
+  move mapped to within 1e-4 of the best, so the cap and the softmax became
+  no-ops together and bots played uniformly random moves (a "2488" ignoring a
+  free rook for six moves, then hanging a bishop). The collapse was symmetric, so
+  endgames — usually decided — showed **zero** rating separation. Retunes could
+  never fix it: the coefficients multiplied a quantity that was already ~0.
+  `weakening.h` carries the full post-mortem. **Do not reintroduce win-prob
+  selection**, and keep the severity cap absolute.
+- **No phase/endgame scaling.** A previous revision widened the window ×3 and the
+  cap ×2 and cut 3 ply in endgames; it only deepened the collapse. See the note
+  in `rating.cpp`.
+
+**Test it — `./zugzwang ratingtest`:**
+
+| mode | what it measures |
+|---|---|
+| `curve` | prints rating → (rankDepth, window, cap, consistency) |
+| `probe` | avg centipawn loss per move **bucketed by how decided the position is**, plus worst single giveaway and blunder rate. ~13s. The regression test for the saturation bug — a suite of balanced positions would have called the broken model flawless. |
+| `gauntlet` | round-robin self-play between rungs; every rung must beat every weaker rung. ~4min at `-games 20`. |
+
+Both take `-threads N`; `probe` takes `-samples N -truth-depth D`, `gauntlet`
+takes `-games N -max-plies P`. Both run with the Watch filler's cost caps.
+Re-run both after touching either file — a ladder can look right per-move and
+still fail to separate in games, and vice versa.
 
 ## Rules / movegen
 

@@ -215,9 +215,11 @@ struct AntichessResult {
 //     narrow tree means 12-25 ply is realistic on real hardware).
 //   - WEAKENED (700 <= rating < 3500): every root move is ranked at a
 //     rating-scaled shallow depth (the SAME search machinery, just capped),
-//     then Weakening::pick's win-prob softmax (temperature/capDelta cloned
-//     verbatim from Rating::config_for_rating's formula, per this module's
-//     spec) chooses among them — clones duck_apply_rating/zh's pattern.
+//     then Weakening::pick chooses among them by centipawn loss under an
+//     absolute severity cap. The window/cap/exponent come from the ONE shared
+//     ladder, Weakening::curve_for_rating — this module used to clone that
+//     formula verbatim, which is precisely how a defect in it survived in four
+//     engines at once (see weakening.h).
 AntichessResult antichess_best_move(const AntichessState& s, const AntichessLimits& lim,
                                      const std::vector<uint64_t>& history = {});
 

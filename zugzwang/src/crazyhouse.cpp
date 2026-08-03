@@ -469,17 +469,23 @@ struct ZHConfig {
     int depth = 4;
     int movetimeMs = 1000;
     uint64_t nodes = 0;
-    double temperature = 0.0;
-    double capDelta = 1.0;
-    double winProbScale = 350.0; // 3.5 x pawn value (pieceValue[PAWN] == 100)
+    // Move-selection weakening, in CENTIPAWNS (this engine's pawn == 100, same
+    // as standard chess). Sourced from the ONE shared ladder,
+    // Weakening::curve_for_rating — see weakening.h for why this is cp-space and
+    // not win-probability, and why the curve must not be re-cloned per engine.
+    double windowCp = 0.0;
+    double capCp = 0.0;
+    double consistency = 1.8;
 };
 
 int clamp_int(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
 // Depth ladder unchanged from gomachine's applyRating (search.go) — this is the
-// bot's tactical "sight" and stays exactly as before. The move-selection
-// weakening (temperature/capDelta) now uses the shared softmax model
-// (Weakening::pick), same formulas as Rating::config_for_rating in rating.cpp.
+// bot's tactical "sight" and stays exactly as before. Move selection comes from
+// the shared ladder (Weakening::curve_for_rating), NOT a local copy of it: the
+// win-probability curve this used to clone collapsed to uniform-random play in
+// any decided position, and having four copies of it meant the fix had to be
+// made four times. One curve, one place to tune.
 void apply_rating(ZHConfig& cfg, int rating) {
     int r = clamp_int(rating, 700, 3500);
     if (r < 1800) cfg.depth = 1;
@@ -487,18 +493,10 @@ void apply_rating(ZHConfig& cfg, int rating) {
     else if (r < 3000) cfg.depth = 3;
     else cfg.depth = 4;
 
-    constexpr double RFULL = 2850.0, RMIN = 700.0;
-    int rc = clamp_int(rating, 700, 2900);
-    if (rc >= RFULL) {
-        cfg.temperature = 0.0;
-        cfg.capDelta = 1.0;
-        return;
-    }
-    double u = (RFULL - rc) / (RFULL - RMIN);
-    if (u < 0.0) u = 0.0;
-    if (u > 1.0) u = 1.0;
-    cfg.temperature = 0.40 * std::pow(u, 1.35);
-    cfg.capDelta = 0.03 + 0.52 * std::pow(u, 1.10);
+    Weakening::SoftmaxConfig sel = Weakening::curve_for_rating(rating);
+    cfg.windowCp = sel.windowCp;
+    cfg.capCp = sel.capCp;
+    cfg.consistency = sel.consistency;
 }
 
 ZHConfig resolve_config(const ZHLimits& lim) {
@@ -669,8 +667,8 @@ uint64_t seed_for(const ZHPosition& z) {
     return h;
 }
 
-// Returns the index of the root move to play. With no weakening (temperature
-// and capDelta both at full-strength defaults) it is always 0 (the best).
+// Returns the index of the root move to play. With no weakening (windowCp at its
+// full-strength default of 0) it is always 0 (the best).
 // Otherwise picks via the shared softmax weakening model (Weakening::pick) —
 // see weakening.h. The forced-mate guard stays hand-rolled here (rather than
 // relying solely on SoftmaxConfig::protectWinningMate) because crazyhouse mate
@@ -680,7 +678,7 @@ uint64_t seed_for(const ZHPosition& z) {
 size_t weaken_pick(const std::vector<ScoredMove>& results, const ZHConfig& cfg, std::mt19937_64& rng) {
     if (results.empty()) return 0;
     if (mate_distance(results[0].score) > 0) return 0;
-    if (cfg.temperature <= 0.0 && cfg.capDelta >= 1.0) return 0;
+    if (cfg.windowCp <= 0.0) return 0;
 
     std::vector<Weakening::Candidate> cands;
     cands.reserve(results.size());
@@ -688,10 +686,9 @@ size_t weaken_pick(const std::vector<ScoredMove>& results, const ZHConfig& cfg, 
         cands.push_back({static_cast<int>(i), results[i].score});
 
     Weakening::SoftmaxConfig sc;
-    sc.sensitivity = cfg.temperature;
-    sc.consistency = 1.8;
-    sc.capDelta = cfg.capDelta;
-    sc.winProbScale = cfg.winProbScale;
+    sc.windowCp = cfg.windowCp;
+    sc.consistency = cfg.consistency;
+    sc.capCp = cfg.capCp;
     sc.protectWinningMate = true;
 
     return Weakening::pick(cands, sc, rng);

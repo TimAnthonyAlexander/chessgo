@@ -892,18 +892,24 @@ struct AntichessSearchConfig {
     uint64_t nodes = 0;
     bool clean = true;
     int rankDepth = 6;
-    double temperature = 0.0;
-    double capDelta = 1.0;
-    double winProbScale = 350.0; // 3.5 x pawn value (AC_PIECE_VALUE[PAWN] == 100), matches duck/rating conventions
+    // Move-selection weakening, in CENTIPAWNS (this engine's pawn == 100, same
+    // as standard chess). Sourced from the ONE shared ladder,
+    // Weakening::curve_for_rating — see weakening.h for why this is cp-space and
+    // not win-probability, and why the curve must not be re-cloned per engine.
+    double windowCp = 0.0;
+    double capCp = 0.0;
+    double consistency = 1.8;
 };
 
 constexpr double AC_RMIN = 700.0, AC_RFULL = 2850.0, AC_RMAX = 3500.0;
 
-// Clones Rating::config_for_rating / duck_apply_rating's temperature/capDelta
-// softmax formula VERBATIM (per this module's spec: bands 700/2850/3500,
-// temperature = 0.40*u^1.35, capDelta = 0.03+0.52*u^1.10). The depth/movetime
-// ladder is antichess-specific — this variant's strength lever is search
-// depth (12-25 ply realistic), not a small fixed 1..4 cap like Duck's.
+// Move selection comes from the ONE shared ladder
+// (Weakening::curve_for_rating), no longer a verbatim local clone of it: the
+// win-probability curve every engine used to copy collapsed to uniform-random
+// play in any decided position, and four copies meant four fixes. The
+// depth/movetime ladder below stays antichess-specific — this variant's strength
+// lever is search depth (12-25 ply realistic), not a small fixed 1..4 cap like
+// Duck's.
 void antichess_apply_rating(AntichessSearchConfig& cfg, int rating) {
     int r = clamp_int(rating, int(AC_RMIN), int(AC_RMAX));
     double s = double(r - AC_RMIN) / double(AC_RMAX - AC_RMIN);
@@ -914,16 +920,14 @@ void antichess_apply_rating(AntichessSearchConfig& cfg, int rating) {
     if (cfg.clean) {
         cfg.depth = AC_MAX_DEPTH;
         cfg.movetimeMs = 2000;
-        cfg.temperature = 0.0;
-        cfg.capDelta = 1.0;
+        cfg.windowCp = 0.0;
         return;
     }
 
-    double u = (AC_RFULL - double(clamp_int(rating, int(AC_RMIN), int(AC_RFULL)))) / (AC_RFULL - AC_RMIN);
-    if (u < 0.0) u = 0.0;
-    if (u > 1.0) u = 1.0;
-    cfg.temperature = 0.40 * std::pow(u, 1.35);
-    cfg.capDelta = 0.03 + 0.52 * std::pow(u, 1.10);
+    Weakening::SoftmaxConfig sel = Weakening::curve_for_rating(rating);
+    cfg.windowCp = sel.windowCp;
+    cfg.capCp = sel.capCp;
+    cfg.consistency = sel.consistency;
 }
 
 AntichessSearchConfig antichess_resolve_config(const AntichessLimits& lim) {
@@ -1135,10 +1139,9 @@ AntichessResult run_weakened_search(const AntichessState& s, const AntichessSear
     for (size_t i = 0; i < rootMoves.size(); ++i) cands.push_back({int(i), scores[i]});
 
     Weakening::SoftmaxConfig sc;
-    sc.sensitivity = cfg.temperature;
-    sc.consistency = 1.8;
-    sc.capDelta = cfg.capDelta;
-    sc.winProbScale = cfg.winProbScale;
+    sc.windowCp = cfg.windowCp;
+    sc.consistency = cfg.consistency;
+    sc.capCp = cfg.capCp;
     sc.protectWinningMate = true;
 
     std::mt19937_64 rng(ac_seed_for(s));

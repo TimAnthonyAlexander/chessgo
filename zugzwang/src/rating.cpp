@@ -2,7 +2,6 @@
 #include "rules.h"
 #include "search.h"
 #include "weakening.h"
-#include <algorithm>
 #include <cmath>
 
 namespace Rating {
@@ -11,63 +10,52 @@ namespace {
 
 constexpr int kWorstMoveDepth = 6;
 
-// Win-probability logistic scale (cp) for the standard-chess NNUE eval. Larger =
-// flatter mapping (a given cp gap is a smaller win-prob gap). Tuned so a ~1 pawn
-// edge is a meaningful-but-not-decisive win-prob swing.
-constexpr double kWinProbScale = 350.0;
-
-// Ranks every legal move at `pos` to `rankDepth` plies (mover-relative). A cheap
-// depth-1 (static-eval) pre-pass orders moves best-first; then a deep re-rank at
-// `rankDepth` runs best-first until `totalMoveTimeMs` is spent — so if the clock
-// binds, it's the already-weak moves that keep only their shallow score, never
-// the strong ones. `pos`'s history must be seeded by the caller; do_move/
-// undo_move are symmetric so it's left intact.
+// Ranks every legal move at `pos` to `rankDepth` plies (mover-relative) with ONE
+// MultiPV search over all root moves.
+//
+// The MultiPV requirement is load-bearing, not an optimisation. Weakening::pick
+// measures a move's error as its CENTIPAWN LOSS versus the best move, which is
+// only meaningful if every candidate was scored at the same depth. The
+// predecessor here ran one independent search per move — a depth-1 pass over all
+// of them, then a deep re-rank that ran best-first until a wall-clock budget
+// expired — so whenever the clock bound (a Watch filler passes 250ms for ~35
+// moves, which never finished) the survivors carried depth-1 scores while the
+// top moves carried deep ones. Shallow scores are systematically optimistic, so
+// that mix quietly biased selection toward the moves that had been examined
+// LEAST. Search::start's MultiPV loop returns every line from the same completed
+// iteration (search.h: "identical across every line of one Result"), which is
+// exactly the invariant pick() needs, and it is cheaper too — one iterative
+// deepening tree with a shared TT instead of N cold ones.
+//
+// `moveTimeCapMs` is a COST cap only (0 = none): if it binds, the whole ranking
+// simply lands at a shallower completed depth, with every move still scored at
+// that same depth. `pos`'s history must be seeded by the caller; `pos` is left
+// untouched.
 std::vector<RootMove> root_scores(Search::Context& ctx, Position& pos, int rankDepth,
-                                  int totalMoveTimeMs, int64_t& nodesOut) {
+                                  int moveTimeCapMs, int64_t& nodesOut) {
     MoveList ml;
     Rules::generate_legal(pos, ml);
     std::vector<RootMove> out;
+    if (ml.size() == 0) return out;
     out.reserve(ml.size());
 
-    // Pass 1: a CAPTURE-AWARE base score for every move — a depth-1 search (which
-    // resolves the opponent's immediate captures via quiescence at the leaf), NOT
-    // a raw static eval. This is load-bearing: moves the time-limited deep pass
-    // below doesn't reach keep this base score, and a raw static eval is
-    // capture-blind (a piece moved to a hanging square looks fine), so a queen
-    // could be sampled into a one-move capture. The depth-1 score sees the hang,
-    // so the severity cap in pick_weakened drops it. Used for ordering + floor.
-    for (const ExtMove& em : ml) {
-        Move m = em.move;
-        StateInfo st;
-        pos.do_move(m, st);
-        Search::Limits base;
-        base.depth = 1;
-        base.silent = true;
-        Search::Result r = Search::start(ctx, pos, base);
-        pos.undo_move(m);
-        out.push_back({m, -r.score});
-        nodesOut += r.nodes;
-    }
-    if (rankDepth <= 1 || out.size() <= 1) return out;
+    Search::Limits lim;
+    lim.depth = rankDepth < 1 ? 1 : rankDepth;
+    lim.movetime = moveTimeCapMs > 0 ? moveTimeCapMs : 0;
+    lim.multiPV = static_cast<int>(ml.size()); // clamped to the legal count by start()
+    lim.silent = true;
+    Search::Result r = Search::start(ctx, pos, lim);
+    nodesOut += r.nodes;
 
-    // Order best-first so the deep pass covers the strongest moves first.
-    std::stable_sort(out.begin(), out.end(),
-                     [](const RootMove& a, const RootMove& b) { return a.score > b.score; });
+    for (const Search::Line& l : r.lines)
+        if (!l.pv.empty()) out.push_back({l.pv[0], l.score});
 
-    // Pass 2: deep re-rank until the total budget is spent.
-    int64_t deadline = totalMoveTimeMs > 0 ? Search::now_ms() + totalMoveTimeMs : 0;
-    for (auto& rm : out) {
-        if (deadline > 0 && Search::now_ms() >= deadline) break; // remainder keep static score
-        StateInfo st;
-        pos.do_move(rm.move, st);
-        Search::Limits lim;
-        lim.depth = rankDepth - 1;
-        lim.silent = true;
-        Search::Result r = Search::start(ctx, pos, lim);
-        pos.undo_move(rm.move);
-        rm.score = -r.score;
-        nodesOut += r.nodes;
-    }
+    // Defensive: a search stopped before completing even depth 1 reports no
+    // lines. Fall back to the plain legal-move list so the caller still gets a
+    // move (all at an equal, if uninformative, score — never a mixed scale).
+    if (out.empty())
+        for (const ExtMove& em : ml) out.push_back({em.move, 0});
+
     return out;
 }
 
@@ -85,10 +73,9 @@ WeakResult pick_weakened(const std::vector<RootMove>& roots, const LevelConfig& 
         cands.push_back({static_cast<int>(i), roots[i].score});
 
     Weakening::SoftmaxConfig sc;
-    sc.sensitivity = cfg.sensitivity;
+    sc.windowCp = cfg.windowCp;
     sc.consistency = cfg.consistency;
-    sc.capDelta = cfg.capDelta;
-    sc.winProbScale = kWinProbScale;
+    sc.capCp = cfg.capCp;
     sc.protectWinningMate = true;
 
     size_t pos = Weakening::pick(cands, sc, Weakening::thread_rng());
@@ -96,40 +83,24 @@ WeakResult pick_weakened(const std::vector<RootMove>& roots, const LevelConfig& 
     return WeakResult{chosen.move, chosen.score, rankDepth, nodes, {chosen.move}};
 }
 
-// Game phase 0..24 (0 = bare kings, 24 = full material), the standard
-// PhaseInc weights {N,B=1, R=2, Q=4} (mirrors eval.cpp).
-int phase_of(const Position& pos) {
-    int p = pos.count(WHITE, KNIGHT) + pos.count(BLACK, KNIGHT)
-          + pos.count(WHITE, BISHOP) + pos.count(BLACK, BISHOP)
-          + 2 * (pos.count(WHITE, ROOK) + pos.count(BLACK, ROOK))
-          + 4 * (pos.count(WHITE, QUEEN) + pos.count(BLACK, QUEEN));
-    return p > 24 ? 24 : p;
-}
-
-// Endgame factor 0..1: 0 in the middlegame (phase >= kPhaseMid), ramping to 1 in
-// a deep endgame (phase <= kPhaseEnd).
-double endgame_factor(int phase) {
-    constexpr double kPhaseMid = 12.0, kPhaseEnd = 3.0;
-    double f = (kPhaseMid - phase) / (kPhaseMid - kPhaseEnd);
-    return f < 0.0 ? 0.0 : (f > 1.0 ? 1.0 : f);
-}
-
-// Phase-aware weakening: eval-softmax barely bites in the endgame (few moves,
-// small eval gaps, strong eval + enough depth => technically perfect moves that
-// read as "engine, not human"). Endgame skill is a SEPARATE, weaker human skill,
-// so as material comes off we calculate shallower (rankDepth down) and wander
-// more (temperature up, cap looser) — the capture-aware base pass still blocks
-// free hangs. Middlegame play (eg==0) is untouched.
-void apply_endgame_scaling(LevelConfig& cfg, const Position& pos) {
-    if (cfg.clean) return;
-    double eg = endgame_factor(phase_of(pos));
-    if (eg <= 0.0) return;
-    cfg.sensitivity *= (1.0 + 2.0 * eg);        // wander more among endgame moves
-    cfg.consistency = std::max(1.3, cfg.consistency - 0.5 * eg); // less precise technique
-    cfg.capDelta = std::min(0.5, cfg.capDelta * (1.0 + 1.0 * eg));
-    cfg.rankDepth -= static_cast<int>(3.0 * eg + 0.5); // shallower endgame calculation
-    if (cfg.rankDepth < 2) cfg.rankDepth = 2;
-}
+// NOTE — there is deliberately NO phase/endgame scaling here any more.
+//
+// A previous revision multiplied the selection width by up to 3x, doubled the
+// severity cap and cut 3 ply off rankDepth as material came off the board, to
+// stop endgames reading as "engine, not human". On a win-probability model that
+// had already collapsed in decided positions it did nothing but deepen the
+// collapse — and endgames are overwhelmingly decided positions, which is exactly
+// why endgame play showed zero rating separation (measured: a 1200 bot and a
+// 2488 bot both lost ~800cp/move in a lost king-and-pawns ending, and both
+// played 10 distinct moves out of 24 samples in a drawn one).
+//
+// Under the centipawn model the phase knob is also unnecessary: eval gaps in an
+// endgame are naturally small, so a fixed cp window already admits proportionally
+// more alternatives there, and rating separation appears on its own (a 200cp
+// losing try is 15% likely at 1600 and capped out entirely at 2488). Adding a
+// phase multiplier on top would re-introduce the same "worse at the thing the
+// user already complained about" behaviour. If measurement ever shows endgames
+// playing too precisely at low ratings, widen `windowCp` there — never the cap.
 
 // Smooth ramp helper: 0 at the weak end (rating==RatingMin) -> 1 at RatingFull.
 double weak_frac(int rating) {
@@ -182,31 +153,26 @@ LevelConfig config_for_rating(int rating) {
     // vs Stockfish UCI_Elo" anchor was the miscalibration source: SF's UCI_Elo ruler
     // is itself badly inflated at the top, which baked in a bot ~hundreds of Elo too
     // strong at its label. Re-anchored self-contained instead — see the harness.)
-    cfg.rankDepth = static_cast<int>(2.0 + 6.0 * (1.0 - u) + 0.5); // 2..8
-    if (cfg.rankDepth < 2) cfg.rankDepth = 2;
+    //
+    // Spans 1..8. It used to start at 2, but the ranking pass got materially
+    // STRONGER at a given depth when it became a single MultiPV search (shared
+    // TT, real root ordering, every move at the same completed iteration) — the
+    // measured effect was that ratings 1000-1800 all lost about the same ~40cp
+    // per move in balanced positions, i.e. the bottom of the ladder played far
+    // above its label in exactly the quiet opening/middlegame positions that are
+    // most visible. One ply off the bottom restores the spread.
+    cfg.rankDepth = static_cast<int>(1.0 + 7.0 * (1.0 - u) + 0.5); // 1..8
+    if (cfg.rankDepth < 1) cfg.rankDepth = 1;
     if (cfg.rankDepth > 8) cfg.rankDepth = 8;
 
-    // Sensitivity `s` (Regan curve, win-prob units): the rating dial — smaller =
-    // sharper = stronger. The prior 0.10·u^1.9 collapsed to a ~10cp selection window
-    // by 2021 (order-of-magnitude too accurate: real ~2000 play loses ~30cp/move,
-    // the model lost ~1-2). ~3.5× wider at the top, still → 0 at RatingFull for a
-    // continuous handoff into the clean branch. ~25cp window at 2021, ~60cp at 1200.
-    cfg.sensitivity = 0.14 * std::pow(u, 1.3);
-
-    // Consistency `c` (Regan curve exponent) > 1: concentrates play on the best in
-    // EASY positions (clearly-worse moves killed hard => no dumb easy free-piece
-    // blunders) while keeping near-best moves ~equiprobable in HARD ones. Lowered
-    // vs the prior 1.8..2.3 — that band drove the ERROR INVERSION (it killed every
-    // alternative in sharp positions, so the bot played decisive moments perfectly
-    // and only wandered in quiet ones). Sharp-position error now comes primarily
-    // from the shallower rankDepth horizon; c stays modest so the softmax still
-    // deviates in complex spots without manufacturing dumb easy blunders.
-    cfg.consistency = 1.5 + 0.4 * (1.0 - u);
-
-    // Severity cap (hard safety, win-prob units): widened to match the wider window
-    // so it doesn't clip legitimate human-scale inaccuracies; it still guarantees an
-    // obviously-losing move (far below best in win-prob) never leaks through.
-    cfg.capDelta = 0.05 + 0.25 * std::pow(u, 1.4);
+    // Move selection (window / cap / curve exponent) comes from the ONE shared
+    // ladder in weakening.cpp, which standard chess and all three variants use.
+    // It was duplicated per engine before, so a fix landed in one and not the
+    // others. Tune it there, and measure with `zugzwang ratingtest`.
+    Weakening::SoftmaxConfig sel = Weakening::curve_for_rating(rating);
+    cfg.windowCp = sel.windowCp;
+    cfg.consistency = sel.consistency;
+    cfg.capCp = sel.capCp;
 
     return cfg;
 }
@@ -216,7 +182,7 @@ namespace {
 // Resolved search budget after applying the Depth->Nodes->MoveTime explicit-
 // override precedence on top of the rating's ladder config. An explicit budget
 // (admin engine-vs-engine) overrides the ladder's time/depth; the rating still
-// drives the weakening (temperature/cap).
+// drives the weakening (window/cap).
 struct Budget {
     int cleanDepth;
     int rankDepth;
@@ -268,7 +234,6 @@ WeakResult best_move_for_rating(Search::SearchGroup& group, Position& pos, int r
                                  int limitMoveTimeMs, int64_t limitNodes,
                                  const std::vector<uint64_t>& history) {
     LevelConfig cfg = config_for_rating(rating);
-    apply_endgame_scaling(cfg, pos);
     Budget b = resolve_budget(cfg, limitDepth, limitMoveTimeMs, limitNodes);
     Rules::seed_history(pos, history);
 
@@ -291,7 +256,6 @@ WeakResult best_move_for_rating_single(Search::Context& ctx, Position& pos, int 
                                         int limitMoveTimeMs, int64_t limitNodes,
                                         const std::vector<uint64_t>& history) {
     LevelConfig cfg = config_for_rating(rating);
-    apply_endgame_scaling(cfg, pos);
     Budget b = resolve_budget(cfg, limitDepth, limitMoveTimeMs, limitNodes);
     Rules::seed_history(pos, history);
 
