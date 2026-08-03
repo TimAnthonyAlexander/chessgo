@@ -39,13 +39,16 @@ type NavItem =
     | { kind: 'link'; label: string; to: string }
     | { kind: 'menu'; label: string; to?: string; items: Leaf[] }
 
-function navItems(isAdmin: boolean, loggedIn: boolean): NavItem[] {
+function navItems(isAdmin: boolean, loggedIn: boolean, ready: boolean): NavItem[] {
     const tools: Leaf[] = [
         { label: 'Analysis', to: '/analysis' },
         ...(isAdmin ? [{ label: 'Engine v Engine', to: '/engine-vs' }] : []),
         { label: 'Editor', to: '/editor' },
     ]
-    return [
+    // While auth is still resolving, show only the items whose identity does not
+    // depend on the session (Play + Tournaments). The rest (Community/Watch,
+    // Tools, Admin) all appear at once when ready — no per-slot layout shifts.
+    const publicOnly: NavItem[] = [
         {
             kind: 'menu',
             label: 'Play',
@@ -61,11 +64,14 @@ function navItems(isAdmin: boolean, loggedIn: boolean): NavItem[] {
             ],
         },
         { kind: 'link', label: 'Tournaments', to: '/tournaments' },
-        // Logged out there is only Watch, and a one-item dropdown is worse than
-        // the plain link it would wrap — so the group only appears with Friends.
+    ]
+    if (!ready) return publicOnly
+
+    return [
+        ...publicOnly,
         loggedIn
             ? {
-                  kind: 'menu',
+                  kind: 'menu' as const,
                   label: 'Community',
                   to: '/watch',
                   items: [
@@ -73,7 +79,7 @@ function navItems(isAdmin: boolean, loggedIn: boolean): NavItem[] {
                       { label: 'Friends', to: '/friends' },
                   ],
               }
-            : { kind: 'link', label: 'Watch', to: '/watch' },
+            : ({ kind: 'link' as const, label: 'Watch', to: '/watch' } as NavItem),
         { kind: 'menu', label: 'Tools', items: tools },
         ...(isAdmin ? [{ kind: 'link' as const, label: 'Admin', to: '/admin' }] : []),
     ]
@@ -117,7 +123,7 @@ const linkSx = (active: boolean, real: boolean) => ({
 /** App shell: a flat, full-width top nav (Lichess-style) over the routed page. */
 export default function Layout() {
     const { pathname } = useLocation()
-    const { user } = useAuth()
+    const { user, status } = useAuth()
     const [authOpen, setAuthOpen] = useState(false)
     const [authMode, setAuthMode] = useState<AuthMode>('login')
     const [themeOpen, setThemeOpen] = useState(false)
@@ -148,7 +154,7 @@ export default function Layout() {
     ])
 
     // The same nav model the desktop bar uses, flattened for the mobile drawer.
-    const sections: MobileNavSection[] = navItems(user?.role === 'admin', !!user).map((item) =>
+    const sections: MobileNavSection[] = navItems(user?.role === 'admin', !!user, status === 'ready').map((item) =>
         item.kind === 'link'
             ? { label: item.label, to: item.to }
             : {
@@ -205,7 +211,7 @@ export default function Layout() {
                 </Link>
 
                 <Box sx={{ display: { xs: 'none', md: 'flex' }, alignItems: 'center', gap: 3 }}>
-                    {navItems(user?.role === 'admin', !!user).map((item) =>
+                    {navItems(user?.role === 'admin', !!user, status === 'ready').map((item) =>
                         item.kind === 'link' ? (
                             <Box
                                 key={item.label}
