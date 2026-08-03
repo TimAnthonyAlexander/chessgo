@@ -63,12 +63,10 @@ enum Theme {
         static let negative = dynamic(light: 0xA23B2E, dark: 0xE07A64)
         static let warning  = dynamic(light: 0xBD7A2A, dark: 0xE0A34F)
 
-        // Board — a real wooden set: ivory + walnut, not screen teal/lilac.
-        static let boardLight     = dynamic(light: 0xEDE1C6, dark: 0xD9C9A3)
-        static let boardDark      = dynamic(light: 0x9C6F4A, dark: 0x5B4230)
-        static let boardHighlight = dynamic(light: 0xC9A24E, dark: 0xD4AA5F, alpha: 0.55)
-        static let lastMove       = dynamic(light: 0xC9A24E, dark: 0xD4AA5F, alpha: 0.38)
-        static let check          = dynamic(light: 0xB8402E, dark: 0xD9614A, alpha: 0.55)
+        // NOTE: the board's own colors are NOT here. A board palette is a user
+        // choice with sixteen options (`Theme/BoardTheme.swift`, ported from the
+        // web) and is absolute rather than light/dark-dynamic, so it lives in
+        // `BoardPalette` and reaches the board through `SettingsStore`.
     }
 
     // MARK: - Spacing
@@ -167,8 +165,6 @@ private struct ThemeSwatchPreview: View {
         ("positive", Theme.Colors.positive),
         ("negative", Theme.Colors.negative),
         ("warning", Theme.Colors.warning),
-        ("boardLight", Theme.Colors.boardLight),
-        ("boardDark", Theme.Colors.boardDark),
     ]
 
     var body: some View {

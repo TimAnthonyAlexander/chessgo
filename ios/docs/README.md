@@ -34,7 +34,21 @@ sound (synthesized tones).
   permissive premove-target generator only.
 - **`BoardControl`** protocol is the one abstraction every mode (bot/live/puzzle/
   analysis/spectate) drives the shared `BoardView` through.
-- **Pieces:** cburnett vector set (GPLv2+) in `Assets.xcassets`, matching the web default.
+- **Board themes + piece sets:** `Theme/BoardTheme.swift` ports the web catalog 1:1 —
+  16 board palettes (`BoardThemeID`) and 7 piece sets (`PieceSetID`), same labels, same
+  colors, same picker order. Board colors are ABSOLUTE (a theme must not shift with
+  light/dark), so they live in `BoardPalette`, not `Theme.Colors`. Selection is two
+  `SettingsStore` fields (`boardTheme`, `pieceSet`); **iOS defaults to Amethyst + Neo**
+  (web defaults to Cherry + Cburnett). `BoardView` and `PieceView` read the store from
+  the environment as an OPTIONAL (`@Environment(SettingsStore.self) var: SettingsStore?`),
+  so every board — game, analysis, puzzles, spectate, home mini-boards — follows the
+  choice with no per-call-site wiring, and previews with no store fall back to the
+  defaults. Pickers are in `Views/Settings/AppearanceView.swift`.
+- **Piece artwork:** `Assets.xcassets` holds `<set>_<code>` imagesets (e.g. `neo_wK`) —
+  the web's vector sets rasterized to 384px PNG (Xcode's asset-catalog SVG support does
+  not cover the `<text>`/CSS-styled sets), plus Neo's own 300px sprites. Cherry's two
+  wood textures are `board_wood_light` / `board_wood_cherry`. Credits per set are on
+  `PieceSetID.credit` and shown in the picker.
 - Schema-drift safety: `Core/Resilient.swift` `@Default*` wrappers. Gotcha: never
   memberwise-construct a `@Default`-wrapped model (decode fixtures instead).
 
@@ -46,7 +60,9 @@ sound (synthesized tones).
   `api_token_id` in the response; additive — the web SPA ignores it).
 
 ## Known gaps vs web (deliberate)
-- One piece set (cburnett) + the built-in board colors — web has 16 boards / 6 piece sets.
+- Site palette (6 accent/neutral families), page backdrop and the 5 sound materials are
+  web-only: the iOS chrome is the fixed brass palette in `Theme.Colors` and the sound is
+  `Sound/ToneSynth` with no material presets.
 - Locally-played analysis moves show UCI, not SAN (no client SAN generator; engine owns rules).
 - Analysis is a linear mainline + one branch, not a full variation tree.
 - Editor, Guess-the-Elo, and Admin screens were scoped out.

@@ -115,6 +115,17 @@ struct BoardView: View {
         self.highlightSquares = highlightSquares
     }
 
+    /// Board palette source. Read from the environment instead of taken as a
+    /// parameter so EVERY board — game, analysis, puzzles, spectate, the home
+    /// mini-boards — follows the player's theme with no per-call-site wiring.
+    /// Optional on purpose: previews render with no store injected and simply
+    /// get the app default (Amethyst).
+    @Environment(SettingsStore.self) private var settings: SettingsStore?
+
+    private var palette: BoardPalette {
+        (settings?.boardTheme ?? .amethyst).palette
+    }
+
     @State private var selected: Square?
     @State private var dragOrigin: Square?
     @State private var dragLocation: CGPoint?
@@ -172,6 +183,10 @@ struct BoardView: View {
                     }
                 }
             }
+            // The theme's frame color as a hairline around the grid — the web
+            // board's frame, minus its rounded corners (the phone board sits
+            // flush inside `BoardStage`).
+            .overlay(Rectangle().strokeBorder(palette.frame, lineWidth: 1))
             if !highlightSquares.isEmpty {
                 highlightLayer(cell: cell)
             }
@@ -391,20 +406,31 @@ struct BoardView: View {
         checkedKings: Set<Square>
     ) -> some View {
         let isLight = (square.file + square.rank) % 2 == 1
+        let theme = palette
         ZStack {
-            (isLight ? Theme.Colors.boardLight : Theme.Colors.boardDark)
+            BoardSquareFace(face: theme.face(light: isLight))
                 .brightness(-(1 - displayOptions.boardBrightness))
-            if displayOptions.highlightLastMove, lastMoveSquares.contains(square) { Theme.Colors.lastMove }
+            // Per-square hairline, drawn only by the themes that define one
+            // (Ice, Marble, Carrara, Newsprint, Onyx) — it's what gives their
+            // low-contrast squares definition.
+            if let border = theme.border {
+                Rectangle().strokeBorder(border, lineWidth: 0.5)
+            }
+            if displayOptions.highlightLastMove, lastMoveSquares.contains(square) { theme.lastMove }
             if checkedKings.contains(square) { checkGlow(cellSize: cellSize) }
             if premoveChainSquares.contains(square) { Theme.Colors.accent.opacity(0.22) }
-            if selected == square { Theme.Colors.boardHighlight }
+            if selected == square { theme.select }
 
             if let piece = displayBoard.piece(at: square), dragOrigin != square {
                 PieceView(piece: piece).padding(cellSize * 0.06)
             }
             if displayBoard.duckSquare == square { duckMarker(cellSize: cellSize) }
-            if displayOptions.showLegalMoves, targetsForSelected.contains(square) { targetDot(cellSize: cellSize) }
-            if displayOptions.showLegalMoves, isArmedDropTarget(square) { targetDot(cellSize: cellSize) }
+            if displayOptions.showLegalMoves, targetsForSelected.contains(square) {
+                targetDot(cellSize: cellSize, isLight: isLight)
+            }
+            if displayOptions.showLegalMoves, isArmedDropTarget(square) {
+                targetDot(cellSize: cellSize, isLight: isLight)
+            }
             if control.duckPlacementActive, displayBoard.piece(at: square) == nil {
                 Circle().fill(Theme.Colors.warning.opacity(0.35)).padding(cellSize * 0.3)
             }
@@ -424,7 +450,9 @@ struct BoardView: View {
     @ViewBuilder
     private func coordinateLabel(square: Square, cellSize: CGFloat, isBottomRow: Bool, isLeftColumn: Bool) -> some View {
         let isLight = (square.file + square.rank) % 2 == 1
-        let tint = (isLight ? Theme.Colors.boardDark : Theme.Colors.boardLight).opacity(0.85)
+        // The theme's own coordinate ink: on the web too, a coordinate is drawn
+        // in the color of the OPPOSITE square shade so it reads on its own.
+        let tint = palette.coord(light: isLight)
         VStack {
             if isLeftColumn {
                 HStack {
@@ -462,20 +490,25 @@ struct BoardView: View {
         }
     }
 
-    private func targetDot(cellSize: CGFloat) -> some View {
-        Circle().fill(Theme.Colors.accent.opacity(0.55)).frame(width: cellSize * 0.28, height: cellSize * 0.28)
+    /// Legal-move marker, in the theme's dot color for this square's shade
+    /// (light squares get the softer of the two, as on the web).
+    private func targetDot(cellSize: CGFloat, isLight: Bool) -> some View {
+        Circle()
+            .fill(palette.dot(light: isLight))
+            .frame(width: cellSize * 0.3, height: cellSize * 0.3)
     }
 
     /// King-in-check glow: full strength across the middle of the square, then
     /// falling off before the edge, so it reads as an alarm centred on the king
     /// instead of a flat tint the eye files next to the last-move highlight.
     private func checkGlow(cellSize: CGFloat) -> some View {
-        RadialGradient(
+        let check = palette.check
+        return RadialGradient(
             stops: [
-                .init(color: Theme.Colors.check, location: 0),
-                .init(color: Theme.Colors.check, location: 0.52),
-                .init(color: Theme.Colors.check.opacity(0.35), location: 0.78),
-                .init(color: Theme.Colors.check.opacity(0), location: 1),
+                .init(color: check, location: 0),
+                .init(color: check, location: 0.52),
+                .init(color: check.opacity(0.35), location: 0.78),
+                .init(color: check.opacity(0), location: 1),
             ],
             center: .center,
             startRadius: 0,

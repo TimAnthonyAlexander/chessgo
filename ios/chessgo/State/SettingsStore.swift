@@ -79,6 +79,18 @@ final class SettingsStore {
         }
     }
 
+    // MARK: - Board appearance
+
+    /// Board palette and piece artwork (`Theme/BoardTheme.swift`) — the same
+    /// sixteen themes and seven sets the web client offers. Read straight off
+    /// the environment by `BoardView`/`PieceView`, so a change here repaints
+    /// every board in the app.
+    var boardTheme: BoardThemeID { didSet { onChange() } }
+    var pieceSet: PieceSetID { didSet { onChange() } }
+
+    /// Convenience for the views: the active palette.
+    var boardPalette: BoardPalette { boardTheme.palette }
+
     // MARK: - Board display
 
     var showCoordinates: Bool { didSet { onChange() } }
@@ -164,6 +176,9 @@ final class SettingsStore {
         self.defaults = defaults
         let snapshot = Self.loadSnapshot(from: defaults)
 
+        boardTheme = snapshot.boardTheme
+        pieceSet = snapshot.pieceSet
+
         showCoordinates = snapshot.showCoordinates
         highlightLastMove = snapshot.highlightLastMove
         showLegalMoves = snapshot.showLegalMoves
@@ -196,6 +211,8 @@ final class SettingsStore {
 
     private var currentSnapshot: Snapshot {
         Snapshot(
+            boardTheme: boardTheme,
+            pieceSet: pieceSet,
             showCoordinates: showCoordinates,
             highlightLastMove: highlightLastMove,
             showLegalMoves: showLegalMoves,
@@ -233,6 +250,8 @@ final class SettingsStore {
     /// unrecognized enum raw value from an older/newer build falls back to
     /// that single field's default instead of failing the whole blob.
     private struct Snapshot: Codable {
+        var boardTheme: BoardThemeID
+        var pieceSet: PieceSetID
         var showCoordinates: Bool
         var highlightLastMove: Bool
         var showLegalMoves: Bool
@@ -251,7 +270,11 @@ final class SettingsStore {
         var lowTimeSound: Bool
         var colorScheme: AppColorScheme
 
+        // Amethyst + Neo: the chessgo iOS house look, deliberately different
+        // from the web's Cherry + Cburnett default.
         static let defaults = Snapshot(
+            boardTheme: .amethyst,
+            pieceSet: .neo,
             showCoordinates: true,
             highlightLastMove: true,
             showLegalMoves: true,
@@ -272,6 +295,8 @@ final class SettingsStore {
         )
 
         init(
+            boardTheme: BoardThemeID,
+            pieceSet: PieceSetID,
             showCoordinates: Bool,
             highlightLastMove: Bool,
             showLegalMoves: Bool,
@@ -290,6 +315,8 @@ final class SettingsStore {
             lowTimeSound: Bool,
             colorScheme: AppColorScheme
         ) {
+            self.boardTheme = boardTheme
+            self.pieceSet = pieceSet
             self.showCoordinates = showCoordinates
             self.highlightLastMove = highlightLastMove
             self.showLegalMoves = showLegalMoves
@@ -310,6 +337,7 @@ final class SettingsStore {
         }
 
         private enum CodingKeys: String, CodingKey {
+            case boardTheme, pieceSet
             case showCoordinates, highlightLastMove, showLegalMoves, boardBrightness, animationSpeed
             case autoQueen, moveMethod, premoves
             case confirmResign, autoFlip, zenMode, showEvalBar, showMoveList
@@ -320,6 +348,9 @@ final class SettingsStore {
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             let fallback = Snapshot.defaults
+
+            boardTheme = Self.enumField(container, .boardTheme, fallback.boardTheme)
+            pieceSet = Self.enumField(container, .pieceSet, fallback.pieceSet)
 
             showCoordinates = Self.field(container, .showCoordinates, fallback.showCoordinates)
             highlightLastMove = Self.field(container, .highlightLastMove, fallback.highlightLastMove)

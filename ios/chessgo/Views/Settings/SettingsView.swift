@@ -19,7 +19,7 @@ struct SettingsView: View {
                         Label {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Board & display")
-                                Text(settings.colorScheme.label)
+                                Text("\(settings.boardTheme.label) · \(settings.pieceSet.label)")
                                     .font(Theme.caption())
                                     .foregroundStyle(Theme.Colors.secondaryText)
                             }

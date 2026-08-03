@@ -55,7 +55,7 @@ struct PocketView: View {
                     .padding(Theme.Spacing.xs)
                     .background(
                         RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
-                            .fill(armed == entry.kind ? Theme.Colors.boardHighlight : Theme.Colors.surface)
+                            .fill(armed == entry.kind ? Theme.Colors.accent.opacity(0.28) : Theme.Colors.surface)
                     )
                 }
             }

@@ -78,8 +78,13 @@ puzzles, analysis, profile/leaderboard/streak, spectate, settings, sound.
   The WS URL is never hardcoded — it comes back from `/ws-ticket` as `wsUrl`.
 - **Engine still owns the rules.** The client parses FEN for rendering and submits UCI;
   it never generates legal moves — it renders the server's `legalMoves`/`status`.
+- **Board themes are ported from the web:** `Theme/BoardTheme.swift` carries the same 16
+  board palettes + 7 piece sets as `frontend/src/lib/boardTheme.ts`, selected by
+  `SettingsStore.boardTheme`/`.pieceSet` and read from the environment by
+  `BoardView`/`PieceView` (so every board follows it). **iOS defaults to Amethyst +
+  Neo**, web to Cherry + Cburnett. Artwork is `<set>_<code>` imagesets (rasterized PNG).
 - Structure: `ios/chessgo/{Core,Models,Services,State,Chess,Theme,Views,Sound}`, plus the
-  cburnett piece set in `ios/chessgo/Assets.xcassets`. Xcode-16 file-system-synchronized
+  piece sets + Cherry wood textures in `ios/chessgo/Assets.xcassets`. Xcode-16 file-system-synchronized
   group — new `.swift` files are picked up without editing `project.pbxproj`.
 - **Backend changes this added (kept):** `app/Middleware/OptionalAuthMiddleware.php`
   (auth-if-present, never 401; on the `/ws-ticket` route so bearer clients get *rated*

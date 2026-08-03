@@ -1,55 +1,54 @@
 import SwiftUI
 
-/// Renders one piece from the cburnett vector set. The SVGs live in
-/// `Assets.xcassets` (asset names `wP`…`bK`) and Xcode rasterizes them from
-/// their preserved vector data, so they stay crisp at any board size. The
-/// artwork carries its own white/black colouring, so there is no tinting here.
+/// Renders one piece in the active piece set (`SettingsStore.pieceSet`, one of
+/// the seven sets in `Theme/BoardTheme.swift`). Artwork lives in
+/// `Assets.xcassets` as `<set>_<code>` — e.g. `neo_wK` — and carries its own
+/// white/black colouring, so there is no tinting here.
 ///
-/// Piece set: cburnett by Colin M.L. Burnett (GPLv2+), the same set the web
-/// client ships as its default.
+/// The set is read from the environment rather than passed in, so every piece
+/// on every screen follows the preference without threading it through each
+/// board. `set:` overrides it for the settings picker, which has to draw the
+/// other options next to the active one. With no `SettingsStore` in the
+/// environment (previews) it falls back to the app default, Neo.
 struct PieceView: View {
     let piece: Piece
+    /// Explicit set; `nil` means "follow the preference."
+    private let explicitSet: PieceSetID?
+
+    @Environment(SettingsStore.self) private var settings: SettingsStore?
+
+    init(piece: Piece, set: PieceSetID? = nil) {
+        self.piece = piece
+        self.explicitSet = set
+    }
 
     var body: some View {
-        Image(assetName)
+        Image(resolvedSet.assetName(for: piece))
             .resizable()
             .scaledToFit()
             .shadow(color: .black.opacity(0.18), radius: 0.6, y: 0.5)
     }
 
-    private var assetName: String {
-        let color = piece.color == .white ? "w" : "b"
-        let kind: String
-        switch piece.kind {
-        case .king: kind = "K"
-        case .queen: kind = "Q"
-        case .rook: kind = "R"
-        case .bishop: kind = "B"
-        case .knight: kind = "N"
-        case .pawn: kind = "P"
-        }
-        return color + kind
+    private var resolvedSet: PieceSetID {
+        explicitSet ?? settings?.pieceSet ?? .neo
     }
 }
 
-#Preview("Pieces — light square") {
-    HStack(spacing: 4) {
-        ForEach(PieceKind.allCases, id: \.fenLetter) { kind in
-            PieceView(piece: Piece(color: .white, kind: kind))
-                .frame(width: 44, height: 44)
+#Preview("Piece sets") {
+    VStack(spacing: 8) {
+        ForEach(PieceSetID.allCases) { set in
+            HStack(spacing: 4) {
+                ForEach(PieceKind.allCases, id: \.fenLetter) { kind in
+                    PieceView(piece: Piece(color: .white, kind: kind), set: set)
+                        .frame(width: 36, height: 36)
+                }
+                ForEach(PieceKind.allCases, id: \.fenLetter) { kind in
+                    PieceView(piece: Piece(color: .black, kind: kind), set: set)
+                        .frame(width: 36, height: 36)
+                }
+            }
         }
     }
     .padding()
-    .background(Theme.Colors.boardLight)
-}
-
-#Preview("Pieces — dark square") {
-    HStack(spacing: 4) {
-        ForEach(PieceKind.allCases, id: \.fenLetter) { kind in
-            PieceView(piece: Piece(color: .black, kind: kind))
-                .frame(width: 44, height: 44)
-        }
-    }
-    .padding()
-    .background(Theme.Colors.boardDark)
+    .background(BoardSquareFace(face: BoardThemeID.amethyst.palette.dark))
 }
