@@ -80,7 +80,7 @@ function navItems(isAdmin: boolean, loggedIn: boolean, ready: boolean): NavItem[
                   ],
               }
             : ({ kind: 'link' as const, label: 'Watch', to: '/watch' } as NavItem),
-        { kind: 'menu', label: 'Tools', items: tools },
+        { kind: 'menu', label: 'Tools', to: '/analysis', items: tools },
         ...(isAdmin ? [{ kind: 'link' as const, label: 'Admin', to: '/admin' }] : []),
     ]
 }
