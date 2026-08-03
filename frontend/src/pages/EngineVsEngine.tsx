@@ -51,6 +51,7 @@ import {
     random960,
     stripCrazyhouseFen,
     VARIANT_LABEL,
+    variantHasCheck,
 } from '../lib/variants'
 import Pocket from '../components/Pocket'
 import {
@@ -877,7 +878,7 @@ export default function EngineVsEngine() {
                 sideToMove={sideToMoveOf(renderFen)}
                 legalMoves={[]}
                 lastMove={shownLast}
-                inCheck={false}
+                showCheck={variantHasCheck(variant)}
                 interactive={false}
                 onMove={() => {}}
                 arrow={atLive ? arrow : null}

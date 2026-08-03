@@ -47,20 +47,22 @@ final class StaticBoardControl: BoardControl {
     let myTurn = false
     let legalMoves: [String] = []
     let lastMove: String?
-    let inCheck = false
     let canPremove = false
     let duckSquare: String?
+    let showCheck: Bool
 
     init(
         fen: String,
         orientation: PieceColor = .white,
         lastMove: String? = nil,
-        duckSquare: String? = nil
+        duckSquare: String? = nil,
+        variant: String? = nil
     ) {
         self.fen = fen.isEmpty ? ChessBoard.startFEN : fen
         self.orientation = orientation
         self.lastMove = (lastMove?.isEmpty ?? true) ? nil : lastMove
         self.duckSquare = (duckSquare?.isEmpty ?? true) ? nil : duckSquare
+        self.showCheck = Variant.hasCheck(variant)
     }
 
     func submit(_ uci: String) {}

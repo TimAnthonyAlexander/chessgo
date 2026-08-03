@@ -13,7 +13,7 @@ import { useAuth } from '../lib/auth'
 //   - /analysis/:id    ← a persisted game rebuilt server-side
 //   - /editor          ← { fen }
 //   - /bot             ← { fen }
-//   - /admin/engine-vs ← { fen }  (admin only)
+//   - /engine-vs       ← { fen }  (admin only)
 //
 // Live / bot / spectated games only mount this at their FINAL state — never
 // mid-game — so the engine can't be used as a mid-game analysis crutch.
@@ -111,7 +111,7 @@ export default function BoardActions({
                 tone="neutral"
                 icon={<Cpu size={16} />}
                 label="Engine vs Engine from here"
-                onClick={() => navigate('/admin/engine-vs', { state: { fen } })}
+                onClick={() => navigate('/engine-vs', { state: { fen } })}
                 disabled={disabled || playDisabled}
             />,
         )

@@ -47,7 +47,7 @@ import { parsePocket } from '../lib/variants'
 import { useMoveNavKeys } from '../lib/useMoveNavKeys'
 import { applyUciVisually, type BoardMap, type Square, parseFen } from '../lib/chess'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
-import { type Variant } from '../lib/variants'
+import { type Variant, variantHasCheck } from '../lib/variants'
 import { authStore, useAuth } from '../lib/auth'
 import { usePrefs, useSetting } from '../lib/settings'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -164,7 +164,7 @@ export default function LiveGame() {
     const isDuck = g?.variant === 'duck'
     const isCrazyhouse = g?.variant === 'crazyhouse'
     // Antichess plays on a normal board — no pockets, no duck placement, and (like
-    // Duck) no check concept, so it's excluded from the check highlight below.
+    // Duck) no check concept: `variantHasCheck` keeps the king glow off for both.
     const isAntichess = g?.variant === 'antichess'
 
     // Board orientation: your own color at the bottom, flipped on demand.
@@ -922,7 +922,7 @@ export default function LiveGame() {
                 sideToMove={g.sideToMove}
                 legalMoves={boardInteractive && !confirmMove.pending ? g.legalMoves : []}
                 lastMove={atLive ? (activeOptimisticLast ?? g.lastMove) : historyLast}
-                inCheck={!atLive || isDuck || isAntichess ? false : g.check}
+                showCheck={variantHasCheck(g.variant)}
                 interactive={boardInteractive && !confirmMove.pending}
                 onMove={isDuck ? duck.onMove : handleBoardMove}
                 hint={atLive ? bestHint : null}

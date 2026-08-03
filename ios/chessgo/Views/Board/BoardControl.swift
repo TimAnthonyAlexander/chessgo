@@ -40,10 +40,10 @@ protocol BoardControl: AnyObject {
     /// Last move played, UCI, for the last-move highlight. `nil` at game start.
     var lastMove: String? { get }
 
-    /// True when the side to move is in check — the board finds that side's
-    /// king square itself from `fen` and highlights it. Never computed by
-    /// the board; this flag comes straight from the server.
-    var inCheck: Bool { get }
+    /// Opt OUT of the king-in-check glow. The board detects check from the
+    /// position itself, so a driver only sets this for variants where check
+    /// isn't a concept (Antichess and Duck: the king is capturable).
+    var showCheck: Bool { get }
 
     /// True when the driver allows queuing premoves while it isn't the
     /// human's turn (live/bot; puzzles set this false).
@@ -97,6 +97,7 @@ protocol BoardControl: AnyObject {
 }
 
 extension BoardControl {
+    var showCheck: Bool { true }
     var duckSquare: String? { nil }
     var pocket: String? { nil }
     var duckPlacementActive: Bool { false }
@@ -117,7 +118,7 @@ final class PreviewBoardControl: BoardControl {
     var myTurn: Bool
     var legalMoves: [String]
     var lastMove: String?
-    var inCheck: Bool
+    var showCheck: Bool
     var canPremove: Bool
     var duckSquare: String?
     var pocket: String?
@@ -132,7 +133,7 @@ final class PreviewBoardControl: BoardControl {
         myTurn: Bool = true,
         legalMoves: [String] = [],
         lastMove: String? = nil,
-        inCheck: Bool = false,
+        showCheck: Bool = true,
         canPremove: Bool = true,
         duckSquare: String? = nil,
         pocket: String? = nil,
@@ -145,7 +146,7 @@ final class PreviewBoardControl: BoardControl {
         self.myTurn = myTurn
         self.legalMoves = legalMoves
         self.lastMove = lastMove
-        self.inCheck = inCheck
+        self.showCheck = showCheck
         self.canPremove = canPremove
         self.duckSquare = duckSquare
         self.pocket = pocket

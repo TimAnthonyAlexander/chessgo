@@ -82,6 +82,7 @@ import {
     parsePocket,
     pocketFromFen,
     stripCrazyhouseFen,
+    variantHasCheck,
 } from '../lib/variants'
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
@@ -322,11 +323,6 @@ export default function BotGame() {
         : flipped
           ? other(humanColor)
           : humanColor
-
-    // Whether the side to move in the SHOWN position is in check — derived from the
-    // last played move's SAN (a checking move ends in "+" / a mating one in "#"), so
-    // the king glow works in bot games without any extra engine/network probe.
-    const shownInCheck = shownPly > 0 && /[+#]$/.test(game?.moves[shownPly - 1]?.san ?? '')
 
     const lastMove =
         activeOverride && atLive && activeOptimisticLast
@@ -695,7 +691,7 @@ export default function BotGame() {
                 sideToMove={game?.side_to_move ?? 'w'}
                 legalMoves={interactive && !confirmMove.pending ? game.legal_moves : []}
                 lastMove={lastMove}
-                inCheck={shownInCheck}
+                showCheck={variantHasCheck(game?.variant)}
                 interactive={interactive && !confirmMove.pending}
                 hint={atLive ? bestHint : null}
                 hintReveal={isAdmin}

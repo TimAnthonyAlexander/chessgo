@@ -15,6 +15,17 @@ export type Variant =
     | 'glassjaw'
     | 'doublemove'
 
+/**
+ * Whether check exists as a concept in this variant — i.e. whether the board
+ * should glow the attacked king. Antichess and Duck both let the king be
+ * captured outright, so an "attacked" king there is normal, not a warning.
+ * Every other variant (including Crazyhouse and the bot-only rating variants)
+ * plays standard check rules.
+ */
+export function variantHasCheck(v: string | null | undefined): boolean {
+    return v !== 'antichess' && v !== 'duck'
+}
+
 /** The standard chess start position. */
 export const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 

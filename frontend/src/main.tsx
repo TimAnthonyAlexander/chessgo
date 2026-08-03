@@ -94,7 +94,7 @@ const router = createBrowserRouter([
                     { path: '/editor', element: suspended(<Editor />) },
                     { path: '/@/:name', element: <Profile /> },
                     { path: '/friends', element: suspended(<Friends />) },
-                    { path: '/admin/engine-vs', element: suspended(<EngineVsEngine />) },
+                    { path: '/engine-vs', element: suspended(<EngineVsEngine />) },
                     {
                         path: '/admin',
                         element: suspended(<Admin />),

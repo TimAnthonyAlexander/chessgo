@@ -309,6 +309,105 @@ export function kingSquare(board: BoardMap, white: boolean): Square | null {
     return null
 }
 
+const KNIGHT_STEPS: ReadonlyArray<readonly [number, number]> = [
+    [1, 2],
+    [2, 1],
+    [2, -1],
+    [1, -2],
+    [-1, -2],
+    [-2, -1],
+    [-2, 1],
+    [-1, 2],
+]
+const SLIDER_DIRS: ReadonlyArray<readonly [number, number]> = [
+    [0, 1],
+    [0, -1],
+    [1, 0],
+    [-1, 0],
+    [1, 1],
+    [1, -1],
+    [-1, 1],
+    [-1, -1],
+]
+
+/**
+ * Is this color's king attacked in the given position? Display-only — the
+ * engine stays the rules authority; this exists so the board can light up the
+ * king's square itself instead of every page threading a check flag down.
+ *
+ * Operates on a raw BoardMap, so it covers Crazyhouse (pockets are stripped
+ * from the FEN before parsing) and Duck (the duck is a standalone square that
+ * blocks sliders like any other occupied square). Anything that isn't a
+ * recognised piece char counts as a blocker, never as an attacker.
+ */
+export function kingAttacked(board: BoardMap, white: boolean, duck?: Square | null): boolean {
+    const king = kingSquare(board, white)
+    if (!king) return false
+    const kf = fileOf(king)
+    const kr = rankOf(king)
+
+    const enemyAt = (sq: Square, types: string): boolean => {
+        const p = board[sq]
+        if (!p || isWhitePiece(p) === white) return false
+        return types.includes(p.toLowerCase())
+    }
+
+    // Pawns capture diagonally FORWARD, so the ones attacking a white king sit
+    // one rank ABOVE it.
+    const pr = kr + (white ? 1 : -1)
+    if (pr >= 0 && pr <= 7) {
+        for (const df of [-1, 1]) {
+            const f = kf + df
+            if (f >= 0 && f <= 7 && enemyAt(squareAt(f, pr), 'p')) return true
+        }
+    }
+
+    for (const [df, dr] of KNIGHT_STEPS) {
+        const f = kf + df
+        const r = kr + dr
+        if (f < 0 || f > 7 || r < 0 || r > 7) continue
+        if (enemyAt(squareAt(f, r), 'n')) return true
+    }
+
+    // Sliders: walk each ray until something occupies a square. A king is never
+    // a checker (two kings can't be adjacent in a legal position), so it isn't
+    // in the attacker sets — only a blocker.
+    for (const [df, dr] of SLIDER_DIRS) {
+        const types = df === 0 || dr === 0 ? 'rq' : 'bq'
+        let f = kf + df
+        let r = kr + dr
+        while (f >= 0 && f <= 7 && r >= 0 && r <= 7) {
+            const sq = squareAt(f, r)
+            if (sq === duck) break
+            if (board[sq]) {
+                if (enemyAt(sq, types)) return true
+                break
+            }
+            f += df
+            r += dr
+        }
+    }
+    return false
+}
+
+/**
+ * The king square(s) currently in check. Both colors are tested rather than
+ * trusting a side-to-move prop: in any legal position at most one king can be
+ * attacked, so this is the same answer without depending on a caller getting
+ * the side right for the position actually ON SCREEN (history scrubbing,
+ * optimistic override boards, puzzle replies mid-animation all get that wrong).
+ */
+export function checkedKings(board: BoardMap, duck?: Square | null): Square[] {
+    const out: Square[] = []
+    for (const white of [true, false]) {
+        if (kingAttacked(board, white, duck)) {
+            const sq = kingSquare(board, white)
+            if (sq) out.push(sq)
+        }
+    }
+    return out
+}
+
 // Piece artwork served from /public/piece/<set>/ (SVG, or PNG for raster sets —
 // see pieceExt). The set defaults to the
 // user's chosen piece theme (appearance store); callers that need a SPECIFIC set

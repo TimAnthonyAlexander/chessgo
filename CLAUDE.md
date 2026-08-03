@@ -202,7 +202,8 @@ and a paginated game history filterable by category/result/opponent/date.
 **Live games always start from the standard position** — `hub.go` builds from
 `chess.StartFEN`, or `RandomChess960FEN()` for 960, and the `challenge` struct
 carries no FEN. The Editor's exits are `/analysis`, `/bot`, and (admin)
-`/admin/engine-vs`.
+`/engine-vs` (the page route carries no `/admin` prefix; its API endpoint
+`POST /admin/engine-vs/move` still does, and the controller enforces the role).
 
 **Pairing** is `matchmaking.go` (rating tolerance widening 100→400 Elo the longer
 you wait) plus `challenge.go` (private 6-char codes, shared out of band, pairing

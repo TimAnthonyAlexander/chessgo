@@ -64,7 +64,7 @@ final class LiveGameDriver: BoardControl {
 
     var lastMove: String? { state?.lastMove }
 
-    var inCheck: Bool { state?.check ?? false }
+    var showCheck: Bool { Variant.hasCheck(state?.variant) }
 
     var canPremove: Bool {
         guard let state else { return false }

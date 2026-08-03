@@ -21,7 +21,6 @@ import { ActionBtn, ErrorBanner, NavBtn, PANEL_SHADOW } from './PanelUI'
 import { MoveSan } from './MoveSan'
 import { useBoardInteraction, type BoardControl } from '../lib/useBoardInteraction'
 import { pvToSan } from '../lib/analysisTree'
-import { Chess } from 'chess.js'
 import type { Color, GameAnalysis } from '../api/client'
 import {
     type Attempt,
@@ -79,16 +78,6 @@ export default function BlunderRewind({
     // Orient the board to the blundering player's POV when the puzzle changes.
     useEffect(() => {
         if (puzzle) setOrientation(puzzle.playerColor)
-    }, [puzzle])
-
-    // Check state for the pre-blunder position (king-in-check highlight).
-    const inCheck = useMemo(() => {
-        if (!puzzle) return false
-        try {
-            return new Chess(puzzle.fen).isCheck()
-        } catch {
-            return false
-        }
     }, [puzzle])
 
     const legalMoves = useMemo(
@@ -306,7 +295,6 @@ export default function BlunderRewind({
                 sideToMove={puzzle.playerColor}
                 legalMoves={legalMoves}
                 lastMove={lastMove}
-                inCheck={inCheck}
                 interactive={phase === 'awaiting'}
                 onMove={bi.onMove}
                 overrideBoard={bi.override ?? undefined}

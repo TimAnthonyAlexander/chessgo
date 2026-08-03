@@ -196,12 +196,38 @@
     background: var(--premove);
     pointer-events: none;
 }
+/* King in check. A red glow centred on the square, held at full strength across
+ * the middle third before it falls off — the single-stop version faded from the
+ * very centre, which read as a soft pink smudge under the king rather than an
+ * alarm. Fades out well inside the square edge so it stays a glow and never
+ * turns into a second last-move-style tint. The pseudo-element only exists
+ * while `.check` is on the square, so the pop-in plays exactly once, when check
+ * is given. */
 .sq.check::before {
     content: '';
     position: absolute;
     inset: 0;
-    background: radial-gradient(circle at center, var(--check), transparent 72%);
+    background: radial-gradient(
+        circle at center,
+        var(--check) 0%,
+        var(--check) 26%,
+        color-mix(in srgb, var(--check) 62%, transparent) 48%,
+        color-mix(in srgb, var(--check) 18%, transparent) 68%,
+        transparent 84%
+    );
     pointer-events: none;
+    animation: checkIn 0.24s ease-out;
+}
+
+@keyframes checkIn {
+    from {
+        opacity: 0;
+        transform: scale(0.6);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
 }
 
 /* Right-click-in-place annotation: the whole square takes the brush colour.
@@ -327,6 +353,9 @@
     .dot,
     .ring {
         transition: none;
+    }
+    .sq.check::before {
+        animation: none;
     }
 }
 

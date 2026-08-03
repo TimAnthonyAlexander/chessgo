@@ -42,7 +42,7 @@ type NavItem =
 function navItems(isAdmin: boolean, loggedIn: boolean): NavItem[] {
     const tools: Leaf[] = [
         { label: 'Analysis', to: '/analysis' },
-        ...(isAdmin ? [{ label: 'Engine v Engine', to: '/admin/engine-vs' }] : []),
+        ...(isAdmin ? [{ label: 'Engine v Engine', to: '/engine-vs' }] : []),
         { label: 'Editor', to: '/editor' },
     ]
     return [
@@ -53,16 +53,27 @@ function navItems(isAdmin: boolean, loggedIn: boolean): NavItem[] {
             items: [
                 { label: 'Online', to: '/' },
                 { label: 'Computer', to: '/bot' },
+                { label: 'Puzzles', to: '/puzzles' },
                 { label: 'Duck Chess', to: '/', state: { quickPair: 'duck' } },
                 { label: 'Crazyhouse', to: '/', state: { quickPair: 'crazyhouse' } },
                 { label: 'Antichess', to: '/', state: { quickPair: 'antichess' } },
                 { label: 'Guess the Elo', to: '/guess-the-elo' },
             ],
         },
-        { kind: 'link', label: 'Puzzles', to: '/puzzles' },
         { kind: 'link', label: 'Tournaments', to: '/tournaments' },
-        { kind: 'link', label: 'Watch', to: '/watch' },
-        ...(loggedIn ? [{ kind: 'link' as const, label: 'Friends', to: '/friends' }] : []),
+        // Logged out there is only Watch, and a one-item dropdown is worse than
+        // the plain link it would wrap — so the group only appears with Friends.
+        loggedIn
+            ? {
+                  kind: 'menu',
+                  label: 'Community',
+                  to: '/watch',
+                  items: [
+                      { label: 'Watch', to: '/watch' },
+                      { label: 'Friends', to: '/friends' },
+                  ],
+              }
+            : { kind: 'link', label: 'Watch', to: '/watch' },
         { kind: 'menu', label: 'Tools', items: tools },
         ...(isAdmin ? [{ kind: 'link' as const, label: 'Admin', to: '/admin' }] : []),
     ]
@@ -80,7 +91,16 @@ export interface LayoutOutletContext {
 // Pages built around a large board need the full viewport — the footer would
 // either push the board up or add an awkward scroll, so we drop it on them:
 // live play, bot play, puzzles, watch/spectate, and analysis.
-const BOARD_ROUTE_PREFIXES = ['/game', '/bot', '/puzzles', '/watch', '/analysis', '/admin', '/editor']
+const BOARD_ROUTE_PREFIXES = [
+    '/game',
+    '/bot',
+    '/puzzles',
+    '/watch',
+    '/analysis',
+    '/admin',
+    '/engine-vs',
+    '/editor',
+]
 const hideFooter = (pathname: string): boolean =>
     BOARD_ROUTE_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))
 

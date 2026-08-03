@@ -604,7 +604,6 @@ export default function Puzzles() {
                     sideToMove={previewColor}
                     legalMoves={[]}
                     lastMove={preview ? splitUci(preview.opponent_move) : null}
-                    inCheck={false}
                     interactive={false}
                     onMove={() => {}}
                 />
@@ -696,7 +695,6 @@ export default function Puzzles() {
                 sideToMove={orientation}
                 legalMoves={interactive ? legal : []}
                 lastMove={lastMove}
-                inCheck={false}
                 interactive={interactive}
                 onMove={onMove}
                 hint={hintMark}

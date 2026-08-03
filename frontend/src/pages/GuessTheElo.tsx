@@ -320,7 +320,6 @@ export default function GuessTheElo() {
                 sideToMove={sideToMoveOf(boardFen)}
                 legalMoves={[]}
                 lastMove={lastMove}
-                inCheck={false}
                 interactive={false}
                 onMove={() => {}}
             />

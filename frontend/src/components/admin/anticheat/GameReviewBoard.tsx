@@ -102,7 +102,6 @@ export default function GameReviewBoard({
                             sideToMove={cur.sideToMove}
                             legalMoves={[]}
                             lastMove={lastMove}
-                            inCheck={false}
                             interactive={false}
                             onMove={() => {}}
                             arrow={arrow}

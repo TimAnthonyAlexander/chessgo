@@ -17,9 +17,10 @@ import type { Color } from '../api/client'
 import {
     type BoardMap,
     type Square,
+    checkedKings,
     fileOf,
     isWhitePiece,
-    kingSquare,
+    kingAttacked,
     parseFen,
     pieceImageUrl,
     premoveTargets,
@@ -131,7 +132,10 @@ interface BoardProps {
     sideToMove: Color
     legalMoves: string[]
     lastMove: { from: Square; to: Square } | null
-    inCheck: boolean
+    /** Opt OUT of the king-in-check glow. The board detects check from the
+     * position itself, so this is only for variants where check isn't a concept
+     * (Antichess: the king is an ordinary capturable piece). */
+    showCheck?: boolean
     interactive: boolean
     onMove: (uci: string) => void
     /** Optional display-only board override for optimistic move feedback. */
@@ -433,7 +437,7 @@ export default function Board({
     sideToMove,
     legalMoves,
     lastMove,
-    inCheck,
+    showCheck = true,
     interactive,
     onMove,
     overrideBoard,
@@ -653,9 +657,20 @@ export default function Board({
         () => (selected ? destsFor(selected) : new Set<Square>()),
         [selected, interactive, legalMoves, board, rookCastles],
     )
-    const checkKing = useMemo(
-        () => (inCheck && prefs.highlightCheck ? kingSquare(board, sideToMove === 'w') : null),
-        [inCheck, prefs.highlightCheck, board, sideToMove],
+    // Check glow, derived from the position on screen rather than from a caller-
+    // supplied flag: every board surface (bot games, puzzles, analysis, review,
+    // engine-vs-engine) gets it for free and none of them can drift out of sync
+    // with the board they're rendering. `checkedKings` tests BOTH kings, so it
+    // stays right while scrubbing history or showing an optimistic board, where
+    // the side-to-move prop belongs to the live position, not the shown one.
+    // Off under blindfold, where a glow on the king's square would give away the
+    // one piece the mode most obviously hides.
+    const checkKings = useMemo(
+        () =>
+            showCheck && prefs.highlightCheck && !prefs.blindfold
+                ? new Set(checkedKings(board, duck))
+                : new Set<Square>(),
+        [showCheck, prefs.highlightCheck, prefs.blindfold, board, duck],
     )
     // The dragged piece's legal destinations, built ONCE per drag instead of
     // per square: the drag-over highlight and the grow-on-hover marker both
@@ -669,7 +684,7 @@ export default function Board({
     // Live-region announcement: piece selection (armed to move — from ANY input,
     // pointer or keyboard) and every move that actually lands, from ANY source —
     // pointer, drag, keyboard, a remote opponent's move over the socket, or
-    // scrubbing move history — since `fen`/`lastMove`/`inCheck` are the props
+    // scrubbing move history — since `fen`/`lastMove` are the props
     // every one of those paths already updates. Never fires on a bare cursor
     // move (see moveCursor below), which would flood a screen reader.
     useEffect(() => {
@@ -687,9 +702,13 @@ export default function Board({
         const piece = board[lastMove.to] // occupant AFTER the move has landed
         const name = piece ? (PIECE_NAMES[piece.toLowerCase()] ?? 'piece') : 'piece'
         const noMoves = legalMoves.length === 0
-        const suffix = inCheck ? (noMoves ? ', checkmate' : ', check') : ''
+        // Position AND side to move both read off `fen`, so the two can't
+        // disagree — unlike the `sideToMove` prop, which belongs to the live
+        // game even while an earlier ply is on screen.
+        const checked = showCheck && kingAttacked(parseFen(fen), fen.split(' ')[1] !== 'b', duck)
+        const suffix = checked ? (noMoves ? ', checkmate' : ', check') : ''
         setAnnouncement(`${name} ${lastMove.from} to ${lastMove.to}${suffix}`)
-    }, [fen, lastMove, board, inCheck, legalMoves.length])
+    }, [fen, lastMove, board, showCheck, duck, legalMoves.length])
 
     // Square center in an 80×80 coordinate space (10 units / square), oriented.
     const center = useCallback(
@@ -1206,7 +1225,7 @@ export default function Board({
                                 isPremove ? 'premove' : '',
                                 isOver ? 'over' : '',
                                 dragTarget ? 'dragTarget' : '',
-                                checkKing === sq ? 'check' : '',
+                                checkKings.has(sq) ? 'check' : '',
                                 keyboardBoard && isCursor && gridFocused ? 'focus-ring' : '',
                             ]
                                 .filter(Boolean)
@@ -1226,7 +1245,7 @@ export default function Board({
                                 isDuckTarget && 'duck placement target',
                                 isDropTarget && 'drop target',
                                 isLast && 'last move',
-                                checkKing === sq && 'king in check',
+                                checkKings.has(sq) && 'king in check',
                             ].filter(Boolean) as string[]
                             const squareAriaLabel = `${sq}, ${occupantName}${
                                 stateBits.length ? `, ${stateBits.join(', ')}` : ''

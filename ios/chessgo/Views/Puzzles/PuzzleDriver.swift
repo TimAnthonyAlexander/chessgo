@@ -32,10 +32,6 @@ final class PuzzleDriver: BoardControl {
     private(set) var legalMoves: [String] = []
     private(set) var lastMove: String?
 
-    /// Puzzle endpoints (`rest-api.md`) don't send a check flag the way live/
-    /// bot games do, so this stays false — a known v1 gap, not a client-side
-    /// legality computation (the engine still owns rules everywhere else).
-    let inCheck: Bool = false
     let canPremove: Bool = false
 
     /// App-wide display/input/sound preferences. `nil` until the hosting

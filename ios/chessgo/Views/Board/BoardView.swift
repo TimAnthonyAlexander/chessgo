@@ -152,12 +152,22 @@ struct BoardView: View {
 
     private func boardContent(side: CGFloat) -> some View {
         let cell = side / 8
+        // Scanned ONCE per layout pass, not once per square: check detection walks
+        // every attacker's rays, so doing it inside `squareView` would repeat that
+        // sweep 64 times a frame.
+        let checked = checkedKingSquares
         return ZStack {
             VStack(spacing: 0) {
                 ForEach(0..<8, id: \.self) { row in
                     HStack(spacing: 0) {
                         ForEach(0..<8, id: \.self) { col in
-                            squareView(squareAt(row: row, col: col), cellSize: cell, isBottomRow: row == 7, isLeftColumn: col == 0)
+                            squareView(
+                                squareAt(row: row, col: col),
+                                cellSize: cell,
+                                isBottomRow: row == 7,
+                                isLeftColumn: col == 0,
+                                checkedKings: checked
+                            )
                         }
                     }
                 }
@@ -229,10 +239,23 @@ struct BoardView: View {
         }
     }
 
-    private var checkedKingSquare: Square? {
-        guard control.inCheck else { return nil }
-        let king = Piece(color: baseBoard.sideToMove, kind: .king)
-        return Square.all.first { baseBoard.piece(at: $0) == king }
+    /// The king square(s) to glow, derived from the position ON SCREEN rather
+    /// than from a driver-supplied flag — so every mode gets the highlight and
+    /// none of them can drift out of sync with the board they're rendering.
+    /// Both colors are tested: at most one king can be attacked in a legal
+    /// position, and testing both keeps this right while showing an optimistic
+    /// or premoved board, where the driver's side-to-move still belongs to the
+    /// last position the server confirmed.
+    private var checkedKingSquares: Set<Square> {
+        guard control.showCheck else { return [] }
+        let board = displayBoard
+        return Set(
+            [PieceColor.white, .black].compactMap { color in
+                Attacks.isInCheck(color, board: board)
+                    ? Attacks.kingSquare(of: color, board: board)
+                    : nil
+            }
+        )
     }
 
     // MARK: - Square layout (orientation-aware)
@@ -360,13 +383,19 @@ struct BoardView: View {
     // MARK: - Square rendering
 
     @ViewBuilder
-    private func squareView(_ square: Square, cellSize: CGFloat, isBottomRow: Bool, isLeftColumn: Bool) -> some View {
+    private func squareView(
+        _ square: Square,
+        cellSize: CGFloat,
+        isBottomRow: Bool,
+        isLeftColumn: Bool,
+        checkedKings: Set<Square>
+    ) -> some View {
         let isLight = (square.file + square.rank) % 2 == 1
         ZStack {
             (isLight ? Theme.Colors.boardLight : Theme.Colors.boardDark)
                 .brightness(-(1 - displayOptions.boardBrightness))
             if displayOptions.highlightLastMove, lastMoveSquares.contains(square) { Theme.Colors.lastMove }
-            if checkedKingSquare == square { Theme.Colors.check }
+            if checkedKings.contains(square) { checkGlow(cellSize: cellSize) }
             if premoveChainSquares.contains(square) { Theme.Colors.accent.opacity(0.22) }
             if selected == square { Theme.Colors.boardHighlight }
 
@@ -435,6 +464,23 @@ struct BoardView: View {
 
     private func targetDot(cellSize: CGFloat) -> some View {
         Circle().fill(Theme.Colors.accent.opacity(0.55)).frame(width: cellSize * 0.28, height: cellSize * 0.28)
+    }
+
+    /// King-in-check glow: full strength across the middle of the square, then
+    /// falling off before the edge, so it reads as an alarm centred on the king
+    /// instead of a flat tint the eye files next to the last-move highlight.
+    private func checkGlow(cellSize: CGFloat) -> some View {
+        RadialGradient(
+            stops: [
+                .init(color: Theme.Colors.check, location: 0),
+                .init(color: Theme.Colors.check, location: 0.52),
+                .init(color: Theme.Colors.check.opacity(0.35), location: 0.78),
+                .init(color: Theme.Colors.check.opacity(0), location: 1),
+            ],
+            center: .center,
+            startRadius: 0,
+            endRadius: cellSize * 0.6
+        )
     }
 
     // MARK: - Gestures
@@ -604,7 +650,7 @@ struct BoardView: View {
         myTurn: true,
         legalMoves: ["e1e2", "g1h3", "d1e2"],
         lastMove: "d8h4",
-        inCheck: true
+        showCheck: true
     ))
     .padding()
     .background(Theme.Colors.background)

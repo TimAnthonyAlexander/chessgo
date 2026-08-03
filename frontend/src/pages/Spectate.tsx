@@ -21,6 +21,7 @@ import {
     spectateSocket,
 } from '../lib/spectate'
 import { useSpectate } from '../lib/useSpectate'
+import { variantHasCheck } from '../lib/variants'
 import { useAuth } from '../lib/auth'
 import { usePrefs } from '../lib/settings'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
@@ -381,7 +382,7 @@ export default function Spectate() {
                 sideToMove={g.sideToMove}
                 legalMoves={[]}
                 lastMove={g.lastMove}
-                inCheck={g.variant === 'duck' ? false : g.check}
+                showCheck={variantHasCheck(g.variant)}
                 interactive={false}
                 onMove={() => {}}
                 duck={g.variant === 'duck' ? g.duck : null}

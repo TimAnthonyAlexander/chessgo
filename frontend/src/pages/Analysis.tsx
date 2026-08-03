@@ -52,7 +52,7 @@ import { toPgn, type ParsedPgn } from '../lib/pgn'
 import { useMoveNavKeys } from '../lib/useMoveNavKeys'
 import { useShortcuts } from '../lib/shortcuts'
 import { usePrefs } from '../lib/settings'
-import { VARIANT_LABEL } from '../lib/variants'
+import { VARIANT_LABEL, variantHasCheck } from '../lib/variants'
 import {
     type GameOver,
     type Tree,
@@ -1362,7 +1362,7 @@ export default function Analysis() {
                 sideToMove={sideToMove}
                 legalMoves={legalMoves}
                 lastMove={lastMove}
-                inCheck={over.check}
+                showCheck={variantHasCheck(game?.variant)}
                 // Duck review is playback-only — no move input / variations (the client
                 // has no duck rules). Navigation is via the move list + nav buttons.
                 interactive={!isDuck}

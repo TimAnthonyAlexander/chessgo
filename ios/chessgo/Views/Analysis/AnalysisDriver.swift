@@ -154,15 +154,6 @@ final class AnalysisDriver: BoardControl {
     var fen: String { steps[safe: currentIndex]?.fen ?? ChessBoard.startFEN }
     var lastMove: String? { steps[safe: currentIndex]?.uci }
 
-    /// No server check flag exists for an arbitrary viewed position — this
-    /// reads the "+"/"#" suffix off the step's own SAN the way `BotGameDriver`
-    /// does off a bot move's SAN. For a locally-played step that suffix comes
-    /// from `SAN.format`'s best-effort check detection (see `submit(_:)`).
-    var inCheck: Bool {
-        guard let san = steps[safe: currentIndex]?.san else { return false }
-        return san.hasSuffix("+") || san.hasSuffix("#")
-    }
-
     var currentStep: Step? { steps[safe: currentIndex] }
 
     /// Prior-position FENs, root→previous (excluding the currently-viewed

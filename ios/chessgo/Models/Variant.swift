@@ -14,6 +14,14 @@ enum Variant: String, Codable, CaseIterable, Sendable {
     case glassjaw
     case doublemove
 
+    /// Whether check exists as a concept here — i.e. whether the board should
+    /// glow the attacked king. Antichess and Duck both let the king be captured
+    /// outright, so an attacked king there is normal play, not a warning.
+    /// Takes the raw server string, which is what game models carry.
+    static func hasCheck(_ raw: String?) -> Bool {
+        raw != Variant.antichess.rawValue && raw != Variant.duck.rawValue
+    }
+
     var displayName: String {
         switch self {
         case .standard: return "Standard"

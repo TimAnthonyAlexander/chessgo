@@ -36,7 +36,7 @@ final class SpectateBoardControl: BoardControl {
 
     var legalMoves: [String] { [] }
     var lastMove: String? { state?.lastMove }
-    var inCheck: Bool { state?.check ?? false }
+    var showCheck: Bool { Variant.hasCheck(state?.variant) }
 
     var duckSquare: String? {
         guard let duck = state?.duck, !duck.isEmpty else { return nil }

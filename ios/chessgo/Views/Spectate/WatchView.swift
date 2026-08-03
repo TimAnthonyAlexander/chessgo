@@ -238,14 +238,15 @@ private final class MiniBoardControl: BoardControl {
     let myTurn = false
     let legalMoves: [String] = []
     let lastMove: String?
-    let inCheck = false
     let canPremove = false
     let duckSquare: String?
+    let showCheck: Bool
 
     init(game: WatchGame) {
         self.fen = game.fen.isEmpty ? ChessBoard.startFEN : game.fen
         self.lastMove = game.lastMove.isEmpty ? nil : game.lastMove
         self.duckSquare = game.duck.isEmpty ? nil : game.duck
+        self.showCheck = Variant.hasCheck(game.variant)
     }
 
     func submit(_ uci: String) {}

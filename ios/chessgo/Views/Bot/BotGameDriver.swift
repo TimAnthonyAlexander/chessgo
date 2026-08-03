@@ -38,10 +38,11 @@ final class BotGameDriver: BoardControl {
     private(set) var myTurn: Bool = false
     private(set) var legalMoves: [String] = []
     private(set) var lastMove: String?
-    private(set) var inCheck: Bool = false
     private(set) var duckSquare: String?
     private(set) var pocket: String?
     private(set) var duckPlacementActive: Bool = false
+
+    var showCheck: Bool { Variant.hasCheck(variant.rawValue) }
 
     /// False for Duck and Double Move — premoving a piece move ahead of a
     /// duck placement (or ahead of your own second move) doesn't map onto
@@ -311,7 +312,6 @@ final class BotGameDriver: BoardControl {
         myTurn = false
         legalMoves = []
         lastMove = nil
-        inCheck = false
         duckSquare = nil
         pocket = nil
         duckPlacementActive = false
@@ -335,7 +335,6 @@ final class BotGameDriver: BoardControl {
         lastMove = game.moves.last?.uci
         duckSquare = game.duck
         pocket = Variant(rawValue: game.variant) == .crazyhouse ? Self.extractPocket(fromFen: game.fen) : nil
-        inCheck = Self.impliesCheck(game.moves.last?.san)
         duckPlacementActive = false
         pendingDuckPieceMove = nil
     }
@@ -352,14 +351,6 @@ final class BotGameDriver: BoardControl {
         return String(fen[fen.index(after: open)..<close])
     }
 
-    /// The bot-game state shape has no explicit check flag (rest-api.md) —
-    /// only `status`. SAN is server-generated and authoritative, so reading
-    /// its "+"/"#" suffix is reading a server signal, not the driver judging
-    /// legality itself.
-    private static func impliesCheck(_ san: String?) -> Bool {
-        guard let san else { return false }
-        return san.hasSuffix("+") || san.hasSuffix("#")
-    }
 }
 
 /// Reference identity is enough for `navigationDestination(item:)` to track

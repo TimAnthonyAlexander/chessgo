@@ -143,7 +143,7 @@ export default function Editor() {
 
     const analyse = () => navigate('/analysis', { state: { startFen: fen } })
     const playBot = () => navigate('/bot', { state: { fen } })
-    const engineVsEngine = () => navigate('/admin/engine-vs', { state: { fen } })
+    const engineVsEngine = () => navigate('/engine-vs', { state: { fen } })
     const challengePlayer = () => setChallengeOpen(true)
 
     return (
