@@ -141,6 +141,12 @@ type game struct {
 	// answers a fast burst of human messages once, not line-by-line.
 	chat              *chatPersona
 	chatCooldownUntil time.Time
+
+	// teardownAt is set when a bot game ends and the farewell message is still in
+	// flight; teardown is deferred until the farewell lands or this deadline passes.
+	// The zero value means "teardown immediately" (the normal path for non-bot games
+	// and for bot games whose farewell has already been delivered).
+	teardownAt time.Time
 }
 
 // appendChat records a chat line (fromBot marks the bot side) into the bounded

@@ -15,12 +15,12 @@ import (
 // OpenAI endpoint); everything here is the *behaviour* around it — who chats,
 // how often, and the human-like pacing.
 //
-// Concurrency: the trigger points (game start, an incoming human line) run on the
-// Run goroutine and only read a snapshot. The generator call + typing pauses run
-// on a spawned goroutine (it makes a network request, which must never block the
-// hub), and each finished line is handed back over botChats for broadcast on the
-// Run goroutine through the SAME chat path a human uses — so the frontend never
-// learns the opponent is a bot.
+// Concurrency: the trigger points (game start, an incoming human line, game
+// over) run on the Run goroutine and only read a snapshot. The generator call +
+// typing pauses run on a spawned goroutine (it makes a network request, which
+// must never block the hub), and each finished line is handed back over botChats
+// for broadcast on the Run goroutine through the SAME chat path a human uses —
+// so the frontend never learns the opponent is a bot.
 
 // botChatMaxHistory bounds the recent chat kept per game for reply context.
 const botChatMaxHistory = 16
@@ -30,6 +30,10 @@ const botChatMaxHistory = 16
 // you there??" / "!!!" / ":("), which reads as robotic — a real person answers
 // the burst once. It comfortably covers one reply's think+type delay.
 const botChatCooldown = 7 * time.Second
+
+// botChatTeardownTimeout is how long a finished bot game waits for its farewell
+// chat to land before tearing down the game anyway (e.g. OpenAI unreachable).
+const botChatTeardownTimeout = 5 * time.Second
 
 // chatPersona is a fill-in bot's chat character, rolled ONCE when its game starts
 // and then FIXED for the whole game — so the opponent feels like one consistent
@@ -91,10 +95,22 @@ type BotChatRequest struct {
 	Bot      string        `json:"bot"`      // the bot's display name (persona)
 	Rating   int           `json:"rating"`   // the bot's displayed rating (flavour only)
 	Opponent string        `json:"opponent"` // the human's display name
-	Kind     string        `json:"kind"`     // "opening" (unprompted) or "reply"
+	Kind     string        `json:"kind"`     // "opening" (unprompted), "reply", or "farewell" (game-over)
 	Style    string        `json:"style"`    // the persona's fixed voice, held all game
 	History  []BotChatTurn `json:"history"`  // recent chat, oldest first
 	Count    int           `json:"count"`    // short lines to produce (1, sometimes 2)
+
+	// Game-state snapshot so the bot can react to checks, captures, and the
+	// position instead of just reading chat history. Empty for opening-kind
+	// requests (no moves played yet).
+	Fen               string `json:"fen"`               // current board FEN
+	LastMove          string `json:"lastMove"`          // last move in SAN, "" if none
+	InCheck           bool   `json:"inCheck"`           // someone is in check
+	Checker           string `json:"checker"`           // "bot" or "opponent" — who is in check, "" if none
+	MaterialAdvantage int    `json:"materialAdvantage"` // rough centipawns bot is ahead (>300 = up a piece, <−300 = down), 0 if even or uncomputed
+	EndReason         string `json:"endReason"`         // "checkmate" | "stalemate" | "flag" | "resign" | "abort" | "" (ongoing)
+	EndResult         string `json:"endResult"`         // "1-0" | "0-1" | "1/2-1/2" | "" (ongoing)
+	BotColor          string `json:"botColor"`          // "w" or "b" — which side the bot is playing
 }
 
 // BotChatFunc generates up to req.Count short, human-like chat lines for a
@@ -106,8 +122,9 @@ type BotChatFunc func(BotChatRequest) []string
 // botChatResult is one generated line, delivered back to the Run goroutine for
 // broadcast through the normal chat path.
 type botChatResult struct {
-	gameID string
-	text   string
+	gameID   string
+	text     string
+	farewell bool // game-over farewell; teardown the game after this line is delivered
 }
 
 // OnBotChat registers the text generator for fill-in bot chat. Call before Run.
@@ -144,7 +161,7 @@ func (h *Hub) maybeOpeningChat(g *game) {
 		Kind:     "opening",
 		Style:    g.chat.style,
 		Count:    1,
-	}, botChatOpeningDelay())
+	}, botChatOpeningDelay(), false)
 }
 
 // maybeReplyChat gives a fill-in bot a chance to answer the human's latest line,
@@ -153,7 +170,7 @@ func (h *Hub) maybeOpeningChat(g *game) {
 // right after the human's message is recorded, so g.chatLog already includes it.
 // A cooldown keeps it from answering every line of a fast burst.
 func (h *Hub) maybeReplyChat(g *game) {
-	bot, _, ok := g.chatBotSide()
+	bot, botColor, ok := g.chatBotSide()
 	if !ok || h.botChatFn == nil || g.chat == nil || g.over {
 		return
 	}
@@ -168,7 +185,8 @@ func (h *Hub) maybeReplyChat(g *game) {
 		count = 2
 	}
 	g.chatCooldownUntil = time.Now().Add(botChatCooldown)
-	h.generateBotChat(g.id, BotChatRequest{
+
+	req := BotChatRequest{
 		Bot:      bot.id.Name,
 		Rating:   bot.rating,
 		Opponent: g.humanName(),
@@ -176,14 +194,104 @@ func (h *Hub) maybeReplyChat(g *game) {
 		Style:    g.chat.style,
 		History:  append([]BotChatTurn(nil), g.chatLog...),
 		Count:    count,
-	}, botChatReplyDelay())
+	}
+	req.Fen = g.boardFEN()
+	if len(g.sans) > 0 {
+		req.LastMove = g.sans[len(g.sans)-1]
+	}
+	st := g.status()
+	req.InCheck = st.Check
+	if st.Check {
+		if g.sideToMove() == botColor {
+			req.Checker = "bot"
+		} else {
+			req.Checker = "opponent"
+		}
+	}
+	req.MaterialAdvantage = materialAdvantage(g.boardFEN(), botColor)
+
+	h.generateBotChat(g.id, req, botChatReplyDelay(), false)
+}
+
+// maybeGameOverChat is the bot's one-shot farewell when the game ends — a "gg",
+// "well played", or commiseration depending on how it ended. Called from finish()
+// BEFORE g.over flips to true (so chatBotSide still sees a live game). Every
+// persona fires one (the game IS ending — staying silent here reads as abandoned,
+// not "quiet"), but the wording fits the voice. The farewell is delivered
+// asynchronously; teardown is deferred until it lands (or a 5s timeout).
+func (h *Hub) maybeGameOverChat(g *game, result, reason string) {
+	bot, botColor, ok := g.chatBotSide()
+	if !ok || h.botChatFn == nil || g.chat == nil {
+		return
+	}
+	h.generateBotChat(g.id, BotChatRequest{
+		Bot:      bot.id.Name,
+		Rating:   bot.rating,
+		Opponent: g.humanName(),
+		Kind:     "farewell",
+		Style:    g.chat.style,
+		Count:    1,
+		// Game-over context.
+		Fen:               g.boardFEN(),
+		MaterialAdvantage: materialAdvantage(g.boardFEN(), botColor),
+		EndReason:         reason,
+		EndResult:         result,
+		BotColor:          colorStr(botColor),
+	}, botChatFarewellDelay(), true)
+}
+
+// materialAdvantage returns a rough material score (centipawns) from the bot's
+// perspective — positive means the bot is ahead. Piece values are intentionally
+// coarse (a pawn is 100, a knight ~320, a queen 900) because the goal is a rough
+// "up a piece / down a piece / roughly even" signal for chat flavour. Zero for a
+// FEN that doesn't parse.
+func materialAdvantage(fen string, botColor chess.Color) int {
+	// Walk the piece-placement field only (up to the first space).
+	var w, b int
+	done := false
+	for _, r := range fen {
+		if r == ' ' {
+			done = true
+		}
+		if done {
+			continue
+		}
+		switch r {
+		case 'P':
+			w += 100
+		case 'N':
+			w += 320
+		case 'B':
+			w += 330
+		case 'R':
+			w += 500
+		case 'Q':
+			w += 900
+		case 'p':
+			b += 100
+		case 'n':
+			b += 320
+		case 'b':
+			b += 330
+		case 'r':
+			b += 500
+		case 'q':
+			b += 900
+		}
+	}
+	diff := w - b
+	if botColor == chess.Black {
+		diff = -diff
+	}
+	return diff
 }
 
 // generateBotChat runs the generator OFF the Run goroutine (it makes a network
 // call), paces the output like a person typing, and hands each finished line back
 // over botChats for broadcast. Silently drops everything if the generator returns
-// nothing or the game has gone away.
-func (h *Hub) generateBotChat(gameID string, req BotChatRequest, initialDelay time.Duration) {
+// nothing. When farewell is true, the delivered result carries a teardown signal
+// so the game is cleaned up once the farewell lands.
+func (h *Hub) generateBotChat(gameID string, req BotChatRequest, initialDelay time.Duration, farewell bool) {
 	fn := h.botChatFn
 	if fn == nil {
 		return
@@ -204,7 +312,7 @@ func (h *Hub) generateBotChat(gameID string, req BotChatRequest, initialDelay ti
 				time.Sleep(botChatBetweenDelay(line)) // a beat, as if typing the follow-up
 			}
 			select {
-			case h.botChats <- botChatResult{gameID: gameID, text: line}:
+			case h.botChats <- botChatResult{gameID: gameID, text: line, farewell: farewell && sent == 0}:
 				sent++
 			case <-time.After(2 * time.Second):
 				return // Run goroutine wedged/gone; drop rather than leak
@@ -213,13 +321,14 @@ func (h *Hub) generateBotChat(gameID string, req BotChatRequest, initialDelay ti
 	}()
 }
 
-// deliverBotChat broadcasts a generated bot line on the Run goroutine, guarding
-// against a game that ended or vanished while the line was being written. It goes
-// out via broadcastPlayers as the bot's color/name — identical on the wire to a
-// human opponent's chat.
+// deliverBotChat broadcasts a generated bot line on the Run goroutine. A game
+// that ended by the time this line was written is still delivered (the opponent
+// may be on the result screen, and a "gg" is just as appropriate there). If the
+// result is a farewell, teardown the game afterward — the farewell was the last
+// thing the bot said, and the deferred cleanup can now run.
 func (h *Hub) deliverBotChat(r botChatResult) {
 	g := h.games[r.gameID]
-	if g == nil || g.over {
+	if g == nil {
 		return
 	}
 	bot, botColor, ok := g.chatBotSide()
@@ -237,6 +346,11 @@ func (h *Hub) deliverBotChat(r botChatResult) {
 		"name":   bot.id.Name,
 		"text":   text,
 	})))
+	if r.farewell && g.over {
+		// The farewell landed — clean up the game now (it was kept in h.games
+		// past finish() specifically so this delivery could find it).
+		h.teardown(g)
+	}
 }
 
 // --- human-like pacing (all real time; unrelated to the game clock) ---
@@ -252,10 +366,16 @@ func botChatReplyDelay() time.Duration {
 	return time.Duration(1200+mrand.IntN(2600)) * time.Millisecond // 1.2s–3.8s
 }
 
+// botChatFarewellDelay: a quick "gg" or "wp" right after the game ends — shorter
+// than a mid-game reply because the outcome is already known.
+func botChatFarewellDelay() time.Duration {
+	return time.Duration(200+mrand.IntN(800)) * time.Millisecond // 0.2s–1.0s
+}
+
 // botChatBetweenDelay: the pause before a follow-up line, scaled a little by how
 // long the line is (a longer line "takes longer to type").
 func botChatBetweenDelay(line string) time.Duration {
-	base := 700 + mrand.IntN(1200)        // 0.7s–1.9s
+	base := 700 + mrand.IntN(1200)          // 0.7s–1.9s
 	base += min(len([]rune(line)), 40) * 25 // + up to ~1s for length
 	return time.Duration(base) * time.Millisecond
 }

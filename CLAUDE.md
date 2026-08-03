@@ -12,8 +12,9 @@ Crazyhouse, Duck, Antichess) — all rules and all AI served by zugzwang. Runs i
 
 ## The engine cutover (important context)
 
-zugzwang is the **primary engine as of the 2026-07 cutover** — it beat the old
-Go engine, **gomachine**, by **+24.6 Elo on the same net**. The entire site now
+zugzwang is the **primary engine as of the 2026-07 cutover**. It initially beat
+gomachine by **+24.6 Elo on the same net**; search improvements since then have
+pushed the gap to **~200 Elo** (**~3500 CCRL**). The entire site now
 runs on zugzwang: analysis, bot games, Stockfish proxying, the four variants,
 and the hub's bot moves. **gomachine is the retired reference:**
 

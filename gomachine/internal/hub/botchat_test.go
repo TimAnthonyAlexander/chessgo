@@ -107,27 +107,67 @@ func TestDeliverBotChatDropsStale(t *testing.T) {
 	// Unknown game id: nothing panics, nothing sent.
 	h.deliverBotChat(botChatResult{gameID: "missing", text: "hi"})
 
-	// Finished game: no delivery.
+	// Finished game: delivery is allowed (the game-over farewell path relies on
+	// this — a "gg" after the game ends is realistic and the client still shows
+	// chat on the result screen).
 	human, ch := humanPlayerWithSend("alice", 2)
 	g := newStdGame(t, "gid", human, botPlayerNamed("bot", 1))
 	g.over = true
 	h.games[g.id] = g
 	h.deliverBotChat(botChatResult{gameID: g.id, text: "hi"})
 	select {
-	case <-ch:
-		t.Fatal("delivered chat for a finished game")
+	case data := <-ch:
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if m["text"] != "hi" {
+			t.Errorf("text = %v, want hi", m["text"])
+		}
 	default:
+		t.Fatal("chat should be delivered even after game over")
 	}
 
 	// Empty-after-sanitize text: no delivery, no history entry.
 	g.over = false
 	h.deliverBotChat(botChatResult{gameID: g.id, text: "   "})
-	if len(g.chatLog) != 0 {
-		t.Errorf("chatLog = %+v, want empty for blank line", g.chatLog)
+	if len(g.chatLog) != 1 { // the "hi" above was recorded
+		t.Errorf("chatLog = %+v, want one entry from the earlier delivery", g.chatLog)
 	}
 	select {
 	case <-ch:
 		t.Fatal("delivered a blank chat line")
 	default:
+	}
+}
+
+func TestMaterialAdvantage(t *testing.T) {
+	// Standard opening: even.
+	if n := materialAdvantage("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", chess.White); n != 0 {
+		t.Errorf("start fen from White = %d, want 0", n)
+	}
+	if n := materialAdvantage("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", chess.Black); n != 0 {
+		t.Errorf("start fen from Black = %d, want 0", n)
+	}
+
+	// White up a queen (remove black's queen).
+	if n := materialAdvantage("rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", chess.White); n != 900 {
+		t.Errorf("White up a queen from White = %d, want 900", n)
+	}
+	if n := materialAdvantage("rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", chess.Black); n != -900 {
+		t.Errorf("White up a queen from Black = %d, want -900", n)
+	}
+
+	// Black up a rook (remove white's a1 rook).
+	if n := materialAdvantage("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/1NBQKBNR w KQkq - 0 1", chess.Black); n != 500 {
+		t.Errorf("Black up a rook from Black = %d, want 500", n)
+	}
+	if n := materialAdvantage("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/1NBQKBNR w KQkq - 0 1", chess.White); n != -500 {
+		t.Errorf("Black up a rook from White = %d, want -500", n)
+	}
+
+	// Both sides equal with queens off.
+	if n := materialAdvantage("rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNB1KBNR w KQkq - 0 1", chess.White); n != 0 {
+		t.Errorf("both missing queens from White = %d, want 0", n)
 	}
 }

@@ -486,6 +486,7 @@ func (h *Hub) Run() {
 			h.checkRematches()
 			h.checkArenas()
 			h.publishLobby()
+			h.checkDeferredTeardowns()
 		}
 	}
 }
@@ -955,6 +956,10 @@ func (h *Hub) finish(g *game, result, reason string) {
 	if g.over {
 		return
 	}
+	// Schedule a farewell chat BEFORE g.over flips (chatBotSide bails on over).
+	// The farewell is async; teardown is deferred until it lands or times out.
+	h.maybeGameOverChat(g, result, reason)
+
 	// Snapshot the live clocks BEFORE flipping `over`: remainingMs only deducts
 	// the side-to-move's elapsed think-time while !over, so reading after over=true
 	// would report the flagged side's pre-turn time (e.g. "lost on time" with 44s
@@ -968,7 +973,14 @@ func (h *Hub) finish(g *game, result, reason string) {
 		"status": g.status().State,
 		"clock":  clock,
 	})))
-	h.teardown(g)
+
+	// Bot games defer teardown so the farewell chat can land (see
+	// deliverBotChat). Non-bot games teardown immediately as before.
+	if g.chat != nil {
+		g.teardownAt = time.Now().Add(botChatTeardownTimeout)
+	} else {
+		h.teardown(g)
+	}
 
 	// Filler (engine-vs-engine) games have no human clients to rematch, so
 	// they never open a rematch window (armRematch would just index a game
@@ -1042,6 +1054,18 @@ func (h *Hub) teardown(g *game) {
 	delete(h.playerGames, g.black.id.UserID)
 	h.unmarkLive(g)
 	h.activeGames.Add(-1)
+}
+
+// checkDeferredTeardowns cleans up bot games whose farewell chat never arrived
+// (e.g. OpenAI unreachable) — teardown is normally triggered by deliverBotChat
+// when the farewell lands, but this is the safety net.
+func (h *Hub) checkDeferredTeardowns() {
+	now := time.Now()
+	for _, g := range h.games {
+		if g.over && !g.teardownAt.IsZero() && now.After(g.teardownAt) {
+			h.teardown(g)
+		}
+	}
 }
 
 // handleRegister runs when a connection opens. If the player (by identity id)

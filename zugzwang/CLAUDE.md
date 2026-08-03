@@ -3,8 +3,10 @@
 **zugzwang** is the chessgo platform's **primary chess engine**: a strong C++17
 NNUE engine (rules + search + eval) that serves standard chess, three variants,
 and Stockfish proxying to the whole website. It replaced gomachine's engine as
-the AI (it beat gomachine **+24.6 Elo on the same net**); gomachine's engine is
-now a deletable legacy reference (see `../gomachine/CLAUDE.md`).
+the AI. It initially beat gomachine **+24.6 Elo on the same net**; search
+improvements since the cutover have widened that to **~200 Elo**
+(**~3500 CCRL**). gomachine's
+engine is now a deletable legacy reference (see `../gomachine/CLAUDE.md`).
 
 This doc is engine-internals orientation. The engine backlog lives in
 `../docs/tasks/`.
