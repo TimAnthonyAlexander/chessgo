@@ -149,7 +149,10 @@ function OpeningDetailView({ detail }: { detail: TutorOpeningDetail }) {
                 <SectionLabel>Vs peers</SectionLabel>
                 {detail.comparison && !noPeer ? (
                     <>
-                        <ComparisonRow c={detail.comparison} tone="strength" />
+                        {/* No forced tone — the row takes its ink from the
+                            (direction-corrected) grade, so a bad result in this
+                            opening can't render in the accent. */}
+                        <ComparisonRow c={detail.comparison} />
                         <Typography sx={{ fontSize: 11.5, color: 'var(--muted)', mt: 1 }}>
                             Compared to players rated {detail.peer!.bandFrom}–{detail.peer!.bandTo}
                             {detail.peer!.tier === 'widened' ? ' (band widened for a bigger sample)' : ''}.

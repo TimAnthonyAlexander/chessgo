@@ -1,53 +1,34 @@
-import { Box, Typography } from '@mui/material'
 import type { TutorComparison } from '../../api/client'
-import { fmtValue } from './format'
+import MeterRow from './MeterRow'
+import { fmtValue, ordinal } from './format'
 
-/** One row in the strengths or weaknesses list. Only `tone="weakness"` may use
- * --danger — strengths use the single site accent, never a second "good"
- * colour, so the page doesn't turn into a red/green scoreboard. */
+/** One ranked finding — a row in the strengths or weaknesses list, and the peer
+ * block on the opening drilldown. `tone` is ink only: --danger marks a finding
+ * the backend actually ranked as a weakness, never a bar fill and never a
+ * blanket "below average" tint. Left unset it follows the (already
+ * direction-corrected) grade, so a caller can't accidentally paint a bad
+ * result in the accent. */
 export default function ComparisonRow({
     c,
     tone,
+    showMeter = true,
 }: {
     c: TutorComparison
-    tone: 'strength' | 'weakness'
+    tone?: 'strength' | 'weakness' | 'plain'
+    showMeter?: boolean
 }) {
-    const valueColor = tone === 'weakness' ? 'var(--danger)' : 'var(--accent)'
+    const resolved = tone ?? (c.grade < 0 ? 'weakness' : 'strength')
     return (
-        <Box sx={{ py: 1.1, borderBottom: '1px solid var(--line-soft)' }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5 }}>
-                <Typography sx={{ fontSize: 13.5, fontWeight: 600, minWidth: 0 }}>
-                    {c.label}
-                </Typography>
-                <Typography
-                    sx={{
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: 13,
-                        fontWeight: 700,
-                        color: valueColor,
-                        flexShrink: 0,
-                        whiteSpace: 'nowrap',
-                    }}
-                >
-                    {fmtValue(c.mine, c.unit)}
-                </Typography>
-            </Box>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1.5, mt: 0.3 }}>
-                <Typography sx={{ fontSize: 12, color: 'var(--text-dim)', minWidth: 0 }}>
-                    {c.wording} · peer {fmtValue(c.peer, c.unit)}
-                </Typography>
-                <Typography
-                    sx={{
-                        fontSize: 11,
-                        color: 'var(--muted)',
-                        flexShrink: 0,
-                        whiteSpace: 'nowrap',
-                    }}
-                >
-                    {c.sample} {c.sample === 1 ? 'game' : 'games'}
-                    {c.percentile != null ? ` · ${c.percentile}th pct` : ''}
-                </Typography>
-            </Box>
-        </Box>
+        <MeterRow
+            label={c.label}
+            valueText={fmtValue(c.mine, c.unit)}
+            grade={showMeter ? c.grade : null}
+            sample={c.sample}
+            higherIsBetter={c.higherIsBetter}
+            tone={resolved}
+            wording={c.wording}
+            peerText={`peer ${fmtValue(c.peer, c.unit)}`}
+            percentileText={c.percentile != null ? `${ordinal(c.percentile)} pct` : undefined}
+        />
     )
 }

@@ -9,7 +9,7 @@ import {
     type TutorEligibility,
     type TutorReportSummary,
 } from '../api/client'
-import { fmtDate } from '../components/tutor/format'
+import { fmtDate, fmtGames } from '../components/tutor/format'
 
 const POLL_MS = 5000
 const RANGE_LABELS: Record<string, string> = {
@@ -261,7 +261,12 @@ function ReportRow({ report, onOpen }: { report: TutorReportSummary; onOpen: () 
                         whiteSpace: 'nowrap',
                     }}
                 >
-                    {report.gamesUsed} games
+                    {/* Only a finished report has a game count — `gamesUsed` is
+                        0 while it is queued or building, and "0 games" reads as
+                        a finished, empty report. Fall back to the range, which
+                        is true in every state (the row's subtitle and the
+                        spinner already carry the build status). */}
+                    {report.status === 'ready' ? fmtGames(report.gamesUsed) : report.rangeLabel}
                 </Typography>
             </Box>
         </Box>

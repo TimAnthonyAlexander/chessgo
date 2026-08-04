@@ -1820,6 +1820,14 @@ export interface TutorPayload {
      *  "Blitz: 12 of 20 games. Play 8 more" instead of silently omitting it. */
     insufficient: Record<string, { games: number; need: number }>
     minGames: number
+    /** Eligible games in the window, before sampling. */
+    gamesConsidered?: number
+    /** Games actually folded into the metrics. */
+    gamesUsed?: number
+    /** Games that were sampled but could not be read at all (engine failure or
+     *  too short), so a report can account for the gap between considered and
+     *  used instead of leaving it to be guessed at. */
+    gamesSkipped?: number
 }
 
 export interface TutorReportSummary {
@@ -1830,6 +1838,8 @@ export interface TutorReportSummary {
     rangeLabel: string
     gamesConsidered: number
     gamesUsed: number
+    /** Sampled but unreadable — see TutorPayload.gamesSkipped. */
+    gamesSkipped: number
     capHit: boolean
     builtAt: string | null
     createdAt: string | null
