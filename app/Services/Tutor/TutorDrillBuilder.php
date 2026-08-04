@@ -23,11 +23,26 @@ use BaseApi\App;
  */
 class TutorDrillBuilder
 {
-    /** Eval (mover POV, centipawns) that counts as winning / lost. */
-    private const int WINNING_CP = 200;
+    public function __construct(
+        private readonly TutorThemeProfile $themeProfile,
+        private readonly TutorMetrics $metrics,
+    ) {}
 
-    /** Below this after having been winning = the advantage was thrown. */
-    private const int THROWN_CP = 50;
+    /**
+     * Win probability at which a position counts as won / lost, and the level
+     * it has to fall to before the advantage counts as thrown away.
+     *
+     * These mirror TutorMetrics::WINNING_PROB exactly, so the positions a
+     * drill offers are the same ones the metric counted. If the metric says
+     * you failed to convert eleven games, the drill must contain those eleven
+     * games and not a different set.
+     */
+    private const float WINNING_PROB = TutorMetrics::WINNING_PROB;
+
+    private const float LOSING_PROB = TutorMetrics::LOSING_PROB;
+
+    /** Win probability below which a won position has been given away. */
+    private const float THROWN_PROB = 55.0;
 
     /** Most positions to offer per drill. */
     private const int MAX_POSITIONS = 12;
@@ -85,18 +100,26 @@ class TutorDrillBuilder
         $metric = (string) ($weakness['metric'] ?? '');
         $dimension = (string) ($weakness['dimension'] ?? '');
 
-        // An opening you score badly in — drill the opening itself.
+        // An opening you score badly in — drill the opening itself, from the
+        // side you actually played it. 'opening:w:Sicilian Defense'.
         if (str_starts_with($dimension, 'opening:')) {
-            $name = substr($dimension, strlen('opening:'));
+            $rest = substr($dimension, strlen('opening:'));
+            $colour = substr($rest, 0, 1);
+            $name = substr($rest, 2);
+
+            if (!in_array($colour, ['w', 'b'], true) || $name === '') {
+                return null;
+            }
 
             return [
                 'kind' => 'opening',
                 'metric' => $metric,
                 'dimension' => $dimension,
                 'label' => 'Drill this opening',
-                'title' => sprintf('Play %s against the bot', $name),
+                'title' => sprintf('Play %s as %s against the bot', $name, $colour === 'w' ? 'White' : 'Black'),
                 'blurb' => 'Repeat the opening until the plans are automatic, from your side of it.',
                 'opening' => $name,
+                'color' => $colour,
             ];
         }
 
@@ -237,14 +260,16 @@ class TutorDrillBuilder
                 continue;
             }
 
-            if ($i % 2 === $mine && $eval >= self::WINNING_CP && ($peak === null || $eval > $peak)) {
+            $prob = $this->metrics->winProbability($eval);
+
+            if ($i % 2 === $mine && $prob >= self::WINNING_PROB && ($peak === null || $eval > $peak)) {
                 $peak = $eval;
                 $peakIndex = $i;
             }
 
             // Once we've been winning, the first drop past the threshold is
             // the moment worth replaying.
-            if ($peak !== null && $eval <= self::THROWN_CP && $peakIndex !== null && $i > $peakIndex) {
+            if ($peak !== null && $prob <= self::THROWN_PROB && $peakIndex !== null && $i > $peakIndex) {
                 return $this->positionAt($game, $peakIndex, $peak - $eval, $color);
             }
         }
@@ -269,7 +294,7 @@ class TutorDrillBuilder
             }
 
             $eval = $this->moverEval($plies[$i]['evalWhite'] ?? null, $color);
-            if ($eval !== null && $eval <= -self::WINNING_CP) {
+            if ($eval !== null && $this->metrics->winProbability($eval) <= self::LOSING_PROB) {
                 return $this->positionAt($game, $i, abs($eval), $color);
             }
         }
@@ -307,7 +332,6 @@ class TutorDrillBuilder
      */
     private function phasePositions(array $games, string $phase): array
     {
-        $metrics = new TutorMetrics();
         $out = [];
 
         foreach ($games as $game) {
@@ -323,7 +347,7 @@ class TutorDrillBuilder
                     continue;
                 }
 
-                if ($metrics->phaseOf($i, (int) ($plies[$i]['npPieces'] ?? 14)) !== $phase) {
+                if ($this->metrics->phaseOf($i, (int) ($plies[$i]['npPieces'] ?? 14)) !== $phase) {
                     continue;
                 }
 
@@ -415,41 +439,16 @@ class TutorDrillBuilder
     }
 
     /**
-     * Themes this player has failed more often than solved. Needs a real
-     * sample per theme, otherwise it's noise dressed as insight.
+     * Themes this player demonstrably fails, from their puzzle history.
+     *
+     * Delegated to TutorThemeProfile so the drill and the report's own theme
+     * section can never disagree about which themes are weak.
      *
      * @return list<string>
      */
     private function failedThemes(User $user): array
     {
-        try {
-            $rows = App::db()->raw(
-                'SELECT pt.theme,
-                        SUM(CASE WHEN pa.solved = 1 THEN 1 ELSE 0 END) AS solved,
-                        COUNT(*) AS attempts
-                 FROM puzzle_attempt pa
-                 JOIN puzzle_theme pt ON pt.puzzle_id = pa.puzzle_id
-                 WHERE pa.user_id = ?
-                 GROUP BY pt.theme
-                 HAVING attempts >= 8
-                 ORDER BY (solved / attempts) ASC
-                 LIMIT 6',
-                [$user->id],
-            );
-        } catch (\Throwable) {
-            return [];
-        }
-
-        $out = [];
-        foreach ($rows as $row) {
-            $attempts = (int) $row['attempts'];
-            $solved = (int) $row['solved'];
-            if ($attempts > 0 && $solved / $attempts < 0.6) {
-                $out[] = (string) $row['theme'];
-            }
-        }
-
-        return $out;
+        return $this->themeProfile->weakThemes($user);
     }
 
     /**

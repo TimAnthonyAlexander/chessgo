@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { Box, CircularProgress, MenuItem, Select, Typography } from '@mui/material'
 import {
     Check,
@@ -70,7 +70,25 @@ const THEMES: { value: string; label: string }[] = [
     { value: 'crushing', label: 'Crushing' },
     { value: 'advantage', label: 'Advantage' },
 ]
-const themeLabel = (v: string) => THEMES.find((t) => t.value === v)?.label ?? 'All puzzles'
+// Any Lichess theme tag is a valid session filter server-side (the backend
+// serves whatever's in `puzzle_theme`), not just the curated THEMES above —
+// e.g. a Tutor drill deep link (`/puzzles?theme=hangingPiece`) can land on a
+// tag that isn't in the picker. Same shape as Lichess's own tags: a single
+// camelCase word.
+const THEME_TAG_RE = /^[A-Za-z][A-Za-z0-9]{0,39}$/
+
+// Turns an uncurated camelCase tag into a readable label ("hangingPiece" →
+// "Hanging piece") so it never falls back to the misleading "All puzzles".
+function prettifyTheme(v: string): string {
+    const spaced = v.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/([A-Za-z])([0-9])/g, '$1 $2')
+    return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase()
+}
+
+const themeLabel = (v: string): string => {
+    const known = THEMES.find((t) => t.value === v)
+    if (known) return known.label
+    return v ? prettifyTheme(v) : 'All puzzles'
+}
 
 // Session-wide countdown presets (Puzzle-Rush style): solve as many as you can
 // before the clock runs out. `null` = untimed practice.
@@ -95,7 +113,9 @@ const TIME_KEY = 'chessgo.puzzleTime'
 function readTheme(): string {
     try {
         const t = localStorage.getItem(THEME_KEY)
-        if (t && THEMES.some((x) => x.value === t)) return t
+        // Accept any curated theme, plus any well-formed tag (an uncurated theme
+        // persisted from a deep link) — reject only genuinely malformed content.
+        if (t && (THEMES.some((x) => x.value === t) || THEME_TAG_RE.test(t))) return t
     } catch {
         /* ignore */
     }
@@ -370,12 +390,51 @@ export default function Puzzles() {
         startSession(null, '', seed)
     }, [location, navigate, startSession])
 
+    // `/puzzles?theme=<tag>` is the Tutor drill deep link: a weakness card hands
+    // the solver straight into a themed session instead of the setup screen. The
+    // tag may be uncurated (not in THEMES — the backend serves any tag present in
+    // `puzzle_theme`), so it's accepted on format alone and proven by actually
+    // fetching a puzzle for it. Consumed once, then the param is stripped so a
+    // reload (or later manual theme change) doesn't keep re-forcing it.
+    const [searchParams] = useSearchParams()
+    const themeParamConsumedRef = useRef(false)
+    const themeParam = searchParams.get('theme')
+    const pendingThemeParam = !themeParamConsumedRef.current && !!themeParam
+    useEffect(() => {
+        if (themeParamConsumedRef.current) return
+        const raw = searchParams.get('theme')
+        if (!raw) return
+        themeParamConsumedRef.current = true
+        navigate(location.pathname, { replace: true, state: location.state })
+        const t = raw.trim()
+        // Malformed tag (garbage, not a single camelCase word) → fall back to the
+        // normal all-puzzles setup screen, no error shown.
+        if (!THEME_TAG_RE.test(t)) return
+        let cancelled = false
+        nextPuzzle(t)
+            .then((p) => {
+                if (cancelled) return
+                storeTheme(t)
+                startSession(null, t, p)
+            })
+            .catch(() => {
+                /* No puzzles for this tag right now (or it's simply not a real
+                 * Lichess theme) — fall back to all-puzzles cleanly rather than
+                 * surfacing the "empty" error screen for a link the user didn't
+                 * type themselves. */
+            })
+        return () => {
+            cancelled = true
+        }
+    }, [searchParams, navigate, location, startSession])
+
     // Keep a real position on the setup board so the page opens as the thing it is
     // rather than a dialog. Refetched on every theme change; skipped entirely when
-    // we're about to jump straight into the daily puzzle. The previous sample stays
-    // up while the next one loads, so switching theme never flashes an empty board.
+    // we're about to jump straight into the daily puzzle or a themed deep link.
+    // The previous sample stays up while the next one loads, so switching theme
+    // never flashes an empty board.
     useEffect(() => {
-        if (mode !== 'setup' || pendingDaily) return
+        if (mode !== 'setup' || pendingDaily || pendingThemeParam) return
         let cancelled = false
         setPreviewErr(null)
         nextPuzzle(theme || undefined)
@@ -401,7 +460,7 @@ export default function Puzzles() {
         return () => {
             cancelled = true
         }
-    }, [mode, theme, pendingDaily])
+    }, [mode, theme, pendingDaily, pendingThemeParam])
 
     // Countdown: tick the displayed clock, warn at 10s, end the session at 0.
     useEffect(() => {
@@ -1699,6 +1758,13 @@ function HistoryBoxes({ history }: { history: Outcome[] }) {
 }
 
 function ThemeSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+    // A deep-linked theme may not be in the curated list (the backend serves any
+    // tag in `puzzle_theme`). Rather than the Select rendering blank for an
+    // unrecognised value, splice it in as an extra option so it shows correctly.
+    const options =
+        !value || THEMES.some((t) => t.value === value)
+            ? THEMES
+            : [...THEMES, { value, label: themeLabel(value) }]
     return (
         <Select
             value={value}
@@ -1729,7 +1795,7 @@ function ThemeSelect({ value, onChange }: { value: string; onChange: (v: string)
                 },
             }}
         >
-            {THEMES.map((t) => (
+            {options.map((t) => (
                 <MenuItem key={t.value} value={t.value} sx={{ fontSize: 13.5 }}>
                     {t.label}
                 </MenuItem>

@@ -20,6 +20,7 @@ use App\Services\Tutor\TutorDrillBuilder;
 use App\Services\Tutor\TutorGameReader;
 use App\Services\Tutor\TutorGrade;
 use App\Services\Tutor\TutorMetrics;
+use App\Services\Tutor\TutorThemeProfile;
 use App\Services\WsTicketService;
 use App\Services\HubClient;
 use App\Services\Glicko2Service;
@@ -82,6 +83,7 @@ class AppServiceProvider extends ServiceProvider
         $container->singleton(TutorGrade::class);
         $container->singleton(TutorBaselineReader::class);
         $container->singleton(TutorGameReader::class);
+        $container->singleton(TutorThemeProfile::class);
         $container->singleton(TutorDrillBuilder::class);
         $container->singleton(TutorBuildService::class);
 

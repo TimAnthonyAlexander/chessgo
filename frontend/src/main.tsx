@@ -19,6 +19,9 @@ const BotGame = lazy(() => import('./pages/BotGame'))
 const Puzzles = lazy(() => import('./pages/Puzzles'))
 const Tournaments = lazy(() => import('./pages/Tournaments'))
 const TournamentPage = lazy(() => import('./pages/Tournament'))
+const Tutor = lazy(() => import('./pages/Tutor'))
+const TutorTrend = lazy(() => import('./pages/TutorTrend'))
+const TutorReport = lazy(() => import('./pages/TutorReport'))
 const Analysis = lazy(() => import('./pages/Analysis'))
 const Editor = lazy(() => import('./pages/Editor'))
 const EngineVsEngine = lazy(() => import('./pages/EngineVsEngine'))
@@ -84,6 +87,9 @@ const router = createBrowserRouter([
                     { path: '/puzzles', element: suspended(<Puzzles />) },
                     { path: '/tournaments', element: suspended(<Tournaments />) },
                     { path: '/tournaments/:id', element: suspended(<TournamentPage />) },
+                    { path: '/tutor', element: suspended(<Tutor />) },
+                    { path: '/tutor/trend', element: suspended(<TutorTrend />) },
+                    { path: '/tutor/:id', element: suspended(<TutorReport />) },
                     { path: '/guess-the-elo', element: suspended(<GuessTheElo />) },
                     { path: '/game/:id', element: <LiveGame /> },
                     { path: '/challenge/:code', element: <ChallengeJoin /> },

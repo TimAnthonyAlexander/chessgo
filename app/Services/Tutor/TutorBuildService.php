@@ -51,6 +51,7 @@ class TutorBuildService
         private readonly TutorGrade $grade,
         private readonly TutorBaselineReader $baselines,
         private readonly TutorDrillBuilder $drills,
+        private readonly TutorThemeProfile $themes,
         private readonly NotificationService $notifications,
     ) {}
 
@@ -172,6 +173,9 @@ class TutorBuildService
         $payload = [
             'version' => self::VERSION,
             'baselineSource' => $source,
+            // Puzzle themes are a player-level fact, not a per-category one —
+            // the puzzle pool has no time control.
+            'themeProfile' => $this->themes->forUser($user),
             'generatedAt' => date('c'),
             'rangeFrom' => $report->range_from,
             'rangeTo' => $report->range_to,
@@ -211,8 +215,21 @@ class TutorBuildService
     ): array {
         $aggregate = $this->metrics->aggregate($measured);
 
+        // The peer band comes from the rating the player actually PLAYED AT
+        // across the window, not from their rating right now. Someone who
+        // gained 200 points over six months has no single current band that
+        // describes those games, and comparing all of them against their
+        // present strength would flatter or punish them for improving.
+        $ratings = [];
+        foreach ($normalized as $game) {
+            if (is_numeric($game['myRating'] ?? null) && (int) $game['myRating'] > 0) {
+                $ratings[] = (int) $game['myRating'];
+            }
+        }
+
         $ratingField = 'rating_' . $category;
-        $rating = (int) ($user->{$ratingField} ?? 1500);
+        $currentRating = (int) ($user->{$ratingField} ?? 1500);
+        $rating = $ratings === [] ? $currentRating : (int) round(array_sum($ratings) / count($ratings));
 
         $peer = $this->baselines->forRating($source, $category, $rating);
 
@@ -240,6 +257,7 @@ class TutorBuildService
         return [
             'category' => $category,
             'rating' => $rating,
+            'currentRating' => $currentRating,
             'games' => count($measured),
             'gamesAvailable' => $available,
             'capHit' => count($measured) < $available,
@@ -255,9 +273,86 @@ class TutorBuildService
             'weaknesses' => $ranked['weaknesses'],
             'phases' => $this->dimensionSlice($comparisons, 'phase'),
             'pieces' => $this->dimensionSlice($comparisons, 'piece'),
-            'openings' => $this->dimensionSlice($comparisons, 'opening'),
+            'openings' => $this->openingSlice($comparisons),
+            'gameRows' => $this->gameRows($normalized, $measured),
             'drills' => $this->drills->forCategory($ranked['weaknesses'], $normalized, $user),
         ];
+    }
+
+    /**
+     * Opening comparisons, split by the colour they were played with and
+     * grouped by family. The same opening is a different problem from each
+     * side — you choose it as White and you are answering it as Black — so
+     * merging them hides the thing a repertoire fix depends on.
+     *
+     * @param list<array<string, mixed>> $comparisons
+     * @return array{w: list<array<string, mixed>>, b: list<array<string, mixed>>}
+     */
+    private function openingSlice(array $comparisons): array
+    {
+        $out = ['w' => [], 'b' => []];
+
+        foreach ($comparisons as $comparison) {
+            $dimension = (string) $comparison['dimension'];
+            if (!str_starts_with($dimension, 'opening:')) {
+                continue;
+            }
+
+            // 'opening:w:Sicilian Defense'
+            $rest = substr($dimension, strlen('opening:'));
+            $colour = substr($rest, 0, 1);
+            if (!isset($out[$colour]) || substr($rest, 1, 1) !== ':') {
+                continue;
+            }
+
+            $comparison['name'] = substr($rest, 2);
+            $comparison['color'] = $colour;
+            $out[$colour][] = $comparison;
+        }
+
+        foreach ($out as $colour => $list) {
+            usort($list, fn(array $a, array $b): int => $b['sample'] <=> $a['sample']);
+            $out[$colour] = $list;
+        }
+
+        return $out;
+    }
+
+    /**
+     * A compact row per measured game.
+     *
+     * This is what makes the opening drilldown and the "show me the games"
+     * drills possible without re-reading and re-analyzing everything, and it
+     * lets the report show its own working — a player can see exactly which
+     * games produced a number rather than being asked to trust it.
+     *
+     * @param list<array<string, mixed>> $normalized
+     * @param list<array<string, mixed>> $measured
+     * @return list<array<string, mixed>>
+     */
+    private function gameRows(array $normalized, array $measured): array
+    {
+        $rows = [];
+
+        foreach ($normalized as $i => $game) {
+            $metrics = $measured[$i]['metrics'] ?? [];
+
+            $rows[] = [
+                'gameId' => (string) ($game['hubGameId'] ?? $game['id'] ?? ''),
+                'playedAt' => $game['playedAt'] ?? null,
+                'color' => $game['color'] ?? 'w',
+                'opening' => $game['opening'] ?? '',
+                'result' => $game['result'] ?? '',
+                'reason' => $game['reason'] ?? '',
+                'myRating' => $game['myRating'] ?? null,
+                'oppRating' => $game['oppRating'] ?? null,
+                'accuracy' => isset($metrics['accuracy']) ? round((float) $metrics['accuracy']['value'], 1) : null,
+                'acpl' => isset($metrics['acpl']) ? round((float) $metrics['acpl']['value'], 1) : null,
+                'moves' => $measured[$i]['moves'] ?? 0,
+            ];
+        }
+
+        return $rows;
     }
 
     /**
@@ -395,7 +490,12 @@ class TutorBuildService
 
         return array_values(array_filter(
             $rows,
-            fn(Game $g): bool => in_array($g->variant, ['standard', '', 'chess960'], true)
+            // Chess960 shares the time-control category with standard games,
+            // so it would otherwise land in the same bucket — but it starts
+            // from a shuffled position, which makes its opening dimension
+            // meaningless and its early-game accuracy incomparable to a
+            // standard-chess baseline. Excluded rather than silently folded in.
+            fn(Game $g): bool => in_array($g->variant, ['standard', ''], true)
                 && $g->result !== ''
                 && $g->ply >= 10,
         ));

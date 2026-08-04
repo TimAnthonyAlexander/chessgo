@@ -1,7 +1,9 @@
 # Tutor — a report card on your chess
 
-**Status:** not started. Greenfield — a new page system, not a panel bolted onto
-analysis.
+**Status:** built. Backend (schema, metric engine, baselines, build pipeline,
+API), frontend pages, and the drill handoff are in. Peer baselines are imported
+from the public Lichess database. Remaining: iOS, and the follow-ups listed at
+the end.
 
 **One line:** you press one button, we read your last few months of games, and
 we tell you the single thing costing you the most rating — then hand you the
@@ -182,8 +184,22 @@ comparison — with four deliberate differences:
 /tutor/:reportId                the report: category tabs, headline strengths + weaknesses
 /tutor/:reportId/:category      one time control or variant
 /tutor/:reportId/:category/:angle   skills | openings | phases | pieces | time | puzzles
+/tutor/:reportId/:category/opening/:color/:family   one opening, from one side
 /tutor/trend                    one metric across all your reports, over time
 ```
+
+The opening drilldown exists because the handoff table below has a "drill this
+opening" row that otherwise has nothing to fire from — and because the opening
+breakdown is the single most-cited concrete output in Lichess's own user
+threads. It is served from the stored report payload (every measured game is
+recorded with its opening and colour), so it re-analyzes nothing.
+
+The **puzzles** angle is the theme profile: your solve rate per tactical theme,
+weakest first, from your puzzle history. It carries **no peer comparison and
+says so** — the imported puzzle set has puzzle ratings but not other players'
+per-theme results, so a peer number there would be invented rather than
+measured. It is the second, independent source of tactical evidence: `awareness`
+says whether you punish mistakes, this says which patterns you miss, by name.
 
 Reachable from the profile page and from the main nav. Yours only in v1 (plus
 admin). Sharing someone else's report is a v2 question with a privacy answer
@@ -209,6 +225,74 @@ category that clears the bar.
   most. The one place ratedness matters is the Performance metric, which is
   simply skipped for a casual-heavy sample rather than blocking the report.
 
+### Exact definitions
+
+Everything below is a real rule, not a description. Where an earlier draft of
+this document said something vague or self-contradictory, the resolution is
+recorded with it.
+
+**Centipawn loss.** The eval delta across your own move: the position before
+versus the position after, from your point of view, floored at zero and capped
+per move. Not "best move versus played move" — a delta needs only per-position
+evals, which both corpora have, whereas a best-move comparison needs a
+principal variation, which the Lichess dump does not carry. This deliberately
+differs from `GameAnalysisService::cpLoss()`, which drives the analysis board
+where naming the specific better move is the point.
+
+**Eval scale.** zugzwang's centipawns are not Stockfish's. Measured on 6,300
+paired positions from identical games (`scripts/calibrate_tutor_evals.php`):
+zugzwang ≈ **2.81×** Stockfish, Pearson **0.969**. Corpus evals are multiplied
+onto zugzwang's scale on the way in, so everything Tutor stores is native and a
+Tutor accuracy figure never disagrees with the analysis board's for the same
+game. Re-fit when the engine's eval scale moves.
+
+**Accuracy.** `103.1668 · e^(−0.04354 · ACPL/10) − 3.1669`, clamped to [0,100] —
+the same exponential fit `GameAnalysisService` already uses. *Resolution:*
+Lichess derives accuracy from win probability per move, which is arguably
+better. We keep our existing fit anyway, because two different accuracy numbers
+for the same game on two pages of the same site is a worse failure than an
+imperfect curve. One formula, site-wide.
+
+**Winning and losing positions.** Win probability ≥ **66%** and ≤ **34%**,
+where win probability is the standard logistic on the Stockfish-scale eval:
+`50 + 50·(2/(1+e^(−0.00368208·cp)) − 1)`. *Resolution:* an earlier draft said
+"eval passed +2.0 (or win prob > 66%)" — those are different sets of games.
+Win probability wins, for two reasons: it is Lichess's definition, and it is
+invariant to the engine's eval scale, so conversion and resourcefulness cannot
+be silently re-broken by an engine change. In zugzwang's scale 66% is about
++507cp, so the old "+200" would have counted ~57%-win positions as winning.
+
+**Conversion** — of the games where your win probability passed 66% at or after
+ply 12, the share you won. **Resourcefulness** — of the games where it fell
+below 34% at or after ply 12, the share you did not lose. The ply-12 floor
+stops an opening line the engine briefly likes from counting as a squandered
+win.
+
+**Tactical awareness** — of the opponent moves that cost them ≥150cp and that
+you had a reply to, the share where your reply cost you ≤50cp.
+
+**Phase.** Material first, then move number: **endgame** when ≤7 non-pawn
+non-king pieces stand on the board; otherwise **opening** before ply 20 and
+**middlegame** from ply 20. One rule, applied identically to both corpora, so a
+queenless position on move 8 is correctly an endgame.
+
+**Clock.** Two metrics, as Lichess has. **Clock remaining** is the mean
+percentage of your initial clock left across all your moves. **Clock left when
+you lost** is the percentage left at your last move, in games you lost — they
+answer different questions and a player can be fine on one and bad on the
+other. Ours adds **moves in time trouble**: the share of your moves played with
+under 10% of the clock left.
+
+**The first move is free.** The start position is treated as carrying no eval
+in every corpus, so White's opening move is never scored. The Lichess dump
+annotates after each move and so has nothing for the initial position, while
+`/analyze-game` does; without this rule White's ACPL would differ between the
+corpora for a reason that has nothing to do with chess.
+
+**Which rating picks the peer band.** The mean of the ratings you actually
+played the sampled games at, not your rating today. A player who gained 200
+points across the window has no single current band that describes those games.
+
 ### The metrics we compute
 
 Everything Lichess has, in their categories, plus two of ours.
@@ -221,7 +305,8 @@ outcome:
 | **Conversion** | Games where your eval passed +2.0 (or win prob > 66%), and you won them. | "You reach winning positions as often as your peers. You win 61% of them. They win 79%." |
 | **Resourcefulness** | Games where your eval fell past −2.0, and you drew or won anyway. | "You resign or collapse in positions your peers save." |
 | **Flagging** | Share of games ending on time, split into for-you and against-you. | "One in five of your blitz losses is the clock, not the board." |
-| **Clock usage** | Clock remaining at the moment you lost. | Pairs with flagging; on its own it's the metric their users found meaningless, so it never appears as a standalone card. |
+| **Clock left when you lost** | Clock remaining at the moment you lost. | Pairs with flagging; on its own it's the metric their users found meaningless, so it never appears as a standalone card. |
+| **Clock remaining** | Mean % of your clock left across all your moves. | Lichess's "global clock". How you spend time in general, as opposed to how it ended. |
 | **Performance** | Rating performance against the field you played. | Only for a sample with enough rated games. |
 
 **Move-level** — needs the full engine pass:
@@ -232,7 +317,7 @@ outcome:
 | **Tactical awareness** | Of the positions where your opponent just blundered, how often your reply was the punishing move. This is the one that separates "I don't blunder much" from "I don't win." |
 | **Phase accuracy** | Accuracy split opening / middlegame / endgame, by a fixed rule (move number plus material), same rule everywhere so numbers are comparable. |
 | **Piece accuracy** | Loss split by which piece moved. Surfaces things like "your rook moves cost you twice what your knight moves do." |
-| **Opening performance** | Score and accuracy per opening family, split by colour, ranked by games played. |
+| **Opening performance** | Score and accuracy per opening family, **split by colour**. The same opening is a different problem from each side — you choose it as White and you are answering it as Black — so merging them hides the thing a repertoire fix depends on. |
 
 **Ours, and the reason to build this here:**
 
@@ -248,21 +333,42 @@ already indexed by exactly the tag we need to build the drill.
 
 ### The peer comparison, honestly
 
-Their peer system is fitted on 50 million documents. Ours won't be, for a while.
-Pretending otherwise produces a report where "you are much worse than your peers"
-means "we found four other people."
+Their peer system is fitted on 50 million of their own documents. We have no
+meaningful game corpus of our own — so the baselines are built from the
+**public Lichess database dump** (CC0), which publishes real games at every
+rating with engine evals attached. Around 11% of games carry `%eval`
+annotations; one month yields about a million analyzed games, measured by the
+same `TutorMetrics` that measures a real user.
 
-So the comparison layer has three tiers, and the report says which one it used:
+Two problems with that, both measured rather than assumed:
 
-1. **Peer band** — bucket by category and rating, bands at least 50 points wide
-   (wider than theirs; smaller population). Used **only** when the band holds a
-   real sample; below the floor, fall through.
-2. **Your own history** — the same metric from your previous reports. Always
-   available from the second report onward, and for a beginner it's the more
-   motivating comparison anyway.
-3. **Absolute bands** — a fixed, published table of what "good" looks like at
-   each rating, derived once from our whole game corpus and refreshed
-   occasionally. Not personalized, but honest and never empty.
+**Selection bias.** A Lichess game has evals because a human requested analysis
+— exactly the bias their lead dev conceded. `scripts/tutor/bias_check.py`
+streams the *unfiltered* dump and compares annotated against unannotated games
+at matched rating bands, on statistics that need no engine. Across 30 matched
+cells the two agree on white-win rate (1.60pp mean absolute difference) and
+draw rate (1.28pp) — representative. They do **not** agree on losses to the
+clock: annotated games flag about **3pp less often**, consistently, at every
+rating. Nobody requests analysis of a game they lost on time.
+That is not a caveat, it is a bug, because `flagging_loss` is graded on a 15pp
+scale and a 3pp-low baseline would tip ordinary players over the "slightly
+worse" threshold on a metric they are average at. So the outcome metrics
+(`win_rate`, `flagging_loss`) are imported from the **entire population**
+instead — they need no engine, so streaming every game is cheap. Engine-derived
+metrics come from the annotated corpus, outcome metrics from all of it, into
+the same source.
+*Known residual:* the clock-usage metrics still come from the annotated corpus,
+because reconstructing per-move clocks for the whole population is a much
+bigger job. Their bias is likely in the same direction as flagging's.
+
+**Engine mismatch.** Their evals come from fishnet, ours from zugzwang. See
+"Eval scale" above — measured, corrected at the source.
+
+Band width is **50 points**, wider than their 30, because a thin band is a noisy
+band. A cell below 50 games is not served at all; the reader widens to
+neighbouring bands and, failing that, reports `tier: 'none'` and the page drops
+the comparison UI rather than inventing one. The tier is carried to the screen
+in every case.
 
 Baselines are precomputed on a schedule, never per request. A report reads one
 row per (category, rating bucket, metric).

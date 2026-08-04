@@ -1,5 +1,5 @@
-import { type ReactNode, useEffect, useMemo, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import {
     Box,
     CircularProgress,
@@ -143,7 +143,16 @@ const isAlternating = (v: Variant): boolean => v !== 'doublemove'
 
 export default function BotGame() {
     // A FEN carried over from the analysis board ("Play bot from this position").
-    const navFen = (useLocation().state as { fen?: string } | null)?.fen ?? null
+    const location = useLocation()
+    const navigate = useNavigate()
+    const navFen = (location.state as { fen?: string } | null)?.fen ?? null
+
+    // Tutor deep links: `?fen=&color=` (replay a specific position, e.g. "Replay
+    // your own position" drills) and `?opening=` (drill an opening by name — no
+    // FEN, so it just starts a normal game and labels it). See DrillCard.tsx.
+    const [searchParams] = useSearchParams()
+    const deepLinkConsumedRef = useRef(false)
+    const [openingName, setOpeningName] = useState<string | null>(null)
 
     // Last-used setup, restored from localStorage so a refresh keeps the player's
     // rating / variant / color instead of snapping back to defaults.
@@ -414,7 +423,65 @@ export default function BotGame() {
         setGame(null)
     }, [navFen])
 
+    // Tutor deep link: `/bot?fen=<fen>&color=<w|b>` starts a game from that
+    // position straight away (the point of the whole feature — one button lands
+    // you in the drill, not another setup screen). `/bot?opening=<name>` alone
+    // has no FEN to honor cheaply (no name→FEN lookup on the client), so it just
+    // starts a normal game and labels it with the opening name. Consumed once,
+    // then the params are stripped so a reload doesn't restart the game. The FEN
+    // is NEVER trusted client-side — createBotGame/the server validates it
+    // through the engine and this surfaces a 400 as the normal error banner.
+    useEffect(() => {
+        if (deepLinkConsumedRef.current) return
+        const fenParam = searchParams.get('fen')
+        const openingParam = searchParams.get('opening')
+        if (!fenParam && !openingParam) return
+        deepLinkConsumedRef.current = true
+        navigate(location.pathname, { replace: true, state: null })
+
+        if (fenParam) {
+            const colorParam = searchParams.get('color')
+            const color: Color = colorParam === 'b' ? 'b' : 'w'
+            setOpeningName(openingParam)
+            void startCustomGame(fenParam, color, 'standard')
+        } else if (openingParam) {
+            setOpeningName(openingParam)
+            const color: Color = colorChoice === 'random' ? 'w' : colorChoice
+            void startCustomGame(null, color, variant)
+        }
+    }, [searchParams])
+
+    // Shared "start a game right now" path for both the setup screen's Start
+    // button and deep links — takes its position/color/variant as explicit
+    // arguments (not the setup state) so a deep link can start immediately in
+    // the same tick it adopts the position, instead of racing a setState.
+    async function startCustomGame(fen: string | null, color: Color, forVariant: Variant) {
+        setError(null)
+        setCreating(true)
+        setResigned(false)
+        setFlipped(false)
+        setViewIndex(null)
+        setVariant(forVariant)
+        setColorChoice(color)
+        setStartFen(fen)
+        try {
+            const g = await createBotGame(rating, color, {
+                variant: forVariant,
+                fen: fen ?? undefined,
+                timeControl: timeControl === 'untimed' ? undefined : timeControl,
+            })
+            setGame(g)
+            const opener = g.moves[g.moves.length - 1]
+            if (opener) playForSan(opener.san, g.status !== 'ongoing')
+        } catch (e) {
+            setError(e instanceof Error ? e.message : 'Could not start a game.')
+        } finally {
+            setCreating(false)
+        }
+    }
+
     async function newGame() {
+        setOpeningName(null)
         setError(null)
         setCreating(true)
         setResigned(false)
@@ -500,6 +567,7 @@ export default function BotGame() {
     function discardGame() {
         setGame(null)
         setStartFen(null)
+        setOpeningName(null)
     }
 
     // Rematch: start a new bot game with colors swapped, same rating and variant.
@@ -685,6 +753,19 @@ export default function BotGame() {
             }
         >
             <Box sx={{ position: 'relative', width: '100%' }}>
+            {openingName && (
+                <Typography
+                    sx={{
+                        fontFamily: 'var(--font-display)',
+                        fontWeight: 700,
+                        fontSize: 15,
+                        color: 'var(--text-dim)',
+                        mb: 1,
+                    }}
+                >
+                    {openingName}
+                </Typography>
+            )}
             <Board
                 fen={boardFen}
                 orientation={orientation}

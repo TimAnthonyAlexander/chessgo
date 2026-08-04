@@ -44,6 +44,7 @@ function navItems(isAdmin: boolean, loggedIn: boolean, ready: boolean): NavItem[
         { label: 'Analysis', to: '/analysis' },
         ...(isAdmin ? [{ label: 'Engine v Engine', to: '/engine-vs' }] : []),
         { label: 'Editor', to: '/editor' },
+        { label: 'Tutor', to: '/tutor' },
     ]
     // While auth is still resolving, show only the items whose identity does not
     // depend on the session (Play + Tournaments). The rest (Community/Watch,

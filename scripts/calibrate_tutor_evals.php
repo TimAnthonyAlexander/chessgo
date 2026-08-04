@@ -17,10 +17,14 @@ declare(strict_types=1);
  * engines agree about who played badly and disagree about what the number
  * should be called.
  *
- * That is not a cosmetic problem. Conversion and resourcefulness fire on an
- * absolute threshold (TutorMetrics::DECISIVE_CP), so an uncorrected scale gap
- * means "winning position" means two different things in the two corpora, and
- * every comparison in the product inherits the error.
+ * That is not a cosmetic problem. Centipawn loss is the basis of accuracy and
+ * of every phase and piece breakdown, so an uncorrected scale gap means the
+ * two corpora report different numbers for identical play, and every
+ * comparison in the product inherits the error.
+ *
+ * (Conversion and resourcefulness are immune by construction: they fire on a
+ * win PROBABILITY, TutorMetrics::WINNING_PROB, which is scale-invariant. This
+ * fit is what lets winProbability() convert between the two scales.)
  *
  * So the correction is fitted and applied at the EVAL level, before any metric
  * is computed — one adjustment at the source, after which every metric,
@@ -245,5 +249,6 @@ file_put_contents($out, json_encode($payload, JSON_PRETTY_PRINT) . "\n");
 
 printf("\nWrote %s\n", $out);
 printf("\nA slope near 1.0 would mean the two engines already agree. Anything else\n");
-printf("is applied to every corpus eval BEFORE metrics are computed, so thresholds\n");
-printf("like TutorMetrics::DECISIVE_CP mean the same thing in both corpora.\n");
+printf("is applied to every corpus eval BEFORE metrics are computed, so centipawn\n");
+printf("loss is comparable between the corpora. Put this value in\n");
+printf("TutorMetrics::SF_SCALE whenever it moves.\n");

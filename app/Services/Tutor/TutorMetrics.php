@@ -51,9 +51,37 @@ class TutorMetrics
     /** Your reply counts as "punished" if it costs at most this. */
     public const int PUNISH_CP = 50;
 
-    /** Eval (mover POV) at which a position counts as winning / lost for the
-     *  conversion and resourcefulness triggers — about two pawns. */
-    public const int DECISIVE_CP = 200;
+    /**
+     * How many zugzwang centipawns equal one Stockfish centipawn.
+     *
+     * MEASURED, not assumed: scripts/calibrate_tutor_evals.php replays the same
+     * games through both and fits a slope through the origin. At 100ms it came
+     * out at 2.81 with a Pearson correlation of 0.969 over ~6,300 paired
+     * positions — the two engines agree almost perfectly on WHICH positions are
+     * better and disagree substantially on what to call the number.
+     *
+     * Everything Tutor stores is in zugzwang's native scale, so a Tutor
+     * accuracy figure and the analysis board's accuracy figure for the same
+     * game never disagree on screen. Corpus evals are multiplied INTO this
+     * scale on the way in (see the `evalScale` input), and divided back out
+     * only inside winProbability(), whose published fit is defined on
+     * Stockfish's scale.
+     *
+     * Re-fit this whenever the engine's eval scale changes; the calibration
+     * script writes storage/tutor-calibration.json and TutorCalibration reads it.
+     */
+    public const float SF_SCALE = 2.8137;
+
+    /**
+     * Win probability at which a position counts as won / lost, for the
+     * conversion and resourcefulness triggers. This is Lichess's definition,
+     * and it is deliberately NOT a centipawn threshold: a probability is
+     * invariant to the engine's eval scale, so these two metrics cannot be
+     * silently re-broken by an engine change the way a raw cp cutoff would be.
+     */
+    public const float WINNING_PROB = 66.0;
+
+    public const float LOSING_PROB = 34.0;
 
     /** Triggers are ignored before this ply, so an opening trap the engine
      *  briefly loves doesn't count as "a winning position you failed to
@@ -131,6 +159,24 @@ class TutorMetrics
             'scale' => 10.0,
             'unit' => 'percent',
         ],
+        // Lichess tracks clock behaviour twice, for good reason: how you spend
+        // time in general, and how much you had left specifically in the games
+        // you lost. They answer different questions and a player can be fine on
+        // one and bad on the other.
+        'global_clock' => [
+            'label' => 'Clock remaining',
+            'higherIsBetter' => true,
+            'level' => 'move',
+            'scale' => 12.0,
+            'unit' => 'percent',
+        ],
+        'clock_when_losing' => [
+            'label' => 'Clock left when you lost',
+            'higherIsBetter' => true,
+            'level' => 'game',
+            'scale' => 15.0,
+            'unit' => 'percent',
+        ],
         'win_rate' => [
             'label' => 'Score',
             'higherIsBetter' => true,
@@ -173,6 +219,14 @@ class TutorMetrics
         $plies = is_array($game['plies'] ?? null) ? $game['plies'] : [];
         $mine = $color === 'w' ? 0 : 1;
 
+        // Multiplier that brings this game's evals onto zugzwang's scale.
+        // 1.0 for our own games (already native); SF_SCALE for the Lichess
+        // corpus. Without it, ACPL from the two corpora would differ by ~2.8x
+        // for reasons that have nothing to do with how anybody played.
+        $evalScale = isset($game['evalScale']) && is_numeric($game['evalScale'])
+            ? (float) $game['evalScale']
+            : 1.0;
+
         $lossSum = 0.0;
         $moveCount = 0;
         $phaseLoss = [];
@@ -187,6 +241,9 @@ class TutorMetrics
         $sawLost = false;
 
         $pressureMoves = 0;
+        $clockPercentSum = 0.0;
+        $clockPercentCount = 0;
+        $lastClockPercent = null;
         $baseMs = isset($game['baseMs']) && is_numeric($game['baseMs']) ? (float) $game['baseMs'] : null;
 
         $count = count($plies);
@@ -205,8 +262,8 @@ class TutorMetrics
                 continue;
             }
 
-            $evalBefore = $this->moverEval($before['evalWhite'] ?? null, $i % 2 === 0 ? 'w' : 'b');
-            $evalAfter = $this->moverEval($after['evalWhite'] ?? null, $i % 2 === 0 ? 'w' : 'b');
+            $evalBefore = $this->moverEval($before['evalWhite'] ?? null, $i % 2 === 0 ? 'w' : 'b', $evalScale);
+            $evalAfter = $this->moverEval($after['evalWhite'] ?? null, $i % 2 === 0 ? 'w' : 'b', $evalScale);
 
             if ($evalBefore === null || $evalAfter === null) {
                 continue;
@@ -232,26 +289,36 @@ class TutorMetrics
                     $pieceCount[$piece] = ($pieceCount[$piece] ?? 0) + 1;
                 }
 
-                if ($baseMs !== null && $baseMs > 0 && isset($before['clockMs']) && is_numeric($before['clockMs'])
-                    && (float) $before['clockMs'] < $baseMs * self::TIME_PRESSURE_FRACTION) {
-                    $pressureMoves++;
+                if ($baseMs !== null && $baseMs > 0 && isset($before['clockMs']) && is_numeric($before['clockMs'])) {
+                    $percent = 100.0 * (float) $before['clockMs'] / $baseMs;
+                    $clockPercentSum += $percent;
+                    $clockPercentCount++;
+                    $lastClockPercent = $percent;
+
+                    if ((float) $before['clockMs'] < $baseMs * self::TIME_PRESSURE_FRACTION) {
+                        $pressureMoves++;
+                    }
                 }
 
                 // My position, my point of view: did the game pass through a
-                // decisively won or decisively lost state?
+                // decisively won or decisively lost state? Judged on win
+                // PROBABILITY, not centipawns, so the trigger means the same
+                // thing regardless of which engine produced the eval.
                 if ($i >= self::TRIGGER_MIN_PLY) {
-                    if ($evalBefore >= self::DECISIVE_CP) {
+                    $prob = $this->winProbability($evalBefore);
+
+                    if ($prob >= self::WINNING_PROB) {
                         $sawWinning = true;
                     }
 
-                    if ($evalBefore <= -self::DECISIVE_CP) {
+                    if ($prob <= self::LOSING_PROB) {
                         $sawLost = true;
                     }
                 }
             } elseif ($loss >= self::OPPORTUNITY_CP && $i + 1 < $count - 1) {
                 // The opponent just handed me something. Did I take it?
-                $replyBefore = $this->moverEval($plies[$i + 1]['evalWhite'] ?? null, $color);
-                $replyAfter = $this->moverEval($plies[$i + 2]['evalWhite'] ?? null, $color);
+                $replyBefore = $this->moverEval($plies[$i + 1]['evalWhite'] ?? null, $color, $evalScale);
+                $replyAfter = $this->moverEval($plies[$i + 2]['evalWhite'] ?? null, $color, $evalScale);
 
                 if ($replyBefore !== null && $replyAfter !== null) {
                     $opportunities++;
@@ -286,10 +353,15 @@ class TutorMetrics
                 ];
             }
 
-            if ($baseMs !== null && $baseMs > 0) {
+            if ($baseMs !== null && $baseMs > 0 && $clockPercentCount > 0) {
                 $metrics['time_pressure'] = [
                     'value' => 100.0 * $pressureMoves / $moveCount,
                     'weight' => (float) $moveCount,
+                ];
+
+                $metrics['global_clock'] = [
+                    'value' => $clockPercentSum / $clockPercentCount,
+                    'weight' => (float) $clockPercentCount,
                 ];
             }
         }
@@ -315,13 +387,23 @@ class TutorMetrics
             if ($score <= 0.0) {
                 $lostOnTime = str_contains(strtolower((string) ($game['reason'] ?? '')), 'time');
                 $metrics['flagging_loss'] = ['value' => $lostOnTime ? 100.0 : 0.0, 'weight' => 1.0];
+
+                if ($lastClockPercent !== null) {
+                    $metrics['clock_when_losing'] = ['value' => $lastClockPercent, 'weight' => 1.0];
+                }
             }
 
+            // Openings are split BY COLOUR. The same opening is a different
+            // problem from each side — you choose it as White and you are
+            // answering it as Black — and merging them hides exactly the thing
+            // a repertoire fix depends on.
             $opening = trim((string) ($game['opening'] ?? ''));
             if ($opening !== '') {
-                $dimensions['win_rate@opening:' . $opening] = ['value' => 100.0 * $score, 'weight' => 1.0];
+                $key = 'opening:' . $color . ':' . $opening;
+                $dimensions['win_rate@' . $key] = ['value' => 100.0 * $score, 'weight' => 1.0];
+
                 if ($moveCount > 0) {
-                    $dimensions['accuracy@opening:' . $opening] = [
+                    $dimensions['accuracy@' . $key] = [
                         'value' => $this->accuracyFromAcpl($lossSum / $moveCount),
                         'weight' => (float) $moveCount,
                     ];
@@ -441,20 +523,40 @@ class TutorMetrics
     }
 
     /**
-     * A White-POV eval, converted to the given side's point of view and
-     * clamped. Returns null when the position carries no eval.
+     * Chance of winning from a centipawn eval, as a percentage.
+     *
+     * Uses the standard logistic fit published for Stockfish evals, so the
+     * eval is divided back down to that scale first (see SF_SCALE). A mate
+     * score saturates, which is the correct answer.
+     *
+     * This is what makes "a winning position" mean one thing across two
+     * corpora produced by two different engines.
+     */
+    public function winProbability(float $cp): float
+    {
+        $sfCp = $cp / self::SF_SCALE;
+
+        return 50.0 + 50.0 * (2.0 / (1.0 + exp(-0.00368208 * $sfCp)) - 1.0);
+    }
+
+    /**
+     * A White-POV eval, brought onto zugzwang's scale, converted to the given
+     * side's point of view, and clamped. Returns null when the position
+     * carries no eval.
      *
      * @param array{type?: string, value?: int|float}|null $evalWhite
      */
-    private function moverEval(?array $evalWhite, string $side): ?float
+    private function moverEval(?array $evalWhite, string $side, float $evalScale = 1.0): ?float
     {
         if ($evalWhite === null || !isset($evalWhite['type'], $evalWhite['value'])) {
             return null;
         }
 
+        // A mate score is already an absolute statement — scaling it would be
+        // meaningless, so only real centipawn evals are rescaled.
         $cp = $evalWhite['type'] === 'mate'
             ? ($evalWhite['value'] >= 0 ? self::MATE_CP - abs((int) $evalWhite['value']) : -(self::MATE_CP - abs((int) $evalWhite['value'])))
-            : (float) $evalWhite['value'];
+            : (float) $evalWhite['value'] * $evalScale;
 
         if ($side === 'b') {
             $cp = -$cp;

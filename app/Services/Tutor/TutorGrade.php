@@ -102,6 +102,13 @@ class TutorGrade
         $pcts = array_keys($points);
         $vals = array_values($points);
 
+        // A flat distribution means the cell was stored without percentiles
+        // (dimension cells keep no reservoir — see the importer). Interpolating
+        // it would manufacture a rank out of nothing.
+        if (max($vals) - min($vals) <= 0.0) {
+            return null;
+        }
+
         // The stored percentiles are always ascending in raw value. Find where
         // this value lands, then flip if lower is better.
         $rank = null;

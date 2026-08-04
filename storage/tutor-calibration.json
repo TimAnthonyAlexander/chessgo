@@ -1,0 +1,10 @@
+{
+    "fittedAt": "2026-08-04T09:54:35+00:00",
+    "movetimeMs": 100,
+    "games": 150,
+    "positions": 6331,
+    "slope": 2.81367,
+    "correlation": 0.96914,
+    "engine": "zugzwang",
+    "note": "Multiply a Lichess-published centipawn eval by `slope` to put it on zugzwang\u2019s scale."
+}

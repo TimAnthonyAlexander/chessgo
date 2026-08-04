@@ -21,11 +21,13 @@ declare(strict_types=1);
  * Idempotent: rows are upserted on TutorBaseline::cellKey(), so re-running
  * replaces a source cleanly rather than duplicating it.
  *
- * MEMORY. The corpus is ~300k games and the cell space is (category × rating
- * band × metric × dimension), which is far too much to hold as raw values. So:
- *   - percentiles come from a bounded reservoir sample per cell, not the full
- *     value list (a few hundred samples pin a decile perfectly well);
- *   - means and weights are accumulated as running sums, exactly;
+ * MEMORY. The corpus is a million games and the cell space is (category ×
+ * rating band × metric × dimension), which is far too much to hold as raw
+ * values. So:
+ *   - means and weights are running sums, and variance is Welford — both exact,
+ *     neither storing anything per game;
+ *   - percentiles come from a bounded reservoir sample, and only for the plain
+ *     metrics that actually claim one on screen;
  *   - opening families are restricted to the most common ones, counted in a
  *     cheap first pass, so a long tail of one-off openings can't explode the
  *     cell count.
@@ -40,8 +42,20 @@ require_once __DIR__ . '/../vendor/autoload.php';
 
 App::boot(dirname(__DIR__));
 
+/**
+ * Percentile sampling.
+ *
+ * Plain metrics keep a bounded reservoir so their percentiles are real — those
+ * are the numbers a report says "you are in the bottom quarter of 1500s" about.
+ * Dimension cells (per phase, per piece, per opening) keep NONE: at a million
+ * games the dimension cell count runs into the tens of thousands, and a PHP
+ * float costs enough per array slot that reservoirs for all of them would need
+ * over a gigabyte. Their mean and standard deviation are accumulated exactly
+ * via Welford instead, and the report simply does not claim a percentile for
+ * them.
+ */
 const RESERVOIR_PLAIN = 1200;
-const RESERVOIR_DIMENSION = 400;
+const RESERVOIR_DIMENSION = 0;
 const BATCH_ROWS = 500;
 
 /** @return array{0: string, 1: array<string, string>} */
@@ -176,6 +190,30 @@ $limit = isset($flags['limit']) ? (int) $flags['limit'] : null;
 $dryRun = isset($flags['dry-run']);
 $familyKeep = isset($flags['families']) ? (int) $flags['families'] : 80;
 
+/**
+ * Which metrics this corpus is allowed to populate.
+ *
+ * Two corpora feed the same `source`, because each is authoritative for a
+ * different thing. The annotated corpus carries engine evals and owns every
+ * eval-derived metric. The full-population corpus has no evals but covers ALL
+ * games, so it owns the outcome metrics — the ones where the annotated subset
+ * was measured to be unrepresentative (see scripts/tutor/bias_check.py:
+ * annotated games flag ~3pp less often at every rating).
+ *
+ * @var list<string> $only
+ * @var list<string> $exclude
+ */
+$only = isset($flags['only']) && $flags['only'] !== '1' ? explode(',', $flags['only']) : [];
+$exclude = isset($flags['exclude']) && $flags['exclude'] !== '1' ? explode(',', $flags['exclude']) : [];
+
+if ($only !== []) {
+    fwrite(STDERR, '  only:   ' . implode(', ', $only) . "\n");
+}
+
+if ($exclude !== []) {
+    fwrite(STDERR, '  exclude: ' . implode(', ', $exclude) . "\n");
+}
+
 fwrite(STDERR, "Tutor baseline import\n");
 fwrite(STDERR, "  corpus: {$path}\n");
 fwrite(STDERR, "  source: {$source}\n");
@@ -216,6 +254,12 @@ foreach (readLines($path) as $line) {
         $game['opening'] = '';
     }
 
+    // Corpus evals are Stockfish-scale (fishnet); everything Tutor stores is
+    // zugzwang-scale. Without this the corpus would report roughly a third of
+    // the centipawn loss our own games do, for reasons that have nothing to do
+    // with how anyone played. Measured by scripts/calibrate_tutor_evals.php.
+    $game['evalScale'] = TutorMetrics::SF_SCALE;
+
     foreach (['w' => 'whiteRating', 'b' => 'blackRating'] as $color => $ratingKey) {
         $rating = (int) ($game[$ratingKey] ?? 0);
         if ($rating <= 0) {
@@ -225,7 +269,11 @@ foreach (readLines($path) as $line) {
         $game['color'] = $color;
         $result = $metrics->perGame($game);
 
-        if ($result['moves'] < 5) {
+        // A game with plies must have enough of them to say anything about
+        // move quality. A game with NO plies (the outcome-only corpus) is
+        // still perfectly good evidence about results, so it is judged on
+        // whether it produced any metric at all rather than on move count.
+        if ($result['metrics'] === [] || ($result['moves'] > 0 && $result['moves'] < 5)) {
             continue;
         }
 
@@ -234,10 +282,20 @@ foreach (readLines($path) as $line) {
 
         foreach (['metrics' => RESERVOIR_PLAIN, 'dimensions' => RESERVOIR_DIMENSION] as $group => $reservoir) {
             foreach ($result[$group] as $key => $entry) {
+                [$metricName] = $metrics->splitKey($key);
+
+                if ($only !== [] && !in_array($metricName, $only, true)) {
+                    continue;
+                }
+
+                if (in_array($metricName, $exclude, true)) {
+                    continue;
+                }
+
                 $cellKey = $prefix . $key;
 
                 if (!isset($cells[$cellKey])) {
-                    $cells[$cellKey] = ['sum' => 0.0, 'weight' => 0.0, 'n' => 0, 'seen' => 0, 'res' => []];
+                    $cells[$cellKey] = ['sum' => 0.0, 'weight' => 0.0, 'n' => 0, 'seen' => 0, 'res' => [], 'm' => 0.0, 'm2' => 0.0];
                 }
 
                 $cell = &$cells[$cellKey];
@@ -246,14 +304,21 @@ foreach (readLines($path) as $line) {
                 $cell['n']++;
                 $cell['seen']++;
 
+                // Welford: exact running variance without keeping the values.
+                $delta = $entry['value'] - $cell['m'];
+                $cell['m'] += $delta / $cell['n'];
+                $cell['m2'] += $delta * ($entry['value'] - $cell['m']);
+
                 // Reservoir sample: keep the first N, then replace with
                 // decreasing probability so the sample stays uniform.
-                if (count($cell['res']) < $reservoir) {
-                    $cell['res'][] = $entry['value'];
-                } else {
-                    $j = random_int(0, $cell['seen'] - 1);
-                    if ($j < $reservoir) {
-                        $cell['res'][$j] = $entry['value'];
+                if ($reservoir > 0) {
+                    if (count($cell['res']) < $reservoir) {
+                        $cell['res'][] = $entry['value'];
+                    } else {
+                        $j = random_int(0, $cell['seen'] - 1);
+                        if ($j < $reservoir) {
+                            $cell['res'][$j] = $entry['value'];
+                        }
                     }
                 }
 
@@ -376,13 +441,12 @@ foreach ($cells as $cellKey => $cell) {
     sort($values);
 
     $mean = $cell['sum'] / $cell['weight'];
+    $stddev = $cell['n'] > 1 ? sqrt($cell['m2'] / ($cell['n'] - 1)) : 0.0;
 
-    $varianceSum = 0.0;
-    foreach ($values as $value) {
-        $varianceSum += ($value - $mean) ** 2;
-    }
-
-    $stddev = count($values) > 1 ? sqrt($varianceSum / (count($values) - 1)) : 0.0;
+    // Without a reservoir there are no percentiles to report. Writing the mean
+    // into every percentile slot would look like data; zeroes are read by
+    // TutorGrade as "no percentile available", which is the truth.
+    $hasPercentiles = $values !== [];
 
     $batch[] = [
         uuidv4(),
@@ -395,11 +459,11 @@ foreach ($cells as $cellKey => $cell) {
         $cell['n'],
         $mean,
         $stddev,
-        percentile($values, 0.10),
-        percentile($values, 0.25),
-        percentile($values, 0.50),
-        percentile($values, 0.75),
-        percentile($values, 0.90),
+        $hasPercentiles ? percentile($values, 0.10) : 0.0,
+        $hasPercentiles ? percentile($values, 0.25) : 0.0,
+        $hasPercentiles ? percentile($values, 0.50) : 0.0,
+        $hasPercentiles ? percentile($values, 0.75) : 0.0,
+        $hasPercentiles ? percentile($values, 0.90) : 0.0,
     ];
 
     $byMetric[$metric] = ($byMetric[$metric] ?? 0) + 1;

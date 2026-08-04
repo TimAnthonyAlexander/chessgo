@@ -63,6 +63,7 @@ use App\Controllers\ArenaInternalController;
 use App\Controllers\TutorController;
 use App\Controllers\TutorReportController;
 use App\Controllers\TutorTrendController;
+use App\Controllers\TutorOpeningController;
 use BaseApi\Http\Middleware\RateLimitMiddleware;
 use BaseApi\Http\SessionStartMiddleware;
 use BaseApi\Permissions\PermissionsMiddleware;
@@ -617,6 +618,14 @@ $router->delete('/tutor/reports/{id}', [
     CombinedAuthMiddleware::class,
     RateLimitMiddleware::class => ['limit' => '30/1m'],
     TutorReportController::class,
+]);
+
+// One opening family from one side — the drilldown a weakness card fires into.
+// Served from the stored payload, so it re-analyzes nothing.
+$router->get('/tutor/reports/{id}/opening', [
+    CombinedAuthMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    TutorOpeningController::class,
 ]);
 
 // One metric across every report you've built — the trend view.

@@ -55,8 +55,19 @@ class TutorTrendController extends Controller
                     $points[$category][$metric][] = [
                         'reportId' => $report->id,
                         'at' => $stamp,
+                        // YOUR measured value, never the comparison. This is
+                        // what makes a trend line legitimate across reports:
+                        // two reports may have been compared against different
+                        // peer tiers (or none at all), so plotting graded
+                        // values would put incommensurable numbers on one line.
+                        // The raw metric is measured identically every time.
                         'value' => $entry['value'] ?? null,
                         'sample' => $entry['sample'] ?? 0,
+                        // Carried so the UI can mark a point whose report had
+                        // no peer data, rather than quietly implying they are
+                        // all equally well-founded.
+                        'peerTier' => $section['peer']['tier'] ?? 'none',
+                        'rating' => $section['rating'] ?? null,
                     ];
                 }
             }
@@ -76,6 +87,8 @@ class TutorTrendController extends Controller
                 $last = (float) ($values[count($values) - 1]['value'] ?? 0);
                 $delta = $last - $first;
 
+                $tiers = array_unique(array_column($values, 'peerTier'));
+
                 $series[$category][$metric] = [
                     'label' => $def['label'] ?? $metric,
                     'unit' => $def['unit'] ?? 'percent',
@@ -83,6 +96,11 @@ class TutorTrendController extends Controller
                     'points' => $values,
                     'delta' => round($delta, 2),
                     'improved' => ($def['higherIsBetter'] ?? true) ? $delta > 0 : $delta < 0,
+                    // True when the reports behind this line were compared
+                    // against different peer tiers. The line itself is still
+                    // valid — it plots raw measured values — but the UI should
+                    // say so rather than presenting a uniform history.
+                    'mixedTiers' => count($tiers) > 1,
                 ];
             }
         }
