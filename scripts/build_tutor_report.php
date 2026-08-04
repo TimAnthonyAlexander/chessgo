@@ -77,12 +77,17 @@ if (!$report instanceof TutorReport) {
 }
 
 fwrite(STDERR, sprintf(
-    "\nstatus=%s in %.1fs — considered=%d used=%d analyzed=%d capHit=%s\n",
+    "\nstatus=%s in %.1fs — considered=%d used=%d analyzed=%d skipped=%d capHit=%s\n",
     $report->status,
     $elapsed,
     $report->games_considered,
     $report->games_used,
+    // `analyzed` is the one that costs wall clock: it's the games this build
+    // had to send to the engine, and it is what TutorBuildService::ANALYSIS_BUDGET
+    // bounds. `used` can be far larger — an already-analyzed game is measured
+    // for free.
     $report->games_analyzed,
+    $report->games_skipped,
     $report->cap_hit ? 'yes' : 'no',
 ));
 

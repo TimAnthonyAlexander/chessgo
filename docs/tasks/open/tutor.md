@@ -419,17 +419,41 @@ done, same as any other notification — they don't sit on a spinner.
 
 The game sample rule, which fixes their bias problem:
 
-> Analyze **every** game in the window up to a cap. Over the cap, take a
-> **uniform random sample** across the window, never the most recent N and never
-> the ones the user already looked at. Record the sample size and the cap hit in
-> the report so the page can say "based on 140 of your 380 blitz games."
+> Analyze **every** game in the window we can afford to. When we can't afford
+> all of them, take a **uniform random sample** across the window, never the
+> most recent N and never the ones the user already looked at. Record the sample
+> size and the cap hit in the report so the page can say "based on 140 of your
+> 380 blitz games."
 
-Sizing needs measuring before the cap is fixed. Rough shape: a cap of 150 games
-at ~40 moves is ~6,000 positions per report, and we own the engine, so a short
-per-position budget is fine — but measure real wall-clock on a real account
-before committing, and set the cap from that measurement, not from this
-paragraph. Cache per-position evals; a popular opening position gets analyzed
-once for everybody.
+**What is affordable is a budget for the whole report, not a cap per category**
+(`TutorBuildService::ANALYSIS_BUDGET`, 150). The first version capped 150 games
+*per category*, which a player active in bullet, blitz, rapid and classical
+turns into 600 analyses — 30-60 minutes at the measured 3-6s a game, and 600
+games' worth of engine time taken from live play. Since games with a bot on
+either side stopped being eagerly precomputed (`GameResultController::shouldEagerlyAnalyze()`,
+~91% of rated games on prod), a bot-heavy player hits that on their first report.
+
+The budget is split across the categories that qualify, in proportion to how
+much the player actually plays each one, with a floor of
+`ANALYSIS_FLOOR` (20, = `MIN_GAMES`) under every one of them so a category
+played occasionally is still measured rather than starved by a dominant one.
+Lichess does the same thing with 100 fresh analyses. The split is
+`TutorBuildService::allocateAnalysisBudget()`: a pure function, highest-averages
+after the floors are paid, and it re-routes what a category can't use.
+
+**The budget counts engine calls, not games measured.** A game whose analysis
+is already cached costs a JSON decode, so it is measured for free and never
+draws on the budget — a category with 380 games of which 12 are uncached draws
+12, and the other 138 go to categories that need them. That is why a report can
+say "based on 380 of your 380 blitz games" while having analyzed twelve. The
+residual, noted honestly: taking every cached game means a game the player chose
+to analyze is *certain* to be in the sample where an uncached one is only
+likely to be. Nothing selects **for** analyzed games — they're just never
+selected against — and the alternative is discarding free measurements to buy
+symmetry with a smaller, noisier sample.
+
+Cache per-position evals; a popular opening position gets analyzed once for
+everybody.
 
 Throttling, in this order:
 
@@ -573,7 +597,21 @@ purpose.
   calibration (two processes hammering it). It restarted cleanly and has been
   stable since, but report building fans out engine calls and this is worth
   reproducing deliberately before it happens under real traffic.
-- **Report build is slow**: ~5 minutes for 68 games when most were already
-  analyzed. Fine behind a queue and a notification, but the analysis cap and
-  per-position movetime deserve measuring against real usage rather than the
-  values picked here.
+- **Per-position movetime is now the binding cost, not the game count.** The
+  number of games one build may send to the engine is bounded per report rather
+  than per category (`ANALYSIS_BUDGET`, above), so the worst case is 150 fresh
+  analyses instead of ~600. What a fresh analysis costs is the open half.
+  Measured on one account (63 bullet + 20 blitz, 12-month window, local dev):
+
+  | build | fresh | cached | wall clock |
+  |---|---|---|---|
+  | first | 15 | 68 | 314 s (~21 s/fresh game) |
+  | rebuild | 0 | 83 | **0.2 s** (2.4 ms/cached game) |
+
+  The rebuild is the same report for free — that is the property the budget is
+  built on. The 21 s is per-position movetime × plies against a cold eval cache
+  (bullet games run 60-100 plies); prod sits nearer 3-6 s because the eval cache
+  is shared across users and seeded from the Lichess dump. At the cold rate a
+  full 150-game budget is ~50 minutes, so if that case shows up in practice the
+  lever is movetime, not a smaller budget — shrinking the budget far enough to
+  fix it leaves a sample too thin to compare against a peer band.

@@ -25,11 +25,91 @@ use Throwable;
  * is skewed by which games the player found interesting enough to analyze —
  * their lead dev conceded this in the beta thread. Ours samples uniformly at
  * random across the window, so a player cannot bias their own report.
+ *
+ * The engine work a build may do is bounded for the report as a whole
+ * (ANALYSIS_BUDGET), split across the player's categories in proportion to
+ * how much they play each one, with a floor under every one of them. Games
+ * that are already analyzed are measured for free and never draw on that
+ * budget — see allocateAnalysisBudget() and sample().
  */
 class TutorBuildService
 {
-    /** Games analyzed per report per category, at most. */
-    public const int ANALYSIS_CAP = 150;
+    /**
+     * Games one report may send to the ENGINE, across every category combined.
+     *
+     * This is a budget, not a cap, and the distinction is the whole point. The
+     * old ANALYSIS_CAP was 150 games PER CATEGORY, so a player active in
+     * bullet, blitz, rapid and classical could ask for 600 analyses in one
+     * build. That was survivable only while every finished rated game was
+     * eagerly precomputed. It no longer is: games with a bot on either side
+     * are not precomputed any more (GameResultController::shouldEagerlyAnalyze()),
+     * and those are ~91% of rated games on prod, so a bot-heavy player's first
+     * report now analyzes most of its sample on demand.
+     *
+     * The arithmetic, at 3-6 seconds per game analyzed:
+     *
+     *   old, per category:  4 x 150 = 600 games  =>  30-60 minutes
+     *   new, total:               150 games      =>   7.5-15 minutes
+     *
+     * and 150 is the WORST case — a player with 150+ never-analyzed games
+     * spread across their categories. Anything already analyzed is served from
+     * game.analysis and costs no engine time at all, so it does not draw on
+     * this budget (see sample()). A player whose games are all cached still
+     * gets every one of them measured; the budget only bounds the fresh work.
+     *
+     * Two real measurements on the same account (63 bullet + 20 blitz games,
+     * 12-month window, local dev box), because 3-6s is the WARM number and the
+     * gap matters when reading the arithmetic above:
+     *
+     *   first build:  15 fresh + 68 cached  =>  314s   (~21s per fresh game)
+     *   rebuild:       0 fresh + 83 cached  =>    0.2s (2.4ms per cached game)
+     *
+     * The rebuild is the important one: it is the same report, byte for byte,
+     * for free. It confirms the thing this budget is built on — a cached game
+     * costs a JSON decode, so charging it against the budget would be charging
+     * for nothing.
+     *
+     * The 21s is per-position movetime x plies with a cold eval cache (a
+     * 2000-rated bullet player's games run 60-100 plies), and it is the reason
+     * the budget cannot be the only lever: at that rate 150 fresh games is
+     * ~50 minutes, not 15. Prod is nearer the warm end because the eval cache
+     * is shared across every user and seeded from the Lichess dump. Cutting
+     * the cold case further means cutting per-position movetime, which is
+     * tracked separately in docs/tasks/open/tutor.md — do not "fix" it by
+     * quietly shrinking this number until the sample stops meaning anything.
+     *
+     * 150 rather than a rounder 100: below ~30 fresh games a category's numbers
+     * start moving on single games, and with the per-category floor below, 150
+     * is the smallest total that still leaves a meaningful proportional share
+     * after four floors are paid. Higher than 150 buys precision the peer
+     * comparison cannot use — the baselines' own cells are the noisier side of
+     * that comparison — at a wall clock that starts competing with live play
+     * for the engine's search pool, which it must never win.
+     *
+     * Deliberately a bound on ENGINE work, not on games measured: the report
+     * still says "based on 140 of your 380 blitz games" via capHit, and a
+     * cached game makes that number bigger for free.
+     */
+    public const int ANALYSIS_BUDGET = 150;
+
+    /**
+     * Fresh analyses every qualifying category gets before the rest of the
+     * budget is split proportionally.
+     *
+     * Without a floor, one dominant category eats the budget and a category
+     * the player plays occasionally is measured on whatever happened to be
+     * cached — possibly nothing. That is worse than not reporting on it,
+     * because the report would still print a verdict.
+     *
+     * It equals MIN_GAMES on purpose: MIN_GAMES is the point at which we are
+     * willing to say anything about a category at all, so the floor is exactly
+     * enough engine time to measure that minimum from scratch. Four categories
+     * at 20 is 80 of the 150, leaving 70 to distribute by how much the player
+     * actually plays each one. A category never gets more floor than it needs
+     * (a category with 3 uncached games draws 3), and if the floors ever
+     * exceeded the budget they are scaled down rather than overrunning it.
+     */
+    public const int ANALYSIS_FLOOR = 20;
 
     /** A category needs this many games in the window to say anything. */
     public const int MIN_GAMES = 20;
@@ -132,6 +212,11 @@ class TutorBuildService
         $skipped = 0;
         $capHit = false;
 
+        // Two passes: the engine budget is a property of the WHOLE report, so
+        // every qualifying category has to be known before any of them is
+        // measured.
+        $eligible = [];
+
         foreach (self::CATEGORIES as $category) {
             $games = $this->gamesFor($report, $category);
             $considered += count($games);
@@ -144,7 +229,13 @@ class TutorBuildService
                 continue;
             }
 
-            $sampled = $this->sample($games, self::ANALYSIS_CAP);
+            $eligible[$category] = $games;
+        }
+
+        $allocation = self::allocateAnalysisBudget($this->demandFor($eligible));
+
+        foreach ($eligible as $category => $games) {
+            $sampled = $this->sample($games, $allocation[$category] ?? 0);
             if (count($sampled) < count($games)) {
                 $capHit = true;
             }
@@ -153,7 +244,11 @@ class TutorBuildService
             $normalized = [];
 
             foreach ($sampled as $game) {
-                $hadAnalysis = ($game->analysis ?? '') !== '';
+                // Read BEFORE the reader runs: read() stores the analysis it
+                // computes back on the row, so afterwards every game looks
+                // cached. This is also what the allocator's `uncached` counts,
+                // so `analyzed` and the budget stay the same measure.
+                $hadAnalysis = self::isAnalyzed($game);
 
                 $normal = $this->reader->read($game, $user->id);
                 if ($normal === null) {
@@ -577,33 +672,209 @@ class TutorBuildService
     }
 
     /**
-     * Uniform random sample across the whole window.
+     * What each qualifying category is asking of the report, for the
+     * allocator: how much of the player's chess happens there (`total`), and
+     * how many of those games would need the engine (`uncached`).
      *
-     * NOT the most recent N, and not the ones the player happened to analyze.
-     * Taking the newest N would make a report a snapshot of this week rather
-     * than of the window it claims to cover; taking analyzed ones reproduces
-     * Lichess's selection bias.
+     * @param array<string, list<Game>> $eligible
+     * @return array<string, array{total: int, uncached: int}>
+     */
+    private function demandFor(array $eligible): array
+    {
+        $demand = [];
+
+        foreach ($eligible as $category => $games) {
+            $uncached = 0;
+            foreach ($games as $game) {
+                if (!self::isAnalyzed($game)) {
+                    $uncached++;
+                }
+            }
+
+            $demand[$category] = ['total' => count($games), 'uncached' => $uncached];
+        }
+
+        return $demand;
+    }
+
+    /**
+     * Split the report's engine budget across its categories in proportion to
+     * how much the player actually plays each one, with a floor under every
+     * one of them.
+     *
+     * Pure: array in, array out, no clock and no randomness, so it can be
+     * tested directly (tests/Unit/TutorBudgetAllocatorTest.php).
+     *
+     * The rules, in order:
+     *
+     *  1. If every category's fresh games fit in the budget, nobody is cut.
+     *     This is the common case — most players have one or two active
+     *     categories, and cached games are already excluded from `uncached`.
+     *  2. Otherwise every category is paid its ANALYSIS_FLOOR first (or its
+     *     whole need, if that is smaller). A category the player visits rarely
+     *     gets measured rather than starved to zero by a dominant one.
+     *  3. The remainder goes out one analysis at a time to whichever hungry
+     *     category has the highest volume-per-analysis-so-far — the standard
+     *     highest-averages (D'Hondt) split. It converges on shares
+     *     proportional to `total`, it can never overshoot the budget by a
+     *     rounding remainder the way a multiply-and-round split can, and it
+     *     automatically re-routes what a category cannot use (a category with
+     *     8 fresh games takes 8 and the rest flows elsewhere).
+     *
+     * Weighted by `total`, not by `uncached`: the question the split answers
+     * is "where does this player's chess happen", and a category that is
+     * mostly cached has not stopped being their main time control. Its own
+     * `uncached` still bounds what it can take.
+     *
+     * Keys are optional in the signature only so a malformed entry degrades to
+     * zero demand instead of a fatal; demandFor() always fills both.
+     *
+     * @param array<string, array{total?: int, uncached?: int}> $demand
+     * @return array<string, int> Fresh analyses granted, per category.
+     */
+    public static function allocateAnalysisBudget(
+        array $demand,
+        int $budget = self::ANALYSIS_BUDGET,
+        int $floor = self::ANALYSIS_FLOOR,
+    ): array {
+        $need = [];
+        $volume = [];
+
+        foreach ($demand as $category => $entry) {
+            $need[$category] = max(0, (int) ($entry['uncached'] ?? 0));
+            // max(1, ...) so a category can never have zero weight and stall
+            // the loop below; a qualifying category always has games anyway.
+            $volume[$category] = max(1, (int) ($entry['total'] ?? 0));
+        }
+
+        if ($need === []) {
+            return [];
+        }
+
+        $budget = max(0, $budget);
+
+        // Everything fits: no allocation to do, and nobody is capped.
+        if (array_sum($need) <= $budget) {
+            return $need;
+        }
+
+        // The floor can never be allowed to write a cheque the budget cannot
+        // cover — with a small budget and many categories, share it evenly.
+        $floor = max(0, min($floor, intdiv($budget, count($need))));
+
+        $alloc = [];
+        foreach ($need as $category => $n) {
+            $alloc[$category] = min($n, $floor);
+        }
+
+        $remaining = $budget - array_sum($alloc);
+
+        while ($remaining > 0) {
+            $pick = null;
+            $best = -1.0;
+
+            foreach ($need as $category => $n) {
+                if ($alloc[$category] >= $n) {
+                    continue;
+                }
+
+                $quotient = $volume[$category] / ($alloc[$category] + 1);
+                if ($quotient > $best) {
+                    $best = $quotient;
+                    $pick = $category;
+                }
+            }
+
+            if ($pick === null) {
+                break; // every category has all it can use
+            }
+
+            $alloc[$pick]++;
+            $remaining--;
+        }
+
+        return $alloc;
+    }
+
+    /** Does this game already carry a cached analysis? */
+    private static function isAnalyzed(Game $game): bool
+    {
+        return ($game->analysis ?? '') !== '';
+    }
+
+    /**
+     * The games to measure in one category: every game whose analysis is
+     * already cached, plus a uniform random draw from the rest, up to this
+     * category's share of the report's engine budget.
+     *
+     * The sampling rule is unchanged where it matters. Which uncached games
+     * get measured is decided by a uniform random draw across the whole
+     * window — NOT the most recent N, which would make a six-month report a
+     * snapshot of this week, and NOT ranked by anything the player controls.
+     *
+     * What is new is that a cached game is free: TutorGameReader::read() reads
+     * game.analysis and never touches the engine, so measuring it costs a JSON
+     * decode. Charging those against the budget would spend the report's
+     * engine time on games that need none, and would shrink the sample for no
+     * reason. So the budget bounds only the games that need the engine.
+     *
+     * The honest caveat, since this is the anti-bias property in
+     * docs/tasks/open/tutor.md: taking every cached game does mean a game the
+     * player chose to analyze is certain to be in the sample while an uncached
+     * one is only likely to be. That is a far weaker version of the bias
+     * Lichess has (their sample is *mostly* what the user chose to look at),
+     * it only bites at all once a category's uncached games exceed its
+     * allocation, and the alternative — throwing away free measurements to
+     * keep the sample perfectly uniform — buys symmetry with a smaller,
+     * noisier sample. Nothing here selects FOR analyzed games; they are simply
+     * never selected against.
+     *
+     * Returns games in the original newest-first order, so gameRows() reads
+     * chronologically.
      *
      * @param list<Game> $games
      * @return list<Game>
      */
-    private function sample(array $games, int $cap): array
+    private function sample(array $games, int $analysisBudget): array
     {
-        if (count($games) <= $cap) {
-            return $games;
+        $keep = [];
+        $fresh = [];
+
+        foreach ($games as $i => $game) {
+            if (self::isAnalyzed($game)) {
+                $keep[$i] = true;
+            } else {
+                $fresh[$i] = $game;
+            }
         }
 
-        $keys = array_rand($games, $cap);
+        if (count($fresh) > $analysisBudget) {
+            $fresh = $analysisBudget < 1 ? [] : $this->pickAtRandom($fresh, $analysisBudget);
+        }
+
+        foreach (array_keys($fresh) as $i) {
+            $keep[$i] = true;
+        }
+
+        ksort($keep);
+
+        return array_values(array_intersect_key($games, $keep));
+    }
+
+    /**
+     * A uniform random subset of $n entries, original keys preserved.
+     *
+     * @param array<int, Game> $games
+     * @return array<int, Game>
+     */
+    private function pickAtRandom(array $games, int $n): array
+    {
+        $keys = array_rand($games, $n);
         if (!is_array($keys)) {
             $keys = [$keys];
         }
 
-        $out = [];
-        foreach ($keys as $key) {
-            $out[] = $games[$key];
-        }
-
-        return $out;
+        return array_intersect_key($games, array_flip($keys));
     }
 
     /** @param array<string, mixed> $payload */

@@ -44,13 +44,19 @@ class TutorReport extends BaseModel
      */
     public string $status = 'queued';
 
-    /** Games in the window that were eligible (before the analysis cap). */
+    /** Games in the window that were eligible (before sampling). */
     public int $games_considered = 0;
 
-    /** Games actually analyzed and folded into the metrics. */
+    /** Games actually measured and folded into the metrics. */
     public int $games_used = 0;
 
-    /** Games this build had to send to the engine (the rest were already analyzed). */
+    /**
+     * Games this build had to send to the engine (the rest were already
+     * analyzed, and cost nothing). This is the one that costs wall clock, and
+     * the one TutorBuildService::ANALYSIS_BUDGET bounds for the whole report —
+     * `games_used` can be several times larger when a player's games are
+     * mostly cached.
+     */
     public int $games_analyzed = 0;
 
     /**
@@ -63,8 +69,9 @@ class TutorReport extends BaseModel
      */
     public int $games_skipped = 0;
 
-    /** True when `games_considered` exceeded the cap and we sampled. The report
-     *  says so on screen — "based on 140 of your 380 blitz games". */
+    /** True when some category had more eligible games than the build could
+     *  measure, so it sampled. The report says so on screen — "based on 140 of
+     *  your 380 blitz games". */
     public bool $cap_hit = false;
 
     /** The computed report. JSON text; use getPayload()/setPayload(). */
