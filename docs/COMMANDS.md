@@ -85,6 +85,35 @@ committed), then `php scripts/import_puzzles.php lichess_db_puzzle.csv [--limit=
 Full design in [tasks/open/tutor.md](tasks/open/tutor.md); metric definitions
 live in `App\Services\Tutor\TutorMetrics`.
 
+### Seeding the baselines (what you almost always want)
+
+The baselines ship **committed** as `storage/seeds/tutor_baseline.jsonl.gz`
+(~870 KB, 10,956 rows, source `lichess-2026-06`). They are derived reference
+data — identical in every environment and expensive to rebuild — so a new
+environment loads the file instead of re-deriving it from a multi-GB dump:
+
+```sh
+# Load the committed baselines. Idempotent (upsert on both unique keys), safe
+# to re-run, prints row counts before and after. Run it after migrations, on
+# every environment, whenever the seed file changes.
+php scripts/seed_tutor_baselines.php [--file=...] [--batch=N] [--dry-run]
+
+# Re-export after rebuilding the baselines from a corpus — this is what
+# regenerates the committed file, then commit it.
+php scripts/export_tutor_baselines.php [--source=lichess-2026-06] [--out=...]
+```
+
+**An empty `tutor_baseline` fails silently**: every report renders "not enough
+peer data to compare yet" with no headline, and nothing errors. That is exactly
+how prod ran until 2026-08-04. If a report has no peer column, check the row
+count first.
+
+Sanity check after seeding — blitz band 1700, plain dimension:
+`performance` mean ≈ 1722.8, `win_rate` mean ≈ 49.68. Wrong numbers there mean
+a wrong load, not a wrong report.
+
+### Rebuilding the baselines from a corpus (rare)
+
 Build the baseline corpus from a public Lichess PGN dump (`.pgn`/`.pgn.zst`),
 end to end:
 
@@ -113,6 +142,10 @@ php scripts/import_tutor_baselines.php ~/tutor-data/games_2026-06.jsonl.zst \
 #    ONLY those two, so the annotated-corpus values aren't overwritten
 php scripts/import_tutor_baselines.php ~/tutor-data/outcomes_2026-06.jsonl.zst \
     --source=lichess-2026-06 --only=win_rate,flagging_loss
+
+# 5. Re-export the seed file so every other environment gets the new numbers,
+#    and commit it. Skipping this leaves prod on the old baselines.
+php scripts/export_tutor_baselines.php --source=lichess-2026-06
 ```
 
 Both importer runs target the same `--source`; rows upsert on

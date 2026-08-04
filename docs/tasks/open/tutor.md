@@ -544,6 +544,23 @@ purpose.
   carry tens of thousands of games — but there is no refresh cadence and no
   job that rebuilds them. Rating distributions drift; decide how often this
   should re-run before it goes stale unnoticed.
+
+  They no longer live only in whichever database happened to run the importer.
+  The 10,956 rows are committed as `storage/seeds/tutor_baseline.jsonl.gz`
+  (~870 KB) and loaded by `php scripts/seed_tutor_baselines.php`, which upserts
+  on both unique keys and is safe to re-run. **This is why prod was broken from
+  launch until 2026-08-04**: the table was empty there, so every report said
+  "not enough peer data to compare yet" and produced no headline, and nothing
+  logged an error. Seeding is now part of bringing up an environment.
+
+  To refresh: rebuild from a newer dump with `import_tutor_baselines.php` as
+  documented in `docs/COMMANDS.md`, then `php scripts/export_tutor_baselines.php`
+  and commit the regenerated file — that is the step that makes the new numbers
+  reach anything but your laptop. A new month should get a new `--source`
+  (`lichess-2026-11`) so both can sit in the table while the switch is checked —
+  `TutorBaselineReader::activeSource()` reads `tutor.baseline_source` from config
+  and otherwise takes whichever source has the most total sample, so pin the
+  config while you compare, then drop the old source.
 - **`TutorThemeProfile::forUser()['attempts']`** counts every theme bucket the
   query returns, including the structural themes hidden from the visible list,
   and double-counts puzzles carrying several tags. Harmless while it is not
