@@ -34,6 +34,44 @@ class TutorBuildService
     /** A category needs this many games in the window to say anything. */
     public const int MIN_GAMES = 20;
 
+    /**
+     * A DIMENSION comparison — one opening, one phase, one piece — needs at
+     * least this many of the player's OWN games behind it before it is shown
+     * at all. This is separate from, and much stricter in spirit than,
+     * MIN_GAMES: MIN_GAMES gates whether a whole CATEGORY (e.g. blitz) is
+     * worth reporting on; this gates whether one SLICE within an
+     * already-qualifying category is. A player can easily have 60 qualifying
+     * blitz games and have played the Caro-Kann only once or twice.
+     *
+     * The importance formula's sqrt(sample * weight) term already discounts a
+     * thin sample when RANKING comparisons, but it does not stop a thin
+     * sample from being PRINTED — and a report that renders "much worse at
+     * the Caro-Kann Defense, n=1" has already done the damage, because a
+     * reader remembers the verdict, not the sample size printed beside it.
+     * This is exactly the failure named in docs/tasks/open/tutor.md's "How
+     * this goes wrong" section: "a confident number from twelve games... the
+     * real defence is the minimum-games gate."
+     *
+     * 4 is the floor because it is the smallest sample where a result stops
+     * being explainable by a single fluke: with 1-3 games, one bad pairing or
+     * one time-scramble loss can single-handedly produce "much worse" on its
+     * own; at 4 you need at least two separate below-average results to reach
+     * the same verdict, which is a much weaker claim to make about noise.
+     * Openings are the dimension this matters most for (a player might see a
+     * given opening only a handful of times per window even in a category
+     * with plenty of games), so the floor is picked for openings and applied
+     * uniformly to phase/piece too, where samples are typically far larger
+     * anyway (phases and pieces occur on nearly every move of every game).
+     *
+     * Sample semantics: for every dimension key the sample counted here is
+     * GAMES, not moves — see TutorMetrics::aggregate(), which counts one
+     * entry per perGame() call regardless of dimension (opening, phase, and
+     * piece dimensions are each emitted at most once per game). `weight` is
+     * the move/game-outcome weight used for importance ranking, and is NOT
+     * what this gate reads.
+     */
+    public const int MIN_DIMENSION_GAMES = 4;
+
     /** How many strengths and weaknesses lead the report. */
     public const int HIGHLIGHTS = 3;
 
@@ -235,12 +273,20 @@ class TutorBuildService
 
         $comparisons = [];
         foreach ($aggregate as $composite => $mine) {
+            [$metric, $dimension] = $this->metrics->splitKey($composite);
+
+            // Plain metrics are already covered by the category's MIN_GAMES
+            // gate above. Dimension slices (opening/phase/piece) get their
+            // own, stricter gate — see MIN_DIMENSION_GAMES's docblock.
+            if (!$this->dimensionSampleGate($dimension, (int) ($mine['sample'] ?? 0))) {
+                continue;
+            }
+
             $cell = $peer['cells'][$composite] ?? null;
             if ($cell === null || ($cell['sample'] ?? 0) < TutorBaseline::MIN_SAMPLE) {
                 continue;
             }
 
-            [$metric, $dimension] = $this->metrics->splitKey($composite);
             $comparisons[] = $this->grade->compare($metric, $dimension, $mine, $cell);
         }
 
@@ -277,6 +323,19 @@ class TutorBuildService
             'gameRows' => $this->gameRows($normalized, $measured),
             'drills' => $this->drills->forCategory($ranked['weaknesses'], $normalized, $user),
         ];
+    }
+
+    /**
+     * Whether a comparison has enough of the player's OWN games behind it to
+     * be shown. Plain metrics (empty dimension) always pass — they were
+     * already filtered by the category-level MIN_GAMES gate before
+     * buildCategory() is even called. A non-empty dimension (opening, phase,
+     * or piece) additionally needs MIN_DIMENSION_GAMES of the player's own
+     * games, or it is dropped rather than rendered as a confident finding.
+     */
+    private function dimensionSampleGate(string $dimension, int $sample): bool
+    {
+        return $dimension === '' || $sample >= self::MIN_DIMENSION_GAMES;
     }
 
     /**

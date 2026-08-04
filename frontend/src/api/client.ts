@@ -1669,7 +1669,7 @@ export interface TutorComparison {
      *  percentile data. */
     percentile: number | null
     higherIsBetter: boolean
-    unit: 'percent' | 'cp'
+    unit: 'percent' | 'cp' | 'rating'
 }
 
 /** A measured value on its own, before comparison. */
@@ -1677,7 +1677,7 @@ export interface TutorMetricValue {
     value: number
     sample: number
     label: string
-    unit: 'percent' | 'cp'
+    unit: 'percent' | 'cp' | 'rating'
     higherIsBetter: boolean
 }
 
@@ -1712,6 +1712,8 @@ export interface TutorDrill {
     themes?: string[]
     positions?: TutorDrillPosition[]
     opening?: string
+    /** Which side to drill the opening from. */
+    color?: 'w' | 'b'
     games?: { gameId: string; playedAt: string | null }[]
 }
 
@@ -1743,8 +1745,55 @@ export interface TutorCategoryReport {
     weaknesses: TutorComparison[]
     phases: TutorComparison[]
     pieces: TutorComparison[]
-    openings: TutorComparison[]
+    /** Split by the colour they were played with. The same opening is a
+     *  different problem from each side — you choose it as White and you are
+     *  answering it as Black — so merging them hides what a repertoire fix
+     *  depends on. */
+    openings: { w: TutorComparison[]; b: TutorComparison[] }
+    /** One row per measured game — the report showing its working, and what
+     *  the opening drilldown is served from. */
+    gameRows: TutorGameRow[]
     drills: TutorDrill[]
+    /** The player's rating TODAY, as opposed to `rating`, which is the mean
+     *  rating they actually played the sampled games at. */
+    currentRating: number
+}
+
+/** One measured game. */
+export interface TutorGameRow {
+    gameId: string
+    playedAt: string | null
+    color: 'w' | 'b'
+    opening: string
+    result: string
+    reason: string
+    myRating: number | null
+    oppRating: number | null
+    accuracy: number | null
+    acpl: number | null
+    moves: number
+}
+
+/**
+ * Solve rate per tactical theme, from the player's puzzle history — the second,
+ * independent source of tactical evidence. `awareness` says whether you punish
+ * mistakes; this says which patterns you miss, by name.
+ *
+ * `comparable` is always false and the UI must respect it: the imported puzzle
+ * set carries puzzle ratings but not other players' per-theme results, so a
+ * peer number here would be invented rather than measured. Show `note`.
+ */
+export interface TutorThemeProfile {
+    themes: {
+        theme: string
+        attempts: number
+        solved: number
+        rate: number
+        avgPuzzleRating: number
+    }[]
+    attempts: number
+    comparable: boolean
+    note: string
 }
 
 /** The one sentence at the top of the report. */
@@ -1764,6 +1813,8 @@ export interface TutorPayload {
     rangeFrom?: string
     rangeTo?: string
     headline: TutorHeadline | null
+    /** Player-level, not per-category — the puzzle pool has no time control. */
+    themeProfile?: TutorThemeProfile
     categories: Record<string, TutorCategoryReport>
     /** Categories that had games but not enough of them, so the page can say
      *  "Blitz: 12 of 20 games. Play 8 more" instead of silently omitting it. */
@@ -1831,11 +1882,47 @@ export function deleteTutorReport(id: string): Promise<{ deleted: boolean }> {
  *  points are omitted — a single point is not a trend. */
 export interface TutorTrendSeries {
     label: string
-    unit: 'percent' | 'cp'
+    unit: 'percent' | 'cp' | 'rating'
     higherIsBetter: boolean
-    points: { reportId: string; at: string | null; value: number | null; sample: number }[]
+    points: {
+        reportId: string
+        at: string | null
+        /** YOUR measured value, never a grade — that is what makes the line
+         *  legitimate across reports compared against different peer tiers. */
+        value: number | null
+        sample: number
+        peerTier: 'band' | 'widened' | 'none'
+        rating: number | null
+    }[]
     delta: number
     improved: boolean
+    /** The reports behind this line used different peer tiers. The line is
+     *  still valid (raw values), but the UI should say so. */
+    mixedTiers: boolean
+}
+
+/** One opening family from one side, with the games behind it. */
+export interface TutorOpeningDetail {
+    category: string
+    color: 'w' | 'b'
+    family: string
+    comparison: TutorComparison | null
+    peer: TutorPeerInfo | null
+    games: TutorGameRow[]
+    summary: { games: number; score: number | null; accuracy: number | null }
+    drill: { kind: 'opening'; opening: string; color: 'w' | 'b' }
+}
+
+/** Drill into one opening from one side. The family is a query parameter, not
+ *  a path segment, because opening names contain spaces and commas. */
+export function getTutorOpening(
+    reportId: string,
+    category: string,
+    color: 'w' | 'b',
+    family: string,
+): Promise<TutorOpeningDetail> {
+    const p = new URLSearchParams({ category, color, family })
+    return request(`/tutor/reports/${encodeURIComponent(reportId)}/opening?${p.toString()}`)
 }
 
 export function getTutorTrend(category?: string): Promise<{

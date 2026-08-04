@@ -180,10 +180,11 @@ function OpeningBody({
     onNavigate: (to: string) => void
 }) {
     if (!drill.opening) return null
+    const colorQuery = drill.color ? `&color=${drill.color}` : ''
     return (
         <PrimaryButton
             label="Drill this opening"
-            onClick={() => onNavigate(`/bot?opening=${encodeURIComponent(drill.opening!)}`)}
+            onClick={() => onNavigate(`/bot?opening=${encodeURIComponent(drill.opening!)}${colorQuery}`)}
         />
     )
 }

@@ -30,6 +30,9 @@ struct BotGameView: View {
             if driver.game == nil {
                 loadingOrError
             } else {
+                if let openingLabel = driver.openingLabel {
+                    openingBanner(openingLabel)
+                }
                 boardArea
                 if driver.variant == .crazyhouse {
                     PocketView(pocket: driver.pocket, sideToMove: currentSideToMove, armed: $armedDrop)
@@ -95,6 +98,20 @@ struct BotGameView: View {
             .frame(maxWidth: .infinity, minHeight: 240)
             .padding(Theme.Spacing.lg)
         }
+    }
+
+    // MARK: - Tutor "drill this opening" banner
+
+    private func openingBanner(_ opening: String) -> some View {
+        HStack(spacing: Theme.Spacing.xs) {
+            Image(systemName: "graduationcap.fill")
+                .font(.system(size: 12))
+            Text("Drilling: \(opening)")
+                .font(Theme.caption(12))
+                .fontWeight(.semibold)
+        }
+        .foregroundStyle(Theme.Colors.accent)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Board + eval bar

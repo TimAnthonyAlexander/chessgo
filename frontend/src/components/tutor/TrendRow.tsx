@@ -47,6 +47,12 @@ export default function TrendRow({ series }: { series: TutorTrendSeries }) {
                         </Typography>
                     )}
                 </Box>
+                {series.mixedTiers && (
+                    <Typography sx={{ fontSize: 11, color: 'var(--muted)', mt: 0.3 }}>
+                        Reports behind this line were compared against different peer groups — the
+                        line still plots your raw measured values, so it's valid across them.
+                    </Typography>
+                )}
             </Box>
             {values.length >= 2 && (
                 <RatingSparkline

@@ -1,5 +1,5 @@
 import { Box, Typography } from '@mui/material'
-import { fmtValue } from './format'
+import { fmtValue, type TutorUnit } from './format'
 
 /** A horizontal bar comparing "yours" against a peer figure — the hand-rolled
  * chart primitive Tutor uses for phases/pieces/openings (no charting library
@@ -21,7 +21,7 @@ export default function BarCompare({
     peer: number
     sample: number
     peerSample?: number
-    unit: 'percent' | 'cp'
+    unit: TutorUnit
     showPeer?: boolean
 }) {
     const max = Math.max(Math.abs(mine), Math.abs(peer), 1e-6)

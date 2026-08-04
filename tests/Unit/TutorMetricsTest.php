@@ -52,9 +52,15 @@ class TutorMetricsTest extends TestCase
     }
 
     /** @return array<string, mixed> */
-    private function game(string $color, string $result, array $plies, string $reason = '', ?float $baseMs = null): array
+    private function game(string $color, string $result, array $plies, string $reason = '', ?float $baseMs = null, ?float $evalScale = null, string $opening = ''): array
     {
-        return ['color' => $color, 'result' => $result, 'reason' => $reason, 'plies' => $plies, 'baseMs' => $baseMs];
+        $game = ['color' => $color, 'result' => $result, 'reason' => $reason, 'plies' => $plies, 'baseMs' => $baseMs, 'opening' => $opening];
+
+        if ($evalScale !== null) {
+            $game['evalScale'] = $evalScale;
+        }
+
+        return $game;
     }
 
     // --- 1. cp-loss is a mover-POV eval delta -----------------------------
@@ -196,12 +202,12 @@ class TutorMetricsTest extends TestCase
 
     // --- 4. mate scores ------------------------------------------------
 
-    private function invokeMoverEval(?array $evalWhite, string $side): ?float
+    private function invokeMoverEval(?array $evalWhite, string $side, float $evalScale = 1.0): ?float
     {
         $method = (new ReflectionClass(TutorMetrics::class))->getMethod('moverEval');
         $method->setAccessible(true);
 
-        return $method->invoke($this->m, $evalWhite, $side);
+        return $method->invoke($this->m, $evalWhite, $side, $evalScale);
     }
 
     public function test_mate_scores_convert_with_the_correct_sign(): void
@@ -334,44 +340,111 @@ class TutorMetricsTest extends TestCase
         return $this->game($color, $result, $plies);
     }
 
+    /**
+     * The smallest positive cp whose win probability is >= WINNING_PROB
+     * (66.0). Derived from winProbability() itself — via a fine-grained
+     * linear scan of the monotonic curve — rather than hard-coded, so this
+     * test tracks WINNING_PROB/SF_SCALE if either constant ever moves.
+     */
+    private function winningCp(): float
+    {
+        for ($cp = 1.0; $cp < 100_000.0; $cp += 0.5) {
+            if ($this->m->winProbability($cp) >= TutorMetrics::WINNING_PROB) {
+                return $cp;
+            }
+        }
+
+        throw new \RuntimeException('winProbability never reached WINNING_PROB — did the curve change shape?');
+    }
+
+    /** Mirror of winningCp() on the losing side, for LOSING_PROB. */
+    private function losingCp(): float
+    {
+        for ($cp = -1.0; $cp > -100_000.0; $cp -= 0.5) {
+            if ($this->m->winProbability($cp) <= TutorMetrics::LOSING_PROB) {
+                return $cp;
+            }
+        }
+
+        throw new \RuntimeException('winProbability never reached LOSING_PROB — did the curve change shape?');
+    }
+
     public function test_conversion_requires_the_decisive_eval_after_trigger_min_ply(): void
     {
         $this->assertSame(12, TutorMetrics::TRIGGER_MIN_PLY, 'sanity: TRIGGER_MIN_PLY is 12 as documented');
-        $this->assertSame(200, TutorMetrics::DECISIVE_CP, 'sanity: DECISIVE_CP is 200 as documented');
+        $this->assertSame(66.0, TutorMetrics::WINNING_PROB, 'sanity: WINNING_PROB is 66.0 as documented');
 
-        // Spike to +500 at ply 4 (< 12) — must NOT trigger, even though the
-        // game is won.
-        $early = $this->m->perGame($this->gameWithSpike(14, 4, 500.0, '1-0'));
+        // The trigger is a win-PROBABILITY threshold now, not a flat cp
+        // cutoff, so derive the decisive cp from winProbability() itself.
+        $decisiveCp = $this->winningCp();
+        $this->assertGreaterThanOrEqual(
+            TutorMetrics::WINNING_PROB,
+            $this->m->winProbability($decisiveCp),
+            'sanity: the derived cp must itself cross WINNING_PROB',
+        );
+
+        // Spike to a decisive eval at ply 4 (< 12) — must NOT trigger, even
+        // though the game is won.
+        $early = $this->m->perGame($this->gameWithSpike(14, 4, $decisiveCp, '1-0'));
         $this->assertArrayNotHasKey('conversion', $early['metrics'], 'a decisive eval BEFORE TRIGGER_MIN_PLY must not arm the conversion trigger, even in a won game');
 
-        // Spike to +250 at ply 12 (>= 12) — must trigger.
-        $lateWin = $this->m->perGame($this->gameWithSpike(14, 12, 250.0, '1-0'));
+        // Same decisive eval at ply 12 (>= 12) — must trigger.
+        $lateWin = $this->m->perGame($this->gameWithSpike(14, 12, $decisiveCp, '1-0'));
         $this->assertArrayHasKey('conversion', $lateWin['metrics'], 'a decisive eval at/after TRIGGER_MIN_PLY must arm the conversion trigger');
         $this->assertSame(100.0, $lateWin['metrics']['conversion']['value'], 'converting a winning position into an actual win must score 100');
 
-        $lateLoss = $this->m->perGame($this->gameWithSpike(14, 12, 250.0, '0-1'));
+        $lateLoss = $this->m->perGame($this->gameWithSpike(14, 12, $decisiveCp, '0-1'));
         $this->assertSame(0.0, $lateLoss['metrics']['conversion']['value'], 'passing through a won position but then losing must score 0');
 
-        $lateDraw = $this->m->perGame($this->gameWithSpike(14, 12, 250.0, '1/2-1/2'));
+        $lateDraw = $this->m->perGame($this->gameWithSpike(14, 12, $decisiveCp, '1/2-1/2'));
         $this->assertSame(0.0, $lateDraw['metrics']['conversion']['value'], 'conversion requires an outright win (score>=1.0) — a draw after being winning is a failed conversion, scored 0');
+
+        // A cp just short of the probability threshold must NOT arm it, even
+        // at/after TRIGGER_MIN_PLY — proves this is a probability trigger,
+        // not "any positive eval".
+        $justShort = $this->m->perGame($this->gameWithSpike(14, 12, $decisiveCp - 50.0, '1-0'));
+        $this->assertLessThan(
+            TutorMetrics::WINNING_PROB,
+            $this->m->winProbability($decisiveCp - 50.0),
+            'sanity: decisiveCp-50 must sit BELOW WINNING_PROB',
+        );
+        $this->assertArrayNotHasKey('conversion', $justShort['metrics'], 'an eval below WINNING_PROB, even after TRIGGER_MIN_PLY, must not arm the conversion trigger');
     }
 
     public function test_resourcefulness_requires_the_decisive_eval_after_trigger_min_ply(): void
     {
-        $early = $this->m->perGame($this->gameWithSpike(14, 4, -500.0, '0-1'));
+        $this->assertSame(34.0, TutorMetrics::LOSING_PROB, 'sanity: LOSING_PROB is 34.0 as documented');
+
+        $decisiveCp = $this->losingCp();
+        $this->assertLessThanOrEqual(
+            TutorMetrics::LOSING_PROB,
+            $this->m->winProbability($decisiveCp),
+            'sanity: the derived cp must itself cross LOSING_PROB',
+        );
+
+        $early = $this->m->perGame($this->gameWithSpike(14, 4, $decisiveCp, '0-1'));
         $this->assertArrayNotHasKey('resourcefulness', $early['metrics'], 'a decisive lost eval BEFORE TRIGGER_MIN_PLY must not arm the resourcefulness trigger');
 
-        $lateLoss = $this->m->perGame($this->gameWithSpike(14, 12, -250.0, '0-1'));
+        $lateLoss = $this->m->perGame($this->gameWithSpike(14, 12, $decisiveCp, '0-1'));
         $this->assertArrayHasKey('resourcefulness', $lateLoss['metrics'], 'a decisive lost eval at/after TRIGGER_MIN_PLY must arm the resourcefulness trigger');
         $this->assertSame(0.0, $lateLoss['metrics']['resourcefulness']['value'], 'failing to recover a lost position must score 0');
 
         // Unlike conversion, resourcefulness only needs score>0 (not
         // score>=1.0) — a draw after being lost DOES count as resourceful.
-        $lateDraw = $this->m->perGame($this->gameWithSpike(14, 12, -250.0, '1/2-1/2'));
+        $lateDraw = $this->m->perGame($this->gameWithSpike(14, 12, $decisiveCp, '1/2-1/2'));
         $this->assertSame(100.0, $lateDraw['metrics']['resourcefulness']['value'], 'salvaging a draw from a lost position must score 100 — resourcefulness only requires avoiding the loss, not winning outright');
 
-        $lateWin = $this->m->perGame($this->gameWithSpike(14, 12, -250.0, '1-0'));
+        $lateWin = $this->m->perGame($this->gameWithSpike(14, 12, $decisiveCp, '1-0'));
         $this->assertSame(100.0, $lateWin['metrics']['resourcefulness']['value'], 'a full comeback win from a lost position must score 100');
+
+        // Symmetry sanity: winProbability(decisiveCp) + winProbability(-decisiveCp) == 100.
+        $justShort = $this->m->perGame($this->gameWithSpike(14, 12, $decisiveCp + 50.0, '0-1'));
+        $this->assertGreaterThan(
+            TutorMetrics::LOSING_PROB,
+            $this->m->winProbability($decisiveCp + 50.0),
+            'sanity: decisiveCp+50 must sit ABOVE LOSING_PROB',
+        );
+        $this->assertArrayNotHasKey('resourcefulness', $justShort['metrics'], 'an eval above LOSING_PROB, even after TRIGGER_MIN_PLY, must not arm the resourcefulness trigger');
     }
 
     // --- 8. flagging_loss -------------------------------------------------
@@ -569,5 +642,287 @@ class TutorMetricsTest extends TestCase
                 "TutorMetrics::accuracyFromAcpl($acpl)=$fromTutor must not disagree with GameAnalysisService::accuracy($acpl)=$fromGameAnalysis beyond rounding",
             );
         }
+    }
+
+    // --- 13. winProbability() -------------------------------------------
+
+    public function test_win_probability_of_zero_cp_is_exactly_50_percent(): void
+    {
+        $this->assertEqualsWithDelta(50.0, $this->m->winProbability(0.0), 0.0001, 'a dead-equal eval must convert to exactly 50% win probability');
+    }
+
+    public function test_win_probability_is_monotonically_increasing(): void
+    {
+        $cps = [-2000.0, -800.0, -300.0, -100.0, -10.0, 0.0, 10.0, 100.0, 300.0, 800.0, 2000.0];
+        $prev = null;
+        foreach ($cps as $cp) {
+            $p = $this->m->winProbability($cp);
+            if ($prev !== null) {
+                $this->assertGreaterThan($prev, $p, "winProbability must strictly increase with cp (cp=$cp must score above the previous, smaller cp)");
+            }
+            $prev = $p;
+        }
+    }
+
+    public function test_win_probability_is_symmetric_about_zero(): void
+    {
+        foreach ([1.0, 25.0, 150.0, 507.0, 1500.0, 50_000.0] as $cp) {
+            $sum = $this->m->winProbability($cp) + $this->m->winProbability(-$cp);
+            $this->assertEqualsWithDelta(100.0, $sum, 0.0001, "winProbability(cp) + winProbability(-cp) must equal 100 for cp=$cp (symmetric about 0)");
+        }
+    }
+
+    public function test_win_probability_saturates_near_0_and_100_for_mate_scores(): void
+    {
+        // A realistic mate score, once folded through MATE_CP, is enormous
+        // compared to the ~500cp range where the logistic curve does its
+        // work — so it must saturate near the 0/100 bounds, never actually
+        // reaching them (the logistic is asymptotic) but well within a tight
+        // tolerance of them.
+        $this->assertEqualsWithDelta(100.0, $this->m->winProbability((float) TutorMetrics::MATE_CP), 0.01, 'a huge positive (winning) mate-folded cp must saturate to ~100%');
+        $this->assertEqualsWithDelta(0.0, $this->m->winProbability((float) -TutorMetrics::MATE_CP), 0.01, 'a huge negative (losing) mate-folded cp must saturate to ~0%');
+
+        // Bounds are respected even at extreme magnitude — never overshoots
+        // past [0,100] (the logistic form can't, but this pins the contract).
+        $p = $this->m->winProbability((float) TutorMetrics::MATE_CP);
+        $this->assertLessThanOrEqual(100.0, $p, 'winProbability must never exceed 100');
+        $this->assertGreaterThanOrEqual(0.0, $this->m->winProbability((float) -TutorMetrics::MATE_CP), 'winProbability must never go below 0');
+    }
+
+    public function test_win_probability_respects_sf_scale_against_the_published_stockfish_curve(): void
+    {
+        // The published Stockfish fit, evaluated directly on the SF cp scale
+        // (i.e. what winProbability() computes internally once it has
+        // divided by SF_SCALE). winProbability(SF_SCALE * x) must equal this
+        // formula evaluated at x, for any x — that's the entire point of
+        // SF_SCALE: it's the unit conversion that makes a zugzwang eval and
+        // a Stockfish eval mean the same win probability.
+        $publishedSfCurve = fn(float $x): float => 50.0 + 50.0 * (2.0 / (1.0 + exp(-0.00368208 * $x)) - 1.0);
+
+        foreach ([-500.0, -100.0, -25.0, 0.0, 25.0, 100.0, 300.0, 900.0] as $x) {
+            $expected = $publishedSfCurve($x);
+            $actual = $this->m->winProbability(TutorMetrics::SF_SCALE * $x);
+
+            $this->assertEqualsWithDelta(
+                $expected,
+                $actual,
+                0.0001,
+                "winProbability(SF_SCALE * $x) must equal the published Stockfish curve evaluated at $x — this is what makes an eval comparable across engines",
+            );
+        }
+    }
+
+    // --- 14. evalScale ----------------------------------------------------
+
+    public function test_eval_scale_multiplies_acpl_by_the_same_factor(): void
+    {
+        // Unscaled eval swing: +50 -> -50 (White POV) = 100cp raw loss on
+        // White's one measured move. Chosen deliberately small: even after
+        // multiplying by SF_SCALE (~2.8137), the scaled evals below (~140cp,
+        // well under EVAL_CLAMP=1500) never approach the clamp, so this
+        // isolates evalScale's effect from EVAL_CLAMP/CP_LOSS_CAP.
+        $plies = [
+            $this->ply($this->cp(0)),   // pos0
+            $this->ply($this->cp(50)),  // pos1
+            $this->ply($this->cp(50)),  // pos2 — White to move, before
+            $this->ply($this->cp(-50)), // pos3 — after: 100cp raw drop
+            $this->ply($this->cp(-50)), // pos4
+        ];
+
+        $native = $this->m->perGame($this->game('w', '1-0', $plies, evalScale: 1.0));
+        $scaled = $this->m->perGame($this->game('w', '1-0', $plies, evalScale: TutorMetrics::SF_SCALE));
+
+        $this->assertSame(1, $native['moves'], 'sanity: exactly 1 measured White move');
+        $this->assertEqualsWithDelta(100.0, $native['metrics']['acpl']['value'], 0.001, 'sanity: unscaled acpl is the raw 100cp drop');
+
+        $ratio = $scaled['metrics']['acpl']['value'] / $native['metrics']['acpl']['value'];
+        $this->assertEqualsWithDelta(
+            TutorMetrics::SF_SCALE,
+            $ratio,
+            0.001,
+            "acpl at evalScale=SF_SCALE must be ~{$this->fmt(TutorMetrics::SF_SCALE)}x the acpl at evalScale=1.0 — this is the entire mechanism that makes a foreign corpus comparable to zugzwang's own",
+        );
+    }
+
+    private function fmt(float $v): string
+    {
+        return number_format($v, 4);
+    }
+
+    public function test_eval_scale_does_not_affect_mate_scores(): void
+    {
+        $native = $this->invokeMoverEval($this->mate(3), 'w', 1.0);
+        $scaled = $this->invokeMoverEval($this->mate(3), 'w', TutorMetrics::SF_SCALE);
+
+        $this->assertSame($native, $scaled, 'a mate score must convert identically regardless of evalScale — it is already an absolute statement, scaling it would be meaningless');
+
+        $nativeLosing = $this->invokeMoverEval($this->mate(-5), 'w', 1.0);
+        $scaledLosing = $this->invokeMoverEval($this->mate(-5), 'w', TutorMetrics::SF_SCALE);
+        $this->assertSame($nativeLosing, $scaledLosing, 'a losing mate score must also be unaffected by evalScale');
+    }
+
+    public function test_eval_scale_default_is_1_when_omitted(): void
+    {
+        $plies = [
+            $this->ply($this->cp(0)),
+            $this->ply($this->cp(50)),
+            $this->ply($this->cp(50)),
+            $this->ply($this->cp(-50)),
+        ];
+
+        // No evalScale key on the game array at all (the default game()
+        // helper omits it) — must behave exactly like evalScale=1.0.
+        $omitted = $this->m->perGame($this->game('w', '1-0', $plies));
+        $explicit = $this->m->perGame($this->game('w', '1-0', $plies, evalScale: 1.0));
+
+        $this->assertEqualsWithDelta($explicit['metrics']['acpl']['value'], $omitted['metrics']['acpl']['value'], 0.0001, 'omitting evalScale entirely must default to 1.0, matching an explicit 1.0');
+    }
+
+    // --- 15. global_clock ---------------------------------------------
+
+    public function test_global_clock_averages_only_the_movers_own_clock_readings(): void
+    {
+        // White moves at ply 2, 4, 6 with clock readings 90%, 70%, 50% of a
+        // 100_000ms base -> mean 70%. Black's readings (ply 1,3,5,7) are set
+        // to a wildly different 10% precisely so an accidental inclusion
+        // would be caught by the assertion below.
+        $baseMs = 100_000.0;
+        $plies = [
+            $this->ply($this->cp(0), clockMs: null),               // pos0
+            $this->ply($this->cp(0), clockMs: 10_000.0),           // pos1 — Black, must be excluded
+            $this->ply($this->cp(0), clockMs: 90_000.0),           // pos2 — White: 90%
+            $this->ply($this->cp(0), clockMs: 10_000.0),           // pos3 — Black, must be excluded
+            $this->ply($this->cp(0), clockMs: 70_000.0),           // pos4 — White: 70%
+            $this->ply($this->cp(0), clockMs: 10_000.0),           // pos5 — Black, must be excluded
+            $this->ply($this->cp(0), clockMs: 50_000.0),           // pos6 — White: 50%
+            $this->ply($this->cp(0), clockMs: 10_000.0),           // pos7 — Black, must be excluded
+            $this->ply($this->cp(0), clockMs: null),               // pos8
+        ];
+
+        $white = $this->m->perGame($this->game('w', '1-0', $plies, baseMs: $baseMs));
+
+        $this->assertArrayHasKey('global_clock', $white['metrics'], 'global_clock must be present once at least one of the mover\'s own plies carries clock data');
+        $this->assertEqualsWithDelta(70.0, $white['metrics']['global_clock']['value'], 0.001, 'mean must be over White\'s own 3 readings (90,70,50 -> 70), never blended with Black\'s 10% readings');
+    }
+
+    public function test_global_clock_absent_when_base_ms_is_null(): void
+    {
+        $plies = [
+            $this->ply($this->cp(0), clockMs: null),
+            $this->ply($this->cp(0), clockMs: 90_000.0),
+            $this->ply($this->cp(0), clockMs: 90_000.0),
+            $this->ply($this->cp(0), clockMs: 80_000.0),
+        ];
+
+        $result = $this->m->perGame($this->game('w', '1-0', $plies, baseMs: null));
+
+        $this->assertArrayNotHasKey('global_clock', $result['metrics'], 'global_clock must be absent when baseMs is unknown — a percentage of an unknown base is meaningless');
+    }
+
+    public function test_global_clock_absent_when_no_ply_carries_clock_data(): void
+    {
+        $plies = [
+            $this->ply($this->cp(0), clockMs: null),
+            $this->ply($this->cp(0), clockMs: null),
+            $this->ply($this->cp(0), clockMs: null),
+            $this->ply($this->cp(0), clockMs: null),
+        ];
+
+        $result = $this->m->perGame($this->game('w', '1-0', $plies, baseMs: 100_000.0));
+
+        $this->assertArrayNotHasKey('global_clock', $result['metrics'], 'global_clock must be absent when baseMs is known but no ply carries clockMs at all');
+    }
+
+    // --- 16. clock_when_losing ------------------------------------------
+
+    /** Shared fixture: White plays 3 timed moves, clock draining 90% -> 70% -> 50%. */
+    private function drainingClockGame(string $result): array
+    {
+        $baseMs = 100_000.0;
+        $plies = [
+            $this->ply($this->cp(0), clockMs: null),
+            $this->ply($this->cp(0), clockMs: null),
+            $this->ply($this->cp(0), clockMs: 90_000.0), // White move 1: 90%
+            $this->ply($this->cp(0), clockMs: null),
+            $this->ply($this->cp(0), clockMs: 70_000.0), // White move 2: 70%
+            $this->ply($this->cp(0), clockMs: null),
+            $this->ply($this->cp(0), clockMs: 50_000.0), // White move 3 (last): 50%
+            $this->ply($this->cp(0), clockMs: null),
+        ];
+
+        return $this->game('w', $result, $plies, baseMs: $baseMs);
+    }
+
+    public function test_clock_when_losing_equals_the_clock_at_the_last_timed_move_on_a_loss(): void
+    {
+        $result = $this->m->perGame($this->drainingClockGame('0-1'));
+
+        $this->assertArrayHasKey('clock_when_losing', $result['metrics'], 'clock_when_losing must be present on a loss with clock data');
+        $this->assertEqualsWithDelta(50.0, $result['metrics']['clock_when_losing']['value'], 0.001, 'must equal the clock % at the LAST move that carried clock data (50%), not the mean (70%) or the first reading (90%)');
+    }
+
+    public function test_clock_when_losing_absent_on_a_win(): void
+    {
+        $result = $this->m->perGame($this->drainingClockGame('1-0'));
+
+        $this->assertArrayNotHasKey('clock_when_losing', $result['metrics'], 'clock_when_losing must be absent on a win, even with full clock data');
+    }
+
+    public function test_clock_when_losing_absent_on_a_draw(): void
+    {
+        $result = $this->m->perGame($this->drainingClockGame('1/2-1/2'));
+
+        $this->assertArrayNotHasKey('clock_when_losing', $result['metrics'], 'clock_when_losing must be absent on a draw, even with full clock data');
+    }
+
+    public function test_clock_when_losing_absent_without_clock_data(): void
+    {
+        $plies = [
+            $this->ply($this->cp(0), clockMs: null),
+            $this->ply($this->cp(0), clockMs: null),
+            $this->ply($this->cp(0), clockMs: null),
+            $this->ply($this->cp(0), clockMs: null),
+        ];
+
+        $result = $this->m->perGame($this->game('w', '0-1', $plies, baseMs: 100_000.0));
+
+        $this->assertArrayNotHasKey('clock_when_losing', $result['metrics'], 'clock_when_losing must be absent on a loss with no clock data at all, even though baseMs is known');
+    }
+
+    // --- 17. colour-split openings ---------------------------------------
+
+    public function test_openings_are_split_by_colour_and_do_not_merge(): void
+    {
+        $whitePlies = [
+            $this->ply($this->cp(0)),
+            $this->ply($this->cp(20)),
+            $this->ply($this->cp(20)),
+            $this->ply($this->cp(30)),
+        ];
+        $blackPlies = [
+            $this->ply($this->cp(0)),
+            $this->ply($this->cp(-20)),
+            $this->ply($this->cp(-20)),
+            $this->ply($this->cp(-30)),
+        ];
+
+        $whiteGame = $this->m->perGame($this->game('w', '1-0', $whitePlies, opening: 'Italian Game'));
+        $blackGame = $this->m->perGame($this->game('b', '0-1', $blackPlies, opening: 'Italian Game'));
+
+        $this->assertArrayHasKey('win_rate@opening:w:Italian Game', $whiteGame['dimensions'], 'a White game must key its opening dimension with the w: prefix');
+        $this->assertArrayNotHasKey('win_rate@opening:b:Italian Game', $whiteGame['dimensions'], 'a White game must NOT also produce a b: key for the same opening');
+
+        $this->assertArrayHasKey('win_rate@opening:b:Italian Game', $blackGame['dimensions'], 'a Black game must key its opening dimension with the b: prefix');
+        $this->assertArrayNotHasKey('win_rate@opening:w:Italian Game', $blackGame['dimensions'], 'a Black game must NOT also produce a w: key for the same opening');
+
+        // Folding both games through aggregate() must keep two distinct
+        // buckets, not merge the family into one — that's the entire point
+        // of the colour split (repertoire choice vs repertoire defence are
+        // different problems).
+        $aggregated = $this->m->aggregate([$whiteGame, $blackGame]);
+        $this->assertArrayHasKey('win_rate@opening:w:Italian Game', $aggregated, 'the White-side opening bucket must survive aggregation as its own key');
+        $this->assertArrayHasKey('win_rate@opening:b:Italian Game', $aggregated, 'the Black-side opening bucket must survive aggregation as its own key');
+        $this->assertSame(1, $aggregated['win_rate@opening:w:Italian Game']['sample'], 'the White bucket must be fed by exactly the 1 White game, not blended with the Black game');
+        $this->assertSame(1, $aggregated['win_rate@opening:b:Italian Game']['sample'], 'the Black bucket must be fed by exactly the 1 Black game, not blended with the White game');
     }
 }

@@ -205,6 +205,51 @@ behind the admin role check.
 last-active, per-category Glicko with rating-history sparklines, lifetime W/L/D,
 and a paginated game history filterable by category/result/opponent/date.
 
+**Tutor** (`docs/tasks/open/tutor.md`) is a requested, dated player report card:
+press a button, a queued job measures a random sample of your recent games
+against peers at your rating, and every weakness ends in a drill. Routes
+`/tutor` (shelf + request button), `/tutor/:id` (report), `/tutor/trend`
+(`pages/Tutor.tsx` / `TutorReport.tsx` / `TutorTrend.tsx`,
+`components/tutor/*`); API is `GET/POST /tutor/reports`,
+`GET/DELETE /tutor/reports/{id}`, `GET /tutor/reports/{id}/opening`,
+`GET /tutor/trend` (`TutorController`, `TutorReportController`,
+`TutorOpeningController`, `TutorTrendController`). `App\Services\Tutor\TutorMetrics`
+is the single definition of every metric (accuracy, ACPL, awareness,
+conversion, resourcefulness, flagging, clock, performance) — deliberately the
+only place either corpus is measured, shared by `TutorBuildService` (via
+`TutorGameReader`, a user's own games through `/analyze-game`) and
+`scripts/import_tutor_baselines.php` (the peer corpus), because two different
+accuracy numbers for the same kind of game would make the comparison
+meaningless. Peer baselines come from the public Lichess database dump, land
+in `tutor_baseline` as 50-point rating bands (`TutorBaseline::BUCKET_WIDTH`),
+and carry two measured corrections: an eval-scale calibration (zugzwang ≈
+2.81× Stockfish, Pearson 0.969 — `TutorMetrics::SF_SCALE`, refit via
+`scripts/calibrate_tutor_evals.php`) and a split-corpus fix, where the outcome
+metrics (`win_rate`, `flagging_loss`) are imported from the full Lichess
+population rather than the analyzed subset because analyzed games were
+measured to under-report losses on time by ~3pp (`scripts/tutor/bias_check.py`,
+population games from `scripts/tutor/outcome_games.py`, importer flags via
+`--only`/`--exclude`). Conversion and resourcefulness trigger on win
+probability (`TutorMetrics::winProbability()`, thresholds `WINNING_PROB`/
+`LOSING_PROB`), never centipawns, so both are invariant to the engine's eval
+scale. `TutorReport::status` (queued → building → ready|insufficient|failed)
+means the report row doubles as its own job record — there is no separate
+queue table — and rows are never deleted, since `/tutor/trend` reads the whole
+history. Every weakness card carries exactly one button
+(`App\Services\Tutor\TutorDrillBuilder`): puzzle sets filtered to the user's
+weak themes, or a replay drill built from positions in the user's own games
+(the moment a won game slipped, or a lost one became hopeless), landing on
+`/puzzles?theme=` or `/bot?fen=&color=` deep links (`DrillCard.tsx`). Gotchas:
+the start position carries no eval in either corpus, so White's first move is
+never scored (`TutorMetrics::perGame`, the `$i === 0` skip); openings are
+split by colour inside the dimension key (`opening:w:Sicilian Defense`);
+dimension baseline cells (phase/piece/opening) keep no percentile reservoir by
+design (`RESERVOIR_DIMENSION = 0` in the importer), so `TutorGrade::percentileOf`
+returns `null` for them rather than a manufactured rank; and a BaseAPI model's
+`$columns` entry ignores a separate `length` hint, so `TutorBaseline`'s
+identity columns (`source`, `category`, `metric`, `dimension`, `cell_key`) are
+declared with a full `VARCHAR(n)` type string.
+
 **Live games always start from the standard position** — `hub.go` builds from
 `chess.StartFEN`, or `RandomChess960FEN()` for 960, and the `challenge` struct
 carries no FEN. The Editor's exits are `/analysis`, `/bot`, and (admin)

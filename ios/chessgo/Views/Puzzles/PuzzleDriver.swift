@@ -95,17 +95,26 @@ final class PuzzleDriver: BoardControl {
     // MARK: - Loading a puzzle
 
     func load(theme: PuzzleTheme) {
-        Task { await loadNext(theme: theme) }
+        Task { await loadNext(themeTag: theme.queryValue) }
+    }
+
+    /// A raw Lichess theme tag, bypassing the curated `PuzzleTheme` enum —
+    /// the Tutor drill deep link (`TutorDrill.themes`) can name any tag the
+    /// server's `puzzle_theme` index carries, not just the 13 curated in the
+    /// setup picker. Mirrors the web's `/puzzles?theme=<tag>` handling
+    /// (`Puzzles.tsx`: "accepted on format alone").
+    func load(themeTag: String) {
+        Task { await loadNext(themeTag: themeTag) }
     }
 
     func loadDaily() {
         Task { await loadDailyPuzzle() }
     }
 
-    private func loadNext(theme: PuzzleTheme) async {
+    private func loadNext(themeTag: String?) async {
         let token = beginLoad()
         do {
-            let next = try await PuzzleService.shared.next(theme: theme.queryValue)
+            let next = try await PuzzleService.shared.next(theme: themeTag)
             guard token == loadToken else { return }
             begin(next, token: token)
         } catch {

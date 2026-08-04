@@ -173,13 +173,34 @@ class TutorDrillBuilder
                 $metric,
             ),
             'flagging_loss', 'time_pressure' => $this->timeDrill($games, $metric),
-            'awareness', 'accuracy' => [
+            // 'awareness' and 'accuracy' share a shape (both are theme-filtered
+            // puzzle sets) but measure different things — awareness is "do you
+            // punish YOUR OPPONENT'S mistakes", accuracy is "how good are YOUR
+            // OWN moves overall" — and THEME_MAP already sends them to
+            // different theme lists (fork/pin/skewer vs crushing/quietMove).
+            // A generic shared title made two cards both render "Puzzles on
+            // the patterns you are missing" when both weaknesses ranked in
+            // the same report, which reads as a broken/duplicated page even
+            // though the underlying drills were already distinct. Titles are
+            // kept separate rather than collapsing the drills, because the
+            // two ARE separate, useful recommendations — the fix is naming
+            // them for what they are, not hiding one.
+            'awareness' => [
                 'kind' => 'puzzles',
                 'metric' => $metric,
                 'dimension' => '',
                 'label' => 'Drill these',
-                'title' => 'Puzzles on the patterns you are missing',
-                'blurb' => 'Filtered to the themes you lose the most to, at your puzzle rating.',
+                'title' => 'Puzzles on the tactics you miss',
+                'blurb' => 'Filtered to the patterns you fail to punish, at your puzzle rating.',
+                'themes' => $this->availableThemes($this->themesFor($metric, $user)),
+            ],
+            'accuracy' => [
+                'kind' => 'puzzles',
+                'metric' => $metric,
+                'dimension' => '',
+                'label' => 'Drill these',
+                'title' => 'Puzzles to sharpen your accuracy',
+                'blurb' => 'Positions that build the calculation habits behind cleaner moves, at your puzzle rating.',
                 'themes' => $this->availableThemes($this->themesFor($metric, $user)),
             ],
             default => null,
@@ -483,7 +504,25 @@ class TutorDrillBuilder
         return array_values(array_filter($themes, fn(string $t): bool => in_array($t, $available, true)));
     }
 
-    /** @param array{type?: string, value?: int|float}|null $evalWhite */
+    /**
+     * A mover-POV eval, clamped exactly like TutorMetrics::moverEval() so the
+     * drills built here never disagree with the metrics that ranked the
+     * weakness driving them.
+     *
+     * The clamp matters most for mate scores. A mate is not "10000cp of
+     * swing" — it's a different KIND of fact (forced win/loss, not a
+     * measured position quality), and displaying it as a raw centipawn
+     * number produced exactly the bug this fixes: a drill card rendering
+     * "top swing 10000cp". Reusing TutorMetrics::EVAL_CLAMP (rather than
+     * inventing a second ceiling here) means "the position is decided,
+     * further magnitude isn't a measurement" is defined in exactly one
+     * place. Since `swing` is a DIFFERENCE of two already-clamped evals, its
+     * displayed maximum is now 2 * EVAL_CLAMP (3000cp) instead of an
+     * unbounded sentinel — large, but a real number, not a placeholder
+     * leaking into the UI.
+     *
+     * @param array{type?: string, value?: int|float}|null $evalWhite
+     */
     private function moverEval(?array $evalWhite, string $side): ?float
     {
         if ($evalWhite === null || !isset($evalWhite['type'], $evalWhite['value'])) {
@@ -491,10 +530,12 @@ class TutorDrillBuilder
         }
 
         $cp = $evalWhite['type'] === 'mate'
-            ? ($evalWhite['value'] >= 0 ? 10000 : -10000)
+            ? ($evalWhite['value'] >= 0 ? TutorMetrics::MATE_CP : -TutorMetrics::MATE_CP)
             : (float) $evalWhite['value'];
 
-        return $side === 'b' ? -$cp : $cp;
+        $cp = $side === 'b' ? -$cp : $cp;
+
+        return max(-TutorMetrics::EVAL_CLAMP, min(TutorMetrics::EVAL_CLAMP, $cp));
     }
 
     private function scoreFor(string $result, string $color): ?float

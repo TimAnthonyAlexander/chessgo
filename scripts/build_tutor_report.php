@@ -158,7 +158,7 @@ foreach ($payload['categories'] ?? [] as $category => $section) {
         }
     }
 
-    foreach (['phases' => 'BY PHASE', 'pieces' => 'BY PIECE', 'openings' => 'BY OPENING'] as $key => $title) {
+    foreach (['phases' => 'BY PHASE', 'pieces' => 'BY PIECE'] as $key => $title) {
         if (($section[$key] ?? []) === []) {
             continue;
         }
@@ -166,6 +166,26 @@ foreach ($payload['categories'] ?? [] as $category => $section) {
         echo "\n  {$title}\n";
         foreach (array_slice($section[$key], 0, 8) as $c) {
             printf("    %-24s %8.1f vs %8.1f  %s\n", $c['name'] ?? $c['dimension'], $c['mine'], $c['peer'], $c['wording']);
+        }
+    }
+
+    // Openings are keyed by the colour they were played with.
+    foreach (['w' => 'BY OPENING (as White)', 'b' => 'BY OPENING (as Black)'] as $colour => $title) {
+        $list = $section['openings'][$colour] ?? [];
+        if ($list === []) {
+            continue;
+        }
+
+        echo "\n  {$title}\n";
+        foreach (array_slice($list, 0, 6) as $c) {
+            printf(
+                "    %-28s %7.1f vs %7.1f  %-14s (n=%d)\n",
+                $c['name'] ?? '?',
+                $c['mine'],
+                $c['peer'],
+                $c['wording'],
+                $c['sample'],
+            );
         }
     }
 

@@ -1,5 +1,6 @@
 import { Box, Typography } from '@mui/material'
-import type { TutorCategoryReport } from '../../api/client'
+import { Link } from 'react-router-dom'
+import type { TutorCategoryReport, TutorComparison } from '../../api/client'
 import PeerBanner from './PeerBanner'
 import ComparisonRow from './ComparisonRow'
 import DrillCard from './DrillCard'
@@ -9,8 +10,15 @@ import { cap } from './format'
 
 /** One category's full breakdown: peer context, strengths/weaknesses (with
  * their drills), every measured metric, then the phase/piece/opening
- * breakdowns. This is the bulk of the report page's main column. */
-export default function CategorySection({ category }: { category: TutorCategoryReport }) {
+ * breakdowns. This is the bulk of the report page's main column. `reportId`
+ * is only needed to link each opening row into its drilldown page. */
+export default function CategorySection({
+    category,
+    reportId,
+}: {
+    category: TutorCategoryReport
+    reportId: string
+}) {
     const noPeer = category.peer.tier === 'none'
     const drillFor = (c: { metric: string; dimension: string }) =>
         category.drills.find((d) => d.metric === c.metric && d.dimension === c.dimension)
@@ -63,7 +71,117 @@ export default function CategorySection({ category }: { category: TutorCategoryR
 
             <BreakdownGroup title="Phases" items={category.phases} noPeer={noPeer} />
             <BreakdownGroup title="Pieces" items={category.pieces} noPeer={noPeer} />
-            <BreakdownGroup title="Openings" items={category.openings} noPeer={noPeer} />
+            <OpeningsBreakdown
+                openings={category.openings}
+                noPeer={noPeer}
+                reportId={reportId}
+                category={category.category}
+            />
+        </Box>
+    )
+}
+
+// Openings are split by colour and never merged back into one list — the same
+// opening is a different problem from each side (you choose it as White, you
+// answer it as Black). Each row links into the drilldown page rather than
+// just plotting a bar, since "click an opening" is the point of this
+// breakdown existing at all.
+function OpeningsBreakdown({
+    openings,
+    noPeer,
+    reportId,
+    category,
+}: {
+    openings: TutorCategoryReport['openings']
+    noPeer: boolean
+    reportId: string
+    category: string
+}) {
+    if (openings.w.length === 0 && openings.b.length === 0) return null
+    return (
+        <Box sx={{ mb: 3 }}>
+            <SectionLabel>Openings</SectionLabel>
+            <Box
+                sx={{
+                    display: 'grid',
+                    gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' },
+                    gap: { xs: 2.5, sm: 3 },
+                }}
+            >
+                <OpeningsColumn
+                    title="As White"
+                    items={openings.w}
+                    noPeer={noPeer}
+                    reportId={reportId}
+                    category={category}
+                    color="w"
+                />
+                <OpeningsColumn
+                    title="As Black"
+                    items={openings.b}
+                    noPeer={noPeer}
+                    reportId={reportId}
+                    category={category}
+                    color="b"
+                />
+            </Box>
+        </Box>
+    )
+}
+
+function OpeningsColumn({
+    title,
+    items,
+    noPeer,
+    reportId,
+    category,
+    color,
+}: {
+    title: string
+    items: TutorComparison[]
+    noPeer: boolean
+    reportId: string
+    category: string
+    color: 'w' | 'b'
+}) {
+    return (
+        <Box>
+            <Typography sx={{ fontSize: 12, fontWeight: 600, color: 'var(--text-dim)', mb: 1 }}>
+                {title}
+            </Typography>
+            {items.length === 0 ? (
+                <Typography sx={{ fontSize: 12.5, color: 'var(--muted)' }}>No games yet.</Typography>
+            ) : (
+                items.map((c, i) => {
+                    const name = c.name ?? cap(c.dimension)
+                    return (
+                        <Box
+                            key={`${c.dimension}-${i}`}
+                            component={Link}
+                            to={`/tutor/${encodeURIComponent(reportId)}/${encodeURIComponent(category)}/opening/${color}/${encodeURIComponent(name)}`}
+                            sx={{
+                                display: 'block',
+                                textDecoration: 'none',
+                                color: 'inherit',
+                                borderRadius: '8px',
+                                mx: -1,
+                                px: 1,
+                                '&:hover': { bgcolor: 'var(--surface-2)' },
+                            }}
+                        >
+                            <BarCompare
+                                label={name}
+                                mine={c.mine}
+                                peer={c.peer}
+                                sample={c.sample}
+                                peerSample={c.peerSample}
+                                unit={c.unit}
+                                showPeer={!noPeer}
+                            />
+                        </Box>
+                    )
+                })
+            )}
         </Box>
     )
 }

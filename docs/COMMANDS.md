@@ -80,6 +80,73 @@ Puzzle seeding: download the Lichess CC0 CSV (`lichess_db_puzzle.csv.zst`, not
 committed), then `php scripts/import_puzzles.php lichess_db_puzzle.csv [--limit=N
 --min-rating --max-rating --themes=a,b]` (batched `INSERT IGNORE`, re-run safe).
 
+## Tutor — peer baselines and report debugging
+
+Full design in [tasks/open/tutor.md](tasks/open/tutor.md); metric definitions
+live in `App\Services\Tutor\TutorMetrics`.
+
+Build the baseline corpus from a public Lichess PGN dump (`.pgn`/`.pgn.zst`),
+end to end:
+
+```sh
+# 1. Transcode the %eval-annotated dump into normalized JSONL (needs the venv
+#    from the script's own docblock: python3 -m venv ~/tutor-data/venv; pip
+#    install chess zstandard)
+~/tutor-data/venv/bin/python3 scripts/tutor/pgn_to_jsonl.py \
+    --in ~/tutor-data/eval_games_2026-06.pgn.zst \
+    --out ~/tutor-data/games_2026-06.jsonl.zst
+    # [--limit N] [--progress-every N]  (stdin/stdout also work)
+
+# 2. Stream the RAW unfiltered dump for outcome-only games (win/loss/flag —
+#    no evals needed, so the whole population is affordable, not just the
+#    annotated ~11%)
+curl -s https://database.lichess.org/standard/lichess_db_standard_rated_2026-06.pgn.zst \
+    | zstdcat | ~/tutor-data/venv/bin/python3 scripts/tutor/outcome_games.py \
+    --in - --out ~/tutor-data/outcomes_2026-06.jsonl.zst
+
+# 3. Import engine-derived metrics from the annotated corpus, EXCLUDING the
+#    outcome metrics it would otherwise get wrong (see bias_check.py below)
+php scripts/import_tutor_baselines.php ~/tutor-data/games_2026-06.jsonl.zst \
+    --source=lichess-2026-06 --exclude=win_rate,flagging_loss
+
+# 4. Import win_rate/flagging_loss from the full-population corpus instead —
+#    ONLY those two, so the annotated-corpus values aren't overwritten
+php scripts/import_tutor_baselines.php ~/tutor-data/outcomes_2026-06.jsonl.zst \
+    --source=lichess-2026-06 --only=win_rate,flagging_loss
+```
+
+Both importer runs target the same `--source`; rows upsert on
+`TutorBaseline::cellKey()`, so re-running either step is safe. `--exclude` and
+`--only` exist because each corpus is authoritative for a different set of
+metrics — the annotated subset owns everything eval-derived, the full
+population owns the two outcome metrics it was measured to get wrong (see
+`bias_check.py`). Other importer flags: `--limit=N`, `--dry-run`,
+`--families=N` (top-N opening families kept, default 80).
+
+```sh
+# Verify the annotated subset is representative before trusting it (win/draw/
+# flag rate, analyzed vs unannotated, at matched rating bands)
+~/tutor-data/venv/bin/python3 scripts/tutor/bias_check.py \
+    --in ~/tutor-data/raw_sample.pgn --limit 400000
+
+# Re-fit the engine eval-scale correction whenever zugzwang's eval scale
+# moves (net retrain, eval rework). Needs a small paired-game set from
+# scripts/tutor/calibration_set.py first. Result goes into
+# App\Services\Tutor\TutorMetrics::SF_SCALE.
+php scripts/calibrate_tutor_evals.php ~/tutor-data/calibration.jsonl \
+    [--limit=N] [--movetime=100] [--out=storage/tutor-calibration.json]
+
+# Build one report synchronously, for debugging — writes a real tutor_report
+# row exactly as a user request would, but runs inline so a failure lands in
+# your terminal instead of a worker log
+php scripts/build_tutor_report.php <username> [--range=6m] [--summary]
+```
+
+Report building (`TutorReportJob`) needs `QUEUE_DRIVER=database` plus a
+running `php mason queue:work` in production (the existing
+`chessgo-queue@.service` worker, shared with game-analysis precompute). Under
+the `sync` dev default it runs inline on the request instead.
+
 ## Tournaments — recurring schedule
 
 **There must always be tournaments running.** `scripts/schedule_tournaments.php`

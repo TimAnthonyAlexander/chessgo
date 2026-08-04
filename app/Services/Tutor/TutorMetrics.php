@@ -184,6 +184,15 @@ class TutorMetrics
             'scale' => 10.0,
             'unit' => 'percent',
         ],
+        // Rating performance against the field actually faced. Graded on a
+        // 150-point scale, matching the rating-difference scale Lichess uses.
+        'performance' => [
+            'label' => 'Performance rating',
+            'higherIsBetter' => true,
+            'level' => 'game',
+            'scale' => 150.0,
+            'unit' => 'rating',
+        ],
     ];
 
     /** Importance weights by level — a game outcome outranks a move average. */
@@ -376,6 +385,18 @@ class TutorMetrics
         if ($score !== null) {
             $metrics['win_rate'] = ['value' => 100.0 * $score, 'weight' => 1.0];
 
+            // Per-game performance rating: the opponent's rating, plus the
+            // standard +/-400 for a win or loss. Averaged over games this is
+            // the usual performance-rating approximation, and it needs no
+            // engine — only who you played and how it went.
+            $oppRating = $this->opponentRating($game, $color);
+            if ($oppRating !== null) {
+                $metrics['performance'] = [
+                    'value' => $oppRating + 400.0 * (2.0 * $score - 1.0),
+                    'weight' => 1.0,
+                ];
+            }
+
             if ($sawWinning) {
                 $metrics['conversion'] = ['value' => $score >= 1.0 ? 100.0 : 0.0, 'weight' => 1.0];
             }
@@ -520,6 +541,28 @@ class TutorMetrics
         }
 
         return $ply < self::OPENING_PLIES ? 'opening' : 'middlegame';
+    }
+
+    /**
+     * The opponent's rating, however the producer happened to record it.
+     *
+     * Our own games carry it directly; the corpus carries both sides' ratings
+     * and the colour being measured, so either shape resolves.
+     *
+     * @param array<string, mixed> $game
+     */
+    private function opponentRating(array $game, string $color): ?float
+    {
+        if (isset($game['oppRating']) && is_numeric($game['oppRating']) && (int) $game['oppRating'] > 0) {
+            return (float) $game['oppRating'];
+        }
+
+        $key = $color === 'w' ? 'blackRating' : 'whiteRating';
+        if (isset($game[$key]) && is_numeric($game[$key]) && (int) $game[$key] > 0) {
+            return (float) $game[$key];
+        }
+
+        return null;
     }
 
     /**

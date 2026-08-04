@@ -70,6 +70,14 @@ struct AccountView: View {
                     .glassButton()
 
                     NavigationLink {
+                        TutorListView()
+                    } label: {
+                        Label("Tutor", systemImage: "graduationcap")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .glassButton()
+
+                    NavigationLink {
                         StreakView()
                     } label: {
                         Label("Streak details", systemImage: "flame")

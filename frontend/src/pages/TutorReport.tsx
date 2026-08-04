@@ -10,6 +10,7 @@ import {
 } from '../api/client'
 import CategoryTabs from '../components/tutor/CategoryTabs'
 import CategorySection from '../components/tutor/CategorySection'
+import ThemeProfileSection from '../components/tutor/ThemeProfileSection'
 import TutorReportSkeleton from '../components/tutor/TutorReportSkeleton'
 import { cap, fmtDate } from '../components/tutor/format'
 
@@ -174,12 +175,18 @@ export default function TutorReport() {
 
                             <Box sx={{ minWidth: 0 }}>
                                 {activeCategory ? (
-                                    <CategorySection category={activeCategory} />
+                                    <CategorySection category={activeCategory} reportId={id} />
                                 ) : (
                                     <Centered>Pick a category to see its breakdown.</Centered>
                                 )}
                             </Box>
                         </Box>
+
+                        {payload.themeProfile && (
+                            <Box sx={{ pt: 2.5, borderTop: '1px solid var(--line-soft)' }}>
+                                <ThemeProfileSection profile={payload.themeProfile} />
+                            </Box>
+                        )}
                     </Box>
                 )}
             </Box>

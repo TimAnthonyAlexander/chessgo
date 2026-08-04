@@ -148,8 +148,9 @@ export default function BotGame() {
     const navFen = (location.state as { fen?: string } | null)?.fen ?? null
 
     // Tutor deep links: `?fen=&color=` (replay a specific position, e.g. "Replay
-    // your own position" drills) and `?opening=` (drill an opening by name — no
-    // FEN, so it just starts a normal game and labels it). See DrillCard.tsx.
+    // your own position" drills) and `?opening=&color=` (drill an opening by
+    // name and side — no FEN, so it just starts a normal game on that side and
+    // labels it). See DrillCard.tsx / TutorOpening.tsx.
     const [searchParams] = useSearchParams()
     const deepLinkConsumedRef = useRef(false)
     const [openingName, setOpeningName] = useState<string | null>(null)
@@ -446,7 +447,13 @@ export default function BotGame() {
             void startCustomGame(fenParam, color, 'standard')
         } else if (openingParam) {
             setOpeningName(openingParam)
-            const color: Color = colorChoice === 'random' ? 'w' : colorChoice
+            const colorParam = searchParams.get('color')
+            const color: Color =
+                colorParam === 'w' || colorParam === 'b'
+                    ? colorParam
+                    : colorChoice === 'random'
+                      ? 'w'
+                      : colorChoice
             void startCustomGame(null, color, variant)
         }
     }, [searchParams])

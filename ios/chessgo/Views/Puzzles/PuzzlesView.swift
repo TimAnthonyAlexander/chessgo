@@ -28,6 +28,21 @@ struct PuzzlesView: View {
     /// `settings`, matching the web's "seeded sessions don't overwrite prefs".
     @State private var sessionTheme: PuzzleTheme = .all
     @State private var sessionTimeFormat: PuzzleTimeFormat = .blitz
+    /// Non-`nil` while the running session was started from a raw theme tag
+    /// (a Tutor drill deep link) rather than the curated `PuzzleTheme` picker
+    /// — takes priority over `sessionTheme` for every reload in that session.
+    /// See `PuzzleDriver.load(themeTag:)`.
+    @State private var sessionThemeTag: String?
+    /// A theme tag to jump straight into a running session with, consumed
+    /// once on first appearance — the Tutor "Drill these" deep link
+    /// (`TutorDrillCardView`'s puzzles body). Mirrors the web's
+    /// `/puzzles?theme=<tag>` auto-start.
+    private let deepLinkThemeTag: String?
+    @State private var consumedDeepLink = false
+
+    init(deepLinkThemeTag: String? = nil) {
+        self.deepLinkThemeTag = deepLinkThemeTag
+    }
 
     @State private var deadline: Date?
     @State private var remainingMs: Int = 0
@@ -82,6 +97,10 @@ struct PuzzlesView: View {
         .onAppear {
             if driver == nil { driver = PuzzleDriver(authStore: authStore) }
             driver?.appSettings = appSettings
+            if !consumedDeepLink, let tag = deepLinkThemeTag, !tag.isEmpty {
+                consumedDeepLink = true
+                startTaggedSession(themeTag: tag, timeFormat: settings.timeFormat)
+            }
         }
         .onChange(of: driver?.phase) { _, newPhase in
             handlePhaseChange(newPhase)
@@ -105,6 +124,7 @@ struct PuzzlesView: View {
         history = []
         lowTimeSounded = false
         sessionTheme = theme
+        sessionThemeTag = nil
         sessionTimeFormat = timeFormat
         if let seconds = timeFormat.seconds {
             deadline = Date().addingTimeInterval(TimeInterval(seconds))
@@ -117,11 +137,33 @@ struct PuzzlesView: View {
         driver?.load(theme: theme)
     }
 
+    /// A raw theme tag from a Tutor drill deep link — see `deepLinkThemeTag`.
+    /// Every reload for the rest of this session reuses the same tag (not
+    /// the curated `sessionTheme`, which can't represent it).
+    private func startTaggedSession(themeTag: String, timeFormat: PuzzleTimeFormat) {
+        advanceTask?.cancel()
+        history = []
+        lowTimeSounded = false
+        sessionTheme = .all
+        sessionThemeTag = themeTag
+        sessionTimeFormat = timeFormat
+        if let seconds = timeFormat.seconds {
+            deadline = Date().addingTimeInterval(TimeInterval(seconds))
+            remainingMs = seconds * 1_000
+        } else {
+            deadline = nil
+            remainingMs = 0
+        }
+        mode = .running
+        driver?.load(themeTag: themeTag)
+    }
+
     private func startDailySession() {
         advanceTask?.cancel()
         history = []
         lowTimeSounded = false
         sessionTheme = .all
+        sessionThemeTag = nil
         sessionTimeFormat = .untimed
         deadline = nil
         remainingMs = 0
@@ -140,7 +182,17 @@ struct PuzzlesView: View {
     /// appends), matching the web's "Skip = next without logging".
     private func advanceNow() {
         advanceTask?.cancel()
-        driver?.load(theme: sessionTheme)
+        reloadNext()
+    }
+
+    /// Routes to whichever theme selector is active for this session — see
+    /// `sessionThemeTag`.
+    private func reloadNext() {
+        if let sessionThemeTag {
+            driver?.load(themeTag: sessionThemeTag)
+        } else {
+            driver?.load(theme: sessionTheme)
+        }
     }
 
     // MARK: - Phase reactions
@@ -166,7 +218,7 @@ struct PuzzlesView: View {
         advanceTask = Task {
             try? await Task.sleep(nanoseconds: UInt64(ms) * 1_000_000)
             guard !Task.isCancelled, mode == .running else { return }
-            driver?.load(theme: sessionTheme)
+            reloadNext()
         }
     }
 

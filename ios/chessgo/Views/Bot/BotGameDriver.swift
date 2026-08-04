@@ -84,10 +84,22 @@ final class BotGameDriver: BoardControl {
     private let resolvedHumanColor: String
     private var pendingDuckPieceMove: String?
 
+    /// A specific starting position to hand `POST /bot-games`, e.g. a Tutor
+    /// "replay this position" drill (`TutorDrillPosition.fen`). `nil` starts
+    /// from the normal position, per `settings.variant`.
+    let startFen: String?
+    /// Display-only context for a Tutor "drill this opening" deep link — the
+    /// game itself starts from the normal position (no `startFen`); this is
+    /// just the opening name to label the screen with. Mirrors the web's
+    /// `BotGame.tsx` `openingName` state (`?opening=<name>` with no `fen`).
+    let openingLabel: String?
+
     static let duckRevealDelayMs: UInt64 = 550
 
-    init(settings: BotSettings) {
+    init(settings: BotSettings, startFen: String? = nil, openingLabel: String? = nil) {
         self.settings = settings
+        self.startFen = startFen
+        self.openingLabel = openingLabel
         switch settings.humanColor {
         case "w", "b": resolvedHumanColor = settings.humanColor
         default: resolvedHumanColor = Bool.random() ? "w" : "b"
@@ -141,7 +153,7 @@ final class BotGameDriver: BoardControl {
                 rating: settings.resolvedRating,
                 humanColor: resolvedHumanColor,
                 variant: settings.variant,
-                fen: nil
+                fen: startFen
             )
             apply(created)
         } catch let error as APIError {
