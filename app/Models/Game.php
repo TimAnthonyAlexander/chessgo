@@ -129,7 +129,12 @@ class Game extends BaseModel
         'moves' => ['type' => 'TEXT', 'nullable' => true],
         'sans' => ['type' => 'TEXT', 'nullable' => true],
         'move_times' => ['type' => 'TEXT', 'nullable' => true],
-        'analysis' => ['type' => 'TEXT', 'nullable' => true],
+        // MEDIUMTEXT (16MB), not TEXT: the cached analysis is one entry per ply
+        // carrying a FEN, an eval, a bestmove, a PV and a judgment, so a long
+        // game overflows TEXT's 64KB. That truncation failed 2,486 AnalyzeGameJob
+        // runs in prod (SQLSTATE 22001) — the job could never cache, so every
+        // later read re-ran the engine and failed to save again.
+        'analysis' => ['type' => 'MEDIUMTEXT', 'nullable' => true],
     ];
 
     /** @return array<string, mixed>|null Decoded cached analysis, or null if absent. */

@@ -53,6 +53,16 @@ class TutorReport extends BaseModel
     /** Games this build had to send to the engine (the rest were already analyzed). */
     public int $games_analyzed = 0;
 
+    /**
+     * Games that were sampled but could not be measured — the engine call
+     * failed, the analysis wouldn't store, or the game was too short. Without
+     * this the report silently claims to have considered games it never read
+     * (TutorGameReader::read() returns null and the game just vanishes), and
+     * `games_considered - games_used` reads as a cap effect rather than a
+     * failure.
+     */
+    public int $games_skipped = 0;
+
     /** True when `games_considered` exceeded the cap and we sampled. The report
      *  says so on screen — "based on 140 of your 380 blitz games". */
     public bool $cap_hit = false;
@@ -70,7 +80,10 @@ class TutorReport extends BaseModel
      * @var array<string, mixed>
      */
     public static array $columns = [
-        'payload' => ['type' => 'TEXT', 'nullable' => true],
+        // MEDIUMTEXT for the same reason game.analysis is: the payload grows
+        // with the player's games (a gameRow per measured game per category,
+        // plus comparisons and drills), so it has no 64KB bound either.
+        'payload' => ['type' => 'MEDIUMTEXT', 'nullable' => true],
         'error' => ['type' => 'TEXT', 'nullable' => true],
     ];
 
@@ -126,6 +139,7 @@ class TutorReport extends BaseModel
             'rangeLabel' => $this->range_label,
             'gamesConsidered' => $this->games_considered,
             'gamesUsed' => $this->games_used,
+            'gamesSkipped' => $this->games_skipped,
             'capHit' => $this->cap_hit,
             'builtAt' => $this->built_at,
             'createdAt' => $this->created_at ?? null,

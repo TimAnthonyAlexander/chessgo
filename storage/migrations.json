@@ -1449,6 +1449,42 @@
             "table": "tutor_baseline",
             "operation": "modify_column",
             "warning": null
+        },
+        {
+            "id": "mig_4eabdf337d63",
+            "sql": "ALTER TABLE `game` MODIFY COLUMN `analysis` MEDIUMTEXT",
+            "destructive": true,
+            "generated_at": "2026-08-04T11:30:32+00:00",
+            "table": "game",
+            "operation": "modify_column",
+            "warning": null
+        },
+        {
+            "id": "mig_cf2f66a74dbc",
+            "sql": "ALTER TABLE `tutor_report` MODIFY COLUMN `payload` MEDIUMTEXT",
+            "destructive": true,
+            "generated_at": "2026-08-04T11:30:32+00:00",
+            "table": "tutor_report",
+            "operation": "modify_column",
+            "warning": null
+        },
+        {
+            "id": "mig_eb8d2979ef11",
+            "sql": "ALTER TABLE `tutor_baseline` DROP INDEX `uniq_tutor_baseline_source_category_rating_bucket_metri_dab88675`",
+            "destructive": true,
+            "generated_at": "2026-08-04T11:30:32+00:00",
+            "table": "tutor_baseline",
+            "operation": "drop_index",
+            "warning": null
+        },
+        {
+            "id": "mig_71092f61e3fd",
+            "sql": "ALTER TABLE `tutor_report` ADD COLUMN `games_skipped` INT NOT NULL DEFAULT 0",
+            "destructive": false,
+            "generated_at": "2026-08-04T11:32:12+00:00",
+            "table": "tutor_report",
+            "operation": "add_column",
+            "warning": null
         }
     ]
 }

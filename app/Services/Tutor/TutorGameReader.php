@@ -42,7 +42,18 @@ class TutorGameReader
 
         try {
             $payload = $this->analysis->analyze($game);
-        } catch (Throwable) {
+        } catch (Throwable $e) {
+            // A game that can't be analyzed is dropped from the report, so the
+            // reason has to be visible somewhere — silently returning null is
+            // how a report ends up measuring fewer games than it says it
+            // considered, with nothing to explain the gap.
+            error_log(sprintf(
+                '[tutor] game %s (hub %s) unreadable: %s',
+                $game->id,
+                $game->hub_game_id,
+                $e->getMessage(),
+            ));
+
             return null;
         }
 

@@ -197,11 +197,37 @@ class GameResultController extends Controller
         // compute (the GET path is unchanged) and the client's 404-retry covers the
         // brief not-yet-persisted window. Requires QUEUE_DRIVER=database + a running
         // `mason queue:work` worker; under the sync driver this would run inline.
-        if ($rated) {
+        //
+        // …and NOT when either side is a bot ({@see shouldEagerlyAnalyze()}). The
+        // eager job buys exactly one thing — latency for a human who opens the
+        // review board — and effectively nobody opens the review board for a game
+        // they played against a bot, so for those it's pure engine time and stored
+        // bytes spent on a cache nothing reads. Nothing is lost: the lazy path is
+        // untouched, so a bot game a user DOES open (or that the Tutor report pulls
+        // in) is analyzed then, on demand, exactly as before.
+        if ($this->shouldEagerlyAnalyze($game)) {
             dispatch(new AnalyzeGameJob($game->hub_game_id));
         }
 
         return JsonResponse::created(['id' => $game->id]);
+    }
+
+    /**
+     * Is this finished game worth precomputing an analysis for, ahead of anyone
+     * asking? Rated, and human on both sides.
+     *
+     * `white_is_bot`/`black_is_bot` mirror the hub's per-side `bot` flag, which
+     * covers BOTH kinds of bot: the hub's own anonymous matchmaking/backfill
+     * fillers (`bot-<random>` uids, no account) and the seeded bot ACCOUNTS
+     * (`user.role = 'bot'`) an arena fills itself with — both are seated through
+     * the hub's newBotPlayer(), so both arrive here flagged. That matters because
+     * a seeded bot account is a registered user, so an arena game against one is
+     * `rated` (even though no Elo moves for the bot side) and used to qualify for
+     * the eager job on the rated check alone.
+     */
+    private function shouldEagerlyAnalyze(Game $game): bool
+    {
+        return $game->rated && !$game->white_is_bot && !$game->black_is_bot;
     }
 
     /**

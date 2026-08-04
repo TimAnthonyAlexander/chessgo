@@ -129,6 +129,7 @@ class TutorBuildService
         $considered = 0;
         $used = 0;
         $analyzed = 0;
+        $skipped = 0;
         $capHit = false;
 
         foreach (self::CATEGORIES as $category) {
@@ -156,6 +157,11 @@ class TutorBuildService
 
                 $normal = $this->reader->read($game, $user->id);
                 if ($normal === null) {
+                    // The reader already logged why. Count it, so the report
+                    // can say "110 of 151, 41 unreadable" instead of leaving
+                    // the reader to assume the sample was capped.
+                    $skipped++;
+
                     continue;
                 }
 
@@ -186,6 +192,7 @@ class TutorBuildService
         $report->games_considered = $considered;
         $report->games_used = $used;
         $report->games_analyzed = $analyzed;
+        $report->games_skipped = $skipped;
         $report->cap_hit = $capHit;
 
         if ($categories === []) {
@@ -197,6 +204,9 @@ class TutorBuildService
                 'categories' => [],
                 'insufficient' => $insufficient,
                 'minGames' => self::MIN_GAMES,
+                'gamesConsidered' => $considered,
+                'gamesUsed' => $used,
+                'gamesSkipped' => $skipped,
             ]);
             $report->save();
 
@@ -220,6 +230,12 @@ class TutorBuildService
             'categories' => $categories,
             'insufficient' => $insufficient,
             'minGames' => self::MIN_GAMES,
+            // Carried in the payload as well as on the row so a rendered
+            // report can account for every game it sampled: considered, used,
+            // and the ones that could not be read at all.
+            'gamesConsidered' => $considered,
+            'gamesUsed' => $used,
+            'gamesSkipped' => $skipped,
         ];
 
         $payload['headline'] = $this->headline($categories);
