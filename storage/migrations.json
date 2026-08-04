@@ -1251,6 +1251,204 @@
             "table": "tournament",
             "operation": "add_index",
             "warning": null
+        },
+        {
+            "id": "mig_8d5efdf13a31",
+            "sql": "CREATE TABLE `tutor_baseline` (\n  `source` VARCHAR(255) NOT NULL DEFAULT '',\n  `category` VARCHAR(255) NOT NULL DEFAULT '',\n  `rating_bucket` INT NOT NULL DEFAULT 0,\n  `metric` VARCHAR(255) NOT NULL DEFAULT '',\n  `dimension` VARCHAR(255) NOT NULL DEFAULT '',\n  `sample` INT NOT NULL DEFAULT 0,\n  `mean` DOUBLE NOT NULL DEFAULT 0,\n  `stddev` DOUBLE NOT NULL DEFAULT 0,\n  `p10` DOUBLE NOT NULL DEFAULT 0,\n  `p25` DOUBLE NOT NULL DEFAULT 0,\n  `p50` DOUBLE NOT NULL DEFAULT 0,\n  `p75` DOUBLE NOT NULL DEFAULT 0,\n  `p90` DOUBLE NOT NULL DEFAULT 0,\n  `id` VARCHAR(36) NOT NULL DEFAULT '',\n  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            "destructive": false,
+            "generated_at": "2026-08-04T09:18:37+00:00",
+            "table": "tutor_baseline",
+            "operation": "create_table",
+            "warning": null
+        },
+        {
+            "id": "mig_e3986dcfa475",
+            "sql": "CREATE TABLE `tutor_report` (\n  `user_id` VARCHAR(36) NOT NULL DEFAULT '',\n  `range_from` VARCHAR(255) NOT NULL DEFAULT '',\n  `range_to` VARCHAR(255) NOT NULL DEFAULT '',\n  `range_label` VARCHAR(255) NOT NULL DEFAULT '6m',\n  `status` VARCHAR(255) NOT NULL DEFAULT 'queued',\n  `games_considered` INT NOT NULL DEFAULT 0,\n  `games_used` INT NOT NULL DEFAULT 0,\n  `games_analyzed` INT NOT NULL DEFAULT 0,\n  `cap_hit` TINYINT(1) NOT NULL DEFAULT 0,\n  `payload` TEXT,\n  `error` TEXT,\n  `built_at` VARCHAR(255),\n  `id` VARCHAR(36) NOT NULL DEFAULT '',\n  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            "destructive": false,
+            "generated_at": "2026-08-04T09:18:37+00:00",
+            "table": "tutor_report",
+            "operation": "create_table",
+            "warning": null
+        },
+        {
+            "id": "mig_25715f20d75e",
+            "sql": "ALTER TABLE `tutor_baseline` ADD UNIQUE KEY `uniq_tutor_baseline_source_category_rating_bucket_metri_dab88675` (`source`, `category`, `rating_bucket`, `metric`, `dimension`)",
+            "destructive": false,
+            "generated_at": "2026-08-04T09:18:37+00:00",
+            "table": "tutor_baseline",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_b79edba0aeff",
+            "sql": "ALTER TABLE `tutor_baseline` ADD INDEX `idx_tutor_baseline_category_rating_bucket` (`category`, `rating_bucket`)",
+            "destructive": false,
+            "generated_at": "2026-08-04T09:18:37+00:00",
+            "table": "tutor_baseline",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_ac9da76c7b35",
+            "sql": "ALTER TABLE `tutor_report` ADD INDEX `idx_tutor_report_user_id_created_at` (`user_id`, `created_at`)",
+            "destructive": false,
+            "generated_at": "2026-08-04T09:18:37+00:00",
+            "table": "tutor_report",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_7fba0baa67bb",
+            "sql": "ALTER TABLE `tutor_report` ADD INDEX `idx_tutor_report_status` (`status`)",
+            "destructive": false,
+            "generated_at": "2026-08-04T09:18:37+00:00",
+            "table": "tutor_report",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_7a77b795b1e3",
+            "sql": "ALTER TABLE `tutor_report` ADD CONSTRAINT `fk_tutor_report_user_id` FOREIGN KEY (`user_id`) REFERENCES `user` (`id`) ON DELETE CASCADE ON UPDATE CASCADE",
+            "destructive": false,
+            "generated_at": "2026-08-04T09:18:37+00:00",
+            "table": "tutor_report",
+            "operation": "add_fk",
+            "warning": null
+        },
+        {
+            "id": "mig_128d2a301fc9",
+            "sql": "ALTER TABLE `tutor_baseline` MODIFY COLUMN `source` TEXT NOT NULL",
+            "destructive": false,
+            "generated_at": "2026-08-04T09:19:00+00:00",
+            "table": "tutor_baseline",
+            "operation": "modify_column",
+            "warning": null
+        },
+        {
+            "id": "mig_d941cb97be5a",
+            "sql": "ALTER TABLE `tutor_baseline` MODIFY COLUMN `category` TEXT NOT NULL",
+            "destructive": false,
+            "generated_at": "2026-08-04T09:19:00+00:00",
+            "table": "tutor_baseline",
+            "operation": "modify_column",
+            "warning": null
+        },
+        {
+            "id": "mig_79735214e52d",
+            "sql": "ALTER TABLE `tutor_baseline` MODIFY COLUMN `metric` TEXT NOT NULL",
+            "destructive": false,
+            "generated_at": "2026-08-04T09:19:00+00:00",
+            "table": "tutor_baseline",
+            "operation": "modify_column",
+            "warning": null
+        },
+        {
+            "id": "mig_411fc2dec652",
+            "sql": "ALTER TABLE `tutor_baseline` MODIFY COLUMN `dimension` TEXT NOT NULL",
+            "destructive": false,
+            "generated_at": "2026-08-04T09:19:00+00:00",
+            "table": "tutor_baseline",
+            "operation": "modify_column",
+            "warning": null
+        },
+        {
+            "id": "mig_a29a6a3c54e9",
+            "sql": "ALTER TABLE `tutor_baseline` ADD COLUMN `cell_key` VARCHAR(255) NOT NULL DEFAULT ''",
+            "destructive": false,
+            "generated_at": "2026-08-04T09:20:02+00:00",
+            "table": "tutor_baseline",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_9567515b8b17",
+            "sql": "ALTER TABLE `tutor_baseline` MODIFY COLUMN `source` VARCHAR(255) NOT NULL DEFAULT ''",
+            "destructive": true,
+            "generated_at": "2026-08-04T09:20:02+00:00",
+            "table": "tutor_baseline",
+            "operation": "modify_column",
+            "warning": null
+        },
+        {
+            "id": "mig_e4c15924a101",
+            "sql": "ALTER TABLE `tutor_baseline` MODIFY COLUMN `category` VARCHAR(255) NOT NULL DEFAULT ''",
+            "destructive": true,
+            "generated_at": "2026-08-04T09:20:02+00:00",
+            "table": "tutor_baseline",
+            "operation": "modify_column",
+            "warning": null
+        },
+        {
+            "id": "mig_df6088bce69a",
+            "sql": "ALTER TABLE `tutor_baseline` MODIFY COLUMN `metric` VARCHAR(255) NOT NULL DEFAULT ''",
+            "destructive": true,
+            "generated_at": "2026-08-04T09:20:02+00:00",
+            "table": "tutor_baseline",
+            "operation": "modify_column",
+            "warning": null
+        },
+        {
+            "id": "mig_7dd858f70432",
+            "sql": "ALTER TABLE `tutor_baseline` MODIFY COLUMN `dimension` VARCHAR(255) NOT NULL DEFAULT ''",
+            "destructive": true,
+            "generated_at": "2026-08-04T09:20:02+00:00",
+            "table": "tutor_baseline",
+            "operation": "modify_column",
+            "warning": null
+        },
+        {
+            "id": "mig_8e8015651da3",
+            "sql": "ALTER TABLE `tutor_baseline` ADD UNIQUE KEY `uniq_tutor_baseline_cell_key` (`cell_key`)",
+            "destructive": false,
+            "generated_at": "2026-08-04T09:20:02+00:00",
+            "table": "tutor_baseline",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_b6cb2635bc62",
+            "sql": "ALTER TABLE `tutor_baseline` MODIFY COLUMN `source` VARCHAR(64) NOT NULL DEFAULT ''",
+            "destructive": true,
+            "generated_at": "2026-08-04T09:21:00+00:00",
+            "table": "tutor_baseline",
+            "operation": "modify_column",
+            "warning": null
+        },
+        {
+            "id": "mig_189b8526a3ac",
+            "sql": "ALTER TABLE `tutor_baseline` MODIFY COLUMN `category` VARCHAR(24) NOT NULL DEFAULT ''",
+            "destructive": true,
+            "generated_at": "2026-08-04T09:21:00+00:00",
+            "table": "tutor_baseline",
+            "operation": "modify_column",
+            "warning": null
+        },
+        {
+            "id": "mig_3a6953c764a9",
+            "sql": "ALTER TABLE `tutor_baseline` MODIFY COLUMN `metric` VARCHAR(48) NOT NULL DEFAULT ''",
+            "destructive": true,
+            "generated_at": "2026-08-04T09:21:00+00:00",
+            "table": "tutor_baseline",
+            "operation": "modify_column",
+            "warning": null
+        },
+        {
+            "id": "mig_5ba0cc51204d",
+            "sql": "ALTER TABLE `tutor_baseline` MODIFY COLUMN `dimension` VARCHAR(96) NOT NULL DEFAULT ''",
+            "destructive": true,
+            "generated_at": "2026-08-04T09:21:00+00:00",
+            "table": "tutor_baseline",
+            "operation": "modify_column",
+            "warning": null
+        },
+        {
+            "id": "mig_0a834ae22196",
+            "sql": "ALTER TABLE `tutor_baseline` MODIFY COLUMN `cell_key` VARCHAR(40) NOT NULL DEFAULT ''",
+            "destructive": true,
+            "generated_at": "2026-08-04T09:21:00+00:00",
+            "table": "tutor_baseline",
+            "operation": "modify_column",
+            "warning": null
         }
     ]
 }
