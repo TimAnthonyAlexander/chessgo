@@ -432,7 +432,9 @@ class TutorDrillBuilder
             'dimension' => '',
             'label' => 'See the games',
             'title' => 'The games the clock decided',
-            'blurb' => 'There is no puzzle for this one. Look at where the time went — a faster time control, or slower opening play, is usually the fix.',
+            // No drill button here by design (see timeDrill's docblock), but the
+            // copy says what to DO, not what we chose not to build.
+            'blurb' => 'Look at where the time went. A faster time control, or spending less of the clock on the opening, is usually the fix.',
             'games' => array_slice($ids, 0, self::MAX_POSITIONS),
         ];
     }

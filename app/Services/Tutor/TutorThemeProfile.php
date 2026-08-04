@@ -90,9 +90,14 @@ class TutorThemeProfile
             'themes' => $themes,
             'attempts' => $total,
             'comparable' => false,
+            // Only the empty state gets copy, and only because it tells the
+            // player what to do. When there ARE themes the numbers speak for
+            // themselves — `comparable` already tells the UI not to draw a peer
+            // column, and the reason for that belongs in this docblock, not on
+            // the page.
             'note' => $themes === []
                 ? sprintf('Solve at least %d puzzles in a theme and it will show up here.', self::MIN_ATTEMPTS)
-                : 'Your own solve rate per theme. There is no peer number here — the puzzle set carries puzzle ratings, not other players’ per-theme results, so a comparison would be invented rather than measured.',
+                : '',
         ];
     }
 

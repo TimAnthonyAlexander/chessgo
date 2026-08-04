@@ -12,7 +12,9 @@ import { isThin, themeLabel } from './format'
  * `comparable` is always false and this component must respect it: the puzzle
  * set carries puzzle ratings but not other players' per-theme results, so there
  * is NO peer column, NO percentile, and NO "vs other players" framing anywhere
- * here — only `note`, verbatim from the backend, explaining why.
+ * here. That reasoning belongs in this docblock and not on the page — the
+ * backend only sends `note` for the empty state, where it tells the player what
+ * to do about it.
  *
  * That is also why it is drawn as a grid of tiles with LEFT-ANCHORED bars and
  * no parity rule, instead of the diverging meter list above it: the shape is
@@ -32,17 +34,19 @@ export default function ThemeProfileSection({ profile }: { profile?: TutorThemeP
                 sub={`Your puzzle history · solve rate, higher is better · no peer comparison`}
             />
 
-            <Typography
-                sx={{
-                    fontSize: 13.5,
-                    color: 'var(--text-dim)',
-                    mb: 2.5,
-                    maxWidth: '58ch',
-                    lineHeight: 1.6,
-                }}
-            >
-                {profile.note}
-            </Typography>
+            {profile.note && (
+                <Typography
+                    sx={{
+                        fontSize: 13.5,
+                        color: 'var(--text-dim)',
+                        mb: 2.5,
+                        maxWidth: '58ch',
+                        lineHeight: 1.6,
+                    }}
+                >
+                    {profile.note}
+                </Typography>
+            )}
 
             {themes.length > 0 && (
                 <Box
