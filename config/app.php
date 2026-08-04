@@ -139,6 +139,21 @@ return [
         'primary' => strtolower((string) ($_ENV['ENGINE_PRIMARY'] ?? 'zugzwang')) === 'gomachine'
             ? 'gomachine'
             : 'zugzwang',
+
+        /*
+        | How many full-game analyses GameAnalysisService::analyzeMany() may
+        | have in flight at once (the Tutor report's fan-out).
+        |
+        | The engine keeps min(6, cores) independent search groups and leases
+        | one for the whole of an /analyze-game call (zugzwang/src/serve.cpp),
+        | so this is a share of a fixed pool that LIVE PLAY also draws on — bot
+        | moves and the analysis board lease from the same groups. 3 of 6 is
+        | deliberate: it halves the report's wall clock while always leaving
+        | half the pool free, so a report building in the background can never
+        | make a live game wait on a search group. Raising it past the pool
+        | size buys nothing (requests just queue engine-side) and starves play.
+        */
+        'analysis_concurrency' => max(1, (int)($_ENV['ENGINE_ANALYSIS_CONCURRENCY'] ?? 3)),
     ],
 
     /*

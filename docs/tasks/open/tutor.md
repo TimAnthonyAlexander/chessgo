@@ -595,23 +595,50 @@ purpose.
   peer number would need our own solve data at volume.
 - **The engine died once under concurrent `/analyze-game` load** during
   calibration (two processes hammering it). It restarted cleanly and has been
-  stable since, but report building fans out engine calls and this is worth
-  reproducing deliberately before it happens under real traffic.
-- **Per-position movetime is now the binding cost, not the game count.** The
-  number of games one build may send to the engine is bounded per report rather
-  than per category (`ANALYSIS_BUDGET`, above), so the worst case is 150 fresh
-  analyses instead of ~600. What a fresh analysis costs is the open half.
-  Measured on one account (63 bullet + 20 blitz, 12-month window, local dev):
+  stable since. The bounded fan-out below has since run several hundred
+  concurrent full-game analyses locally without a wobble, but that is not the
+  same as sustained production traffic.
+- **The cold build was serial, and that was the binding cost — not movetime.**
+  The number of games one build may send to the engine is bounded per report
+  rather than per category (`ANALYSIS_BUDGET`, above), so the worst case is 150
+  fresh analyses instead of ~600. What each of those cost was the open half,
+  and the answer turned out to be scheduling. `/analyze-game` leases ONE of the
+  engine's `min(6, cores)` search groups for its whole duration
+  (`zugzwang/src/serve_handlers.cpp`), and PHP issued them through a single
+  blocking curl, so five of six groups idled through an entire build.
+  `GameAnalysisService::analyzeMany()` now fans them out at
+  `engine.analysis_concurrency` (default 3). Measured on 12 fresh games, 907
+  plies, same games every pass:
 
-  | build | fresh | cached | wall clock |
+  | schedule | wall clock | games/sec | mean depth |
   |---|---|---|---|
-  | first | 15 | 68 | 314 s (~21 s/fresh game) |
-  | rebuild | 0 | 83 | **0.2 s** (2.4 ms/cached game) |
+  | serial | 82.1 s | 0.146 | 27.06 |
+  | concurrency 2 | 45.8 s | 0.262 | 27.28 |
+  | **concurrency 3** | **33.1 s** | **0.363** | 27.26 |
+  | concurrency 6 | 16.8 s | 0.713 | 26.89 |
 
-  The rebuild is the same report for free — that is the property the budget is
-  built on. The 21 s is per-position movetime × plies against a cold eval cache
-  (bullet games run 60-100 plies); prod sits nearer 3-6 s because the eval cache
-  is shared across users and seeded from the Lichess dump. At the cold rate a
-  full 150-game budget is ~50 minutes, so if that case shows up in practice the
-  lever is movetime, not a smaller budget — shrinking the budget far enough to
-  fix it leaves a sample too thin to compare against a peer band.
+  and end to end on the account above (63 bullet + 20 blitz, 12-month window,
+  83 fresh analyses, local dev): **864 s serial → 332 s at concurrency 3**, the
+  same report either way.
+
+  The default is 3 and not 6 because the pool is shared with live play. Timing
+  the site's own bot-move call (`/bestmove` at a rating) while a batch runs:
+  4 ms mean / 19 ms max with the engine idle, 4 ms / 17 ms during a
+  concurrency-3 batch, and **224 ms mean / 2624 ms max during a concurrency-6
+  batch** — at 6 every group is leased and a bot move waits on `GroupLease`.
+  Half the pool is the price of a report never being noticeable in a game.
+
+  Per-position movetime is a floor, not a lever: `kMinMoveTime` clamps
+  `/analyze-game` to 100 ms, and 100/50/25 ms all measure the same ~95 ms per
+  position.
+
+  A rebuild is still the same report for free (0 fresh, 83 cached, **0.2 s**),
+  which is the property the budget is built on.
+
+  Note the payloads are NOT reproducible run to run, and never were: a
+  movetime-limited search reaches whatever depth the clock allowed. Two serial
+  passes over the same 6 games agree on 70.4% of best moves and 68.5% of
+  judgments (median |eval| delta 37 cp); serial vs concurrent agrees on 72.5% /
+  68.7% (36 cp). Batching adds no divergence beyond the engine's own noise, and
+  costs no depth. What IS identical is everything the clock cannot touch —
+  positions, played moves, meta, payload shape.

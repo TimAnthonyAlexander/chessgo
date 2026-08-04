@@ -256,6 +256,66 @@ class GomachineClient
     }
 
     /**
+     * Full-game analysis for MANY games at once, issued CONCURRENTLY.
+     *
+     * Same per-game work as {@see analyzeGame()} / {@see duckAnalyzeGame()} /
+     * {@see antichessAnalyzeGame()} — identical endpoints, identical bodies,
+     * identical timeouts — but the requests are in flight together instead of
+     * one after another. The engine keeps `min(6, cores)` independent search
+     * groups (`zugzwang/src/serve.cpp`), each leased for the duration of one
+     * `/analyze-game` call, and a strictly sequential caller leaves all but one
+     * of them idle. Its HTTP layer is a 128-thread pool, so concurrency is
+     * bounded by the search groups, not by the socket handling.
+     *
+     * $concurrency MUST stay below the pool size: live play (bot moves, the
+     * analysis board) leases from the same groups, and saturating them makes a
+     * game stutter. See `engine.analysis_concurrency`.
+     *
+     * One request failing never fails the batch — every input key gets an entry
+     * back, carrying either the decoded body or the error string that
+     * {@see post()} would have thrown. Keys are preserved, so callers can key
+     * the batch by game id.
+     *
+     * @param array<array-key, array{moves: list<string>, variant?: string, startFen?: string|null, movetimeMs?: int|null}> $jobs
+     * @return array<array-key, array{ok: bool, data: array<string, mixed>|null, error: string|null}>
+     */
+    public function analyzeGameMany(array $jobs, int $concurrency = 3): array
+    {
+        $requests = [];
+
+        foreach ($jobs as $key => $job) {
+            $moves = array_values(array_map('strval', $job['moves'] ?? []));
+            $variant = (string) ($job['variant'] ?? 'standard');
+            $movetimeMs = $job['movetimeMs'] ?? null;
+
+            // Per-variant endpoint + default movetime, mirroring the single-game
+            // methods exactly so a batched analysis is byte-identical to a
+            // sequential one.
+            [$path, $defaultMovetime] = match ($variant) {
+                'duck' => ['/duck/analyze-game', 250],
+                'antichess' => ['/antichess/analyze-game', 250],
+                default => ['/analyze-game', 100],
+            };
+
+            $body = [
+                'moves' => $moves,
+                'movetime' => $movetimeMs ?? $defaultMovetime,
+            ];
+            // Only the standard endpoint takes a start position (see analyzeGame()).
+            if ($path === '/analyze-game') {
+                $startFen = $job['startFen'] ?? null;
+                if (is_string($startFen) && $startFen !== '') {
+                    $body['startFen'] = $startFen;
+                }
+            }
+
+            $requests[$key] = ['path' => $path, 'body' => $body, 'timeoutMs' => 120_000];
+        }
+
+        return $this->postMany($requests, $concurrency);
+    }
+
+    /**
      * Duck Chess full-game analysis: replay composite `moves`
      * (`"<pieceUCI>:<duckSquare>"`) from the standard start and evaluate every
      * resulting position with the duck engine at full strength. Mirrors
@@ -572,5 +632,148 @@ class GomachineClient
         }
 
         return $decoded;
+    }
+
+    /**
+     * POST several requests CONCURRENTLY, at most $concurrency in flight.
+     *
+     * The sibling of {@see post()}: same URL, headers, body encoding, connect
+     * timeout and per-request timeout override. The one deliberate difference
+     * is the failure mode — post() throws, this REPORTS. A batch is only worth
+     * having if one bad game can't take the other 149 with it, so every input
+     * key comes back with `ok` plus either `data` or the exact message post()
+     * would have thrown.
+     *
+     * Protected for the same reason as post(): {@see \App\Services\ZugzwangClient}
+     * reuses it for zugzwang-only endpoints.
+     *
+     * @param array<array-key, array{path: string, body: array<string, mixed>, timeoutMs?: int|null}> $requests
+     * @return array<array-key, array{ok: bool, data: array<string, mixed>|null, error: string|null}>
+     */
+    protected function postMany(array $requests, int $concurrency = 3): array
+    {
+        if ($requests === []) {
+            return [];
+        }
+
+        $limit = max(1, $concurrency);
+        $queue = array_keys($requests);
+        $out = [];
+
+        $mh = curl_multi_init();
+
+        /** @var array<int, array-key> $inflight spl_object_id => request key */
+        $inflight = [];
+        /** @var array<int, \CurlHandle> $handles */
+        $handles = [];
+
+        try {
+            do {
+                // Top up the in-flight window.
+                while (count($inflight) < $limit && $queue !== []) {
+                    $key = array_shift($queue);
+                    $req = $requests[$key];
+
+                    $ch = curl_init($this->baseUrl . $req['path']);
+                    if ($ch === false) {
+                        $out[$key] = ['ok' => false, 'data' => null, 'error' => 'could not initialise request'];
+
+                        continue;
+                    }
+
+                    curl_setopt_array($ch, [
+                        CURLOPT_RETURNTRANSFER => true,
+                        CURLOPT_POST => true,
+                        CURLOPT_POSTFIELDS => json_encode($req['body'], JSON_THROW_ON_ERROR),
+                        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+                        CURLOPT_TIMEOUT_MS => $req['timeoutMs'] ?? $this->timeoutMs,
+                        CURLOPT_CONNECTTIMEOUT_MS => 2000,
+                    ]);
+
+                    $id = spl_object_id($ch);
+                    $inflight[$id] = $key;
+                    $handles[$id] = $ch;
+                    curl_multi_add_handle($mh, $ch);
+                }
+
+                $status = curl_multi_exec($mh, $running);
+                if ($status !== CURLM_OK) {
+                    break;
+                }
+
+                // Reap everything that finished this round.
+                while (($info = curl_multi_info_read($mh)) !== false) {
+                    /** @var \CurlHandle $ch */
+                    $ch = $info['handle'];
+                    $id = spl_object_id($ch);
+                    $key = $inflight[$id] ?? null;
+                    if ($key !== null) {
+                        $out[$key] = $this->readMultiResult($ch, (int) $info['result'], (string) $requests[$key]['path']);
+                    }
+
+                    unset($inflight[$id], $handles[$id]);
+                    curl_multi_remove_handle($mh, $ch);
+                    curl_close($ch);
+                }
+
+                // Block until something moves rather than spinning. select()
+                // returns -1 immediately when there is nothing to wait on
+                // (all handles just finished / none added yet), so guard it.
+                if ($running > 0 && curl_multi_select($mh, 1.0) === -1) {
+                    usleep(1000);
+                }
+            } while ($running > 0 || $inflight !== [] || $queue !== []);
+        } finally {
+            foreach ($handles as $ch) {
+                curl_multi_remove_handle($mh, $ch);
+                curl_close($ch);
+            }
+
+            curl_multi_close($mh);
+        }
+
+        // Anything that never produced a result (a curl_multi_exec failure
+        // above) still has to answer for its key.
+        foreach (array_keys($requests) as $key) {
+            $out[$key] ??= ['ok' => false, 'data' => null, 'error' => 'engine batch aborted'];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Decode one finished multi handle with EXACTLY {@see post()}'s validation
+     * order and messages — unreachable, empty, non-JSON, HTTP >= 400 — reported
+     * instead of thrown.
+     *
+     * @return array{ok: bool, data: array<string, mixed>|null, error: string|null}
+     */
+    private function readMultiResult(\CurlHandle $ch, int $result, string $path): array
+    {
+        $raw = curl_multi_getcontent($ch);
+        $code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+
+        if ($result !== CURLE_OK) {
+            return [
+                'ok' => false,
+                'data' => null,
+                'error' => sprintf('engine unreachable at %s%s: %s', $this->baseUrl, $path, curl_error($ch)),
+            ];
+        }
+        if (!is_string($raw)) {
+            return ['ok' => false, 'data' => null, 'error' => 'engine returned no response'];
+        }
+
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
+            return ['ok' => false, 'data' => null, 'error' => 'engine returned invalid JSON: ' . $raw];
+        }
+        if ($code >= 400) {
+            $msg = is_string($decoded['error'] ?? null) ? $decoded['error'] : 'engine error';
+
+            return ['ok' => false, 'data' => null, 'error' => sprintf('engine %d: %s', $code, $msg)];
+        }
+
+        return ['ok' => true, 'data' => $decoded, 'error' => null];
     }
 }

@@ -161,6 +161,15 @@ class EngineSelector extends GomachineClient
     }
 
     #[Override]
+    public function analyzeGameMany(array $jobs, int $concurrency = 3): array
+    {
+        // Same routing as analyzeGame()/duckAnalyzeGame()/antichessAnalyzeGame()
+        // — the batch just puts several of those in flight at once, and every
+        // one of them is a primary-engine call.
+        return $this->primaryOnly(static fn (GomachineClient $c): array => $c->analyzeGameMany($jobs, $concurrency));
+    }
+
+    #[Override]
     public function duckAnalyzeGame(array $moves, int $movetimeMs = 250): array
     {
         return $this->primaryOnly(static fn (GomachineClient $c): array => $c->duckAnalyzeGame($moves, $movetimeMs));

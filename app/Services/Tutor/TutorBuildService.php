@@ -6,6 +6,7 @@ use App\Models\Game;
 use App\Models\TutorReport;
 use App\Models\TutorBaseline;
 use App\Models\User;
+use App\Services\GameAnalysisService;
 use App\Services\NotificationService;
 use BaseApi\App;
 use Throwable;
@@ -69,14 +70,22 @@ class TutorBuildService
      * costs a JSON decode, so charging it against the budget would be charging
      * for nothing.
      *
-     * The 21s is per-position movetime x plies with a cold eval cache (a
-     * 2000-rated bullet player's games run 60-100 plies), and it is the reason
-     * the budget cannot be the only lever: at that rate 150 fresh games is
-     * ~50 minutes, not 15. Prod is nearer the warm end because the eval cache
-     * is shared across every user and seeded from the Lichess dump. Cutting
-     * the cold case further means cutting per-position movetime, which is
-     * tracked separately in docs/tasks/open/tutor.md — do not "fix" it by
-     * quietly shrinking this number until the sample stops meaning anything.
+     * The 21s was per-position movetime x plies with a cold eval cache (a
+     * 2000-rated bullet player's games run 60-100 plies) — and it was measured
+     * while the build analyzed games strictly one at a time. It no longer does:
+     * warmAnalyses() below sends the whole sample through
+     * GameAnalysisService::analyzeMany(), which keeps `engine.analysis_concurrency`
+     * (3) full-game analyses in flight instead of one, because the engine has
+     * six independent search groups and a serial caller leaves five idle. The
+     * same 83-fresh-game cold build measured 864s serial and 332s concurrent
+     * (2.6x), same report either way; the numbers are in
+     * docs/tasks/open/tutor.md. Per-position movetime is not a lever — the
+     * engine clamps /analyze-game to a 100ms floor.
+     *
+     * So do not "fix" a slow build by quietly shrinking this number until the
+     * sample stops meaning anything, and do not raise the concurrency to soak
+     * up the whole pool either: live play leases from the same six groups, and
+     * at 6 a bot move waits seconds.
      *
      * 150 rather than a rounder 100: below ~30 fresh games a category's numbers
      * start moving on single games, and with the per-category floor below, 150
@@ -165,6 +174,9 @@ class TutorBuildService
 
     public function __construct(
         private readonly TutorGameReader $reader,
+        // Used only to warm the sample's analyses concurrently before the
+        // reader runs — the reader still owns every read of them.
+        private readonly GameAnalysisService $analysis,
         private readonly TutorMetrics $metrics,
         private readonly TutorGrade $grade,
         private readonly TutorBaselineReader $baselines,
@@ -234,22 +246,34 @@ class TutorBuildService
 
         $allocation = self::allocateAnalysisBudget($this->demandFor($eligible));
 
+        $sampledByCategory = [];
         foreach ($eligible as $category => $games) {
             $sampled = $this->sample($games, $allocation[$category] ?? 0);
             if (count($sampled) < count($games)) {
                 $capHit = true;
             }
 
+            $sampledByCategory[$category] = $sampled;
+        }
+
+        // Read BEFORE any engine work: both the warm pass and the reader store
+        // the analysis they compute back on the row, so afterwards every game
+        // looks cached. This is also what the allocator's `uncached` counts, so
+        // `analyzed` and the budget stay the same measure.
+        $hadAnalysis = [];
+        foreach ($sampledByCategory as $sampled) {
+            foreach ($sampled as $game) {
+                $hadAnalysis[$game->id] = self::isAnalyzed($game);
+            }
+        }
+
+        $this->warmAnalyses($sampledByCategory);
+
+        foreach ($sampledByCategory as $category => $sampled) {
             $measured = [];
             $normalized = [];
 
             foreach ($sampled as $game) {
-                // Read BEFORE the reader runs: read() stores the analysis it
-                // computes back on the row, so afterwards every game looks
-                // cached. This is also what the allocator's `uncached` counts,
-                // so `analyzed` and the budget stay the same measure.
-                $hadAnalysis = self::isAnalyzed($game);
-
                 $normal = $this->reader->read($game, $user->id);
                 if ($normal === null) {
                     // The reader already logged why. Count it, so the report
@@ -260,7 +284,7 @@ class TutorBuildService
                     continue;
                 }
 
-                if (!$hadAnalysis) {
+                if (($hadAnalysis[$game->id] ?? false) === false) {
                     $analyzed++;
                 }
 
@@ -280,7 +304,7 @@ class TutorBuildService
                 $source,
                 $measured,
                 $normalized,
-                count($games),
+                count($eligible[$category]),
             );
         }
 
@@ -794,6 +818,55 @@ class TutorBuildService
         }
 
         return $alloc;
+    }
+
+    /**
+     * Analyze every sampled game that still needs it, CONCURRENTLY, before any
+     * of them is read.
+     *
+     * This is the whole of the speed-up, and it is purely a matter of ordering.
+     * TutorGameReader::read() asks GameAnalysisService for one game's analysis
+     * and blocks until the engine answers; a build that reads 150 games in a
+     * loop therefore holds exactly ONE of the engine's six search groups busy
+     * and leaves five idle for 30-50 minutes. Warming the whole sample first
+     * puts several of those calls in flight together, and read() then finds
+     * everything cached and does no engine work at all.
+     *
+     * Nothing downstream changes. The warm pass and read() go through the same
+     * GameAnalysisService cache check, so the reader's behaviour is identical
+     * whether it was warmed or not — a warmed game is just a cache hit, exactly
+     * as a game already reviewed on the analysis board is. A game the warm pass
+     * could not analyze is left alone: read() retries it serially and, if that
+     * fails too, logs and drops it, precisely as before.
+     *
+     * Failures never propagate — a report is still worth building from the
+     * games that did analyze.
+     *
+     * @param array<string, list<Game>> $sampledByCategory
+     */
+    private function warmAnalyses(array $sampledByCategory): void
+    {
+        $games = [];
+        foreach ($sampledByCategory as $sampled) {
+            foreach ($sampled as $game) {
+                // A game can be sampled by only one category (games carry one
+                // category), but analyzeMany() dedupes by id regardless.
+                $games[$game->id] = $game;
+            }
+        }
+
+        if ($games === []) {
+            return;
+        }
+
+        try {
+            $this->analysis->analyzeMany($games);
+        } catch (Throwable $e) {
+            // The per-game failures are already handled inside analyzeMany();
+            // this only catches a total engine outage, which read() will meet
+            // again game by game and report properly.
+            error_log('[tutor] concurrent analysis warm-up failed: ' . $e->getMessage());
+        }
     }
 
     /** Does this game already carry a cached analysis? */

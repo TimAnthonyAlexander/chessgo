@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Game;
+use BaseApi\App;
 use RuntimeException;
 
 /**
@@ -85,6 +86,151 @@ class GameAnalysisService
         $game->save();
 
         return $payload;
+    }
+
+    /**
+     * Analyze MANY games, issuing the engine calls concurrently, and return
+     * `game id => payload` (null for a game whose analysis failed).
+     *
+     * This is a scheduling change and nothing else. Every game still goes
+     * through the same cache check, the same unsupported-variant rule, the same
+     * {@see build()} and the same `setAnalysis()`+`save()` as {@see analyze()},
+     * so a report-triggered analysis and a review-board-triggered one produce
+     * the identical row. What changes is that the engine calls overlap: PHP's
+     * blocking curl left five of the engine's six search groups idle for the
+     * whole of a Tutor build.
+     *
+     * Cached games cost nothing and are never re-run; unsupported variants are
+     * answered exactly as the single-game path answers them. Neither reaches
+     * the engine, so neither draws on the concurrency window.
+     *
+     * Never throws on a per-game failure: one unanalyzable game maps to null so
+     * the caller can drop it and keep the rest of the batch.
+     *
+     * @param iterable<Game> $games
+     * @return array<string, array<string, mixed>|null>
+     */
+    public function analyzeMany(iterable $games, ?int $concurrency = null): array
+    {
+        $out = [];
+        /** @var array<string, Game> $pending */
+        $pending = [];
+        $jobs = [];
+
+        foreach ($games as $game) {
+            if (!$game instanceof Game) {
+                continue;
+            }
+
+            $id = (string) $game->id;
+            // The same game can be sampled once per category; analyze it once.
+            if (array_key_exists($id, $out) || isset($pending[$id])) {
+                continue;
+            }
+
+            $variant = $game->variant === '' ? 'standard' : $game->variant;
+
+            // Chess960/Crazyhouse: the standard analyzer would replay from the
+            // wrong start or with the wrong rules, so the single-game path
+            // returns an explicit "unsupported" payload and caches nothing.
+            if (!in_array($variant, ['standard', 'duck', 'antichess'], true)) {
+                $out[$id] = $this->unsupported($game);
+
+                continue;
+            }
+
+            $cached = $game->getAnalysis();
+            if ($cached !== null && ($cached['version'] ?? null) === self::VERSION) {
+                $out[$id] = $cached;
+
+                continue;
+            }
+
+            $pending[$id] = $game;
+            $jobs[$id] = [
+                'moves' => array_map('strval', $game->getMoves()),
+                'variant' => $variant,
+            ];
+        }
+
+        if ($jobs === []) {
+            return $out;
+        }
+
+        $limit = $concurrency ?? self::concurrency();
+
+        // Analyzed in chunks rather than as one giant fan-out. A 150-ply game's
+        // decoded response is a few hundred KB, and a Tutor build can ask for
+        // 150 of them; holding every one in memory before the first row is
+        // written would peak needlessly AND put all the engine work at risk of
+        // a crash near the end. Chunking saves as it goes. The chunk is a large
+        // multiple of the window so the drain at each boundary costs a few
+        // percent, not a stall per game.
+        foreach (array_chunk($jobs, max(16, $limit * 8), true) as $slice) {
+            $results = $this->engine->analyzeGameMany($slice, $limit);
+
+            foreach (array_keys($slice) as $id) {
+                $out[$id] = $this->storeResult($pending[$id], $results[$id] ?? null);
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Turn one batch entry into a saved payload, or null with the reason
+     * logged. Deliberately the same three steps the single-game path takes
+     * after its engine call — build, setAnalysis, save — so the two cannot
+     * drift apart.
+     *
+     * @param array{ok: bool, data: array<string, mixed>|null, error: string|null}|null $result
+     * @return array<string, mixed>|null
+     */
+    private function storeResult(Game $game, ?array $result): ?array
+    {
+        $fail = static function (string $why) use ($game): null {
+            error_log(sprintf('[analysis] game %s not analyzed: %s', $game->id, $why));
+
+            return null;
+        };
+
+        if ($result === null) {
+            return $fail('no result returned for this game');
+        }
+        if (($result['ok'] ?? false) !== true) {
+            return $fail((string) ($result['error'] ?? 'unknown engine error'));
+        }
+
+        $positions = is_array($result['data']['positions'] ?? null) ? $result['data']['positions'] : [];
+        if ($positions === []) {
+            return $fail('engine returned no positions');
+        }
+
+        try {
+            $payload = $this->build(
+                $this->gameMeta($game),
+                array_map('strval', $game->getMoves()),
+                array_map('strval', $game->getSans()),
+                $positions,
+            );
+
+            $game->setAnalysis($payload);
+            $game->save();
+
+            return $payload;
+        } catch (\Throwable $e) {
+            return $fail($e->getMessage());
+        }
+    }
+
+    /**
+     * Concurrent full-game analyses allowed in flight, from
+     * `engine.analysis_concurrency` (see config/app.php for why it is a share
+     * of the engine's search pool and not the whole of it).
+     */
+    private static function concurrency(): int
+    {
+        return max(1, (int) (App::config('engine.analysis_concurrency') ?? 3));
     }
 
     /**
