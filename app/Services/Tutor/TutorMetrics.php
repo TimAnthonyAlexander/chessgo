@@ -1,0 +1,495 @@
+<?php
+
+namespace App\Services\Tutor;
+
+/**
+ * The metric definitions. This is the single source of truth for what every
+ * Tutor number MEANS, and it is deliberately the only place either corpus is
+ * measured.
+ *
+ * Two very different producers feed this class:
+ *   1. A user's own games, evaluated by zugzwang via /analyze-game.
+ *   2. The public Lichess database dump, which ships %eval annotations.
+ * They must be measured identically or the peer comparison is meaningless —
+ * so both are normalized into the same per-ply shape (see perGame()) and run
+ * through this one implementation. Nothing here calls an engine, touches the
+ * database, or knows where its input came from.
+ *
+ * ON CP-LOSS. A move's cost is the eval DELTA across it — the position before
+ * versus the position after, from the mover's point of view — not "best move
+ * versus played move". That choice is deliberate: a delta needs only per-
+ * position evals, which both corpora have, whereas a best-move comparison
+ * needs a principal variation, which the Lichess dump does not carry. Defining
+ * it this way makes the two corpora directly comparable, and reduces the
+ * engine difference between them to a question of scale rather than a
+ * difference in kind. See docs/tasks/open/tutor.md.
+ *
+ * Note this differs slightly from GameAnalysisService::cpLoss(), which does
+ * compare against the best achievable line. That service drives the per-game
+ * analysis board, where "you missed this specific better move" is the point.
+ * Here the point is comparability across two corpora, so the definitions
+ * differ on purpose rather than by accident.
+ */
+class TutorMetrics
+{
+    /** Mate scores are folded to a large finite centipawn value, as elsewhere. */
+    public const int MATE_CP = 100_000;
+
+    /** A single move can't contribute more than this to ACPL. Without a cap,
+     *  one catastrophic blunder in one game dominates a whole rating band. */
+    public const int CP_LOSS_CAP = 1000;
+
+    /** Evals beyond this are clamped before the delta is taken. Past roughly a
+     *  queen, further "improvement" is not a measure of move quality — it's
+     *  noise in a decided position, and it would otherwise swamp the average. */
+    public const int EVAL_CLAMP = 1500;
+
+    /** An opponent move losing at least this much is an opportunity you were
+     *  handed. Matches GameAnalysisService's MISTAKE threshold. */
+    public const int OPPORTUNITY_CP = 150;
+
+    /** Your reply counts as "punished" if it costs at most this. */
+    public const int PUNISH_CP = 50;
+
+    /** Eval (mover POV) at which a position counts as winning / lost for the
+     *  conversion and resourcefulness triggers — about two pawns. */
+    public const int DECISIVE_CP = 200;
+
+    /** Triggers are ignored before this ply, so an opening trap the engine
+     *  briefly loves doesn't count as "a winning position you failed to
+     *  convert". */
+    public const int TRIGGER_MIN_PLY = 12;
+
+    /** Fewer non-pawn, non-king pieces than this on the board = endgame. */
+    public const int ENDGAME_PIECES = 7;
+
+    /** Plies before this are the opening, unless material says otherwise. */
+    public const int OPENING_PLIES = 20;
+
+    /** A move played with less than this share of the initial clock left
+     *  counts as played under time pressure. */
+    public const float TIME_PRESSURE_FRACTION = 0.10;
+
+    /**
+     * Every metric, with the three facts the grader needs: which direction is
+     * good, whether it's a game-level outcome or a move-level average, and the
+     * difference that counts as a full grade of 1.0.
+     *
+     * `level` drives the importance weighting — a game-level outcome is worth
+     * far more than a move-level average, because outcomes are what actually
+     * move rating and move-level averages are noisy.
+     *
+     * @var array<string, array{label: string, higherIsBetter: bool, level: string, scale: float, unit: string}>
+     */
+    public const array METRICS = [
+        'accuracy' => [
+            'label' => 'Accuracy',
+            'higherIsBetter' => true,
+            'level' => 'move',
+            'scale' => 8.0,
+            'unit' => 'percent',
+        ],
+        'acpl' => [
+            'label' => 'Average centipawn loss',
+            'higherIsBetter' => false,
+            'level' => 'move',
+            'scale' => 25.0,
+            'unit' => 'cp',
+        ],
+        'awareness' => [
+            'label' => 'Tactical awareness',
+            'higherIsBetter' => true,
+            'level' => 'move',
+            'scale' => 15.0,
+            'unit' => 'percent',
+        ],
+        'conversion' => [
+            'label' => 'Conversion',
+            'higherIsBetter' => true,
+            'level' => 'game',
+            'scale' => 15.0,
+            'unit' => 'percent',
+        ],
+        'resourcefulness' => [
+            'label' => 'Resourcefulness',
+            'higherIsBetter' => true,
+            'level' => 'game',
+            'scale' => 10.0,
+            'unit' => 'percent',
+        ],
+        'flagging_loss' => [
+            'label' => 'Losses on time',
+            'higherIsBetter' => false,
+            'level' => 'game',
+            'scale' => 15.0,
+            'unit' => 'percent',
+        ],
+        'time_pressure' => [
+            'label' => 'Moves in time trouble',
+            'higherIsBetter' => false,
+            'level' => 'move',
+            'scale' => 10.0,
+            'unit' => 'percent',
+        ],
+        'win_rate' => [
+            'label' => 'Score',
+            'higherIsBetter' => true,
+            'level' => 'game',
+            'scale' => 10.0,
+            'unit' => 'percent',
+        ],
+    ];
+
+    /** Importance weights by level — a game outcome outranks a move average. */
+    public const array LEVEL_WEIGHT = ['game' => 35, 'move' => 1];
+
+    /**
+     * Measure one game from one player's point of view.
+     *
+     * $game is the normalized shape both producers emit:
+     *   color        'w'|'b'          — whose report this is
+     *   result       '1-0'|'0-1'|'1/2-1/2'
+     *   reason       'timeout'|'resign'|'checkmate'|... ('' if unknown)
+     *   opening      opening family name, or ''
+     *   baseMs       initial clock in ms, or null when unknown/untimed
+     *   plies        list, one entry per POSITION, in order. Entry i describes
+     *                the position before move i, and carries the move played
+     *                from it. The final position carries no move.
+     *                  evalWhite  ['type'=>'cp'|'mate','value'=>int] or null
+     *                  san        move played, or null on the last entry
+     *                  piece      'P'|'N'|'B'|'R'|'Q'|'K' or null
+     *                  npPieces   non-pawn non-king piece count in this position
+     *                  clockMs    mover's clock remaining AFTER the move, or null
+     *
+     * Returns per-metric contributions rather than final numbers, so many
+     * games can be folded together by aggregate() with correct weighting.
+     *
+     * @param array<string, mixed> $game
+     * @return array{metrics: array<string, array{value: float, weight: float}>, dimensions: array<string, array{value: float, weight: float}>, moves: int}
+     */
+    public function perGame(array $game): array
+    {
+        $color = ($game['color'] ?? 'w') === 'b' ? 'b' : 'w';
+        $plies = is_array($game['plies'] ?? null) ? $game['plies'] : [];
+        $mine = $color === 'w' ? 0 : 1;
+
+        $lossSum = 0.0;
+        $moveCount = 0;
+        $phaseLoss = [];
+        $phaseCount = [];
+        $pieceLoss = [];
+        $pieceCount = [];
+
+        $opportunities = 0;
+        $punished = 0;
+
+        $sawWinning = false;
+        $sawLost = false;
+
+        $pressureMoves = 0;
+        $baseMs = isset($game['baseMs']) && is_numeric($game['baseMs']) ? (float) $game['baseMs'] : null;
+
+        $count = count($plies);
+
+        for ($i = 0; $i < $count - 1; $i++) {
+            $before = $plies[$i];
+            $after = $plies[$i + 1];
+
+            // The start position is treated as carrying no eval, in EVERY
+            // corpus. The Lichess dump annotates evals after each move, so it
+            // has nothing for the initial position, while /analyze-game does.
+            // Left alone that would count White's first move in one corpus and
+            // not the other, biasing White's ACPL between the two. The rule is
+            // enforced here rather than in the producers so it cannot drift.
+            if ($i === 0) {
+                continue;
+            }
+
+            $evalBefore = $this->moverEval($before['evalWhite'] ?? null, $i % 2 === 0 ? 'w' : 'b');
+            $evalAfter = $this->moverEval($after['evalWhite'] ?? null, $i % 2 === 0 ? 'w' : 'b');
+
+            if ($evalBefore === null || $evalAfter === null) {
+                continue;
+            }
+
+            // Both evals are from the POV of whoever moved at ply i, so the
+            // drop is directly this move's cost.
+            $loss = min(self::CP_LOSS_CAP, max(0.0, $evalBefore - $evalAfter));
+
+            $isMine = $i % 2 === $mine;
+
+            if ($isMine) {
+                $lossSum += $loss;
+                $moveCount++;
+
+                $phase = $this->phaseOf($i, (int) ($before['npPieces'] ?? 14));
+                $phaseLoss[$phase] = ($phaseLoss[$phase] ?? 0.0) + $loss;
+                $phaseCount[$phase] = ($phaseCount[$phase] ?? 0) + 1;
+
+                $piece = is_string($before['piece'] ?? null) ? $before['piece'] : null;
+                if ($piece !== null && $piece !== '') {
+                    $pieceLoss[$piece] = ($pieceLoss[$piece] ?? 0.0) + $loss;
+                    $pieceCount[$piece] = ($pieceCount[$piece] ?? 0) + 1;
+                }
+
+                if ($baseMs !== null && $baseMs > 0 && isset($before['clockMs']) && is_numeric($before['clockMs'])
+                    && (float) $before['clockMs'] < $baseMs * self::TIME_PRESSURE_FRACTION) {
+                    $pressureMoves++;
+                }
+
+                // My position, my point of view: did the game pass through a
+                // decisively won or decisively lost state?
+                if ($i >= self::TRIGGER_MIN_PLY) {
+                    if ($evalBefore >= self::DECISIVE_CP) {
+                        $sawWinning = true;
+                    }
+
+                    if ($evalBefore <= -self::DECISIVE_CP) {
+                        $sawLost = true;
+                    }
+                }
+            } elseif ($loss >= self::OPPORTUNITY_CP && $i + 1 < $count - 1) {
+                // The opponent just handed me something. Did I take it?
+                $replyBefore = $this->moverEval($plies[$i + 1]['evalWhite'] ?? null, $color);
+                $replyAfter = $this->moverEval($plies[$i + 2]['evalWhite'] ?? null, $color);
+
+                if ($replyBefore !== null && $replyAfter !== null) {
+                    $opportunities++;
+                    if (max(0.0, $replyBefore - $replyAfter) <= self::PUNISH_CP) {
+                        $punished++;
+                    }
+                }
+            }
+        }
+
+        $score = $this->scoreFor((string) ($game['result'] ?? ''), $color);
+
+        $metrics = [];
+        $dimensions = [];
+
+        if ($moveCount > 0) {
+            $acpl = $lossSum / $moveCount;
+            $metrics['acpl'] = ['value' => $acpl, 'weight' => (float) $moveCount];
+            $metrics['accuracy'] = ['value' => $this->accuracyFromAcpl($acpl), 'weight' => (float) $moveCount];
+
+            foreach ($phaseCount as $phase => $n) {
+                $dimensions['accuracy@phase:' . $phase] = [
+                    'value' => $this->accuracyFromAcpl($phaseLoss[$phase] / $n),
+                    'weight' => (float) $n,
+                ];
+            }
+
+            foreach ($pieceCount as $piece => $n) {
+                $dimensions['acpl@piece:' . $piece] = [
+                    'value' => $pieceLoss[$piece] / $n,
+                    'weight' => (float) $n,
+                ];
+            }
+
+            if ($baseMs !== null && $baseMs > 0) {
+                $metrics['time_pressure'] = [
+                    'value' => 100.0 * $pressureMoves / $moveCount,
+                    'weight' => (float) $moveCount,
+                ];
+            }
+        }
+
+        if ($opportunities > 0) {
+            $metrics['awareness'] = [
+                'value' => 100.0 * $punished / $opportunities,
+                'weight' => (float) $opportunities,
+            ];
+        }
+
+        if ($score !== null) {
+            $metrics['win_rate'] = ['value' => 100.0 * $score, 'weight' => 1.0];
+
+            if ($sawWinning) {
+                $metrics['conversion'] = ['value' => $score >= 1.0 ? 100.0 : 0.0, 'weight' => 1.0];
+            }
+
+            if ($sawLost) {
+                $metrics['resourcefulness'] = ['value' => $score > 0.0 ? 100.0 : 0.0, 'weight' => 1.0];
+            }
+
+            if ($score <= 0.0) {
+                $lostOnTime = str_contains(strtolower((string) ($game['reason'] ?? '')), 'time');
+                $metrics['flagging_loss'] = ['value' => $lostOnTime ? 100.0 : 0.0, 'weight' => 1.0];
+            }
+
+            $opening = trim((string) ($game['opening'] ?? ''));
+            if ($opening !== '') {
+                $dimensions['win_rate@opening:' . $opening] = ['value' => 100.0 * $score, 'weight' => 1.0];
+                if ($moveCount > 0) {
+                    $dimensions['accuracy@opening:' . $opening] = [
+                        'value' => $this->accuracyFromAcpl($lossSum / $moveCount),
+                        'weight' => (float) $moveCount,
+                    ];
+                }
+            }
+        }
+
+        return ['metrics' => $metrics, 'dimensions' => $dimensions, 'moves' => $moveCount];
+    }
+
+    /**
+     * Fold many per-game results into final numbers.
+     *
+     * Means are weighted (a 60-move game says more about your accuracy than a
+     * 12-move one), but percentiles are taken over per-GAME values unweighted,
+     * because "a quarter of your games were worse than this" is a statement
+     * about games, not about moves.
+     *
+     * @param list<array{metrics: array<string, array{value: float, weight: float}>, dimensions: array<string, array{value: float, weight: float}>, moves: int}> $perGame
+     * @return array<string, array{value: float, sample: int, weight: float, p10: float, p25: float, p50: float, p75: float, p90: float, stddev: float}>
+     */
+    public function aggregate(array $perGame, bool $includeDimensions = true): array
+    {
+        /** @var array<string, list<array{value: float, weight: float}>> $buckets */
+        $buckets = [];
+
+        foreach ($perGame as $game) {
+            foreach ($game['metrics'] ?? [] as $key => $entry) {
+                $buckets[$key][] = $entry;
+            }
+
+            if ($includeDimensions) {
+                foreach ($game['dimensions'] ?? [] as $key => $entry) {
+                    $buckets[$key][] = $entry;
+                }
+            }
+        }
+
+        $out = [];
+
+        foreach ($buckets as $key => $entries) {
+            $weightSum = 0.0;
+            $valueSum = 0.0;
+            $values = [];
+
+            foreach ($entries as $entry) {
+                $weightSum += $entry['weight'];
+                $valueSum += $entry['value'] * $entry['weight'];
+                $values[] = $entry['value'];
+            }
+
+            if ($weightSum <= 0.0) {
+                continue;
+            }
+
+            $mean = $valueSum / $weightSum;
+
+            sort($values);
+            $varianceSum = 0.0;
+            foreach ($values as $value) {
+                $varianceSum += ($value - $mean) ** 2;
+            }
+
+            $out[$key] = [
+                'value' => $mean,
+                'sample' => count($entries),
+                'weight' => $weightSum,
+                'p10' => $this->percentile($values, 0.10),
+                'p25' => $this->percentile($values, 0.25),
+                'p50' => $this->percentile($values, 0.50),
+                'p75' => $this->percentile($values, 0.75),
+                'p90' => $this->percentile($values, 0.90),
+                'stddev' => count($values) > 1 ? sqrt($varianceSum / (count($values) - 1)) : 0.0,
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Split a composite key back into its metric and dimension halves.
+     * 'accuracy@phase:endgame' → ['accuracy', 'phase:endgame'].
+     *
+     * @return array{0: string, 1: string}
+     */
+    public function splitKey(string $key): array
+    {
+        $at = strpos($key, '@');
+
+        return $at === false ? [$key, ''] : [substr($key, 0, $at), substr($key, $at + 1)];
+    }
+
+    /**
+     * ACPL → accuracy percentage. Same exponential fit the analysis board
+     * already uses (GameAnalysisService::accuracy), so a Tutor accuracy figure
+     * and a per-game accuracy figure never disagree on screen.
+     */
+    public function accuracyFromAcpl(float $acpl): float
+    {
+        $a = 103.1668 * exp(-0.04354 * ($acpl / 10.0)) - 3.1669;
+
+        return max(0.0, min(100.0, $a));
+    }
+
+    /**
+     * Which phase a position belongs to. One rule, applied to both corpora —
+     * material first, then move number, so a queenless position on move 8 is
+     * correctly an endgame rather than an "opening".
+     */
+    public function phaseOf(int $ply, int $nonPawnPieces): string
+    {
+        if ($nonPawnPieces <= self::ENDGAME_PIECES) {
+            return 'endgame';
+        }
+
+        return $ply < self::OPENING_PLIES ? 'opening' : 'middlegame';
+    }
+
+    /**
+     * A White-POV eval, converted to the given side's point of view and
+     * clamped. Returns null when the position carries no eval.
+     *
+     * @param array{type?: string, value?: int|float}|null $evalWhite
+     */
+    private function moverEval(?array $evalWhite, string $side): ?float
+    {
+        if ($evalWhite === null || !isset($evalWhite['type'], $evalWhite['value'])) {
+            return null;
+        }
+
+        $cp = $evalWhite['type'] === 'mate'
+            ? ($evalWhite['value'] >= 0 ? self::MATE_CP - abs((int) $evalWhite['value']) : -(self::MATE_CP - abs((int) $evalWhite['value'])))
+            : (float) $evalWhite['value'];
+
+        if ($side === 'b') {
+            $cp = -$cp;
+        }
+
+        return max(-self::EVAL_CLAMP, min(self::EVAL_CLAMP, $cp));
+    }
+
+    /** 1.0 win, 0.5 draw, 0.0 loss, null if the result is unparseable. */
+    private function scoreFor(string $result, string $color): ?float
+    {
+        return match ($result) {
+            '1-0' => $color === 'w' ? 1.0 : 0.0,
+            '0-1' => $color === 'w' ? 0.0 : 1.0,
+            '1/2-1/2' => 0.5,
+            default => null,
+        };
+    }
+
+    /** @param list<float> $sorted */
+    private function percentile(array $sorted, float $q): float
+    {
+        $n = count($sorted);
+        if ($n === 0) {
+            return 0.0;
+        }
+
+        if ($n === 1) {
+            return $sorted[0];
+        }
+
+        $pos = $q * ($n - 1);
+        $lo = (int) floor($pos);
+        $hi = (int) ceil($pos);
+
+        return $sorted[$lo] + ($sorted[$hi] - $sorted[$lo]) * ($pos - $lo);
+    }
+}

@@ -60,6 +60,9 @@ use App\Controllers\TournamentGamesController;
 use App\Controllers\TournamentJoinController;
 use App\Controllers\TournamentWithdrawController;
 use App\Controllers\ArenaInternalController;
+use App\Controllers\TutorController;
+use App\Controllers\TutorReportController;
+use App\Controllers\TutorTrendController;
 use BaseApi\Http\Middleware\RateLimitMiddleware;
 use BaseApi\Http\SessionStartMiddleware;
 use BaseApi\Permissions\PermissionsMiddleware;
@@ -583,6 +586,45 @@ $router->post('/tournaments/{id}/withdraw', [
 
 // Internal: the hub polls this to drive Arena pairing (secret-gated, no session)
 $router->get('/internal/arenas/active', [ArenaInternalController::class]);
+
+// ================================
+// Tutor — the player report card (docs/tasks/open/tutor.md)
+// ================================
+
+// Your shelf of reports + whether you can build another (and if not, why)
+$router->get('/tutor/reports', [
+    CombinedAuthMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    TutorController::class,
+]);
+
+// Request a build. Cheap to call, expensive to serve — the work is queued, so
+// this is limited far more tightly than the reads.
+$router->post('/tutor/reports', [
+    CombinedAuthMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '10/1m'],
+    TutorController::class,
+]);
+
+// One report's full payload. Private to its owner (admins excepted).
+$router->get('/tutor/reports/{id}', [
+    CombinedAuthMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    TutorReportController::class,
+]);
+
+$router->delete('/tutor/reports/{id}', [
+    CombinedAuthMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '30/1m'],
+    TutorReportController::class,
+]);
+
+// One metric across every report you've built — the trend view.
+$router->get('/tutor/trend', [
+    CombinedAuthMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '120/1m'],
+    TutorTrendController::class,
+]);
 
 // ================================
 // Development Only

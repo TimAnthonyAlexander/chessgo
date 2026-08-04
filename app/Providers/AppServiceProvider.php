@@ -14,6 +14,12 @@ use App\Services\EngineSelector;
 use App\Services\BotGameService;
 use App\Services\GuessGameService;
 use App\Services\GameAnalysisService;
+use App\Services\Tutor\TutorBaselineReader;
+use App\Services\Tutor\TutorBuildService;
+use App\Services\Tutor\TutorDrillBuilder;
+use App\Services\Tutor\TutorGameReader;
+use App\Services\Tutor\TutorGrade;
+use App\Services\Tutor\TutorMetrics;
 use App\Services\WsTicketService;
 use App\Services\HubClient;
 use App\Services\Glicko2Service;
@@ -68,6 +74,16 @@ class AppServiceProvider extends ServiceProvider
 
         // Server-side position-eval cache in front of /analyze (SPEC §6)
         $container->singleton(EvalCacheService::class);
+
+        // Tutor: the player report card (docs/tasks/open/tutor.md). TutorMetrics
+        // is the single definition of what every number means, shared by the
+        // report builder and the baseline importer so the two can be compared.
+        $container->singleton(TutorMetrics::class);
+        $container->singleton(TutorGrade::class);
+        $container->singleton(TutorBaselineReader::class);
+        $container->singleton(TutorGameReader::class);
+        $container->singleton(TutorDrillBuilder::class);
+        $container->singleton(TutorBuildService::class);
 
         // Example: Register a custom service with manual configuration
         // $container->singleton(SomeService::class, function (ContainerInterface $c) {
