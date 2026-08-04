@@ -147,7 +147,17 @@ while (($line = fgets($handle)) !== false && $done < $limit) {
 fclose($handle);
 
 if (count($pairs) < 500) {
-    fwrite(STDERR, "\nToo few paired positions to fit anything trustworthy (" . count($pairs) . ").\n");
+    fwrite(STDERR, sprintf(
+        "\nToo few paired positions to fit anything trustworthy: %d pairs from %d games (%d games failed).\n",
+        count($pairs),
+        $done,
+        $failed,
+    ));
+
+    if ($failed > $done) {
+        fwrite(STDERR, "Most games failed outright — check the engine is up: curl 127.0.0.1:6476/healthz\n");
+    }
+
     exit(1);
 }
 

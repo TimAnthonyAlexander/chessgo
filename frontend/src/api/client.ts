@@ -1637,3 +1637,212 @@ export interface ArenaGame {
 export function getTournamentGames(id: string): Promise<{ games: ArenaGame[] }> {
     return request(`/tournaments/${encodeURIComponent(id)}/games`)
 }
+
+// --- Tutor: the player report card (docs/tasks/open/tutor.md) ---
+
+/** How a measured value compares to players in the same rating band. Every
+ *  Tutor number is relative — an absolute accuracy figure says nothing, and
+ *  "below other 1500s" is the only form that's actionable. */
+export interface TutorComparison {
+    metric: string
+    /** '' for a plain metric, else a qualifier: 'phase:endgame', 'piece:R',
+     *  'opening:Sicilian Defense'. */
+    dimension: string
+    label: string
+    /** Present on entries inside `phases`/`pieces`/`openings`: the dimension
+     *  with its family prefix stripped, ready to render. */
+    name?: string
+    mine: number
+    peer: number
+    /** Games behind YOUR number. Always shown next to it — a figure without
+     *  its sample size is an argument, not a fact. */
+    sample: number
+    /** Games behind the PEER number. */
+    peerSample: number
+    /** [-1, 1]. Positive is always good, whichever direction the raw metric runs. */
+    grade: number
+    /** 'much better' | 'better' | 'slightly better' | 'similar' | … */
+    wording: string
+    /** grade x sqrt(evidence x level weight). Drives ranking, not display. */
+    importance: number
+    /** Where you sit in the peer distribution, 1-99, or null without enough
+     *  percentile data. */
+    percentile: number | null
+    higherIsBetter: boolean
+    unit: 'percent' | 'cp'
+}
+
+/** A measured value on its own, before comparison. */
+export interface TutorMetricValue {
+    value: number
+    sample: number
+    label: string
+    unit: 'percent' | 'cp'
+    higherIsBetter: boolean
+}
+
+/** A position from one of the player's OWN games, to be replayed. */
+export interface TutorDrillPosition {
+    fen: string
+    gameId: string
+    ply: number
+    color: 'w' | 'b'
+    san: string | null
+    /** Centipawns lost at this moment — drills are ordered by it. */
+    swing: number
+    playedAt: string | null
+}
+
+/**
+ * What to DO about a weakness. Exactly one per weakness card, by design: a
+ * card with four links is a card with no recommendation.
+ *
+ * - `puzzles` — a themed set, filtered to this player's weak themes
+ * - `replay`  — positions from their own games, played out against the bot
+ * - `opening` — drill one opening from their side of it
+ * - `games`   — no honest drill exists (time trouble); show the evidence
+ */
+export interface TutorDrill {
+    kind: 'puzzles' | 'replay' | 'opening' | 'games'
+    metric: string
+    dimension: string
+    label: string
+    title: string
+    blurb: string
+    themes?: string[]
+    positions?: TutorDrillPosition[]
+    opening?: string
+    games?: { gameId: string; playedAt: string | null }[]
+}
+
+/** Which peer band produced the comparisons, so the UI can say how sure it is
+ *  rather than implying certainty it doesn't have. */
+export interface TutorPeerInfo {
+    /** 'band' = your own rating band; 'widened' = neighbouring bands merged
+     *  because yours was too thin; 'none' = no comparison was possible. */
+    tier: 'band' | 'widened' | 'none'
+    bandFrom: number
+    bandTo: number
+    source: string
+}
+
+/** One rating category's sub-report. Categories are never merged — mixing
+ *  bullet and classical accuracy into one number is meaningless. */
+export interface TutorCategoryReport {
+    category: string
+    rating: number
+    /** Games actually measured. */
+    games: number
+    /** Games available in the window before sampling. */
+    gamesAvailable: number
+    capHit: boolean
+    peer: TutorPeerInfo
+    metrics: Record<string, TutorMetricValue>
+    comparisons: TutorComparison[]
+    strengths: TutorComparison[]
+    weaknesses: TutorComparison[]
+    phases: TutorComparison[]
+    pieces: TutorComparison[]
+    openings: TutorComparison[]
+    drills: TutorDrill[]
+}
+
+/** The one sentence at the top of the report. */
+export interface TutorHeadline {
+    category: string
+    metric: string
+    text: string
+    mine: number
+    peer: number
+    sample: number
+}
+
+export interface TutorPayload {
+    version: number
+    baselineSource?: string
+    generatedAt?: string
+    rangeFrom?: string
+    rangeTo?: string
+    headline: TutorHeadline | null
+    categories: Record<string, TutorCategoryReport>
+    /** Categories that had games but not enough of them, so the page can say
+     *  "Blitz: 12 of 20 games. Play 8 more" instead of silently omitting it. */
+    insufficient: Record<string, { games: number; need: number }>
+    minGames: number
+}
+
+export interface TutorReportSummary {
+    id: string
+    status: 'queued' | 'building' | 'ready' | 'insufficient' | 'failed'
+    rangeFrom: string
+    rangeTo: string
+    rangeLabel: string
+    gamesConsidered: number
+    gamesUsed: number
+    capHit: boolean
+    builtAt: string | null
+    createdAt: string | null
+    error: string | null
+    headline: TutorHeadline | null
+    categories: string[]
+}
+
+/** Whether a new report is worth building — and if not, a reason the user can
+ *  act on. Never a bare cooldown: "no new games, play a few more" beats a
+ *  dead button with a timer, which is a recurring complaint about Lichess's. */
+export interface TutorEligibility {
+    canRequest: boolean
+    reason: string | null
+    newGames: number
+    usedToday: number
+    dailyLimit: number
+}
+
+/** Your shelf of reports, newest first. Requires auth. */
+export function getTutorReports(): Promise<{
+    reports: TutorReportSummary[]
+    eligibility: TutorEligibility
+    ranges: string[]
+    minGames: number
+}> {
+    return request('/tutor/reports')
+}
+
+/** Queue a build. Returns immediately with the queued row; a notification
+ *  arrives when it's ready. */
+export function requestTutorReport(range = '6m'): Promise<{ report: TutorReportSummary }> {
+    return request('/tutor/reports', { method: 'POST', body: JSON.stringify({ range }) })
+}
+
+/** One report in full. 404s (not 403s) for someone else's — a stranger
+ *  shouldn't learn that a given report id exists. */
+export function getTutorReport(id: string): Promise<{
+    report: TutorReportSummary
+    payload: TutorPayload
+}> {
+    return request(`/tutor/reports/${encodeURIComponent(id)}`)
+}
+
+export function deleteTutorReport(id: string): Promise<{ deleted: boolean }> {
+    return request(`/tutor/reports/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+/** One metric across every report you've built. Series with fewer than two
+ *  points are omitted — a single point is not a trend. */
+export interface TutorTrendSeries {
+    label: string
+    unit: 'percent' | 'cp'
+    higherIsBetter: boolean
+    points: { reportId: string; at: string | null; value: number | null; sample: number }[]
+    delta: number
+    improved: boolean
+}
+
+export function getTutorTrend(category?: string): Promise<{
+    categories: string[]
+    series: Record<string, Record<string, TutorTrendSeries>>
+    reports: number
+}> {
+    const q = category ? `?category=${encodeURIComponent(category)}` : ''
+    return request(`/tutor/trend${q}`)
+}
