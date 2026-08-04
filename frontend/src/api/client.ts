@@ -1661,12 +1661,28 @@ export interface TutorComparison {
     peerSample: number
     /** [-1, 1]. Positive is always good, whichever direction the raw metric runs. */
     grade: number
+    /** The same ratio BEFORE the ±1 clamp. `grade` is the verdict and saturates
+     *  by design; `spread` is what lets the meter keep separating rows that are
+     *  all "much better". Absent on reports built before it existed. */
+    spread?: number
     /** 'much better' | 'better' | 'slightly better' | 'similar' | … */
     wording: string
     /** grade x sqrt(evidence x level weight). Drives ranking, not display. */
     importance: number
-    /** Where you sit in the peer distribution, 1-99, or null without enough
-     *  percentile data. */
+    /**
+     * Where the player's average falls in the peer cell's stored quantiles.
+     *
+     * NOT RENDERED, deliberately. The baseline reservoir samples one value per
+     * GAME, so this ranks a player's average against a distribution of
+     * individual games — a different population. For the boundary-heavy
+     * metrics (conversion, resourcefulness, flagging_loss, win_rate,
+     * time_pressure) the knots are point-masses at 0/100 and the result is an
+     * arbitrary interpolation between two identical endpoints, which is what
+     * produced real rows reading "much better · 45th percentile". For the rest
+     * it is directionally right but compressed hard toward 50. The backend
+     * nulls the degenerate cases; the number that survives still is not a rank
+     * among players, so the report does not print it.
+     */
     percentile: number | null
     higherIsBetter: boolean
     unit: 'percent' | 'cp' | 'rating'
@@ -1714,7 +1730,25 @@ export interface TutorDrill {
     opening?: string
     /** Which side to drill the opening from. */
     color?: 'w' | 'b'
-    games?: { gameId: string; playedAt: string | null }[]
+    games?: TutorDrillGameRow[]
+}
+
+/** One game behind a `games`-kind drill (time trouble: no honest exercise
+ *  exists, so the drill shows the evidence instead). Every field past
+ *  `gameId`/`playedAt` is a later enrichment and optional on the wire — an
+ *  older stored report only has the first two, so render the rest
+ *  defensively. */
+export interface TutorDrillGameRow {
+    gameId: string
+    playedAt: string | null
+    color?: 'w' | 'b'
+    result?: string
+    reason?: string
+    oppRating?: number | null
+    accuracy?: number | null
+    moves?: number
+    /** Percent of the player's own clock left at their last move. */
+    clockLeftPct?: number | null
 }
 
 /** Which peer band produced the comparisons, so the UI can say how sure it is

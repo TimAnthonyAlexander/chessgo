@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react'
 import { Box, Typography } from '@mui/material'
 import GradeMeter from './GradeMeter'
-import { Caption, DirectionMark, SampleNote, Value } from './parts'
-import { isThin, relToBand } from './format'
+import { Caption, DirectionMark, SampleNote, Value, Verdict } from './parts'
+import { confidence, isSaturated, isThin, relToBand } from './format'
 
 /**
  * The report's one row shape: name and direction on the left, the single bright
@@ -18,12 +18,13 @@ export default function MeterRow({
     label,
     valueText,
     grade,
+    spread,
     sample,
     higherIsBetter,
     tone = 'plain',
     wording,
+    gapText,
     peerText,
-    percentileText,
     density = 'default',
     trailing,
     note,
@@ -31,12 +32,16 @@ export default function MeterRow({
     label: ReactNode
     valueText: string
     grade: number | null
+    /** Unclamped ratio behind `grade`; lets the meter separate saturated rows. */
+    spread?: number | null
     sample: number
     higherIsBetter?: boolean
     tone?: 'plain' | 'strength' | 'weakness'
     wording?: string
+    /** Signed distance from the band, from `fmtGap` — the figure that actually
+     * varies down a column, unlike the peer value. */
+    gapText?: string
     peerText?: string
-    percentileText?: string
     density?: 'default' | 'compact'
     /** Chevron, external-link mark — anything that says this row goes somewhere. */
     trailing?: ReactNode
@@ -45,7 +50,8 @@ export default function MeterRow({
 }) {
     const compact = density === 'compact'
     const thin = isThin(sample)
-    const meta = [wording, peerText, percentileText].filter(Boolean).join(' · ')
+    const conf = confidence(sample)
+    const meta = [gapText, peerText].filter(Boolean).join(' · ')
 
     return (
         <Box sx={{ py: compact ? 0.9 : 1.25, minWidth: 0 }}>
@@ -86,16 +92,23 @@ export default function MeterRow({
             {grade !== null && (
                 <GradeMeter
                     grade={grade}
-                    dim={thin}
+                    spread={spread}
+                    confidence={conf}
                     height={compact ? 5 : 7}
                     label={`${typeof label === 'string' ? label : 'This metric'}: ${valueText}${
                         wording ? `, ${relToBand(wording)}` : ''
-                    }`}
+                    }${isSaturated(grade) ? ', past the end of the scale' : ''}`}
                 />
             )}
 
             <Box sx={{ mt: 0.6 }}>
                 <Caption>
+                    {wording && (
+                        <>
+                            <Verdict wording={wording} tone={tone} />
+                            {' · '}
+                        </>
+                    )}
                     {meta && (
                         <>
                             {meta}

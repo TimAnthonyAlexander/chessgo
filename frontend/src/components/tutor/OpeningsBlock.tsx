@@ -1,16 +1,23 @@
+import { useState } from 'react'
 import { Box, Typography } from '@mui/material'
-import { ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import type { TutorComparison } from '../../api/client'
-import MeterRow from './MeterRow'
-import { SectionHead } from './parts'
-import { cap, directionText, fmtValue, ordinal } from './format'
+import GradeMeter from './GradeMeter'
+import { SampleNote, SectionHead } from './parts'
+import { cap, confidence, directionText, fmtGap, fmtValue } from './format'
+import { SECTION_OPENINGS } from './sections'
+
+/** Families beyond this many, per colour, sit behind a "show all" disclosure —
+ * a sorted link list doesn't need a full screen to prove there are ten of them. */
+const VISIBLE_CAP = 5
 
 /**
  * The one breakdown that goes somewhere: every row routes into the opening
- * drilldown, so this block is shaped as two columns of links with a chevron
- * rather than as another full-width meter list. Colours are never merged — the
- * same opening is a different problem from each side.
+ * drilldown, so this block is a dense, sorted list of links — one line per
+ * family, its value, its distance from the band, and its game count — rather
+ * than another full-height meter block. Colours are never merged — the same
+ * opening is a different problem from each side.
  */
 export default function OpeningsBlock({
     openings,
@@ -38,6 +45,7 @@ export default function OpeningsBlock({
     return (
         <Box sx={{ mb: 4 }}>
             <SectionHead
+                id={SECTION_OPENINGS}
                 title="Openings"
                 sub={
                     sharedLabel
@@ -93,7 +101,11 @@ function Column({
     color: 'w' | 'b'
     showLabel: boolean
 }) {
+    const [showAll, setShowAll] = useState(false)
     const sorted = [...items].sort((a, b) => b.grade - a.grade)
+    const visible = showAll ? sorted : sorted.slice(0, VISIBLE_CAP)
+    const hidden = sorted.length - visible.length
+
     return (
         <Box sx={{ minWidth: 0 }}>
             <Typography
@@ -113,51 +125,191 @@ function Column({
                     No games yet.
                 </Typography>
             ) : (
-                sorted.map((c, i) => {
-                    const name = c.name ?? cap(c.dimension)
-                    return (
+                <>
+                    {visible.map((c, i) => {
+                        const name = c.name ?? cap(c.dimension)
+                        return (
+                            <OpeningRow
+                                key={`${c.dimension}-${i}`}
+                                name={name}
+                                valueText={fmtValue(c.mine, c.unit)}
+                                gapText={noPeer ? undefined : fmtGap(c.mine, c.peer, c.unit)}
+                                grade={noPeer ? null : c.grade}
+                                spread={noPeer ? undefined : c.spread}
+                                sample={c.sample}
+                                label={showLabel ? c.label : undefined}
+                                to={`/tutor/${encodeURIComponent(reportId)}/${encodeURIComponent(category)}/opening/${color}/${encodeURIComponent(name)}`}
+                            />
+                        )
+                    })}
+                    {hidden > 0 || showAll ? (
                         <Box
-                            key={`${c.dimension}-${i}`}
-                            component={Link}
-                            to={`/tutor/${encodeURIComponent(reportId)}/${encodeURIComponent(category)}/opening/${color}/${encodeURIComponent(name)}`}
+                            role="button"
+                            tabIndex={0}
+                            aria-expanded={showAll}
+                            onClick={() => setShowAll((v) => !v)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault()
+                                    setShowAll((v) => !v)
+                                }
+                            }}
                             sx={{
-                                display: 'block',
-                                textDecoration: 'none',
-                                color: 'inherit',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 0.5,
+                                py: 0.75,
                                 mx: -1,
                                 px: 1,
                                 borderRadius: '8px',
-                                '&:hover': { bgcolor: 'var(--surface-2)' },
+                                cursor: 'pointer',
+                                color: 'var(--muted)',
+                                '&:hover': {
+                                    bgcolor: 'var(--surface-2)',
+                                    color: 'var(--text-dim)',
+                                },
                                 '&:focus-visible': { outline: '1px solid var(--accent-line)' },
                             }}
                         >
-                            <MeterRow
-                                density="compact"
-                                label={name}
-                                valueText={fmtValue(c.mine, c.unit)}
-                                grade={noPeer ? null : c.grade}
-                                sample={c.sample}
-                                // Only when the column mixes metrics; otherwise
-                                // the header already carries the direction.
-                                higherIsBetter={showLabel ? c.higherIsBetter : undefined}
-                                wording={noPeer ? undefined : c.wording}
-                                peerText={noPeer ? undefined : `peer ${fmtValue(c.peer, c.unit)}`}
-                                percentileText={
-                                    !noPeer && c.percentile != null
-                                        ? `${ordinal(c.percentile)} pct`
-                                        : undefined
-                                }
-                                note={showLabel ? c.label : undefined}
-                                trailing={
-                                    <Box sx={{ display: 'inline-flex', color: 'var(--muted)' }}>
-                                        <ChevronRight size={15} />
-                                    </Box>
-                                }
-                            />
+                            <Typography sx={{ fontSize: 12, fontWeight: 600 }}>
+                                {showAll ? 'Show fewer' : `Show all ${sorted.length}`}
+                            </Typography>
+                            <Box
+                                sx={{
+                                    display: 'inline-flex',
+                                    transform: showAll ? 'rotate(180deg)' : 'none',
+                                    transition: 'transform 120ms ease',
+                                }}
+                            >
+                                <ChevronDown size={13} />
+                            </Box>
                         </Box>
-                    )
-                })
+                    ) : null}
+                </>
             )}
+        </Box>
+    )
+}
+
+/** One family, one line: name, an inline peer-parity meter, value, gap, and
+ * game count, routing into the drilldown. The three-line `MeterRow` block was
+ * most of a screen for what is fundamentally a sorted list of links. */
+function OpeningRow({
+    name,
+    valueText,
+    gapText,
+    grade,
+    spread,
+    sample,
+    label,
+    to,
+}: {
+    name: string
+    valueText: string
+    gapText?: string
+    grade: number | null
+    spread?: number
+    sample: number
+    label?: string
+    to: string
+}) {
+    const conf = confidence(sample)
+    return (
+        <Box
+            component={Link}
+            to={to}
+            sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+                py: 0.6,
+                mx: -1,
+                px: 1,
+                borderRadius: '8px',
+                textDecoration: 'none',
+                color: 'inherit',
+                '&:hover': { bgcolor: 'var(--surface-2)' },
+                '&:focus-visible': { outline: '1px solid var(--accent-line)' },
+            }}
+        >
+            <Typography
+                sx={{
+                    fontSize: 12.5,
+                    fontWeight: 600,
+                    color: 'var(--text)',
+                    lineHeight: 1.3,
+                    flex: 1,
+                    minWidth: 0,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                }}
+            >
+                {name}
+            </Typography>
+            {label && (
+                <Typography
+                    sx={{
+                        fontSize: 10.5,
+                        color: 'var(--muted)',
+                        flexShrink: 0,
+                        whiteSpace: 'nowrap',
+                    }}
+                >
+                    {label}
+                </Typography>
+            )}
+            {grade !== null && (
+                <Box sx={{ width: 40, flexShrink: 0 }}>
+                    <GradeMeter
+                        grade={grade}
+                        spread={spread}
+                        confidence={conf}
+                        height={5}
+                        label={`${name}: ${valueText}`}
+                    />
+                </Box>
+            )}
+            <Typography
+                sx={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: 'var(--text)',
+                    flexShrink: 0,
+                    whiteSpace: 'nowrap',
+                    fontVariantNumeric: 'tabular-nums',
+                }}
+            >
+                {valueText}
+            </Typography>
+            {gapText && (
+                <Typography
+                    sx={{
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 10.5,
+                        color: 'var(--muted)',
+                        flexShrink: 0,
+                        whiteSpace: 'nowrap',
+                        fontVariantNumeric: 'tabular-nums',
+                    }}
+                >
+                    {gapText}
+                </Typography>
+            )}
+            <Typography
+                sx={{
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 10.5,
+                    flexShrink: 0,
+                    whiteSpace: 'nowrap',
+                }}
+            >
+                <SampleNote sample={sample} />
+            </Typography>
+            <Box sx={{ display: 'inline-flex', color: 'var(--muted)', flexShrink: 0 }}>
+                <ChevronRight size={14} />
+            </Box>
         </Box>
     )
 }

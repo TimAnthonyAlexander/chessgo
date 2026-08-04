@@ -35,12 +35,19 @@ export function cap(s: string): string {
     return s.length ? s[0].toUpperCase() + s.slice(1) : s
 }
 
-/** "hangingPiece" -> "Hanging piece", "rookEndgame" -> "Rook endgame". Puzzle
- * theme tags arrive camelCase from the API; this is the one place that turns
- * them into a readable label so it never renders inconsistently between the
- * report's theme table and a puzzle-page filter chip. */
+/** "hangingPiece" -> "Hanging piece", "rookEndgame" -> "Rook endgame",
+ * "mateIn1" -> "Mate in 1". Puzzle theme tags arrive camelCase from the API;
+ * this is the one place that turns them into a readable label so it never
+ * renders inconsistently between the report's theme table and a puzzle-page
+ * filter chip.
+ *
+ * Two boundaries, not one: lowercase->uppercase AND letter->digit. Only the
+ * first was handled, so every "mateInN" tag rendered as "Mate in1". */
 export function themeLabel(tag: string): string {
-    const spaced = tag.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase()
+    const spaced = tag
+        .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+        .replace(/([a-zA-Z])(\d)/g, '$1 $2')
+        .toLowerCase()
     return spaced.length ? spaced[0].toUpperCase() + spaced.slice(1) : spaced
 }
 
@@ -54,6 +61,80 @@ export const THIN_SAMPLE = 12
 
 export function isThin(sample: number): boolean {
     return sample < THIN_SAMPLE
+}
+
+/**
+ * Sample size at which a figure is drawn at full strength. Between THIN_SAMPLE
+ * and here, confidence ramps continuously rather than snapping.
+ */
+export const FULL_SAMPLE = 40
+
+/**
+ * How strongly to draw a figure, 0.35–1, from the number of games behind it.
+ * A step function at THIN_SAMPLE rendered a 16-game row and a 110-game row
+ * identically — the same "confident number from a thin sample" problem one
+ * threshold up. sqrt, because evidence accumulates with the square root of the
+ * sample and the eye should see that curve, not a cliff.
+ */
+export function confidence(sample: number): number {
+    if (!Number.isFinite(sample) || sample <= 0) return 0.35
+    return Math.min(1, Math.max(0.35, Math.sqrt(sample / FULL_SAMPLE)))
+}
+
+/**
+ * The signed distance from the band, in the metric's own unit — "+4.9 pts",
+ * "-19 cp", "+172". This is what rows print instead of restating the peer
+ * value: the peer figure is near-identical down a column (it's the same band)
+ * while the gap is the thing that actually varies row to row, and it is the
+ * number the meter is drawing. Percentage-point gaps say "pts", never "%",
+ * because a gap between two percentages is not itself a percentage.
+ */
+export function fmtGap(mine: number, peer: number, unit: TutorUnit): string {
+    const d = mine - peer
+    const sign = d > 0 ? '+' : d < 0 ? '-' : '±'
+    const mag = Math.abs(d)
+    if (unit === 'percent') return `${sign}${mag.toFixed(1)} pts`
+    if (unit === 'rating') return `${sign}${Math.round(mag)}`
+    return `${sign}${Math.round(mag)} cp`
+}
+
+/**
+ * The grade at which the meter runs out of track. The backend clamps `grade`
+ * to [-1, 1], so a row at the rail is "at least this far from the band" and
+ * not "exactly this far" — the meter draws a caret at the end to say so, and
+ * the printed gap carries the real magnitude.
+ */
+export function isSaturated(grade: number | null): boolean {
+    return grade !== null && Math.abs(grade) >= 1
+}
+
+/** Where the linear part of the meter ends — the point the backend calls
+ * "much better/worse". Rows inside it are drawn strictly proportionally. */
+const MUCH_MARK = 0.72
+
+/**
+ * How far along the meter a comparison sits, in [-1, 1].
+ *
+ * `grade` is a VERDICT: the backend clamps it to ±1 so that "much better"
+ * means one thing, and on real reports 46% of rows sat exactly at that clamp.
+ * Drawn directly, that made the single largest visual element on the page
+ * encode nothing — a third of the bars were the same bar. `spread` is the same
+ * ratio BEFORE clamping, so it still separates the rows the grade has flattened
+ * together.
+ *
+ * The mapping is deliberately linear up to the "much" line, where most rows
+ * live, so the bar can be read proportionally and the scale can be stated in
+ * one sentence. Past that line it compresses towards the rail but never
+ * reaches it, so two rows that are both off the scale still differ. Exact
+ * magnitudes are never left to the bar alone — every row prints its gap.
+ */
+export function meterMagnitude(grade: number, spread?: number | null): number {
+    const x = spread != null && Number.isFinite(spread) ? spread : grade
+    if (!Number.isFinite(x)) return 0
+    const mag = Math.abs(x)
+    const sign = x < 0 ? -1 : 1
+    if (mag <= 1) return sign * MUCH_MARK * mag
+    return sign * Math.min(1, MUCH_MARK + (1 - MUCH_MARK) * (1 - 1 / mag))
 }
 
 /** "1 game" / "23 games". */

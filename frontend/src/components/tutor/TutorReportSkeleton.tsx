@@ -3,7 +3,9 @@ import SkeletonBar from '../home/SkeletonBar'
 
 /** Loading placeholder shaped like the real report: eyebrow, hero figure, then
  * the rail/main split with meter-shaped rows, so the layout doesn't jump when
- * data arrives. Mirrors ProfileSkeleton's idiom. */
+ * data arrives. The rail column mirrors its real contents — category rows,
+ * a short jump-nav list, a peer-band figure — so it doesn't visibly grow once
+ * the report loads. Mirrors ProfileSkeleton's idiom. */
 export default function TutorReportSkeleton() {
     return (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: { xs: 3, md: 4 } }}>
@@ -26,11 +28,18 @@ export default function TutorReportSkeleton() {
                     alignItems: 'start',
                 }}
             >
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                    {Array.from({ length: 3 }).map((_, i) => (
-                        <SkeletonBar key={i} h={34} sx={{ borderRadius: '10px' }} />
-                    ))}
-                    <SkeletonBar w="70%" h={12} sx={{ mt: 2 }} />
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                        {Array.from({ length: 3 }).map((_, i) => (
+                            <SkeletonBar key={i} h={34} sx={{ borderRadius: '10px' }} />
+                        ))}
+                    </Box>
+                    <SkeletonBar w={100} h={26} sx={{ mt: -1 }} />
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                        {Array.from({ length: 3 }).map((_, i) => (
+                            <SkeletonBar key={i} w="65%" h={12} />
+                        ))}
+                    </Box>
                 </Box>
                 <Box>
                     <SkeletonBar w={120} h={12} sx={{ mb: 2 }} />

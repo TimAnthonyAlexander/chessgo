@@ -99,6 +99,40 @@ class TutorMetrics
     public const float TIME_PRESSURE_FRACTION = 0.10;
 
     /**
+     * How many zugzwang centipawns of ACPL gap equal one full grade of ACPL,
+     * i.e. the ACPL analogue of the accuracy metric's 25-percentage-point
+     * scale (see METRICS below for why percent metrics use 25).
+     *
+     * Accuracy and ACPL are the same underlying quantity viewed through
+     * accuracyFromAcpl()'s exponential fit, `acc(a) = 103.1668*e^(-0.004354a)
+     * - 3.1669`, so the ACPL scale isn't a free choice — it's whatever ACPL
+     * gap maps to a 25-point accuracy gap at a typical peer-band ACPL.
+     *
+     * Typical ACPL: the measured median of `mean` across all plain `acpl`
+     * baseline cells (`tutor_baseline`, dimension='') is ~119 (156 cells,
+     * range 44.7-160.9, median of the two central values 118.04/119.89).
+     * Call it a0 = 118.
+     *
+     * At a0, acc(118) = 58.55. The additive constant (-3.1669) cancels in any
+     * difference of acc() at two points, so only the exponential matters:
+     *   acc(a0) - acc(a0+d) = 103.1668*e^(-0.004354*a0) * (1 - e^(-0.004354*d))
+     * Solving acc(a0-d) = acc(a0) + 25 (how much ACPL has to DROP from a
+     * typical value to gain 25 accuracy points) gives d = ln((A0+25)/A0) /
+     * 0.004354, where A0 = acc(a0)+3.1669 = 61.72. That's d = ln(86.72/61.72)
+     * / 0.004354 = 0.3401 / 0.004354 ≈ 78.1 cp.
+     *
+     * Note the curve is convex, so this is NOT symmetric: gaining 25 points by
+     * lowering ACPL from 118 takes ~78cp, but losing 25 points by raising it
+     * takes ~119cp (the same absolute cp move matters less once ACPL is
+     * already high). A single scale constant has to serve both directions, so
+     * one of the two has to be picked; ~78cp (rounds to 80) is used because it
+     * is the tighter of the two — it does not require an implausibly large cp
+     * swing to reach a full grade, which is the whole point of widening this
+     * scale from the old, far-too-tight 25cp (56% of real rows clamped).
+     */
+    public const float ACPL_SCALE_CP = 80.0;
+
+    /**
      * Every metric, with the three facts the grader needs: which direction is
      * good, whether it's a game-level outcome or a move-level average, and the
      * difference that counts as a full grade of 1.0.
@@ -107,6 +141,16 @@ class TutorMetrics
      * far more than a move-level average, because outcomes are what actually
      * move rating and move-level averages are noisy.
      *
+     * `scale` provenance (docs/tasks/open/tutor.md, "Grading and ranking"):
+     * the design doc specifies a percentage-point gap / 25 and a rating gap /
+     * 150. Every percent-unit metric below uses 25 and `performance` uses 150,
+     * matching the spec exactly. `acpl` (unit cp) is not in the spec, since
+     * the spec only covers percent and rating metrics — it is derived from
+     * the accuracy curve instead of invented; see ACPL_SCALE_CP above for the
+     * arithmetic. Before this change these were much tighter ad hoc numbers
+     * (8/15/10/12/etc.), which is why 46.3% of real comparison rows clamped to
+     * exactly +-1 and read "much better/worse" regardless of true gap size.
+     *
      * @var array<string, array{label: string, higherIsBetter: bool, level: string, scale: float, unit: string}>
      */
     public const array METRICS = [
@@ -114,49 +158,49 @@ class TutorMetrics
             'label' => 'Accuracy',
             'higherIsBetter' => true,
             'level' => 'move',
-            'scale' => 8.0,
+            'scale' => 25.0,
             'unit' => 'percent',
         ],
         'acpl' => [
             'label' => 'Average centipawn loss',
             'higherIsBetter' => false,
             'level' => 'move',
-            'scale' => 25.0,
+            'scale' => self::ACPL_SCALE_CP,
             'unit' => 'cp',
         ],
         'awareness' => [
             'label' => 'Tactical awareness',
             'higherIsBetter' => true,
             'level' => 'move',
-            'scale' => 15.0,
+            'scale' => 25.0,
             'unit' => 'percent',
         ],
         'conversion' => [
             'label' => 'Conversion',
             'higherIsBetter' => true,
             'level' => 'game',
-            'scale' => 15.0,
+            'scale' => 25.0,
             'unit' => 'percent',
         ],
         'resourcefulness' => [
             'label' => 'Resourcefulness',
             'higherIsBetter' => true,
             'level' => 'game',
-            'scale' => 10.0,
+            'scale' => 25.0,
             'unit' => 'percent',
         ],
         'flagging_loss' => [
             'label' => 'Losses on time',
             'higherIsBetter' => false,
             'level' => 'game',
-            'scale' => 15.0,
+            'scale' => 25.0,
             'unit' => 'percent',
         ],
         'time_pressure' => [
             'label' => 'Moves in time trouble',
             'higherIsBetter' => false,
             'level' => 'move',
-            'scale' => 10.0,
+            'scale' => 25.0,
             'unit' => 'percent',
         ],
         // Lichess tracks clock behaviour twice, for good reason: how you spend
@@ -167,21 +211,21 @@ class TutorMetrics
             'label' => 'Clock remaining',
             'higherIsBetter' => true,
             'level' => 'move',
-            'scale' => 12.0,
+            'scale' => 25.0,
             'unit' => 'percent',
         ],
         'clock_when_losing' => [
             'label' => 'Clock left when you lost',
             'higherIsBetter' => true,
             'level' => 'game',
-            'scale' => 15.0,
+            'scale' => 25.0,
             'unit' => 'percent',
         ],
         'win_rate' => [
             'label' => 'Score',
             'higherIsBetter' => true,
             'level' => 'game',
-            'scale' => 10.0,
+            'scale' => 25.0,
             'unit' => 'percent',
         ],
         // Rating performance against the field actually faced. Graded on a

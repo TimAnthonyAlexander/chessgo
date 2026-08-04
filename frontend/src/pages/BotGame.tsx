@@ -150,7 +150,7 @@ export default function BotGame() {
     // Tutor deep links: `?fen=&color=` (replay a specific position, e.g. "Replay
     // your own position" drills) and `?opening=&color=` (drill an opening by
     // name and side — no FEN, so it just starts a normal game on that side and
-    // labels it). See DrillCard.tsx / TutorOpening.tsx.
+    // labels it). See FindingCard.tsx / TutorOpening.tsx.
     const [searchParams] = useSearchParams()
     const deepLinkConsumedRef = useRef(false)
     const [openingName, setOpeningName] = useState<string | null>(null)

@@ -43,7 +43,9 @@ export default function PeerBanner({ category }: { category: TutorCategoryReport
                     >
                         {peer.bandFrom}–{peer.bandTo}
                     </Typography>
-                    <Typography sx={{ fontSize: 12.5, color: 'var(--muted)', mt: 0.25, lineHeight: 1.5 }}>
+                    <Typography
+                        sx={{ fontSize: 12.5, color: 'var(--muted)', mt: 0.25, lineHeight: 1.5 }}
+                    >
                         Players in this rating band
                         {peer.tier === 'widened' ? ', widened for a bigger sample' : ''}.
                     </Typography>

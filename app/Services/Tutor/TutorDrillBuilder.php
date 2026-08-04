@@ -402,29 +402,115 @@ class TutorDrillBuilder
      * Time trouble has no honest drill — you cannot practise not flagging in a
      * puzzle. So this points at the evidence instead of inventing an exercise.
      *
+     * Shared by two weaknesses that are NOT the same question:
+     *   - 'flagging_loss' — did the clock end the game? Only games actually
+     *     lost on time qualify.
+     *   - 'time_pressure' — were many moves played low on the clock, win or
+     *     lose? Filtering this one to flagged losses too used to mean a
+     *     player who scrambles constantly but rarely actually flags got an
+     *     empty (null) drill card for a weakness that is real and has
+     *     evidence — the filter was answering the wrong question for half of
+     *     its callers.
+     *
+     * Every row is measured through TutorMetrics::perGame() — the same call
+     * TutorBuildService makes to build the report's own per-game table — so
+     * 'accuracy'/'moves'/'clockLeftPct' here can never disagree with the
+     * number for the same game shown elsewhere on the same report.
+     *
      * @param list<array<string, mixed>> $games
      * @return array<string, mixed>|null
      */
     private function timeDrill(array $games, string $metric): ?array
     {
-        $ids = [];
+        $entries = [];
 
         foreach ($games as $game) {
             $color = ($game['color'] ?? 'w') === 'b' ? 'b' : 'w';
             $score = $this->scoreFor((string) ($game['result'] ?? ''), $color);
+            if ($score === null) {
+                continue;
+            }
 
-            if ($score !== null && $score <= 0.0
-                && str_contains(strtolower((string) ($game['reason'] ?? '')), 'time')) {
-                $ids[] = [
+            // Matches TutorMetrics::perGame's own flagging_loss condition
+            // exactly (same substring check on the same field) — of the
+            // reason strings this app stores (checkmate, timeout, resign,
+            // draw-fivefold, draw-insufficient-material, draw-seventyfive,
+            // adjudicated), only 'timeout' contains "time", so this neither
+            // misses nor over-matches any of them.
+            $lostOnTime = $score <= 0.0
+                && str_contains(strtolower((string) ($game['reason'] ?? '')), 'time');
+
+            // Cheap test first: perGame() walks every ply, and for a flagging
+            // drill the vast majority of a sample is thrown away on this line.
+            if ($metric === 'flagging_loss' && !$lostOnTime) {
+                continue;
+            }
+
+            $measured = $this->metrics->perGame($game);
+            $pressurePct = isset($measured['metrics']['time_pressure'])
+                ? (float) $measured['metrics']['time_pressure']['value']
+                : null;
+
+            // A game only has a time_pressure figure at all when it had
+            // reconstructable clocks and at least one measured move for this
+            // player (see TutorMetrics::perGame's clockPercentCount guard).
+            if ($metric === 'time_pressure' && $pressurePct === null) {
+                continue;
+            }
+
+            // 'clock_when_losing' is only ever set by perGame() for a lost
+            // game with reconstructed clocks — null everywhere else,
+            // including every time_pressure row where the player didn't
+            // lose. That's the correct, existing definition; not recomputed
+            // here.
+            $clockLeftPct = isset($measured['metrics']['clock_when_losing'])
+                ? round((float) $measured['metrics']['clock_when_losing']['value'], 1)
+                : null;
+
+            $entries[] = [
+                'row' => [
                     'gameId' => (string) ($game['hubGameId'] ?? $game['id'] ?? ''),
                     'playedAt' => $game['playedAt'] ?? null,
-                ];
-            }
+                    'color' => $color,
+                    'result' => (string) ($game['result'] ?? ''),
+                    'reason' => (string) ($game['reason'] ?? ''),
+                    'oppRating' => isset($game['oppRating']) && is_numeric($game['oppRating'])
+                        ? (int) $game['oppRating']
+                        : null,
+                    'accuracy' => isset($measured['metrics']['accuracy'])
+                        ? round((float) $measured['metrics']['accuracy']['value'], 1)
+                        : null,
+                    // Same 'moves' TutorBuildService::gameRows() shows for
+                    // this game elsewhere in the report — both read it off
+                    // the same perGame() call, on purpose.
+                    'moves' => (int) ($measured['moves'] ?? 0),
+                    'clockLeftPct' => $clockLeftPct,
+                ],
+                'pressurePct' => $pressurePct,
+            ];
         }
 
-        if ($ids === []) {
+        if ($entries === []) {
             return null;
         }
+
+        // Most instructive first. For a flagged loss that's the game where
+        // the least clock was left when it mattered; for time_pressure (no
+        // single flag moment) it's the game with the highest share of moves
+        // played low on the clock. A missing clockLeftPct (older game, no
+        // reconstructed clocks) sorts last rather than first.
+        usort($entries, function (array $a, array $b) use ($metric): int {
+            if ($metric === 'time_pressure') {
+                return ($b['pressurePct'] ?? -1.0) <=> ($a['pressurePct'] ?? -1.0);
+            }
+
+            $av = $a['row']['clockLeftPct'] ?? PHP_FLOAT_MAX;
+            $bv = $b['row']['clockLeftPct'] ?? PHP_FLOAT_MAX;
+
+            return $av <=> $bv;
+        });
+
+        $rows = array_map(static fn(array $entry): array => $entry['row'], $entries);
 
         return [
             'kind' => 'games',
@@ -435,7 +521,7 @@ class TutorDrillBuilder
             // No drill button here by design (see timeDrill's docblock), but the
             // copy says what to DO, not what we chose not to build.
             'blurb' => 'Look at where the time went. A faster time control, or spending less of the clock on the opening, is usually the fix.',
-            'games' => array_slice($ids, 0, self::MAX_POSITIONS),
+            'games' => array_slice($rows, 0, self::MAX_POSITIONS),
         ];
     }
 

@@ -106,7 +106,11 @@ export default function CategoryTabs({
                                 }}
                             >
                                 <Typography
-                                    sx={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text-dim)' }}
+                                    sx={{
+                                        fontSize: 13.5,
+                                        fontWeight: 600,
+                                        color: 'var(--text-dim)',
+                                    }}
                                 >
                                     {cap(key)}
                                 </Typography>
@@ -123,7 +127,12 @@ export default function CategoryTabs({
                                 </Typography>
                             </Box>
                             <Box sx={{ mt: 0.75 }}>
-                                <MagnitudeBar value={info.games} max={total} height={4} dim />
+                                <MagnitudeBar
+                                    value={info.games}
+                                    max={total}
+                                    height={4}
+                                    confidence={0.35}
+                                />
                             </Box>
                             <Typography
                                 sx={{

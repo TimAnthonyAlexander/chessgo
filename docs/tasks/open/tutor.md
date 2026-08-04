@@ -381,12 +381,48 @@ number you can act on and a number you argue with.
 
 Take their scale — it's well designed and there's no reason to invent another.
 
-- Grade in **[-1, +1]**: percentage gap / 25, rating gap / 150.
-- Seven words at thresholds 1 / 0.4 / 0.2 / 0.07: *much better* through *much
-  worse*, with *similar* in the middle.
+- Grade in **[-1, +1]**: percentage gap / 25, rating gap / 150, ACPL gap / 80.
+  The percent scales shipped at 8–15 instead of 25 and the effect was
+  measurable: **46.3% of all comparison rows in a real report clamped to exactly
+  ±1**, so a third of the page said "much better/worse" and every one of those
+  bars drew the same full bar. The cp scale is the one number here not taken
+  from Lichess — it is derived through our own accuracy curve, as the ACPL
+  change worth 25 accuracy points at a typical band ACPL of ~119 (≈78, rounded
+  to 80), so "much" means the same size of mistake whichever of the two views
+  of move quality you read.
+- Seven words at thresholds 1 / 0.4 / 0.2: *much better* through *much worse*,
+  with *similar* in the middle.
 - **Importance = grade × √(sample × weight)**, weight 35 for game-level metrics
   and 1 for move-level. Sort by importance; show the top three strengths and top
   three weaknesses per category, more slots to the categories you play most.
+- **`spread` is the same ratio before the clamp**, and it is what the meter
+  actually draws. `grade` is a verdict and is *supposed* to saturate; a bar is a
+  quantity and must not. The frontend maps `spread` proportionally out to the
+  "much" line and compresses beyond it, so no two rows collapse onto the same
+  length and rows past the line carry a caret. After both changes, on the same
+  real report: clamped rows 46.3% → 12.5%, bars at the rail **46.3% → 0%**.
+
+**The percentile is computed but never rendered, and that is deliberate.** The
+baseline reservoir samples one value per *game* (`import_tutor_baselines.php`
+feeds `TutorMetrics::perGame` per game-side), so `p10..p90` describe the spread
+of individual games, while `mine` is a player's average over N of them. Ranking
+an average inside a per-game distribution is a category error. For the
+boundary-heavy metrics it is not merely noisy but arbitrary: conversion's knots
+are `0,0,100,100,100`, so the reported figure is a linear rescaling between two
+identical endpoints — that is exactly what produced real rows reading "much
+better · 45th percentile". `TutorGrade::percentileOf` now returns null when one
+knot-to-knot jump takes ≥60% of the p10–p90 range (measured separation: the
+five broken metrics sit at 0.76–1.00, the six sound ones at 0.28–0.48). What
+survives is still a rank among *games*, not among players, and compressed hard
+toward 50, so the report does not print it. A real player percentile needs a
+per-player reservoir, which the corpus cannot give us — it carries no player
+ids.
+
+For the same reason, **do not anchor the grade on `p50` or scale it by
+`stddev`**. Both were measured and both invert real results: median-anchoring
+grades a player scoring 59.5% in a band averaging 50.4% as *worse*, because the
+median sampled game is a win. `mean` is the only baseline column comparable to
+a player average.
 
 Two rules on presentation. Never show a grade without its sample size. And red
 is for the ranked weaknesses only — not for every below-average cell, or the page
@@ -406,6 +442,22 @@ links is a card with no recommendation.
 | Resourcefulness | **Replay your lost causes** | Same, from positions where you were lost and resigned or collapsed. |
 | Endgame accuracy | **Drill endgames** | Endgame-tagged puzzles, plus the endgame positions from your own games. |
 | Time / flagging | *(no drill)* | Show the games, and the move where the clock ran out on you. There is no honest drill for this, so don't fake one. |
+
+A weakness and its drill are **one card**, not a ranked row plus a separate
+card repeating it. The card states the finding once — value, band, meter,
+verdict, sample — and the action sits under it. A weakness with no drill
+(`win_rate`, `global_clock`, `clock_when_losing`, `performance` never build one)
+still renders its card and simply ends without a button, and every card can open
+the games behind it from `gameRows`, so no finding is a dead end.
+
+The `games` card shows the games, not their primary keys: date, the outcome from
+this player's side, how it ended in words, opponent rating, moves, accuracy, and
+the clock left at the end. Those fields ride on the drill rows themselves
+(`TutorDrillBuilder::timeDrill`), measured through the same
+`TutorMetrics::perGame` the rest of the report uses so a game's numbers cannot
+disagree between two places on one page. They are all optional on the wire —
+reports built before this exist and carry only `gameId` and `playedAt`, and the
+table hides a column no visible row can fill.
 
 The two replay drills are the ones nobody else has. They're built from the leak
 map, which we're computing anyway, and they're the most convincing thing on the

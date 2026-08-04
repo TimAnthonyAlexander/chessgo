@@ -35,7 +35,7 @@ class TutorGrade
      *
      * @param array{value: float, sample: int, weight: float} $mine
      * @param array{mean: float, sample: int, p10?: float, p25?: float, p50?: float, p75?: float, p90?: float} $peer
-     * @return array{metric: string, dimension: string, label: string, mine: float, peer: float, sample: int, peerSample: int, grade: float, wording: string, importance: float, percentile: int|null, higherIsBetter: bool, unit: string}
+     * @return array{metric: string, dimension: string, label: string, mine: float, peer: float, sample: int, peerSample: int, grade: float, spread: float, wording: string, importance: float, percentile: int|null, higherIsBetter: bool, unit: string}
      */
     public function compare(string $metric, string $dimension, array $mine, array $peer): array
     {
@@ -52,7 +52,14 @@ class TutorGrade
             $delta = -$delta;
         }
 
-        $grade = max(-1.0, min(1.0, $delta / max(0.001, $def['scale'])));
+        // The same direction-corrected ratio the grade is built from, but
+        // BEFORE clamping. `grade` still drives wording/importance/ranking
+        // exactly as before and is still clamped to [-1, 1] — `spread` is a
+        // pure addition so the frontend meter has something that keeps moving
+        // once `grade` has already hit the rail (still ~30% of rows even
+        // after widening the scales in Task 1).
+        $spread = $delta / max(0.001, $def['scale']);
+        $grade = max(-1.0, min(1.0, $spread));
 
         // Evidence is the smaller of the two sides — a huge peer sample can't
         // rescue a comparison built on four of your games.
@@ -69,6 +76,7 @@ class TutorGrade
             'sample' => $mine['sample'],
             'peerSample' => $peer['sample'],
             'grade' => round($grade, 4),
+            'spread' => round($spread, 4),
             'wording' => $this->wordingFor($grade),
             'importance' => round($importance, 4),
             'percentile' => $this->percentileOf($mine['value'], $peer, (bool) $def['higherIsBetter']),
@@ -76,6 +84,29 @@ class TutorGrade
             'unit' => (string) $def['unit'],
         ];
     }
+
+    /**
+     * A single knot-to-knot jump taking this much of the total p10..p90 range
+     * marks the cell as dominated by a point mass rather than a real spread.
+     *
+     * Measured over every plain `tutor_baseline` cell (dimension=''), the
+     * share of the p10-p90 range taken by the single largest adjacent jump
+     * splits cleanly in two:
+     *
+     *   accuracy 0.283, acpl 0.294, awareness 0.297, global_clock 0.336,
+     *   clock_when_losing 0.414, performance 0.478   <- real spread
+     *   win_rate 0.763, time_pressure 0.783, flagging_loss 0.998,
+     *   resourcefulness 1.000, conversion 1.000       <- point mass
+     *
+     * The gap between 0.478 and 0.763 is wide and metric-agnostic, so 0.6
+     * (computed from the knots themselves, not the metric name) keeps
+     * classifying correctly if the baselines are re-imported from a new dump
+     * with different numbers. Below this line the interpolation is real;
+     * above it, at least one pair of adjacent quantiles is identical (a
+     * degenerate 0/0/100/100/100-style cell), so any point "between" them is
+     * an arbitrary rescaling between two identical endpoints, not a rank.
+     */
+    private const float POINT_MASS_SHARE = 0.6;
 
     /**
      * Where this value sits in the peer distribution, as a rough percentile.
@@ -105,7 +136,19 @@ class TutorGrade
         // A flat distribution means the cell was stored without percentiles
         // (dimension cells keep no reservoir — see the importer). Interpolating
         // it would manufacture a rank out of nothing.
-        if (max($vals) - min($vals) <= 0.0) {
+        $totalRange = max($vals) - min($vals);
+        if ($totalRange <= 0.0) {
+            return null;
+        }
+
+        // Widen the same guard to a near-flat distribution: one point mass
+        // dominating the range is just as meaningless to interpolate inside
+        // as a fully flat one. See POINT_MASS_SHARE for the measured split.
+        $maxGap = 0.0;
+        for ($i = 0; $i < count($vals) - 1; $i++) {
+            $maxGap = max($maxGap, $vals[$i + 1] - $vals[$i]);
+        }
+        if ($maxGap / $totalRange >= self::POINT_MASS_SHARE) {
             return null;
         }
 

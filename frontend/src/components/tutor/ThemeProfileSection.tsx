@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom'
 import type { TutorThemeProfile } from '../../api/client'
 import { MagnitudeBar } from './GradeMeter'
 import { SectionHead } from './parts'
-import { isThin, themeLabel } from './format'
+import { SECTION_THEMES } from './sections'
+import { confidence, isThin, themeLabel } from './format'
 
 /**
  * The report's second, independent line of tactical evidence — solve rate per
@@ -30,6 +31,7 @@ export default function ThemeProfileSection({ profile }: { profile?: TutorThemeP
     return (
         <Box>
             <SectionHead
+                id={SECTION_THEMES}
                 title="Tactical themes"
                 sub={`Your puzzle history · solve rate, higher is better · no peer comparison`}
             />
@@ -105,7 +107,7 @@ export default function ThemeProfileSection({ profile }: { profile?: TutorThemeP
                                 <Box sx={{ mt: 0.5 }}>
                                     <MagnitudeBar
                                         value={t.rate}
-                                        dim={thin}
+                                        confidence={confidence(t.attempts)}
                                         height={4}
                                         label={`${themeLabel(t.theme)}: ${t.rate.toFixed(0)}% solved`}
                                     />

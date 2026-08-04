@@ -3,7 +3,21 @@ import { Box, Typography } from '@mui/material'
 import { ChevronDown } from 'lucide-react'
 import type { TutorCategoryReport, TutorComparison } from '../../api/client'
 import MeterRow from './MeterRow'
-import { cap, fmtValue, ordinal, pieceLabel } from './format'
+import { cap, fmtGap, fmtValue, pieceLabel } from './format'
+
+/** How far a grade must sit from parity to count as part of the story. Below
+ * this a row is close enough to the band that stacking it at full height adds
+ * length without adding a finding. */
+const NOTABLE_GRADE = 0.18
+/** Floor and ceiling on how many rows show before the reader has to ask for
+ * more — never so few that an all-parity report shows almost nothing, never
+ * so many that "show all" stops meaning anything. */
+const MIN_VISIBLE = 4
+const MAX_VISIBLE = 8
+
+function clamp(x: number, lo: number, hi: number): number {
+    return Math.max(lo, Math.min(hi, x))
+}
 
 /**
  * Every measured metric, ranked by how far it sits from the peer band — best at
@@ -13,10 +27,17 @@ import { cap, fmtValue, ordinal, pieceLabel } from './format'
  * breakdowns went: they are not separate claims, they are the same metric cut
  * by where on the board it happened, so they live one disclosure level inside
  * the metric they belong to instead of being two more tables underneath it.
+ *
+ * The list itself is progressive: only the rows far enough from parity to be
+ * worth a look render by default (floor 4, ceiling 8). The near-parity middle
+ * — unremarkable by construction — sits behind one "show all" disclosure so an
+ * 11-metric report doesn't spend a full screen on rows nobody needed to read.
+ * With no peer band there is nothing to rank by, so every row shows.
  */
 export default function MetricList({ category }: { category: TutorCategoryReport }) {
     const noPeer = category.peer.tier === 'none'
     const [open, setOpen] = useState<string | null>(null)
+    const [showAll, setShowAll] = useState(false)
 
     const splits = useMemo(() => {
         const m = new Map<string, { phases: TutorComparison[]; pieces: TutorComparison[] }>()
@@ -72,83 +93,186 @@ export default function MetricList({ category }: { category: TutorCategoryReport
         })
     }, [category.metrics, category.comparisons, splits, noPeer])
 
+    // Which rows carry the story: ranked by |grade|, clamped to [floor, ceiling].
+    // Because `rows` is already sorted best-to-worst, picking by |grade| pulls
+    // from both ends first — the wedge's strongest and weakest rows — and hides
+    // the near-parity middle, which is exactly the tail that doesn't earn its
+    // height.
+    const visibleKeys = useMemo(() => {
+        if (noPeer) return new Set(rows.map((r) => r.key))
+        const notableCount = rows.filter(
+            (r) => r.cmp && Math.abs(r.cmp.grade) >= NOTABLE_GRADE,
+        ).length
+        const target = Math.min(rows.length, clamp(notableCount, MIN_VISIBLE, MAX_VISIBLE))
+        const ranked = [...rows].sort((a, b) => {
+            const sa = a.cmp ? Math.abs(a.cmp.grade) : -1
+            const sb = b.cmp ? Math.abs(b.cmp.grade) : -1
+            return sb - sa
+        })
+        return new Set(ranked.slice(0, target).map((r) => r.key))
+    }, [rows, noPeer])
+
     if (rows.length === 0) return null
 
-    return (
-        <Box>
-            {rows.map((r) => {
-                const split = splits.get(r.key)
-                const hasSplits =
-                    !noPeer && !!split && split.phases.length + split.pieces.length > 0
-                const isOpen = open === r.key
-                const cmp = noPeer ? null : r.cmp
+    const hiddenCount = rows.length - visibleKeys.size
 
-                return (
-                    <Box
-                        key={r.key}
-                        sx={{ borderBottom: '1px solid var(--line-soft)', '&:last-of-type': { borderBottom: 0 } }}
-                    >
-                        <Box
-                            {...(hasSplits
-                                ? {
-                                      role: 'button',
-                                      tabIndex: 0,
-                                      'aria-expanded': isOpen,
-                                      onClick: () => setOpen(isOpen ? null : r.key),
-                                      onKeyDown: (e: React.KeyboardEvent) => {
-                                          if (e.key === 'Enter' || e.key === ' ') {
-                                              e.preventDefault()
-                                              setOpen(isOpen ? null : r.key)
-                                          }
-                                      },
+    const renderRow = (r: (typeof rows)[number]) => {
+        const split = splits.get(r.key)
+        const hasSplits = !noPeer && !!split && split.phases.length + split.pieces.length > 0
+        const isOpen = open === r.key
+        const cmp = noPeer ? null : r.cmp
+
+        return (
+            <Box
+                key={r.key}
+                sx={{
+                    borderBottom: '1px solid var(--line-soft)',
+                    '&:last-of-type': { borderBottom: 0 },
+                }}
+            >
+                <Box
+                    {...(hasSplits
+                        ? {
+                              role: 'button',
+                              tabIndex: 0,
+                              'aria-expanded': isOpen,
+                              onClick: () => setOpen(isOpen ? null : r.key),
+                              onKeyDown: (e: React.KeyboardEvent) => {
+                                  if (e.key === 'Enter' || e.key === ' ') {
+                                      e.preventDefault()
+                                      setOpen(isOpen ? null : r.key)
                                   }
-                                : {})}
-                            sx={{
-                                mx: -1,
-                                px: 1,
-                                borderRadius: '8px',
-                                cursor: hasSplits ? 'pointer' : 'default',
-                                '&:hover': hasSplits ? { bgcolor: 'var(--surface-2)' } : undefined,
-                                '&:focus-visible': { outline: '1px solid var(--accent-line)' },
-                            }}
-                        >
-                            <MeterRow
-                                label={r.label}
-                                valueText={r.valueText}
-                                grade={cmp ? cmp.grade : null}
-                                sample={r.sample}
-                                higherIsBetter={r.higherIsBetter}
-                                wording={cmp?.wording}
-                                peerText={cmp ? `peer ${fmtValue(cmp.peer, cmp.unit)}` : undefined}
-                                percentileText={
-                                    cmp?.percentile != null ? `${ordinal(cmp.percentile)} pct` : undefined
-                                }
-                                trailing={
-                                    hasSplits ? (
-                                        <Box
-                                            sx={{
-                                                display: 'inline-flex',
-                                                color: 'var(--muted)',
-                                                transform: isOpen ? 'rotate(180deg)' : 'none',
-                                                transition: 'transform 120ms ease',
-                                            }}
-                                        >
-                                            <ChevronDown size={15} />
-                                        </Box>
-                                    ) : undefined
-                                }
-                            />
-                        </Box>
+                              },
+                          }
+                        : {})}
+                    sx={{
+                        mx: -1,
+                        px: 1,
+                        borderRadius: '8px',
+                        cursor: hasSplits ? 'pointer' : 'default',
+                        '&:hover': hasSplits ? { bgcolor: 'var(--surface-2)' } : undefined,
+                        '&:focus-visible': { outline: '1px solid var(--accent-line)' },
+                    }}
+                >
+                    <MeterRow
+                        label={r.label}
+                        valueText={r.valueText}
+                        grade={cmp ? cmp.grade : null}
+                        spread={cmp?.spread}
+                        sample={r.sample}
+                        higherIsBetter={r.higherIsBetter}
+                        wording={cmp?.wording}
+                        gapText={cmp ? fmtGap(cmp.mine, cmp.peer, cmp.unit) : undefined}
+                        trailing={
+                            hasSplits ? (
+                                <Box
+                                    sx={{
+                                        display: 'inline-flex',
+                                        color: 'var(--muted)',
+                                        transform: isOpen ? 'rotate(180deg)' : 'none',
+                                        transition: 'transform 120ms ease',
+                                    }}
+                                >
+                                    <ChevronDown size={15} />
+                                </Box>
+                            ) : undefined
+                        }
+                    />
+                </Box>
 
-                        {hasSplits && isOpen && split && (
-                            <Box sx={{ pb: 1.5, pl: { xs: 1.25, sm: 2 }, borderLeft: '1px solid var(--line)', ml: 0.5 }}>
-                                <SplitGroup title="By phase" items={split.phases} kind="phase" />
-                                <SplitGroup title="By piece" items={split.pieces} kind="piece" />
-                            </Box>
-                        )}
+                {hasSplits && isOpen && split && (
+                    <Box
+                        sx={{
+                            pb: 1.5,
+                            pl: { xs: 1.25, sm: 2 },
+                            borderLeft: '1px solid var(--line)',
+                            ml: 0.5,
+                        }}
+                    >
+                        <SplitGroup title="By phase" items={split.phases} kind="phase" />
+                        <SplitGroup title="By piece" items={split.pieces} kind="piece" />
                     </Box>
-                )
-            })}
+                )}
+            </Box>
+        )
+    }
+
+    const items: React.ReactNode[] = []
+    let discloseInserted = false
+    for (const r of rows) {
+        const isVisible = visibleKeys.has(r.key)
+        if (!isVisible && !discloseInserted) {
+            discloseInserted = true
+            items.push(
+                <ShowAllRow
+                    key="__show_all"
+                    expanded={showAll}
+                    total={rows.length}
+                    hiddenCount={hiddenCount}
+                    onToggle={() => setShowAll((v) => !v)}
+                />,
+            )
+        }
+        if (isVisible || showAll) items.push(renderRow(r))
+    }
+
+    return <Box>{items}</Box>
+}
+
+function ShowAllRow({
+    expanded,
+    total,
+    hiddenCount,
+    onToggle,
+}: {
+    expanded: boolean
+    total: number
+    hiddenCount: number
+    onToggle: () => void
+}) {
+    return (
+        <Box
+            role="button"
+            tabIndex={0}
+            aria-expanded={expanded}
+            onClick={onToggle}
+            onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onToggle()
+                }
+            }}
+            sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.5,
+                py: 1,
+                mx: -1,
+                px: 1,
+                borderRadius: '8px',
+                cursor: 'pointer',
+                color: 'var(--muted)',
+                '&:hover': { bgcolor: 'var(--surface-2)', color: 'var(--text-dim)' },
+                '&:focus-visible': { outline: '1px solid var(--accent-line)' },
+            }}
+        >
+            <Typography sx={{ fontSize: 12.5, fontWeight: 600 }}>
+                {expanded ? 'Show fewer' : `Show all ${total}`}
+            </Typography>
+            {!expanded && (
+                <Typography sx={{ fontSize: 11.5, color: 'var(--muted)' }}>
+                    ({hiddenCount} near your band)
+                </Typography>
+            )}
+            <Box
+                sx={{
+                    display: 'inline-flex',
+                    transform: expanded ? 'rotate(180deg)' : 'none',
+                    transition: 'transform 120ms ease',
+                }}
+            >
+                <ChevronDown size={14} />
+            </Box>
         </Box>
     )
 }
@@ -196,9 +320,10 @@ function SplitGroup({
                         }
                         valueText={fmtValue(c.mine, c.unit)}
                         grade={c.grade}
+                        spread={c.spread}
                         sample={c.sample}
                         wording={c.wording}
-                        peerText={`peer ${fmtValue(c.peer, c.unit)}`}
+                        gapText={fmtGap(c.mine, c.peer, c.unit)}
                     />
                 ))}
             </Box>
