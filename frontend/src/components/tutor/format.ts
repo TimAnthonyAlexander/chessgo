@@ -173,6 +173,31 @@ export function relToBand(wording: string): string {
     return `${wording} ${prep} your rating band`
 }
 
+/**
+ * What each metric actually means, in one line, in the player's language.
+ *
+ * This is what replaced the sidebar legend. A reader who doesn't know what
+ * "resourcefulness" is cannot act on being bad at it, and explaining the
+ * CHART was never the missing piece — explaining the MEASURE was.
+ */
+const METRIC_BLURBS: Record<string, string> = {
+    accuracy: 'How close your moves were to the best move available.',
+    acpl: 'How much each of your moves cost you on average, in centipawns.',
+    awareness: 'How often you punished your opponent for a mistake.',
+    conversion: 'How often you went on to win from a winning position.',
+    resourcefulness: 'How often you saved a game you were losing.',
+    flagging_loss: 'How often you lost on the clock instead of on the board.',
+    time_pressure: 'How much of your play happened with under a tenth of your clock left.',
+    global_clock: 'How much of your clock you had left across the game.',
+    clock_when_losing: 'How much clock you still had when you lost.',
+    win_rate: 'Your overall score — a win counts one, a draw a half.',
+    performance: 'The rating your results were worth against the players you faced.',
+}
+
+export function metricBlurb(metric: string): string | undefined {
+    return METRIC_BLURBS[metric]
+}
+
 /** Which way a metric points, in words — the old table gave the reader no way
  * to know that 47 cp is good and 26% is bad. Used as the title on every
  * direction arrow and spelled out once in the reading key. */

@@ -6,13 +6,19 @@ import { fmtDelta, fmtValue } from './format'
 
 /** One metric's history on the trend page: a small line chart (reusing the
  * same sparkline idiom as the profile ratings panel) plus its net change.
- * Neutral colouring — direction is shown with an arrow, not a red/green
- * verdict, since a single metric drifting isn't a ranked "weakness". */
+ * `series.improved` is already direction-corrected by the backend — for a
+ * lower-is-better metric a falling line IS improvement — so it is trusted
+ * as-is rather than re-derived from the raw delta's sign here. A metric
+ * moving the wrong way over time is exactly the kind of "am I getting worse"
+ * question colour exists to answer, so improved inks --good and the reverse
+ * inks --bad; the arrow direction still carries the same fact for anyone who
+ * can't see the colour. */
 export default function TrendRow({ series }: { series: TutorTrendSeries }) {
     const values = series.points
         .filter((p): p is typeof p & { value: number } => p.value != null)
         .map((p) => p.value)
     const last = series.points[series.points.length - 1]
+    const ink = series.improved ? 'var(--good)' : 'var(--bad)'
 
     return (
         <Box
@@ -28,15 +34,16 @@ export default function TrendRow({ series }: { series: TutorTrendSeries }) {
                 <Typography sx={{ fontSize: 13.5, fontWeight: 600 }}>{series.label}</Typography>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 0.4 }}>
                     {series.improved ? (
-                        <ArrowUp size={13} style={{ color: 'var(--accent)' }} />
+                        <ArrowUp size={13} style={{ color: ink }} />
                     ) : (
-                        <ArrowDown size={13} style={{ color: 'var(--text-dim)' }} />
+                        <ArrowDown size={13} style={{ color: ink }} />
                     )}
                     <Typography
                         sx={{
                             fontFamily: 'var(--font-mono)',
                             fontSize: 12.5,
-                            color: series.improved ? 'var(--accent)' : 'var(--text-dim)',
+                            fontWeight: 700,
+                            color: ink,
                         }}
                     >
                         {fmtDelta(series.delta, series.unit)}
@@ -55,12 +62,7 @@ export default function TrendRow({ series }: { series: TutorTrendSeries }) {
                 )}
             </Box>
             {values.length >= 2 && (
-                <RatingSparkline
-                    series={values}
-                    color={series.improved ? 'var(--accent)' : 'var(--text-dim)'}
-                    width={128}
-                    height={36}
-                />
+                <RatingSparkline series={values} color={ink} width={128} height={36} />
             )}
         </Box>
     )

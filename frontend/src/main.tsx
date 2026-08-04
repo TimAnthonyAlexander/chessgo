@@ -22,6 +22,7 @@ const TournamentPage = lazy(() => import('./pages/Tournament'))
 const Tutor = lazy(() => import('./pages/Tutor'))
 const TutorTrend = lazy(() => import('./pages/TutorTrend'))
 const TutorReport = lazy(() => import('./pages/TutorReport'))
+const TutorCategory = lazy(() => import('./pages/TutorCategory'))
 const TutorOpening = lazy(() => import('./pages/TutorOpening'))
 const Analysis = lazy(() => import('./pages/Analysis'))
 const Editor = lazy(() => import('./pages/Editor'))
@@ -94,6 +95,7 @@ const router = createBrowserRouter([
                         path: '/tutor/:id/:category/opening/:color/:family',
                         element: suspended(<TutorOpening />),
                     },
+                    { path: '/tutor/:id/:category', element: suspended(<TutorCategory />) },
                     { path: '/tutor/:id', element: suspended(<TutorReport />) },
                     { path: '/guess-the-elo', element: suspended(<GuessTheElo />) },
                     { path: '/game/:id', element: <LiveGame /> },

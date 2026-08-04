@@ -85,6 +85,13 @@ interface Seed {
     live: string
     warn: string
     danger: string
+    /** Verdict pair for measured comparisons (Tutor's meters). Deliberately
+     *  NOT the accent: the accent is the brand and varies per palette, so it
+     *  cannot carry "this number is good" — in Claret it is red and in
+     *  Evergreen it is green, which would mean the opposite thing in two
+     *  palettes. These are constant across palettes and tuned per mode. */
+    good: string
+    bad: string
 }
 
 interface SitePalette {
@@ -98,8 +105,20 @@ interface SitePalette {
 
 // Shared dark/light status colors — most palettes reuse these; a palette may
 // override in its seed (none currently need to).
-const DARK_STATUS = { live: '#7bb661', warn: '#e9c46a', danger: '#e07a5f' }
-const LIGHT_STATUS = { live: '#3f9d59', warn: '#b07d1e', danger: '#c85a42' }
+const DARK_STATUS = {
+    live: '#7bb661',
+    warn: '#e9c46a',
+    danger: '#e07a5f',
+    good: '#63b37c',
+    bad: '#e2775f',
+}
+const LIGHT_STATUS = {
+    live: '#3f9d59',
+    warn: '#b07d1e',
+    danger: '#c85a42',
+    good: '#25764a',
+    bad: '#b2402b',
+}
 
 const PALETTES: SitePalette[] = [
     {
@@ -357,6 +376,11 @@ function expand(s: Seed): Record<string, string> {
         '--live': s.live,
         '--warn': s.warn,
         '--danger': s.danger,
+        '--good': s.good,
+        '--good-soft': rgba(s.good, 0.16),
+        '--bad': s.bad,
+        '--bad-soft': rgba(s.bad, 0.16),
+        '--warn-soft': rgba(s.warn, 0.16),
         '--premove': rgba(s.danger, 0.5),
         '--eval-white': s.evalWhite,
         '--eval-black': s.evalBlack,

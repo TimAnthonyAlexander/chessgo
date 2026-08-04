@@ -3,14 +3,25 @@ import { Box, Typography } from '@mui/material'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import type { TutorComparison } from '../../api/client'
-import GradeMeter from './GradeMeter'
+import SegmentMeter from './SegmentMeter'
 import { SampleNote, SectionHead } from './parts'
 import { cap, confidence, directionText, fmtGap, fmtValue } from './format'
-import { SECTION_OPENINGS } from './sections'
 
 /** Families beyond this many, per colour, sit behind a "show all" disclosure —
  * a sorted link list doesn't need a full screen to prove there are ten of them. */
 const VISIBLE_CAP = 5
+
+/** PHP can't tell an empty associative array from an empty list, so an
+ * all-empty `{ w: [], b: [] }` is encoded on the wire as a bare `[]` — measured
+ * on a real stored report. The declared type never reflects that, so normalize
+ * defensively rather than crash on `openings.w` being `undefined`. */
+function normalizeOpenings(
+    openings: { w: TutorComparison[]; b: TutorComparison[] } | unknown,
+): { w: TutorComparison[]; b: TutorComparison[] } {
+    if (!openings || Array.isArray(openings)) return { w: [], b: [] }
+    const rec = openings as { w?: TutorComparison[]; b?: TutorComparison[] }
+    return { w: rec.w ?? [], b: rec.b ?? [] }
+}
 
 /**
  * The one breakdown that goes somewhere: every row routes into the opening
@@ -30,7 +41,8 @@ export default function OpeningsBlock({
     reportId: string
     category: string
 }) {
-    const all = [...openings.w, ...openings.b]
+    const { w, b } = normalizeOpenings(openings)
+    const all = [...w, ...b]
     if (all.length === 0) return null
 
     // When every row measures the same thing, say it once in the header instead
@@ -45,7 +57,6 @@ export default function OpeningsBlock({
     return (
         <Box sx={{ mb: 4 }}>
             <SectionHead
-                id={SECTION_OPENINGS}
                 title="Openings"
                 sub={
                     sharedLabel
@@ -63,7 +74,7 @@ export default function OpeningsBlock({
             >
                 <Column
                     title="As White"
-                    items={openings.w}
+                    items={w}
                     noPeer={noPeer}
                     reportId={reportId}
                     category={category}
@@ -72,7 +83,7 @@ export default function OpeningsBlock({
                 />
                 <Column
                     title="As Black"
-                    items={openings.b}
+                    items={b}
                     noPeer={noPeer}
                     reportId={reportId}
                     category={category}
@@ -135,7 +146,6 @@ function Column({
                                 valueText={fmtValue(c.mine, c.unit)}
                                 gapText={noPeer ? undefined : fmtGap(c.mine, c.peer, c.unit)}
                                 grade={noPeer ? null : c.grade}
-                                spread={noPeer ? undefined : c.spread}
                                 sample={c.sample}
                                 label={showLabel ? c.label : undefined}
                                 to={`/tutor/${encodeURIComponent(reportId)}/${encodeURIComponent(category)}/opening/${color}/${encodeURIComponent(name)}`}
@@ -199,7 +209,6 @@ function OpeningRow({
     valueText,
     gapText,
     grade,
-    spread,
     sample,
     label,
     to,
@@ -208,7 +217,6 @@ function OpeningRow({
     valueText: string
     gapText?: string
     grade: number | null
-    spread?: number
     sample: number
     label?: string
     to: string
@@ -260,14 +268,8 @@ function OpeningRow({
                 </Typography>
             )}
             {grade !== null && (
-                <Box sx={{ width: 40, flexShrink: 0 }}>
-                    <GradeMeter
-                        grade={grade}
-                        spread={spread}
-                        confidence={conf}
-                        height={5}
-                        label={`${name}: ${valueText}`}
-                    />
+                <Box sx={{ width: 56, flexShrink: 0 }}>
+                    <SegmentMeter grade={grade} confidence={conf} height={7} title={`${name}: ${valueText}`} />
                 </Box>
             )}
             <Typography

@@ -1,11 +1,13 @@
 import { Box } from '@mui/material'
 import SkeletonBar from '../home/SkeletonBar'
 
-/** Loading placeholder shaped like the real report: eyebrow, hero figure, then
- * the rail/main split with meter-shaped rows, so the layout doesn't jump when
- * data arrives. The rail column mirrors its real contents — category rows,
- * a short jump-nav list, a peer-band figure — so it doesn't visibly grow once
- * the report loads. Mirrors ProfileSkeleton's idiom. */
+/** Loading placeholder shaped like the overview: eyebrow, hero figure, then a
+ * stack of category blocks — a header line plus a handful of meter-shaped
+ * rows each — so the layout doesn't jump when the report arrives. Two blocks
+ * is a reasonable guess for the common case (most players have one or two
+ * qualifying time controls); the real page renders however many categories
+ * qualified, and the fetch is fast enough that a mismatch is never visible
+ * for more than a frame. */
 export default function TutorReportSkeleton() {
     return (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: { xs: 3, md: 4 } }}>
@@ -19,38 +21,32 @@ export default function TutorReportSkeleton() {
                 </Box>
             </Box>
 
-            <Box
-                sx={{
-                    display: 'grid',
-                    gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 260px) minmax(0, 1fr)' },
-                    columnGap: 5,
-                    rowGap: 4,
-                    alignItems: 'start',
-                }}
-            >
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-                        {Array.from({ length: 3 }).map((_, i) => (
-                            <SkeletonBar key={i} h={34} sx={{ borderRadius: '10px' }} />
-                        ))}
-                    </Box>
-                    <SkeletonBar w={100} h={26} sx={{ mt: -1 }} />
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-                        {Array.from({ length: 3 }).map((_, i) => (
-                            <SkeletonBar key={i} w="65%" h={12} />
-                        ))}
-                    </Box>
-                </Box>
-                <Box>
-                    <SkeletonBar w={120} h={12} sx={{ mb: 2 }} />
-                    {Array.from({ length: 6 }).map((_, i) => (
-                        <Box key={i} sx={{ mb: 2 }}>
-                            <SkeletonBar w="45%" h={13} />
-                            <SkeletonBar h={7} sx={{ mt: 1, borderRadius: '2px' }} />
-                            <SkeletonBar w="30%" h={10} sx={{ mt: 0.75 }} />
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {Array.from({ length: 2 }).map((_, block) => (
+                    <Box key={block}>
+                        <Box
+                            sx={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'baseline',
+                            }}
+                        >
+                            <SkeletonBar w={100} h={18} />
+                            <SkeletonBar w={60} h={12} />
                         </Box>
-                    ))}
-                </Box>
+                        <SkeletonBar w={200} h={11} sx={{ mt: 0.75, mb: 2 }} />
+                        {Array.from({ length: 5 }).map((_, row) => (
+                            <Box
+                                key={row}
+                                sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 1 }}
+                            >
+                                <SkeletonBar w="30%" h={13} />
+                                <SkeletonBar h={9} sx={{ flex: 1, borderRadius: '2px' }} />
+                                <SkeletonBar w={40} h={13} />
+                            </Box>
+                        ))}
+                    </Box>
+                ))}
             </Box>
         </Box>
     )

@@ -204,7 +204,7 @@ function GameRowLink({ game }: { game: TutorGameRow }) {
     const navigate = useNavigate()
     const outcome = resultFor(game)
     const outcomeColor =
-        outcome === 'Win' ? 'var(--accent)' : outcome === 'Loss' ? 'var(--danger)' : 'var(--text-dim)'
+        outcome === 'Win' ? 'var(--good)' : outcome === 'Loss' ? 'var(--bad)' : 'var(--text-dim)'
 
     return (
         <Box

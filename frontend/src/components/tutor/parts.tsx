@@ -20,6 +20,14 @@ import { directionText, fmtGames, isThin } from './format'
  * Section headers sit at --text-dim, NOT --muted — at 11px in a mono face with
  * wide tracking, --muted was the least legible text on the page while also
  * being the only thing telling you what you were looking at.
+ *
+ * `tone` on `Value`/`Verdict` used to point 'strength' at --accent. That made
+ * good/bad depend on which palette was active — the accent is itself red in
+ * Claret and green in Evergreen, so the exact same tone read as opposite
+ * verdicts depending on a setting neither carries any peer-comparison meaning.
+ * 'strength' now inks --good and 'weakness' inks --bad, the same fixed pair
+ * `SegmentMeter` draws its segments in, so a row's number and its meter can
+ * never disagree. Accent is never a verdict colour anywhere in Tutor.
  */
 
 export function SectionHead({
@@ -101,9 +109,9 @@ export function DirectionMark({ higherIsBetter }: { higherIsBetter: boolean }) {
 }
 
 /** The verdict — "much worse", "similar", "better" — at --text/600 inside the
- * otherwise --muted caption line. A ranked finding takes accent/danger ink
- * instead, matching what `Value` already does with the same `tone` prop. See
- * the contrast rule at the top of this file for why it is bright at all. */
+ * otherwise --muted caption line. A ranked finding takes good/bad ink instead,
+ * matching what `Value` already does with the same `tone` prop. See the
+ * contrast rule at the top of this file for why it is bright at all. */
 export function Verdict({
     wording,
     tone = 'plain',
@@ -113,9 +121,9 @@ export function Verdict({
 }) {
     const color =
         tone === 'weakness'
-            ? 'var(--danger)'
+            ? 'var(--bad)'
             : tone === 'strength'
-              ? 'var(--accent)'
+              ? 'var(--good)'
               : 'var(--text)'
     return (
         <Box component="span" sx={{ color, fontWeight: 600, whiteSpace: 'nowrap' }}>
@@ -159,7 +167,7 @@ export function Caption({ children }: { children: ReactNode }) {
 }
 
 /** The one bright thing in a row. `tone` is ink only — never a bar fill — and
- * 'weakness' is the sole caller allowed --danger. */
+ * 'weakness' is the sole caller allowed --bad. */
 export function Value({
     children,
     tone = 'plain',
@@ -173,9 +181,9 @@ export function Value({
 }) {
     const color =
         tone === 'weakness'
-            ? 'var(--danger)'
+            ? 'var(--bad)'
             : tone === 'strength'
-              ? 'var(--accent)'
+              ? 'var(--good)'
               : dim
                 ? 'var(--text-dim)'
                 : 'var(--text)'

@@ -1,14 +1,24 @@
 import type { ReactNode } from 'react'
 import { Box, Typography } from '@mui/material'
-import GradeMeter from './GradeMeter'
-import { Caption, DirectionMark, SampleNote, Value, Verdict } from './parts'
-import { confidence, isSaturated, isThin, relToBand } from './format'
+import SegmentMeter, { stepFor, toneFor, TONE_INK } from './SegmentMeter'
+import { Caption, DirectionMark, Verdict } from './parts'
+import { confidence, fmtGames, isThin } from './format'
 
 /**
- * The report's one row shape: name and direction on the left, the single bright
- * value on the right, a peer-parity meter under both, and one muted mono line
- * of provenance. Findings, metrics, phase/piece splits and openings are all
- * this row at three sizes, so a reader learns to read it exactly once.
+ * The report's detail-page row shape: name and direction on the left, the
+ * single bright value on the right, a `SegmentMeter` underneath, and one
+ * caption line carrying the wording. Findings, metrics, and phase/piece
+ * splits are all this row at two densities, so a reader learns it once.
+ *
+ * The value is inked by `TONE_INK[toneFor(stepFor(grade))]` — the exact same
+ * lookup that colours the meter's lit segments — so the number and the bar
+ * can never disagree. The wording stays visible next to it: colour repeats
+ * the verdict, it never carries it alone.
+ *
+ * The exact peer figure, gap, and sample size are folded into the meter's
+ * tooltip rather than printed on the row, matching `StatRow` — a row that
+ * spells out label, peer value, gap AND sample every time is the wall of
+ * numbers this replaced.
  *
  * `grade === null` means there was no peer comparison to make (peer tier
  * 'none', or a metric the backend never compared): the meter is omitted
@@ -18,7 +28,6 @@ export default function MeterRow({
     label,
     valueText,
     grade,
-    spread,
     sample,
     higherIsBetter,
     tone = 'plain',
@@ -32,14 +41,11 @@ export default function MeterRow({
     label: ReactNode
     valueText: string
     grade: number | null
-    /** Unclamped ratio behind `grade`; lets the meter separate saturated rows. */
-    spread?: number | null
     sample: number
     higherIsBetter?: boolean
     tone?: 'plain' | 'strength' | 'weakness'
     wording?: string
-    /** Signed distance from the band, from `fmtGap` — the figure that actually
-     * varies down a column, unlike the peer value. */
+    /** Folded into the meter's tooltip only — never printed on the row. */
     gapText?: string
     peerText?: string
     density?: 'default' | 'compact'
@@ -51,7 +57,17 @@ export default function MeterRow({
     const compact = density === 'compact'
     const thin = isThin(sample)
     const conf = confidence(sample)
-    const meta = [gapText, peerText].filter(Boolean).join(' · ')
+    const step = grade !== null ? stepFor(grade) : null
+    const ink = step !== null ? TONE_INK[toneFor(step)] : null
+    const tip = [
+        `${typeof label === 'string' ? label : 'This metric'}: you ${valueText}`,
+        peerText,
+        gapText,
+        wording,
+        fmtGames(sample),
+    ]
+        .filter(Boolean)
+        .join(' · ')
 
     return (
         <Box sx={{ py: compact ? 0.9 : 1.25, minWidth: 0 }}>
@@ -82,43 +98,42 @@ export default function MeterRow({
                     {higherIsBetter != null && <DirectionMark higherIsBetter={higherIsBetter} />}
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexShrink: 0 }}>
-                    <Value tone={tone} dim={thin && tone === 'plain'} size={compact ? 13 : 15}>
+                    <Typography
+                        sx={{
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: compact ? 13 : 15,
+                            fontWeight: 700,
+                            color: ink ?? (thin ? 'var(--text-dim)' : 'var(--text)'),
+                            opacity: ink && thin ? 0.65 : 1,
+                            fontVariantNumeric: 'tabular-nums',
+                            whiteSpace: 'nowrap',
+                        }}
+                    >
                         {valueText}
-                    </Value>
+                    </Typography>
                     {trailing}
                 </Box>
             </Box>
 
             {grade !== null && (
-                <GradeMeter
+                <SegmentMeter
                     grade={grade}
-                    spread={spread}
                     confidence={conf}
+                    title={tip}
                     height={compact ? 5 : 7}
-                    label={`${typeof label === 'string' ? label : 'This metric'}: ${valueText}${
-                        wording ? `, ${relToBand(wording)}` : ''
-                    }${isSaturated(grade) ? ', past the end of the scale' : ''}`}
                 />
             )}
 
-            <Box sx={{ mt: 0.6 }}>
-                <Caption>
+            {(wording || note) && (
+                <Box sx={{ mt: 0.6 }}>
                     {wording && (
-                        <>
+                        <Caption>
                             <Verdict wording={wording} tone={tone} />
-                            {' · '}
-                        </>
+                        </Caption>
                     )}
-                    {meta && (
-                        <>
-                            {meta}
-                            {' · '}
-                        </>
-                    )}
-                    <SampleNote sample={sample} />
-                </Caption>
-                {note && <Caption>{note}</Caption>}
-            </Box>
+                    {note && <Caption>{note}</Caption>}
+                </Box>
+            )}
         </Box>
     )
 }

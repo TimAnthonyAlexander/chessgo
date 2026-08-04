@@ -1,7 +1,7 @@
 import { Box, Typography } from '@mui/material'
 import type { TutorComparison, TutorPayload } from '../../api/client'
-import GradeMeter from './GradeMeter'
-import { Caption, DirectionMark, SampleNote } from './parts'
+import SegmentMeter from './SegmentMeter'
+import { Caption, SampleNote } from './parts'
 import { cap, confidence, fmtValue, isThin, relToBand } from './format'
 
 /** The strongest thing the report found, or null if it found nothing rankable.
@@ -26,23 +26,6 @@ export function topFinding(payload: TutorPayload): { c: TutorComparison; categor
  * behind it is the same dead space in a cheaper suit. */
 export function hasHero(payload: TutorPayload): boolean {
     return payload.headline !== null || topFinding(payload) !== null
-}
-
-/** The exact (category, metric, dimension) triple ReportHero is about to
- * render — headline first, the ranked top finding otherwise, same order
- * ReportHero itself uses. A category section reuses this to drop that one
- * finding from its own ranked lists: the hero already said it once, at full
- * weight, and repeating it immediately below would be the same figure twice.
- * The hero only ever covers ONE category, so a section for any other category
- * must not drop anything — the caller compares this against its own
- * `category.category` before filtering. */
-export function heroFinding(
-    payload: TutorPayload,
-): { category: string; metric: string; dimension: string } | null {
-    const h = payload.headline
-    if (h) return { category: h.category, metric: h.metric, dimension: '' }
-    const top = topFinding(payload)
-    return top ? { category: top.category, metric: top.c.metric, dimension: top.c.dimension } : null
 }
 
 /** The comparison behind the backend's headline, if it can be found — the
@@ -97,9 +80,7 @@ export default function ReportHero({ payload }: { payload: TutorPayload }) {
                     mineText={cmp ? fmtValue(h.mine, cmp.unit) : fmtPlain(h.mine)}
                     peerText={cmp ? fmtValue(h.peer, cmp.unit) : fmtPlain(h.peer)}
                     grade={cmp ? cmp.grade : null}
-                    spread={cmp?.spread}
                     sample={h.sample}
-                    higherIsBetter={cmp?.higherIsBetter}
                     context={cap(h.category)}
                 />
             </Box>
@@ -142,9 +123,7 @@ export default function ReportHero({ payload }: { payload: TutorPayload }) {
                 mineText={fmtValue(top.c.mine, top.c.unit)}
                 peerText={fmtValue(top.c.peer, top.c.unit)}
                 grade={top.c.grade}
-                spread={top.c.spread}
                 sample={top.c.sample}
-                higherIsBetter={top.c.higherIsBetter}
                 context={null}
             />
         </Box>
@@ -156,18 +135,14 @@ function Figure({
     mineText,
     peerText,
     grade,
-    spread,
     sample,
-    higherIsBetter,
     context,
 }: {
     label: string
     mineText: string
     peerText: string
     grade: number | null
-    spread?: number
     sample: number
-    higherIsBetter?: boolean
     context: string | null
 }) {
     const thin = isThin(sample)
@@ -182,20 +157,17 @@ function Figure({
             }}
         >
             <Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                    <Typography
-                        sx={{
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: 10.5,
-                            letterSpacing: '0.14em',
-                            textTransform: 'uppercase',
-                            color: 'var(--muted)',
-                        }}
-                    >
-                        You
-                    </Typography>
-                    {higherIsBetter != null && <DirectionMark higherIsBetter={higherIsBetter} />}
-                </Box>
+                <Typography
+                    sx={{
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 10.5,
+                        letterSpacing: '0.14em',
+                        textTransform: 'uppercase',
+                        color: 'var(--muted)',
+                    }}
+                >
+                    You
+                </Typography>
                 <Typography
                     sx={{
                         fontFamily: 'var(--font-display)',
@@ -236,12 +208,11 @@ function Figure({
 
             <Box sx={{ flex: '1 1 200px', minWidth: 160, pb: 0.5 }}>
                 {grade !== null && (
-                    <GradeMeter
+                    <SegmentMeter
                         grade={grade}
-                        spread={spread}
                         confidence={confidence(sample)}
                         height={8}
-                        label={`${label}: ${mineText} against a band figure of ${peerText}`}
+                        title={`${label}: ${mineText} against a band figure of ${peerText}`}
                     />
                 )}
                 <Box sx={{ mt: 0.75 }}>

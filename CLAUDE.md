@@ -208,9 +208,18 @@ and a paginated game history filterable by category/result/opponent/date.
 **Tutor** (`docs/tasks/open/tutor.md`) is a requested, dated player report card:
 press a button, a queued job measures a random sample of your recent games
 against peers at your rating, and every weakness ends in a drill. Routes
-`/tutor` (shelf + request button), `/tutor/:id` (report), `/tutor/trend`
-(`pages/Tutor.tsx` / `TutorReport.tsx` / `TutorTrend.tsx`,
-`components/tutor/*`); API is `GET/POST /tutor/reports`,
+`/tutor` (shelf + request button), `/tutor/:id` (the **overview** — headline
+plus one scannable block per rating category), `/tutor/:id/:category` (the
+**detail** — drills, skills with plain-language descriptions, phases, pieces,
+openings) and `/tutor/trend` (`pages/Tutor.tsx` / `TutorReport.tsx` /
+`TutorCategory.tsx` / `TutorTrend.tsx`, `components/tutor/*`). The
+overview/detail split is deliberate and was the third attempt at this page:
+everything on one screen was unreadable. **`SegmentMeter` is the only
+comparison primitive** — seven segments whose count IS the backend's seven
+verdict words and whose colour (`--bad` / `--warn` / neutral / `--good`, fixed
+per mode, never `--accent`, which is itself red in the Claret palette) says
+good or bad without a legend. There is no legend, by design; if a meter needs
+one it is the meter that is wrong. API is `GET/POST /tutor/reports`,
 `GET/DELETE /tutor/reports/{id}`, `GET /tutor/reports/{id}/opening`,
 `GET /tutor/trend` (`TutorController`, `TutorReportController`,
 `TutorOpeningController`, `TutorTrendController`). `App\Services\Tutor\TutorMetrics`

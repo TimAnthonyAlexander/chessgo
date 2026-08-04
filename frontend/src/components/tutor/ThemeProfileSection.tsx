@@ -1,10 +1,15 @@
 import { Box, Typography } from '@mui/material'
 import { Link } from 'react-router-dom'
 import type { TutorThemeProfile } from '../../api/client'
-import { MagnitudeBar } from './GradeMeter'
+import { MagnitudeBar } from './MagnitudeBar'
 import { SectionHead } from './parts'
-import { SECTION_THEMES } from './sections'
 import { confidence, isThin, themeLabel } from './format'
+
+// Matches the id `sections.ts` used to mint for this section's jump-nav
+// anchor. Inlined rather than imported: that module is being restructured as
+// part of this same redesign and this component owns no say over its shape,
+// so a hard string keeps this file compiling independent of that work.
+const SECTION_THEMES = 'tutor-section-themes'
 
 /**
  * The report's second, independent line of tactical evidence — solve rate per
@@ -20,8 +25,11 @@ import { confidence, isThin, themeLabel } from './format'
  * That is also why it is drawn as a grid of tiles with LEFT-ANCHORED bars and
  * no parity rule, instead of the diverging meter list above it: the shape is
  * the reader's cue that these numbers are measured against nothing but
- * themselves. Player-level (the puzzle pool has no time control), so it renders
- * once per report, not once per category.
+ * themselves. Now that every peer-compared row on the report is a red/green
+ * `SegmentMeter`, staying uncoloured is what keeps this section legible as a
+ * different KIND of number — a solve rate painted green would read as a
+ * verdict this data cannot support. Player-level (the puzzle pool has no time
+ * control), so it renders once per report, not once per category.
  */
 export default function ThemeProfileSection({ profile }: { profile?: TutorThemeProfile }) {
     if (!profile) return null
@@ -92,6 +100,15 @@ export default function ThemeProfileSection({ profile }: { profile?: TutorThemeP
                                 >
                                     {themeLabel(t.theme)}
                                 </Typography>
+                                {/* No --good/--bad here on purpose: a solve rate
+                                    has no peer figure behind it, so painting it
+                                    red or green would assert a verdict ("you're
+                                    bad at this") the backend never measured —
+                                    only a rate against other PLAYERS could
+                                    honestly claim that, and this is a rate
+                                    against puzzles. Thin-sample dims it the same
+                                    way every other row does; that's the only ink
+                                    variation it earns. */}
                                 <Typography
                                     sx={{
                                         fontFamily: 'var(--font-mono)',

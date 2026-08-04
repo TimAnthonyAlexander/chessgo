@@ -29,6 +29,16 @@
     /* Off-palette accents used across the app — tokenized so they stop drifting. */
     --warn: #e9c46a; /* amber — warnings / low-clock */
     --danger: #e07a5f; /* coral/red — errors / destructive */
+
+    /* Verdict pair — "this measured number is good / bad". Constant across
+       palettes on purpose: the accent is the brand and is itself red in Claret
+       and green in Evergreen, so it can never mean "good". Mirrored per mode in
+       lib/siteTheme.ts; these are the brass-dark defaults for the first paint. */
+    --good: #63b37c;
+    --good-soft: rgba(99, 179, 124, 0.16);
+    --bad: #e2775f;
+    --bad-soft: rgba(226, 119, 95, 0.16);
+    --warn-soft: rgba(233, 196, 106, 0.16);
     --premove: rgba(229, 116, 92, 0.5); /* queued-premove square highlight */
     --eval-white: #f3eee2; /* eval-bar white share */
     --eval-black: #191c22; /* eval-bar black share */

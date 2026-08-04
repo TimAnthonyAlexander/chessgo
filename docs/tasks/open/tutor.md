@@ -181,12 +181,41 @@ comparison — with four deliberate differences:
 
 ```
 /tutor                          your reports — a list, plus the request button
-/tutor/:reportId                the report: category tabs, headline strengths + weaknesses
-/tutor/:reportId/:category      one time control or variant
-/tutor/:reportId/:category/:angle   skills | openings | phases | pieces | time | puzzles
+/tutor/:reportId                OVERVIEW: headline + one block per rating category
+/tutor/:reportId/:category      DETAIL: drills, skills, phases, pieces, openings
 /tutor/:reportId/:category/opening/:color/:family   one opening, from one side
 /tutor/trend                    one metric across all your reports, over time
 ```
+
+**The overview/detail split is the whole readability of this feature**, and it
+took three attempts to get there. Putting the hero, a category rail, ranked
+findings, all eleven metrics with phase and piece cuts, the openings grid and
+the puzzle themes on one page produced four screens in which a player could not
+locate their own answer — measured verdict from the person it was built for:
+"it's crammed… I can't tell whether I'm shit or not". The overview now carries
+only the headline and, per category, a short list of comparisons; everything
+else is one click away.
+
+Two rules fell out of that and should not be relitigated:
+
+- **`SegmentMeter` is the only comparison primitive.** Seven segments, lit 1–7,
+  where the count IS the backend's seven verdict words and the colour is
+  `--bad` / `--warn` / neutral / `--good`. Its predecessor was a diverging bar
+  drawn in a single accent, with polarity carried only by which side of a centre
+  line the fill sat on. That was a deliberate choice, defended in a docblock,
+  and it was wrong: readers could not tell good from bad without consulting a
+  key. Colour never travels alone — the segment count says the same thing, so
+  the meter survives greyscale and colour blindness.
+- **No legend, anywhere.** A chart that needs a key has failed. What a reader
+  actually lacked was not an explanation of the CHART but of the MEASURE, so the
+  key was replaced by a one-line plain-language description of each metric
+  (`metricBlurb` in `components/tutor/format.ts`) on the detail page.
+
+Verdict colour is `--good`/`--bad`, defined per mode in `lib/siteTheme.ts` and
+constant across palettes. **Never use `--accent` to mean "good"**: the accent is
+the brand and is itself red in Claret and green in Evergreen, so the same ink
+would read as opposite verdicts depending on a user setting that carries no
+comparison meaning at all.
 
 The opening drilldown exists because the handoff table below has a "drill this
 opening" row that otherwise has nothing to fire from — and because the opening
