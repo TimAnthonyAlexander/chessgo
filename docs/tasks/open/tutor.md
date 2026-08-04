@@ -519,3 +519,44 @@ puts them on a board in a position from their own game, winning, with the bot
 waiting.
 
 Their second report, weeks later, shows that number moving.
+
+---
+
+## What is left
+
+Honest list, including things verification surfaced that were left alone on
+purpose.
+
+- **iOS is uncompiled.** The native client is written and reviewed but never
+  built — this repo's app is built on device in Xcode, not here. First things
+  to check on device: that a real report payload decodes without emptying
+  `categories` (the whole-dictionary decode is the one failure mode the
+  resilient wrappers can't narrow), and that the puzzle theme deep-link starts
+  a session rather than landing on the setup screen.
+- **Clock metrics still come from the annotated corpus.** `bias_check.py`
+  proved the annotated subset under-represents clock losses by ~3pp, which was
+  fixed for `flagging_loss` by measuring the full population. The same fix is
+  not applied to `global_clock`, `clock_when_losing` or `time_pressure`,
+  because those need per-move clocks and reconstructing them for ~5M games is a
+  much bigger job than reading headers. Their bias is likely in the same
+  direction. Measure it before trusting those three as finely as the rest.
+- **Baselines are one month (2026-06).** Good enough — the cells that matter
+  carry tens of thousands of games — but there is no refresh cadence and no
+  job that rebuilds them. Rating distributions drift; decide how often this
+  should re-run before it goes stale unnoticed.
+- **`TutorThemeProfile::forUser()['attempts']`** counts every theme bucket the
+  query returns, including the structural themes hidden from the visible list,
+  and double-counts puzzles carrying several tags. Harmless while it is not
+  displayed. If it is ever surfaced as "N puzzles considered", fix it first.
+- **No peer comparison for puzzle themes**, and there cannot be one from the
+  current data: the imported set has puzzle ratings but not other players'
+  per-theme results. The payload says so rather than inventing a number. A real
+  peer number would need our own solve data at volume.
+- **The engine died once under concurrent `/analyze-game` load** during
+  calibration (two processes hammering it). It restarted cleanly and has been
+  stable since, but report building fans out engine calls and this is worth
+  reproducing deliberately before it happens under real traffic.
+- **Report build is slow**: ~5 minutes for 68 games when most were already
+  analyzed. Fine behind a queue and a notification, but the analysis cap and
+  per-position movetime deserve measuring against real usage rather than the
+  values picked here.
