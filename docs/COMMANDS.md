@@ -299,6 +299,18 @@ systemd units + php-fpm → `nginx -s reload`.
   — reload won't re-read it.
 - nginx `/ws` must be an **exact match** (`location = /ws`) — a prefix match also
   captures `/ws-ticket` and breaks ticket minting.
+- nginx's SPA `location /` must send `Cache-Control: no-cache` on `index.html`.
+  The shell names the content-hashed chunks and `bun run build` wipes
+  `dist/assets`, so a browser holding a stale shell requests chunk URLs that no
+  longer exist — the one route whose hash changed 404s ("chessgo updated /
+  reload") while every other page still works, and redeploying can't fix it
+  because the browser never re-fetches `index.html`. With no directive at all
+  there is no `Cache-Control`, and browsers fall back to heuristic freshness off
+  `Last-Modified`. (Fixed 2026-08-06 after `/tournaments` broke this way.)
+- Don't leave `*.bak` files in `/etc/nginx/sites-enabled/` — the include is a
+  glob, so a backup becomes a second `server` block and nginx picks one at
+  random-looking order ("conflicting server name … ignored"). Backups go in
+  `/etc/nginx/backups/`.
 - Cloudflare 526 = wrong/placeholder origin cert.
 - After Go/C++ changes, rebuild the binary and restart the engine/hub units (no
   hot reload). The frontend has Vite HMR; PHP re-reads code per request.
