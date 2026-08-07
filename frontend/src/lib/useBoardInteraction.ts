@@ -163,12 +163,21 @@ export function useBoardInteraction(control: BoardControl): BoardInteraction {
         }
     }, [myTurn, premoves, legalMoves, fen, executeMove])
 
+    // Board's `premoves` prop wants plain {from,to} pairs (no `uci`); mapping to
+    // that shape inline in the return would allocate a brand-new array on every
+    // render regardless of whether the chain changed — memoize it so the prop
+    // stays referentially stable across unrelated re-renders.
+    const premovesOut = useMemo(
+        () => premoves.map((p) => ({ from: p.from, to: p.to })),
+        [premoves],
+    )
+
     return {
         // Show the projected premove chain when one is queued (it already folds in
         // the optimistic overlay as its base); otherwise the bare optimistic overlay.
         override: premoveBoard ?? override,
         optimisticLast,
-        premoves: premoves.map((p) => ({ from: p.from, to: p.to })),
+        premoves: premovesOut,
         onMove,
         cancelPremove,
     }

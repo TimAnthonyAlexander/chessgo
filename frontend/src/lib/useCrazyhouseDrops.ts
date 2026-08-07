@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { BoardMap, Square } from './chess'
 import { dropTargets as computeDropTargets, type PocketPiece } from './variants'
 import { playForMove } from './sounds'
@@ -59,9 +59,17 @@ export function useCrazyhouseDrops(
 
     const cancel = useCallback(() => setSelected(null), [])
 
+    // Rebuilds the Set only when the selection or the legal-move list actually
+    // changes, instead of on every render — Board's `dropTargets` prop stays
+    // referentially stable across unrelated re-renders (chat, presence, …).
+    const dropTargets = useMemo(
+        () => (selected ? computeDropTargets(legalMoves, selected) : null),
+        [legalMoves, selected],
+    )
+
     return {
         selected,
-        dropTargets: selected ? computeDropTargets(legalMoves, selected) : null,
+        dropTargets,
         selectPocket,
         drop,
         cancel,

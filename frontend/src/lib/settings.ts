@@ -225,13 +225,35 @@ class SettingsStore {
     // Push the CSS-var-driven settings onto <html>: piece animation duration, the
     // board dim overlay (1 - brightness), and the board contrast filter. Board.css
     // reads all three.
+    //
+    // The dim/contrast vars are only SET (and their marker class only added) when
+    // the corresponding setting is off its default — at the default, both would be
+    // a visual no-op (transparent scrim / contrast(100%)) that's nonetheless live
+    // in the paint tree: a standing `filter` on `.board` forces the browser to
+    // flatten the whole 64-square board into one offscreen raster on every repaint,
+    // and a standing `::after` scrim is a layer painted for nothing. Removing the
+    // property + class at the default keeps both fully out of the paint tree.
     private applyVars(): void {
         if (typeof document === 'undefined') return
         const root = document.documentElement
         root.style.setProperty('--piece-anim', `${ANIM_MS[this.state.animationSpeed]}ms`)
+
         const dim = Math.min(1, Math.max(0, (100 - this.state.boardBrightness) / 100))
-        root.style.setProperty('--board-dim', dim.toFixed(3))
-        root.style.setProperty('--board-contrast', `${this.state.boardContrast}%`)
+        if (dim > 0) {
+            root.style.setProperty('--board-dim', dim.toFixed(3))
+            root.classList.add('board-dim-adj')
+        } else {
+            root.style.removeProperty('--board-dim')
+            root.classList.remove('board-dim-adj')
+        }
+
+        if (this.state.boardContrast !== 100) {
+            root.style.setProperty('--board-contrast', `${this.state.boardContrast}%`)
+            root.classList.add('board-contrast-adj')
+        } else {
+            root.style.removeProperty('--board-contrast')
+            root.classList.remove('board-contrast-adj')
+        }
     }
 
     private persist(): void {

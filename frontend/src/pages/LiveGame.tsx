@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Button, type SxProps, type Theme, Typography } from '@mui/material'
 import {
     Check,
@@ -36,7 +36,7 @@ import { buildBlunderPuzzles } from '../lib/blunderRewind'
 import { type Color, gameSocket, type LiveGameState, liveRemaining } from '../lib/socket'
 import { computeMaterial, type Material } from '../lib/material'
 import { categoryFor } from '../lib/timeControl'
-import { useGameSocket } from '../lib/useGameSocket'
+import { useGameSocketField } from '../lib/useGameSocket'
 import { useBoardInteraction } from '../lib/useBoardInteraction'
 import { useConfirmMove } from '../lib/useConfirmMove'
 import PendingMoveBar from '../components/PendingMoveBar'
@@ -57,6 +57,11 @@ import BoardActions from '../components/BoardActions'
 const other = (c: Color): Color => (c === 'w' ? 'b' : 'w')
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
+
+// Stable "no legal moves" reference — every "it isn't your turn" branch below
+// used to hand Board (and the interaction hooks) a fresh `[]` on every render,
+// which alone was enough to defeat Board's prop-identity memoization.
+const NO_MOVES: string[] = []
 
 // Full-move rows the move list shows before it starts scrolling. Fixed (not
 // content-driven) so the right card keeps one height from move 1 to move 60.
@@ -118,8 +123,13 @@ function useLowTimeWarning(g: LiveGameState | null, enabled: boolean): void {
 
 export default function LiveGame() {
     const navigate = useNavigate()
-    const s = useGameSocket()
-    const g = s.game
+    // Field-level subscriptions: LiveGame only ever reads the socket's `game` and
+    // `conn` slices, so subscribing to those two fields (instead of the whole
+    // SocketState, which GameSocket.set() replaces wholesale on every message —
+    // including chat/presence/arena/challenge events unrelated to this game)
+    // keeps this page from re-rendering for events it doesn't care about.
+    const g = useGameSocketField('game')
+    const conn = useGameSocketField('conn')
     const { user } = useAuth()
     const prefs = usePrefs()
     const isAdmin = user?.role === 'admin'
@@ -160,7 +170,7 @@ export default function LiveGame() {
     }
 
     // The local player can move when it's their turn and the socket is live.
-    const myTurn = !!g && !g.ended && g.sideToMove === g.color && s.conn === 'open'
+    const myTurn = !!g && !g.ended && g.sideToMove === g.color && conn === 'open'
     const isDuck = g?.variant === 'duck'
     const isCrazyhouse = g?.variant === 'crazyhouse'
     // Antichess plays on a normal board — no pockets, no duck placement, and (like
@@ -200,13 +210,19 @@ export default function LiveGame() {
         return board
     }, [g?.id, atLive, shownPly, g?.moves])
 
-    const historyLast =
-        g && !atLive && shownPly > 0
-            ? {
-                  from: g.moves[shownPly - 1].uci.slice(0, 2),
-                  to: g.moves[shownPly - 1].uci.slice(2, 4),
-              }
-            : null
+    const historyLast = useMemo(
+        () =>
+            g && !atLive && shownPly > 0
+                ? {
+                      from: g.moves[shownPly - 1].uci.slice(0, 2),
+                      to: g.moves[shownPly - 1].uci.slice(2, 4),
+                  }
+                : null,
+        // g.moves keeps its reference across updates that don't touch it (chat,
+        // presence, offers — see GameSocket.set's shallow spread), so this only
+        // recomputes when the move list, view position, or game itself changes.
+        [g?.moves, atLive, shownPly],
+    )
 
     // History navigation (client-side review only).
     const goFirst = () => setViewIndex(0)
@@ -226,26 +242,31 @@ export default function LiveGame() {
     // hub accepts a plain UCI or a composite "<pieceUci>:<duckSquare>". Unlike the
     // bot page there's no reveal delay: the opponent is a human whose reply arrives
     // asynchronously, so the player sees their own duck placement immediately.
+    // gameSocket is a page-lifetime singleton, so this closure never needs to
+    // change — one stable reference shared by every controller below, instead
+    // of a fresh arrow function per hook call on every render (which would
+    // otherwise cascade into their internal useCallbacks re-creating too).
+    const submitMove = useCallback((uci: string) => gameSocket.move(uci), [])
     const interaction = useBoardInteraction({
         fen: g?.fen ?? '',
         myTurn: boardInteractive && !isDuck,
-        legalMoves: g && boardInteractive && !isDuck ? g.legalMoves : [],
-        submit: (uci) => gameSocket.move(uci),
+        legalMoves: g && boardInteractive && !isDuck ? g.legalMoves : NO_MOVES,
+        submit: submitMove,
         canPremove: prefs.premoves,
     })
     const duck = useDuckInteraction({
         fen: g?.fen ?? '',
         duck: g?.duck ?? null,
         myTurn: boardInteractive && isDuck,
-        legalMoves: g && boardInteractive && isDuck ? g.legalMoves : [],
-        submit: (composite) => gameSocket.move(composite),
+        legalMoves: g && boardInteractive && isDuck ? g.legalMoves : NO_MOVES,
+        submit: submitMove,
     })
     // Crazyhouse drops: submitted as a plain "<P>@<sq>" move over the same socket
     // call (the hub treats a drop like any other move).
     const drops = useCrazyhouseDrops(
-        g && boardInteractive && isCrazyhouse ? g.legalMoves : [],
+        g && boardInteractive && isCrazyhouse ? g.legalMoves : NO_MOVES,
         boardInteractive && isCrazyhouse,
-        (uci) => gameSocket.move(uci),
+        submitMove,
     )
 
     // confirmMove: hold a real (on-turn) move for an explicit Confirm/Cancel
@@ -262,13 +283,16 @@ export default function LiveGame() {
     // Board's raw move intent: a premove (made while it isn't our turn) bypasses
     // confirmation entirely — it's already a deliberate commitment — and goes
     // straight to the real submit. A real (on-turn) move runs through the gate.
-    const handleBoardMove = (uci: string) => {
-        if (!boardInteractive) {
-            interaction.onMove(uci)
-            return
-        }
-        confirmMove.onMove(uci)
-    }
+    const handleBoardMove = useCallback(
+        (uci: string) => {
+            if (!boardInteractive) {
+                interaction.onMove(uci)
+                return
+            }
+            confirmMove.onMove(uci)
+        },
+        [boardInteractive, interaction.onMove, confirmMove.onMove],
+    )
 
     // The optimistic overlay + last-move highlight come from whichever controller
     // is live for this variant.
@@ -277,6 +301,25 @@ export default function LiveGame() {
     // Crazyhouse pockets (the hub sends the live pocket string). History review
     // shows the live pocket — the socket doesn't retain per-ply pockets.
     const pockets = parsePocket(isCrazyhouse && g ? g.pocket : '')
+
+    // Board's pending-confirm arrow — memoized so it's a stable `null` (not a
+    // fresh object) whenever nothing is pending.
+    const confirmArrow = useMemo(
+        () =>
+            confirmMove.pending
+                ? { from: confirmMove.pending.from, to: confirmMove.pending.to }
+                : null,
+        [confirmMove.pending],
+    )
+
+    // Board's overrideBoard — collapsed from the old conditional prop-spread (which
+    // changed prop SHAPE, not just value, defeating shallow prop comparison) into a
+    // single stable value. `overrideBoard?: BoardMap` on Board already treats an
+    // explicit `undefined` identically to the prop being absent.
+    const overrideBoard = useMemo<BoardMap | undefined>(
+        () => (atLive ? activeOverride ?? undefined : historyBoard ?? undefined),
+        [atLive, activeOverride, historyBoard],
+    )
 
     // Sound: voice the OPPONENT's newest move as the position advances. Our own
     // move is played synchronously in onMove (inside the click gesture) — both for
@@ -438,18 +481,26 @@ export default function LiveGame() {
     const zen = prefs.zenMode && !g.ended
 
     // Captured material (approximate, from the live FEN) for the player-bar readouts.
-    const mat = computeMaterial(g.fen)
+    // Memoized so PlayerBar/CapturedPanel don't get a fresh object on every render
+    // that doesn't touch the position (chat, presence, offers, …).
+    const mat = useMemo(() => computeMaterial(g.fen), [g.fen])
 
     // The player's own rating for this pool (shown in the "You" bar; hidden under zen).
     const myRating = userRatingFor(user, g.variant, g.pool)
 
-    const moveEntries: MoveEntry[] = g.moves.map((m, i) => ({
-        ply: i + 1,
-        san: m.san,
-        uci: m.uci,
-        by: 'human',
-        fen: '',
-    }))
+    // Memoized so MoveList's own memo() actually bites — its `moves` prop used to
+    // be a fresh array of fresh objects every render.
+    const moveEntries: MoveEntry[] = useMemo(
+        () =>
+            g.moves.map((m, i) => ({
+                ply: i + 1,
+                san: m.san,
+                uci: m.uci,
+                by: 'human' as const,
+                fen: '',
+            })),
+        [g.moves],
+    )
 
     return (
         <BoardPage
@@ -920,18 +971,14 @@ export default function LiveGame() {
                 fen={g.fen}
                 orientation={orientation}
                 sideToMove={g.sideToMove}
-                legalMoves={boardInteractive && !confirmMove.pending ? g.legalMoves : []}
+                legalMoves={boardInteractive && !confirmMove.pending ? g.legalMoves : NO_MOVES}
                 lastMove={atLive ? (activeOptimisticLast ?? g.lastMove) : historyLast}
                 showCheck={variantHasCheck(g.variant)}
                 interactive={boardInteractive && !confirmMove.pending}
                 onMove={isDuck ? duck.onMove : handleBoardMove}
                 hint={atLive ? bestHint : null}
                 hintReveal={isAdmin}
-                arrow={
-                    confirmMove.pending
-                        ? { from: confirmMove.pending.from, to: confirmMove.pending.to }
-                        : null
-                }
+                arrow={confirmArrow}
                 premoveColor={
                     confirmMove.pending || g.ended || isDuck || !atLive || !prefs.premoves
                         ? null
@@ -945,11 +992,7 @@ export default function LiveGame() {
                 dropTargets={isCrazyhouse && atLive ? drops.dropTargets : null}
                 onDrop={drops.drop}
                 onDropCancel={drops.cancel}
-                {...(atLive
-                    ? activeOverride
-                        ? { overrideBoard: activeOverride }
-                        : {}
-                    : { overrideBoard: historyBoard ?? undefined })}
+                overrideBoard={overrideBoard}
             />
             {confirmMove.pending && (
                 <PendingMoveBar
@@ -963,7 +1006,7 @@ export default function LiveGame() {
                 second "Reconnecting…" banner under the same condition — same message,
                 same form, twice on screen, and its appearing/disappearing shifted the
                 panel's height mid-game. This overlay is unmissable; don't re-add it. */}
-            {s.conn !== 'open' && !g.ended && (
+            {conn !== 'open' && !g.ended && (
                 <Box
                     sx={{
                         position: 'absolute',

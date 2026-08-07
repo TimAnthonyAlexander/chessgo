@@ -164,11 +164,31 @@ function audio(): { c: AudioContext; out: GainNode } | null {
     return { c: ctx, out: master! }
 }
 
+// Cache generated noise buffers by duration — woodHit() calls this synchronously
+// inside the click gesture on every single move, and the small fixed set of
+// material presets only ever asks for a handful of distinct durations. Reusing
+// a buffer means replaying the same fixed noise burst instead of allocating +
+// filling a fresh Float32Array with Math.random() per move; since it's already
+// unpitched noise, replaying one fixed burst is inaudible from generating a new
+// one each time. Keyed off the AudioContext instance so it can never outlive a
+// context with a different sampleRate (ctx is a page-lifetime singleton, so in
+// practice this cache is built once and never invalidated).
+let noiseBufferCacheCtx: AudioContext | null = null
+let noiseBufferCache: Map<number, AudioBuffer> | null = null
+
 function noiseBuffer(c: AudioContext, seconds: number): AudioBuffer {
+    if (noiseBufferCacheCtx !== c) {
+        noiseBufferCacheCtx = c
+        noiseBufferCache = new Map()
+    }
+    const key = Math.round(seconds * 1e6) // dedupe by microsecond precision
+    const cached = noiseBufferCache!.get(key)
+    if (cached) return cached
     const len = Math.floor(c.sampleRate * seconds)
     const buf = c.createBuffer(1, len, c.sampleRate)
     const data = buf.getChannelData(0)
     for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1
+    noiseBufferCache!.set(key, buf)
     return buf
 }
 

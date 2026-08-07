@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { applyUciVisually, type BoardMap, parseFen, type Square } from './chess'
 import { duckTargets as computeDuckTargets } from './variants'
 import type { Move } from './useBoardInteraction'
@@ -107,11 +107,16 @@ export function useDuckInteraction(control: DuckControl): DuckInteraction {
         setPending(null)
     }, [])
 
+    // `pending.targets` is already the SAME Set reference across renders (it's
+    // built once, inside onMove, and stored in state) — this useMemo is just
+    // making that explicit/robust rather than fixing a real per-render rebuild.
+    const duckTargets = useMemo(() => (pending ? pending.targets : null), [pending])
+
     return {
         override,
         optimisticLast,
         placing: pending != null,
-        duckTargets: pending ? pending.targets : null,
+        duckTargets,
         onMove,
         onPlaceDuck,
         cancel,

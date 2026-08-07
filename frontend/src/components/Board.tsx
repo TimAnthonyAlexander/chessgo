@@ -3,6 +3,7 @@ import {
     type KeyboardEvent as ReactKeyboardEvent,
     type PointerEvent as ReactPointerEvent,
     type TransitionEvent as ReactTransitionEvent,
+    memo,
     useCallback,
     useEffect,
     useLayoutEffect,
@@ -431,7 +432,90 @@ function DragGhost({
     )
 }
 
-export default function Board({
+// One square's contents. Wrapped in React.memo so a pointer-driven state change
+// elsewhere on the board (e.g. `setDrag({ ...drag, over })` firing every time the
+// pointer crosses into a new square) only re-renders the handful of squares whose
+// OWN props actually changed, instead of rebuilding all 64 `createElement` calls,
+// class-array joins, and aria-label strings every time. Every prop below is a
+// primitive (string/boolean/number) or a stable reference (a callback/setter that
+// doesn't change identity across renders) — an object/array prop recreated fresh
+// per render would defeat the memoization outright.
+const BoardSquare = memo(function BoardSquare({
+    sq,
+    classes,
+    role,
+    ariaLabel,
+    tabIndex,
+    onFocusSquare,
+    setRef,
+    markColor,
+    markerOn,
+    hasPiece,
+    hintMarkVisible,
+    piece,
+    pieceSet,
+    pieceHidden,
+    showDuck,
+    duckHidden,
+    showRank,
+    showFile,
+    rankLabel,
+    fileLabel,
+}: {
+    sq: Square
+    classes: string
+    role: 'gridcell' | 'cell'
+    ariaLabel: string
+    tabIndex: number | undefined
+    onFocusSquare: ((sq: Square) => void) | undefined
+    setRef: (el: HTMLDivElement | null) => void
+    markColor: string | undefined
+    markerOn: boolean
+    hasPiece: boolean
+    hintMarkVisible: boolean
+    piece: string | undefined
+    pieceSet: string
+    pieceHidden: boolean
+    showDuck: boolean
+    duckHidden: boolean
+    showRank: boolean
+    showFile: boolean
+    rankLabel: string
+    fileLabel: string
+}) {
+    return (
+        <div
+            ref={setRef}
+            className={classes}
+            role={role}
+            aria-label={ariaLabel}
+            tabIndex={tabIndex}
+            onFocus={onFocusSquare ? () => onFocusSquare(sq) : undefined}
+        >
+            {markColor && (
+                <span className="mark" style={{ '--mark': markColor } as CSSProperties} aria-hidden />
+            )}
+            {/* Legal-move marker: a dot on an empty square, a ring around an
+                occupied (capture) one. ALWAYS mounted and toggled with `.on`,
+                never conditionally rendered — that's what lets it scale from 0
+                on the way IN and back to 0 on the way OUT. An unmount can't be
+                animated, and faking one with a timer would mean holding 64
+                squares' worth of exit state in React. */}
+            <span className={`${hasPiece ? 'ring' : 'dot'}${markerOn ? ' on' : ''}`} />
+            {hintMarkVisible && <span className="hint-mark" />}
+            {piece && <PieceGlyph piece={piece} set={pieceSet} hidden={pieceHidden} />}
+            {showDuck && (
+                <span className={duckHidden ? 'duck is-hidden' : 'duck'} aria-hidden>
+                    <DuckGlyph />
+                </span>
+            )}
+            {showRank && <span className="coord rank">{rankLabel}</span>}
+            {showFile && <span className="coord file">{fileLabel}</span>}
+        </div>
+    )
+})
+
+function Board({
     fen,
     orientation,
     sideToMove,
@@ -475,6 +559,15 @@ export default function Board({
     // Live pointer position during a drag — see DragState's comment for why this
     // is a ref and not part of that state.
     const dragPosRef = useRef({ x: 0, y: 0 })
+    // Board rect, cached for the duration of a drag. onPointerDown measures it
+    // once (it already needs the width for the ghost's size); squareFromPoint
+    // reuses that instead of calling getBoundingClientRect() on every native
+    // pointermove — a high-polling mouse fires those at 500-1000Hz, and the
+    // layout read is real cost repeated for no reason since the board can't
+    // resize mid-drag except via the window/scroll, which the effect below
+    // guards against. Null outside a drag, so every other squareFromPoint
+    // caller (click-to-move, right-click annotations) still gets a fresh rect.
+    const dragRectRef = useRef<DOMRect | null>(null)
     // Right-click drawn annotations + the one currently being dragged out.
     const [shapes, setShapes] = useState<Shape[]>([])
     const [drawing, setDrawing] = useState<Shape | null>(null)
@@ -504,6 +597,31 @@ export default function Board({
     // onBlur (checking the move stayed inside the board).
     const [gridFocused, setGridFocused] = useState(false)
     const squareRefs = useRef<Map<Square, HTMLDivElement>>(new Map())
+    // One stable ref-callback per square, built once. Passing a fresh inline
+    // `ref={(el) => ...}` closure per square on every Board render (the old
+    // code) makes React detach+reattach all 64 callback refs on every render,
+    // even ones that don't touch this square — a stable per-square setter from
+    // this map means a square's ref callback identity never changes.
+    const squareRefSetters = useMemo(() => {
+        const map = new Map<Square, (el: HTMLDivElement | null) => void>()
+        for (let file = 0; file < 8; file++) {
+            for (let rank = 0; rank < 8; rank++) {
+                const sq = squareAt(file, rank)
+                map.set(sq, (el) => {
+                    if (el) squareRefs.current.set(sq, el)
+                    else squareRefs.current.delete(sq)
+                })
+            }
+        }
+        return map
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
+    // Stable handler for a square's onFocus (keyboard roving-tabindex) — passed
+    // to the memoized BoardSquare so its identity never changes across renders.
+    const handleSquareFocus = useCallback((sq: Square) => {
+        setCursor(sq)
+        setGridFocused(true)
+    }, [])
     // Polite live-region text: set on piece selection and on every move that
     // lands (see the effects below) — never on a bare cursor move, which would
     // flood a screen reader on every arrow press.
@@ -831,10 +949,29 @@ export default function Board({
     const ranks = orientation === 'w' ? [7, 6, 5, 4, 3, 2, 1, 0] : [0, 1, 2, 3, 4, 5, 6, 7]
     const files = orientation === 'w' ? [0, 1, 2, 3, 4, 5, 6, 7] : [7, 6, 5, 4, 3, 2, 1, 0]
 
+    // Cheap insurance against the cached drag rect above going stale: a resize
+    // or scroll mid-drag (rare, but not impossible) re-measures it. Keyed on
+    // whether a drag is active (a boolean, not `drag` itself) so this doesn't
+    // tear down and re-attach the listeners on every `over` change.
+    const dragActive = !!drag
+    useEffect(() => {
+        if (!dragActive) return
+        const invalidate = () => {
+            if (boardRef.current) dragRectRef.current = boardRef.current.getBoundingClientRect()
+        }
+        window.addEventListener('resize', invalidate)
+        window.addEventListener('scroll', invalidate, true)
+        return () => {
+            window.removeEventListener('resize', invalidate)
+            window.removeEventListener('scroll', invalidate, true)
+        }
+    }, [dragActive])
+
     function squareFromPoint(cx: number, cy: number): Square | null {
-        const el = boardRef.current
-        if (!el) return null
-        const r = el.getBoundingClientRect()
+        // During a drag, reuse the rect cached at pointer-down instead of
+        // measuring layout again on every pointermove.
+        const r = dragRectRef.current ?? boardRef.current?.getBoundingClientRect()
+        if (!r) return null
         if (cx < r.left || cx > r.right || cy < r.top || cy > r.bottom) return null
         const col = Math.min(7, Math.max(0, Math.floor((cx - r.left) / (r.width / 8))))
         const row = Math.min(7, Math.max(0, Math.floor((cy - r.top) / (r.height / 8))))
@@ -1011,7 +1148,9 @@ export default function Board({
             // Drag is suppressed in click-to-move-only mode; the piece still
             // selects so the second click can commit.
             if (allowDrag) {
-                const size = (boardRef.current?.getBoundingClientRect().width ?? 0) / 8
+                const rect = boardRef.current?.getBoundingClientRect() ?? null
+                dragRectRef.current = rect
+                const size = (rect?.width ?? 0) / 8
                 try {
                     boardRef.current?.setPointerCapture(e.pointerId)
                 } catch {
@@ -1073,6 +1212,7 @@ export default function Board({
         }
 
         const dropSq = squareFromPoint(e.clientX, e.clientY)
+        dragRectRef.current = null
         if (dropSq === d.from) {
             // Released on the origin square — a plain tap, not a drag.
             if (d.reselect) setSelected(null) // tapped an already-selected piece → toggle off
@@ -1184,6 +1324,7 @@ export default function Board({
                 onPointerCancel={() => {
                     setDrag(null)
                     setDrawing(null)
+                    dragRectRef.current = null
                 }}
                 onContextMenu={(e) => e.preventDefault()}
                 onKeyDown={onBoardKeyDown}
@@ -1220,6 +1361,11 @@ export default function Board({
                                 'sq',
                                 light ? 'light' : 'dark',
                                 inputEnabled ? 'interactive' : '',
+                                // Occupancy as a plain class instead of a `:has(.piece)`
+                                // selector in Board.css — `:has()` is relational and
+                                // forces wider style invalidation on every piece
+                                // mount/unmount; this is computed here anyway.
+                                piece ? 'has-piece' : '',
                                 selected === sq ? 'sel' : '',
                                 isLast ? 'last' : '',
                                 isPremove ? 'premove' : '',
@@ -1267,15 +1413,12 @@ export default function Board({
                                 coordsInside && (orientation === 'w' ? file === 0 : file === 7)
 
                             return (
-                                <div
+                                <BoardSquare
                                     key={sq}
-                                    ref={(el) => {
-                                        if (el) squareRefs.current.set(sq, el)
-                                        else squareRefs.current.delete(sq)
-                                    }}
-                                    className={classes}
+                                    sq={sq}
+                                    classes={classes}
                                     role={keyboardBoard ? 'gridcell' : 'cell'}
-                                    aria-label={squareAriaLabel}
+                                    ariaLabel={squareAriaLabel}
                                     // Roving tabindex: only the cursor square is Tab-reachable;
                                     // arrow keys move both `cursor` and real DOM focus (see
                                     // moveCursor), so Tab always lands where the user left off.
@@ -1286,53 +1429,26 @@ export default function Board({
                                     // ring and Tab walks straight past the board, exactly as
                                     // before any of this existed.
                                     tabIndex={keyboardBoard ? (isCursor ? 0 : -1) : undefined}
-                                    onFocus={
-                                        keyboardBoard
-                                            ? () => {
-                                                  setCursor(sq)
-                                                  setGridFocused(true)
-                                              }
-                                            : undefined
+                                    onFocusSquare={keyboardBoard ? handleSquareFocus : undefined}
+                                    setRef={squareRefSetters.get(sq)!}
+                                    markColor={marks.get(sq)}
+                                    markerOn={markerOn}
+                                    hasPiece={!!piece}
+                                    hintMarkVisible={
+                                        !!hintVisible &&
+                                        !!hint &&
+                                        (hint.from === sq || (hintShowTo && hint.to === sq))
                                     }
-                                >
-                                    {marks.has(sq) && (
-                                        <span
-                                            className="mark"
-                                            style={{ '--mark': marks.get(sq) } as CSSProperties}
-                                            aria-hidden
-                                        />
-                                    )}
-                                    {/* Legal-move marker: a dot on an empty square, a ring
-                                        around an occupied (capture) one. ALWAYS mounted and
-                                        toggled with `.on`, never conditionally rendered —
-                                        that's what lets it scale from 0 on the way IN and
-                                        back to 0 on the way OUT. An unmount can't be
-                                        animated, and faking one with a timer would mean
-                                        holding 64 squares' worth of exit state in React. */}
-                                    <span className={`${piece ? 'ring' : 'dot'}${markerOn ? ' on' : ''}`} />
-                                    {hintVisible &&
-                                        hint &&
-                                        (hint.from === sq || (hintShowTo && hint.to === sq)) && (
-                                            <span className="hint-mark" />
-                                        )}
-                                    {piece && (
-                                        <PieceGlyph
-                                            piece={piece}
-                                            set={pieceSet}
-                                            hidden={isDragOrigin || prefs.blindfold || animatingTo.has(sq)}
-                                        />
-                                    )}
-                                    {duck === sq && (
-                                        <span
-                                            className={duckFlightTo === sq ? 'duck is-hidden' : 'duck'}
-                                            aria-hidden
-                                        >
-                                            <DuckGlyph />
-                                        </span>
-                                    )}
-                                    {showRank && <span className="coord rank">{rank + 1}</span>}
-                                    {showFile && <span className="coord file">{'abcdefgh'[file]}</span>}
-                                </div>
+                                    piece={piece}
+                                    pieceSet={pieceSet}
+                                    pieceHidden={isDragOrigin || prefs.blindfold || animatingTo.has(sq)}
+                                    showDuck={duck === sq}
+                                    duckHidden={duckFlightTo === sq}
+                                    showRank={showRank}
+                                    showFile={showFile}
+                                    rankLabel={String(rank + 1)}
+                                    fileLabel={'abcdefgh'[file]}
+                                />
                             )
                         })}
                     </div>
@@ -1628,3 +1744,10 @@ export default function Board({
         </div>
     )
 }
+
+// Memoized so a caller re-rendering for unrelated reasons (e.g. a parent's own
+// state tick) doesn't force this whole 64-square tree to re-render when none of
+// Board's own props changed. Only pays off if the caller passes stable
+// references for object/array/function props (fen/legalMoves/lastMove/etc.) —
+// see the page component wiring those up.
+export default memo(Board)

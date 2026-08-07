@@ -62,27 +62,41 @@
         0 0 0 1px rgba(0, 0, 0, 0.35);
     user-select: none;
     touch-action: none;
-    /* Board-contrast preference, 70–130%; 100% (the default) is a no-op. Set on
-     * <html> by settings.ts, alongside --board-dim below. */
-    filter: contrast(var(--board-contrast, 100%));
+}
+
+/* Board-contrast preference, 70–130%; 100% (the default) is a no-op — but a LIVE
+ * `filter` on `.board` forces the browser to flatten the whole 64-square subtree
+ * into one offscreen raster, so every hover ring / drag-over ring / dot
+ * transition / piece-mount animation would repaint the WHOLE board instead of one
+ * square. So the filter only exists in the paint tree once the user actually
+ * moves the slider off 100%. settings.ts toggles `board-contrast-adj` on <html>
+ * (alongside --board-contrast) to match. */
+html.board-contrast-adj .board {
+    filter: contrast(var(--board-contrast));
 }
 
 /* Board-brightness preference: a black scrim over the squares (and legal-move
  * dots) but UNDER the pieces (z-index 2) and coords (z-index 3), so lowering
  * brightness dims the board without washing out the pieces. --board-dim is
- * (1 - brightness); at 100% brightness it's 0 (fully transparent = no-op). */
-.board::after {
+ * (1 - brightness); at 100% brightness it's 0 (fully transparent = no-op) — so
+ * the ::after is only mounted in the paint tree once brightness is actually
+ * lowered off 100%, rather than painting a fully transparent layer for nothing.
+ * settings.ts toggles `board-dim-adj` on <html> (alongside --board-dim) to match. */
+html.board-dim-adj .board::after {
     content: '';
     position: absolute;
     inset: 0;
     z-index: 1;
     pointer-events: none;
-    background: rgba(0, 0, 0, var(--board-dim, 0));
+    background: rgba(0, 0, 0, var(--board-dim));
 }
 
 /* Grab hint only where there's something to pick up — an empty interactive
- * square has no piece to drag, so it stays a plain cursor. */
-.sq.interactive:has(.piece) {
+ * square has no piece to drag, so it stays a plain cursor. `.has-piece` (set by
+ * Board.tsx, which already computes piece-occupancy per square) replaces a
+ * `:has(.piece)` relational selector — `:has()` forces wider style invalidation
+ * whenever a `.piece` mounts/unmounts anywhere on the board. */
+.sq.interactive.has-piece {
     cursor: grab;
 }
 .board.dragging,
@@ -110,7 +124,7 @@
  * on the target square, and excludes `.focus-ring` so the keyboard cursor
  * always wins on the square it's on. */
 @media (hover: hover) and (pointer: fine) {
-    .board:not(.dragging) .sq:hover:has(.piece):not(.focus-ring) {
+    .board:not(.dragging) .sq.has-piece:hover:not(.focus-ring) {
         box-shadow: inset 0 0 0 2px var(--square-hover);
         z-index: 1;
     }
@@ -159,6 +173,11 @@
     /* Every square carries a tabIndex for roving-tabindex keyboard nav; the
      * default browser focus outline is replaced by `.focus-ring` above. */
     outline: none;
+    /* No `contain` here on purpose. `contain: layout` would scope each square's
+     * layout recalc nicely, but it also makes every square its own stacking
+     * context — and the piece/duck drop-shadows deliberately bleed a few px
+     * past their square, so cross-square overlap would start resolving by DOM
+     * order instead of z-index. Small, but a visual change; not worth it. */
 }
 /* --board-light/--board-dark are usually a color, but a photographic theme (e.g.
  * Cherry) sets them to a url(); background-size/position make the texture fill the
