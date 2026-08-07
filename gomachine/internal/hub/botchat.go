@@ -47,38 +47,44 @@ type chatPersona struct {
 	style       string  // a short voice descriptor, sent to the generator for consistency
 }
 
-// chatStyles are the voices a fill-in bot can be given. One is picked per game
-// and held for its whole duration, so the persona (and its phrasing) stays
-// consistent — and so different games don't all sound identical.
-var chatStyles = []string{
-	"friendly and relaxed, easygoing",
-	"quiet and focused on the game, says little",
-	"dry and a bit sarcastic",
-	"upbeat and talkative",
-	"chill, low energy, casual",
-	"competitive and lightly cocky, but not rude",
-	"polite and sportsmanlike",
-	"goofy, likes a bad joke",
+// There are two kinds of online chess opponent, and both are here. The QUIET one
+// (most of them) types "hf" at the start, "gg" at the end, and otherwise treats
+// the chat box as furniture — if you pull an answer out of them it's two words
+// and defensive. The TALKER answers most lines, but is still terse and a bit odd,
+// friendly at the start and quick to sour. Nobody in here is a coach or a fan.
+var quietChatStyles = []string{
+	"barely chats — hf at the start, gg at the end, and two-word answers at most if pushed",
+	"heads-down on the board, treats the chat box as an annoyance",
+	"curt and guarded, answers in one or two flat words or not at all",
+	"silent type, replies only when directly asked and even then says almost nothing",
 }
 
-// newChatPersona rolls a stable chat character. Talkativeness is bucketed and
-// weighted toward the quiet/normal middle (most online opponents barely chat);
-// each bucket sets a FIXED reply probability for the rest of the game.
+var talkerChatStyles = []string{
+	"friendly at the start but thin-skinned — goes cold and clipped the second they needle you",
+	"dry and sarcastic, one-liners only, never earnest",
+	"quietly cocky, small jabs when you're ahead, defensive when you're behind",
+	"a bit odd — short random remarks that don't quite follow the conversation",
+	"over-familiar and blunt, talks like you two have history",
+}
+
+// newChatPersona rolls a stable chat character: mostly the quiet archetype (that
+// is what online chess actually looks like), sometimes the talker. The bucket
+// picks the reply probability AND the voice pool, so a quiet persona never draws
+// a chatty voice and vice-versa.
 func newChatPersona() *chatPersona {
-	var reply, multi, openChance float64
-	switch r := mrand.Float64(); {
-	case r < 0.35: // quiet: rarely says anything
-		reply, multi, openChance = 0.15, 0.04, 0.20
-	case r < 0.80: // normal
-		reply, multi, openChance = 0.45, 0.10, 0.45
-	default: // chatty
-		reply, multi, openChance = 0.80, 0.18, 0.75
+	if mrand.Float64() < 0.70 { // quiet: hf / gg and little else
+		return &chatPersona{
+			opens:       mrand.Float64() < 0.70,
+			replyChance: 0.14,
+			multiChance: 0.02,
+			style:       quietChatStyles[mrand.IntN(len(quietChatStyles))],
+		}
 	}
-	return &chatPersona{
-		opens:       mrand.Float64() < openChance,
-		replyChance: reply,
-		multiChance: multi,
-		style:       chatStyles[mrand.IntN(len(chatStyles))],
+	return &chatPersona{ // talker: answers most lines, still short
+		opens:       mrand.Float64() < 0.85,
+		replyChance: 0.75,
+		multiChance: 0.12,
+		style:       talkerChatStyles[mrand.IntN(len(talkerChatStyles))],
 	}
 }
 
