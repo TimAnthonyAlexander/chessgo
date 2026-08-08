@@ -615,8 +615,8 @@ func (h *Hub) startGame(a, b *Client, tc timeControl, pool, variant string) {
 		white, black = b, a
 	}
 	// Public pairing is rated only if both sides are accounts; startGameWith further
-	// gates by variant (standard → time-control pools, duck → the duck pool, 960
-	// unrated). The queue key carries the variant through (standard threads bare).
+	// gates by variant (standard → time-control pools, every other variant → its own
+	// isolated pool). The queue key carries the variant through (standard threads bare).
 	h.startGameWith(white, black, tc, pool, !white.id.Anon && !black.id.Anon, variant, "", "", "")
 }
 
@@ -640,12 +640,15 @@ func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, r
 	h.retireRematch(black.lastGame)
 	variantID = normalizeVariant(variantID)
 	// Rating eligibility by variant. Standard chess feeds the time-control Glicko
-	// pools; Duck Chess, Crazyhouse, Antichess and Secret Queen each feed their own
-	// isolated pool (categoryFor routes each). Chess960 alone stays unrated (no
-	// dedicated pool). This is the single funnel for both public matchmaking and
-	// private challenges, so gating rated here covers every started game.
-	rated = rated && (variantID == variantStandard || variantID == variantDuck ||
-		variantID == variantCrazyhouse || variantID == variantAntichess || variantID == variantSecretQueen)
+	// pools; Chess960, Duck Chess, Crazyhouse, Antichess and Secret Queen each feed
+	// their own isolated pool (categoryFor routes each). Every variant the hub
+	// understands is now rated, so this is a no-op guard kept as the one place a
+	// future unrated variant would be excluded. It is the single funnel for both
+	// public matchmaking and private challenges, so gating rated here covers every
+	// started game.
+	rated = rated && (variantID == variantStandard || variantID == variantChess960 ||
+		variantID == variantDuck || variantID == variantCrazyhouse ||
+		variantID == variantAntichess || variantID == variantSecretQueen)
 	// The start position is the classic start FEN, a random Fischer-random start
 	// for Chess960, or (a private challenge only) a validated custom fen.
 	// g.startFen MUST be this FEN (not chess.StartFEN), or a takeback rebuild

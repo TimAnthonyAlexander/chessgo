@@ -121,6 +121,7 @@ class Tournament extends BaseModel
     public function ratingCategory(Glicko2Service $glicko): string
     {
         return match ($this->variant) {
+            'chess960' => 'chess960',
             'duck' => 'duck',
             'crazyhouse' => 'crazyhouse',
             'antichess' => 'antichess',

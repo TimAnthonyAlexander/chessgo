@@ -38,7 +38,7 @@ class ProfileController extends Controller
     /** Rating pools backed by a `Game.category` value (time controls + the
      *  isolated Duck/Crazyhouse/Antichess pools). Puzzle history comes from
      *  PuzzleAttempt instead, since puzzles aren't Game rows. */
-    private const HISTORY_CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'duck', 'crazyhouse', 'antichess'];
+    private const HISTORY_CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'chess960', 'duck', 'crazyhouse', 'antichess'];
 
     /** Bound from path {name}. */
     public string $name = '';
@@ -88,6 +88,15 @@ class ProfileController extends Controller
                 'games' => $user->games_puzzle,
                 'solved' => $puzzleSolved,
                 'provisional' => ((float) $user->rd_puzzle) > Glicko2Service::PROVISIONAL_RD,
+            ],
+            // Chess960 is its own isolated pool (like puzzle) — standard rules, but
+            // a different skill, so it never feeds the time-control tiles.
+            'chess960' => [
+                'rating' => $user->rating_chess960,
+                'rd' => $user->rd_chess960,
+                'games' => $user->games_chess960,
+                'provisional' => ((float) $user->rd_chess960) > Glicko2Service::PROVISIONAL_RD,
+                'rated_at' => $user->rated_at_chess960,
             ],
             // Duck Chess is its own isolated pool (like puzzle) — surfaced separately
             // from the time-control rating tiles.

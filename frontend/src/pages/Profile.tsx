@@ -150,14 +150,14 @@ export default function Profile() {
     )
 
     // Category chips to offer: 'all' plus the time controls the player has games
-    // in, plus Duck / Antichess if they've played them. (Chess960 games surface
-    // under their time-control chip.)
+    // in, plus Chess960 / Duck / Antichess if they've played them.
     const availableCats = useMemo<CatFilter[]>(() => {
         if (!data) return ['all']
         const cats: CatFilter[] = ['all']
         for (const c of ['bullet', 'blitz', 'rapid', 'classical'] as const) {
             if (data.ratings[c].games > 0) cats.push(c)
         }
+        if (data.chess960.games > 0) cats.push('chess960')
         if (data.duck.games > 0) cats.push('duck')
         if (data.antichess.games > 0) cats.push('antichess')
         return cats

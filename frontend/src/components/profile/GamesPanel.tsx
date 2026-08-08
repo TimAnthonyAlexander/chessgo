@@ -22,6 +22,7 @@ const CAT_LABEL: Record<Exclude<CatFilter, 'all'>, string> = {
     blitz: 'Blitz',
     rapid: 'Rapid',
     classical: 'Classical',
+    chess960: 'Chess960',
     duck: 'Duck',
     antichess: 'Antichess',
 }

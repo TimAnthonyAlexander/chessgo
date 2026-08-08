@@ -67,6 +67,7 @@ struct Profile: Decodable, Identifiable, Sendable {
     let createdAt: String?
     let ratings: RatingsBlock?
     let puzzle: PuzzleSnapshot?
+    let chess960: RatingSnapshot?
     let duck: RatingSnapshot?
     let antichess: RatingSnapshot?
     let record: Record?

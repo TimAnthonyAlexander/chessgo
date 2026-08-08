@@ -12,8 +12,9 @@ import type { Title } from '../api/client'
 export interface MobileNavLink {
     label: string
     to: string
-    // Router state carried on tap (e.g. Duck Chess/Crazyhouse/Antichess → Home quick pairing).
-    state?: { quickPair: 'duck' | 'crazyhouse' | 'antichess' }
+    // Router state carried on tap (e.g. Chess960/Duck Chess/Crazyhouse/Antichess →
+    // Home quick pairing).
+    state?: { quickPair: 'chess960' | 'duck' | 'crazyhouse' | 'antichess' }
 }
 
 export interface MobileNavSection {

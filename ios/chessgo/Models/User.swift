@@ -69,6 +69,12 @@ struct User: Decodable, Identifiable, Sendable {
     let ratedAtPuzzle: String?
     @DefaultZero var gamesPuzzle: Int
 
+    @DefaultZero var ratingChess960: Int
+    @DefaultZeroDouble var rdChess960: Double
+    @DefaultZeroDouble var volChess960: Double
+    let ratedAtChess960: String?
+    @DefaultZero var gamesChess960: Int
+
     @DefaultZero var ratingDuck: Int
     @DefaultZeroDouble var rdDuck: Double
     @DefaultZeroDouble var volDuck: Double
@@ -106,6 +112,7 @@ struct User: Decodable, Identifiable, Sendable {
         case .rapid: return ratingRapid
         case .classical: return ratingClassical
         case .puzzle: return ratingPuzzle
+        case .chess960: return ratingChess960
         case .duck: return ratingDuck
         case .crazyhouse: return ratingCrazyhouse
         case .antichess: return ratingAntichess
@@ -120,6 +127,7 @@ struct User: Decodable, Identifiable, Sendable {
         case .rapid: return gamesRapid
         case .classical: return gamesClassical
         case .puzzle: return gamesPuzzle
+        case .chess960: return gamesChess960
         case .duck: return gamesDuck
         case .crazyhouse: return gamesCrazyhouse
         case .antichess: return gamesAntichess

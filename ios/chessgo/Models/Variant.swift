@@ -40,7 +40,7 @@ enum Variant: String, Codable, CaseIterable, Sendable {
     }
 }
 
-/// The nine rating pools a user has a Glicko-2 block for (User model,
+/// The ten rating pools a user has a Glicko-2 block for (User model,
 /// leaderboard categories). Crazyhouse has no leaderboard endpoint but still
 /// carries a rating block on the user.
 enum RatingCategory: String, Codable, CaseIterable, Sendable {
@@ -49,6 +49,7 @@ enum RatingCategory: String, Codable, CaseIterable, Sendable {
     case rapid
     case classical
     case puzzle
+    case chess960
     case duck
     case crazyhouse
     case antichess

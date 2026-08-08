@@ -64,15 +64,14 @@ class GameResultController extends Controller
             return JsonResponse::ok(['id' => $existing->id, 'duplicate' => true]);
         }
 
-        // Duck Chess, Crazyhouse, Antichess, and Secret Queen are each their own
-        // isolated rating pool (no time-control split): every game of that variant
-        // maps to its own category regardless of its clock. Standard / Chess960
-        // fall back to the duration-derived time-control category. This mirrors
-        // the hub's categoryFor(). (Secret Queen live play isn't wired up on the
-        // hub side yet — see docs/tasks/open/secret-queen.md — but the category
-        // is ready for when it is, same as the User rating columns.)
+        // Chess960, Duck Chess, Crazyhouse, Antichess, and Secret Queen are each
+        // their own isolated rating pool (no time-control split): every game of that
+        // variant maps to its own category regardless of its clock. Only standard
+        // falls back to the duration-derived time-control category. This mirrors the
+        // hub's categoryFor().
         $variant = $this->normalizeVariant($b['variant'] ?? null);
         $category = match ($variant) {
+            'chess960' => 'chess960',
             'duck' => 'duck',
             'crazyhouse' => 'crazyhouse',
             'antichess' => 'antichess',

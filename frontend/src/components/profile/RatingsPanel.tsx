@@ -1,6 +1,6 @@
 import { Box, Typography } from '@mui/material'
 import type { ReactNode } from 'react'
-import { Skull, Zap } from 'lucide-react'
+import { Shuffle, Skull, Zap } from 'lucide-react'
 import type { Profile, RatingCategory } from '../../api/client'
 import { CATEGORY_META } from '../../lib/timeControl'
 import { DuckGlyph } from '../DuckGlyph'
@@ -65,6 +65,14 @@ export default function RatingsPanel({
                     provisional={profile.puzzle.provisional}
                     sub={`${profile.puzzle.solved}W ${profile.puzzle.games - profile.puzzle.solved}L`}
                     series={profile.ratingHistory.puzzle ?? []}
+                />
+                <RatingRow
+                    icon={<Shuffle size={14} />}
+                    label="Chess960"
+                    rating={profile.chess960.rating}
+                    provisional={profile.chess960.provisional}
+                    sub={`${profile.chess960.games} ${profile.chess960.games === 1 ? 'game' : 'games'}`}
+                    series={profile.ratingHistory.chess960 ?? []}
                 />
                 <RatingRow
                     icon={

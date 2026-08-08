@@ -794,6 +794,10 @@ export interface User {
     games_classical: number
     rating_puzzle: number
     games_puzzle: number
+    // Chess960 — its own isolated rating pool (no time-control split). Standard
+    // rules, but playing a position you've never seen is a different skill.
+    rating_chess960: number
+    games_chess960: number
     // Duck Chess — its own isolated rating pool (no time-control split).
     rating_duck: number
     games_duck: number
@@ -914,6 +918,8 @@ export interface Profile {
     created_at: string
     ratings: Record<RatingCategory, RatingTile>
     puzzle: PuzzleProfile
+    // Chess960 rating tile (isolated pool, surfaced separately from time controls).
+    chess960: RatingTile
     // Duck Chess rating tile (isolated pool, surfaced separately from time controls).
     duck: RatingTile
     // Crazyhouse rating tile — likewise its own isolated pool.
@@ -930,8 +936,8 @@ export interface Profile {
     gamesTotal: number
     gamesPerPage: number
     // Per-pool rating trend (oldest -> newest ratings-after), keyed by
-    // RatingCategory plus 'puzzle' | 'duck' | 'crazyhouse' | 'antichess'. Feeds
-    // every sparkline in the ratings panel.
+    // RatingCategory plus 'puzzle' | 'chess960' | 'duck' | 'crazyhouse' |
+    // 'antichess'. Feeds every sparkline in the ratings panel.
     ratingHistory: Record<string, number[]>
 }
 
@@ -1011,15 +1017,17 @@ export interface LeaderboardEntry {
     provisional: boolean
 }
 
+export type LeaderboardCategory = RatingCategory | 'puzzle' | 'chess960' | 'duck' | 'antichess'
+
 export interface LeaderboardResult {
-    category: RatingCategory | 'puzzle' | 'duck' | 'antichess'
+    category: LeaderboardCategory
     entries: LeaderboardEntry[]
 }
 
-/** Top players for a single rating category (bullet/blitz/rapid/classical/puzzle/duck/antichess). */
-export function getLeaderboard(
-    category: RatingCategory | 'puzzle' | 'duck' | 'antichess',
-): Promise<LeaderboardResult> {
+/** Top players for a single rating category (the four time controls, puzzle, or an
+ * isolated variant pool). Must stay in sync with LeaderboardController::CATEGORIES —
+ * anything else is rejected there, never interpolated into the column names. */
+export function getLeaderboard(category: LeaderboardCategory): Promise<LeaderboardResult> {
     return request<LeaderboardResult>(`/leaderboard?category=${encodeURIComponent(category)}`)
 }
 

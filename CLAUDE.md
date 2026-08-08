@@ -156,13 +156,27 @@ three).
 
 **Variants.** The canonical live-play enum is
 `gomachine/internal/variant/variant.go`: standard, chess960, duck, crazyhouse,
-antichess. Chess960 reaches human play through challenge links; Duck/Crazyhouse/
-Antichess each also have one fixed quick-pair pool (5+0 / 3+0 / 3+0) in
-`frontend/src/pages/home/parts.tsx`. **Fading, Glass Jaw and Double Move are a
-separate axis** — they live in `BotGameService`/`BotGame` (rating decays per move
-/ per check given) and are unknown to the hub's `normalizeVariant`, so they're
-reachable from `/bot` only. `frontend/src/lib/variants.ts` and
-`ios/chessgo/Models/Variant.swift` carry all eight.
+antichess (plus secretqueen, declared in `secretqueen.go`). Each has one fixed
+quick-pair pool — Chess960 5+0, Duck 5+0, Crazyhouse 3+0, Antichess 3+0, Secret
+Queen 3+0 — in `frontend/src/pages/home/parts.tsx` / iOS `VariantPool.all`; the
+two must agree, since a phone and a browser queueing the same variant with
+different pool strings land in queues that never pair. They sit under the
+homepage's **"More"** heading, whose sixth cell is Guess the Elo (a solo mode, no
+pool and no rating — the slot the variant cells give the clock holds its icon).
+**Every variant is its own isolated Glicko category**, no time-control split:
+`categoryFor` (hub) and `GameResultController` route them, `User` carries the
+`rating_/rd_/vol_/rated_at_/games_` block, and `WsTicketController` must ship the
+rating in the ticket's `ratings` map — a category missing from THAT map doesn't
+fail loudly, it silently pairs that variant by the player's blitz rating
+(`auth.Identity.RatingFor` falls back to `Identity.Rating`). Chess960 is in this
+set despite being standard rules, because a shuffled back rank is a different
+skill from the book. **Fading, Glass Jaw and Double Move are a separate axis** —
+they live in `BotGameService`/`BotGame` (rating decays per move / per check
+given) and are unknown to the hub's `normalizeVariant`, so they're reachable from
+`/bot` only; Double Move is a real ruleset but it exists only as a side-to-move
+flip in PHP, with no zugzwang rules and no `variant.State`, so it cannot go live
+without a port. `frontend/src/lib/variants.ts` and
+`ios/chessgo/Models/Variant.swift` carry all nine.
 
 **Secret Queen** (`secretqueen`) is the platform's first **hidden-information**
 variant, and it is the reason several things above are no longer universally

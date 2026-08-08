@@ -7,10 +7,17 @@ import { type Category } from '../../lib/timeControl'
 export type Outcome = 'win' | 'loss' | 'draw'
 
 // Server-side game-history filter axes (see ProfileGamesController). 'all' means
-// no filter on that axis. Duck and Antichess are each their own stored category;
-// Chess960 games keep their time-control category, so they filter under
-// Bullet/Blitz/Rapid/Classical.
-export type CatFilter = 'all' | 'bullet' | 'blitz' | 'rapid' | 'classical' | 'duck' | 'antichess'
+// no filter on that axis. Chess960, Duck and Antichess are each their own stored
+// category — no time-control split.
+export type CatFilter =
+    | 'all'
+    | 'bullet'
+    | 'blitz'
+    | 'rapid'
+    | 'classical'
+    | 'chess960'
+    | 'duck'
+    | 'antichess'
 export type ResultFilter = 'all' | 'win' | 'loss' | 'draw'
 
 export const OUTCOME_STYLE: Record<Outcome, { label: string; color: string }> = {

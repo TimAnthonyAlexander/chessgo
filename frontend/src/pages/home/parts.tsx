@@ -8,7 +8,7 @@ import {
     DialogContent,
     Typography,
 } from '@mui/material'
-import { Cpu, Crown, Gauge, Skull, Swords, Target, Telescope, UserPlus } from 'lucide-react'
+import { Cpu, Crown, Gauge, Shuffle, Skull, Swords, Target, Telescope, UserPlus } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { gameSocket, type LiveGameState } from '../../lib/socket'
 import { useGameSocket } from '../../lib/useGameSocket'
@@ -33,6 +33,11 @@ export const CRAZYHOUSE_POOL = '3+0'
 // and Crazyhouse. Blitz suits a variant that's usually over fast.
 export const ANTICHESS_POOL = '3+0'
 export const SECRETQUEEN_POOL = '3+0'
+
+// Chess960 quick-pairing pool — one isolated pool with its own rating, like the
+// other variants. A shuffled back rank costs you the opening book you've
+// memorized, so it gets the slower 5+0 rather than the 3+0 the sharp variants use.
+export const CHESS960_POOL = '5+0'
 
 // Quick-pairing presets, grouped by time-control category.
 export interface Preset {
@@ -93,15 +98,22 @@ export function useHome() {
         setOpenWhenLive(true)
     }
 
-    // Quick-pairing intent carried in from the navbar (Play → Duck Chess / Crazyhouse /
-    // Antichess): land on Home and start matchmaking instantly. Consumed once, then
-    // cleared from history state so a refresh/back doesn't silently re-queue.
+    // Quick-pairing intent carried in from the navbar (Play → Chess960 / Duck Chess /
+    // Crazyhouse / Antichess): land on Home and start matchmaking instantly. Consumed
+    // once, then cleared from history state so a refresh/back doesn't silently re-queue.
     useEffect(() => {
         const qp = (location.state as { quickPair?: Variant } | null)?.quickPair
-        if (qp !== 'duck' && qp !== 'crazyhouse' && qp !== 'antichess' && qp !== 'secretqueen')
+        if (
+            qp !== 'chess960' &&
+            qp !== 'duck' &&
+            qp !== 'crazyhouse' &&
+            qp !== 'antichess' &&
+            qp !== 'secretqueen'
+        )
             return
         navigate(location.pathname, { replace: true, state: null })
-        if (qp === 'duck') queue(`Duck Chess · ${DUCK_POOL}`, DUCK_POOL, 'duck')
+        if (qp === 'chess960') queue(`Chess960 · ${CHESS960_POOL}`, CHESS960_POOL, 'chess960')
+        else if (qp === 'duck') queue(`Duck Chess · ${DUCK_POOL}`, DUCK_POOL, 'duck')
         else if (qp === 'crazyhouse')
             queue(`Crazyhouse · ${CRAZYHOUSE_POOL}`, CRAZYHOUSE_POOL, 'crazyhouse')
         else if (qp === 'antichess') queue(`Antichess · ${ANTICHESS_POOL}`, ANTICHESS_POOL, 'antichess')
@@ -392,8 +404,10 @@ export function QuickPairingPanel({
                 ))}
             </Box>
 
-            {/* Variants get their own section + 2-up grid, so it grows independently
-                as new variants ship without knocking the time-control grid off-count. */}
+            {/* Everything that isn't a standard time control gets its own section +
+                grid, so it grows independently as new modes ship without knocking the
+                time-control grid off-count. Six cells fill the 3-up (desktop) and 2-up
+                (phone) grids exactly. */}
             <Typography
                 sx={{
                     mt: '6px',
@@ -406,7 +420,7 @@ export function QuickPairingPanel({
                     color: 'var(--text-dim)',
                 }}
             >
-                Variants
+                More
             </Typography>
             <Box
                 sx={{
@@ -416,6 +430,9 @@ export function QuickPairingPanel({
                     gap: 0.75,
                 }}
             >
+                <Chess960Cell
+                    onClick={() => onQueue(`Chess960 · ${CHESS960_POOL}`, CHESS960_POOL, 'chess960')}
+                />
                 <DuckCell onClick={() => onQueue(`Duck Chess · ${DUCK_POOL}`, DUCK_POOL, 'duck')} />
                 <CrazyhouseCell
                     onClick={() =>
@@ -443,8 +460,10 @@ export function QuickPairingPanel({
 }
 
 /** Guess the Elo — watch an engine game played at a hidden strength and guess the
- * rating. A solo mode that lives beside the variants (it plays like its own game
- * type), full-width under the variant grid. */
+ * rating. A solo mode that sits in the "More" grid as its own cell: it plays like
+ * its own game type, and it's what fills the grid's sixth slot. It has no pool and
+ * no rating of its own, so the slot the variant cells give the time control holds
+ * the icon instead. */
 function GuessEloCell({ onClick }: { onClick: () => void }) {
     return (
         <Box
@@ -458,12 +477,12 @@ function GuessEloCell({ onClick }: { onClick: () => void }) {
                 }
             }}
             sx={{
-                gridColumn: '1 / -1', // span every variant column
                 position: 'relative',
                 display: 'flex',
+                flexDirection: 'column',
                 alignItems: 'center',
-                gap: 1.5,
-                px: 2,
+                justifyContent: 'center',
+                gap: 0.75,
                 py: { xs: 1.75, md: 2 },
                 bgcolor: 'var(--surface-2)',
                 border: '1px solid var(--line-soft)',
@@ -474,23 +493,12 @@ function GuessEloCell({ onClick }: { onClick: () => void }) {
                 '&:hover': { borderColor: 'var(--accent-line)', bgcolor: 'var(--surface)' },
             }}
         >
-            <Box sx={{ color: 'var(--accent)', display: 'flex' }}>
-                <Gauge size={26} />
+            <Box sx={{ display: 'flex', color: 'var(--text)', height: 26, alignItems: 'center' }}>
+                <Gauge size={24} />
             </Box>
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
-                <Typography
-                    sx={{
-                        fontFamily: 'var(--font-display)',
-                        fontSize: { xs: 17, md: 19 },
-                        fontWeight: 600,
-                        lineHeight: 1.1,
-                        letterSpacing: '-0.01em',
-                    }}
-                >
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
+                <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)', fontWeight: 500 }}>
                     Guess the Elo
-                </Typography>
-                <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
-                    Watch a game, guess its rating
                 </Typography>
             </Box>
         </Box>
@@ -751,6 +759,77 @@ function TimeCell({ preset, onClick }: { preset: Preset; onClick: () => void }) 
                     </Box>
                     <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)', fontWeight: 500 }}>
                         {preset.cat}
+                    </Typography>
+                </Box>
+                {eloRange && (
+                    <Typography sx={{ fontSize: 11, color: 'var(--muted)' }}>{eloRange}</Typography>
+                )}
+            </Box>
+        </Box>
+    )
+}
+
+function Chess960Cell({ onClick }: { onClick: () => void }) {
+    const { user } = useAuth()
+
+    // Chess960 is its own isolated rating, like Duck/Crazyhouse/Antichess/Secret
+    // Queen — it's standard rules, but knowing the position from move one is a
+    // different skill, so it doesn't feed the time-control pools.
+    let eloRange: string | null = null
+    if (user) {
+        const rounded = Math.round(user.rating_chess960 / 50) * 50
+        eloRange = `${(rounded - 100).toLocaleString('de-DE')}–${(rounded + 100).toLocaleString('de-DE')}`
+    }
+
+    return (
+        <Box
+            onClick={onClick}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onClick()
+                }
+            }}
+            sx={{
+                position: 'relative',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 0.75,
+                py: { xs: 1.75, md: 2 },
+                bgcolor: 'var(--surface-2)',
+                border: '1px solid var(--line-soft)',
+                borderRadius: '12px',
+                cursor: 'pointer',
+                overflow: 'hidden',
+                transition: 'border-color 0.12s ease, background 0.12s ease',
+                '&:hover': {
+                    borderColor: 'var(--accent-line)',
+                    bgcolor: 'var(--surface)',
+                },
+            }}
+        >
+            <Typography
+                sx={{
+                    fontFamily: 'var(--font-display)',
+                    fontSize: { xs: 22, md: 26 },
+                    fontWeight: 500,
+                    lineHeight: 1,
+                    letterSpacing: '-0.01em',
+                }}
+            >
+                {CHESS960_POOL}
+            </Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                    <Box component="span" sx={{ display: 'flex', color: 'var(--text-dim)' }}>
+                        <Shuffle size={14} />
+                    </Box>
+                    <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)', fontWeight: 500 }}>
+                        Chess960
                     </Typography>
                 </Box>
                 {eloRange && (

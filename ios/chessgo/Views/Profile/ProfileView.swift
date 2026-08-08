@@ -174,6 +174,13 @@ private struct ProfileBody: View {
                 highlighted: false
             ))
         }
+        if let chess960 = profile.chess960 {
+            rows.append(RatingsPanel.Row(
+                id: "chess960", icon: "shuffle", label: "Chess960",
+                rating: chess960.rating, games: chess960.games, provisional: chess960.provisional,
+                sub: nil, highlighted: false
+            ))
+        }
         if let duck = profile.duck {
             rows.append(RatingsPanel.Row(
                 id: "duck", icon: "bird.fill", label: "Duck",
@@ -252,6 +259,7 @@ private struct ProfileBody: View {
         for category: RatingCategory in [.bullet, .blitz, .rapid, .classical] {
             if (snapshot(for: category)?.games ?? 0) > 0 { cats.append(category.rawValue) }
         }
+        if (profile.chess960?.games ?? 0) > 0 { cats.append("chess960") }
         if (profile.duck?.games ?? 0) > 0 { cats.append("duck") }
         if (profile.antichess?.games ?? 0) > 0 { cats.append("antichess") }
         return cats

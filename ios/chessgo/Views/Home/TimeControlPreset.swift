@@ -100,9 +100,12 @@ struct TimeControlPreset: Identifiable, Hashable, Sendable {
     }
 }
 
-/// A fixed variant queue — Duck/Crazyhouse/Antichess each play one canonical
-/// pool rather than exposing the full preset grid (frontend-features.md:
-/// "Duck 5+0, Crazyhouse 3+0, Antichess 3+0").
+/// A fixed variant queue — each variant plays one canonical pool rather than
+/// exposing the full preset grid, and each is its own isolated rating. Must stay
+/// in sync with the web's pool constants in `frontend/src/pages/home/parts.tsx`
+/// (CHESS960_POOL / DUCK_POOL / CRAZYHOUSE_POOL / ANTICHESS_POOL /
+/// SECRETQUEEN_POOL) — a phone and a browser queueing the "same" variant with
+/// different pool strings land in two queues that never pair with each other.
 struct VariantPool: Identifiable, Hashable, Sendable {
     var id: String { variant.rawValue }
     let variant: Variant
@@ -110,8 +113,10 @@ struct VariantPool: Identifiable, Hashable, Sendable {
     let systemImage: String
 
     static let all: [VariantPool] = [
+        VariantPool(variant: .chess960, pool: "5+0", systemImage: "shuffle"),
         VariantPool(variant: .duck, pool: "5+0", systemImage: "bird.fill"),
         VariantPool(variant: .crazyhouse, pool: "3+0", systemImage: "arrow.triangle.2.circlepath"),
         VariantPool(variant: .antichess, pool: "3+0", systemImage: "xmark.circle.fill"),
+        VariantPool(variant: .secretqueen, pool: "3+0", systemImage: "crown.fill"),
     ]
 }

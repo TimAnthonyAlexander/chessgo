@@ -1,6 +1,6 @@
 import { Box, Typography } from '@mui/material'
 import type { ReactNode } from 'react'
-import { Puzzle, Skull } from 'lucide-react'
+import { Puzzle, Shuffle, Skull } from 'lucide-react'
 import type { AdminUserRecord } from '../../../api/client'
 import { CATEGORY_META } from '../../../lib/timeControl'
 import { Panel, PanelHead } from '../../home/Panel'
@@ -54,6 +54,15 @@ export default function UserRatingsGrid({ user }: { user: AdminUserRecord }) {
                     rating={user.rating_puzzle}
                     games={user.games_puzzle}
                     provisional={!!prov.puzzle}
+                    accent
+                />
+                <RatingTile
+                    icon={<Shuffle size={14} />}
+                    color="var(--accent)"
+                    label="Chess960"
+                    rating={user.rating_chess960}
+                    games={user.games_chess960}
+                    provisional={!!prov.chess960}
                     accent
                 />
                 <RatingTile

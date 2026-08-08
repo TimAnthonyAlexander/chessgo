@@ -28,7 +28,7 @@ use App\Models\User;
 class BotGameCounterReconciler
 {
     /** Every Game.category value this platform tracks a per-category counter for. */
-    private const CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'duck', 'crazyhouse', 'antichess'];
+    private const CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'chess960', 'duck', 'crazyhouse', 'antichess'];
 
     /**
      * @return list<array{id: string, name: string, changed: bool, before: array<string, int>, after: array<string, int>}>

@@ -1530,6 +1530,51 @@
             "table": "user",
             "operation": "add_column",
             "warning": null
+        },
+        {
+            "id": "mig_c356ffb00326",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rating_chess960` INT NOT NULL DEFAULT 1500",
+            "destructive": false,
+            "generated_at": "2026-08-08T08:36:51+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_3896f693f94f",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rd_chess960` DOUBLE NOT NULL DEFAULT 350",
+            "destructive": false,
+            "generated_at": "2026-08-08T08:36:51+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_3e18ae890693",
+            "sql": "ALTER TABLE `user` ADD COLUMN `vol_chess960` DOUBLE NOT NULL DEFAULT 0.06",
+            "destructive": false,
+            "generated_at": "2026-08-08T08:36:51+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_3cf7ecddc7e4",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rated_at_chess960` TEXT",
+            "destructive": false,
+            "generated_at": "2026-08-08T08:36:51+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_f94cddddfd99",
+            "sql": "ALTER TABLE `user` ADD COLUMN `games_chess960` INT NOT NULL DEFAULT 0",
+            "destructive": false,
+            "generated_at": "2026-08-08T08:36:51+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
         }
     ]
 }

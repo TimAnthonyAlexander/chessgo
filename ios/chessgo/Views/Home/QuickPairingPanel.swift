@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The preset grid (12 standard time controls in one dense 3-column grid,
 /// speed shown as a small glyph+label inside each cell — matching the web's
-/// layout) plus the three fixed variant pools. Tapping any cell queues
+/// layout) plus the fixed variant pools under "More". Tapping any cell queues
 /// immediately and opens `SearchingSheet` — there's no separate "confirm"
 /// step, matching the web's one-tap queue.
 struct QuickPairingPanel: View {
@@ -34,13 +34,16 @@ struct QuickPairingPanel: View {
         }
     }
 
+    // Uses the same 3-column grid as the presets above rather than a single row:
+    // the variant list grows (five and counting), and a row of five squeezes every
+    // label past legibility on a phone.
     private var variantSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            Text("Variants")
+            Text("More")
                 .font(Theme.headline(14))
                 .foregroundStyle(Theme.Colors.secondaryText)
 
-            HStack(spacing: Theme.Spacing.sm) {
+            LazyVGrid(columns: columns, spacing: Theme.Spacing.sm) {
                 ForEach(VariantPool.all) { pool in
                     variantCell(pool)
                 }

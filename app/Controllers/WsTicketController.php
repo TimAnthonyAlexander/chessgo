@@ -57,13 +57,17 @@ class WsTicketController extends Controller
                 'blitz' => (int)($user['rating_blitz'] ?? 1500),
                 'rapid' => (int)($user['rating_rapid'] ?? 1500),
                 'classical' => (int)($user['rating_classical'] ?? 1500),
-                // Duck Chess has its own isolated pool — the hub matches/displays
-                // duck games by this rating (categoryFor → "duck").
+                // Every variant has its own isolated pool — the hub matches and
+                // displays that variant's games by this rating (categoryFor →
+                // the same key). A category MISSING from this map silently falls
+                // back to Identity.Rating (blitz) in auth.Identity.RatingFor, so
+                // forgetting one here doesn't fail loudly — it just pairs that
+                // variant's players by their blitz strength.
+                'chess960' => (int)($user['rating_chess960'] ?? 1500),
                 'duck' => (int)($user['rating_duck'] ?? 1500),
-                // Crazyhouse is likewise its own isolated pool (categoryFor → "crazyhouse").
                 'crazyhouse' => (int)($user['rating_crazyhouse'] ?? 1500),
-                // Antichess is likewise its own isolated pool (categoryFor → "antichess").
                 'antichess' => (int)($user['rating_antichess'] ?? 1500),
+                'secretqueen' => (int)($user['rating_secretqueen'] ?? 1500),
             ];
             $identity = [
                 'sub' => (string)$user['id'],

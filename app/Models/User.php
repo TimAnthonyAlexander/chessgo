@@ -76,6 +76,21 @@ class User extends BaseModel
 
     public int $games_puzzle = 0;
 
+    // Chess960 is a separate, isolated category despite being standard rules: a
+    // shuffled back rank takes away the opening you've memorized, so it is its own
+    // skill and never feeds the time-control pools. No time-control split either —
+    // every 960 game, whatever its clock, is one "chess960" rating. Fed only by
+    // chess960 games. See GameResultController.
+    public int $rating_chess960 = 1500;
+
+    public float $rd_chess960 = 350.0;
+
+    public float $vol_chess960 = 0.06;
+
+    public ?string $rated_at_chess960 = null;
+
+    public int $games_chess960 = 0;
+
     // Duck Chess is ALSO a separate, isolated category: it is its own game with no
     // time-control split (every duck game, whatever its clock, is one "duck"
     // rating). Updated by Glicko2Service just like the time-control categories, but
@@ -216,6 +231,7 @@ class User extends BaseModel
         'rated_at_rapid' => ['type' => 'TEXT', 'nullable' => true],
         'rated_at_classical' => ['type' => 'TEXT', 'nullable' => true],
         'rated_at_puzzle' => ['type' => 'TEXT', 'nullable' => true],
+        'rated_at_chess960' => ['type' => 'TEXT', 'nullable' => true],
         'rated_at_duck' => ['type' => 'TEXT', 'nullable' => true],
         'rated_at_crazyhouse' => ['type' => 'TEXT', 'nullable' => true],
         'rated_at_antichess' => ['type' => 'TEXT', 'nullable' => true],
@@ -243,8 +259,8 @@ class User extends BaseModel
         return $this->title ?? ($this->role === 'admin' ? 'AM' : null);
     }
 
-    /** Categories carrying a Glicko-2 rating, including the isolated puzzle + duck + crazyhouse + antichess + secretqueen pools. */
-    private const RATING_CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'puzzle', 'duck', 'crazyhouse', 'antichess', 'secretqueen'];
+    /** Categories carrying a Glicko-2 rating, including the isolated puzzle + chess960 + duck + crazyhouse + antichess + secretqueen pools. */
+    private const RATING_CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'puzzle', 'chess960', 'duck', 'crazyhouse', 'antichess', 'secretqueen'];
 
     /**
      * Serialize for API output. Overrides BaseModel::jsonSerialize() to strip

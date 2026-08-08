@@ -142,11 +142,18 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variantID string
 	}
 	displayed := botDisplayRating(userRating)
 	bot := newBotIdentity(displayed)
-	// A bot backfill always starts from the standard opening (960/mid-game seeds are
-	// human-only); variant.New builds the right ruleset (Duck begins duck-unplaced).
-	st, err := variant.New(variantID, chess.StartFEN)
+	// A bot backfill starts from the variant's own start position: the standard
+	// opening for everything except Chess960, which MUST get a real shuffled back
+	// rank — a 960 game started from chess.StartFEN is just plain chess wearing a
+	// 960 label. Custom mid-game seeds stay human-only. variant.New builds the right
+	// ruleset (Duck begins duck-unplaced).
+	startFen := chess.StartFEN
+	if variantID == variantChess960 {
+		startFen = chess.RandomChess960FEN()
+	}
+	st, err := variant.New(variantID, startFen)
 	if err != nil {
-		return // defensive: the standard start always parses
+		return // defensive: our start FENs always parse
 	}
 	g := &game{
 		id:    newID(),
@@ -155,15 +162,16 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variantID string
 		pool:  pool,
 		// A matchmaking bot fill-in is rated for a logged-in human (one-sided Elo
 		// vs the bot), mirroring startGameWith: standard feeds the time-control pools
-		// and Duck/Crazyhouse/Antichess/Secret Queen each feed their own isolated
-		// pool, but Chess960 stays unrated. Anonymous players can't be rated.
-		// Explicit /bot games never reach the hub.
-		rated: !human.id.Anon && (variantID == variantStandard || variantID == variantDuck ||
-			variantID == variantCrazyhouse || variantID == variantAntichess || variantID == variantSecretQueen),
+		// and Chess960/Duck/Crazyhouse/Antichess/Secret Queen each feed their own
+		// isolated pool. Anonymous players can't be rated. Explicit /bot games never
+		// reach the hub.
+		rated: !human.id.Anon && (variantID == variantStandard || variantID == variantChess960 ||
+			variantID == variantDuck || variantID == variantCrazyhouse ||
+			variantID == variantAntichess || variantID == variantSecretQueen),
 		clockMs:   [2]int64{tc.Base, tc.Base},
 		turnStart: time.Now(),
 		online:    [2]bool{true, true},
-		startFen:  chess.StartFEN,
+		startFen:  startFen,
 		variant:   variantID,
 	}
 

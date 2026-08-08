@@ -16,8 +16,8 @@ use App\Models\User;
  *   GET /users/{name}/games?page=<n>&category=<pool>&result=<win|loss|draw>
  *     &opponent=<name-substring>&from=<YYYY-MM-DD>&to=<YYYY-MM-DD>
  *
- * `category` is a stored value (bullet|blitz|rapid|classical|duck — Chess960
- * games keep their time-control category). `result` is from the profiled
+ * `category` is a stored value (bullet|blitz|rapid|classical|chess960|duck|
+ * antichess). `result` is from the profiled
  * player's own perspective, so it depends on which colour they played.
  * `opponent` matches a substring of the *other* side's display name (parameterized
  * LIKE, never string-concatenated SQL). `from`/`to` bound `created_at` by calendar
@@ -28,7 +28,7 @@ class ProfileGamesController extends Controller
     /** Page size — also the hard cap on what one request can return. */
     private const PER_PAGE = 10;
 
-    private const CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'duck', 'antichess'];
+    private const CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'chess960', 'duck', 'antichess'];
 
     /** Bound from path {name}. */
     public string $name = '';
@@ -78,7 +78,7 @@ class ProfileGamesController extends Controller
             $g->where('white_user_id', '=', $id)->orWhere('black_user_id', '=', $id);
         });
 
-        // Category / pool filter (Duck is stored as its own category value).
+        // Category / pool filter (every variant is stored as its own category value).
         if (in_array($this->category, self::CATEGORIES, true)) {
             $query->where('category', '=', $this->category);
         }

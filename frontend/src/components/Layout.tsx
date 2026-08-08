@@ -31,9 +31,10 @@ import type { RatingCategory, User } from '../api/client'
 interface Leaf {
     label: string
     to: string
-    // Router state carried on navigation — e.g. Play → Duck Chess/Crazyhouse/Antichess
-    // land on Home ("/") and start quick pairing instantly via useHome's quickPair intent.
-    state?: { quickPair: 'duck' | 'crazyhouse' | 'antichess' }
+    // Router state carried on navigation — e.g. Play → Chess960/Duck Chess/Crazyhouse/
+    // Antichess land on Home ("/") and start quick pairing instantly via useHome's
+    // quickPair intent.
+    state?: { quickPair: 'chess960' | 'duck' | 'crazyhouse' | 'antichess' }
 }
 type NavItem =
     | { kind: 'link'; label: string; to: string }
@@ -58,6 +59,7 @@ function navItems(isAdmin: boolean, loggedIn: boolean, ready: boolean): NavItem[
                 { label: 'Online', to: '/' },
                 { label: 'Computer', to: '/bot' },
                 { label: 'Puzzles', to: '/puzzles' },
+                { label: 'Chess960', to: '/', state: { quickPair: 'chess960' } },
                 { label: 'Duck Chess', to: '/', state: { quickPair: 'duck' } },
                 { label: 'Crazyhouse', to: '/', state: { quickPair: 'crazyhouse' } },
                 { label: 'Antichess', to: '/', state: { quickPair: 'antichess' } },
@@ -520,6 +522,11 @@ function UserMenu({ user }: { user: User }) {
                             label="Puzzles"
                             value={`${user.rating_puzzle}${user.provisional?.puzzle ? '?' : ''}`}
                             games={user.games_puzzle}
+                        />
+                        <RatingLine
+                            label="Chess960"
+                            value={`${user.rating_chess960}${user.provisional?.chess960 ? '?' : ''}`}
+                            games={user.games_chess960}
                         />
                         <RatingLine
                             label="Duck"

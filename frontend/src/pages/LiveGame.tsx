@@ -74,14 +74,16 @@ const NO_MOVES: string[] = []
 // content-driven) so the right card keeps one height from move 1 to move 60.
 const MOVE_LIST_ROWS = 7
 
-// The signed-in user's rating for THIS game's rated pool: variant games map to
-// their own rating (duck / crazyhouse), everything else to the pool's time-control
-// category. Null when signed out — anonymous players have no rating to show.
+// The signed-in user's rating for THIS game's rated pool: every variant maps to
+// its own isolated rating, standard to the pool's time-control category. Null when
+// signed out — anonymous players have no rating to show.
 function userRatingFor(user: AuthUser | null, variant: Variant, pool: string): number | null {
     if (!user) return null
+    if (variant === 'chess960') return user.rating_chess960
     if (variant === 'duck') return user.rating_duck
     if (variant === 'crazyhouse') return user.rating_crazyhouse
     if (variant === 'antichess') return user.rating_antichess
+    if (variant === 'secretqueen') return user.rating_secretqueen
     switch (categoryFor(pool)) {
         case 'Bullet':
             return user.rating_bullet
