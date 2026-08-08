@@ -111,7 +111,7 @@ class PremoveTrainerTest extends TestCase
      * (see docs/tasks/open/premove-trainer.md §3), so there is no solution here
      * to hide.
      */
-    private function makePosition(int $rating = 1500, int $conversionPlies = 6, int $breadthPct = 80): PremovePosition
+    private function makePosition(int $rating = 1500, int $forcedChainLen = 6, int $breadthPct = 80): PremovePosition
     {
         $position = new PremovePosition();
         $position->fen = self::START_FEN;
@@ -121,7 +121,7 @@ class PremoveTrainerTest extends TestCase
         $position->breadth_pct = $breadthPct;
         $position->winning_moves = 8;
         $position->legal_moves = 10;
-        $position->conversion_plies = $conversionPlies;
+        $position->forced_chain_len = $forcedChainLen;
         $position->rating = $rating;
         $this->assertTrue($position->save(), 'fixture setup: position must save');
         $this->positions[] = $position;
@@ -667,21 +667,22 @@ class PremoveTrainerTest extends TestCase
     // The old pool was mined from Lichess puzzles, so the thing to hide was the
     // solution line. The generated pool has no single solution — many moves win,
     // that is the whole point — but it carries something just as spoiling:
-    // `conversion_plies` says exactly how long the win is, `chain_target` is
-    // derived from it, and `breadth_pct` says how forgiving the position is.
+    // `forced_chain_len` IS the answer — it is exactly how many moves the
+    // forced mate takes — `chain_target` is a copy of it, and `breadth_pct` says
+    // how forgiving the position is.
     // Telling the player any of those hands them a third of the work.
     //
     // Asserted against the serialized JSON rather than field-by-field, so a leak
     // through a newly-added field fails this too.
 
     private const SPOILER_KEYS = [
-        'position_id', 'conversion_plies', 'chain_target', 'breadth_pct',
+        'position_id', 'forced_chain_len', 'chain_target', 'breadth_pct',
         'winning_moves', 'signature', 'opponent_rating', 'start_fen',
     ];
 
     public function test_pool_metadata_never_appears_in_a_fresh_present_payload(): void
     {
-        $position = $this->makePosition(rating: 1500, conversionPlies: 17, breadthPct: 63);
+        $position = $this->makePosition(rating: 1500, forcedChainLen: 17, breadthPct: 63);
         $game = $this->makeGame(['position' => $position]);
 
         $engine = new FakePremoveEngine();
@@ -693,14 +694,14 @@ class PremoveTrainerTest extends TestCase
             $this->assertStringNotContainsString($key, $json, "{$key} must never reach the client");
         }
         $this->assertStringNotContainsString($position->id, $json, "the position's own id leaked");
-        // 17 is the conversion length; seeing it anywhere in the payload means
-        // the chain length escaped by some other name.
+        // 17 is the forced chain length; seeing it anywhere in the payload means
+        // the answer escaped under some other name.
         $this->assertStringNotContainsString('17', $json, 'the conversion length leaked');
     }
 
     public function test_pool_metadata_never_appears_after_a_collapsed_release(): void
     {
-        $position = $this->makePosition(rating: 1500, conversionPlies: 19, breadthPct: 55);
+        $position = $this->makePosition(rating: 1500, forcedChainLen: 19, breadthPct: 55);
         $game = $this->makeGame(['position' => $position]);
 
         $engine = new FakePremoveEngine();

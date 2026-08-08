@@ -95,7 +95,7 @@ export function SetupCard({
                 <Typography sx={{ fontSize: 12.5, color: 'var(--muted)', mt: 1.5, lineHeight: 1.5 }}>
                     {format === 'rated'
                         ? 'A real 15-second clock runs while you queue. Releasing costs nothing — a queued premove stops your clock. If the chain breaks you keep going, clock running.'
-                        : 'No clock, no rating. Queue, release, see what happens.'}
+                        : 'No clock, no rating. Queue the forced mate, release, see it play.'}
                 </Typography>
             </Box>
 

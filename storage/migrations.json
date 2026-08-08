@@ -1746,6 +1746,33 @@
             "table": "premove_position",
             "operation": "add_column",
             "warning": null
+        },
+        {
+            "id": "mig_258cefc5214e",
+            "sql": "ALTER TABLE `premove_position` ADD COLUMN `forced_chain_len` INT NOT NULL DEFAULT 0",
+            "destructive": false,
+            "generated_at": "2026-08-08T19:07:49+00:00",
+            "table": "premove_position",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_57c8386b0b13",
+            "sql": "ALTER TABLE `premove_position` DROP COLUMN `conversion_plies`",
+            "destructive": true,
+            "generated_at": "2026-08-08T19:07:49+00:00",
+            "table": "premove_position",
+            "operation": "drop_column",
+            "warning": null
+        },
+        {
+            "id": "mig_4531589dc676",
+            "sql": "ALTER TABLE `premove_position` DROP COLUMN `safe_depth`",
+            "destructive": true,
+            "generated_at": "2026-08-08T19:07:49+00:00",
+            "table": "premove_position",
+            "operation": "drop_column",
+            "warning": null
         }
     ]
 }

@@ -113,68 +113,55 @@ So the pool is generated, not mined. We hold the full 5-piece Syzygy set locally
 about a millisecond, which lets us ask the question that actually matters: not
 "is this won" but **how many of my legal moves keep the win**.
 
-### 3.1 What qualifies
+### 3.1 What qualifies: a forced mating chain
 
-Random placements for a target material signature, kept only if all hold:
+**A position belongs in this pool only if there is a chain of premoves that
+mates against every defence.** Queue those N moves, release, and it mates
+whatever the defender plays. That is the entire filter.
 
-- Syzygy says it is a **win for the side to move**.
-- **Breadth**: at least 3 legal moves preserve the win, AND at least 40% of all
-  legal moves do.
-- **Safe depth ≥ 5** — see below. This is the filter that actually decides
-  whether a position belongs in this mode.
-- **Convertible in the time given**: optimal play mates within
-  `MAX_CONVERSION_PLIES` (30).
+Two weaker filters were tried and both produced a tactics trainer:
 
-#### Safe depth: the one that matters
+- **Breadth** (how many of *your* moves keep the win) says nothing about whether
+  the *defender* is predictable. Up a rook against a loose king scores near
+  perfect and is unpremoveable — after your first move the position could be any
+  of a dozen things.
+- **Safe depth** (how many moves stay legal *and* still winning) is satisfiable
+  by shuffling: a queen can circle a corner indefinitely without progressing, so
+  KQvK scored a perfect 10 while still playing like calculation. This is the same
+  trap as the engine's WDL root probe preserving a win without driving to mate.
 
-Breadth counts how many of **your** moves keep the win. That says nothing about
-whether you can predict the **defender** — and predicting the defender is the
-entire premise of premoving. A position where you are up a rook against a loose
-enemy king scores near-perfect breadth and is impossible to premove: after your
-first move the position could be any of a dozen things, so no second premove is
-reliably legal.
+Requiring the chain to actually **mate** is what makes the mode premoving rather
+than tactics. Chain length is then the difficulty axis, and the only thing left
+to do is see it and beat the clock.
 
-So `safe_depth` measures the belief state a premover is actually in: track the
-SET of positions you might be facing, and count how many moves you can queue that
-are legal *and* still winning in **every** one of them, expanding by all defender
-replies at each step.
+### 3.2 Signatures: overwhelming material vs a bare king
 
-Measured medians, otherwise-qualifying positions:
+Forcing requires a **bare enemy king**. Any defending material multiplies their
+options and no chain survives contact. Measured hit rates (n=30, greedy search so
+these are floors):
 
-| signature | median safe depth |
-|---|---:|
-| KQvK, KRvK, KPvK | 10 |
-| KPPvK | 6 |
-| KRvKP | 5 (genuinely split — half qualify, half don't) |
-| **KRPvKR** | **1** |
+| signature | forced chain exists | median length |
+|---|---:|---:|
+| KQvK | 27% | 6 |
+| KQNvK | 23% | 5 |
+| KQQvK | 20% | 5 |
+| KRRvK | 20% | 2 |
+| KQBvK | 17% | 7 |
+| KQRvK | 13% | 3 |
+| KRvK | **0%** | — |
+| KQvKR | **0%** | — |
+| KPvK, KPPvK | **0%** | — |
 
-At the `>= 5` threshold, KPvK keeps 24 of 25 and KRPvKR keeps 1 of 24. Because
-KRvKP splits down the middle, this has to be a **per-position** filter, not a
-signature allowlist.
+KRvK is zero because a lone rook cannot herd a king blind. The pawn signatures
+are zero even with 26-move chains and a 20,000-position frontier — promotion is
+forceable but the mate afterwards is not, so the chain never completes.
 
-**Deduplicating the frontier is load-bearing, not an optimisation.** Defender
-lines transpose heavily; without dedup the set explodes past any cap after about
-three plies and the function measures the cap rather than the chess. That bug
-made every signature look identical at depth 3 and would have hidden the whole
-effect.
+**This is the cost of the mode being pure: no promotion races.** They were
+explicitly wanted and they cannot be made forcing. Chosen deliberately over
+serving positions whose ending is a guess.
 
-Breadth is still measured (it is cheap, and it keeps out positions with a single
-winning move), but it is not sufficient on its own — shipping without safe depth
-is what put unplayable rook endings in front of players.
-
-### 3.2 Signatures
-
-Weighted toward promotion races, which is the premove scenario:
-
-| band | signatures | character |
-|---|---|---|
-| promotion | `KPvK`, `KPPvK`, `KPvKP`, `KPPvKP` | race to queen, many winning move orders |
-| basic mate | `KQvK`, `KRvK` | pure premove speed |
-| technique | `KRPvKR`, `KQvKP`, `KRvKP` | the hard end |
-
-Do NOT hand-exclude signatures beyond this list. Narrow-technique endings
-(`KBNvK` being the obvious one) are removed by the breadth rule on their own,
-which is the point of having the rule.
+Chains are kept in `[MIN_CHAIN_LEN, MAX_CHAIN_LEN]` = [3, 12]: 2 is a gimme, and
+12 has to fit both the clock and the server's `MAX_CHAIN` of 20.
 
 ### 3.3 Table `premove_position`, and why the builder reads Syzygy directly
 

@@ -44,25 +44,26 @@ class PremovePosition extends BaseModel
     /** Total legal moves from `fen` (the /legal-moves count). */
     public int $legal_moves = 0;
 
-    /** Plies (half-moves) from `fen` to checkmate when BOTH sides are played
-     *  full-strength by the engine (DTZ-optimal for the defender too). */
-    public int $conversion_plies = 0;
-
     /**
-     * How many moves you can queue BLIND and have them still be legal and still
-     * winning, whatever the defender does — the belief-state depth a premover is
-     * actually in. This, not `breadth_pct`, is what decides whether a position
-     * can be premoved at all: breadth says how many of YOUR moves win, which
-     * says nothing about whether you can predict the DEFENDER.
+     * Length of a chain of premoves that MATES against every defence — the
+     * defining property of this pool. Queue these N moves, release, and it mates
+     * whatever the defender plays. Nothing else qualifies.
      *
-     * Measured: KQvK/KRvK/KPvK sit at a median of 10, KRPvKR at 1 — up a rook
-     * against an active rook and king, no second premove is reliably legal. The
-     * pool held both kinds until this was added.
+     * This replaced a weaker `safe_depth` that only required each queued move to
+     * stay legal and still winning. That is satisfiable by shuffling: a queen can
+     * circle a corner forever without progressing, so KQvK scored a perfect 10
+     * while still playing like a calculation exercise. Requiring the chain to
+     * actually mate is what makes the mode premoving rather than tactics.
+     *
+     * Forcing needs a BARE enemy king. Measured: every signature with any
+     * defending material scores 0 (KQvKR 0/30, KPvK 0/20 even with 26-move
+     * chains) because defender material multiplies their options and no chain
+     * survives. KRvK is 0 too — a lone rook cannot herd a king blind.
      */
-    public int $safe_depth = 0;
+    public int $forced_chain_len = 0;
 
     /** Difficulty this position is served/rated against. Derived from
-     *  conversion_plies + breadth_pct + piece_count — see
+     *  forced_chain_len + piece_count — see
      *  RatingFormula::compute() in the builder script for the (explicitly
      *  uncalibrated) heuristic. Stored so the formula can be revisited from
      *  real attempt data without re-generating the pool. */

@@ -59,9 +59,10 @@ class PremoveTrainerService
      * "you may queue 6" tells you it's a 6-move win.
      *
      * Being flat, it must therefore sit ABOVE anything the pool can require, or
-     * it stops being a request bound and silently becomes a gameplay limit. The
-     * pool caps conversions at MAX_CONVERSION_PLIES (30) = 15 player moves, so
-     * this is 20: comfortably clear, and still bounded.
+     * it stops being a request bound and silently becomes a gameplay limit (it
+     * did exactly that once, capping players at 12). The pool's forced chains run
+     * to MAX_CHAIN_LEN = 12 moves, so this is 20: comfortably clear, and still
+     * bounded. It is published to the client as `max_chain`; never mirror it.
      */
     private const MAX_CHAIN = 20;
 
@@ -129,9 +130,9 @@ class PremoveTrainerService
         $game->start_fen = $position->fen;
         $game->fen = $position->fen;
         $game->side_to_move = $playerColor;
-        // Analytics only, never sent to the client — telling the player how long
-        // the conversion is would hand them a third of the work.
-        $game->chain_target = (int) ceil($position->conversion_plies / 2);
+        // Analytics only, never sent to the client: this IS the length of the
+        // forced mating chain, so telling the player would hand them the answer.
+        $game->chain_target = $position->forced_chain_len;
         $game->opponent_rating = $position->rating;
         $game->setMoves([]);
         $game->setChains([]);

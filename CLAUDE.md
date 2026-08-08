@@ -222,20 +222,25 @@ applied unchanged; casual is untimed and one-shot. It is BaseAPI-only: the hub i
 strictly two-player, so this mirrors `BotGameService`'s epoch-ms server clock
 instead of inventing a second one.
 
-Three things are load-bearing and easy to get wrong. **The pool is generated
-against Syzygy, never mined from puzzles** — a puzzle is crafted so exactly one
-line works, which is a tactics test, the opposite of a premove drill; positions
-are kept only when ≥3 moves and ≥40% of legal moves preserve the win
-(`scripts/build_premove_positions.py`, `premove_position`). **The builder reads
-the tablebase files directly and must not use the engine**: zugzwang's root probe
-is WDL (`tb_probe_root`, deliberate — see `gomachine/CLAUDE.md`), so it preserves
-a win without progressing to mate and self-play shuffles forever (0/15 random
-KQvK mated at any movetime), which silently rejected 57% of good positions.
-**`last_move_at` is stamped into the future** by `plies * ply_ms` so the client's
-playout animation isn't charged to the clock — and a release arriving before that
-stamp must be refused, or `max(0, ...)` clamps elapsed to zero and every release
-is free (9 releases, clock never moved). `conversion_plies`/`chain_target` never
-reach the client; they'd reveal how long the win is. Full contract:
+Three things are load-bearing and easy to get wrong. **A position qualifies only
+if a chain of premoves MATES against every defence** — queue N moves, release, it
+mates whatever they play (`forced_chain_len`, `scripts/build_premove_positions.py`,
+`premove_position`). Two weaker filters both produced a tactics trainer and were
+replaced: breadth (how many of YOUR moves win) says nothing about whether the
+DEFENDER is predictable, and safe-depth (moves that stay legal and winning) is
+satisfiable by shuffling a queen around a corner. Forcing needs a **bare enemy
+king** — KRvK, KQvKR and every pawn signature measure 0%, so there are no
+promotion races, deliberately. **The builder reads the tablebase files directly
+and must not use the engine**: zugzwang's root probe is WDL (`tb_probe_root`,
+deliberate — see `gomachine/CLAUDE.md`), so it preserves a win without
+progressing to mate and self-play shuffles forever (0/15 random KQvK mated at any
+movetime). **`last_move_at` is stamped into the future** by `plies * ply_ms` so
+the client's playout animation isn't charged to the clock — and a release
+arriving before that stamp must be refused, or `max(0, ...)` clamps elapsed to
+zero and every release is free (9 releases, clock never moved). `ply_ms` and
+`max_chain` are sent to the client and must never be mirrored there; a hardcoded
+`MAX_CHAIN` copy drifted and silently capped players at 12. `forced_chain_len`
+and `chain_target` never reach the client — they are the answer. Full contract:
 `docs/tasks/open/premove-trainer.md`.
 
 **Analysis** (`lib/analysisTree.ts` + `components/MoveTree.tsx`) is a real

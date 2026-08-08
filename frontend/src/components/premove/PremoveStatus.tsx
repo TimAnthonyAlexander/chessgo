@@ -121,7 +121,7 @@ export function PlayingAside({
             </Box>
 
             <Box sx={{ borderTop: '1px solid var(--line-soft)', mt: 2.25, pt: 2.25, display: 'flex', gap: 0.75 }}>
-                <Chip>{game.format === 'rated' ? '10+0 · Rated' : 'Casual'}</Chip>
+                <Chip>{game.format === 'rated' ? '15+0 · Rated' : 'Casual'}</Chip>
             </Box>
         </Card>
     )
@@ -227,7 +227,7 @@ export function StatusCard({
                         <Typography
                             sx={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 20 }}
                         >
-                            {lastBreak ? 'Keep going' : 'Find the mate'}
+                            {lastBreak ? 'Keep going' : 'Force the mate'}
                         </Typography>
                         <Typography
                             sx={{
@@ -240,7 +240,7 @@ export function StatusCard({
                                 ? lastBreak.collapsedAt !== null
                                     ? `Your chain broke at move ${lastBreak.collapsedAt + 1} — the defender went elsewhere. Clock's running.`
                                     : "Chain played out, no mate yet. Clock's running."
-                                : "Queue your line, then release it. No feedback until it's done."}
+                                : "There is a forced mate. Queue the whole thing — it works against any defence."}
                         </Typography>
                     </>
                 )}
