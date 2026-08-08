@@ -88,6 +88,11 @@ class PremoveTrainerService
      *  rather than a dead end. */
     private const RATING_WINDOWS = [300, 600, 1200, 10000];
 
+    /** How many recently-dealt positions an anonymous session remembers, so it
+     *  stops being served the same handful. Kept small: it rides in the session
+     *  and is only there to break short-term repetition. */
+    private const ANON_RECENT_MAX = 60;
+
     public function __construct(
         private readonly EngineSelector $engine,
         private readonly Glicko2Service $glicko,
@@ -147,6 +152,10 @@ class PremoveTrainerService
 
         $game->status = 'ongoing';
         $game->save();
+
+        if ($user === null) {
+            $this->rememberAnonymousId($position->id);
+        }
 
         return $game;
     }
@@ -611,6 +620,27 @@ class PremoveTrainerService
         return null;
     }
 
+    /** Position ids this anonymous session has already been dealt (most recent
+     *  first, capped at ANON_RECENT_MAX). Empty when there is no session. */
+    private function recentAnonymousIds(): array
+    {
+        $recent = $_SESSION['premove_recent'] ?? null;
+
+        return is_array($recent) ? array_values(array_filter($recent, 'is_string')) : [];
+    }
+
+    /** Remember a dealt position for this anonymous session. */
+    private function rememberAnonymousId(string $positionId): void
+    {
+        if (session_status() !== PHP_SESSION_ACTIVE) {
+            return;
+        }
+        $recent = $this->recentAnonymousIds();
+        array_unshift($recent, $positionId);
+
+        $_SESSION['premove_recent'] = array_slice(array_values(array_unique($recent)), 0, self::ANON_RECENT_MAX);
+    }
+
     private function isTimed(PremoveGame $game): bool
     {
         return $game->time_control !== null;
@@ -627,12 +657,9 @@ class PremoveTrainerService
     /**
      * Pick a position near `$target` that this user has not already attempted.
      *
-     * Same widening-window indexed scan the puzzle trainer uses (random pivot
-     * inside each window, randomized direction, SQL NOT EXISTS de-dup) — but
-     * against `premove_position`, which is generated, not mined. There is no
-     * theme draw any more: the pool's difficulty axis IS the position's rating,
-     * which is itself derived from conversion length and breadth, so a rating
-     * window already selects for "how hard is this to convert".
+     * Widening rating windows, as the puzzle trainer does, but sampling a RANDOM
+     * row inside each window rather than the one nearest a pivot — see
+     * randomUnseenPositionId() for why the pivot approach breaks badly here.
      *
      * De-dup is against this user's own `premove_game` rows. Anonymous players
      * skip it and may see repeats.
@@ -642,22 +669,14 @@ class PremoveTrainerService
         foreach (self::RATING_WINDOWS as $window) {
             $lo = max(0, $target - $window);
             $hi = $target + $window;
-            $pivot = random_int($lo, $hi);
 
-            $dirs = [['>=', 'ASC'], ['<=', 'DESC']];
-            if (random_int(0, 1) === 1) {
-                $dirs = array_reverse($dirs);
+            $id = $this->randomUnseenPositionId($userId, $lo, $hi);
+            if ($id === null) {
+                continue;
             }
-
-            foreach ($dirs as [$cmp, $dir]) {
-                $id = $this->nearestUnseenPositionId($userId, $lo, $hi, $pivot, $cmp, $dir);
-                if ($id === null) {
-                    continue;
-                }
-                $p = PremovePosition::find($id);
-                if ($p instanceof PremovePosition) {
-                    return $p;
-                }
+            $p = PremovePosition::find($id);
+            if ($p instanceof PremovePosition) {
+                return $p;
             }
         }
 
@@ -665,20 +684,37 @@ class PremoveTrainerService
     }
 
     /**
-     * Nearest position to `$pivot` in the given direction that `$userId` has
-     * never been dealt. `$cmp`/`$dir` are fixed literals (never user input), so
-     * they are safe to interpolate; everything else is bound.
+     * A RANDOM position inside the rating window that `$userId` has not been
+     * dealt, or null if the window is empty.
+     *
+     * Not "nearest to a pivot", which is what the puzzle picker does and what
+     * this used to do. That works for puzzles because their ratings are
+     * near-continuous, but a generated position's rating is a pure function of
+     * chain length and piece count, so the whole pool collapses into ~16
+     * distinct values — 685 rows share 1010. Ordering by rating and taking the
+     * first row therefore returns the SAME row out of a huge tie group every
+     * time: 149 games came from just 21 positions before this changed.
+     *
+     * Still not `ORDER BY RAND()` (it sorts the entire matching set). A random
+     * OFFSET into an indexed rating range is O(offset) on a pool of a few
+     * thousand, which is nothing, and it samples uniformly.
      */
-    private function nearestUnseenPositionId(
-        ?string $userId,
-        int $lo,
-        int $hi,
-        int $pivot,
-        string $cmp,
-        string $dir,
-    ): ?string {
-        $where = ['p.rating BETWEEN ? AND ?', "p.rating $cmp ?"];
-        $params = [$lo, $hi, $pivot];
+    private function randomUnseenPositionId(?string $userId, int $lo, int $hi): ?string
+    {
+        $where = ['p.rating BETWEEN ? AND ?'];
+        $params = [$lo, $hi];
+
+        // Anonymous players have no premove_game history to exclude against, so
+        // they used to be able to see the same position repeatedly. Keep a short
+        // recent list in the session instead — server-side, so the client never
+        // learns a position id (it is deliberately stripped from every payload).
+        $recent = $this->recentAnonymousIds();
+        if ($userId === null && $recent !== []) {
+            $where[] = 'p.id NOT IN (' . implode(',', array_fill(0, count($recent), '?')) . ')';
+            foreach ($recent as $rid) {
+                $params[] = $rid;
+            }
+        }
 
         if ($userId !== null) {
             $where[] = 'NOT EXISTS (
@@ -687,12 +723,19 @@ class PremoveTrainerService
                         )';
             $params[] = $userId;
         }
+        $clause = implode(' AND ', $where);
 
-        $sql = "SELECT p.id AS id FROM premove_position p
-                WHERE " . implode(' AND ', $where) . "
-                ORDER BY p.rating $dir LIMIT 1";
+        $countRows = App::db()->raw("SELECT COUNT(*) AS c FROM premove_position p WHERE {$clause}", $params);
+        $count = (int) ($countRows[0]['c'] ?? 0);
+        if ($count === 0) {
+            return null;
+        }
 
-        $rows = App::db()->raw($sql, $params);
+        $offset = random_int(0, $count - 1);
+        $rows = App::db()->raw(
+            "SELECT p.id AS id FROM premove_position p WHERE {$clause} ORDER BY p.id LIMIT 1 OFFSET {$offset}",
+            $params,
+        );
 
         return isset($rows[0]['id']) ? (string) $rows[0]['id'] : null;
     }
