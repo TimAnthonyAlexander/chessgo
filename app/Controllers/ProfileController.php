@@ -5,6 +5,7 @@ namespace App\Controllers;
 use BaseApi\Controllers\Controller;
 use BaseApi\Http\JsonResponse;
 use App\Models\Game;
+use App\Models\PremoveGame;
 use App\Models\PuzzleAttempt;
 use App\Models\User;
 use App\Services\Glicko2Service;
@@ -18,8 +19,9 @@ use App\Services\HubClient;
  *   GET /users/{name}
  *
  * Returns the account's per-category ratings (rating/RD/games/provisional), the
- * isolated puzzle rating + solved count, the isolated Duck Chess rating, an overall
- * win/loss/draw record across all persisted games, and the most recent games as
+ * isolated puzzle rating + solved count, the isolated Duck Chess rating, the
+ * isolated Premove Trainer rating, an overall win/loss/draw record across all
+ * persisted games, and the most recent games as
  * light rows (no move blobs —
  * the board opens them via the analysis endpoint). Game pagination lives on the
  * sibling {@see ProfileGamesController} ("load more").
@@ -88,6 +90,14 @@ class ProfileController extends Controller
                 'games' => $user->games_puzzle,
                 'solved' => $puzzleSolved,
                 'provisional' => ((float) $user->rd_puzzle) > Glicko2Service::PROVISIONAL_RD,
+            ],
+            // Premove Trainer is its own isolated pool (like puzzle) — surfaced
+            // separately from the time-control rating tiles.
+            'premove' => [
+                'rating' => $user->rating_premove,
+                'rd' => $user->rd_premove,
+                'games' => $user->games_premove,
+                'provisional' => ((float) $user->rd_premove) > Glicko2Service::PROVISIONAL_RD,
             ],
             // Chess960 is its own isolated pool (like puzzle) — standard rules, but
             // a different skill, so it never feeds the time-control tiles.
@@ -216,7 +226,7 @@ class ProfileController extends Controller
     /**
      * Per-pool rating history for the sparklines: one series per time-control /
      * Duck / Crazyhouse / Antichess pool (from Game rows) plus puzzle (from
-     * PuzzleAttempt).
+     * PuzzleAttempt) and premove (from PremoveGame).
      * No schema change — every series is reconstructed from already-stored
      * rating-after values on the last HISTORY_POINTS rated results.
      *
@@ -229,6 +239,7 @@ class ProfileController extends Controller
             $out[$cat] = $this->categoryRatingSeries($id, $cat);
         }
         $out['puzzle'] = $this->puzzleRatingSeries($id);
+        $out['premove'] = $this->premoveRatingSeries($id);
 
         return $out;
     }
@@ -276,6 +287,33 @@ class ProfileController extends Controller
             ->get();
 
         $series = array_map(static fn (PuzzleAttempt $a): int => $a->rating_after, $attempts);
+
+        return array_reverse($series);
+    }
+
+    /**
+     * The last HISTORY_POINTS premove-trainer rating-after values, oldest first.
+     * Only rated rows carry a rating_after (casual attempts and anonymous play
+     * never touch the rating), so unrated/null rows are skipped rather than
+     * poisoning the sparkline with nulls.
+     *
+     * @return list<int>
+     */
+    private function premoveRatingSeries(string $id): array
+    {
+        $games = PremoveGame::query()
+            ->where('user_id', '=', $id)
+            ->where('rated', '=', true)
+            ->orderByDesc('created_at')
+            ->limit(self::HISTORY_POINTS)
+            ->get();
+
+        $series = [];
+        foreach ($games as $g) {
+            if ($g->rating_after !== null) {
+                $series[] = $g->rating_after;
+            }
+        }
 
         return array_reverse($series);
     }

@@ -59,6 +59,7 @@ function navItems(isAdmin: boolean, loggedIn: boolean, ready: boolean): NavItem[
                 { label: 'Online', to: '/' },
                 { label: 'Computer', to: '/bot' },
                 { label: 'Puzzles', to: '/puzzles' },
+                { label: 'Premove Trainer', to: '/premove' },
                 { label: 'Chess960', to: '/', state: { quickPair: 'chess960' } },
                 { label: 'Duck Chess', to: '/', state: { quickPair: 'duck' } },
                 { label: 'Crazyhouse', to: '/', state: { quickPair: 'crazyhouse' } },

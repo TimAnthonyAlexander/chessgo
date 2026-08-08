@@ -17,6 +17,7 @@ import RouteError, { NotFound } from './components/RouteError'
 const Friends = lazy(() => import('./pages/Friends'))
 const BotGame = lazy(() => import('./pages/BotGame'))
 const Puzzles = lazy(() => import('./pages/Puzzles'))
+const PremoveTrainer = lazy(() => import('./pages/PremoveTrainer'))
 const Tournaments = lazy(() => import('./pages/Tournaments'))
 const TournamentPage = lazy(() => import('./pages/Tournament'))
 const Tutor = lazy(() => import('./pages/Tutor'))
@@ -87,6 +88,7 @@ const router = createBrowserRouter([
                     { path: '/', element: <Home /> },
                     { path: '/bot', element: suspended(<BotGame />) },
                     { path: '/puzzles', element: suspended(<Puzzles />) },
+                    { path: '/premove', element: suspended(<PremoveTrainer />) },
                     { path: '/tournaments', element: suspended(<Tournaments />) },
                     { path: '/tournaments/:id', element: suspended(<TournamentPage />) },
                     { path: '/tutor', element: suspended(<Tutor />) },

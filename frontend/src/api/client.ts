@@ -695,6 +695,106 @@ export function submitPuzzleMove(
     })
 }
 
+// --- Premove Trainer (docs/tasks/open/premove-trainer.md) -------------------
+
+export type PremoveFormat = 'rated' | 'casual'
+export type PremoveStatus = 'ongoing' | 'won' | 'lost'
+export type PremoveEndReason =
+    | 'checkmate'
+    | 'mated'
+    | 'flagged'
+    | 'stalemate'
+    | 'draw'
+    | 'chain-broke'
+    | 'unresolved'
+
+/** One ply of a premove game or its playout. `by` is 'player' for the human's
+ *  own (pre-queued) move, 'engine' for the full-strength defender's reply. */
+export interface PremoveMoveEntry {
+    ply: number
+    uci: string
+    san: string
+    fen: string
+    by: 'player' | 'engine'
+}
+
+/** Rating block, shaped like PuzzleRating but against the puzzle's own rating as
+ *  a fixed opponent. `after`/`delta` are absent until the attempt resolves;
+ *  absent entirely (not just null) when the game isn't rated (see `rated`
+ *  below) — an anonymous player in the rated format gets no `rating` at all. */
+export interface PremoveRating {
+    before: number
+    after?: number
+    delta?: number
+    provisional: boolean
+}
+
+/** A premove game/attempt, same shape returned by create, release and GET. The
+ *  puzzle's solution never appears here — only the current position, that
+ *  position's legal moves (unused while queuing; kept for parity with the
+ *  contract), and the clock. */
+export interface PremoveGame {
+    id: string
+    format: PremoveFormat
+    /** Whether Glicko was actually applied to this attempt — false for every
+     *  anonymous player, even in the rated format (10s clock and all; nothing
+     *  is rated). */
+    rated: boolean
+    player_color: Color
+    fen: string
+    side_to_move: Color
+    legal_moves: string[]
+    status: PremoveStatus
+    end_reason: PremoveEndReason | null
+    /** Player's remaining clock, ms. Null in casual. */
+    clock_ms: number | null
+    /** Epoch ms the clock starts/resumes counting down from `clock_ms`. Null
+     *  once the game is over, and in casual. Frozen (in the sense that
+     *  `clock_ms` doesn't move) until this instant passes. */
+    resume_at: number | null
+    /** Playout cadence, ms/ply — the client MUST animate at this, never a
+     *  hardcoded constant (see the contract's §9). */
+    ply_ms: number
+    moves: PremoveMoveEntry[]
+    /** Omitted entirely when unrated (anonymous, or a resolved casual game). */
+    rating?: PremoveRating
+}
+
+/** Response to releasing a chain: the game's fresh state, plus the plies to
+ *  animate and where (if at all) the submitted chain collapsed. */
+export interface PremoveReleaseResult extends PremoveGame {
+    /** The plies actually played this release, in order — animate these at
+     *  `ply_ms` with input blocked. Empty when the very first submitted move
+     *  was already illegal (a legitimate, instructive collapse at index 0). */
+    playout: PremoveMoveEntry[]
+    /** 0-based index into the submitted chain where it collapsed, or null if
+     *  the whole chain played through (win, loss-by-exhaustion, or flag). */
+    collapsed_at: number | null
+}
+
+/** Create a premove game (also how you get the next one — there's no separate
+ *  "next" endpoint). 503s with an ApiError when the position pool is exhausted. */
+export function createPremoveGame(format: PremoveFormat): Promise<PremoveGame> {
+    return request<PremoveGame>('/premove-games', {
+        method: 'POST',
+        body: JSON.stringify({ format }),
+    })
+}
+
+/** Release a queued premove chain (1..12 entries, each a 4-char `from+to`
+ *  UCI square pair — promotion is always resolved to a queen server-side). */
+export function releasePremoveChain(id: string, chain: string[]): Promise<PremoveReleaseResult> {
+    return request<PremoveReleaseResult>(`/premove-games/${id}/release`, {
+        method: 'POST',
+        body: JSON.stringify({ chain }),
+    })
+}
+
+/** Current state of a premove game, for refresh/resume. No `playout`. */
+export function getPremoveGame(id: string): Promise<PremoveGame> {
+    return request<PremoveGame>(`/premove-games/${id}`)
+}
+
 export interface WsTicket {
     ticket: string
     wsUrl: string
@@ -926,6 +1026,9 @@ export interface Profile {
     crazyhouse: RatingTile
     // Antichess rating tile — likewise its own isolated pool.
     antichess: RatingTile
+    // Premove Trainer rating tile — likewise its own isolated pool (see
+    // docs/tasks/open/premove-trainer.md §6).
+    premove: RatingTile
     record: ProfileRecord
     // Present iff the hub reports this account in a live game right now (null
     // otherwise, including whenever the hub is unreachable — never an error).
@@ -937,7 +1040,7 @@ export interface Profile {
     gamesPerPage: number
     // Per-pool rating trend (oldest -> newest ratings-after), keyed by
     // RatingCategory plus 'puzzle' | 'chess960' | 'duck' | 'crazyhouse' |
-    // 'antichess'. Feeds every sparkline in the ratings panel.
+    // 'antichess' | 'premove'. Feeds every sparkline in the ratings panel.
     ratingHistory: Record<string, number[]>
 }
 

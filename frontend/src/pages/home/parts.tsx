@@ -8,7 +8,18 @@ import {
     DialogContent,
     Typography,
 } from '@mui/material'
-import { Cpu, Crown, Gauge, Shuffle, Skull, Swords, Target, Telescope, UserPlus } from 'lucide-react'
+import {
+    Cpu,
+    Crown,
+    FastForward,
+    Gauge,
+    Shuffle,
+    Skull,
+    Swords,
+    Target,
+    Telescope,
+    UserPlus,
+} from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { gameSocket, type LiveGameState } from '../../lib/socket'
 import { useGameSocket } from '../../lib/useGameSocket'
@@ -406,8 +417,10 @@ export function QuickPairingPanel({
 
             {/* Everything that isn't a standard time control gets its own section +
                 grid, so it grows independently as new modes ship without knocking the
-                time-control grid off-count. Six cells fill the 3-up (desktop) and 2-up
-                (phone) grids exactly. */}
+                time-control grid off-count. "More" holds the five variant pools, each
+                with its own isolated rating and its own matchmaking queue. Training
+                modes carry no pool to queue into, so they get their own row below
+                instead of a sixth "More" cell. */}
             <Typography
                 sx={{
                     mt: '6px',
@@ -453,17 +466,137 @@ export function QuickPairingPanel({
                         )
                     }
                 />
+            </Box>
+
+            {/* Solo training modes: no pool, no opponent, nothing to queue for — a
+                separate row rather than a sixth "More" cell. Three cells fill the
+                3-up desktop grid exactly; the 2-up phone grid takes the trailing
+                orphan (a lone third cell on its own row) rather than distorting
+                "More" to make the counts divide evenly everywhere. */}
+            <Typography
+                sx={{
+                    mt: '14px',
+                    mb: 0.5,
+                    fontFamily: 'var(--font-display)',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    letterSpacing: 0.6,
+                    textTransform: 'uppercase',
+                    color: 'var(--text-dim)',
+                }}
+            >
+                Train
+            </Typography>
+            <Box
+                sx={{
+                    display: 'grid',
+                    gridTemplateColumns: { xs: 'repeat(2, 1fr)', sm: 'repeat(3, 1fr)' },
+                    gridAutoRows: '1fr',
+                    gap: 0.75,
+                }}
+            >
+                <PuzzlesCell onClick={() => navigate('/puzzles')} />
+                <PremoveCell onClick={() => navigate('/premove')} />
                 <GuessEloCell onClick={() => navigate('/guess-the-elo')} />
             </Box>
         </Panel>
     )
 }
 
+/** Puzzles — the "Train" row's entry point into the tactics trainer. Same icon
+ * as the Play panel's own Puzzles action; this cell exists because the homepage's
+ * training modes (Puzzles, Premove Trainer, Guess the Elo) read as one family and
+ * belong together, not scattered between "Play" and "More". */
+function PuzzlesCell({ onClick }: { onClick: () => void }) {
+    return (
+        <Box
+            onClick={onClick}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onClick()
+                }
+            }}
+            sx={{
+                position: 'relative',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 0.75,
+                py: { xs: 1.75, md: 2 },
+                bgcolor: 'var(--surface-2)',
+                border: '1px solid var(--line-soft)',
+                borderRadius: '12px',
+                cursor: 'pointer',
+                overflow: 'hidden',
+                transition: 'border-color 0.12s ease, background 0.12s ease',
+                '&:hover': { borderColor: 'var(--accent-line)', bgcolor: 'var(--surface)' },
+            }}
+        >
+            <Box sx={{ display: 'flex', color: 'var(--text)', height: 26, alignItems: 'center' }}>
+                <Target size={24} />
+            </Box>
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
+                <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)', fontWeight: 500 }}>
+                    Puzzles
+                </Typography>
+            </Box>
+        </Box>
+    )
+}
+
+/** Premove Trainer — queue a blind chain of premoves against a forced mate and
+ * release it all at once. Same "Train" row as Puzzles and Guess the Elo: a solo
+ * mode with no matchmaking pool, so no queue-time-control icon to show. */
+function PremoveCell({ onClick }: { onClick: () => void }) {
+    return (
+        <Box
+            onClick={onClick}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onClick()
+                }
+            }}
+            sx={{
+                position: 'relative',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 0.75,
+                py: { xs: 1.75, md: 2 },
+                bgcolor: 'var(--surface-2)',
+                border: '1px solid var(--line-soft)',
+                borderRadius: '12px',
+                cursor: 'pointer',
+                overflow: 'hidden',
+                transition: 'border-color 0.12s ease, background 0.12s ease',
+                '&:hover': { borderColor: 'var(--accent-line)', bgcolor: 'var(--surface)' },
+            }}
+        >
+            <Box sx={{ display: 'flex', color: 'var(--text)', height: 26, alignItems: 'center' }}>
+                <FastForward size={24} />
+            </Box>
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
+                <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)', fontWeight: 500 }}>
+                    Premove Trainer
+                </Typography>
+            </Box>
+        </Box>
+    )
+}
+
 /** Guess the Elo — watch an engine game played at a hidden strength and guess the
- * rating. A solo mode that sits in the "More" grid as its own cell: it plays like
- * its own game type, and it's what fills the grid's sixth slot. It has no pool and
- * no rating of its own, so the slot the variant cells give the time control holds
- * the icon instead. */
+ * rating. A solo mode that sits in the "Train" row alongside Puzzles and the
+ * Premove Trainer: it plays like its own game type. It has no pool and no rating
+ * of its own, so the slot the variant cells give the time control holds the icon
+ * instead. */
 function GuessEloCell({ onClick }: { onClick: () => void }) {
     return (
         <Box

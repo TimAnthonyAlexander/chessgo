@@ -38,6 +38,8 @@ use App\Controllers\ProfileGamesController;
 use App\Controllers\ProfileUpdateController;
 use App\Controllers\PuzzleController;
 use App\Controllers\DailyPuzzleController;
+use App\Controllers\PremoveGameController;
+use App\Controllers\PremoveReleaseController;
 use App\Controllers\LeaderboardController;
 use App\Controllers\StreakController;
 use App\Controllers\AdminFlagsController;
@@ -352,7 +354,45 @@ $router->post('/puzzles/{id}/move', [
     PuzzleController::class,
 ]);
 
-// ================================  
+// ================================
+// Premove Trainer (docs/tasks/open/premove-trainer.md) — solo forced-mate
+// training: queue a whole chain of premoves blind, release it, watch it play
+// out. Session is OPTIONAL, same shape as puzzles: a logged-in user gets an
+// isolated rating_premove update on the rated format; anonymous still plays
+// (including the rated format's real 10s clock) but is never rated.
+// ================================
+
+// All three carry OptionalAuthMiddleware (never 401): it resolves an API token
+// FIRST, then the session, so a bearer client — iOS, or anyone driving the play
+// API with a token — is rated and can own an attempt, instead of silently
+// falling through to anonymous. SessionStartMiddleware runs first because the
+// middleware's session branch reads the started session.
+
+// Deal a new attempt: { format: "rated" | "casual" }
+$router->post('/premove-games', [
+    SessionStartMiddleware::class,
+    OptionalAuthMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '300/1m'],
+    PremoveGameController::class,
+]);
+
+// Fetch an attempt's current state + legal moves (no playout). A rated attempt
+// is owner-only, and the owner check reads the resolved user.
+$router->get('/premove-games/{id}', [
+    SessionStartMiddleware::class,
+    OptionalAuthMiddleware::class,
+    PremoveGameController::class,
+]);
+
+// Release a queued chain of premoves: { chain: ["e2e4", "d1h5", ...] }
+$router->post('/premove-games/{id}/release', [
+    SessionStartMiddleware::class,
+    OptionalAuthMiddleware::class,
+    RateLimitMiddleware::class => ['limit' => '1200/1m'],
+    PremoveReleaseController::class,
+]);
+
+// ================================
 // Authentication Endpoints
 // ================================
 

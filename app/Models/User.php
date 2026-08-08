@@ -144,6 +144,21 @@ class User extends BaseModel
 
     public int $games_secretqueen = 0;
 
+    // Premove Trainer is likewise a separate, isolated category (docs/tasks/open/
+    // premove-trainer.md §6): rated against the puzzle's own fixed rating as the
+    // "opponent", never a time-control split, never touching live matchmaking or
+    // the WS ticket ratings map. Fed only by rated-format PremoveGame attempts
+    // whose user is logged in. See PremoveTrainerService.
+    public int $rating_premove = 1500;
+
+    public float $rd_premove = 350.0;
+
+    public float $vol_premove = 0.06;
+
+    public ?string $rated_at_premove = null;
+
+    public int $games_premove = 0;
+
     // "The Flame" — a daily-activity streak (SPEC dashboard). A day qualifies when
     // the user solves a puzzle OR plays a rated game; consecutive qualifying UTC
     // days grow current_streak, a miss resets it to 1 (unless a freeze token
@@ -236,6 +251,7 @@ class User extends BaseModel
         'rated_at_crazyhouse' => ['type' => 'TEXT', 'nullable' => true],
         'rated_at_antichess' => ['type' => 'TEXT', 'nullable' => true],
         'rated_at_secretqueen' => ['type' => 'TEXT', 'nullable' => true],
+        'rated_at_premove' => ['type' => 'TEXT', 'nullable' => true],
         // The Flame streak's last-qualifying UTC day, stored as 'YYYY-MM-DD' text.
         'last_active_date' => ['type' => 'TEXT', 'nullable' => true],
         // Freeform, so it isn't clipped by the default VARCHAR(255); validated
@@ -259,8 +275,8 @@ class User extends BaseModel
         return $this->title ?? ($this->role === 'admin' ? 'AM' : null);
     }
 
-    /** Categories carrying a Glicko-2 rating, including the isolated puzzle + chess960 + duck + crazyhouse + antichess + secretqueen pools. */
-    private const RATING_CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'puzzle', 'chess960', 'duck', 'crazyhouse', 'antichess', 'secretqueen'];
+    /** Categories carrying a Glicko-2 rating, including the isolated puzzle + chess960 + duck + crazyhouse + antichess + secretqueen + premove pools. */
+    private const RATING_CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'puzzle', 'chess960', 'duck', 'crazyhouse', 'antichess', 'secretqueen', 'premove'];
 
     /**
      * Serialize for API output. Overrides BaseModel::jsonSerialize() to strip

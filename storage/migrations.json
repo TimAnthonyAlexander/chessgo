@@ -1575,6 +1575,168 @@
             "table": "user",
             "operation": "add_column",
             "warning": null
+        },
+        {
+            "id": "mig_34715266886b",
+            "sql": "CREATE TABLE `premove_game` (\n  `user_id` VARCHAR(36),\n  `puzzle_id` VARCHAR(36) NOT NULL DEFAULT '',\n  `rated` TINYINT(1) NOT NULL DEFAULT 0,\n  `time_control` TEXT,\n  `player_color` VARCHAR(255) NOT NULL DEFAULT 'w',\n  `start_fen` VARCHAR(255) NOT NULL DEFAULT '',\n  `fen` VARCHAR(255) NOT NULL DEFAULT '',\n  `side_to_move` VARCHAR(36) NOT NULL DEFAULT 'w',\n  `clock_ms` INT,\n  `last_move_at` TEXT,\n  `status` VARCHAR(255) NOT NULL DEFAULT 'ongoing',\n  `end_reason` TEXT,\n  `moves` TEXT,\n  `chains` TEXT,\n  `chain_target` INT NOT NULL DEFAULT 0,\n  `opponent_rating` INT NOT NULL DEFAULT 1500,\n  `rating_before` INT,\n  `rating_after` INT,\n  `rating_delta` INT,\n  `id` VARCHAR(36) NOT NULL DEFAULT '',\n  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            "destructive": false,
+            "generated_at": "2026-08-08T14:23:03+00:00",
+            "table": "premove_game",
+            "operation": "create_table",
+            "warning": null
+        },
+        {
+            "id": "mig_0a505cca2d80",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rating_premove` INT NOT NULL DEFAULT 1500",
+            "destructive": false,
+            "generated_at": "2026-08-08T14:23:03+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_0d2bf2e6938f",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rd_premove` DOUBLE NOT NULL DEFAULT 350",
+            "destructive": false,
+            "generated_at": "2026-08-08T14:23:03+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_8e80f74e98fa",
+            "sql": "ALTER TABLE `user` ADD COLUMN `vol_premove` DOUBLE NOT NULL DEFAULT 0.06",
+            "destructive": false,
+            "generated_at": "2026-08-08T14:23:03+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_d58db03395c6",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rated_at_premove` TEXT",
+            "destructive": false,
+            "generated_at": "2026-08-08T14:23:03+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_df3bea3af590",
+            "sql": "ALTER TABLE `user` ADD COLUMN `games_premove` INT NOT NULL DEFAULT 0",
+            "destructive": false,
+            "generated_at": "2026-08-08T14:23:03+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_7eb79d0d1293",
+            "sql": "ALTER TABLE `premove_game` ADD INDEX `idx_premove_game_user_id` (`user_id`)",
+            "destructive": false,
+            "generated_at": "2026-08-08T14:23:03+00:00",
+            "table": "premove_game",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_8d8d85f1e0f0",
+            "sql": "ALTER TABLE `premove_game` ADD INDEX `idx_premove_game_puzzle_id` (`puzzle_id`)",
+            "destructive": false,
+            "generated_at": "2026-08-08T14:23:03+00:00",
+            "table": "premove_game",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_cf449ae6b2e2",
+            "sql": "ALTER TABLE `premove_game` ADD CONSTRAINT `fk_premove_game_user_id` FOREIGN KEY (`user_id`) REFERENCES `user` (`id`) ON DELETE CASCADE ON UPDATE CASCADE",
+            "destructive": false,
+            "generated_at": "2026-08-08T14:23:03+00:00",
+            "table": "premove_game",
+            "operation": "add_fk",
+            "warning": null
+        },
+        {
+            "id": "mig_3904b8cfc964",
+            "sql": "ALTER TABLE `premove_game` ADD CONSTRAINT `fk_premove_game_puzzle_id` FOREIGN KEY (`puzzle_id`) REFERENCES `puzzle` (`id`) ON DELETE CASCADE ON UPDATE CASCADE",
+            "destructive": false,
+            "generated_at": "2026-08-08T14:23:03+00:00",
+            "table": "premove_game",
+            "operation": "add_fk",
+            "warning": null
+        },
+        {
+            "id": "mig_28f4d894d7b6",
+            "sql": "CREATE TABLE `premove_position` (\n  `fen` VARCHAR(255) NOT NULL DEFAULT '',\n  `signature` VARCHAR(255) NOT NULL DEFAULT '',\n  `side_to_move` VARCHAR(36) NOT NULL DEFAULT 'w',\n  `piece_count` INT NOT NULL DEFAULT 0,\n  `breadth_pct` INT NOT NULL DEFAULT 0,\n  `winning_moves` INT NOT NULL DEFAULT 0,\n  `legal_moves` INT NOT NULL DEFAULT 0,\n  `conversion_plies` INT NOT NULL DEFAULT 0,\n  `rating` INT NOT NULL DEFAULT 1500,\n  `id` VARCHAR(36) NOT NULL DEFAULT '',\n  `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+            "destructive": false,
+            "generated_at": "2026-08-08T15:06:10+00:00",
+            "table": "premove_position",
+            "operation": "create_table",
+            "warning": null
+        },
+        {
+            "id": "mig_23d4e7a4ff33",
+            "sql": "ALTER TABLE `premove_position` ADD INDEX `idx_premove_position_rating` (`rating`)",
+            "destructive": false,
+            "generated_at": "2026-08-08T15:06:10+00:00",
+            "table": "premove_position",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_2af6c7879053",
+            "sql": "ALTER TABLE `premove_position` ADD INDEX `idx_premove_position_signature_rating` (`signature`, `rating`)",
+            "destructive": false,
+            "generated_at": "2026-08-08T15:06:10+00:00",
+            "table": "premove_position",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_b72c090d2308",
+            "sql": "ALTER TABLE `premove_game` ADD COLUMN `position_id` VARCHAR(36) NOT NULL DEFAULT ''",
+            "destructive": false,
+            "generated_at": "2026-08-08T15:49:48+00:00",
+            "table": "premove_game",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_f9e2f3654801",
+            "sql": "ALTER TABLE `premove_game` ADD INDEX `idx_premove_game_position_id` (`position_id`)",
+            "destructive": false,
+            "generated_at": "2026-08-08T15:49:48+00:00",
+            "table": "premove_game",
+            "operation": "add_index",
+            "warning": null
+        },
+        {
+            "id": "mig_5c29894294a1",
+            "sql": "ALTER TABLE `premove_game` DROP FOREIGN KEY `fk_premove_game_puzzle_id`",
+            "destructive": true,
+            "generated_at": "2026-08-08T15:49:48+00:00",
+            "table": "premove_game",
+            "operation": "drop_fk",
+            "warning": null
+        },
+        {
+            "id": "mig_fd1c027d9f48",
+            "sql": "ALTER TABLE `premove_game` DROP INDEX `idx_premove_game_puzzle_id`",
+            "destructive": true,
+            "generated_at": "2026-08-08T15:49:48+00:00",
+            "table": "premove_game",
+            "operation": "drop_index",
+            "warning": null
+        },
+        {
+            "id": "mig_75d862710705",
+            "sql": "ALTER TABLE `premove_game` DROP COLUMN `puzzle_id`",
+            "destructive": true,
+            "generated_at": "2026-08-08T15:49:48+00:00",
+            "table": "premove_game",
+            "operation": "drop_column",
+            "warning": null
         }
     ]
 }

@@ -24,8 +24,10 @@ use App\Services\Glicko2Service;
  */
 class LeaderboardController extends Controller
 {
-    /** Whitelisted rating pools — the ONLY values allowed into the column names. */
-    private const CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'puzzle', 'chess960', 'duck', 'antichess', 'secretqueen'];
+    /** Whitelisted rating pools — the ONLY values allowed into the column names.
+     *  'crazyhouse' was a pre-existing gap (it has a rating category on User but
+     *  was never listed here) — fixed as a drive-by alongside adding 'premove'. */
+    private const CATEGORIES = ['bullet', 'blitz', 'rapid', 'classical', 'puzzle', 'chess960', 'duck', 'crazyhouse', 'antichess', 'secretqueen', 'premove'];
 
     /** Bound from ?category= ; one of CATEGORIES. */
     public string $category = 'blitz';

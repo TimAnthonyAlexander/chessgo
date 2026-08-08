@@ -13,6 +13,7 @@ use App\Services\ZugzwangClient;
 use App\Services\EngineSelector;
 use App\Services\BotGameService;
 use App\Services\GuessGameService;
+use App\Services\PremoveTrainerService;
 use App\Services\GameAnalysisService;
 use App\Services\Tutor\TutorBaselineReader;
 use App\Services\Tutor\TutorBuildService;
@@ -58,6 +59,7 @@ class AppServiceProvider extends ServiceProvider
         $container->singleton(EngineSelector::class);
         $container->singleton(BotGameService::class);
         $container->singleton(GuessGameService::class);
+        $container->singleton(PremoveTrainerService::class);
         $container->singleton(GameAnalysisService::class);
         $container->singleton(WsTicketService::class);
 

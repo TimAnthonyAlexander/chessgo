@@ -1,6 +1,6 @@
 import { Box, Typography } from '@mui/material'
 import type { ReactNode } from 'react'
-import { Shuffle, Skull, Zap } from 'lucide-react'
+import { FastForward, Shuffle, Skull, Zap } from 'lucide-react'
 import type { Profile, RatingCategory } from '../../api/client'
 import { CATEGORY_META } from '../../lib/timeControl'
 import { DuckGlyph } from '../DuckGlyph'
@@ -65,6 +65,14 @@ export default function RatingsPanel({
                     provisional={profile.puzzle.provisional}
                     sub={`${profile.puzzle.solved}W ${profile.puzzle.games - profile.puzzle.solved}L`}
                     series={profile.ratingHistory.puzzle ?? []}
+                />
+                <RatingRow
+                    icon={<FastForward size={14} />}
+                    label="Premove Trainer"
+                    rating={profile.premove.rating}
+                    provisional={profile.premove.provisional}
+                    sub={`${profile.premove.games} ${profile.premove.games === 1 ? 'game' : 'games'}`}
+                    series={profile.ratingHistory.premove ?? []}
                 />
                 <RatingRow
                     icon={<Shuffle size={14} />}
