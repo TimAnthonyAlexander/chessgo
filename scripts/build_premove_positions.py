@@ -58,6 +58,9 @@ MIN_WINNING_MOVES = 3      # absolute breadth floor
 MIN_BREADTH_PCT = 40       # relative breadth floor — the load-bearing filter
 MAX_CONVERSION_PLIES = 30  # must be finishable on the clock
 MIN_CONVERSION_PLIES = 4   # below this it's a mate-in-2 gimme, not a conversion
+MIN_SAFE_DEPTH = 5         # see safe_depth(): the filter that makes a position premoveable
+SAFE_DEPTH_MAX = 10        # measuring past this tells us nothing more
+SAFE_DEPTH_FRONTIER_CAP = 1500
 
 # --- Signatures (spec §3.2), weighted toward promotion races ---------------
 # (name, white pieces, black pieces, weight)
@@ -83,16 +86,20 @@ RATING_BASE = 500
 RATING_PER_PLY = 45              # each extra ply of conversion
 RATING_PER_NARROWNESS = 7        # each point of (100 - breadth_pct)
 RATING_PER_EXTRA_PIECE = 40      # each piece beyond the 3-piece floor
+RATING_PER_UNSAFE_PLY = 55       # each ply of safe_depth below SAFE_DEPTH_MAX
 RATING_MIN, RATING_MAX = 400, 2400
 
 PREMOVE_NS = uuid.UUID("2b7e9a3c-4f1d-4e8a-9b6f-1c2d3e4f5a6b")
 
 
-def rating_for(plies: int, breadth_pct: int, piece_count: int) -> int:
+def rating_for(plies: int, breadth_pct: int, piece_count: int, safe: int) -> int:
     r = (RATING_BASE
          + plies * RATING_PER_PLY
          + (100 - breadth_pct) * RATING_PER_NARROWNESS
-         + max(0, piece_count - 3) * RATING_PER_EXTRA_PIECE)
+         + max(0, piece_count - 3) * RATING_PER_EXTRA_PIECE
+         # The further ahead you can safely commit, the easier the position is to
+         # premove — this is the dominant term in practice.
+         + (SAFE_DEPTH_MAX - min(safe, SAFE_DEPTH_MAX)) * RATING_PER_UNSAFE_PLY)
     return max(RATING_MIN, min(RATING_MAX, r))
 
 
@@ -138,6 +145,96 @@ def breadth(board: chess.Board, tb: chess.syzygy.Tablebase) -> tuple[int, int]:
         finally:
             board.pop()
     return keep, len(legal)
+
+
+def safe_depth(board: chess.Board, tb: chess.syzygy.Tablebase,
+               maxd: int = SAFE_DEPTH_MAX, cap: int = SAFE_DEPTH_FRONTIER_CAP) -> int:
+    """How many moves you can queue BLIND and have them still be legal and still
+    winning, whatever the defender does.
+
+    This is the filter that decides whether a position belongs in this mode at
+    all. `breadth_pct` counts how many of YOUR moves keep the win, which says
+    nothing about whether you can predict the DEFENDER — and predicting the
+    defender is the entire premise of premoving. A position where you are up a
+    rook but the enemy king is loose scores high on breadth and is impossible to
+    premove, because after your first move the position could be any of a dozen
+    things.
+
+    So: track the SET of positions you might be in (the belief state). A move is
+    queueable only if it is legal and winning in every one of them. Then expand
+    by all defender replies and repeat.
+
+    Deduplicating that frontier is load-bearing, not an optimisation: defender
+    lines transpose heavily, and without dedup the set explodes past any cap
+    after ~3 plies and the function measures the cap instead of the chess. That
+    error made every signature look identical at depth 3; with dedup, KQvK/KRvK/
+    KPvK come out at a median of 10 and KRPvKR at 1.
+    """
+    def key(b: chess.Board) -> str:
+        return b.board_fen() + (" w" if b.turn else " b")
+
+    frontier = {key(board): board.copy()}
+    depth = 0
+
+    while depth < maxd:
+        boards = list(frontier.values())
+
+        common: set[tuple[int, int]] | None = None
+        for b in boards:
+            moves = {(m.from_square, m.to_square) for m in b.legal_moves}
+            common = moves if common is None else (common & moves)
+            if not common:
+                break
+        if not common:
+            break
+
+        chosen = None
+        for fr, to in common:
+            ok = True
+            for b in boards:
+                mv = next((m for m in b.legal_moves if m.from_square == fr and m.to_square == to), None)
+                if mv is None:
+                    ok = False
+                    break
+                b.push(mv)
+                try:
+                    if not b.is_checkmate():
+                        if not any(b.legal_moves) or tb.probe_wdl(b) >= 0:
+                            ok = False
+                finally:
+                    b.pop()
+                if not ok:
+                    break
+            if ok:
+                chosen = (fr, to)
+                break
+        if chosen is None:
+            break
+
+        fr, to = chosen
+        nxt: dict[str, chess.Board] = {}
+        mated_everywhere = True
+        for b in boards:
+            mv = next(m for m in b.legal_moves if m.from_square == fr and m.to_square == to)
+            b.push(mv)
+            try:
+                if not b.is_game_over():
+                    mated_everywhere = False
+                    for reply in b.legal_moves:
+                        b.push(reply)
+                        nxt[key(b)] = b.copy()
+                        b.pop()
+            finally:
+                b.pop()
+
+        depth += 1
+        if mated_everywhere:
+            return depth
+        if len(nxt) > cap:
+            break
+        frontier = nxt
+
+    return depth
 
 
 def conversion_plies(board: chess.Board, tb: chess.syzygy.Tablebase,
@@ -247,6 +344,10 @@ def main() -> int:
             if plies is None or plies > MAX_CONVERSION_PLIES or plies < MIN_CONVERSION_PLIES:
                 st["bad_length"] += 1
                 continue
+            depth = safe_depth(board, tb)
+            if depth < MIN_SAFE_DEPTH:
+                st["unpredictable"] += 1
+                continue
             fen = board.fen()
             if fen in seen:
                 st["dupe"] += 1
@@ -257,7 +358,7 @@ def main() -> int:
             pieces = chess.popcount(board.occupied)
             rows.append((
                 str(uuid.uuid5(PREMOVE_NS, fen)), fen, name, "w", pieces,
-                pct, win_moves, legal, plies, rating_for(plies, pct, pieces),
+                pct, win_moves, legal, plies, depth, rating_for(plies, pct, pieces, depth),
             ))
         print(f"  {name:8} kept {kept:5}/{want:<5} from {attempts:6} attempts "
               f"({100*kept/max(1,attempts):4.1f}%)  " +
@@ -280,8 +381,8 @@ def main() -> int:
                 cur.executemany(
                     "INSERT IGNORE INTO premove_position "
                     "(id, fen, signature, side_to_move, piece_count, breadth_pct, winning_moves,"
-                    " legal_moves, conversion_plies, rating, created_at, updated_at) "
-                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())", chunk)
+                    " legal_moves, conversion_plies, safe_depth, rating, created_at, updated_at) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())", chunk)
             conn.commit()
     finally:
         conn.close()

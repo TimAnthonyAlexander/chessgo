@@ -119,16 +119,48 @@ Random placements for a target material signature, kept only if all hold:
 
 - Syzygy says it is a **win for the side to move**.
 - **Breadth**: at least 3 legal moves preserve the win, AND at least 40% of all
-  legal moves do. This is the load-bearing filter — it is what makes the position
-  a premove drill instead of a puzzle.
-- **Convertible in the time given**: playing it out full-strength for both sides
-  reaches mate within `MAX_CONVERSION_PLIES` (30).
+  legal moves do.
+- **Safe depth ≥ 5** — see below. This is the filter that actually decides
+  whether a position belongs in this mode.
+- **Convertible in the time given**: optimal play mates within
+  `MAX_CONVERSION_PLIES` (30).
 
-Breadth is measured per move by applying it and evaluating the child from the
-opponent's point of view (a move keeps the win iff the child is lost for them).
-`/candidates` at `multipv = <legal move count>` gives the same answer in one call
-and is TB-exact — both methods agree (86% on a sample KQvK) — so use `/candidates`
-for speed and the per-child probe only to spot-check.
+#### Safe depth: the one that matters
+
+Breadth counts how many of **your** moves keep the win. That says nothing about
+whether you can predict the **defender** — and predicting the defender is the
+entire premise of premoving. A position where you are up a rook against a loose
+enemy king scores near-perfect breadth and is impossible to premove: after your
+first move the position could be any of a dozen things, so no second premove is
+reliably legal.
+
+So `safe_depth` measures the belief state a premover is actually in: track the
+SET of positions you might be facing, and count how many moves you can queue that
+are legal *and* still winning in **every** one of them, expanding by all defender
+replies at each step.
+
+Measured medians, otherwise-qualifying positions:
+
+| signature | median safe depth |
+|---|---:|
+| KQvK, KRvK, KPvK | 10 |
+| KPPvK | 6 |
+| KRvKP | 5 (genuinely split — half qualify, half don't) |
+| **KRPvKR** | **1** |
+
+At the `>= 5` threshold, KPvK keeps 24 of 25 and KRPvKR keeps 1 of 24. Because
+KRvKP splits down the middle, this has to be a **per-position** filter, not a
+signature allowlist.
+
+**Deduplicating the frontier is load-bearing, not an optimisation.** Defender
+lines transpose heavily; without dedup the set explodes past any cap after about
+three plies and the function measures the cap rather than the chess. That bug
+made every signature look identical at depth 3 and would have hidden the whole
+effect.
+
+Breadth is still measured (it is cheap, and it keeps out positions with a single
+winning move), but it is not sufficient on its own — shipping without safe depth
+is what put unplayable rook endings in front of players.
 
 ### 3.2 Signatures
 

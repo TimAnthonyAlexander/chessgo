@@ -48,6 +48,19 @@ class PremovePosition extends BaseModel
      *  full-strength by the engine (DTZ-optimal for the defender too). */
     public int $conversion_plies = 0;
 
+    /**
+     * How many moves you can queue BLIND and have them still be legal and still
+     * winning, whatever the defender does — the belief-state depth a premover is
+     * actually in. This, not `breadth_pct`, is what decides whether a position
+     * can be premoved at all: breadth says how many of YOUR moves win, which
+     * says nothing about whether you can predict the DEFENDER.
+     *
+     * Measured: KQvK/KRvK/KPvK sit at a median of 10, KRPvKR at 1 — up a rook
+     * against an active rook and king, no second premove is reliably legal. The
+     * pool held both kinds until this was added.
+     */
+    public int $safe_depth = 0;
+
     /** Difficulty this position is served/rated against. Derived from
      *  conversion_plies + breadth_pct + piece_count — see
      *  RatingFormula::compute() in the builder script for the (explicitly

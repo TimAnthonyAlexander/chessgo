@@ -1737,6 +1737,15 @@
             "table": "premove_game",
             "operation": "drop_column",
             "warning": null
+        },
+        {
+            "id": "mig_1bc9737fffb1",
+            "sql": "ALTER TABLE `premove_position` ADD COLUMN `safe_depth` INT NOT NULL DEFAULT 0",
+            "destructive": false,
+            "generated_at": "2026-08-08T18:28:34+00:00",
+            "table": "premove_position",
+            "operation": "add_column",
+            "warning": null
         }
     ]
 }
