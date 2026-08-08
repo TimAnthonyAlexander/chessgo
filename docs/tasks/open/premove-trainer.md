@@ -411,6 +411,7 @@ Create, which doubles as "next". Rate limit `300/1m`, `SessionStartMiddleware`
   "clock_ms": 10000,          // null in casual
   "resume_at": 1754650000250, // epoch ms the clock starts; null in casual
   "ply_ms": 320,              // playout cadence the client MUST animate at
+  "max_chain": 20,            // cap the client MUST enforce; never hardcode it
   "moves": [],
   "rating": { "before": 1500, "provisional": true }   // omitted when unrated
 }
@@ -461,9 +462,14 @@ Current state, same shape, for refresh and resume. No `playout`.
 | `DEFENDER_MOVETIME_MS` | `120` | service | off-clock, so it can be generous; bounds the request at ~1.5s for a 12-move chain |
 | `PLY_MS_RATED` | `320` | service | playout cadence; also the future-stamp multiplier |
 | `PLY_MS_CASUAL` | `180` | service | nothing at stake, so move it along |
-| `MAX_CHAIN` | `12` | service | request bound |
+| `MAX_CHAIN` | `20` | service | request bound; **published to the client as `max_chain`** |
 | `MAX_PLIES` | `60` | service | row bound |
 | `PREMOVE_RD` | `60.0` | service | fixed-opponent RD, same as `PUZZLE_RD` |
+
+`MAX_CHAIN` is published the same way and for the same reason. A hardcoded copy
+on the page drifted below the server's value and silently capped players at 12
+premoves while `release()` accepted 20 — no error, just a board that stopped
+responding. Never mirror a server constant the client has to respect.
 
 `PLY_MS` is load-bearing on both sides: the server multiplies by it to compute the
 future-stamp, the client animates at it. It is defined **once, server-side**, and

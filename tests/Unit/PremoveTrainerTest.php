@@ -624,6 +624,44 @@ class PremoveTrainerTest extends TestCase
         $this->assertSame(0, $reloaded->games_premove);
     }
 
+    /**
+     * The client must never hold its own copy of the chain cap. It did, it
+     * drifted below the server's value, and players were silently blocked at 12
+     * premoves while release() would happily accept 20 — with no error, just a
+     * board that stopped responding. Pin that the cap is published, and that the
+     * published number is the one release() actually enforces.
+     */
+    public function test_present_publishes_the_chain_cap_that_release_enforces(): void
+    {
+        $game = $this->makeGame();
+        $engine = new FakePremoveEngine();
+        $engine->legalMovesResult = ['moves' => ['e2e4']];
+
+        $payload = $this->trainer($engine)->present($game);
+        $this->assertArrayHasKey('max_chain', $payload, 'the client has no other way to learn the cap');
+        $cap = $payload['max_chain'];
+        $this->assertIsInt($cap);
+
+        // A chain of exactly the published length must be accepted...
+        $ok = $this->makeGame();
+        $accepting = new FakePremoveEngine();
+        $accepting->moveQueue = array_fill(0, $cap * 2, $this->legal(self::AFTER_E4, 'e4'));
+        $accepting->analyzeQueue = array_fill(0, $cap, ['bestmove' => 'e7e5']);
+        $result = $this->trainer($accepting)->release($ok, array_fill(0, $cap, 'e2e4'));
+        $played = count(array_filter($result['playout'], static fn (array $p): bool => $p['by'] === 'player'));
+        $this->assertSame($cap, $played, 'every move of a max_chain-length chain must actually be played');
+        $this->assertNull($result['collapsedAt'], 'the cap itself must not read as a collapse');
+
+        // ...and one move past it must be refused.
+        $over = $this->makeGame();
+        try {
+            $this->trainer(new FakePremoveEngine())->release($over, array_fill(0, $cap + 1, 'e2e4'));
+            $this->fail('a chain longer than max_chain must be refused');
+        } catch (\InvalidArgumentException $e) {
+            $this->assertStringContainsString((string) $cap, $e->getMessage());
+        }
+    }
+
     // --- pool metadata never appears in any response payload -------------
     //
     // The old pool was mined from Lichess puzzles, so the thing to hide was the

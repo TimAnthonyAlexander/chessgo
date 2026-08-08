@@ -373,6 +373,11 @@ class PremoveTrainerService
             'clock_ms' => $game->clock_ms,
             'resume_at' => $resumeAt,
             'ply_ms' => $timed ? self::PLY_MS_RATED : self::PLY_MS_CASUAL,
+            // Sent, never mirrored client-side. A hardcoded copy on the page
+            // silently drifted below this and capped players at 12 while the
+            // server allowed 20 — the same duplicated-constant trap ply_ms is
+            // sent to avoid.
+            'max_chain' => self::MAX_CHAIN,
             'moves' => $data['moves'],
         ];
 

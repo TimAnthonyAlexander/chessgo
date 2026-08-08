@@ -755,6 +755,8 @@ export interface PremoveGame {
     /** Playout cadence, ms/ply — the client MUST animate at this, never a
      *  hardcoded constant (see the contract's §9). */
     ply_ms: number
+    /** Server-owned cap on how many premoves one release may carry. */
+    max_chain: number
     moves: PremoveMoveEntry[]
     /** Omitted entirely when unrated (anonymous, or a resolved casual game). */
     rating?: PremoveRating

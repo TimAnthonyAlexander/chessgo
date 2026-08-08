@@ -26,10 +26,12 @@ const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
 const NO_MOVES: string[] = []
 const noop = () => {}
 
-// A request-bounding safety rail (contract §9), mirrored client-side just to
-// stop queuing past the point the server would reject the chain — not a
-// gameplay rule.
-const MAX_CHAIN = 12
+// The chain cap comes from the server on every response (`max_chain`) and is
+// deliberately NOT mirrored here. A hardcoded copy drifted below the server's
+// value and capped players at 12 while the server allowed 20 — the same trap
+// `ply_ms` is sent to avoid. This fallback only covers the first render before
+// a game exists, where nothing is queueable anyway.
+const MAX_CHAIN_FALLBACK = 20
 
 interface Mark {
     from: string
@@ -292,10 +294,12 @@ export default function PremoveTrainer() {
         return () => window.removeEventListener('keydown', onKey)
     })
 
-    // A board move intent while queuing: append to the chain, capped at
-    // MAX_CHAIN (silently — the button/counter already show the cap).
+    const maxChain = game?.max_chain ?? MAX_CHAIN_FALLBACK
+
+    // A board move intent while queuing: append to the chain, capped at the
+    // server's max_chain (silently — the button/counter already show the cap).
     function handleBoardMove(uci: string) {
-        if (interaction.premoves.length >= MAX_CHAIN) return
+        if (interaction.premoves.length >= maxChain) return
         interaction.onMove(uci)
     }
 
@@ -355,7 +359,7 @@ export default function PremoveTrainer() {
                     resultData={resultData}
                     mateInN={mateInN}
                     queuedCount={interaction.premoves.length}
-                    maxChain={MAX_CHAIN}
+                    maxChain={maxChain}
                     lastBreak={lastBreak}
                     error={error}
                     sound={sound}
