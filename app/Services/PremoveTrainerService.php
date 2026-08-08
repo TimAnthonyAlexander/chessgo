@@ -666,9 +666,16 @@ class PremoveTrainerService
      */
     private function pickPosition(int $target, ?string $userId): ?PremovePosition
     {
-        foreach (self::RATING_WINDOWS as $window) {
-            $lo = max(0, $target - $window);
-            $hi = $target + $window;
+        // Anonymous players draw from the WHOLE pool, uniformly. Rating-matching
+        // exists to make a rating meaningful, and an anonymous player has no
+        // rating to protect — pinning them to a 1500 band just meant they only
+        // ever saw the ~1800 positions rated 1200-1800.
+        $windows = $userId === null ? [null] : self::RATING_WINDOWS;
+
+        foreach ($windows as $window) {
+            [$lo, $hi] = $window === null
+                ? [null, null]
+                : [max(0, $target - $window), $target + $window];
 
             $id = $this->randomUnseenPositionId($userId, $lo, $hi);
             if ($id === null) {
@@ -699,10 +706,16 @@ class PremoveTrainerService
      * OFFSET into an indexed rating range is O(offset) on a pool of a few
      * thousand, which is nothing, and it samples uniformly.
      */
-    private function randomUnseenPositionId(?string $userId, int $lo, int $hi): ?string
+    private function randomUnseenPositionId(?string $userId, ?int $lo, ?int $hi): ?string
     {
-        $where = ['p.rating BETWEEN ? AND ?'];
-        $params = [$lo, $hi];
+        // Null bounds mean the entire pool (anonymous play).
+        $where = [];
+        $params = [];
+        if ($lo !== null && $hi !== null) {
+            $where[] = 'p.rating BETWEEN ? AND ?';
+            $params[] = $lo;
+            $params[] = $hi;
+        }
 
         // Anonymous players have no premove_game history to exclude against, so
         // they used to be able to see the same position repeatedly. Keep a short
@@ -723,7 +736,7 @@ class PremoveTrainerService
                         )';
             $params[] = $userId;
         }
-        $clause = implode(' AND ', $where);
+        $clause = $where === [] ? '1' : implode(' AND ', $where);
 
         $countRows = App::db()->raw("SELECT COUNT(*) AS c FROM premove_position p WHERE {$clause}", $params);
         $count = (int) ($countRows[0]['c'] ?? 0);
