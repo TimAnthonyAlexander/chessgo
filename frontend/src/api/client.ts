@@ -783,8 +783,9 @@ export function createPremoveGame(format: PremoveFormat): Promise<PremoveGame> {
     })
 }
 
-/** Release a queued premove chain (1..12 entries, each a 4-char `from+to`
- *  UCI square pair — promotion is always resolved to a queen server-side). */
+/** Release a queued premove chain. Each entry is a 4-char `from+to` UCI square
+ *  pair; promotion is always resolved to a queen server-side. The length limit is
+ *  whatever the server published as `max_chain` — never hardcode it here. */
 export function releasePremoveChain(id: string, chain: string[]): Promise<PremoveReleaseResult> {
     return request<PremoveReleaseResult>(`/premove-games/${id}/release`, {
         method: 'POST',
