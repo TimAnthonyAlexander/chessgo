@@ -1485,6 +1485,51 @@
             "table": "tutor_report",
             "operation": "add_column",
             "warning": null
+        },
+        {
+            "id": "mig_e21d4e8a6504",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rating_secretqueen` INT NOT NULL DEFAULT 1500",
+            "destructive": false,
+            "generated_at": "2026-08-07T19:26:17+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_c94312ce016f",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rd_secretqueen` DOUBLE NOT NULL DEFAULT 350",
+            "destructive": false,
+            "generated_at": "2026-08-07T19:26:17+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_c620ace7ec61",
+            "sql": "ALTER TABLE `user` ADD COLUMN `vol_secretqueen` DOUBLE NOT NULL DEFAULT 0.06",
+            "destructive": false,
+            "generated_at": "2026-08-07T19:26:17+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_a69356d21363",
+            "sql": "ALTER TABLE `user` ADD COLUMN `rated_at_secretqueen` TEXT",
+            "destructive": false,
+            "generated_at": "2026-08-07T19:26:17+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
+        },
+        {
+            "id": "mig_f9eb0a27f915",
+            "sql": "ALTER TABLE `user` ADD COLUMN `games_secretqueen` INT NOT NULL DEFAULT 0",
+            "destructive": false,
+            "generated_at": "2026-08-07T19:26:17+00:00",
+            "table": "user",
+            "operation": "add_column",
+            "warning": null
         }
     ]
 }

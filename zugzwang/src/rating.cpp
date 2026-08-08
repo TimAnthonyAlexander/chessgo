@@ -112,6 +112,13 @@ double weak_frac(int rating) {
 
 } // namespace
 
+// Public wrapper over the ranking pass above — see rating.h for why a caller
+// would want the whole ranked set instead of the ladder's own choice.
+std::vector<RootMove> rank_root_moves(Search::Context& ctx, Position& pos, int rankDepth,
+                                      int moveTimeCapMs, int64_t& nodesOut) {
+    return root_scores(ctx, pos, rankDepth, moveTimeCapMs, nodesOut);
+}
+
 LevelConfig config_for_rating(int rating) {
     if (rating > RatingMax) rating = RatingMax;
     if (rating < RatingMin) rating = RatingMin;

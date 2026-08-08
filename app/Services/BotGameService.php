@@ -39,6 +39,26 @@ class BotGameService
      */
     private const BOT_MOVETIME_DIVISOR = 20;
 
+    /** Secret Queen always starts from the standard position, exactly like
+     *  Duck/Crazyhouse/Antichess — no custom start FEN, no pockets, no duck
+     *  square, just the ordinary opening array with no secrets designated yet. */
+    private const SECRETQUEEN_START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+    /**
+     * Files a..h, weighted so a random (bot, or unspecified-human) Secret
+     * Queen designation leans away from the rook pawns — a central secret
+     * queen plays very differently from an edge one, and a flat 1/8 draw made
+     * bot games feel samey (docs/tasks/open/secret-queen.md "Bot designation").
+     * Not a probability table, just relative weights: the middle four files
+     * are 3x as likely as the two rook files, and the knight files sit
+     * between.
+     *
+     * @var array<string, int>
+     */
+    private const SECRETQUEEN_FILE_WEIGHTS = [
+        'a' => 1, 'b' => 2, 'c' => 3, 'd' => 3, 'e' => 3, 'f' => 3, 'g' => 2, 'h' => 1,
+    ];
+
     public function __construct(private readonly EngineSelector $engine)
     {
     }
@@ -50,19 +70,25 @@ class BotGameService
      *
      * @param string|null $startFen Optional custom starting position (e.g. carried
      *   over from the analysis board). Null = standard start. Ignored for Duck
-     *   Chess, Crazyhouse, and Antichess, which always start from the standard
-     *   position (Duck with no duck placed, Crazyhouse with empty pockets).
+     *   Chess, Crazyhouse, Antichess, and Secret Queen, which always start from
+     *   the standard position (Duck with no duck placed, Crazyhouse with empty
+     *   pockets, Secret Queen with no designations yet).
      * @param string $variant 'standard' | 'chess960' | 'duck' | 'crazyhouse' |
-     *   'antichess' | 'fading' | 'glassjaw' | 'doublemove'. Chess960 uses the
-     *   standard engine flow (the engine parses 960 FENs); Duck Chess,
-     *   Crazyhouse, and Antichess each use their own dedicated /duck/*,
-     *   /crazyhouse/*, /antichess/* endpoints. "fading", "glassjaw", and
-     *   "doublemove" are standard-rules handicap modes — they use the plain
-     *   engine /move + /bestmove flow like Chess960, just with a per-move
-     *   effective rating (fading/glassjaw) or an altered turn order
-     *   (doublemove); see effectiveBotRating() and humanMove().
+     *   'antichess' | 'secretqueen' | 'fading' | 'glassjaw' | 'doublemove'.
+     *   Chess960 uses the standard engine flow (the engine parses 960 FENs);
+     *   Duck Chess, Crazyhouse, Antichess, and Secret Queen each use their own
+     *   dedicated /duck/*, /crazyhouse/*, /antichess/*, /secretqueen/*
+     *   endpoints. "fading", "glassjaw", and "doublemove" are standard-rules
+     *   handicap modes — they use the plain engine /move + /bestmove flow like
+     *   Chess960, just with a per-move effective rating (fading/glassjaw) or an
+     *   altered turn order (doublemove); see effectiveBotRating() and
+     *   humanMove().
      * @param string|null $timeControl One of BotGame::TIME_CONTROLS, or null/anything
      *   else for untimed (the default) — see BotGame::parseTimeControl().
+     * @param string|null $secretSquare Secret Queen only — the human's chosen
+     *   pawn square (e.g. "e2"). Must be a pawn square on the human's own home
+     *   rank; null or anything else picks one at random from that rank instead
+     *   of rejecting the request (see pickSecretQueenSquare()).
      * @throws \InvalidArgumentException if the custom FEN is invalid or already finished.
      */
     public function create(
@@ -71,10 +97,11 @@ class BotGameService
         ?string $startFen = null,
         string $variant = 'standard',
         ?string $timeControl = null,
+        ?string $secretSquare = null,
     ): BotGame {
         $game = new BotGame();
         $game->variant = in_array($variant, [
-            'standard', 'chess960', 'duck', 'crazyhouse', 'antichess',
+            'standard', 'chess960', 'duck', 'crazyhouse', 'antichess', 'secretqueen',
             'fading', 'glassjaw', 'doublemove',
         ], true) ? $variant : 'standard';
         // rating<=0 is the "Unlosable" sentinel — kept verbatim (0), NOT clamped up to
@@ -115,6 +142,28 @@ class BotGameService
             // is already correct. Open with a bot move if the human is Black.
             if ($game->status === 'ongoing' && $game->side_to_move !== $game->human_color) {
                 $this->playAntichessBot($game);
+            }
+        } elseif ($game->variant === 'secretqueen') {
+            // Secret Queen always starts from the standard position. Both
+            // designations happen right here, before either side has moved —
+            // there's no human-facing timer on the /bot path (that's a live-play
+            // concern for the hub), just one request that sets both secrets at
+            // once. Order between the two designate calls doesn't matter: neither
+            // one changes the side to move, and each call only ever touches its
+            // own color's secret field.
+            $botColor = $game->human_color === 'w' ? 'b' : 'w';
+            $humanSquare = $this->pickSecretQueenSquare($game->human_color, $secretSquare);
+            $botSquare = $this->pickSecretQueenSquare($botColor, null);
+
+            $afterHuman = $this->engine->secretqueenDesignate(self::SECRETQUEEN_START_FEN, $game->human_color, $humanSquare);
+            $fenAfterHuman = is_string($afterHuman['newFen'] ?? null) ? $afterHuman['newFen'] : self::SECRETQUEEN_START_FEN;
+            $afterBoth = $this->engine->secretqueenDesignate($fenAfterHuman, $botColor, $botSquare);
+
+            $game->fen = is_string($afterBoth['newFen'] ?? null) ? $afterBoth['newFen'] : $fenAfterHuman;
+            $game->side_to_move = is_string($afterBoth['sideToMove'] ?? null) ? $afterBoth['sideToMove'] : $game->side_to_move;
+
+            if ($game->status === 'ongoing' && $game->side_to_move !== $game->human_color) {
+                $this->playSecretQueenBot($game);
             }
         } else {
             // Standard, Chess960, and the three handicap modes (fading, glassjaw,
@@ -252,6 +301,32 @@ class BotGameService
             return ['ok' => true];
         }
 
+        if ($game->variant === 'secretqueen') {
+            // Secret Queen move ("e2e4", "e7e8q", or a queen move that reveals the
+            // hidden square). The FEN is self-describing (its own trailing
+            // "[e2|h7]" field), so this follows antichess's shape most closely —
+            // plain FEN in, plain FEN out, no pockets, no duck square. Like
+            // antichess's /move (and unlike duck's), an illegal move here is an
+            // HTTP 400 (ZugzwangClient::secretqueenMove() throws) rather than
+            // legal:false in a 200 body.
+            try {
+                $result = $this->engine->secretqueenMove($game->fen, $move);
+            } catch (\RuntimeException) {
+                return ['ok' => false, 'error' => 'illegal move'];
+            }
+
+            $this->applySecretQueen($game, $move, $result, 'human');
+            $this->addHumanIncrement($game);
+
+            if ($game->status === 'ongoing') {
+                $this->playSecretQueenBot($game);
+            }
+
+            $game->save();
+
+            return ['ok' => true];
+        }
+
         $result = $this->engine->move($game->fen, $move, $game->getHistory());
         if (empty($result['legal'])) {
             return ['ok' => false, 'error' => 'illegal move'];
@@ -322,6 +397,15 @@ class BotGameService
         // Duck Chess undo is out of scope (the duck endpoints carry no history).
         if ($game->variant === 'duck') {
             return ['ok' => false, 'error' => 'undo is not available in Duck Chess'];
+        }
+        // Secret Queen undo is refused outright, same reasoning as Duck but for a
+        // different mechanism: once a move has revealed a hidden queen (or the
+        // human has simply SEEN the opponent's move), taking it back can't
+        // un-reveal what the human already knows. Rather than track "has either
+        // secret been seen yet" for a narrow window where undo would still be
+        // harmless, this is refused for the whole game — simplest correct rule.
+        if ($game->variant === 'secretqueen') {
+            return ['ok' => false, 'error' => 'undo is not available in Secret Queen'];
         }
         // Double Move's turn order (1-2 human plies per bot reply, with a passed
         // "flip" ply that isn't recorded in moves/history) doesn't map cleanly onto
@@ -682,6 +766,114 @@ class BotGameService
     }
 
     /**
+     * Compute and apply one Secret Queen bot move. The RAW human rating is
+     * passed (same human-scale semantics as playAntichessBot()/
+     * playCrazyhouseBot()/playDuckBot()). Unlike those three, the engine runs
+     * its real NNUE search here rather than a hand eval (secretqueen_bot.h) —
+     * it sees its OWN hidden queen but not the human's, so it plays into an
+     * ambush exactly like a human would; there is no belief model to worry
+     * about disabling. The bestmove is already applied engine-side, so its
+     * response carries the resulting newFen/sideToMove/status/result/reveal.
+     */
+    private function playSecretQueenBot(BotGame $game): void
+    {
+        if ($game->status !== 'ongoing') {
+            return;
+        }
+        $botColor = $game->side_to_move;
+        $movetimeMs = $this->botMovetimeMs($game, $botColor);
+        $startedAt = microtime(true);
+        $best = $this->engine->secretqueenBestMove($game->fen, $game->rating, $movetimeMs);
+        if ($this->isTimed($game) && $this->flagBotIfOutOfTime($game, $botColor, $startedAt)) {
+            return;
+        }
+        $uci = $best['bestmove'] ?? null;
+        if (!is_string($uci) || $uci === '') {
+            return;
+        }
+        $this->applySecretQueen($game, $uci, $best, 'bot', $best);
+        $this->settleBotClockAfterMove($game, $botColor);
+    }
+
+    /**
+     * Picks the pawn square a side's secret queen is designated on.
+     * `$requested` (human-only) is honored when it names a pawn square on
+     * `$color`'s own home rank; anything else — null, malformed, wrong rank,
+     * wrong color of home rank — falls back to a random pick rather than
+     * rejecting the request (validation happens by falling back, not by
+     * throwing; see create()'s doc block).
+     */
+    private function pickSecretQueenSquare(string $color, ?string $requested): string
+    {
+        $rank = $color === 'w' ? '2' : '7';
+        if ($requested !== null && preg_match('/^[a-h]' . $rank . '$/', $requested) === 1) {
+            return $requested;
+        }
+
+        return $this->weightedSecretQueenFile() . $rank;
+    }
+
+    /** Weighted-random file a..h for a Secret Queen designation — see
+     *  SECRETQUEEN_FILE_WEIGHTS for why it isn't a flat 1/8. */
+    private function weightedSecretQueenFile(): string
+    {
+        $total = array_sum(self::SECRETQUEEN_FILE_WEIGHTS);
+        $roll = random_int(1, $total);
+        foreach (self::SECRETQUEEN_FILE_WEIGHTS as $file => $weight) {
+            if ($roll <= $weight) {
+                return $file;
+            }
+            $roll -= $weight;
+        }
+
+        return 'e'; // unreachable — keeps the return type honest
+    }
+
+    /**
+     * Mutate the game with one applied Secret Queen move's result. Mirrors the
+     * standard apply() (no pockets, no duck square, so it stays close to that
+     * shape) but additionally records `reveal` on the move entry — what that
+     * move unmasked (moved/captured/promoted/square), all false/null on a move
+     * that stayed pawn-shaped — so the UI can narrate a reveal on replay, not
+     * just live.
+     *
+     * @param array<string, mixed> $result Engine /secretqueen/move or /bestmove response.
+     * @param array<string, mixed> $best   Engine /secretqueen/bestmove response (bot only, for eval).
+     */
+    private function applySecretQueen(BotGame $game, string $uci, array $result, string $by, array $best = []): void
+    {
+        // Record the position we are leaving. The secretqueen endpoints don't
+        // themselves consume history (no repetition param on /move or
+        // /bestmove, same as antichess/crazyhouse), but the game's own history
+        // list is kept anyway for consistency with apply()/applyDuck().
+        $history = $game->getHistory();
+        $history[] = $game->fen;
+        $game->setHistory($history);
+
+        $moves = $game->getMoves();
+        $entry = [
+            'ply' => count($moves) + 1,
+            'uci' => $uci,
+            'san' => is_string($result['san'] ?? null) ? $result['san'] : $uci,
+            'by' => $by,
+            'fen' => is_string($result['newFen'] ?? null) ? $result['newFen'] : $game->fen,
+            'reveal' => $result['reveal'] ?? null,
+        ];
+        if ($by === 'bot' && isset($best['eval'])) {
+            $entry['eval'] = $best['eval'];
+        }
+        $moves[] = $entry;
+        $game->setMoves($moves);
+
+        $game->fen = is_string($result['newFen'] ?? null) ? $result['newFen'] : $game->fen;
+        $game->side_to_move = is_string($result['sideToMove'] ?? null) ? $result['sideToMove'] : $game->side_to_move;
+        $game->status = is_string($result['status'] ?? null) ? $result['status'] : 'ongoing';
+        if (!empty($result['result'])) {
+            $game->result = $result['result'];
+        }
+    }
+
+    /**
      * Mutate the game with one applied move's result.
      *
      * @param array<string, mixed> $result Engine /move response.
@@ -782,6 +974,14 @@ class BotGameService
      * Build the API representation: the game plus the legal moves available to
      * the side to move and a your_turn flag.
      *
+     * For Secret Queen this is where redaction happens. `$game->fen` is the
+     * CANONICAL fen — it names BOTH sides' hidden squares (see BotGame::$fen /
+     * docs/tasks/open/secret-queen.md "THE ONE THING TO GET RIGHT") — so the
+     * default `$data['fen']` from jsonSerialize() is overwritten with the
+     * human's own redacted view before this ever leaves the server, and
+     * `secret_square` is published so the client can draw the human's own
+     * queen badge (rule 6) without having to parse the fen itself.
+     *
      * @return array<string, mixed>
      */
     public function present(BotGame $game): array
@@ -793,12 +993,79 @@ class BotGameService
                 'duck' => $this->engine->duckLegalMoves($game->fen, $game->duck ?? ''),
                 'crazyhouse' => $this->engine->crazyhouseLegalMoves($game->fen),
                 'antichess' => $this->engine->antichessLegalMoves($game->fen),
+                // Legal moves are computed in the SIDE-TO-MOVE's own information
+                // set (their hidden queen moves like a queen), so this always
+                // takes the CANONICAL fen — never a redacted one — same as every
+                // other secretqueen engine call in this service.
+                'secretqueen' => $this->engine->secretqueenLegalMoves($game->fen),
                 default => $this->engine->legalMoves($game->fen),
             };
             $data['legal_moves'] = $legal['moves'] ?? [];
         }
         $data['your_turn'] = $game->status === 'ongoing' && $game->side_to_move === $game->human_color;
 
+        if ($game->variant === 'secretqueen') {
+            $data['secret_square'] = $this->secretQueenSquare($game->fen, $game->human_color);
+
+            // Redaction applies only while the game is LIVE. Once it is over the
+            // secret stops being one and the canonical FEN goes out intact — a
+            // game that ended without a reveal would otherwise stay permanently
+            // unexplained, and you would never learn what you had been playing
+            // against.
+            if ($game->status === 'ongoing') {
+                $data['fen'] = $this->secretQueenRedact($game->fen, $game->human_color);
+                // Every move entry carries the position AFTER that move, and the
+                // client replays those FENs for history review — so each one
+                // discloses exactly as much as the live FEN above. Redacting only
+                // the live one handed the bot's secret over on ply 1.
+                if (is_array($data['moves'] ?? null)) {
+                    foreach ($data['moves'] as $i => $entry) {
+                        if (is_array($entry) && is_string($entry['fen'] ?? null)) {
+                            $data['moves'][$i]['fen'] =
+                                $this->secretQueenRedact($entry['fen'], $game->human_color);
+                        }
+                    }
+                }
+            }
+        }
+
         return $data;
+    }
+
+    /**
+     * Secret Queen redaction — THE ONE THING THIS VARIANT LIVES OR DIES ON: keep
+     * `$keepColor`'s own hidden-queen square in the FEN's trailing "[w|b]"
+     * field and blank the other side's. Subtractive by design (drop the
+     * field's content, never substitute a piece), so it can't leak by someone
+     * forgetting to swap a square — once a field is blanked there is nothing
+     * left in the string to reconstruct the secret from. This and
+     * secretQueenSquare() below are deliberately the ONLY two places that ever
+     * touch this field, so a leak has exactly one place to be wrong.
+     */
+    private function secretQueenRedact(string $fen, string $keepColor): string
+    {
+        if (!preg_match('/^(.*) \[([^|\]]*)\|([^|\]]*)\]$/', $fen, $m)) {
+            return $fen; // no trailing field — not a canonical secretqueen fen, leave it alone
+        }
+        [, $rest, $w, $b] = $m;
+
+        return $rest . ' [' . ($keepColor === 'w' ? $w : '-') . '|' . ($keepColor === 'b' ? $b : '-') . ']';
+    }
+
+    /**
+     * Reads `$color`'s own still-hidden square out of the CANONICAL fen's
+     * trailing "[w|b]" field, or null once it's "-" (revealed, captured, or
+     * promoted away — see the engine's sq_secret_field()). See
+     * secretQueenRedact() for why this stays paired with it as the only two
+     * readers of the field.
+     */
+    private function secretQueenSquare(string $fen, string $color): ?string
+    {
+        if (!preg_match('/\[([^|\]]*)\|([^|\]]*)\]$/', $fen, $m)) {
+            return null;
+        }
+        $value = $color === 'w' ? $m[1] : $m[2];
+
+        return $value === '' || $value === '-' ? null : $value;
     }
 }

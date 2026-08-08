@@ -7,6 +7,7 @@ const ORDER: Variant[] = [
     'duck',
     'crazyhouse',
     'antichess',
+    'secretqueen',
     'fading',
     'glassjaw',
     'doublemove',
@@ -14,9 +15,9 @@ const ORDER: Variant[] = [
 
 /**
  * Controlled variant selector for the "New game" setup card — Standard / Chess960 /
- * Duck Chess / Crazyhouse / Antichess / Fading / Glass Jaw / Double Move, each with
- * its one-line blurb. Styled to match the Setup card's toggle aesthetic (gold-selected
- * pills on the dark surface).
+ * Duck Chess / Crazyhouse / Antichess / Secret Queen / Fading / Glass Jaw / Double
+ * Move, each with its one-line blurb. Styled to match the Setup card's toggle
+ * aesthetic (gold-selected pills on the dark surface).
  *
  * `only` restricts the rendered options to a subset (in ORDER's order) — e.g. the
  * live challenge dialog offers just Standard / Chess960. Omit for all variants.

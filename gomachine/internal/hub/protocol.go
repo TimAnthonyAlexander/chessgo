@@ -11,7 +11,8 @@ import (
 // resign, watch, unwatch, drawOffer, drawAccept, drawDecline, takebackOffer,
 // takebackAccept, takebackDecline, chat, createChallenge, joinChallenge,
 // cancelChallenge, rematchOffer, rematchAccept, rematchDecline, rematchCancel,
-// joinArena, leaveArena.
+// joinArena, leaveArena, designate (Secret Queen's pre-game designation
+// phase — hub.go's designateSecretQueen).
 //
 // `resume` is the client asking "does my account have a live game?" — the hub
 // answers with a full `resume` (seating this connection) or `idle`/`queued`. A
@@ -26,10 +27,14 @@ type inMsg struct {
 	Color  string `json:"color,omitempty"`  // "w"|"b"|"random" creator side (createChallenge)
 	Rated  bool   `json:"rated,omitempty"`  // creator's rated preference (createChallenge)
 	Code   string `json:"code,omitempty"`   // private invite code (joinChallenge)
-	// Variant is "standard" (default), "chess960", "duck", "crazyhouse" or
-	// "antichess" (createChallenge). Anything else is normalized to "standard"
-	// on the hub.
+	// Variant is "standard" (default), "chess960", "duck", "crazyhouse",
+	// "antichess" or "secretqueen" (createChallenge). Anything else is
+	// normalized to "standard" on the hub.
 	Variant string `json:"variant,omitempty"`
+	// Square is a home-rank pawn square (e.g. "e2") — the designate message's
+	// payload during Secret Queen's pre-game designation phase (hub.go's
+	// designateSecretQueen). Unused by every other message type.
+	Square string `json:"square,omitempty"`
 	// Fen is an optional custom start position (createChallenge). "" (the
 	// default) starts from the variant's normal start. Rejected at creation if
 	// it doesn't parse for the chosen variant, or if paired with "chess960"
@@ -65,9 +70,9 @@ func parseTimeControl(pool string) (timeControl, bool) {
 }
 
 // categoryFor picks the rating category for a game from BOTH its pool and its
-// variant. Duck Chess, Crazyhouse and Antichess are each their own isolated
-// pool (no time-control split — every game of that variant, whatever its
-// clock, is one rating), mirroring how BaseAPI routes them in
+// variant. Duck Chess, Crazyhouse, Antichess and Secret Queen are each their
+// own isolated pool (no time-control split — every game of that variant,
+// whatever its clock, is one rating), mirroring how BaseAPI routes them in
 // GameResultController. Standard/Chess960 fall back to the duration-derived
 // time-control category.
 func categoryFor(pool, variant string) string {
@@ -78,6 +83,8 @@ func categoryFor(pool, variant string) string {
 		return "crazyhouse"
 	case variantAntichess:
 		return "antichess"
+	case variantSecretQueen:
+		return "secretqueen"
 	}
 	return categoryForPool(pool)
 }
@@ -108,11 +115,12 @@ func categoryForPool(pool string) string {
 // its many comparisons; variant.New/State turn an id into a live ruleset, so the
 // game flow never branches on the id itself.
 const (
-	variantStandard   = variant.Standard
-	variantChess960   = variant.Chess960
-	variantDuck       = variant.Duck
-	variantCrazyhouse = variant.Crazyhouse
-	variantAntichess  = variant.Antichess
+	variantStandard    = variant.Standard
+	variantChess960    = variant.Chess960
+	variantDuck        = variant.Duck
+	variantCrazyhouse  = variant.Crazyhouse
+	variantAntichess   = variant.Antichess
+	variantSecretQueen = variant.SecretQueen
 )
 
 // normalizeVariant clamps any client-supplied variant to a known value. Anything
@@ -127,6 +135,8 @@ func normalizeVariant(v string) string {
 		return variantCrazyhouse
 	case variantAntichess:
 		return variantAntichess
+	case variantSecretQueen:
+		return variantSecretQueen
 	default:
 		return variantStandard
 	}

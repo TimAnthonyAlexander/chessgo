@@ -87,6 +87,12 @@ struct User: Decodable, Identifiable, Sendable {
     let ratedAtAntichess: String?
     @DefaultZero var gamesAntichess: Int
 
+    @DefaultZero var ratingSecretqueen: Int
+    @DefaultZeroDouble var rdSecretqueen: Double
+    @DefaultZeroDouble var volSecretqueen: Double
+    let ratedAtSecretqueen: String?
+    @DefaultZero var gamesSecretqueen: Int
+
     @DefaultZero var currentStreak: Int
     @DefaultZero var longestStreak: Int
     let lastActiveDate: String?
@@ -103,6 +109,7 @@ struct User: Decodable, Identifiable, Sendable {
         case .duck: return ratingDuck
         case .crazyhouse: return ratingCrazyhouse
         case .antichess: return ratingAntichess
+        case .secretqueen: return ratingSecretqueen
         }
     }
 
@@ -116,6 +123,7 @@ struct User: Decodable, Identifiable, Sendable {
         case .duck: return gamesDuck
         case .crazyhouse: return gamesCrazyhouse
         case .antichess: return gamesAntichess
+        case .secretqueen: return gamesSecretqueen
         }
     }
 

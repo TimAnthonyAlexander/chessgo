@@ -32,6 +32,16 @@ export interface MoveEntry {
     fen: string // position after this move (for history navigation)
     eval?: { type: 'cp' | 'mate'; value: number }
     duck?: string // Duck Chess: the duck's square after this move
+    // Secret Queen: present on the move that unmasked a hidden queen (either
+    // side's) — a non-pawn move from its square, reaching the last rank, or
+    // being captured while still hidden. `square` is where the reveal happened
+    // (the capturing move's `to` for a capture, otherwise `moved`'s own square).
+    reveal?: {
+        moved: Color // whose secret queen was revealed
+        captured: boolean // it came off the board as it revealed (see rule 7)
+        promoted: boolean // it reached the last rank rather than moving as a queen
+        square: string
+    }
 }
 
 export interface BotGame {
@@ -54,6 +64,12 @@ export interface BotGame {
     legal_moves: string[]
     your_turn: boolean
     duck: string | null // Duck Chess: the duck's square, or null before the first placement
+    // Secret Queen: the human's OWN secret-queen square, or null once it's been
+    // revealed, captured, or promoted. The bot's secret is never sent — the
+    // server redacts it out of both this field and the trailing FEN suffix
+    // before the payload leaves BotGameService::present(). Absent (undefined)
+    // on every other variant.
+    secret_square?: string | null
     // Clock (server-authoritative; the client only ticks a local display between
     // requests and re-syncs from these fields after every move). All null/absent
     // for an untimed game — time_control is the field to gate the clock UI on.
@@ -96,12 +112,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 /** Create a bot game. `opts.fen` starts from a custom position (e.g. one carried
  * over from the analysis board); `opts.variant` selects a chess variant (default
  * standard); `opts.timeControl` is one of BotGame's TIME_CONTROLS (e.g. "5+0") —
- * omitted = untimed, the default. Omitting all = a standard untimed game from
- * the normal start. */
+ * omitted = untimed, the default. `opts.secretSquare` (Secret Queen only) is the
+ * human's chosen home-rank pawn ("e2"); omitted, the server picks one at random
+ * — never a fixed default, which would be readable by the opponent. Omitting
+ * all = a standard untimed game from the normal start. */
 export function createBotGame(
     rating: number,
     humanColor: Color,
-    opts?: { fen?: string; variant?: Variant; timeControl?: string },
+    opts?: { fen?: string; variant?: Variant; timeControl?: string; secretSquare?: string },
 ): Promise<BotGame> {
     return request<BotGame>('/bot-games', {
         method: 'POST',
@@ -111,6 +129,7 @@ export function createBotGame(
             ...(opts?.variant ? { variant: opts.variant } : {}),
             ...(opts?.fen ? { fen: opts.fen } : {}),
             ...(opts?.timeControl ? { time_control: opts.timeControl } : {}),
+            ...(opts?.secretSquare ? { secret_square: opts.secretSquare } : {}),
         }),
     })
 }
@@ -784,6 +803,9 @@ export interface User {
     // Antichess — its own isolated rating pool (no time-control split).
     rating_antichess: number
     games_antichess: number
+    // Secret Queen — its own isolated rating pool (no time-control split).
+    rating_secretqueen: number
+    games_secretqueen: number
     // Per-category Glicko-2 provisional flag (RD > 110): the rating is still
     // settling and is shown with a "?". Keyed by category, incl. 'puzzle' + 'duck'.
     provisional: Record<string, boolean>

@@ -7,6 +7,8 @@
 #include "rules.h"
 #include "rating.h"
 #include "search.h"
+#include "secretqueen.h"
+#include "secretqueen_bot.h"
 #include "movegen.h"
 #include "sf_uci.h"
 #include <algorithm>
@@ -1258,6 +1260,144 @@ json antichess_analyze_game(const json& body) {
     }
 
     return json{{"positions", positions}, {"count", positions.size()}};
+}
+
+// ==================== Secret Queen ====================
+// Self-contained variant (src/secretqueen.{h,cpp}) with a bot that reuses the
+// real search (src/secretqueen_bot.{h,cpp}). Stateless: the canonical FEN's
+// trailing "[e2|h7]" field carries the hidden queens, so every handler parses
+// `fen` fresh like Duck/Crazyhouse/Antichess.
+//
+// THE ONE THING TO GET RIGHT: these responses carry a canonical FEN that names
+// both secrets, and three redacted views. The caller forwards ONE view per
+// recipient and never the canonical one. See serve_handlers.h's doc block and
+// ../docs/tasks/open/secret-queen.md.
+//
+// As with antichess, this module's own free functions share names with these
+// handlers, so calls to them are written with an explicit leading `::`.
+
+namespace {
+
+SecretQueenState secretqueen_parse_or_throw(const std::string& fen) {
+    SecretQueenState s;
+    std::string err;
+    if (!::secretqueen_parse(fen, s, err)) throw ApiError{400, err};
+    return s;
+}
+
+// Stamps the position onto a response: the canonical FEN plus every redacted
+// view, so the caller never has to construct one (and so there is exactly one
+// implementation of redaction, here in the engine that owns the rules).
+json secretqueen_result_json(json base, const SecretQueenState& s) {
+    SecretQueenStatus st = ::secretqueen_status(s);
+    base["newFen"] = s.fen();           // canonical — names BOTH secrets, server only
+    base["fenWhite"] = s.fenFor(WHITE); // safe to send to White
+    base["fenBlack"] = s.fenFor(BLACK); // safe to send to Black
+    base["boardFen"] = s.boardFen();    // safe to send to spectators
+    base["sideToMove"] = s.side == WHITE ? "w" : "b";
+    base["status"] = ::secretqueen_status_name(st);
+    std::string res = ::secretqueen_status_result(st);
+    base["result"] = res.empty() ? json(nullptr) : json(res);
+    base["kingCaptured"] = ::secretqueen_king_captured(s);
+    return base;
+}
+
+json reveal_json(const SecretQueenReveal& r) {
+    return json{
+        {"moved", r.moved},
+        {"captured", r.captured},
+        {"promoted", r.promoted},
+        {"square", r.square == SQ_NONE ? json(nullptr) : json(SQ_NAMES[r.square])},
+    };
+}
+
+SecretQueenLimits secretqueen_limits_from_json(const json& limits) {
+    SecretQueenLimits lim = secretqueen_default_limits();
+    if (jhas(limits, "rating")) lim.rating = limits["rating"].get<int>();
+    lim.depth = limits.value("depth", 0);
+    lim.nodes = static_cast<uint64_t>(limits.value("nodes", static_cast<int64_t>(0)));
+    lim.movetimeMs = limits.value("movetime", 0);
+    return lim;
+}
+
+} // namespace
+
+// Designates a side's secret queen, returning the new canonical FEN. Kept in the
+// engine so the FEN's secret-field format has exactly one writer — a caller
+// composing "[e2|h7]" by hand is a second implementation waiting to disagree.
+//
+// Body: { fen, color: "w"|"b", square: "e2" }
+json secretqueen_designate(const json& body) {
+    std::string fen = body.value("fen", "");
+    std::string colorStr = body.value("color", "");
+    std::string squareStr = body.value("square", "");
+
+    SecretQueenState s = secretqueen_parse_or_throw(fen);
+    if (colorStr != "w" && colorStr != "b") throw ApiError{400, "color must be \"w\" or \"b\""};
+    Color c = (colorStr == "w") ? WHITE : BLACK;
+
+    Square sq = Rules::parse_square(squareStr);
+    if (sq == SQ_NONE) throw ApiError{400, "invalid square: " + squareStr};
+
+    std::string err;
+    if (!::secretqueen_designate(s, c, sq, err)) throw ApiError{400, err};
+    return secretqueen_result_json(json{{"designated", SQ_NAMES[sq]}}, s);
+}
+
+// Legal moves for the side to move, in ITS OWN information set (its hidden queen
+// moves like a queen; the opponent's is just a pawn). Safe to hand to that
+// player and to nobody else — the list names queen moves from their secret
+// square.
+json secretqueen_legal_moves(const json& body) {
+    std::string fen = body.value("fen", "");
+    SecretQueenState s = secretqueen_parse_or_throw(fen);
+    return json{{"moves", ::secretqueen_legal_moves(s)}};
+}
+
+// Validates and applies one move. An illegal move throws a 400 (mirrors
+// antichess_move rather than duck_move's legal:false 200). `reveal` reports what
+// the move unmasked, so the caller can narrate it.
+json secretqueen_move(const json& body) {
+    std::string fen = body.value("fen", "");
+    std::string moveStr = body.value("move", "");
+    SecretQueenState s = secretqueen_parse_or_throw(fen);
+
+    SecretQueenMove parsed, m;
+    if (!::secretqueen_parse_uci(moveStr, parsed) || !::secretqueen_find_legal(s, parsed, m)) {
+        throw ApiError{400, "illegal move: " + moveStr};
+    }
+    std::string sanStr = ::secretqueen_san(s, m); // computed BEFORE mutating s
+
+    bool capturedKing = false;
+    SecretQueenReveal reveal;
+    SecretQueenState ns = ::secretqueen_do_move(s, m, capturedKing, reveal);
+    return secretqueen_result_json(json{{"legal", true}, {"san", sanStr}, {"reveal", reveal_json(reveal)}}, ns);
+}
+
+// Searches for and APPLIES the bot's move, honoring rating weakening. Unlike the
+// other variants' bestmove handlers this one runs the real NNUE search (see
+// secretqueen_bot.h for why that is sound here), so it leases a pool Context —
+// which happens inside secretqueen_best_move.
+json secretqueen_bestmove(const json& body) {
+    std::string fen = body.value("fen", "");
+    SecretQueenState s = secretqueen_parse_or_throw(fen);
+    SecretQueenLimits lim = secretqueen_limits_from_json(body.value("limits", json::object()));
+
+    SecretQueenResult res = ::secretqueen_best_move(s, lim);
+    if (!res.hasMove) {
+        return secretqueen_result_json(
+            json{{"bestmove", nullptr}, {"san", nullptr}, {"eval", nullptr}, {"reason", "no legal moves"}}, s);
+    }
+
+    std::string sanStr = ::secretqueen_san(s, res.move); // computed BEFORE mutating s
+    bool capturedKing = false;
+    SecretQueenReveal reveal;
+    SecretQueenState ns = ::secretqueen_do_move(s, res.move, capturedKing, reveal);
+
+    json evalObj = (res.mate != 0) ? json{{"type", "mate"}, {"value", res.mate}}
+                                   : json{{"type", "cp"}, {"value", res.score}};
+    return secretqueen_result_json(
+        json{{"bestmove", res.move.uci()}, {"san", sanStr}, {"eval", evalObj}, {"reveal", reveal_json(reveal)}}, ns);
 }
 
 } // namespace Handlers

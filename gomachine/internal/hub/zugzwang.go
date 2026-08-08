@@ -335,6 +335,71 @@ func (z *zugzwangClient) AntichessBestMove(ctx context.Context, fen string, rati
 	return *out.BestMove, nil
 }
 
+// secretQueenBestMoveResponse is zugzwang's /secretqueen/bestmove response
+// shape (zugzwang/src/serve_handlers.cpp): bestmove is null (with reason set)
+// when there's no legal move. Only bestmove is read here — applying it goes
+// through variant.HiddenState.Apply (internal/variant/secretqueen.go), which
+// has its OWN separate HTTP client to zugzwang (that package can't import
+// this one — see secretqueen.go's package doc for why). This one, living
+// here, is used only for the bot's move CHOICE (bot.go's selfSearchMove),
+// mirroring AntichessBestMove/CrazyhouseBestMove/DuckBestMove exactly.
+type secretQueenBestMoveResponse struct {
+	BestMove *string `json:"bestmove"`
+	Reason   string  `json:"reason"`
+	Error    string  `json:"error"`
+}
+
+// SecretQueenBestMove asks zugzwang's Secret Queen bot (its own NNUE search
+// running in the bot's own information set — zugzwang/src/secretqueen_bot.h)
+// for a move at a target rating. fen is the CANONICAL Secret Queen FEN
+// (carries whichever secret squares are still hidden — self-describing, no
+// separate extras needed, like Crazyhouse/Antichess).
+//
+// A nil error with an empty move string means "zugzwang answered, there's
+// genuinely no legal move" (the game already ended by king capture or the
+// no-legal-move draw) — not a transport failure, mirroring the other three
+// BestMove methods' doc — so the caller must not retry. There is no
+// emergency in-process fallback for this variant at all (see
+// internal/variant/secretqueen.go's package doc): it never had a Go rules
+// implementation to fall back to.
+func (z *zugzwangClient) SecretQueenBestMove(ctx context.Context, fen string, rating int) (string, error) {
+	body, err := json.Marshal(map[string]any{
+		"fen":    fen,
+		"limits": map[string]any{"rating": rating},
+	})
+	if err != nil {
+		return "", fmt.Errorf("zugzwang: marshal secretqueen request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, z.baseURL+"/secretqueen/bestmove", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("zugzwang: build secretqueen request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := z.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("zugzwang: secretqueen request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var out secretQueenBestMoveResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("zugzwang: decode secretqueen response: %w", err)
+	}
+	if resp.StatusCode >= 300 {
+		msg := out.Error
+		if msg == "" {
+			msg = fmt.Sprintf("status %d", resp.StatusCode)
+		}
+		return "", fmt.Errorf("zugzwang: secretqueen: %s", msg)
+	}
+	if out.BestMove == nil || *out.BestMove == "" {
+		return "", nil // genuinely no legal move
+	}
+	return *out.BestMove, nil
+}
+
 // Healthy reports whether zugzwang answers GET /healthz within a short
 // timeout. Best-effort, safe to call from any goroutine (a fresh request,
 // no shared state).

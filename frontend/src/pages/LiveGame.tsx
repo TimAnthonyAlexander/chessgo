@@ -4,6 +4,7 @@ import {
     Check,
     ChevronLeft,
     ChevronRight,
+    Crown,
     Flag,
     FlipVertical2,
     Handshake,
@@ -48,6 +49,12 @@ import { useMoveNavKeys } from '../lib/useMoveNavKeys'
 import { applyUciVisually, type BoardMap, type Square, parseFen } from '../lib/chess'
 import { playForSan, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { type Variant, variantHasCheck } from '../lib/variants'
+import {
+    DesignationPanel,
+    DesignationRibbon,
+    randomSecretQueenSquare,
+    secretQueenChoices,
+} from '../components/SecretQueenDesignation'
 import { authStore, useAuth } from '../lib/auth'
 import { usePrefs, useSetting } from '../lib/settings'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -176,6 +183,20 @@ export default function LiveGame() {
     // Antichess plays on a normal board — no pockets, no duck placement, and (like
     // Duck) no check concept: `variantHasCheck` keeps the king glow off for both.
     const isAntichess = g?.variant === 'antichess'
+    // Secret Queen: the pre-game step where each side picks which of its own
+    // pawns is the queen. `needsDesignation` is OUR obligation only — the hub
+    // never says whether the opponent has chosen, because the choice is
+    // simultaneous and the timing would leak. See docs/tasks/open/secret-queen.md.
+    const isSecretQueen = g?.variant === 'secretqueen'
+    const designating = !!g && isSecretQueen && g.needsDesignation && !g.ended
+
+    // The pawn we've clicked during designation, held locally until the hub
+    // echoes it back as `secretSquare`. Cleared whenever we stop designating so
+    // a rematch starts blank.
+    const [pick, setPick] = useState<Square | null>(null)
+    useEffect(() => {
+        if (!designating) setPick(null)
+    }, [designating])
 
     // Board orientation: your own color at the bottom, flipped on demand.
     const orientation: Color = g ? (flipped ? other(g.color) : g.color) : 'w'
@@ -340,6 +361,25 @@ export default function LiveGame() {
             if (other(g.sideToMove) !== g.color) playForSan(g.moves[g.moves.length - 1].san, false)
         }
     }, [g?.id, g?.moves.length])
+
+    // Secret Queen: announce a reveal. The hub sends `reveal` — the square a
+    // hidden queen was just unmasked on — with the move that did it; by then it
+    // IS a queen on everyone's board, so this is public and safe to narrate.
+    // Whose it was follows from who moved: the mover unmasked their own, unless
+    // they captured it, in which case it was the victim's. We can't tell those
+    // apart from the wire alone, so the copy stays neutral about it and names
+    // only the square, which is what the player can see anyway.
+    const [revealNote, setRevealNote] = useState<string | null>(null)
+    const revealSeen = useRef<string>('')
+    useEffect(() => {
+        const sq = g?.reveal ?? ''
+        if (!sq || sq === revealSeen.current) return
+        revealSeen.current = sq
+        setRevealNote(`A secret queen was revealed on ${sq}.`)
+        sounds.promote()
+        const t = window.setTimeout(() => setRevealNote(null), 4500)
+        return () => window.clearTimeout(t)
+    }, [g?.reveal])
 
     // Sound: warn once when our own clock enters "low time" (threshold scales with
     // the time control). Re-arms if we climb back above it via increment.
@@ -559,6 +599,23 @@ export default function LiveGame() {
                 </>
             }
             right={
+                designating ? (
+                    // The designation step replaces the game panel entirely: there
+                    // is no move list, clock action or offer to show until both
+                    // sides have chosen, and the choice is the only thing to do.
+                    <DesignationPanel
+                        color={g.color}
+                        picked={pick}
+                        opponentName={g.opponent.name || 'Your opponent'}
+                        deadline={g.designationDeadline || null}
+                        onSurprise={() => {
+                            const sq = randomSecretQueenSquare(g.color)
+                            setPick(sq)
+                            gameSocket.designate(sq)
+                        }}
+                        onConfirm={() => pick && gameSocket.designate(pick)}
+                    />
+                ) : (
                 <Box
                     sx={{
                         // Sized by its content (the 7-row move list plus the header and
@@ -902,9 +959,11 @@ export default function LiveGame() {
                             {/* Post-game only — carry the finished game/position into
                                 analysis, the editor, a bot game, or an engine match.
                                 Never mid-game (no engine assistance while playing).
-                                Duck Chess has no analysable standard position. The
+                                Duck Chess has no analysable standard position, and
+                                Secret Queen's reveal moves aren't legal standard chess,
+                                so neither replays through the standard analyzer. The
                                 game replays server-side by id, so Chess960 works too. */}
-                            {g.variant !== 'duck' && (
+                            {g.variant !== 'duck' && !isSecretQueen && (
                                 <BoardActions
                                     fen={g.fen}
                                     analyzeGame={
@@ -930,7 +989,7 @@ export default function LiveGame() {
                         >
                             <AdminBestMove
                                 fen={g.fen}
-                                myTurn={!g.ended && g.sideToMove === g.color}
+                                myTurn={!g.ended && g.sideToMove === g.color && !isSecretQueen}
                                 isDuck={isDuck}
                                 isAntichess={isAntichess}
                                 duck={g.duck ?? null}
@@ -964,6 +1023,7 @@ export default function LiveGame() {
                         onClose={() => setConfirmResignOpen(false)}
                     />
                 </Box>
+                )
             }
         >
             <Box sx={{ position: 'relative', width: '100%' }}>
@@ -971,10 +1031,12 @@ export default function LiveGame() {
                 fen={g.fen}
                 orientation={orientation}
                 sideToMove={g.sideToMove}
-                legalMoves={boardInteractive && !confirmMove.pending ? g.legalMoves : NO_MOVES}
+                legalMoves={
+                    boardInteractive && !confirmMove.pending && !designating ? g.legalMoves : NO_MOVES
+                }
                 lastMove={atLive ? (activeOptimisticLast ?? g.lastMove) : historyLast}
                 showCheck={variantHasCheck(g.variant)}
-                interactive={boardInteractive && !confirmMove.pending}
+                interactive={boardInteractive && !confirmMove.pending && !designating}
                 onMove={isDuck ? duck.onMove : handleBoardMove}
                 hint={atLive ? bestHint : null}
                 hintReveal={isAdmin}
@@ -993,7 +1055,55 @@ export default function LiveGame() {
                 onDrop={drops.drop}
                 onDropCancel={drops.cancel}
                 overrideBoard={overrideBoard}
+                secretQueenSquare={
+                    designating ? pick : isSecretQueen && g.secretSquare ? (g.secretSquare as Square) : null
+                }
+                pickTargets={designating ? secretQueenChoices(g.color) : null}
+                onPick={setPick}
             />
+            {designating && <DesignationRibbon picked={pick} />}
+            {!designating && revealNote && (
+                <Box
+                    sx={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        display: 'flex',
+                        justifyContent: 'center',
+                        pointerEvents: 'none',
+                        zIndex: 6,
+                        p: 1.25,
+                    }}
+                >
+                    <Box
+                        sx={{
+                            px: 1.75,
+                            py: 0.9,
+                            borderRadius: '999px',
+                            bgcolor: 'rgba(16,17,21,0.86)',
+                            border: '1px solid rgba(255,255,255,0.14)',
+                            boxShadow: '0 10px 30px -12px rgba(0,0,0,0.9)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 0.9,
+                        }}
+                    >
+                        <Crown size={15} style={{ color: '#e9c168', flexShrink: 0 }} />
+                        <Typography
+                            sx={{
+                                fontFamily: 'var(--font-display)',
+                                fontWeight: 600,
+                                fontSize: 13.5,
+                                color: '#f3eee2',
+                                whiteSpace: 'nowrap',
+                            }}
+                        >
+                            {revealNote}
+                        </Typography>
+                    </Box>
+                </Box>
+            )}
             {confirmMove.pending && (
                 <PendingMoveBar
                     pending={confirmMove.pending}

@@ -164,6 +164,30 @@ separate axis** — they live in `BotGameService`/`BotGame` (rating decays per m
 reachable from `/bot` only. `frontend/src/lib/variants.ts` and
 `ios/chessgo/Models/Variant.swift` carry all eight.
 
+**Secret Queen** (`secretqueen`) is the platform's first **hidden-information**
+variant, and it is the reason several things above are no longer universally
+true. Each side secretly designates one of its own home-rank pawns; that pawn
+also moves as a queen, and any non-pawn move reveals it permanently. No en
+passant, no check, no checkmate — you win by **capturing the king**, like Duck.
+The canonical FEN is an ordinary FEN plus a trailing `[e2|h7]` naming the
+still-hidden queens, and **the board itself never encodes the secret** (a hidden
+queen is a plain pawn on it), so redaction is subtractive.
+
+The load-bearing consequence: **every FEN and every move list that leaves the
+server is per-recipient.** The hub's one-payload-for-everyone `broadcast` is not
+safe here — `game.go`'s `snapshotFor` sends each player only their own
+`secretSquare` and sends `legalMoves` only to the mover, spectators get neither,
+and everyone gets both once the game ends. BaseAPI's `present()` redacts the live
+FEN **and every move-history FEN** (missing the latter leaked the bot's secret on
+ply 1). `internal/hub/secretqueen_test.go` and `tests/Unit/SecretQueenRedactionTest.php`
+pin this; the Go one asserts against the marshalled JSON so a leak through a
+newly-added field still fails it. Rules live only in
+`zugzwang/src/secretqueen.{h,cpp}` — `internal/variant/secretqueen.go` is the
+first `State` that calls the engine over HTTP rather than porting a ruleset
+twice, deliberately (see its header for the goroutine-blocking cost that buys).
+Full design, rules sources and the bugs found while building it:
+`docs/tasks/open/secret-queen.md`.
+
 **Time controls.** Live/hub games take base 0-180 min + inc 0-180 s in any
 combination (`parseTimeControl`, `hub/protocol.go`); presets run 1+0…30+20. Bot
 games (`/bot`, BaseAPI-direct, never touches the hub) are untimed by design —

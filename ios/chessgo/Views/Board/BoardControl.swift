@@ -63,6 +63,14 @@ protocol BoardControl: AnyObject {
     /// (e.g. "PPNq"), or `nil` outside Crazyhouse.
     var pocket: String? { get }
 
+    /// Secret Queen: algebraic square of the LOCAL PLAYER'S OWN hidden queen
+    /// pawn — `nil` before designation, after it reveals/is captured, or
+    /// outside this variant. There is no "whose square" parameter because
+    /// there's only ever one to show: the server never sends the opponent's
+    /// (see `BotGame.secretSquare`), so the board can badge it unconditionally
+    /// wherever this points.
+    var secretQueenSquare: String? { get }
+
     /// True while the driver is between "piece move chosen" and "duck square
     /// chosen" in a Duck Chess turn. See `submitDuckPlacement` below.
     var duckPlacementActive: Bool { get }
@@ -100,6 +108,7 @@ extension BoardControl {
     var showCheck: Bool { true }
     var duckSquare: String? { nil }
     var pocket: String? { nil }
+    var secretQueenSquare: String? { nil }
     var duckPlacementActive: Bool { false }
     var inputMethod: BoardInputMethod { .both }
     var autoQueen: Bool { true }
@@ -122,6 +131,7 @@ final class PreviewBoardControl: BoardControl {
     var canPremove: Bool
     var duckSquare: String?
     var pocket: String?
+    var secretQueenSquare: String?
     var duckPlacementActive: Bool
     var inputMethod: BoardInputMethod
     var autoQueen: Bool
@@ -137,6 +147,7 @@ final class PreviewBoardControl: BoardControl {
         canPremove: Bool = true,
         duckSquare: String? = nil,
         pocket: String? = nil,
+        secretQueenSquare: String? = nil,
         duckPlacementActive: Bool = false,
         inputMethod: BoardInputMethod = .both,
         autoQueen: Bool = true
@@ -150,6 +161,7 @@ final class PreviewBoardControl: BoardControl {
         self.canPremove = canPremove
         self.duckSquare = duckSquare
         self.pocket = pocket
+        self.secretQueenSquare = secretQueenSquare
         self.duckPlacementActive = duckPlacementActive
         self.inputMethod = inputMethod
         self.autoQueen = autoQueen

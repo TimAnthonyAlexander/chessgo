@@ -30,15 +30,16 @@ class Game extends BaseModel
     public string $pool = '';
 
     /** Rating category: a time control (bullet|blitz|rapid|classical) or one of
-     *  the isolated pools 'duck' | 'crazyhouse' | 'antichess'. */
+     *  the isolated pools 'duck' | 'crazyhouse' | 'antichess' | 'secretqueen'. */
     public string $category = '';
 
     /** True only when both sides are registered accounts (affects Elo). */
     public bool $rated = false;
 
-    /** Game variant: 'standard' | 'chess960' | 'duck' | 'crazyhouse' | 'antichess'.
-     *  Live play persists the variant the hub reports; standard + Chess960 share
-     *  the same board/rules record (only the start position differs). */
+    /** Game variant: 'standard' | 'chess960' | 'duck' | 'crazyhouse' | 'antichess'
+     *  | 'secretqueen'. Live play persists the variant the hub reports; standard +
+     *  Chess960 share the same board/rules record (only the start position
+     *  differs). */
     public string $variant = 'standard';
 
     /** Final result: '1-0' | '0-1' | '1/2-1/2'. */

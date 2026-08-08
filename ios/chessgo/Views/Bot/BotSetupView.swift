@@ -123,7 +123,14 @@ struct BotSetupView: View {
         Button {
             let driver = BotGameDriver(settings: settings)
             activeDriver = driver
-            Task { await driver.start() }
+            // Secret Queen doesn't start here — the player has to designate a
+            // pawn first, and does it by tapping the real board, so
+            // `BotGameView` shows that step itself (`driver.game == nil` +
+            // `variant == .secretqueen`) and calls `start(secretSquare:)` once
+            // confirmed. Every other variant starts immediately, same as before.
+            if settings.variant != .secretqueen {
+                Task { await driver.start() }
+            }
         } label: {
             Text("Play")
                 .frame(maxWidth: .infinity)

@@ -26,6 +26,16 @@ import Foundation
 ///   in-band as `...RNBQKBNR[PPnbrq] w ...` (`zugzwang/src/crazyhouse.cpp
 ///   zh_pocket_string` / `BotGame.php`) rather than as a separate wire
 ///   field like live games get, so this driver extracts the bracket itself.
+/// - **Secret Queen**: two things predate a normal turn. First, the game
+///   itself doesn't exist until `start(secretSquare:)` is called with the
+///   player's chosen home-rank pawn — `BotGameView` shows a designation step
+///   on the real board (`pickDesignation(_:)` drives its badge) instead of
+///   calling plain `start()`. Second, once the game is live, `secretQueenSquare`
+///   badges the player's own hidden pawn, and `performSubmit` detects a
+///   revealing move and patches the optimistic board to a real queen — and
+///   clears the badge — the same frame the move is committed (see
+///   `revealsOwnSecretQueen`'s doc comment for why that can't wait for the
+///   server). `docs/tasks/open/secret-queen.md` is the full design.
 @Observable
 @MainActor
 final class BotGameDriver: BoardControl {
@@ -41,6 +51,26 @@ final class BotGameDriver: BoardControl {
     private(set) var duckSquare: String?
     private(set) var pocket: String?
     private(set) var duckPlacementActive: Bool = false
+
+    /// Secret Queen only. Before the game exists: the square tapped so far in
+    /// designation (`pickDesignation(_:)`), not yet confirmed. Once the game
+    /// exists: the human's own still-hidden square, straight off
+    /// `BotGame.secretSquare` — the server already redacts the opponent's out
+    /// of the response, so there's nothing to filter here. `nil` the instant
+    /// `optimisticReveal` is set, so the badge disappears the same frame the
+    /// queen artwork appears rather than a request later.
+    var secretQueenSquare: String? {
+        guard variant == .secretqueen, optimisticReveal == nil else { return nil }
+        return game?.secretSquare ?? designationPick
+    }
+
+    private(set) var designationPick: String?
+    private(set) var optimisticReveal: String?
+    /// Plain-words reveal note ("Black's e-pawn was a secret queen."), or
+    /// `nil` between reveals. `BotGameView` shows + the driver auto-clears it
+    /// after a few seconds — see `scheduleRevealNoteClear`.
+    private(set) var revealNote: String?
+    private var revealNoteClearTask: Task<Void, Never>?
 
     var showCheck: Bool { Variant.hasCheck(variant.rawValue) }
 
@@ -137,13 +167,24 @@ final class BotGameDriver: BoardControl {
 
     var canUndo: Bool {
         guard let game, !resigned, !isLoading, !botThinking, game.status == "ongoing" else { return false }
-        guard variant != .duck, variant != .doublemove else { return false }
+        // Duck/Double Move: undo doesn't map onto a single reversible step.
+        // Secret Queen: refused server-side once either secret has revealed —
+        // un-revealing information the human already saw is incoherent
+        // (docs/tasks/open/secret-queen.md "BaseAPI") — so there's nothing
+        // for the button to usefully do here either.
+        guard variant != .duck, variant != .doublemove, variant != .secretqueen else { return false }
         return !moves.isEmpty
     }
 
     // MARK: - Lifecycle
 
-    func start() async {
+    /// `secretSquare` is Secret Queen only — the player's confirmed
+    /// designation ("e2"), or `nil` to let the server pick one at random
+    /// (never a fixed default, which would be readable by the opponent).
+    /// Ignored by every other variant. `BotGameView` calls this once the
+    /// designation step (`pickDesignation(_:)`) is confirmed; every other
+    /// variant calls the no-argument form straight from setup.
+    func start(secretSquare: String? = nil) async {
         guard game == nil else { return }
         isLoading = true
         errorMessage = nil
@@ -153,14 +194,30 @@ final class BotGameDriver: BoardControl {
                 rating: settings.resolvedRating,
                 humanColor: resolvedHumanColor,
                 variant: settings.variant,
-                fen: startFen
+                fen: startFen,
+                secretSquare: secretSquare
             )
             apply(created)
+            // The opener can theoretically already be a reveal if the human
+            // plays Black and the bot's first move unmasks its own queen —
+            // vanishingly rare with the concealment veto, but a real case the
+            // engine can produce, so it's checked the same as any other move.
+            if variant == .secretqueen { narrateReveal(in: created.moves) }
         } catch let error as APIError {
             errorMessage = error.errorDescription
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    // MARK: - Secret Queen designation
+
+    /// Called as the player taps candidate pawns on the pre-game board
+    /// (`BotGameView`'s designation step) — purely local, drives
+    /// `secretQueenSquare`'s badge before anything is committed.
+    /// `start(secretSquare:)` is what actually creates the game.
+    func pickDesignation(_ square: Square?) {
+        designationPick = square?.algebraic
     }
 
     // MARK: - BoardControl
@@ -202,10 +259,17 @@ final class BotGameDriver: BoardControl {
     /// only (per its own doc comment), which is exactly the fidelity an
     /// optimistic preview needs. Skipped for the Duck composite send since
     /// both halves of that turn were already applied incrementally by the
-    /// two calls above.
+    /// two calls above. If `performSubmit` just set `optimisticReveal`
+    /// (Secret Queen), the destination is patched to a real queen here too —
+    /// `applying(_:)` on its own would move whatever piece already sat on the
+    /// from-square, which for a still-hidden queen is a plain pawn by design
+    /// (see `ChessBoard.withPiece`'s doc comment).
     private func applyOptimistic(_ uci: String) {
         var board = ChessBoard(fen: fen).withPocket(pocket)
         board = board.applying(uci)
+        if let optimisticReveal, let square = Square(algebraic: optimisticReveal) {
+            board = board.withPiece(Piece(color: humanPieceColor, kind: .queen), at: square)
+        }
         fen = board.fen()
         pocket = board.pocket
         lastMove = uci
@@ -223,11 +287,21 @@ final class BotGameDriver: BoardControl {
         let preBoard = ChessBoard(fen: fen).withPocket(pocket)
         playOwnMoveSound(uci: uci, preBoard: preBoard)
 
+        // Secret Queen: flip our own queen to real queen artwork — and clear
+        // its badge — the instant we commit a revealing move, not when the
+        // server answers. See `revealsOwnSecretQueen`'s doc comment for why.
+        let revealsNow = applyOptimistically && revealsOwnSecretQueen(uci: uci, board: preBoard)
+        if revealsNow, let move = Move(uci: uci) {
+            optimisticReveal = move.to.algebraic
+            playRevealSound()
+        }
+
         if applyOptimistically { applyOptimistic(uci) }
         myTurn = false
         botThinking = true
         errorMessage = nil
 
+        let priorMoveCount = moves.count
         Task {
             defer { botThinking = false }
             do {
@@ -237,6 +311,14 @@ final class BotGameDriver: BoardControl {
                 }
                 apply(updated)
                 playReplySound(for: updated)
+                if variant == .secretqueen {
+                    // Skip the sound if this move already played it
+                    // optimistically above — the web plays it twice here
+                    // (once optimistic, once on the real response landing);
+                    // that's an artifact of its own timing, not something
+                    // worth reproducing on a client that can just track it.
+                    narrateReveal(in: Array(updated.moves.dropFirst(min(priorMoveCount, updated.moves.count))), skipSound: revealsNow)
+                }
             } catch let error as APIError {
                 errorMessage = error.errorDescription
                 apply(knownGood) // illegal move (422) or a transport hiccup — resync to last-known-good
@@ -244,6 +326,60 @@ final class BotGameDriver: BoardControl {
                 errorMessage = error.localizedDescription
                 apply(knownGood)
             }
+        }
+    }
+
+    /// The human's own color as `PieceColor`, resolved once at init (see
+    /// `resolvedHumanColor`) — used wherever driver-local logic needs it as
+    /// an enum rather than the wire's "w"/"b" string.
+    private var humanPieceColor: PieceColor { resolvedHumanColor == "b" ? .black : .white }
+
+    /// Whether `uci`, played from `board` (the position BEFORE this move),
+    /// reveals this driver's OWN secret queen: it starts on the still-hidden
+    /// square (`game.secretSquare`, which the server has already blanked
+    /// once it reveals — so this can't refire) and isn't pawn-shaped.
+    ///
+    /// This exists only so the board can show the queen a frame early. A bot
+    /// game applies the human move AND the bot's reply in ONE request
+    /// (`BotService.move`), so waiting for that response to show the reveal
+    /// would display the human's own queen a whole move late — after the
+    /// opponent had already replied to it as if it were still hidden. The
+    /// server decides the real rule (`secretqueen.cpp`) and its FEN is what
+    /// `apply(_:)` renders; this only controls when the PLAYER sees it.
+    private func revealsOwnSecretQueen(uci: String, board: ChessBoard) -> Bool {
+        guard variant == .secretqueen, let mySquare = game?.secretSquare, uci.hasPrefix(mySquare) else { return false }
+        return !SecretQueen.isPawnShaped(uci: uci, color: humanPieceColor, board: board)
+    }
+
+    private func playRevealSound() {
+        let volume = soundVolume
+        guard volume > 0 else { return }
+        SoundEngine.shared.play(.promote, volume: volume)
+    }
+
+    /// Surfaces the FIRST reveal among `freshMoves` (there's realistically
+    /// only ever one) — the human's own move and/or the bot's reply,
+    /// whichever unmasked a hidden queen. `skipSound` avoids re-cueing the
+    /// promote chime for a self-reveal `performSubmit` already sounded
+    /// optimistically. Auto-clears after a few seconds so it doesn't linger.
+    private func narrateReveal(in freshMoves: [GameMove], skipSound: Bool = false) {
+        guard let entry = freshMoves.first(where: { $0.reveal?.didReveal == true }), let reveal = entry.reveal else { return }
+        // Whose queen this was. The mover is known from `by`; a CAPTURE
+        // reveal unmasks the OPPONENT's queen, not the mover's — the one case
+        // where the two come apart (see `SecretQueen.revealMessage`).
+        let mover: PieceColor = entry.by == "human" ? humanPieceColor : humanPieceColor.opposite
+        let owner: PieceColor = reveal.captured ? mover.opposite : mover
+        revealNote = SecretQueen.revealMessage(entry: entry, reveal: reveal, owner: owner)
+        if !skipSound { playRevealSound() }
+        scheduleRevealNoteClear()
+    }
+
+    private func scheduleRevealNoteClear() {
+        revealNoteClearTask?.cancel()
+        revealNoteClearTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 4_500_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.revealNote = nil
         }
     }
 
@@ -333,6 +469,10 @@ final class BotGameDriver: BoardControl {
         isLoading = false
         errorMessage = nil
         moves = []
+        designationPick = nil
+        optimisticReveal = nil
+        revealNoteClearTask?.cancel()
+        revealNote = nil
     }
 
     // MARK: - Applying a server response
@@ -349,6 +489,10 @@ final class BotGameDriver: BoardControl {
         pocket = Variant(rawValue: game.variant) == .crazyhouse ? Self.extractPocket(fromFen: game.fen) : nil
         duckPlacementActive = false
         pendingDuckPieceMove = nil
+        // The server's FEN always wins — once its response lands there's no
+        // more optimism to hold onto, and no pre-game designation left either.
+        designationPick = nil
+        optimisticReveal = nil
     }
 
     /// Bot-game Crazyhouse FENs embed the pocket in the placement field —
@@ -387,7 +531,8 @@ extension BotGameDriver {
         ],
         yourTurn: Bool = true,
         status: String = "ongoing",
-        result: String? = nil
+        result: String? = nil,
+        secretSquare: String? = nil
     ) -> BotGameDriver {
         let driver = BotGameDriver(settings: BotSettings(variant: variant, rating: 1500, humanColor: humanColor))
         // BotGame's stored properties are property-wrapper-backed
@@ -399,7 +544,7 @@ extension BotGameDriver {
         let wire = PreviewBotGameWire(
             id: "preview-game", rating: 1500, humanColor: humanColor, variant: variant.rawValue,
             duck: nil, fen: fen, sideToMove: "w", status: status, result: result,
-            moves: moves, legalMoves: legalMoves, yourTurn: yourTurn
+            moves: moves, legalMoves: legalMoves, yourTurn: yourTurn, secretSquare: secretSquare
         )
         guard let data = try? JSONEncoder().encode(wire), let game = try? JSONDecoder().decode(BotGame.self, from: data) else {
             return driver
@@ -425,5 +570,6 @@ private struct PreviewBotGameWire: Encodable {
     let moves: [GameMove]
     let legalMoves: [String]
     let yourTurn: Bool
+    let secretSquare: String?
 }
 #endif

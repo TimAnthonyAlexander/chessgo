@@ -12,7 +12,7 @@ import {
     useState,
 } from 'react'
 import { createPortal } from 'react-dom'
-import { Sparkles } from 'lucide-react'
+import { Crown, Sparkles } from 'lucide-react'
 import './Board.css'
 import type { Color } from '../api/client'
 import {
@@ -189,6 +189,21 @@ interface BoardProps {
     /** Crazyhouse: called when a click should clear the armed pocket selection (the
      * user clicked away from a drop target, e.g. to pick a board piece instead). */
     onDropCancel?: () => void
+    /** Secret Queen: the LOCAL PLAYER'S OWN secret-queen square (null before
+     * designation lands, or once it's revealed/captured/promoted). Renders a
+     * small crown badge on that pawn so the player never has to remember which
+     * one it is — see docs/tasks/open/secret-queen.md rule 6. Only ever the
+     * caller's own square: the server has already redacted the opponent's, so
+     * there's no way to accidentally badge their pawn from here. */
+    secretQueenSquare?: Square | null
+    /** Secret Queen designation: non-null puts the board in PICK mode — normal
+     * piece input is disabled and these squares (the player's own home-rank
+     * pawns) are the only things clickable. The same shape as duckTargets, and
+     * for the same reason: the player is choosing a SQUARE, not making a move,
+     * so it must not go anywhere near the move machinery. */
+    pickTargets?: Set<Square> | null
+    /** Secret Queen designation: called with the square the player picked. */
+    onPick?: (sq: Square) => void
 }
 
 // Antichess uniquely allows promoting to a KING ('k') — the server only ever
@@ -455,6 +470,7 @@ const BoardSquare = memo(function BoardSquare({
     piece,
     pieceSet,
     pieceHidden,
+    secretBadge,
     showDuck,
     duckHidden,
     showRank,
@@ -476,6 +492,8 @@ const BoardSquare = memo(function BoardSquare({
     piece: string | undefined
     pieceSet: string
     pieceHidden: boolean
+    /** Secret Queen: this square carries the local player's own hidden queen. */
+    secretBadge: boolean
     showDuck: boolean
     duckHidden: boolean
     showRank: boolean
@@ -504,6 +522,15 @@ const BoardSquare = memo(function BoardSquare({
             <span className={`${hasPiece ? 'ring' : 'dot'}${markerOn ? ' on' : ''}`} />
             {hintMarkVisible && <span className="hint-mark" />}
             {piece && <PieceGlyph piece={piece} set={pieceSet} hidden={pieceHidden} />}
+            {/* Secret Queen: a quiet crown badge on the player's own hidden pawn,
+                from designation until it reveals (see BoardProps.secretQueenSquare).
+                Hidden alongside the piece itself (dragging / blindfold / mid-flight)
+                so it never floats free of the artwork it's marking. */}
+            {piece && secretBadge && !pieceHidden && (
+                <span className="secret-badge" aria-hidden>
+                    <Crown size="100%" strokeWidth={2.5} />
+                </span>
+            )}
             {showDuck && (
                 <span className={duckHidden ? 'duck is-hidden' : 'duck'} aria-hidden>
                     <DuckGlyph />
@@ -540,6 +567,9 @@ function Board({
     dropTargets,
     onDrop,
     onDropCancel,
+    secretQueenSquare = null,
+    pickTargets = null,
+    onPick,
 }: BoardProps) {
     const boardRef = useRef<HTMLDivElement>(null)
     const pieceSet = usePieceSet() // re-render (with new piece SVGs) when the set changes
@@ -737,7 +767,11 @@ function Board({
     // Duck-placement mode disables ALL normal piece input; the only left-click action
     // is dropping the duck on an empty target square (handled separately below).
     const duckPlacing = duckTargets != null
-    const inputEnabled = !duckPlacing && (interactive || premoveActive)
+    // Secret Queen designation. Like duck placement this takes the board over
+    // entirely: the player is choosing which of their pawns is the queen, and a
+    // stray drag that started a move here would be nonsense.
+    const picking = pickTargets != null
+    const inputEnabled = !duckPlacing && !picking && (interactive || premoveActive)
     const movingColor: Color = interactive ? sideToMove : (premoveColor ?? sideToMove)
 
     // rookCastle pref: rook-square → king-castling-UCI, derived entirely from
@@ -1052,6 +1086,10 @@ function Board({
             if (duckTargets?.has(sq)) onPlaceDuck?.(sq)
             return
         }
+        if (picking) {
+            if (pickTargets?.has(sq)) onPick?.(sq)
+            return
+        }
         if (dropTargets != null) {
             if (dropTargets.has(sq)) {
                 onDrop?.(sq)
@@ -1115,6 +1153,16 @@ function Board({
             const sq = squareFromPoint(e.clientX, e.clientY)
             if (sq) setCursor(sq) // keep the roving-tabindex cursor in sync with pointer input
             if (sq && duckTargets?.has(sq)) onPlaceDuck?.(sq)
+            return
+        }
+
+        // Secret Queen designation: the only left action is choosing one of your
+        // own pawns. Clicking anywhere else does nothing — there is no partial
+        // state to fall through to.
+        if (picking) {
+            const sq = squareFromPoint(e.clientX, e.clientY)
+            if (sq) setCursor(sq)
+            if (sq && pickTargets?.has(sq)) onPick?.(sq)
             return
         }
 
@@ -1344,6 +1392,7 @@ function Board({
                             const isTarget = targets.has(sq)
                             const isDuckTarget = duckTargets?.has(sq) ?? false
                             const isDropTarget = dropTargets?.has(sq) ?? false
+                            const isPickable = pickTargets?.has(sq) ?? false
                             const isLast =
                                 prefs.highlightLastMove &&
                                 lastMove &&
@@ -1373,6 +1422,11 @@ function Board({
                                 dragTarget ? 'dragTarget' : '',
                                 checkKings.has(sq) ? 'check' : '',
                                 keyboardBoard && isCursor && gridFocused ? 'focus-ring' : '',
+                                // Secret Queen designation: `pickable` lifts the eight
+                                // candidate pawns; `dimmed` pushes everything else back
+                                // so the choice reads instantly.
+                                picking ? (isPickable ? 'pickable' : 'dimmed') : '',
+                                picking && secretQueenSquare === sq ? 'picked' : '',
                             ]
                                 .filter(Boolean)
                                 .join(' ')
@@ -1390,6 +1444,8 @@ function Board({
                                 prefs.showLegalMoves && isTarget && 'legal move',
                                 isDuckTarget && 'duck placement target',
                                 isDropTarget && 'drop target',
+                                isPickable && 'choosable as your secret queen',
+                                picking && secretQueenSquare === sq && 'chosen as your secret queen',
                                 isLast && 'last move',
                                 checkKings.has(sq) && 'king in check',
                             ].filter(Boolean) as string[]
@@ -1442,6 +1498,7 @@ function Board({
                                     piece={piece}
                                     pieceSet={pieceSet}
                                     pieceHidden={isDragOrigin || prefs.blindfold || animatingTo.has(sq)}
+                                    secretBadge={secretQueenSquare === sq}
                                     showDuck={duck === sq}
                                     duckHidden={duckFlightTo === sq}
                                     showRank={showRank}

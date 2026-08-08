@@ -150,7 +150,7 @@ export default function FriendChallengeDialog({
                         <VariantPicker
                             value={variant}
                             onChange={(v) => setVariant(v as ChallengeVariant)}
-                            only={['standard', 'chess960', 'duck', 'crazyhouse', 'antichess']}
+                            only={['standard', 'chess960', 'duck', 'crazyhouse', 'antichess', 'secretqueen']}
                             layout="menu"
                         />
 

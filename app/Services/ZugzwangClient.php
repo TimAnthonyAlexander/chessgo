@@ -22,6 +22,17 @@ use BaseApi\App;
  * call those methods on this client directly. {@see EngineSelector} guards
  * its own duck methods straight to the gomachine client for exactly this
  * reason.
+ *
+ * Secret Queen (`secretqueen{Designate,LegalMoves,Move,BestMove}()` below) is
+ * ANOTHER completely separate, self-contained module (`zugzwang/src/
+ * secretqueen.{h,cpp}` + `secretqueen_bot.{h,cpp}`) behind `/secretqueen/
+ * {designate,legal-moves,move,bestmove}` — own mailbox rules (no check, king
+ * capture wins), but unlike Duck/Crazyhouse/Antichess it DOES reuse the real
+ * NNUE search for its bot (see secretqueen_bot.h). Gomachine has no Secret
+ * Queen implementation at all, so these four methods live directly on THIS
+ * class (like {@see opening()}/{@see book()}) rather than on the shared
+ * {@see GomachineClient} base — {@see EngineSelector} calls this client
+ * straight through, with no primary/gomachine routing to speak of.
  */
 class ZugzwangClient extends GomachineClient
 {
@@ -145,5 +156,98 @@ class ZugzwangClient extends GomachineClient
             'pv' => array_values(array_map('strval', $pv)),
             'depth' => $depth,
         ];
+    }
+
+    /**
+     * Secret Queen: designates `$square` as `$color`'s secret pawn-queen on
+     * `$fen`. Kept in the engine so the FEN's trailing "[e2|h7]" secret field
+     * has exactly one writer — a caller composing it by hand is a second
+     * implementation waiting to disagree (`serve_handlers.cpp`).
+     *
+     * THE ONE THING TO GET RIGHT (repeated here because it's the whole point):
+     * `newFen` in the response is the CANONICAL fen — it names BOTH sides'
+     * secrets and must never reach a browser. `fenWhite`/`fenBlack`/`boardFen`
+     * are the three redacted views, safe to hand to White, Black, and a
+     * spectator respectively.
+     *
+     * @return array<string, mixed> {designated, newFen, fenWhite, fenBlack, boardFen, sideToMove, status, result, kingCaptured}
+     */
+    public function secretqueenDesignate(string $fen, string $color, string $square): array
+    {
+        return $this->post('/secretqueen/designate', [
+            'fen' => $fen,
+            'color' => $color,
+            'square' => $square,
+        ]);
+    }
+
+    /**
+     * Secret Queen: legal moves for the side to move, in ITS OWN information
+     * set — its own hidden queen generates queen moves as well as pawn moves,
+     * the opponent's hidden queen is just a pawn. Safe to hand to that player
+     * ONLY, never to the opponent or a spectator: the list itself names queen
+     * moves from the secret square.
+     *
+     * @return array<string, mixed> {moves}
+     */
+    public function secretqueenLegalMoves(string $fen): array
+    {
+        return $this->post('/secretqueen/legal-moves', ['fen' => $fen]);
+    }
+
+    /**
+     * Secret Queen: validate and apply a move. Like {@see GomachineClient::antichessMove()}
+     * (and unlike Duck's `legal:false` 200), an illegal move here is an HTTP
+     * 400 — post() throws a RuntimeException; callers needing a soft failure
+     * (e.g. BotGameService::humanMove) must catch it. `reveal` reports what
+     * the move unmasked (`moved`/`captured`/`promoted`/`square`, all
+     * false/null on a move that stayed pawn-shaped) so the caller can narrate
+     * it.
+     *
+     * @return array<string, mixed> {legal, san, reveal, newFen, fenWhite, fenBlack, boardFen, sideToMove, status, result, kingCaptured}
+     */
+    public function secretqueenMove(string $fen, string $move): array
+    {
+        return $this->post('/secretqueen/move', [
+            'fen' => $fen,
+            'move' => $move,
+        ]);
+    }
+
+    /**
+     * Secret Queen: compute the AI's move at a target Elo rating (human-scale,
+     * same semantics as antichessBestMove()/crazyhouseBestMove()). Unlike
+     * those two self-contained variants, this one runs zugzwang's real NNUE
+     * search rather than a hand eval (`secretqueen_bot.h`) — it is blind to
+     * the OPPONENT's hidden queen (only its own), so the bot walks into an
+     * ambush the same way a human would, with no belief model and no
+     * peeking. The returned move is ALREADY APPLIED — newFen/fenWhite/
+     * fenBlack/boardFen/sideToMove reflect the position after it.
+     *
+     * @return array<string, mixed> {bestmove, san, eval, reveal, newFen, fenWhite, fenBlack, boardFen, sideToMove, status, result, kingCaptured}
+     */
+    public function secretqueenBestMove(
+        string $fen,
+        int $rating,
+        int $movetimeMs = 0,
+        int $depth = 0,
+        int $nodes = 0,
+    ): array {
+        $limits = [];
+        if ($rating > 0) {
+            $limits['rating'] = $rating; // >0 caps strength; omit for full power
+        }
+        if ($depth > 0) {
+            $limits['depth'] = $depth;
+        } elseif ($nodes > 0) {
+            $limits['nodes'] = $nodes;
+        } elseif ($movetimeMs > 0) {
+            $limits['movetime'] = $movetimeMs;
+        }
+
+        return $this->post('/secretqueen/bestmove', [
+            'fen' => $fen,
+            'limits' => $limits,
+        ]);
     }
 }

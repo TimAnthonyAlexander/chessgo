@@ -39,6 +39,26 @@ export interface LiveGameState {
     check: boolean
     duck: string | null // Duck Chess: the duck's square, or null (non-duck games / before first placement)
     pocket: string // Crazyhouse: the pocket string ("PPNq", white upper / black lower), "" otherwise
+    // --- Secret Queen (per-viewer; see docs/tasks/open/secret-queen.md) ---
+    // This is the one variant whose payload is NOT the same for everybody. The
+    // hub sends each side only its OWN secret, and the mover's legalMoves only
+    // to the mover, so everything below describes US, never the opponent.
+    /** Our own hidden queen's square, "" once it's revealed/captured/promoted
+     *  or if this isn't a Secret Queen game. Never the opponent's. */
+    secretSquare: string
+    /** True while WE still owe a designation. The hub reports only our own
+     *  obligation — whether the opponent has already chosen is deliberately not
+     *  sent, since designation is simultaneous and the timing would leak. */
+    needsDesignation: boolean
+    /** Epoch ms by which designation must be made; the server picks a random
+     *  pawn for anyone who misses it. 0 when not in that phase. */
+    designationDeadline: number
+    /** Both secrets, sent to everyone once the game is OVER — a game that ended
+     *  without a reveal would otherwise stay permanently unexplained. */
+    secretSquares: { w: string; b: string } | null
+    /** The square a queen was unmasked on by the move that just landed, "" if
+     *  none. Public: by the time it's sent, the queen is a queen. */
+    reveal: string
     status: string
     legalMoves: string[]
     clock: { w: number; b: number } // ms remaining at clockAt
@@ -164,6 +184,11 @@ function buildGame(m: Msg): LiveGameState {
         check: false,
         duck: parseDuck(m.duck),
         pocket: typeof m.pocket === 'string' ? m.pocket : '',
+        secretSquare: parseSecretSquare(m),
+        needsDesignation: !!m.needsDesignation,
+        designationDeadline: typeof m.designationDeadline === 'number' ? m.designationDeadline : 0,
+        secretSquares: parseSecretSquares(m),
+        reveal: typeof m.reveal === 'string' ? m.reveal : '',
         status: 'ongoing',
         legalMoves: m.legalMoves ?? [],
         clock: m.clock,
@@ -178,6 +203,25 @@ function buildGame(m: Msg): LiveGameState {
         takebackOffer: null,
         rematchOffer: null,
     }
+}
+
+// --- Secret Queen wire helpers -------------------------------------------
+//
+// Every field below is per-viewer: the hub only ever sends US our own secret
+// and, when it's our move, our own move list. There is deliberately nothing
+// here that could describe the opponent while the game is live.
+
+/** Our own secret square from a payload, "" when absent (non-secretqueen games,
+ *  or once ours has been revealed/captured/promoted). */
+function parseSecretSquare(m: Msg): string {
+    return typeof m.secretSquare === 'string' ? m.secretSquare : ''
+}
+
+/** Both secrets, sent only once the game is over. Null while it's live. */
+function parseSecretSquares(m: Msg): { w: string; b: string } | null {
+    const s = m.secretSquares
+    if (!s || typeof s !== 'object') return null
+    return { w: typeof s.w === 'string' ? s.w : '', b: typeof s.b === 'string' ? s.b : '' }
 }
 
 // Build a full game state from a resume message (includes move history).
@@ -201,6 +245,11 @@ function buildResume(m: Msg): LiveGameState {
         check: !!m.check,
         duck: parseDuck(m.duck),
         pocket: typeof m.pocket === 'string' ? m.pocket : '',
+        secretSquare: parseSecretSquare(m),
+        needsDesignation: !!m.needsDesignation,
+        designationDeadline: typeof m.designationDeadline === 'number' ? m.designationDeadline : 0,
+        secretSquares: parseSecretSquares(m),
+        reveal: typeof m.reveal === 'string' ? m.reveal : '',
         status: m.status,
         legalMoves: m.legalMoves ?? [],
         clock: m.clock,
@@ -442,6 +491,15 @@ class GameSocket {
 
     move(uci: string) {
         this.rawSend({ type: 'move', move: uci })
+    }
+
+    /** Secret Queen: commit our own pre-game designation (a home-rank pawn
+     *  square like "e2"). One-shot — the hub ignores a second one — and if we
+     *  never send it, the server picks a random pawn at the deadline rather
+     *  than stalling the game. The hub validates the square; the client only
+     *  offers the eight it believes are ours. */
+    designate(square: string) {
+        this.rawSend({ type: 'designate', square })
     }
 
     resign() {
@@ -840,6 +898,12 @@ class GameSocket {
                 check: !!msg.check,
                 duck: parseDuck(msg.duck),
                 pocket: typeof msg.pocket === 'string' ? msg.pocket : '',
+                secretSquare: parseSecretSquare(msg),
+                needsDesignation: !!msg.needsDesignation,
+                designationDeadline:
+                    typeof msg.designationDeadline === 'number' ? msg.designationDeadline : 0,
+                secretSquares: parseSecretSquares(msg),
+                reveal: typeof msg.reveal === 'string' ? msg.reveal : '',
                 status: msg.status,
                 legalMoves: msg.legalMoves ?? [],
                 clock: msg.clock,
@@ -867,6 +931,11 @@ class GameSocket {
                 clock: msg.clock ?? g.clock,
                 clockAt: Date.now(),
                 legalMoves: [],
+                // The result is decided, so the hub stops withholding: a game
+                // that ended without a reveal is explained here or never.
+                secretSquares: parseSecretSquares(msg) ?? g.secretSquares,
+                needsDesignation: false,
+                designationDeadline: 0,
             },
         })
     }

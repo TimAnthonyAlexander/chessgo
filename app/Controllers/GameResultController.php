@@ -64,15 +64,19 @@ class GameResultController extends Controller
             return JsonResponse::ok(['id' => $existing->id, 'duplicate' => true]);
         }
 
-        // Duck Chess, Crazyhouse, and Antichess are each their own isolated rating
-        // pool (no time-control split): every game of that variant maps to its own
-        // category regardless of its clock. Standard / Chess960 fall back to the
-        // duration-derived time-control category. This mirrors the hub's categoryFor().
+        // Duck Chess, Crazyhouse, Antichess, and Secret Queen are each their own
+        // isolated rating pool (no time-control split): every game of that variant
+        // maps to its own category regardless of its clock. Standard / Chess960
+        // fall back to the duration-derived time-control category. This mirrors
+        // the hub's categoryFor(). (Secret Queen live play isn't wired up on the
+        // hub side yet — see docs/tasks/open/secret-queen.md — but the category
+        // is ready for when it is, same as the User rating columns.)
         $variant = $this->normalizeVariant($b['variant'] ?? null);
         $category = match ($variant) {
             'duck' => 'duck',
             'crazyhouse' => 'crazyhouse',
             'antichess' => 'antichess',
+            'secretqueen' => 'secretqueen',
             default => $this->glicko->categoryForPool($pool),
         };
         $rated = (bool)($b['rated'] ?? false);
@@ -240,7 +244,7 @@ class GameResultController extends Controller
     {
         $v = is_string($variant) ? $variant : '';
 
-        return in_array($v, ['standard', 'chess960', 'duck', 'crazyhouse', 'antichess'], true) ? $v : 'standard';
+        return in_array($v, ['standard', 'chess960', 'duck', 'crazyhouse', 'antichess', 'secretqueen'], true) ? $v : 'standard';
     }
 
     private function authorized(): bool

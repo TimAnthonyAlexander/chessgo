@@ -15,6 +15,7 @@ import (
 
 	"github.com/timanthonyalexander/gomachine/internal/auth"
 	"github.com/timanthonyalexander/gomachine/internal/hub"
+	"github.com/timanthonyalexander/gomachine/internal/variant"
 )
 
 // cmdVerifyTicket verifies a WebSocket ticket against the shared secret (debug /
@@ -77,6 +78,12 @@ func cmdHub(args []string) {
 	// doc). Wire this up before EnableBotFill/EnableSpectatorFillers so both
 	// pools are built as the (now emergency-only) fallback from the start.
 	h.SetZugzwangClient(*zugzwangURL, *zugzwangTimeoutFlag, *emergencyInProc)
+	// Secret Queen's State implementation lives in internal/variant, not
+	// internal/hub (it can't import hub — hub already imports variant), so it
+	// carries its OWN small HTTP client to the same zugzwang instance instead
+	// of reusing the one above — see internal/variant/secretqueen.go's
+	// package doc. Same base URL, configured separately.
+	variant.SetSecretQueenBackend(*zugzwangURL)
 	healthCtx, healthCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	zugzwangUp := h.ZugzwangHealthy(healthCtx)
 	healthCancel()

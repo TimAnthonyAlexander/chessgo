@@ -12,7 +12,9 @@ SRC = src/main.cpp src/uci.cpp src/search.cpp src/eval.cpp src/position.cpp \
       src/nnue_accumulator.cpp \
       src/rules.cpp src/rating.cpp src/weakening.cpp src/ratingtest.cpp \
       src/serve.cpp src/serve_handlers.cpp \
-      src/sf_uci.cpp src/crazyhouse.cpp src/duck.cpp src/antichess.cpp src/book.cpp src/openings.cpp \
+      src/sf_uci.cpp src/crazyhouse.cpp src/duck.cpp src/antichess.cpp \
+      src/secretqueen.cpp src/secretqueen_bot.cpp \
+      src/book.cpp src/openings.cpp \
       src/zug_tb.cpp src/syzygy/tbprobe.cpp
 OBJ = $(SRC:.cpp=.o)
 DEP = $(OBJ:.o=.d)
@@ -71,9 +73,22 @@ nnue_web_format_test: test/nnue_web_format_test.cpp src/position.cpp src/bitboar
        src/nnue_net.cpp src/nnue_features.cpp src/nnue_eval.cpp src/nnue_accumulator.cpp
 	$(CXX) $(CXXFLAGS) -Isrc -o test/nnue_web_format_test $^
 
+# secretqueen_test: the Secret Queen rules/movegen gate. Cross-checks this
+# module's generator AND its apply against Duck's independent implementation of
+# the same no-check/king-capture ruleset (perft to depth 4), then asserts the
+# hidden-queen rules the cross-check cannot see — reveal, redaction, the ambush.
+# Deliberately net-free: test/secretqueen_test_stubs.cpp stubs the NNUE
+# accumulator and the clock so this stays a pure rules test.
+#   Usage: make secretqueen_test && ./test/secretqueen_test
+secretqueen_test: test/secretqueen_test.cpp test/secretqueen_test_stubs.cpp src/secretqueen.cpp \
+       src/duck.cpp src/bitboard.cpp src/zobrist.cpp src/rules.cpp src/position.cpp \
+       src/movegen.cpp src/weakening.cpp
+	$(CXX) $(CXXFLAGS) -o test/secretqueen_test $^
+
 clean:
-	rm -f $(TARGET) perft_test $(OBJ) $(DEP) tools/netweb_writer test/nnue_web_format_test tools/book_export
+	rm -f $(TARGET) perft_test $(OBJ) $(DEP) tools/netweb_writer test/nnue_web_format_test \
+	      test/secretqueen_test tools/book_export
 
 -include $(DEP)
 
-.PHONY: all clean perft netweb nnue_web_format_test book_export
+.PHONY: all clean perft netweb nnue_web_format_test secretqueen_test book_export

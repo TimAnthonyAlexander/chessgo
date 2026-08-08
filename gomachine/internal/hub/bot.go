@@ -155,11 +155,11 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variantID string
 		pool:  pool,
 		// A matchmaking bot fill-in is rated for a logged-in human (one-sided Elo
 		// vs the bot), mirroring startGameWith: standard feeds the time-control pools
-		// and Duck/Crazyhouse/Antichess each feed their own isolated pool, but
-		// Chess960 stays unrated. Anonymous players can't be rated. Explicit /bot
-		// games never reach the hub.
+		// and Duck/Crazyhouse/Antichess/Secret Queen each feed their own isolated
+		// pool, but Chess960 stays unrated. Anonymous players can't be rated.
+		// Explicit /bot games never reach the hub.
 		rated: !human.id.Anon && (variantID == variantStandard || variantID == variantDuck ||
-			variantID == variantCrazyhouse || variantID == variantAntichess),
+			variantID == variantCrazyhouse || variantID == variantAntichess || variantID == variantSecretQueen),
 		clockMs:   [2]int64{tc.Base, tc.Base},
 		turnStart: time.Now(),
 		online:    [2]bool{true, true},
@@ -187,6 +187,12 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variantID string
 	h.markLive(g)
 	h.activeGames.Add(1)
 
+	// Secret Queen: designate the bot's side immediately (see
+	// beginSecretQueenDesignation's doc) and arm the human's 15s deadline,
+	// BEFORE sendMatched so its payload already reflects needsDesignation.
+	if variantID == variantSecretQueen {
+		h.beginSecretQueenDesignation(g)
+	}
 	h.sendMatched(g, human, humanColor)
 	h.joinOtherSessions(g, human) // open it on this account's other devices too
 	h.scheduleBotMove(g)          // if the bot plays White, it moves first
@@ -198,6 +204,17 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variantID string
 // game uses its own dedicated engine pool so it can't starve human bot-fill.
 func (h *Hub) scheduleBotMove(g *game) {
 	if g.over {
+		return
+	}
+	// Secret Queen: a bot must never move before BOTH sides have designated —
+	// its own side may already be picked (beginSecretQueenDesignation
+	// designates a bot side immediately at creation), but the position isn't
+	// playable until the human side is too, and LegalMoves() is deliberately
+	// empty until then (secretqueen.go's newSecretQueenState/Designate). Every
+	// call site that might reach here mid-designation (startBotGame's own
+	// trailing call, the designation handlers once the SECOND side completes)
+	// relies on this guard rather than each remembering to check first.
+	if g.variant == variantSecretQueen && !g.secretQueenReady() {
 		return
 	}
 	if variant.SelfSearches(g.variant) {
@@ -348,6 +365,25 @@ func (h *Hub) selfSearchMove(variantID, fen string, extras map[string]string, ra
 		fmt.Fprintf(os.Stderr, "hub: zugzwang crazyhouse unreachable — emergency in-process move (%v)\n", lastErr)
 		// fall through to the in-process path below
 	}
+	if variantID == variant.SecretQueen && h.zugzwang != nil {
+		const retries = 1
+		var lastErr error
+		for attempt := 0; attempt <= retries; attempt++ {
+			ctx, cancel := context.WithTimeout(context.Background(), h.zugzwang.Timeout())
+			uci, err := h.zugzwang.SecretQueenBestMove(ctx, fen, rating)
+			cancel()
+			if err == nil {
+				return uci, uci != "" // "" + nil error = genuinely no legal move
+			}
+			lastErr = err
+		}
+		// No emergency in-process fallback for this variant — it never had a
+		// Go rules implementation (internal/variant/secretqueen.go's package
+		// doc). emergencyInProc is irrelevant here; the move is simply
+		// dropped, loudly.
+		fmt.Fprintf(os.Stderr, "hub: zugzwang secretqueen unreachable (%v) — no emergency fallback exists for this variant, dropping bot move\n", lastErr)
+		return "", false
+	}
 	if variantID == variant.Duck && h.zugzwang != nil {
 		duck := extras["duck"]
 		const retries = 1
@@ -471,7 +507,7 @@ func (h *Hub) applyBotMove(r botMoveResult) {
 		return
 	}
 	h.refreshLive(g) // keep the anti-cheat live-board FEN current
-	h.broadcast(g, mustJSON(out("state", g.snapshot())))
+	h.broadcastState(g)
 	if st := g.status(); st.State != "ongoing" {
 		h.finish(g, st.Result, st.State)
 		return

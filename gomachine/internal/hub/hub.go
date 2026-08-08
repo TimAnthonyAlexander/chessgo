@@ -479,6 +479,7 @@ func (h *Hub) Run() {
 			h.applyArenaSnapshots(snaps)
 		case <-ticker.C:
 			h.checkClocks()
+			h.checkSecretQueenDesignations()
 			h.matchWaiting()
 			h.checkBotFill()
 			h.checkFillers()
@@ -503,6 +504,8 @@ func (h *Hub) handle(cmd command) {
 		h.resumeRequest(c)
 	case "move":
 		h.move(c, cmd.msg.Move)
+	case "designate":
+		h.designateSecretQueen(c, cmd.msg.Square)
 	case "resign":
 		h.resign(c)
 	case "drawOffer":
@@ -637,12 +640,12 @@ func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, r
 	h.retireRematch(black.lastGame)
 	variantID = normalizeVariant(variantID)
 	// Rating eligibility by variant. Standard chess feeds the time-control Glicko
-	// pools; Duck Chess, Crazyhouse and Antichess each feed their own isolated pool
-	// (categoryFor routes each). Chess960 alone stays unrated (no dedicated pool).
-	// This is the single funnel for both public matchmaking and private
-	// challenges, so gating rated here covers every started game.
+	// pools; Duck Chess, Crazyhouse, Antichess and Secret Queen each feed their own
+	// isolated pool (categoryFor routes each). Chess960 alone stays unrated (no
+	// dedicated pool). This is the single funnel for both public matchmaking and
+	// private challenges, so gating rated here covers every started game.
 	rated = rated && (variantID == variantStandard || variantID == variantDuck ||
-		variantID == variantCrazyhouse || variantID == variantAntichess)
+		variantID == variantCrazyhouse || variantID == variantAntichess || variantID == variantSecretQueen)
 	// The start position is the classic start FEN, a random Fischer-random start
 	// for Chess960, or (a private challenge only) a validated custom fen.
 	// g.startFen MUST be this FEN (not chess.StartFEN), or a takeback rebuild
@@ -689,6 +692,14 @@ func (h *Hub) startGameWith(white, black *Client, tc timeControl, pool string, r
 	h.playerGames[black.id.UserID] = g
 	h.markLive(g)
 	h.activeGames.Add(1)
+	// Secret Queen: arm the designation phase (and, for a bot side, designate
+	// it immediately) BEFORE either sendMatched, so the very first message
+	// each client sees already carries needsDesignation/designationDeadline.
+	// A no-op call for every other variant would be pointless, so this is
+	// gated explicitly rather than folded into a no-op-elsewhere helper.
+	if variantID == variantSecretQueen {
+		h.beginSecretQueenDesignation(g)
+	}
 	h.sendMatched(g, white, chess.White)
 	h.sendMatched(g, black, chess.Black)
 	// Any other device signed into either account is now stale — tell it, so its
@@ -721,6 +732,19 @@ func (h *Hub) sendMatched(g *game, c *Client, color chess.Color) {
 	if g.arenaID != "" {
 		payload["tournamentId"] = g.arenaID
 	}
+	// Secret Queen: overlay the viewer-specific fields (secretQueenViewerFields
+	// always sets needsDesignation=true here — sendMatched only ever runs
+	// once, right at creation, before either side has designated) and the
+	// designation deadline, so the client can put up its designation UI
+	// immediately instead of waiting for a separate message.
+	if hs, hidden := g.hiddenState(); hidden {
+		for k, v := range secretQueenViewerFields(g, hs, color) {
+			payload[k] = v
+		}
+		if !g.sqDesignationDeadline.IsZero() {
+			payload["designationDeadline"] = g.sqDesignationDeadline.UnixMilli()
+		}
+	}
 	g.addExtras(payload)
 	c.trySend(mustJSON(out("matched", payload)))
 }
@@ -741,12 +765,20 @@ func (h *Hub) move(c *Client, uci string) {
 		h.sendErr(c, "not your turn")
 		return
 	}
+	// Secret Queen's designation phase gates every move until BOTH sides have
+	// picked their pawn — see beginSecretQueenDesignation/
+	// designateSecretQueen. No-op (secretQueenReady is unconditionally true)
+	// for every other variant.
+	if !g.secretQueenReady() {
+		h.sendErr(c, "designation not complete")
+		return
+	}
 	if _, ok := g.applyMove(uci); !ok {
 		h.sendErr(c, "illegal move")
 		return
 	}
 	h.refreshLive(g) // keep the anti-cheat live-board FEN current
-	h.broadcast(g, mustJSON(out("state", g.snapshot())))
+	h.broadcastState(g)
 	if st := g.status(); st.State != "ongoing" {
 		h.finish(g, st.Result, st.State)
 		return
@@ -838,6 +870,16 @@ func (h *Hub) takebackOffer(c *Client) {
 	if g == nil || g.over || len(g.moves) == 0 {
 		return
 	}
+	// Secret Queen refuses takeback outright: un-revealing a queen the
+	// opponent already saw move is incoherent (mirrors BaseAPI's /bot path —
+	// docs/tasks/open/secret-queen.md's BaseAPI section — and sidesteps
+	// rebuildTo's variant.New+replay chain, which would cost one HTTP round
+	// trip PER REPLAYED MOVE on this goroutine for this variant; see
+	// internal/variant/secretqueen.go's package doc on why Apply() is
+	// synchronous in the first place).
+	if g.variant == variantSecretQueen {
+		return
+	}
 	color, ok := g.colorOf(c)
 	if !ok {
 		return
@@ -891,7 +933,7 @@ func (h *Hub) applyTakeback(g *game) {
 		g.rebuildTo(target)
 	}
 	g.clearOffers()
-	h.broadcast(g, mustJSON(out("state", g.snapshot())))
+	h.broadcastState(g)
 	h.scheduleBotMove(g)
 }
 
@@ -966,6 +1008,18 @@ func (h *Hub) finish(g *game, result, reason string) {
 	// still showing) instead of 0.
 	clock := map[string]int64{"w": g.remainingMs(chess.White), "b": g.remainingMs(chess.Black)}
 	g.over = true
+	// Secret Queen only: hand everyone the full canonical position (both
+	// secret squares, whichever weren't already revealed on the board) now
+	// that the result is decided — "at game end, send the full state to
+	// everyone" (docs/tasks/open/secret-queen.md). broadcastState no-ops into
+	// the ordinary shared path for every other variant, so this is a pure
+	// addition for them too, but it was never sent before finish() for ANY
+	// variant — only fire it for the one that actually needs the extra
+	// message. snapshotFor's g.over branch (now true) is what makes this the
+	// full reveal rather than an ordinary mid-game payload.
+	if _, hidden := g.hiddenState(); hidden {
+		h.broadcastState(g)
+	}
 	h.broadcast(g, mustJSON(out("end", map[string]any{
 		"gameId": g.id,
 		"result": result,
@@ -1214,6 +1268,19 @@ func (h *Hub) resumeMsg(g *game, color chess.Color) map[string]any {
 	if g.arenaID != "" {
 		payload["tournamentId"] = g.arenaID
 	}
+	// Secret Queen: a reconnecting player must get the SAME per-viewer
+	// gating an ordinary state broadcast would give them — see
+	// secretQueenViewerFields' doc. Without this a resume would leak the
+	// mover's legalMoves to a reconnecting non-mover, and would never tell a
+	// still-undesignated reconnecting player to finish designating.
+	if hs, hidden := g.hiddenState(); hidden {
+		for k, v := range secretQueenViewerFields(g, hs, color) {
+			payload[k] = v
+		}
+		if !g.secretQueenReady() && !g.sqDesignationDeadline.IsZero() {
+			payload["designationDeadline"] = g.sqDesignationDeadline.UnixMilli()
+		}
+	}
 	g.addExtras(payload)
 	return out("resume", payload)
 }
@@ -1269,6 +1336,36 @@ func (h *Hub) broadcast(g *game, data []byte) {
 	g.black.send(data)
 	for c := range g.spectators {
 		c.trySend(data)
+	}
+}
+
+// broadcastState sends the current position to white, black and every
+// spectator — the single call site every board mutation (move, bot move,
+// takeback) uses instead of calling broadcast(g, ...snapshot()...) directly.
+// For every variant except Secret Queen this IS exactly
+// h.broadcast(g, mustJSON(out("state", g.snapshot()))), unchanged (hs, ok :=
+// g.hiddenState() reports ok=false, so the byte-identical fast path runs).
+// Secret Queen's State implements variant.HiddenState, and for that ONE
+// variant this fans out a DIFFERENT payload to each recipient — see
+// game.snapshotFor's doc for what differs and why it can't ride in the
+// shared snapshot(). It is also, deliberately, the call finish() makes once
+// more right after g.over flips true: snapshotFor's g.over branch hands
+// everyone the full canonical picture (both secret squares) once the result
+// is decided — "at game end, send the full state to everyone"
+// (docs/tasks/open/secret-queen.md).
+func (h *Hub) broadcastState(g *game) {
+	hs, hidden := g.hiddenState()
+	if !hidden {
+		h.broadcast(g, mustJSON(out("state", g.snapshot())))
+		return
+	}
+	g.white.send(mustJSON(out("state", g.snapshotFor(hs, chess.White, true))))
+	g.black.send(mustJSON(out("state", g.snapshotFor(hs, chess.Black, true))))
+	if len(g.spectators) > 0 {
+		data := mustJSON(out("state", g.snapshotFor(hs, chess.White, false))) // viewerColor ignored when isPlayer=false
+		for c := range g.spectators {
+			c.trySend(data)
+		}
 	}
 }
 

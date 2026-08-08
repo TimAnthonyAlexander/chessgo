@@ -34,6 +34,12 @@ use Override;
  * other variant's /move, an illegal antichess move surfaces as an HTTP 400
  * (GomachineClient::antichessMove() throws) rather than `legal:false`.
  *
+ * Secret Queen (`secretqueen*` methods below) is DIFFERENT from all four:
+ * gomachine has no implementation of it at all, so there is nothing to route
+ * to on that side — these calls skip `primaryOnly`/`gomachineOnly` entirely
+ * and go straight to the composed {@see ZugzwangClient}, the same
+ * always-zugzwang shape as `opening()`/`book()`/`stockfishMove()` below.
+ *
  * gomachine has zero engine-call paths left through this class — every
  * variant + standard chess + Stockfish now goes to zugzwang (`primaryOnly`
  * or `zugzwangOnly`); `gomachineOnly` is retained only as machinery
@@ -297,5 +303,55 @@ class EngineSelector extends GomachineClient
     public function book(string $fen): array
     {
         return $this->zugzwang->book($fen);
+    }
+
+    /**
+     * Secret Queen: designate a side's secret pawn-queen. Always zugzwang —
+     * see the class-level doc block ("Secret Queen") for why there's no
+     * primary/gomachine routing here.
+     *
+     * @return array<string, mixed> {designated, newFen, fenWhite, fenBlack, boardFen, sideToMove, status, result, kingCaptured}
+     */
+    public function secretqueenDesignate(string $fen, string $color, string $square): array
+    {
+        return $this->zugzwang->secretqueenDesignate($fen, $color, $square);
+    }
+
+    /**
+     * Secret Queen: legal moves for the side to move, in ITS OWN information
+     * set. Always zugzwang — see secretqueenDesignate().
+     *
+     * @return array<string, mixed> {moves}
+     */
+    public function secretqueenLegalMoves(string $fen): array
+    {
+        return $this->zugzwang->secretqueenLegalMoves($fen);
+    }
+
+    /**
+     * Secret Queen: validate and apply a move. Throws on an illegal move
+     * (mirrors antichessMove()). Always zugzwang — see secretqueenDesignate().
+     *
+     * @return array<string, mixed> {legal, san, reveal, newFen, fenWhite, fenBlack, boardFen, sideToMove, status, result, kingCaptured}
+     */
+    public function secretqueenMove(string $fen, string $move): array
+    {
+        return $this->zugzwang->secretqueenMove($fen, $move);
+    }
+
+    /**
+     * Secret Queen: compute the AI's move at a target Elo rating. Already
+     * applied engine-side. Always zugzwang — see secretqueenDesignate().
+     *
+     * @return array<string, mixed> {bestmove, san, eval, reveal, newFen, fenWhite, fenBlack, boardFen, sideToMove, status, result, kingCaptured}
+     */
+    public function secretqueenBestMove(
+        string $fen,
+        int $rating,
+        int $movetimeMs = 0,
+        int $depth = 0,
+        int $nodes = 0,
+    ): array {
+        return $this->zugzwang->secretqueenBestMove($fen, $rating, $movetimeMs, $depth, $nodes);
     }
 }

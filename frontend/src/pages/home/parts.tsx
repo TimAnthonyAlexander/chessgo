@@ -8,7 +8,7 @@ import {
     DialogContent,
     Typography,
 } from '@mui/material'
-import { Cpu, Gauge, Skull, Swords, Target, Telescope, UserPlus } from 'lucide-react'
+import { Cpu, Crown, Gauge, Skull, Swords, Target, Telescope, UserPlus } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { gameSocket, type LiveGameState } from '../../lib/socket'
 import { useGameSocket } from '../../lib/useGameSocket'
@@ -32,6 +32,7 @@ export const CRAZYHOUSE_POOL = '3+0'
 // Antichess quick-pairing pool — one isolated pool (its own rating), like Duck
 // and Crazyhouse. Blitz suits a variant that's usually over fast.
 export const ANTICHESS_POOL = '3+0'
+export const SECRETQUEEN_POOL = '3+0'
 
 // Quick-pairing presets, grouped by time-control category.
 export interface Preset {
@@ -97,12 +98,19 @@ export function useHome() {
     // cleared from history state so a refresh/back doesn't silently re-queue.
     useEffect(() => {
         const qp = (location.state as { quickPair?: Variant } | null)?.quickPair
-        if (qp !== 'duck' && qp !== 'crazyhouse' && qp !== 'antichess') return
+        if (qp !== 'duck' && qp !== 'crazyhouse' && qp !== 'antichess' && qp !== 'secretqueen')
+            return
         navigate(location.pathname, { replace: true, state: null })
         if (qp === 'duck') queue(`Duck Chess · ${DUCK_POOL}`, DUCK_POOL, 'duck')
         else if (qp === 'crazyhouse')
             queue(`Crazyhouse · ${CRAZYHOUSE_POOL}`, CRAZYHOUSE_POOL, 'crazyhouse')
-        else queue(`Antichess · ${ANTICHESS_POOL}`, ANTICHESS_POOL, 'antichess')
+        else if (qp === 'antichess') queue(`Antichess · ${ANTICHESS_POOL}`, ANTICHESS_POOL, 'antichess')
+        else
+            queue(
+                `Secret Queen · ${SECRETQUEEN_POOL}`,
+                SECRETQUEEN_POOL,
+                'secretqueen',
+            )
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [location.key])
 
@@ -417,6 +425,15 @@ export function QuickPairingPanel({
                 <AntichessCell
                     onClick={() =>
                         onQueue(`Antichess · ${ANTICHESS_POOL}`, ANTICHESS_POOL, 'antichess')
+                    }
+                />
+                <SecretQueenCell
+                    onClick={() =>
+                        onQueue(
+                            `Secret Queen · ${SECRETQUEEN_POOL}`,
+                            SECRETQUEEN_POOL,
+                            'secretqueen',
+                        )
                     }
                 />
                 <GuessEloCell onClick={() => navigate('/guess-the-elo')} />
@@ -952,6 +969,76 @@ function AntichessCell({ onClick }: { onClick: () => void }) {
                     </Box>
                     <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)', fontWeight: 500 }}>
                         Antichess
+                    </Typography>
+                </Box>
+                {eloRange && (
+                    <Typography sx={{ fontSize: 11, color: 'var(--muted)' }}>{eloRange}</Typography>
+                )}
+            </Box>
+        </Box>
+    )
+}
+
+function SecretQueenCell({ onClick }: { onClick: () => void }) {
+    const { user } = useAuth()
+
+    // Secret Queen has its own isolated rating, like Duck/Crazyhouse/Antichess —
+    // show the same matchmaking Elo range the time-control cells show.
+    let eloRange: string | null = null
+    if (user) {
+        const rounded = Math.round(user.rating_secretqueen / 50) * 50
+        eloRange = `${(rounded - 100).toLocaleString('de-DE')}\u2013${(rounded + 100).toLocaleString('de-DE')}`
+    }
+
+    return (
+        <Box
+            onClick={onClick}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onClick()
+                }
+            }}
+            sx={{
+                position: 'relative',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 0.75,
+                py: { xs: 1.75, md: 2 },
+                bgcolor: 'var(--surface-2)',
+                border: '1px solid var(--line-soft)',
+                borderRadius: '12px',
+                cursor: 'pointer',
+                overflow: 'hidden',
+                transition: 'border-color 0.12s ease, background 0.12s ease',
+                '&:hover': {
+                    borderColor: 'var(--accent-line)',
+                    bgcolor: 'var(--surface)',
+                },
+            }}
+        >
+            <Typography
+                sx={{
+                    fontFamily: 'var(--font-display)',
+                    fontSize: { xs: 22, md: 26 },
+                    fontWeight: 500,
+                    lineHeight: 1,
+                    letterSpacing: '-0.01em',
+                }}
+            >
+                {SECRETQUEEN_POOL}
+            </Typography>
+            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                    <Box component="span" sx={{ display: 'flex', color: 'var(--text-dim)' }}>
+                        <Crown size={14} />
+                    </Box>
+                    <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)', fontWeight: 500 }}>
+                        Secret Queen
                     </Typography>
                 </Box>
                 {eloRange && (

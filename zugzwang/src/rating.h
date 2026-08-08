@@ -89,4 +89,21 @@ WeakResult best_move_for_rating_single(Search::Context& ctx, Position& pos, int 
 // depth, ignoring rating entirely.
 WeakResult best_move_worst(Search::Context& ctx, Position& pos, const std::vector<uint64_t>& history);
 
+// Ranks EVERY legal move at `pos` with one MultiPV search to `rankDepth`, so all
+// scores come from the same completed iteration (that shared-depth invariant is
+// what makes centipawn-loss comparisons between them meaningful — see the long
+// comment on the implementation in rating.cpp). `moveTimeCapMs` is a cost cap
+// only (0 = none): if it binds, the whole ranking simply lands shallower with
+// every move still scored at the same depth. `pos` is left untouched.
+//
+// This is the weakening ladder's own ranking pass, exposed because a caller may
+// need to reason about the ALTERNATIVES rather than just take the ladder's
+// choice. Secret Queen is the case that needed it: revealing its hidden queen is
+// a strategic cost the evaluation cannot see, so it compares the best move
+// against the best move that keeps the disguise (secretqueen_bot.cpp). Use
+// best_move_for_rating unless you specifically need the whole ranked set —
+// selection logic belongs in the ladder, not in callers.
+std::vector<RootMove> rank_root_moves(Search::Context& ctx, Position& pos, int rankDepth,
+                                      int moveTimeCapMs, int64_t& nodesOut);
+
 } // namespace Rating

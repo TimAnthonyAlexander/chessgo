@@ -11,6 +11,150 @@ We follow the **phantomchess.in "Hidden Queen Chess"** ruleset — the most conc
 published version of this variant (same variant as the `dames-cachees`
 implementation announced on the Lichess forum). Sources at the bottom.
 
+## Designation is a board step, not a form field
+
+The first attempt put an a–h dropdown on the setup screen. That is not the
+feature. Pressing "Start game" on this variant now drops into a pre-game step
+where you **click one of your own pawns on the real board** and confirm:
+
+- the board shows the standard array oriented to your side, your eight home-rank
+  pawns lift and carry a halo (`.sq.pickable`), everything else recedes
+  (`.sq.dimmed`);
+- clicking one rings it and puts the crown badge on it immediately, so you see
+  exactly what you are committing to;
+- a ribbon over the board tracks the state ("Pick one of your pawns" →
+  "c2 is your queen — or pick another"), and the side panel's button becomes
+  "Start game with c2". "Surprise me" and "Back" sit under it;
+- no eval bar during the step — there is no game to evaluate yet.
+
+The game is not created until you confirm, so the whole step is client-side and
+free. `Board` grew `pickTargets`/`onPick`, mirroring `duckTargets`/`onPlaceDuck`
+— the player is choosing a SQUARE, not making a move, so it must not touch the
+move machinery.
+
+## Two bugs the first pass shipped, both found by playing it
+
+**`null is not an object (evaluating 'rev.square[0]')`.** Every move carries a
+`reveal` object, all-false on ordinary moves, so `moves.find(m => m.reveal)`
+matched the first move of the game and then read a null `square`. The guard now
+tests `moved || captured || promoted`. The same function also read `rev.moved` as
+a colour when it is a boolean, so every reveal was attributed to Black; the side
+now comes from the move's `by` plus the human's colour — and for a CAPTURE
+reveal it is the victim's queen, not the mover's. It also named the pawn by the
+reveal square, which is the DESTINATION: a queen sliding e4→h4 was announced as
+"the h-pawn". It uses the move's origin now.
+
+**The reveal appeared a move late.** A bot game applies your move and the bot's
+reply in one request, so your own queen sat there as a pawn until your opponent
+had already moved. The board now flips it the instant you commit, via
+`isPawnShapedMove` (display-only, in `lib/variants.ts`) folded into the
+optimistic overlay; the server's FEN replaces it when it lands and remains the
+authority. The badge disappears in the same frame.
+
+Verified by driving the real page in a headless browser: badge follows a
+pawn-shaped move and the piece stays a pawn; a queen-only move shows a queen on
+the destination **before** the bot replies; the note reads "White's e-pawn was a
+secret queen." and clears itself; no console errors.
+
+## Live play (step 4) — done, with one gap
+
+**Hub.** `internal/variant/secretqueen.go` is the first `State` whose rules live
+out of process: it calls zugzwang's `/secretqueen/*` over HTTP rather than
+porting the ruleset into Go a second time. That is deliberate and the header
+argues it — two implementations of a *hidden-information* ruleset that drift
+don't just produce a wrong move, they can produce a right-looking move for the
+wrong reason and hand a player information no legal inference should give them.
+
+The cost was measured rather than left as a worry: `/secretqueen/move` and
+`/legal-moves` answer in ~0.15ms median / 0.21ms p95 on localhost, so a live move
+blocks the hub's mutation goroutine for ~0.3ms — far below the other per-move
+work it already does, which is why this stayed synchronous instead of growing a
+result channel (that would make every call site reading `g.state` after
+`applyMove` wait on one, a real architecture change bought for a third of a
+millisecond). The bound that does matter is the HTTP timeout, tightened to 250ms
+— still ~1000x the measured p95, so it cannot trip on a healthy engine, and it
+caps what other games feel if zugzwang ever answers slowly.
+
+`game.go` gained `snapshotFor` — the per-viewer counterpart of `snapshot()` —
+plus `hiddenState()` as the single switch that decides which path a variant
+takes. Each player gets only their own `secretSquare`, and `legalMoves` only when
+it is their move; spectators get neither; once the game is over everyone gets
+both squares.
+
+**The test that was missing.** `internal/hub/secretqueen_test.go` asserts the
+split by marshalling each recipient's actual wire message and searching the JSON
+for the forbidden square — bytes, not named fields, so it catches a leak through
+a field nobody thought of, including one added later. That is the realistic
+regression. It was mutation-tested: adding a leaking field to
+`secretQueenViewerFields` makes it fail with the offending payload printed, and
+removing it makes it pass again.
+
+**Web.** `lib/socket.ts` carries the per-viewer fields (`secretSquare`,
+`needsDesignation`, `designationDeadline`, `secretSquares`, `reveal`) and a
+`designate(square)` sender. `LiveGame.tsx` reuses the same board-based
+designation as `/bot` — the two pages share
+`components/SecretQueenDesignation.tsx` rather than owning a copy each; live play
+passes a deadline and omits "Back" (once paired there is nothing to go back to).
+Lobby quick pool (3+0, its own cell with the `rating_secretqueen` range), the
+friend-challenge allowlist, reveal narration, and the analysis/admin-probe
+exclusions are all wired.
+
+**The gap:** live play has not been exercised end to end with two real clients.
+That needs a hub restart on the owner's machine, so the verification here is the
+payload-level unit tests plus a clean typecheck/build — not a played game.
+
+## Build status
+
+**Steps 1 and 2 are done** (see Order at the bottom). The engine owns the rules
+and can play the variant end to end:
+
+- `zugzwang/src/secretqueen.{h,cpp}` — rules, movegen, apply, status, SAN, perft.
+  Deliberately net-free (no Position/Search/NNUE), which is what lets the gate
+  below run without a net file.
+- `zugzwang/test/secretqueen_test.cpp` (+ `_stubs.cpp`) — `make secretqueen_test`.
+  Green. Cross-checks generator AND apply against Duck's independent
+  implementation of the same no-check/king-capture ruleset out to perft(4), then
+  asserts the hidden-queen rules Duck cannot see.
+- `zugzwang/src/secretqueen_bot.{h,cpp}` — the bot, reusing the real NNUE search
+  (see that header for why the substitution is sound), plus a **concealment
+  veto**: the evaluation cannot see that hiding is worth anything, so a move that
+  would unmask the queen has to beat the best concealing move by 150cp. Without
+  it the bot revealed as early as ply 1 and the variant evaporated; with it the
+  earliest reveal is ply 7, the typical one moved from ~ply 15 to ply 26, and
+  games regularly end with a side still hidden. It needed `Rating::rank_root_moves`
+  (the ladder's own MultiPV ranking pass, previously file-private) — exposed
+  rather than reimplemented, because a second copy of the selection maths is
+  exactly how one defect ends up living in four places.
+- `POST /secretqueen/{designate,legal-moves,move,bestmove}` in
+  `serve_handlers.cpp` + `serve.cpp`. Every response carries the canonical FEN
+  plus the three redacted views.
+
+Smoke-tested over HTTP: redaction produces the right three views, a pawn-shaped
+move keeps the disguise, a queen-only move reveals and puts a real queen on the
+board, an illegal move 400s, the bot takes an exposed king at every rating, and
+each side's eval reflects its own information set (it sees its own hidden queen,
+not the opponent's).
+
+**Self-play harness** (bot vs bot over the live endpoints, ~8 full games) asserts
+on every ply that the returned move is in that position's own legal list, that a
+secret never comes back once spent, that a reveal really puts a queen on the
+board, and that no view ever names the other side's secret. All green.
+
+One assertion in it was worth the trouble twice over: "the bot must never lose
+its king to a piece it can SEE". It fired five times, and every one was a false
+alarm — a chess-checkmated position, which in this variant means the king falls
+next move whatever you play (the extra moves chess forbids are exactly the ones
+that leave your own king attacked, so none of them help). The check now has to
+prove counterfactually that some alternative move would actually have saved the
+king. Worth recording so nobody "fixes" the bot over it later.
+
+Perft note: perft(4) from the start is **197742**, not chess's 197281. The first
+check is reachable at ply 3 and this variant has no check, so continuations that
+are illegal in chess are legal here. The number is cross-checked against Duck's
+generator rather than blessed from our own output.
+
+Next: step 3, the BaseAPI `/bot` path.
+
 ## Rules
 
 1. **Designation.** Before the first move, each player picks one of their own
@@ -215,6 +359,23 @@ own analyze controller and this one can wait. PGN **export** is cheap and worth
 doing: `[Variant "Secret Queen"]` + `[SecretQueens "e2,h7"]` headers, normal SAN
 throughout (once revealed it's a queen, so queen SAN with ordinary disambiguation is
 correct).
+
+## iOS (step 5) — done
+
+`Chess/SecretQueen.swift` carries the Swift counterparts of the web helpers
+(`homeRankSquares`, `isPawnShaped`, `revealMessage`), and the same three
+behaviours are ported: designation is a board step (`BoardView` gained
+`pickTargets`/`onPick`, kept entirely separate from move submission), the badge
+rides on the piece, and the reveal is optimistic so your own queen appears the
+frame you commit rather than after the bot answers. `RevealInfo.didReveal` guards
+the all-false-reveal trap that crashed the web client, and `moved` is typed as
+the `Bool` it actually is.
+
+Verified by whole-module `swiftc -typecheck` over all 117 files: the only errors
+are 4 pre-existing actor-isolation ones in `BoardView.swift`, confirmed identical
+on clean HEAD (an artifact of typechecking outside Xcode's project settings, not
+of this work). **Not verified without a device build:** on-screen layout and
+contrast of the ribbon, halo and picked-ring across the 16 palettes.
 
 ## Order
 

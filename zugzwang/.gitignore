@@ -31,6 +31,7 @@ book.bin
 net.web.nnue
 tools/netweb_writer
 test/nnue_web_format_test
+test/secretqueen_test
 test/.tmp_web_net*.bin
 
 # tools/book_export build artifact — built by `make book_export`, never

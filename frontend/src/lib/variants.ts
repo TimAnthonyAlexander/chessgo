@@ -11,6 +11,7 @@ export type Variant =
     | 'duck'
     | 'crazyhouse'
     | 'antichess'
+    | 'secretqueen'
     | 'fading'
     | 'glassjaw'
     | 'doublemove'
@@ -19,11 +20,13 @@ export type Variant =
  * Whether check exists as a concept in this variant — i.e. whether the board
  * should glow the attacked king. Antichess and Duck both let the king be
  * captured outright, so an "attacked" king there is normal, not a warning.
+ * Secret Queen is the same shape — no check, no checkmate, win by capturing
+ * the king (see docs/tasks/open/secret-queen.md) — so it joins them here.
  * Every other variant (including Crazyhouse and the bot-only rating variants)
  * plays standard check rules.
  */
 export function variantHasCheck(v: string | null | undefined): boolean {
-    return v !== 'antichess' && v !== 'duck'
+    return v !== 'antichess' && v !== 'duck' && v !== 'secretqueen'
 }
 
 /** The standard chess start position. */
@@ -35,6 +38,7 @@ export const VARIANT_LABEL: Record<Variant, string> = {
     duck: 'Duck Chess',
     crazyhouse: 'Crazyhouse',
     antichess: 'Antichess',
+    secretqueen: 'Secret Queen',
     fading: 'Fading',
     glassjaw: 'Glass Jaw',
     doublemove: 'Double Move',
@@ -47,6 +51,8 @@ export const VARIANT_BLURB: Record<Variant, string> = {
     crazyhouse: 'Captured pieces switch sides — drop them back on the board.',
     antichess:
         'Räuberschach — captures are compulsory and the king is just a piece. Lose all your men (or get stalemated) to win.',
+    secretqueen:
+        'One of your pawns is secretly a queen. It stays hidden as long as it moves like a pawn — any other move reveals it. No check, no checkmate: capture the enemy king to win.',
     fading: 'Full strength to start — Zugzwang loses 100 Elo with every move it makes.',
     glassjaw: 'Full strength — but every check you give it costs Zugzwang 300 Elo for good.',
     doublemove:
@@ -92,6 +98,72 @@ export function parsePocket(pocket: string): Pockets {
  */
 export function stripCrazyhouseFen(fen: string): string {
     return fen.replace(/\[[^\]]*\]/, '').replace(/~/g, '')
+}
+
+/**
+ * Strip the Secret Queen "[white|black]" secret-square suffix from a FEN,
+ * leaving a standard FEN the board renderer understands. The field is
+ * appended (space-separated) after the normal six FEN fields, e.g.
+ * `...KQkq - 0 1 [e2|h7]` — anchored to the end (unlike Crazyhouse's pocket,
+ * which sits inside the board field) so the trailing space goes with it.
+ */
+export function stripSecretQueenFen(fen: string): string {
+    return fen.replace(/\s*\[[^|]*\|[^\]]*\]\s*$/, '')
+}
+
+/**
+ * Read a color's secret-queen square out of a Secret Queen FEN's trailing
+ * "[white|black]" field, or null once it's been revealed, captured, or
+ * promoted (recorded as "-"). Mirrors pocketFromFen. In practice the human's
+ * own secret square comes straight off `BotGame.secret_square` — the backend
+ * redacts the opponent's out of this field entirely before it ever reaches the
+ * client — so this is here mainly for parity with the other variant helpers.
+ */
+export function secretQueenSquareFromFen(fen: string, color: 'w' | 'b'): Square | null {
+    const m = fen.match(/\[([^|]*)\|([^\]]*)\]/)
+    if (!m) return null
+    const raw = color === 'w' ? m[1] : m[2]
+    return raw && raw !== '-' ? (raw as Square) : null
+}
+
+/**
+ * Whether `uci` is a move an ordinary pawn of `color` could have made — i.e.
+ * whether it keeps a Secret Queen hidden. The engine owns this rule and decides
+ * it again server-side; this exists purely so the board can flip the pawn to a
+ * queen the INSTANT the player commits a revealing move.
+ *
+ * Without it the reveal arrives with the server's reply, and because a bot game
+ * applies the human move and the bot's answer in ONE request, your own queen
+ * would sit there as a pawn until your opponent had already moved — you'd watch
+ * the reveal happen a move late, which reads as a bug even though the position
+ * is right.
+ *
+ * The variant has no en passant, so occupancy of the destination is enough to
+ * tell a push from a capture, and the whole test is a few lines of geometry.
+ */
+export function isPawnShapedMove(uci: string, color: 'w' | 'b', board: BoardMap): boolean {
+    const from = uci.slice(0, 2) as Square
+    const to = uci.slice(2, 4) as Square
+    if (board[from]?.toLowerCase() !== 'p') return false
+
+    const df = Math.abs(FILES.indexOf(to[0]) - FILES.indexOf(from[0]))
+    const dr = Number(to[1]) - Number(from[1])
+    const forward = color === 'w' ? 1 : -1
+    const homeRank = color === 'w' ? 2 : 7
+    const occupied = !!board[to]
+
+    // Straight pushes: destination must be empty, and a double push only from home.
+    if (df === 0 && !occupied) {
+        if (dr === forward) return true
+        return dr === 2 * forward && Number(from[1]) === homeRank && !board[squareAt2(from, forward)]
+    }
+    // Diagonal: only as a capture.
+    return df === 1 && dr === forward && occupied
+}
+
+/** The square one rank ahead of `from` — the square a double push passes through. */
+function squareAt2(from: Square, forward: number): Square {
+    return `${from[0]}${Number(from[1]) + forward}` as Square
 }
 
 /**

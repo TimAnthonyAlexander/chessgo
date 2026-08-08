@@ -325,6 +325,7 @@ private struct GameRow: View {
         case "duck": return ("bird.fill", Theme.Colors.accent)
         case "crazyhouse": return ("arrow.triangle.2.circlepath", Theme.Colors.accent)
         case "antichess": return ("xmark.seal.fill", Theme.Colors.secondaryText)
+        case "secretqueen": return ("crown.fill", Theme.Colors.accent)
         case "chess960": return ("shuffle", Theme.Colors.accent)
         default: return nil
         }

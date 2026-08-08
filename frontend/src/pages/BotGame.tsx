@@ -40,12 +40,13 @@ import {
     type Color,
     createBotGame,
     type GameAnalysis,
+    type MoveEntry,
     playMove,
     type Title,
     undoMove,
 } from '../api/client'
 import { buildBlunderPuzzles } from '../lib/blunderRewind'
-import { statusLabel, type Square } from '../lib/chess'
+import { parseFen, statusLabel, type Square } from '../lib/chess'
 import { computeMaterial } from '../lib/material'
 import { buildFromMoves } from '../lib/analysisTree'
 import { useBoardInteraction } from '../lib/useBoardInteraction'
@@ -77,15 +78,24 @@ import AdminBestMove from '../components/AdminBestMove'
 import BoardActions from '../components/BoardActions'
 import VariantPicker from '../components/VariantPicker'
 import {
+    DesignationPanel,
+    DesignationRibbon,
+    randomSecretQueenSquare,
+    secretQueenChoices,
+} from '../components/SecretQueenDesignation'
+import {
     type Variant,
     random960,
     parsePocket,
     pocketFromFen,
+    isPawnShapedMove,
     stripCrazyhouseFen,
+    stripSecretQueenFen,
     variantHasCheck,
 } from '../lib/variants'
 
 const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1'
+
 const other = (c: Color): Color => (c === 'w' ? 'b' : 'w')
 
 // Full-move rows the move list shows before it starts scrolling. Fixed (not
@@ -104,6 +114,32 @@ const DUCK_REVEAL_MS = 550
 
 // The side to move encoded in a FEN's active-color field (defaults to White).
 const sideToMoveOf = (fen: string): Color => (fen.split(' ')[1] === 'b' ? 'b' : 'w')
+
+// Secret Queen: plain-words narration for a `reveal` (see MoveEntry.reveal) —
+// "Black's e-pawn was a secret queen." The file letter (not "e2") is what a
+// player actually remembers about their own or the opponent's pawn structure,
+// so that's what reads naturally here rather than the raw square.
+/** Whether a move entry's `reveal` actually unmasked anything. Every move carries
+ *  a `reveal` object, all-false on the ordinary ones, so a plain truthiness check
+ *  matches every move in the game — and then reads a null `square`. */
+function didReveal(rev: MoveEntry['reveal']): boolean {
+    return !!rev && !!(rev.moved || rev.captured || rev.promoted)
+}
+
+/** `owner` is whose queen was unmasked — NOT who moved. A capture reveals the
+ *  VICTIM's queen, so the two differ exactly there. */
+function revealMessage(entry: MoveEntry, rev: NonNullable<MoveEntry['reveal']>, owner: Color): string {
+    const side = owner === 'w' ? "White's" : "Black's"
+    // Name the pawn by the file it was SITTING on, which is what the player was
+    // looking at. For a move that means the move's ORIGIN — `rev.square` is the
+    // destination, so using it would call a queen that slid e4→h4 "the h-pawn".
+    // For a capture the reveal square IS where the victim stood, so that's right.
+    const file = rev.captured ? rev.square?.[0] : entry.uci[0]
+    const pawn = file ? `${file}-pawn` : 'pawn'
+    if (rev.captured) return `${side} ${pawn} was a secret queen — captured before it could act.`
+    if (rev.promoted) return `${side} ${pawn} reached the back rank — it was a secret queen.`
+    return `${side} ${pawn} was a secret queen.`
+}
 
 // Live remaining clock time (ms) for a color, ticking down locally between
 // requests — mirrors lib/socket.ts's liveRemaining for live games. The server
@@ -168,6 +204,17 @@ export default function BotGame() {
     )
     const [variant, setVariant] = useState<Variant>(saved.variant)
     const [timeControl, setTimeControl] = useState<TimeControl>(saved.timeControl)
+    // Secret Queen designation. Pressing "Start game" on this variant does NOT
+    // create the game — it drops into a pre-game step where the player picks
+    // which of their own pawns is the queen ON THE BOARD, then confirms. So this
+    // holds the resolved colour (rolled now, because "random" side decides which
+    // eight pawns are even choosable) and the square they have clicked so far.
+    // Null when we are not in that step. See DesignationPrompt below.
+    const [designating, setDesignating] = useState<{ color: Color } | null>(null)
+    const [pick, setPick] = useState<Square | null>(null)
+    // Secret Queen: the square our own queen just revealed itself on, held only
+    // until the server's reply lands (see submitMove).
+    const [optimisticReveal, setOptimisticReveal] = useState<Square | null>(null)
     const [creating, setCreating] = useState(false)
     const [thinking, setThinking] = useState(false)
     const [error, setError] = useState<string | null>(null)
@@ -179,6 +226,13 @@ export default function BotGame() {
     // Duck Chess: the human's just-placed duck square, shown during the brief
     // reveal hold before the bot's reply lands (null when not holding).
     const [duckReveal, setDuckReveal] = useState<string | null>(null)
+    // Secret Queen: a plain-words line for the moment a hidden queen unmasks
+    // (either side) — the variant's whole point, so it gets more than the pawn
+    // artwork quietly turning into a queen. Reuses the panel's existing banner
+    // slot (see MovePanel) rather than a new toast system; cleared on the next
+    // move/undo/new game and by its own timeout so it never goes stale.
+    const [revealNote, setRevealNote] = useState<string | null>(null)
+    const revealTimerRef = useRef<number | null>(null)
     // Guarded-resign modal (only shown when the confirmResign preference is on).
     const [confirmResignOpen, setConfirmResignOpen] = useState(false)
     // Guarded "New game" modal — only shown when a game is still ongoing (starting
@@ -203,11 +257,24 @@ export default function BotGame() {
     // none of the special interaction wiring below, only the standard controller
     // and a couple of display-only exclusions (eval bar, check highlight).
     const isAntichess = game?.variant === 'antichess'
+    // Secret Queen also plays on a normal board with no special interaction wiring
+    // (the standard controller drives it, premoves included) — it just needs the
+    // FEN's trailing "[white|black]" field stripped before it reaches Board, plus
+    // the same display exclusions as Duck/Crazyhouse/Antichess (the standard
+    // analyzer has no idea what a hidden queen is) and undo disabled (the server
+    // refuses it — un-revealing information the player already saw is incoherent).
+    const isSecretQueen = game?.variant === 'secretqueen'
 
     // Persist the setup whenever it changes, so it survives a refresh.
     useEffect(() => {
         saveBotSettings({ rating, colorChoice, variant, timeControl })
     }, [rating, colorChoice, variant, timeControl])
+
+    // Clear the Secret Queen reveal-note auto-dismiss timer on unmount, so it
+    // can't fire setRevealNote after this page has gone away.
+    useEffect(() => () => {
+        if (revealTimerRef.current != null) window.clearTimeout(revealTimerRef.current)
+    }, [])
 
     const liveLen = game?.moves.length ?? 0
     const shownPly = viewIndex === null ? liveLen : Math.min(viewIndex, liveLen)
@@ -220,18 +287,59 @@ export default function BotGame() {
     // engine treat it opaquely, so this path is identical for both.
     const submitMove = async (uci: string) => {
         if (!game) return
+        const priorCount = game.moves.length
         setError(null)
         setViewIndex(null)
         setThinking(true)
+
+        // Secret Queen: unmask our own queen NOW, not when the server answers. A
+        // bot game applies the human move and the bot's reply in one request, so
+        // waiting would leave your queen looking like a pawn until your opponent
+        // had already moved — the reveal would appear a move late. The server's
+        // FEN replaces this the moment it lands, and it decides the rule; this is
+        // only about when the player sees it.
+        const revealingNow =
+            isSecretQueen &&
+            game.secret_square != null &&
+            uci.slice(0, 2) === game.secret_square &&
+            !isPawnShapedMove(uci, humanColor, parseFen(boardFen))
+        if (revealingNow) {
+            setOptimisticReveal(uci.slice(2, 4) as Square)
+            sounds.promote()
+        }
+
         try {
             const g = await playMove(game.id, uci)
             setGame(g)
-            voiceServerReply(game.moves.length, g)
+            voiceServerReply(priorCount, g)
+            if (isSecretQueen) announceReveal(g.moves.slice(priorCount))
         } catch (e) {
             setError(e instanceof Error ? e.message : 'Move failed.')
         } finally {
+            setOptimisticReveal(null)
             setThinking(false)
         }
+    }
+
+    // Secret Queen: surface the FIRST reveal among the moves that just landed
+    // (the human's own move and/or the bot's reply, whichever unmasked a hidden
+    // queen — there's realistically only ever one). Also cues the promote sound
+    // (standard chess has no distinct reveal cue; "a pawn becomes a queen" is
+    // exactly what promotion already sounds like) and clears itself after a few
+    // seconds so it doesn't linger once the player's moved on.
+    function announceReveal(freshMoves: MoveEntry[]) {
+        const entry = freshMoves.find((m) => didReveal(m.reveal))
+        const rev = entry?.reveal
+        if (!rev) return
+        // Whose queen this was. The mover is known from `by`; a CAPTURE reveal
+        // unmasks the opponent's queen, not the mover's, which is the one case
+        // where the two come apart.
+        const mover: Color = entry.by === 'human' ? humanColor : other(humanColor)
+        const owner: Color = rev.captured ? other(mover) : mover
+        setRevealNote(revealMessage(entry, rev, owner))
+        sounds.promote()
+        if (revealTimerRef.current != null) window.clearTimeout(revealTimerRef.current)
+        revealTimerRef.current = window.setTimeout(() => setRevealNote(null), 4500)
     }
 
     // Duck Chess submit: the server returns the human move AND the bot's reply in a
@@ -309,20 +417,32 @@ export default function BotGame() {
 
     // The optimistic overlay + last-move highlight come from whichever controller
     // is live for this variant.
-    const activeOverride = isDuck ? duck.override : interaction.override
+    const baseOverride = isDuck ? duck.override : interaction.override
+    // Fold the just-revealed queen into the optimistic board so the piece that
+    // lands is a queen, not the pawn it was disguised as.
+    const activeOverride =
+        optimisticReveal && baseOverride
+            ? { ...baseOverride, [optimisticReveal]: humanColor === 'w' ? 'Q' : 'q' }
+            : baseOverride
     const activeOptimisticLast = isDuck ? duck.optimisticLast : interaction.optimisticLast
 
     // The FEN of the shown position (canonical — for Crazyhouse this still carries
     // the [pocket] and ~ marks). The board renderer wants a plain FEN, so strip
     // that markup; the pocket is parsed from the same raw FEN for the pocket strips.
-    const rawShownFen = !game
-        ? (startFen ?? START_FEN)
-        : atLive
+    const rawShownFen = designating
+        ? START_FEN // Secret Queen always starts from the standard array
+        : !game
+          ? (startFen ?? START_FEN)
+          : atLive
           ? game.fen
           : shownPly === 0
             ? START_FEN
             : game.moves[shownPly - 1].fen
-    const boardFen = isCrazyhouse ? stripCrazyhouseFen(rawShownFen) : rawShownFen
+    const boardFen = isCrazyhouse
+        ? stripCrazyhouseFen(rawShownFen)
+        : isSecretQueen
+          ? stripSecretQueenFen(rawShownFen)
+          : rawShownFen
     const pockets = parsePocket(isCrazyhouse ? pocketFromFen(rawShownFen) : '')
 
     // Board orientation. Auto-flip (a preference) OVERRIDES the manual flip button:
@@ -369,10 +489,11 @@ export default function BotGame() {
             setAnalyzedEval(null)
             return
         }
-        if (!game || isDuck || isCrazyhouse || isAntichess) {
-            // Duck Chess, Crazyhouse, and Antichess aren't understood by the standard
-            // /analyze engine (the duck, pockets/drops, and compulsory-capture rules
-            // respectively) — no meaningful eval bar to show.
+        if (!game || isDuck || isCrazyhouse || isAntichess || isSecretQueen) {
+            // Duck Chess, Crazyhouse, Antichess, and Secret Queen aren't understood
+            // by the standard /analyze engine (the duck, pockets/drops, compulsory-
+            // capture, and hidden-queen rules respectively) — no meaningful eval
+            // bar to show.
             setAnalyzedEval(null)
             return
         }
@@ -490,12 +611,23 @@ export default function BotGame() {
     async function newGame() {
         setOpeningName(null)
         setError(null)
-        setCreating(true)
+        setRevealNote(null)
         setResigned(false)
         setFlipped(false)
         setViewIndex(null)
         const color: Color =
             colorChoice === 'random' ? (Math.random() < 0.5 ? 'w' : 'b') : colorChoice
+
+        // Secret Queen doesn't start here. The player has to choose their queen
+        // first, and they do it by clicking a pawn on the real board — so hand
+        // off to the designation step and let it call startSecretQueenGame().
+        if (variant === 'secretqueen') {
+            setPick(null)
+            setDesignating({ color })
+            return
+        }
+
+        setCreating(true)
         // Chess960 gets a fresh random back-rank; Duck Chess always starts from the
         // standard position (its rules, not the layout, are what differ); Standard
         // honors a position carried over from the analysis board.
@@ -514,11 +646,44 @@ export default function BotGame() {
             setGame(g)
             const opener = g.moves[g.moves.length - 1]
             if (opener) playForSan(opener.san, g.status !== 'ongoing')
+            announceReveal(g.moves)
         } catch (e) {
             setError(e instanceof Error ? e.message : 'Could not start a game.')
         } finally {
             setCreating(false)
         }
+    }
+
+    /** Commit the designation and start the game. `square` is the pawn the player
+     *  clicked, or a random one of theirs for "Surprise me". */
+    async function startSecretQueenGame(square: Square) {
+        if (!designating) return
+        const color = designating.color
+        setError(null)
+        setCreating(true)
+        try {
+            const g = await createBotGame(rating, color, {
+                variant: 'secretqueen',
+                timeControl: timeControl === 'untimed' ? undefined : timeControl,
+                secretSquare: square,
+            })
+            setDesignating(null)
+            setPick(null)
+            setGame(g)
+            const opener = g.moves[g.moves.length - 1]
+            if (opener) playForSan(opener.san, g.status !== 'ongoing')
+            announceReveal(g.moves)
+        } catch (e) {
+            setError(e instanceof Error ? e.message : 'Could not start a game.')
+        } finally {
+            setCreating(false)
+        }
+    }
+
+    function cancelDesignation() {
+        setDesignating(null)
+        setPick(null)
+        setError(null)
     }
 
     function voiceServerReply(priorCount: number, g: Game) {
@@ -531,11 +696,14 @@ export default function BotGame() {
     // Take back the human's last move (plus any bot reply since). Available once
     // the human has actually moved, while the game is live and nothing's in flight.
     // Duck Chess and Double Move undo aren't supported (stateless duck-move engine;
-    // Double Move's non-alternating plies, server-side).
+    // Double Move's non-alternating plies, server-side); Secret Queen refuses it too
+    // — the server won't un-reveal information the player already saw, so the
+    // button is disabled here rather than round-tripping to a 400.
     const canUndo =
         ongoing &&
         !thinking &&
         !isDuck &&
+        !isSecretQueen &&
         game?.variant !== 'doublemove' &&
         !game?.time_control &&
         !!game?.moves.some((m) => m.by === 'human')
@@ -575,6 +743,7 @@ export default function BotGame() {
         setGame(null)
         setStartFen(null)
         setOpeningName(null)
+        setRevealNote(null)
     }
 
     // Rematch: start a new bot game with colors swapped, same rating and variant.
@@ -585,11 +754,15 @@ export default function BotGame() {
         setColorChoice(other)
         setStartFen(null)
         setError(null)
+        setRevealNote(null)
         setCreating(true)
         setResigned(false)
         setFlipped(false)
         setViewIndex(null)
         const fen = variant === 'chess960' ? random960() : undefined
+        // Rematch has no setup screen to re-pick a secret file — the server's
+        // random designation (same as leaving Setup's picker on Random) is fine
+        // for a quick same-settings replay.
         createBotGame(rating, other, {
             variant,
             fen,
@@ -599,6 +772,7 @@ export default function BotGame() {
                 setGame(g)
                 const opener = g.moves[g.moves.length - 1]
                 if (opener) playForSan(opener.san, g.status !== 'ongoing')
+                announceReveal(g.moves)
             })
             .catch((e) => {
                 setError(e instanceof Error ? e.message : 'Could not start a game.')
@@ -691,7 +865,9 @@ export default function BotGame() {
                 </>
             }
             evalBar={
-                prefs.showEvalBar && !(prefs.zenMode && ongoing) ? (
+                // No eval bar during Secret Queen designation: there is no game to
+                // evaluate yet, and this variant never shows one anyway.
+                prefs.showEvalBar && !(prefs.zenMode && ongoing) && !designating ? (
                     <EvalBar ev={analyzedEval} orientation={orientation} />
                 ) : undefined
             }
@@ -708,6 +884,7 @@ export default function BotGame() {
                         caption={caption}
                         statusTone={statusTone}
                         error={error}
+                        revealNote={revealNote}
                         onSelectPly={selectPly}
                         onPrev={goPrev}
                         onNext={goNext}
@@ -727,6 +904,21 @@ export default function BotGame() {
                         onBestHint={setBestHint}
                         gameStartFen={startFen ?? START_FEN}
                     />
+                ) : designating ? (
+                    <>
+                        <DesignationPanel
+                            color={designating.color}
+                            picked={pick}
+                            opponentName="Zugzwang"
+                            busy={creating}
+                            onSurprise={() =>
+                                void startSecretQueenGame(randomSecretQueenSquare(designating.color))
+                            }
+                            onConfirm={() => pick && void startSecretQueenGame(pick)}
+                            onBack={cancelDesignation}
+                        />
+                        {error && <ErrorBanner sx={{ mt: 1.5 }}>{error}</ErrorBanner>}
+                    </>
                 ) : (
                     <>
                         <Setup
@@ -775,7 +967,7 @@ export default function BotGame() {
             )}
             <Board
                 fen={boardFen}
-                orientation={orientation}
+                orientation={designating ? designating.color : orientation}
                 sideToMove={game?.side_to_move ?? 'w'}
                 legalMoves={interactive && !confirmMove.pending ? game.legal_moves : []}
                 lastMove={lastMove}
@@ -802,6 +994,17 @@ export default function BotGame() {
                 dropTargets={isCrazyhouse && atLive ? drops.dropTargets : null}
                 onDrop={drops.drop}
                 onDropCancel={drops.cancel}
+                secretQueenSquare={
+                    designating
+                        ? pick
+                        : // Once it has revealed there is nothing left to badge — drop it
+                          // in the same frame as the queen appears, not a request later.
+                          isSecretQueen && !optimisticReveal
+                          ? (game?.secret_square ?? null)
+                          : null
+                }
+                pickTargets={designating ? secretQueenChoices(designating.color) : null}
+                onPick={setPick}
                 {...(activeOverride && atLive ? { overrideBoard: activeOverride } : {})}
             />
             {confirmMove.pending && (
@@ -811,6 +1014,7 @@ export default function BotGame() {
                     onCancel={confirmMove.cancel}
                 />
             )}
+            {designating && <DesignationRibbon picked={pick} />}
             </Box>
             {/* Resign confirmation — only reached when the confirmResign preference
                 is on (requestResign resigns directly otherwise). */}
@@ -855,6 +1059,7 @@ function MovePanel({
     caption,
     statusTone,
     error,
+    revealNote,
     onSelectPly,
     onPrev,
     onNext,
@@ -887,6 +1092,9 @@ function MovePanel({
     caption: string
     statusTone: StatusTone
     error: string | null
+    /** Secret Queen: plain-words narration of the most recent hidden-queen
+     *  reveal, or null between reveals. See BotGame's announceReveal. */
+    revealNote: string | null
     onSelectPly: (p: number) => void
     onPrev: () => void
     onNext: () => void
@@ -1073,6 +1281,20 @@ function MovePanel({
             </Box>
 
             {error && <ErrorBanner>{error}</ErrorBanner>}
+            {/* Secret Queen's reveal moment — reuses ErrorBanner's shell (the panel's
+                one existing inline-banner slot) in a neutral gold tone instead of the
+                danger red, since this is the variant's big moment, not a problem. */}
+            {!error && revealNote && (
+                <ErrorBanner
+                    sx={{
+                        color: 'var(--accent)',
+                        bgcolor: 'var(--accent-soft)',
+                        borderColor: 'var(--accent-line)',
+                    }}
+                >
+                    {revealNote}
+                </ErrorBanner>
+            )}
 
             {/* Moves — a FIXED 7 rows: padded with empty rows when the game is shorter
                 and scrolling once it's longer, so the panel height never jumps mid-game.
@@ -1179,7 +1401,10 @@ function MovePanel({
                     </Typography>
                 </Box>
 
-                {isAdmin && (
+                {/* Secret Queen isn't understood by the standard/duck/antichess engine
+                    paths AdminBestMove queries (a hidden queen has no analogue there),
+                    so it's excluded the same way as the eval bar/OpeningPanel above. */}
+                {isAdmin && game.variant !== 'secretqueen' && (
                     <AdminBestMove
                         fen={bestFen}
                         myTurn={bestMyTurn}
@@ -1349,15 +1574,17 @@ function Setup({
                 ? 'Play Crazyhouse — captured pieces switch sides and can be dropped back in.'
                 : variant === 'antichess'
                   ? 'Play Antichess — captures are compulsory; lose every piece (or get stalemated) to win.'
-                  : variant === 'fading'
-                    ? 'Play Fading — Zugzwang starts at full strength and loses 100 Elo with every move it makes.'
-                    : variant === 'glassjaw'
-                      ? 'Play Glass Jaw — full strength, but every check you land costs Zugzwang 300 Elo for good.'
-                      : variant === 'doublemove'
-                        ? "Play Double Move — two moves for every one of Zugzwang's; check with the first and your turn ends there."
-                        : customStart
-                          ? 'Play the Zugzwang engine from this position.'
-                          : 'Play the Zugzwang engine.'
+                  : variant === 'secretqueen'
+                    ? 'Play Secret Queen — one of your pawns is secretly a queen. It stays hidden until it moves like one; capture the enemy king to win.'
+                    : variant === 'fading'
+                      ? 'Play Fading — Zugzwang starts at full strength and loses 100 Elo with every move it makes.'
+                      : variant === 'glassjaw'
+                        ? 'Play Glass Jaw — full strength, but every check you land costs Zugzwang 300 Elo for good.'
+                        : variant === 'doublemove'
+                          ? "Play Double Move — two moves for every one of Zugzwang's; check with the first and your turn ends there."
+                          : customStart
+                            ? 'Play the Zugzwang engine from this position.'
+                            : 'Play the Zugzwang engine.'
     return (
         <Box
             sx={{

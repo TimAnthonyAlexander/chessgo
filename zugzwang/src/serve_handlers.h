@@ -94,4 +94,28 @@ json antichess_move(const json& body);
 json antichess_bestmove(const json& body);
 json antichess_analyze_game(const json& body);
 
+// Secret Queen: a hidden-information variant (src/secretqueen.h) — no check, no
+// en passant, win by capturing the king, and one pawn per side that is secretly
+// a queen. Stateless like the others: the canonical FEN carries the hidden
+// queens in a trailing "[e2|h7]" field, so it fully describes a position.
+//
+// UNLIKE every other variant here, the response is NOT one position for
+// everybody. Each of these returns the canonical FEN alongside the three
+// REDACTED views (fenWhite / fenBlack / boardFen), and the caller must forward
+// only the one its recipient is entitled to — see the redaction table in
+// ../docs/tasks/open/secret-queen.md. Handing a player the canonical `newFen`,
+// or handing either player the opponent's view, leaks the whole variant.
+//
+// secretqueen_legal_moves is likewise per-viewer by nature: it answers for the
+// side to move, in that side's own information set, so its result is safe for
+// that player and nobody else.
+//
+// The bot (src/secretqueen_bot.h) DOES lease a standard Search::Context, unlike
+// Duck/Crazyhouse/Antichess: this variant's board is an ordinary chess board, so
+// it reuses the real NNUE search rather than a hand eval.
+json secretqueen_designate(const json& body);
+json secretqueen_legal_moves(const json& body);
+json secretqueen_move(const json& body);
+json secretqueen_bestmove(const json& body);
+
 } // namespace Handlers

@@ -6,7 +6,7 @@ import SwiftUI
 /// player's profile.
 struct LeaderboardView: View {
     private static let categories: [RatingCategory] = [
-        .bullet, .blitz, .rapid, .classical, .puzzle, .duck, .antichess,
+        .bullet, .blitz, .rapid, .classical, .puzzle, .duck, .antichess, .secretqueen,
     ]
 
     @State private var category: RatingCategory = .blitz
@@ -87,6 +87,7 @@ struct LeaderboardView: View {
         case .duck: return "Duck"
         case .crazyhouse: return "Crazyhouse"
         case .antichess: return "Antichess"
+        case .secretqueen: return "Secret Queen"
         }
     }
 

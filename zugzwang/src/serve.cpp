@@ -234,6 +234,14 @@ int serve_main(int argc, char** argv) {
     // its own rules (forced-capture, inverted win condition, king-promotion),
     // eval, and real iterative-deepening search, no Search::Context pool
     // involvement (fully self-describing FEN, no pockets/duck-square).
+    // Secret Queen. Every response carries the canonical FEN plus the three
+    // redacted views; the caller forwards one view per recipient and never the
+    // canonical one (serve_handlers.h documents the split).
+    svr.Post("/secretqueen/designate", wrap(Handlers::secretqueen_designate));
+    svr.Post("/secretqueen/legal-moves", wrap(Handlers::secretqueen_legal_moves));
+    svr.Post("/secretqueen/move", wrap(Handlers::secretqueen_move));
+    svr.Post("/secretqueen/bestmove", wrap(Handlers::secretqueen_bestmove));
+
     svr.Post("/antichess/legal-moves", wrap(Handlers::antichess_legal_moves));
     svr.Post("/antichess/move", wrap(Handlers::antichess_move));
     svr.Post("/antichess/bestmove", wrap(Handlers::antichess_bestmove));

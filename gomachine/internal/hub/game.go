@@ -88,6 +88,15 @@ type game struct {
 	startFen  string
 	variant   string // board ruleset id: "standard", "chess960" or "duck" (see internal/variant)
 
+	// sqDesignationDeadline is Secret Queen's pre-game designation-phase
+	// timer (checkSecretQueenDesignations): zero once both sides have
+	// designated (or for every variant but secretqueen, always). It cannot
+	// be derived from g.state the way "is side X designated" can
+	// (secretQueenReady checks variant.HiddenState.OwnSecretSquare directly)
+	// because a deadline is genuinely new per-game state with no State
+	// equivalent — see hub.go's beginSecretQueenDesignation.
+	sqDesignationDeadline time.Time
+
 	// Pending draw / takeback offers. At most one of each may be outstanding; the
 	// `*By` color is the side that made the offer. Any committed move clears both
 	// (Lichess-style: a draw offer is declined by the opponent's reply, and a
@@ -437,4 +446,129 @@ func (g *game) legalMoves() []string {
 		return []string{}
 	}
 	return g.state.LegalMoves()
+}
+
+// --- Secret Queen: per-viewer state (variant.HiddenState) ---
+//
+// Every variant above this point shares ONE payload with both players and
+// every spectator (snapshot(), sendMatched, resumeMsg, spectateMsg) because
+// their position genuinely IS public information. Secret Queen's isn't: see
+// internal/variant/variant.go's HiddenState doc. The functions below are the
+// hub's side of that split — hub.go's broadcastState/designateSecretQueen
+// are the only callers.
+
+// hiddenState reports whether g's ruleset needs a per-viewer payload
+// (currently only Secret Queen) — the single switch point every call site
+// below and in hub.go uses to decide whether the ordinary shared
+// snapshot()/broadcast() path is still safe to use. Returns ok=false (hs
+// nil) for every other variant, so nothing here executes for them.
+func (g *game) hiddenState() (hs variant.HiddenState, ok bool) {
+	hs, ok = g.state.(variant.HiddenState)
+	return
+}
+
+// secretQueenReady reports whether BOTH sides have completed Secret Queen's
+// designation phase — i.e. whether the game may actually be played yet. For
+// every other variant this is unconditionally true (never gates anything).
+// It reads OwnSecretSquare rather than a separate bool because, BEFORE the
+// first move is played, "" unambiguously means "not designated yet" (a
+// reveal — the only other way OwnSecretSquare can read "" — cannot have
+// happened with zero moves on the board), so no extra state is needed to
+// track this; sqDesignationDeadline (game.go's field doc) is the only piece
+// that couldn't be derived the same way.
+func (g *game) secretQueenReady() bool {
+	hs, ok := g.hiddenState()
+	if !ok {
+		return true
+	}
+	return hs.OwnSecretSquare(chess.White) != "" && hs.OwnSecretSquare(chess.Black) != ""
+}
+
+// secretQueenViewerFields computes the fields that differ by recipient for a
+// Secret Queen payload — legalMoves, secretSquare (or secretSquares once the
+// game is over) and, mid-designation, needsDesignation. It is the SINGLE
+// place this gating logic lives, shared by sendMatched, resumeMsg (both
+// per-connection messages, called once per recipient already) and
+// snapshotFor below (the per-viewer counterpart of the ordinary broadcast),
+// so the "who may see what, and when" rule can't drift between those three
+// call sites. viewer is the recipient's own side; callers for a spectator
+// never call this at all (see snapshotFor's isPlayer branch) — a spectator
+// gets legalMoves:[] and, once over, both secretSquares, with no "viewer"
+// notion at all.
+func secretQueenViewerFields(g *game, hs variant.HiddenState, viewer chess.Color) map[string]any {
+	if g.over {
+		// The result is decided — nothing left to protect. A post-game review
+		// gets the full picture: both secret squares, though legalMoves is
+		// moot (the game is over) and left empty for shape-stability with the
+		// ongoing-game payload.
+		return map[string]any{
+			"legalMoves": []string{},
+			"secretSquares": map[string]string{
+				"w": hs.OwnSecretSquare(chess.White),
+				"b": hs.OwnSecretSquare(chess.Black),
+			},
+		}
+	}
+	if !g.secretQueenReady() {
+		return map[string]any{
+			"needsDesignation": hs.OwnSecretSquare(viewer) == "",
+			"legalMoves":       []string{},
+		}
+	}
+	fields := map[string]any{"secretSquare": hs.OwnSecretSquare(viewer)}
+	if g.state.Side() == viewer {
+		fields["legalMoves"] = g.legalMoves() // the mover's own list — safe ONLY for the mover
+	} else {
+		fields["legalMoves"] = []string{}
+	}
+	return fields
+}
+
+// snapshotFor is the per-viewer counterpart of snapshot(), used only when
+// g.hiddenState() reports ok (currently only Secret Queen — hub.go's
+// broadcastState is the sole caller). The base fields are identical to
+// snapshot()'s (and "fen" never differs by viewer — BoardFEN() never
+// encodes the secret in the first place, only the wire's legalMoves and
+// secretSquare fields carry information that must be withheld); only
+// isPlayer/viewerColor change what secretQueenViewerFields adds on top.
+// isPlayer=false is the spectator/neutral view (viewerColor is ignored).
+func (g *game) snapshotFor(hs variant.HiddenState, viewerColor chess.Color, isPlayer bool) map[string]any {
+	st := g.status()
+	var lastSan string
+	if len(g.moves) > 0 {
+		lastSan = g.sans[len(g.sans)-1]
+	}
+	snap := map[string]any{
+		"gameId":     g.id,
+		"variant":    g.variant,
+		"fen":        g.boardFEN(),
+		"sideToMove": st.SideToMove,
+		"lastMove":   g.lastUci(),
+		"san":        lastSan,
+		"status":     st.State,
+		"check":      st.Check, // always false for Secret Queen (state.go's Status())
+		"clock":      map[string]int64{"w": g.remainingMs(chess.White), "b": g.remainingMs(chess.Black)},
+		"ply":        len(g.moves),
+	}
+	for k, v := range hs.Extras() { // public extras (currently: the last reveal) — safe for everyone
+		snap[k] = v
+	}
+	if isPlayer {
+		for k, v := range secretQueenViewerFields(g, hs, viewerColor) {
+			snap[k] = v
+		}
+		return snap
+	}
+	// Spectator: never a secretSquare/needsDesignation field at all while the
+	// game is ongoing; once over, the same full reveal a player gets.
+	if g.over {
+		snap["legalMoves"] = []string{}
+		snap["secretSquares"] = map[string]string{
+			"w": hs.OwnSecretSquare(chess.White),
+			"b": hs.OwnSecretSquare(chess.Black),
+		}
+	} else {
+		snap["legalMoves"] = []string{}
+	}
+	return snap
 }

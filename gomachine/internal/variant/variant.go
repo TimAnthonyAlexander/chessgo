@@ -18,6 +18,9 @@ import (
 
 // Variant ids. Standard and Chess960 share the standard ruleset — they differ
 // only in the start FEN — so both resolve to the same State implementation.
+// SecretQueen is declared in secretqueen.go, next to its own State
+// implementation, rather than here — see that file's package doc for why it
+// is not just another entry in this list conceptually.
 const (
 	Standard   = "standard"
 	Chess960   = "chess960"
@@ -60,6 +63,34 @@ type State interface {
 	CanMate(side chess.Color) bool
 }
 
+// HiddenState is implemented by variants whose position is NOT shared public
+// information — currently only Secret Queen (secretqueen.go). Every OTHER
+// variant's payload genuinely IS the same for both players and every
+// spectator, which is what lets hub/hub.go's broadcast fan out one
+// marshalled message unchanged (hub/game.go's snapshot()). Secret Queen
+// can't: the canonical FEN and the mover's own LegalMoves() both name a
+// square that must never reach the opponent or a spectator. Rather than
+// adding OwnSecretSquare/Designate to the base State interface — which every
+// other adapter would have to answer with a meaningless no-op — the hub
+// type-switches on this narrower interface (hub/game.go's hiddenState) and
+// only THEN builds a payload per recipient instead of the shared one. See
+// that file's snapshotFor for the split this makes possible.
+type HiddenState interface {
+	State
+	// OwnSecretSquare returns viewer's OWN still-hidden square ("" if
+	// undesignated or already revealed) — the one piece of per-position data
+	// that cannot live in Extras(), because Extras() has no notion of "for
+	// whom": it is the same map handed to every recipient of a shared
+	// broadcast, and this value must never be.
+	OwnSecretSquare(viewer chess.Color) string
+	// Designate applies ONE side's designation-phase pick (the hub's
+	// designation timer / WS handler, not an ordinary ply — see
+	// secretqueen.go's Designate doc). ok=false means the square was invalid
+	// or the backend was unreachable; the caller should treat that exactly
+	// like a rejected move.
+	Designate(color chess.Color, square string) (State, bool)
+}
+
 // New builds the initial State for a variant from its start FEN.
 func New(id, fen string) (State, error) {
 	switch id {
@@ -69,6 +100,8 @@ func New(id, fen string) (State, error) {
 		return newCrazyhouseState(fen)
 	case Antichess:
 		return newAntichessState(fen)
+	case SecretQueen:
+		return newSecretQueenState(fen)
 	default: // Standard, Chess960, and anything unknown → standard rules.
 		return newStandardState(fen)
 	}
@@ -76,7 +109,9 @@ func New(id, fen string) (State, error) {
 
 // SelfSearches reports whether a variant provides its own bot search (Tier 2)
 // rather than playing through the hub's shared engine pool (Tier 1).
-func SelfSearches(id string) bool { return id == Duck || id == Crazyhouse || id == Antichess }
+func SelfSearches(id string) bool {
+	return id == Duck || id == Crazyhouse || id == Antichess || id == SecretQueen
+}
 
 // SelfSearchMove computes a bot move for a self-searching (Tier 2) variant from a
 // position snapshot: the canonical FEN plus the wire extras (the auxiliary fields
@@ -90,6 +125,8 @@ func SelfSearchMove(id, fen string, extras map[string]string, rating int) (uci s
 		return crazyhouseSelfSearchMove(fen, rating)
 	case Antichess:
 		return antichessSelfSearchMove(fen, rating)
+	case SecretQueen:
+		return secretQueenSelfSearchMove(fen, rating)
 	default:
 		return "", false
 	}

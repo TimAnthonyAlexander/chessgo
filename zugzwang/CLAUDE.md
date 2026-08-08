@@ -86,6 +86,31 @@ Standard chess:
 Variants (self-contained modules, no `Search::Context` pool involvement):
 - **Duck** (`src/duck.{h,cpp}`): `POST /duck/{legal-moves,move,bestmove,analyze-game}` — own rules/hand-eval/search.
 - **Crazyhouse** (`src/crazyhouse.{h,cpp}`): `POST /crazyhouse/{legal-moves,move,bestmove}` — own rules/pockets/drops + pocket-aware hand eval (NOT the shared NNUE).
+- **Antichess** (`src/antichess.{h,cpp}`): `POST /antichess/{legal-moves,move,bestmove,analyze-game}` — own rules/eval + its own real iterative-deepening negamax.
+
+**Secret Queen** (`src/secretqueen.{h,cpp}` + `src/secretqueen_bot.{h,cpp}`):
+`POST /secretqueen/{designate,legal-moves,move,bestmove}`. Two things make it
+unlike the four above, both deliberate:
+
+- **It DOES lease a `Search::Context`.** Its board is an ordinary chess board (a
+  hidden queen is a pawn on it), so the bot reuses the real NNUE search instead
+  of a hand eval — it searches the position with its OWN hidden queen swapped to
+  a queen and the opponent's left as a pawn, which is exactly its information
+  set. `secretqueen_bot.h` explains why standard chess search models a variant
+  with no check almost exactly, and documents the concealment veto.
+- **It is the only HIDDEN-INFORMATION variant, so responses are per-viewer.**
+  Every handler returns the canonical `newFen` (which names BOTH secrets)
+  alongside `fenWhite`, `fenBlack` and `boardFen`. Callers forward one view per
+  recipient and never the canonical one. Redaction lives here, in the engine that
+  owns the rules, so there is exactly one implementation of it.
+
+Rules gate: `make secretqueen_test && ./test/secretqueen_test` — cross-checks
+movegen AND apply against Duck's independent implementation of the same
+no-check/king-capture ruleset out to perft(4), then asserts the hidden-queen
+rules Duck cannot see. Net-free (stubs the accumulator), so it runs without
+`net.nnue`. Integration gate: `python3 test/secretqueen_selfplay.py [games]`
+against a running `serve` — bot-vs-bot games asserting the redaction and
+reveal invariants on every ply. Design + rules: `../docs/tasks/open/secret-queen.md`.
 
 The eval `{type,value}` object is converted to gomachine's shape so response
 schemas match the old engine.

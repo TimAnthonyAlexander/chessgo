@@ -83,6 +83,7 @@ struct IdentityHeader: View {
         case .duck: return "Duck"
         case .crazyhouse: return "Crazyhouse"
         case .antichess: return "Antichess"
+        case .secretqueen: return "Secret Queen"
         }
     }
 

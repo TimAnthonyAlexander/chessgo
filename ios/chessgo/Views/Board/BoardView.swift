@@ -99,13 +99,24 @@ struct BoardView: View {
     /// only while the peek is held.
     private let highlightSquares: [Square]
 
+    /// Secret Queen designation only: non-`nil` puts the WHOLE board into
+    /// PICK mode — every other input path (taps, drags, premoves, drops) is
+    /// disabled and these squares (the player's own home-rank pawns) are the
+    /// only thing tappable. Mirrors the web's `pickTargets`/`onPick` Board
+    /// props for the same reason: the player is choosing a SQUARE, not making
+    /// a move, so this deliberately does not go anywhere near `control.submit`.
+    private let pickTargets: Set<Square>?
+    private let onPick: ((Square) -> Void)?
+
     init(
         control: any BoardControl,
         armedDrop: Binding<PieceKind?> = .constant(nil),
         flipped: Bool = false,
         displayOptions: BoardDisplayOptions = .default,
         arrows: [BoardArrow] = [],
-        highlightSquares: [Square] = []
+        highlightSquares: [Square] = [],
+        pickTargets: Set<Square>? = nil,
+        onPick: ((Square) -> Void)? = nil
     ) {
         self.control = control
         self._armedDrop = armedDrop
@@ -113,6 +124,8 @@ struct BoardView: View {
         self.displayOptions = displayOptions
         self.arrows = arrows
         self.highlightSquares = highlightSquares
+        self.pickTargets = pickTargets
+        self.onPick = onPick
     }
 
     /// Board palette source. Read from the environment instead of taken as a
@@ -407,6 +420,13 @@ struct BoardView: View {
     ) -> some View {
         let isLight = (square.file + square.rank) % 2 == 1
         let theme = palette
+        // Secret Queen designation: everything that ISN'T one of the eight
+        // candidate pawns recedes, mirroring the web's `.sq.dimmed` — see the
+        // `.brightness`/`.saturation` pair applied to the whole square below,
+        // which (like the web's CSS `filter`) dims the piece art on it too,
+        // not just the square face.
+        let isDimmedForPicking = pickTargets != nil && !(pickTargets?.contains(square) ?? false)
+        let isPickable = pickTargets?.contains(square) ?? false
         ZStack {
             BoardSquareFace(face: theme.face(light: isLight))
                 .brightness(-(1 - displayOptions.boardBrightness))
@@ -420,9 +440,17 @@ struct BoardView: View {
             if checkedKings.contains(square) { checkGlow(cellSize: cellSize) }
             if premoveChainSquares.contains(square) { Theme.Colors.accent.opacity(0.22) }
             if selected == square { theme.select }
+            if isPickable { pickableHalo(cellSize: cellSize) }
 
             if let piece = displayBoard.piece(at: square), dragOrigin != square {
                 PieceView(piece: piece).padding(cellSize * 0.06)
+                // Secret Queen: badge the player's own hidden pawn, hidden
+                // alongside the piece itself while it's mid-drag so it never
+                // floats free of the artwork it's marking (matches the piece
+                // check right above, and the web's `!pieceHidden` guard).
+                if control.secretQueenSquare == square.algebraic {
+                    secretQueenBadge(cellSize: cellSize)
+                }
             }
             if displayBoard.duckSquare == square { duckMarker(cellSize: cellSize) }
             if displayOptions.showLegalMoves, targetsForSelected.contains(square) {
@@ -434,11 +462,16 @@ struct BoardView: View {
             if control.duckPlacementActive, displayBoard.piece(at: square) == nil {
                 Circle().fill(Theme.Colors.warning.opacity(0.35)).padding(cellSize * 0.3)
             }
+            if pickTargets != nil, control.secretQueenSquare == square.algebraic {
+                pickedRing(cellSize: cellSize)
+            }
             if displayOptions.showCoordinates {
                 coordinateLabel(square: square, cellSize: cellSize, isBottomRow: isBottomRow, isLeftColumn: isLeftColumn)
             }
         }
         .frame(width: cellSize, height: cellSize)
+        .brightness(isDimmedForPicking ? -0.16 : 0)
+        .saturation(isDimmedForPicking ? 0.55 : 1)
         .contentShape(Rectangle())
         .onTapGesture { handleTap(square) }
     }
@@ -490,6 +523,75 @@ struct BoardView: View {
         }
     }
 
+    /// Fixed, NOT theme-derived (no `palette.*` lookup) — a crown tinted from
+    /// one of the 16 board palettes risks vanishing into that same palette's
+    /// own squares. The near-black disc gives it contrast on a light square
+    /// and any light piece set; the pale ring gives it an edge on a dark
+    /// square and a dark piece. Together they hold up on both at once, across
+    /// every palette × piece-set combination, without needing to special-case
+    /// any of them. Ported 1:1 from the web's `.secret-badge` (Board.css) so
+    /// the two clients read the same mark.
+    private static let secretBadgeBackground = Color(red: 16.0 / 255, green: 17.0 / 255, blue: 21.0 / 255).opacity(0.86)
+    private static let secretBadgeRing = Color.white.opacity(0.68)
+    private static let secretBadgeGold = Color(red: 0xE9 / 255.0, green: 0xC1 / 255.0, blue: 0x68 / 255.0)
+
+    /// Secret Queen (rule 6, secret-queen.md): a quiet crown mark on the
+    /// player's own hidden pawn, from designation until it reveals. Laid out
+    /// with the same VStack/HStack/Spacer trick `coordinateLabel` uses above
+    /// — a corner glyph pinned inside the square's existing `cellSize`-sized
+    /// `ZStack` rather than a separately-positioned floating overlay — so it
+    /// scales and flips with the board like every other marker here instead
+    /// of drifting.
+    private func secretQueenBadge(cellSize: CGFloat) -> some View {
+        let size = cellSize * 0.32
+        return VStack {
+            HStack {
+                Spacer()
+                ZStack {
+                    Circle().fill(Self.secretBadgeBackground)
+                    Circle().strokeBorder(Self.secretBadgeRing, lineWidth: max(1, cellSize * 0.012))
+                    Image(systemName: "crown.fill")
+                        .font(.system(size: size * 0.52, weight: .semibold))
+                        .foregroundStyle(Self.secretBadgeGold)
+                }
+                .frame(width: size, height: size)
+                .shadow(color: .black.opacity(0.5), radius: 1.4, y: 1)
+            }
+            Spacer()
+        }
+        .padding(cellSize * 0.05)
+        .allowsHitTesting(false)
+    }
+
+    /// Secret Queen designation: a soft halo under a candidate pawn so the
+    /// eight read as a set at a glance, before anything is tapped. Mirrors
+    /// the web's `.sq.pickable::before` radial gradient. Fixed white, not
+    /// theme-derived, for the same reason the badge above is — it has to
+    /// read against any of the 16 board palettes underneath.
+    private func pickableHalo(cellSize: CGFloat) -> some View {
+        RadialGradient(
+            colors: [Color.white.opacity(0.22), Color.white.opacity(0.08), Color.white.opacity(0)],
+            center: .center,
+            startRadius: 0,
+            endRadius: cellSize * 0.46
+        )
+        .allowsHitTesting(false)
+    }
+
+    /// Secret Queen designation: the ring around the square the player has
+    /// currently picked (not yet confirmed) — mirrors the web's `.sq.picked`
+    /// inset double ring. Layered with the crown badge (`secretQueenBadge`,
+    /// driven by `control.secretQueenSquare` the same as a live game), so
+    /// picking a pawn shows both at once, immediately.
+    private func pickedRing(cellSize: CGFloat) -> some View {
+        ZStack {
+            Rectangle().strokeBorder(Color.white.opacity(0.92), lineWidth: max(2, cellSize * 0.045))
+            Rectangle().strokeBorder(Self.secretBadgeBackground, lineWidth: max(1, cellSize * 0.022))
+                .padding(max(2, cellSize * 0.045))
+        }
+        .allowsHitTesting(false)
+    }
+
     /// Legal-move marker, in the theme's dot color for this square's shade
     /// (light squares get the softer of the two, as on the web).
     private func targetDot(cellSize: CGFloat, isLight: Bool) -> some View {
@@ -527,6 +629,14 @@ struct BoardView: View {
     private func handleTap(_ square: Square) {
         guard control.inputMethod != .dragOnly else { return }
 
+        // Secret Queen designation takes the board over entirely — the only
+        // left action is choosing one of your own pawns, so this returns
+        // before any of the normal move machinery below ever sees the tap.
+        if let pickTargets {
+            if pickTargets.contains(square) { onPick?(square) }
+            return
+        }
+
         if control.duckPlacementActive {
             handleDuckPlacementTap(square)
             return
@@ -553,7 +663,9 @@ struct BoardView: View {
     private func dragGesture(side: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 4, coordinateSpace: .local)
             .onChanged { value in
-                guard control.inputMethod != .clickOnly, armedDrop == nil, !control.duckPlacementActive else { return }
+                guard control.inputMethod != .clickOnly, armedDrop == nil, !control.duckPlacementActive,
+                      pickTargets == nil
+                else { return }
                 if dragOrigin == nil {
                     guard let origin = square(at: value.startLocation, side: side), isOwnPiece(at: origin) else { return }
                     dragOrigin = origin
@@ -671,6 +783,40 @@ struct BoardView: View {
             BoardArrow(from: Square(algebraic: "g1")!, to: Square(algebraic: "f3")!, color: Theme.Colors.accent),
             BoardArrow(from: Square(algebraic: "c4")!, to: Square(algebraic: "f7")!, color: Color(red: 0.69, green: 0.42, blue: 1.0)),
         ]
+    )
+    .padding()
+    .background(Theme.Colors.background)
+}
+
+#Preview("BoardView — Secret Queen badge") {
+    // The badge on d2 sits on a light square in Amethyst's default palette
+    // and Neo's default piece set — the two hardest-to-see corners (light
+    // square + light-ish pawn art) — plus b7 for the dark-square case.
+    BoardView(control: PreviewBoardControl(
+        fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+        orientation: .white,
+        myTurn: true,
+        legalMoves: ["d2d3", "d2d4"],
+        secretQueenSquare: "d2"
+    ))
+    .padding()
+    .background(Theme.Colors.background)
+}
+
+#Preview("BoardView — Secret Queen designation") {
+    // Every white home-rank pawn is pickable (lifted/haloed); everything else
+    // (including Black's whole army) is dimmed. d2 is the current pick — ring
+    // + badge together, exactly as tapping it would leave the board.
+    BoardView(
+        control: PreviewBoardControl(
+            fen: ChessBoard.startFEN,
+            orientation: .white,
+            myTurn: false,
+            legalMoves: [],
+            secretQueenSquare: "d2"
+        ),
+        pickTargets: Set(SecretQueen.homeRankSquares(for: .white)),
+        onPick: { _ in }
     )
     .padding()
     .background(Theme.Colors.background)

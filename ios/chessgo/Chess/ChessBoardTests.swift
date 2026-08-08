@@ -14,6 +14,9 @@ enum ChessSelfCheck {
         checkPromotion()
         checkChess960FenParses()
         checkKnightPremoveTargets()
+        checkSecretQueenFenTrailerTolerated()
+        checkSecretQueenPawnShapedMoves()
+        checkSecretQueenOptimisticRevealPatch()
     }
 
     private static func sq(_ algebraic: String) -> Square {
@@ -81,6 +84,46 @@ enum ChessSelfCheck {
             sq("e2"), sq("e6"), sq("f3"), sq("f5"),
         ]
         assert(Set(targets) == expected, "knight targets should be exactly the 8 L-shapes from d4")
+    }
+
+    // MARK: - Secret Queen
+
+    private static func checkSecretQueenFenTrailerTolerated() {
+        let board = ChessBoard(fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1 [e2|h7]")
+        let occupied = Square.all.compactMap { board.piece(at: $0) }
+        assert(occupied.count == 32, "the trailing [w|b] field should be ignored, not break placement parsing")
+        assert(board.sideToMove == .white)
+        assert(board.fullmoveNumber == 1, "fields past index 5 shouldn't shift the real ones")
+    }
+
+    private static func checkSecretQueenPawnShapedMoves() {
+        let board = ChessBoard(fen: ChessBoard.startFEN)
+        assert(SecretQueen.isPawnShaped(uci: "e2e3", color: .white, board: board), "single push")
+        assert(SecretQueen.isPawnShaped(uci: "e2e4", color: .white, board: board), "double push from home")
+        assert(!SecretQueen.isPawnShaped(uci: "e2e5", color: .white, board: board), "not a legal pawn distance")
+        assert(!SecretQueen.isPawnShaped(uci: "e2a6", color: .white, board: board), "diagonal slide is a queen move, not a pawn one")
+
+        let midgame = ChessBoard(fen: "rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 2")
+        assert(SecretQueen.isPawnShaped(uci: "e4d5", color: .white, board: midgame), "diagonal onto an occupied square is an ordinary pawn capture")
+        assert(!SecretQueen.isPawnShaped(uci: "e4d5", color: .black, board: midgame), "the wrong color's forward direction shouldn't match")
+
+        // Destination e4 is empty, but e3 (the square a double push passes
+        // through) is occupied — the push should still be refused.
+        let blocked = ChessBoard(fen: "8/8/8/8/8/4p3/4P3/K6k w - - 0 1")
+        assert(!SecretQueen.isPawnShaped(uci: "e2e4", color: .white, board: blocked), "double push through an occupied square isn't pawn-shaped")
+    }
+
+    /// Mirrors what `BotGameDriver.applyOptimistic` does for a Secret Queen
+    /// reveal: apply the move, then patch the destination to a real queen —
+    /// `applying(_:)` alone would keep it a pawn, since the board stores a
+    /// still-hidden queen as a plain `P` (see `withPiece`'s doc comment).
+    private static func checkSecretQueenOptimisticRevealPatch() {
+        let board = ChessBoard(fen: ChessBoard.startFEN)
+        let afterApply = board.applying("e2a6")
+        assert(afterApply.piece(at: sq("a6")) == Piece(color: .white, kind: .pawn), "applying(_:) alone doesn't know about hidden queens")
+        let revealed = afterApply.withPiece(Piece(color: .white, kind: .queen), at: sq("a6"))
+        assert(revealed.piece(at: sq("a6")) == Piece(color: .white, kind: .queen))
+        assert(revealed.piece(at: sq("e1")) == Piece(color: .white, kind: .king), "withPiece should only touch the one square it's given")
     }
 }
 #endif

@@ -9,6 +9,14 @@ import Foundation
 /// separate fields alongside `fen` (see `LiveGameState`/bot-game responses).
 /// `init(fen:)` always produces `nil` for both; callers merge in the server's
 /// values with `withDuckSquare`/`withPocket`.
+///
+/// Secret Queen FENs carry one more trailing field this type doesn't model:
+/// `... w KQkq - 0 1 [e2|-]`, the redacted "who's still hidden" suffix
+/// (`docs/tasks/open/secret-queen.md` "Representation"). `init(fen:)` only
+/// ever reads fields 0-5 by index, so that seventh space-separated token is
+/// silently ignored rather than mis-parsed — no explicit strip needed here.
+/// The human's own secret square comes off `BotGame.secretSquare` instead
+/// (see `BotGameDriver`), never by re-parsing this trailer.
 struct ChessBoard: Sendable, Equatable {
     let squares: [Piece?] // count 64, indexed by Square.index (a1 = 0, h8 = 63)
     let sideToMove: PieceColor
@@ -90,6 +98,23 @@ struct ChessBoard: Sendable, Equatable {
         ChessBoard(squares: squares, sideToMove: sideToMove, castlingRights: castlingRights,
                    enPassant: enPassant, halfmoveClock: halfmoveClock, fullmoveNumber: fullmoveNumber,
                    duckSquare: duckSquare, pocket: pocket)
+    }
+
+    /// Copy with a single square's occupant replaced outright. Not a general
+    /// mutation API — every ordinary update goes through `applying(_:)`. This
+    /// exists only for Secret Queen's optimistic reveal (`BotGameDriver`):
+    /// `applying(_:)` moves whatever piece already sits on the from-square,
+    /// which for a still-hidden queen is a plain pawn (the board deliberately
+    /// stores it that way — see `docs/tasks/open/secret-queen.md`
+    /// "Representation"), so the driver patches the destination to a real
+    /// queen itself the instant the player commits a revealing move, rather
+    /// than waiting a whole round trip for the server's FEN to say so.
+    func withPiece(_ piece: Piece?, at square: Square) -> ChessBoard {
+        var next = squares
+        next[square.index] = piece
+        return ChessBoard(squares: next, sideToMove: sideToMove, castlingRights: castlingRights,
+                           enPassant: enPassant, halfmoveClock: halfmoveClock, fullmoveNumber: fullmoveNumber,
+                           duckSquare: duckSquare, pocket: pocket)
     }
 
     /// Apply a submitted turn visually and return a new board. Accepts any of

@@ -458,6 +458,120 @@ html.board-dim-adj .board::after {
     color: var(--coord-on-dark);
 }
 
+/* Secret Queen: a small crown badge on the player's OWN hidden pawn (rule 6 —
+ * see docs/tasks/open/secret-queen.md), rendered as part of the square/piece
+ * (Board.tsx's secretBadge), so it scales and flips with the board like every
+ * other overlay here instead of drifting as a floating absolute-positioned
+ * layer. Deliberately NOT theme-derived (no --dot/--accent lookup): it has to
+ * read the same dark-disc-and-crown regardless of which of the 16 board
+ * palettes or 7 piece sets is active, including the darkest (Onyx) and
+ * lightest (Ice/Carrara) — a themed color risks vanishing into its own square.
+ * The dark disc gives it contrast on a light square; the light ring gives it
+ * an edge on a dark one; together they hold up on both at once. Small and
+ * quiet on purpose — it's a reminder, not decoration. */
+.secret-badge {
+    position: absolute;
+    top: 4%;
+    right: 4%;
+    z-index: 3;
+    width: 32%;
+    height: 32%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: rgba(16, 17, 21, 0.86);
+    box-shadow:
+        0 0 0 1.4px rgba(255, 255, 255, 0.68),
+        0 1px 3px rgba(0, 0, 0, 0.55);
+    color: #e9c168;
+    pointer-events: none;
+}
+.secret-badge svg {
+    width: 62%;
+    height: 62%;
+    display: block;
+}
+
+/* Secret Queen designation: the pre-game screen where you choose which of your
+ * eight pawns is the queen. The board itself is the picker — you click the pawn,
+ * not a letter — so the whole affordance has to live on the squares.
+ *
+ * Three states, and the contrast between them is the whole point: everything
+ * that is not a candidate recedes (.dimmed), the eight candidates lift and
+ * invite a click (.pickable), and the one you have chosen holds a ring
+ * (.picked). Like .secret-badge above, none of it is theme-derived — it must
+ * read identically on all 16 palettes, so it works in black and white and
+ * borrows nothing from --accent. */
+.sq.dimmed {
+    filter: brightness(0.62) saturate(0.65);
+    transition: filter 0.18s ease;
+}
+
+.sq.pickable {
+    cursor: pointer;
+    transition: filter 0.18s ease;
+}
+
+/* The lift is on the PIECE, not the square: moving the square would break the
+ * grid, and the pawn is what the player is actually choosing. */
+.sq.pickable .piece {
+    transition:
+        transform 0.16s ease,
+        filter 0.16s ease;
+    filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.55));
+}
+
+.sq.pickable:hover .piece,
+.sq.pickable:focus-visible .piece {
+    transform: translateY(-9%) scale(1.06);
+    filter: drop-shadow(0 5px 10px rgba(0, 0, 0, 0.6));
+}
+
+/* A soft halo under a candidate pawn so the eight read as a set at a glance,
+ * before any hover. Inset so it never bleeds into the neighbouring square.
+ * ::before, not ::after — `.sq.last::after` and `.sq.sel::after` own that one for
+ * the move tints. Neither can be on the board during designation (there is no
+ * last move and input is disabled), but sharing a pseudo-element with them would
+ * be a trap for whoever reuses pick mode somewhere that does. */
+.sq.pickable::before {
+    content: '';
+    position: absolute;
+    inset: 12%;
+    border-radius: 50%;
+    background: radial-gradient(
+        circle,
+        rgba(255, 255, 255, 0.22) 0%,
+        rgba(255, 255, 255, 0.08) 55%,
+        transparent 72%
+    );
+    pointer-events: none;
+    z-index: 0;
+}
+
+.sq.picked {
+    box-shadow:
+        inset 0 0 0 3px rgba(255, 255, 255, 0.9),
+        inset 0 0 0 5px rgba(16, 17, 21, 0.75);
+}
+
+.sq.picked .piece {
+    transform: translateY(-9%) scale(1.06);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .sq.dimmed,
+    .sq.pickable,
+    .sq.pickable .piece {
+        transition: none;
+    }
+    .sq.pickable:hover .piece,
+    .sq.pickable:focus-visible .piece,
+    .sq.picked .piece {
+        transform: none;
+    }
+}
+
 /* Promotion picker */
 .promo-backdrop {
     position: absolute;

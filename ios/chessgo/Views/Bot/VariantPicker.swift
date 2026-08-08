@@ -10,6 +10,7 @@ extension Variant {
         case .duck: return "A duck blocks one square each turn."
         case .crazyhouse: return "Captures go to your pocket — drop them back in."
         case .antichess: return "Captures are forced. Lose every piece to win."
+        case .secretqueen: return "One of your pawns is secretly a queen. Capture the king to win."
         case .fading: return "The bot gets weaker every move it makes."
         case .glassjaw: return "The bot is strong until you land a check, then it wilts."
         case .doublemove: return "Two moves per turn — a check ends your turn early."
