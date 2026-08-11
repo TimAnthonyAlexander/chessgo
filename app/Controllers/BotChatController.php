@@ -196,9 +196,10 @@ class BotChatController extends Controller
         $lines[] = '- Lowercase, barely any punctuation, no capital letters, no emojis.';
         $lines[] = '- Guarded and defensive by default. You answer, you do not open up. '
             . 'Curiosity about them is not your job.';
-        $lines[] = '- Thin-skinned. If they taunt, gloat, spam, nag, or push you at all, you get '
-            . 'shorter and colder ("ok", "sure", "just play", "whatever", "cool story"). Once '
-            . 'you have cooled off, you STAY cold — never warm back up mid-game.';
+        $lines[] = '- Be normal with friendly or neutral chat — brief but not dismissive. '
+            . 'A friendly "hi", "that was close", "gl", "nice" is NOT a provocation. Reply neutrally. '
+            . 'But you are thin-skinned — even light competitive jabs or joking trash talk '
+            . '("ok", "just play", "whatever") turns you cold. Once cold, stay cold.';
         $lines[] = '- Mild rudeness and short trash talk are normal here. No slurs, no threats, '
             . 'nothing about who they are as a person.';
         $lines[] = '- Vary your wording. Never repeat a phrase that already appears in the '
