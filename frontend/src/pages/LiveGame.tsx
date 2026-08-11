@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Button, type SxProps, type Theme, Typography } from '@mui/material'
 import {
     Check,
@@ -247,15 +247,18 @@ export default function LiveGame() {
         [g?.moves, atLive, shownPly],
     )
 
-    // History navigation (client-side review only).
-    const goFirst = () => setViewIndex(0)
-    const goPrev = () => setViewIndex(Math.max(0, shownPly - 1))
-    const goNext = () => {
+    // History navigation (client-side review only). Memoized so MoveList's own
+    // memo() (which already gets a stable `moves` prop) actually bites — a fresh
+    // onSelectPly every render defeated it regardless of moves/currentPly being
+    // unchanged.
+    const goFirst = useCallback(() => setViewIndex(0), [])
+    const goPrev = useCallback(() => setViewIndex(Math.max(0, shownPly - 1)), [shownPly])
+    const goNext = useCallback(() => {
         const n = Math.min(liveLen, shownPly + 1)
         setViewIndex(n >= liveLen ? null : n)
-    }
-    const goLast = () => setViewIndex(null)
-    const selectPly = (p: number) => setViewIndex(p >= liveLen ? null : p)
+    }, [liveLen, shownPly])
+    const goLast = useCallback(() => setViewIndex(null), [])
+    const selectPly = useCallback((p: number) => setViewIndex(p >= liveLen ? null : p), [liveLen])
     useMoveNavKeys({ onPrev: goPrev, onNext: goNext, onFirst: goFirst, onLast: goLast, enabled: !!g })
 
     // Two board controllers, both hooks called unconditionally (only one is ever
@@ -270,6 +273,10 @@ export default function LiveGame() {
     // of a fresh arrow function per hook call on every render (which would
     // otherwise cascade into their internal useCallbacks re-creating too).
     const submitMove = useCallback((uci: string) => gameSocket.move(uci), [])
+    // Same reasoning as submitMove: gameSocket is a page-lifetime singleton, so
+    // this can be a stable empty-deps callback — lets memo(ChatPanel) actually
+    // bail on renders that don't touch the chat (a move, a clock tick, ...).
+    const sendChat = useCallback((t: string) => gameSocket.sendChat(t), [])
     const interaction = useBoardInteraction({
         fen: g?.fen ?? '',
         myTurn: boardInteractive && !isDuck,
@@ -493,6 +500,59 @@ export default function LiveGame() {
         }
     }, [myMove])
 
+    // The hooks below sit ABOVE the `if (!g)` bail-out on purpose: a hook after an
+    // early return is a conditional hook. The render with no game would skip them
+    // and the render where one arrives would call them, which is React's "Rendered
+    // more hooks than during the previous render" crash — reachable by reloading
+    // /game/:id, where the "No active game" branch paints first and the socket's
+    // resume lands a moment later. So each one tolerates a null `g` instead.
+
+    // Captured material (approximate, from the live FEN) for the player-bar readouts.
+    // Memoized so PlayerBar/CapturedPanel don't get a fresh object on every render
+    // that doesn't touch the position (chat, presence, offers, …).
+    const mat = useMemo(() => computeMaterial(g?.fen ?? START_FEN), [g?.fen])
+
+    // Clock.tsx's effect re-arms its interval whenever `getMs`'s identity changes
+    // (see its `[getMs, active, running]` deps), so a fresh closure here — as this
+    // used to be, created inline in the JSX below — tore down and restarted BOTH
+    // players' clock intervals on every LiveGame render, including ones with no
+    // clock-relevant change (chat, a draw offer, presence). liveRemaining only
+    // reads clock/ended/moves.length/sideToMove/clockAt off `g`, plus the color
+    // argument, so those are the only deps that matter — this closure stays
+    // stable across e.g. a chat message (which doesn't touch any of them) and
+    // only changes when the position/clock genuinely advances.
+    const opponentGetMs = useCallback(
+        () => (g ? liveRemaining(g, other(g.color)) : 0),
+        [g?.clock, g?.ended, g?.moves.length, g?.sideToMove, g?.clockAt, g?.color],
+    )
+    const myGetMs = useCallback(
+        () => (g ? liveRemaining(g, g.color) : 0),
+        [g?.clock, g?.ended, g?.moves.length, g?.sideToMove, g?.clockAt, g?.color],
+    )
+
+    // Secret Queen designation: the set of squares Board should treat as pickable.
+    // secretQueenChoices(color) is pure (only reads its argument), so this is a
+    // fresh `Set` only when designation starts/ends or the color changes — not on
+    // every render, which used to defeat memo(Board) outright while designating.
+    const pickTargets = useMemo(
+        () => (designating && g ? secretQueenChoices(g.color) : null),
+        [designating, g?.color],
+    )
+
+    // Memoized so MoveList's own memo() actually bites — its `moves` prop used to
+    // be a fresh array of fresh objects every render.
+    const moveEntries: MoveEntry[] = useMemo(
+        () =>
+            (g?.moves ?? []).map((m, i) => ({
+                ply: i + 1,
+                san: m.san,
+                uci: m.uci,
+                by: 'human' as const,
+                fen: '',
+            })),
+        [g?.moves],
+    )
+
     if (!g) {
         return (
             <Box
@@ -522,27 +582,8 @@ export default function LiveGame() {
     // a game is in progress. It lapses once the game ends so the result shows normally.
     const zen = prefs.zenMode && !g.ended
 
-    // Captured material (approximate, from the live FEN) for the player-bar readouts.
-    // Memoized so PlayerBar/CapturedPanel don't get a fresh object on every render
-    // that doesn't touch the position (chat, presence, offers, …).
-    const mat = useMemo(() => computeMaterial(g.fen), [g.fen])
-
     // The player's own rating for this pool (shown in the "You" bar; hidden under zen).
     const myRating = userRatingFor(user, g.variant, g.pool)
-
-    // Memoized so MoveList's own memo() actually bites — its `moves` prop used to
-    // be a fresh array of fresh objects every render.
-    const moveEntries: MoveEntry[] = useMemo(
-        () =>
-            g.moves.map((m, i) => ({
-                ply: i + 1,
-                san: m.san,
-                uci: m.uci,
-                by: 'human' as const,
-                fen: '',
-            })),
-        [g.moves],
-    )
 
     return (
         <BoardPage
@@ -591,11 +632,7 @@ export default function LiveGame() {
                         `0 0 50%` — no grow, no shrink, so it's a fixed half rather than
                         whatever is left over. */}
                     <Box sx={{ flex: '0 0 50%', minHeight: 0, display: 'flex' }}>
-                        <ChatPanel
-                            messages={g.messages}
-                            onSend={(t) => gameSocket.sendChat(t)}
-                            disabled={g.ended}
-                        />
+                        <ChatPanel messages={g.messages} onSend={sendChat} disabled={g.ended} />
                     </Box>
                 </Box>
                 </>
@@ -682,7 +719,7 @@ export default function LiveGame() {
                                 ? null
                                 : g.opponent.rating
                         }
-                        getMs={() => liveRemaining(g, other(g.color))}
+                        getMs={opponentGetMs}
                         active={!g.ended && g.sideToMove === other(g.color)}
                         running={!g.ended && g.moves.length >= 2}
                         initialMs={g.timeControl.base}
@@ -1005,7 +1042,7 @@ export default function LiveGame() {
                         name="You"
                         title={user?.title}
                         rating={myRating}
-                        getMs={() => liveRemaining(g, g.color)}
+                        getMs={myGetMs}
                         active={myTurn}
                         running={!g.ended && g.moves.length >= 2}
                         initialMs={g.timeControl.base}
@@ -1060,7 +1097,7 @@ export default function LiveGame() {
                 secretQueenSquare={
                     designating ? pick : isSecretQueen && g.secretSquare ? (g.secretSquare as Square) : null
                 }
-                pickTargets={designating ? secretQueenChoices(g.color) : null}
+                pickTargets={pickTargets}
                 onPick={setPick}
             />
             {designating && <DesignationRibbon picked={pick} />}
@@ -1231,7 +1268,11 @@ function CapturedGlyphs({
 // Desktop captured-material panel for the left column: both players' captured
 // pieces with room to breathe (the narrow player bar wraps after ~2 glyphs).
 // Renders nothing until the first capture so it never shifts the layout early.
-function CapturedPanel({
+//
+// memo()'d: every prop is either a primitive (opponentColor/humanColor, always
+// 'w'/'b') or `mat`, which LiveGame already memoizes on `g.fen` — so this only
+// re-renders when the material actually changes, not on chat/offers/presence.
+const CapturedPanel = memo(function CapturedPanel({
     mat,
     opponentColor,
     humanColor,
@@ -1272,9 +1313,16 @@ function CapturedPanel({
             ))}
         </Box>
     )
-}
+})
 
-function PlayerBar({
+// memo()'d: name/title/rating/active/running/initialMs/color/online/divider/zen
+// are all primitives (rating and divider are recomputed inline at the call site
+// but are primitive VALUES, which shallow-compare fine regardless), `mat` is
+// LiveGame's fen-keyed useMemo, and `getMs` is now a useCallback keyed to the
+// clock fields it actually reads — so this bails on chat/offers/presence, which
+// used to re-render both player bars (and, via Clock's getMs-keyed effect,
+// re-arm the countdown interval) on every one of those events.
+const PlayerBar = memo(function PlayerBar({
     name,
     title,
     rating,
@@ -1380,7 +1428,7 @@ function PlayerBar({
             )}
         </Box>
     )
-}
+})
 
 // A subtle opening-name strip for live play. Self-fetches the position's opening
 // name (ECO + name) as the game develops, showing NOTHING until one is known so it
@@ -1392,7 +1440,11 @@ function PlayerBar({
 // moment both loses the one bit of context worth keeping ("this was a Najdorf") and
 // shifts the column. A later, more specific name still replaces an earlier one —
 // only the drop back to "no opening" is ignored.
-function LiveOpening({ fen }: { fen: string }) {
+//
+// memo()'d: its one prop, `fen`, is a primitive string — this only re-renders
+// (and re-fires its fetch effect) when the position actually changes, not on
+// every LiveGame render in between.
+const LiveOpening = memo(function LiveOpening({ fen }: { fen: string }) {
     const [opening, setOpening] = useState<Opening | null>(null)
     useEffect(() => {
         // The starting position has no opening to name yet.
@@ -1464,7 +1516,7 @@ function LiveOpening({ fen }: { fen: string }) {
             </Typography>
         </Box>
     )
-}
+})
 
 function OfferBanner({
     label,

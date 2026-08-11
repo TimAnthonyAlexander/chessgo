@@ -71,7 +71,17 @@ function MoveList({
     const activeRef = useRef<HTMLDivElement>(null)
     useEffect(() => {
         if (!isDesktop) return
-        activeRef.current?.scrollIntoView({ block: 'nearest' })
+        // Deferred a frame: scrollIntoView forces a synchronous layout to measure the
+        // row against its scroll ancestor, and on the live page this effect fires when
+        // the WebSocket echoes the just-played move — often within a frame or two of
+        // the board's own pointer/drop-animation work. Pushing the reflow to the next
+        // frame keeps it off that critical frame; the scroll is instant either way (no
+        // `behavior: 'smooth'` anywhere), so a one-frame delay isn't visible. Cancel a
+        // pending frame on cleanup so rapid ply scrubbing only scrolls to the latest.
+        const id = requestAnimationFrame(() => {
+            activeRef.current?.scrollIntoView({ block: 'nearest' })
+        })
+        return () => cancelAnimationFrame(id)
     }, [currentPly, moves.length, isDesktop])
 
     const rowEls = (

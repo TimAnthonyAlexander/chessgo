@@ -130,9 +130,22 @@ export default function AdminBestMove({
     // board). The board itself owns the hold-to-reveal gating — nothing is drawn until
     // the admin peeks (keyboard on desktop, the touch pad on mobile). Never report a
     // stale hint: cleared on error, and on off-turn via `best` below.
+    //
+    // Gate on VALUE, not on every `best` update: each ladder rung (20/100/1000ms) calls
+    // setBest with a freshly allocated hint object even when the best move hasn't
+    // changed, and Board is memo'd with the default shallow prop comparator — an
+    // unguarded forward re-renders all 64 squares for zero visual difference on every
+    // rung, right as the admin is dragging a piece. Keyed on fen (not just the hint) so
+    // a genuine position change always forces a fresh report even when the new best move
+    // happens to reuse the same squares as the old one.
+    const lastReportedRef = useRef<{ fen: string; hint: Hint }>({ fen: '', hint: null })
     useEffect(() => {
-        onHintRef.current?.(error ? null : (best?.hint ?? null))
-    }, [best, error])
+        const hint = error ? null : (best?.hint ?? null)
+        const last = lastReportedRef.current
+        const unchanged = last.fen === fen && last.hint?.uci === hint?.uci
+        lastReportedRef.current = { fen, hint }
+        if (!unchanged) onHintRef.current?.(hint)
+    }, [best, error, fen])
 
     useEffect(() => {
         // Only compute the best move for the player's own side — no point spending

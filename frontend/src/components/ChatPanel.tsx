@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { Box, Typography } from '@mui/material'
 import { MessageSquare, Send } from 'lucide-react'
 import { PANEL_SHADOW } from './PanelUI'
@@ -7,7 +7,14 @@ import type { ChatMessage } from '../lib/socket'
 // Players-only in-game chat. Read-only history + a single-line composer; the
 // store relays text to the opponent and echoes our own line back, so every
 // message (mine or theirs) arrives via the same `chat` event.
-export default function ChatPanel({
+//
+// memo()'d: `messages` only gets a new array reference from GameSocket when a
+// chat message actually arrives (a move/offer/presence update spreads the game
+// object without touching it), `onSend` is expected to be a useCallback-stable
+// closure at the call site (LiveGame's `gameSocket.sendChat` wrapper), and
+// `disabled` is a primitive boolean — so this bails on every LiveGame render
+// that isn't a chat event, a game start/end, or the disabled flag flipping.
+function ChatPanel({
     messages,
     onSend,
     disabled,
@@ -163,6 +170,8 @@ export default function ChatPanel({
         </Box>
     )
 }
+
+export default memo(ChatPanel)
 
 function ChatLine({ m }: { m: ChatMessage }) {
     return (

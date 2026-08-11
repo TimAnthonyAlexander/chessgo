@@ -1761,14 +1761,22 @@ function Board({
                 </div>
             )}
 
-            {drag && (
-                <DragGhost
-                    posRef={dragPosRef}
-                    size={drag.size}
-                    // Blindfold hides the ghost image too, so a drag can't reveal the piece.
-                    backgroundImage={prefs.blindfold ? 'none' : `url(${pieceImageUrl(drag.piece)})`}
-                />
-            )}
+            {/* PORTALED to <body>, same reason as the peek pad below: with
+                "Coordinates: outside" on, .board-wrap sets `container-type`,
+                which makes it a containing block for `position: fixed`
+                descendants — so the ghost's viewport-relative translate3d
+                math would resolve against the wrap instead of the viewport
+                and sit offset from the cursor. */}
+            {drag &&
+                createPortal(
+                    <DragGhost
+                        posRef={dragPosRef}
+                        size={drag.size}
+                        // Blindfold hides the ghost image too, so a drag can't reveal the piece.
+                        backgroundImage={prefs.blindfold ? 'none' : `url(${pieceImageUrl(drag.piece)})`}
+                    />,
+                    document.body,
+                )}
 
             {/* Touch peek pad (admin): the mobile counterpart to the desktop 'H' hold.
                 A floating press-and-hold button — held reveals the hint, released hides

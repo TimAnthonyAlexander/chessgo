@@ -1,4 +1,4 @@
-import { type ReactNode } from 'react'
+import { memo, type ReactNode } from 'react'
 import { Box, Typography } from '@mui/material'
 import { Crown, Rabbit, Timer, Zap } from 'lucide-react'
 import { type Variant, VARIANT_LABEL } from '../lib/variants'
@@ -8,8 +8,11 @@ import { type Variant, VARIANT_LABEL } from '../lib/variants'
  *
  * Deliberately says nothing about WHO is playing or which colour you are: both
  * player rows sit beside the board with names and ratings, and your own colour is
- * implied by the orientation you're looking at. Repeating it here was noise. */
-export default function LiveModeCard({
+ * implied by the orientation you're looking at. Repeating it here was noise.
+ *
+ * memo()'d: all three props (pool, rated, variant) are primitives that never
+ * change mid-game, so this only ever renders once per game. */
+function LiveModeCard({
     pool,
     rated,
     variant = 'standard',
@@ -89,6 +92,8 @@ export default function LiveModeCard({
         </Box>
     )
 }
+
+export default memo(LiveModeCard)
 
 /** Map a "base+inc" pool (minutes + seconds) to a Lichess-style category. */
 function categoryFor(pool: string): { label: string; icon: ReactNode } {
