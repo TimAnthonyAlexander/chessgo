@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { Box, CircularProgress, MenuItem, Select, Typography } from '@mui/material'
 import {
@@ -18,6 +18,8 @@ import {
     VolumeX,
     X,
     XCircle,
+    Zap,
+    ZapOff,
 } from 'lucide-react'
 import Board from '../components/Board'
 import BoardActions from '../components/BoardActions'
@@ -36,7 +38,7 @@ import { applyUciVisually, type BoardMap, parseFen } from '../lib/chess'
 import { playForMove, setSoundEnabled, soundEnabled, sounds } from '../lib/sounds'
 import { authStore, useAuth } from '../lib/auth'
 
-type Phase = 'loading' | 'intro' | 'solving' | 'checking' | 'solved' | 'failed' | 'empty'
+type Phase = 'loading' | 'solving' | 'checking' | 'solved' | 'failed' | 'empty'
 // A puzzle "session" runs across many puzzles under one fixed theme + time control:
 //   setup   — the front page where you pick theme + time, then Start
 //   running — solving puzzles; theme/time are locked, a clock counts down
@@ -76,6 +78,13 @@ const THEMES: { value: string; label: string }[] = [
 // tag that isn't in the picker. Same shape as Lichess's own tags: a single
 // camelCase word.
 const THEME_TAG_RE = /^[A-Za-z][A-Za-z0-9]{0,39}$/
+
+// Mate themes ('mate', 'mateIn3', and the named patterns like 'smotheredMate'
+// or 'backRankMate'): on those the side cue lights up only the enemy KING, since
+// every other black piece is scenery around the one square that matters. Reads
+// the SESSION filter, so it's off under "All puzzles" even when the puzzle dealt
+// happens to be a mate — a served puzzle doesn't carry its themes.
+const isMateTheme = (v: string): boolean => /^mate(In\d+)?$/.test(v) || /Mate$/.test(v)
 
 // Turns an uncurated camelCase tag into a readable label ("hangingPiece" →
 // "Hanging piece") so it never falls back to the misleading "All puzzles".
@@ -147,6 +156,25 @@ function storeLimit(v: number | null): void {
     }
 }
 
+// The side cue (see Board's `pieceCue`) is on by default and can be switched off
+// from the status card. Stored as an explicit 'off', so a browser with no key
+// yet — or unreadable storage — gets the default rather than silently opting out.
+const CUE_KEY = 'chessgo.puzzleSideCue'
+function readCue(): boolean {
+    try {
+        return localStorage.getItem(CUE_KEY) !== 'off'
+    } catch {
+        return true
+    }
+}
+function storeCue(on: boolean): void {
+    try {
+        localStorage.setItem(CUE_KEY, on ? 'on' : 'off')
+    } catch {
+        /* ignore */
+    }
+}
+
 // Best consecutive-solve streak, persisted across sessions (the CURRENT streak is
 // session-only — it lives in React state and starts back at 0 on reload). This is
 // unrelated to the navbar's daily-activity flame: that one tracks "played today",
@@ -194,6 +222,33 @@ export default function Puzzles() {
     const [legal, setLegal] = useState<string[]>([])
     const [ply, setPly] = useState(1)
     const [lastMove, setLastMove] = useState<Mark | null>(null)
+    // Bumped once per dealt position; every change flashes the board's pieces by
+    // side (see Board's `pieceCue`). A counter rather than a boolean so a puzzle
+    // dealt while the previous flash is still running restarts it.
+    const [cueToken, setCueToken] = useState(0)
+    const [cueEnabled, setCueEnabled] = useState(readCue)
+    // Switching the cue ON replays it on the position already on the board —
+    // otherwise the setting appears to do nothing until the next puzzle.
+    const toggleCue = () => {
+        const next = !cueEnabled
+        setCueEnabled(next)
+        storeCue(next)
+        if (next) setCueToken((t) => t + 1)
+    }
+    // Token 0 is "nothing dealt yet" — without that the board flashes once on
+    // mount, over the placeholder start position, and is then cut off by the real
+    // puzzle's cue a few hundred ms later. Memoised so the memoised Board isn't
+    // handed a fresh object (and a redundant re-render) on every unrelated state
+    // change — a clock tick, a hint, a keystroke. Declared up here with the rest
+    // of the hooks: the render below returns early for the setup/summary screens,
+    // and a hook after those returns runs on some renders and not others.
+    const pieceCue = useMemo(
+        () =>
+            cueToken === 0 || !cueEnabled
+                ? null
+                : { own: data?.color ?? 'w', token: cueToken, foeKingOnly: isMateTheme(theme) },
+        [data?.color, cueToken, theme, cueEnabled],
+    )
     const [override, setOverride] = useState<BoardMap | null>(null)
     const [result, setResult] = useState<PuzzleMoveResult | null>(null)
     const [error, setError] = useState<string | null>(null)
@@ -278,7 +333,15 @@ export default function Puzzles() {
     }
 
     // Seed the solving state from a puzzle (freshly fetched or handed in, e.g. the
-    // daily puzzle) and run the intro animation.
+    // daily puzzle).
+    //
+    // The position lands whole: no pre-move board, no slide of the opponent's setup
+    // move, just the static last-move highlight. Animating that move in put the only
+    // motion on screen on the OPPONENT's pieces, which is exactly the wrong pull for
+    // someone about to move — over a long session it reads as a cue for your own
+    // side. The piece cue below replaces it: both sides flash once, yours green and
+    // theirs red, so which colour you're playing arrives as a glance rather than as
+    // something to read off the status card.
     const beginPuzzle = useCallback((p: PuzzleNext) => {
         clearTimers()
         setError(null)
@@ -288,16 +351,12 @@ export default function Puzzles() {
         setFen(p.fen)
         setLegal(p.legal_moves)
         setPly(p.ply)
-        setLastMove(null)
+        setLastMove(splitUci(p.opponent_move))
         setHintUsed(false)
         resetHint()
-        setPhase('intro')
-        // Show the pre-move position briefly, then "play" the opponent's setup move.
-        later(() => {
-            setLastMove(splitUci(p.opponent_move))
-            sounds.move()
-            setPhase('solving')
-        }, 480)
+        setPhase('solving')
+        setCueToken((t) => t + 1)
+        sounds.move()
     }, [])
 
     const load = useCallback(
@@ -686,7 +745,7 @@ export default function Puzzles() {
     }
 
     const orientation: Color = data?.color ?? 'w'
-    const displayFen = phase === 'intro' || !data ? (data?.start_fen ?? START_FEN) : fen
+    const displayFen = data ? fen : START_FEN
     const interactive = phase === 'solving'
     // Only shown once at least the piece has been revealed, and only while the
     // hint is actually for THIS position (cleared on every new position by
@@ -730,6 +789,8 @@ export default function Puzzles() {
                         hintLoading={hintLoading}
                         hintUnavailable={hintStage > 0 && !hintLoading && hintMove == null}
                         hintUsed={hintUsed}
+                        cueEnabled={cueEnabled}
+                        onToggleCue={toggleCue}
                         onHint={() => void requestHint()}
                         onRetry={retryPuzzle}
                         onNext={() => void load(theme)}
@@ -756,6 +817,7 @@ export default function Puzzles() {
                 lastMove={lastMove}
                 interactive={interactive}
                 onMove={onMove}
+                pieceCue={pieceCue}
                 hint={hintMark}
                 hintStage={hintMark ? (hintStage === 1 ? 'piece' : 'move') : null}
                 {...(override ? { overrideBoard: override } : {})}
@@ -1316,6 +1378,8 @@ function StatusCard({
     hintLoading,
     hintUnavailable,
     hintUsed,
+    cueEnabled,
+    onToggleCue,
     onHint,
     onRetry,
     onNext,
@@ -1337,6 +1401,8 @@ function StatusCard({
     hintLoading: boolean
     hintUnavailable: boolean
     hintUsed: boolean
+    cueEnabled: boolean
+    onToggleCue: () => void
     onHint: () => void
     onRetry: () => void
     onNext: () => void
@@ -1351,7 +1417,7 @@ function StatusCard({
     const delta = isRetry || result?.rating?.unrated ? null : (result?.rating?.delta ?? null)
     const toMove = orientation === 'w' ? 'White' : 'Black'
     const lowTime = limitSec != null && remainingMs <= 10_000
-    const solving = phase === 'intro' || phase === 'solving' || phase === 'checking'
+    const solving = phase === 'solving' || phase === 'checking'
     const [sound, setSound] = useState(soundEnabled())
 
     function toggleSound() {
@@ -1401,6 +1467,18 @@ function StatusCard({
                     </Typography>
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    {/* Side cue: flashes your pieces green, then the opponent's red,
+                        on every new puzzle. Off is a real preference — it's a second
+                        or two before the board is quiet — so it sits next to mute
+                        rather than buried in global settings, and persists. */}
+                    <NavBtn
+                        small
+                        active={cueEnabled}
+                        label={cueEnabled ? 'Side flash on' : 'Side flash off'}
+                        onClick={onToggleCue}
+                    >
+                        {cueEnabled ? <Zap size={18} /> : <ZapOff size={18} />}
+                    </NavBtn>
                     <NavBtn small label={sound ? 'Mute' : 'Unmute'} onClick={toggleSound}>
                         {sound ? <Volume2 size={18} /> : <VolumeX size={18} />}
                     </NavBtn>
@@ -1437,7 +1515,7 @@ function StatusCard({
                             : "Couldn't load a puzzle — the server didn't answer. Try again in a moment."}
                     </Typography>
                 )}
-                {(phase === 'intro' || phase === 'solving' || phase === 'checking') && (
+                {(phase === 'solving' || phase === 'checking') && (
                     <>
                         <Typography
                             sx={{

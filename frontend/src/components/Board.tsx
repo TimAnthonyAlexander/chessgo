@@ -204,7 +204,31 @@ interface BoardProps {
     pickTargets?: Set<Square> | null
     /** Secret Queen designation: called with the square the player picked. */
     onPick?: (sq: Square) => void
+    /** One-shot "which side are you" cue, in two beats: first every square under
+     * one of `own`'s pieces flashes green, and once that's faded the other side's
+     * squares flash red. Sequential rather than simultaneous so the two colours
+     * are never on the board together to be compared — the first beat alone says
+     * which side is yours, and the second is the answer to a question you've
+     * already stopped asking.
+     *
+     * A square tint, the same shape as the last-move highlight, deliberately: a
+     * glow around the piece artwork had to fight sixteen board themes for contrast
+     * and lost on most of them. Fires on every CHANGE of `token`, so the caller
+     * bumps a counter per position rather than mounting anything. Used by the
+     * puzzle trainer, where a fresh position every few seconds otherwise leaves the
+     * solver's eye on the opponent's highlighted last move with nothing saying
+     * which colour is theirs.
+     *
+     * `foeKingOnly` cuts the second beat down to the enemy KING. For a mate
+     * puzzle every other enemy piece is scenery — the king is the whole target —
+     * and lighting up all sixteen of them buries it. */
+    pieceCue?: { own: Color; token: number; foeKingOnly?: boolean } | null
 }
+
+// How long ONE beat of the `pieceCue` (own, then foe) stays mounted. Must match
+// the cue keyframes' duration in Board.css — the tints unmount afterwards, which
+// is also what lets the next beat, and the next cue, replay from the start.
+const CUE_PHASE_MS = 1300
 
 // Antichess uniquely allows promoting to a KING ('k') — the server only ever
 // includes 'k' in a position's legal moves there, so listing it here is safe for
@@ -466,6 +490,7 @@ const BoardSquare = memo(function BoardSquare({
     markColor,
     markerOn,
     hasPiece,
+    cueTint,
     hintMarkVisible,
     piece,
     pieceSet,
@@ -488,6 +513,9 @@ const BoardSquare = memo(function BoardSquare({
     markColor: string | undefined
     markerOn: boolean
     hasPiece: boolean
+    /** One-shot side cue (BoardProps.pieceCue): tints this square green ('own')
+     * or red ('foe') for as long as it's mounted. Null the rest of the time. */
+    cueTint: 'own' | 'foe' | null
     hintMarkVisible: boolean
     piece: string | undefined
     pieceSet: string
@@ -513,6 +541,10 @@ const BoardSquare = memo(function BoardSquare({
             {markColor && (
                 <span className="mark" style={{ '--mark': markColor } as CSSProperties} aria-hidden />
             )}
+            {/* Side cue: mounted only for the length of the flash, so the fade
+                is the element's own mount animation and the next cue replays it
+                by mounting a fresh one. */}
+            {cueTint && <span className={`cue-tint ${cueTint}`} aria-hidden />}
             {/* Legal-move marker: a dot on an empty square, a ring around an
                 occupied (capture) one. ALWAYS mounted and toggled with `.on`,
                 never conditionally rendered — that's what lets it scale from 0
@@ -570,6 +602,7 @@ function Board({
     secretQueenSquare = null,
     pickTargets = null,
     onPick,
+    pieceCue = null,
 }: BoardProps) {
     const boardRef = useRef<HTMLDivElement>(null)
     const pieceSet = usePieceSet() // re-render (with new piece SVGs) when the set changes
@@ -845,6 +878,38 @@ function Board({
         const name = piece ? (PIECE_NAMES[piece.toLowerCase()] ?? 'piece') : 'piece'
         setAnnouncement(`Selected ${name} on ${selected}`)
     }, [selected])
+
+    // `pieceCue` flash (see the prop): beat one tints the player's own squares,
+    // beat two the opponent's. The tints have to LEAVE the DOM between beats —
+    // a keyframe animation restarts when its element mounts, not when a prop
+    // changes underneath it — which the stage swap does for free (different
+    // squares, fresh elements). The leading null → (one frame) → 'own' does the
+    // same for a cue arriving while the previous one is still running.
+    const [cueStage, setCueStage] = useState<'own' | 'foe' | null>(null)
+    const cueToken = pieceCue?.token ?? null
+    useEffect(() => {
+        setCueStage(null)
+        if (cueToken === null) return
+        const timers: number[] = []
+        const raf = requestAnimationFrame(() => {
+            setCueStage('own')
+            timers.push(window.setTimeout(() => setCueStage('foe'), CUE_PHASE_MS))
+            timers.push(window.setTimeout(() => setCueStage(null), CUE_PHASE_MS * 2))
+        })
+        return () => {
+            cancelAnimationFrame(raf)
+            timers.forEach(window.clearTimeout)
+        }
+    }, [cueToken])
+
+    // Which cue tint (if any) this square's occupant gets in the current beat.
+    const cueTintFor = (p: string | undefined): 'own' | 'foe' | null => {
+        if (!cueStage || !pieceCue || !p) return null
+        const mine = isWhitePiece(p) === (pieceCue.own === 'w')
+        if (cueStage === 'own') return mine ? 'own' : null
+        if (mine) return null
+        return pieceCue.foeKingOnly && p.toLowerCase() !== 'k' ? null : 'foe'
+    }
 
     const prevFenRef = useRef<string | null>(null)
     useEffect(() => {
@@ -1490,6 +1555,7 @@ function Board({
                                     markColor={marks.get(sq)}
                                     markerOn={markerOn}
                                     hasPiece={!!piece}
+                                    cueTint={cueTintFor(piece)}
                                     hintMarkVisible={
                                         !!hintVisible &&
                                         !!hint &&

@@ -274,6 +274,48 @@ html.board-dim-adj .board::after {
     animation: pieceIn var(--piece-anim, 0.16s) ease;
 }
 
+/* Two-beat "which side are you" cue (Board.tsx's `pieceCue`): the player's own
+ * squares flash green, then — once that's faded — the opponent's flash red. Each
+ * beat is one run of the keyframes below on a freshly mounted set of tints.
+ * A flat square tint like `.sq.last`, NOT a glow around the artwork:
+ * a glow is a half-transparent edge fighting whichever of the sixteen board
+ * themes is loaded, and on most of them it lost. This paints the whole square,
+ * so it reads at a glance on every theme.
+ *
+ * z-index 1 puts it over the last-move / selection tints (::after, z-index auto)
+ * and under the piece (z-index 2) — the point is the square, not obscuring what
+ * stands on it. Mounted only for its own beat (CUE_PHASE_MS in Board.tsx, which
+ * must match the 1.3s below), so this is a mount animation. */
+.sq .cue-tint {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    animation: cueFlash 1.3s ease-out both;
+}
+/* Fully opaque: a partly-transparent tint takes on whatever square is under it,
+ * so the same green reads differently on a light square, a dark one and a
+ * photographic (Cherry) one. Solid means the cue looks identical everywhere. */
+.sq .cue-tint.own {
+    background: rgb(106, 168, 79);
+}
+.sq .cue-tint.foe {
+    background: rgb(198, 74, 60);
+}
+
+@keyframes cueFlash {
+    0% {
+        opacity: 0;
+    }
+    9%,
+    42% {
+        opacity: 1;
+    }
+    100% {
+        opacity: 0;
+    }
+}
+
 /* Duck Chess: the duck glyph, drawn above its square (blocks all pieces). */
 .duck {
     position: absolute;

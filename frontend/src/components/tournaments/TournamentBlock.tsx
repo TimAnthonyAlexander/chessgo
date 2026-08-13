@@ -30,7 +30,7 @@ export default function TournamentBlock({
     const past = t.status === 'finished'
     const { limit, increment } = parsePool(t.pool)
     const restriction = restrictionText(t)
-    const startsAt = new Date(t.starts_at.replace(' ', 'T') + 'Z').getTime()
+    const startsAt = new Date(`${t.starts_at.replace(' ', 'T')  }Z`).getTime()
 
     const tooltip = [
         t.name,
