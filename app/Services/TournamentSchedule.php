@@ -100,32 +100,20 @@ final class TournamentSchedule
     private static function occurrencesAtHour(int $ts): array
     {
         $hour = (int) gmdate('G', $ts);
-        $dow = (int) gmdate('N', $ts); // 1 (Mon) .. 7 (Sun)
-        $day = (int) gmdate('j', $ts);
-        $daysInMonth = (int) gmdate('t', $ts);
 
-        $occ = [self::hourly($ts, $hour)];
-
-        if ($hour % 3 === 0) {
-            $occ[] = self::variantHourly($ts, $hour);
+        // Reduced to a single arena a day — the 18:00 UTC Daily Blitz — to stop
+        // the bot backfill from manufacturing tens of thousands of filler
+        // games. The full rota (hourly/variant-hourly/weekly/monthly, plus the
+        // other daily slots) is intentionally left defined below but uncalled,
+        // so restoring it is a one-line change here.
+        if ($hour === 18) {
+            $daily = self::daily($ts, $hour);
+            if ($daily !== null) {
+                return [$daily];
+            }
         }
 
-        $daily = self::daily($ts, $hour);
-        if ($daily !== null) {
-            $occ[] = $daily;
-        }
-
-        $weekly = self::weekly($ts, $dow, $hour);
-        if ($weekly !== null) {
-            $occ[] = $weekly;
-        }
-
-        $monthly = self::monthly($ts, $dow, $hour, $day, $daysInMonth);
-        if ($monthly !== null) {
-            $occ[] = $monthly;
-        }
-
-        return $occ;
+        return [];
     }
 
     /**
