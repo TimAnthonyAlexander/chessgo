@@ -20,16 +20,85 @@
 #include "tt.h"
 #include "zobrist.h"
 
+#include "native_thread.h"  // NativeThread: 8MB stacks (SF ~sf18-arm/src/thread_win32_osx.h)
+
 #include <algorithm>
+#include <condition_variable>
 #include <cstdio>
 #include <functional>
 #include <iostream>
+#include <list>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
 using RouteFn = std::function<json(const json&)>;
+
+// httplib's own ThreadPool (src/vendor/httplib.h:752), rebuilt on zug::NativeThread.
+//
+// Every search-backed route runs Search::start() DIRECTLY on the httplib worker thread
+// that accepted the request, and a deep search needs more than 1MB of stack. macOS gives
+// a plain std::thread — which is all httplib::ThreadPool can create — about 544KB, so the
+// worker hits the guard page mid-search and the whole process dies with a SIGBUS (see
+// native_thread.h for the measured frame sizes and the exact endgame that triggered it).
+// NativeThread asks for Linux's 8MB default instead, which is what these threads already
+// get on every prod box: on Linux NativeThread IS std::thread and this class is a
+// byte-for-byte behavioural copy of the one it replaces.
+//
+// Logic below is httplib::ThreadPool's, unchanged except for the thread type and the
+// dropped max_queued_requests_ cap (serve never set one).
+class NativeThreadPool final : public httplib::TaskQueue {
+   public:
+    explicit NativeThreadPool(size_t n) : shutdown_(false) {
+        threads_.reserve(n);
+        for (size_t i = 0; i < n; ++i) threads_.emplace_back([this] { work(); });
+    }
+
+    NativeThreadPool(const NativeThreadPool&) = delete;
+    ~NativeThreadPool() override = default;
+
+    bool enqueue(std::function<void()> fn) override {
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            jobs_.push_back(std::move(fn));
+        }
+        cond_.notify_one();
+        return true;
+    }
+
+    void shutdown() override {
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            shutdown_ = true;
+        }
+        cond_.notify_all();
+        for (auto& t : threads_) t.join();
+    }
+
+   private:
+    void work() {
+        for (;;) {
+            std::function<void()> fn;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                cond_.wait(lock, [this] { return !jobs_.empty() || shutdown_; });
+                if (shutdown_ && jobs_.empty()) break;
+                fn = jobs_.front();
+                jobs_.pop_front();
+            }
+            fn();
+        }
+    }
+
+    std::vector<zug::NativeThread>   threads_;
+    std::list<std::function<void()>> jobs_;
+    std::mutex                       mutex_;
+    std::condition_variable          cond_;
+    bool                             shutdown_;
+};
 
 // Wraps a Handlers:: function into an httplib handler: decodes the JSON
 // body, dispatches, and encodes the result — translating ApiError into the
@@ -198,7 +267,7 @@ int serve_main(int argc, char** argv) {
     // free for rules-only work no matter how many search requests are queued
     // up waiting on the (much smaller) search-group pool.
     constexpr size_t kHttpThreads = 128;
-    svr.new_task_queue = [] { return new httplib::ThreadPool(kHttpThreads); };
+    svr.new_task_queue = [] { return new NativeThreadPool(kHttpThreads); };
 
     svr.Get("/healthz", [](const httplib::Request&, httplib::Response& res) {
         res.set_content(json{{"status", "ok"}}.dump(), "application/json");

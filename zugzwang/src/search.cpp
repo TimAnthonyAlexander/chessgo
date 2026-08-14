@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include "native_thread.h"  // NativeThread: 8MB stacks (SF ~sf18-arm/src/thread_win32_osx.h)
 
 using namespace BB;
 
@@ -733,6 +734,20 @@ struct Context {
         // plays these perfectly; the value is real-clock / long-TC / vs-non-TB-opponents,
         // exactly gomachine's rationale for shipping it default-on.
         bool syzygy = true;
+        // ---- TBROOTRANK (2026-08-14): Syzygy ROOT DTZ ranking, SF-style
+        // (~sf18-arm/src/syzygy/tbprobe.cpp:1603/1717 + search.cpp:341-350). SHIPPED
+        // default-ON: this is a correctness fix, not a strength experiment. Without it the
+        // HTTP serve path (the whole website: /bestmove, /candidates, /analyze,
+        // /analyze-game, bot games, engine-vs-engine) had NO access to DTZ at all —
+        // TB::probe_root was reachable only from Search::start_smp, i.e. UCI — and
+        // WDL-in-search's flat ±(VALUE_TB_WIN - ply) made every winning move tie, so won
+        // ≤5-man endings were shuffled into 50-move draws on the site while the eval bar
+        // read +314.96. Gate: test/tb_conversion.sh, serve path 1/24 → 24/24.
+        //
+        // Subordinate to `syzygy` (TB off ⇒ this cannot fire) and to TB::loaded(), so a box
+        // with no resolvable syzygy/ dir is byte-identical either way. Kill-switch:
+        // env TBROOTRANK=0, which restores the flat-WDL behaviour exactly.
+        bool tbRootRank = true;
         // ---- Move Overhead (2026-07-20): reserved per-move slack (ms) for GUI/OS/network
         // latency, subtracted from remaining time in set_time_limits' clock branch. UCI
         // spin option "Move Overhead" (SF/SP default 10; zug ships 40 = the old hardcoded
@@ -1069,6 +1084,7 @@ struct Context {
             if (on("QSTTQUIET")) qsTtQuiet = true;
             if (on("FULLPROBCUT")) fullProbCut = true;
             if (off("SYZYGY")) syzygy = false; // shipped default-on; kill-switch (path-gated by TB::loaded())
+            if (off("TBROOTRANK")) tbRootRank = false; // shipped default-on; kill-switch
             if (const char* e = getenv("MOVEOVERHEAD")) { int v = atoi(e); if (v >= 0) moveOverhead = v; }
             if (const char* e = getenv("CONTEMPT")) contempt = atoi(e); // cp; 0 = off
             if (off("TIMEMAN")) timeMan = false; // shipped default-on (+28 Elo TC-SPRT); kill-switch
@@ -1213,6 +1229,30 @@ struct Context {
     // all provable no-ops, so the searched tree is byte-identical to pre-MultiPV.
     int     multiPV = 1;
     int     pvIdx   = 0;
+    // ---- Syzygy root-rank grouping (SF search.cpp:341-350) ----
+    // [pvFirst, pvLast) is the contiguous run of rootMoves sharing the CURRENT line's
+    // tbRank. Every root sort and the root move filter are confined to it, which is
+    // what makes the DTZ rank strictly dominate the search score: a lower-ranked move
+    // is never even searched for this line, so it can never become the best move.
+    // Recomputed per depth iteration, and per PV line once the previous group is
+    // exhausted.
+    //
+    // BYTE IDENTITY: with no DTZ ranking every tbRank is 0, so the first group is the
+    // WHOLE list — pvFirst==0 and pvLast==rootMoves.size() for every line — and all
+    // three consumers reduce to exactly the ranges they used before this existed.
+    int     pvFirst = 0;
+    int     pvLast  = 0;
+    // ---- Syzygy root config (SF Tablebases::Config, ~sf18-arm/src/syzygy/tbprobe.h:41) ----
+    // rootInTB: the root's moves carry real DTZ ranks and tbScores.
+    // tbCardinality: the piece count at or below which the IN-SEARCH WDL probe may fire.
+    //   Seeded to TB::max_pieces() (exactly the old hardcoded gate) and zeroed once DTZ
+    //   ranking succeeds, mirroring SF tbprobe.cpp:1764-1766. That zeroing is the point:
+    //   inside a DTZ-ranked root every child is a TB hit, and WDL's flat ±(VALUE_TB_WIN -
+    //   ply) would make every winning move tie, collapsing the search to move ordering.
+    //   With it off the search runs on real eval and can actually find the mate, while the
+    //   rank grouping guarantees it can only ever choose among moves that keep the win.
+    bool    tbRootInTB    = false;
+    int     tbCardinality = 0;
     // NODEEFFORT (SF search.cpp:1308/1346/487-508, sf_18): the per-root-move
     // node-count accrual now lives in RootMove::effort (SF's own home for it),
     // replacing the old `unordered_map<Move,int64_t> rootMoveEffort` — same values,
@@ -1315,19 +1355,73 @@ static inline RootMove* find_root_move(Context& C, Move m) {
     return nullptr;
 }
 
-// Re-rank the root moves the CURRENT line and every later line may still use
-// (SF search.cpp:383/425). The sort MUST be stable: everything except the new PV
-// (and, at moveCount==1, the first move) was just reset to -VALUE_INFINITE, and
-// stability is what preserves last iteration's ordering for all of them. The
-// [0, pvIdx) prefix is the already-emitted lines and is deliberately frozen.
-static inline void sort_root_moves(Context& C) {
-    std::stable_sort(C.rootMoves.begin() + C.pvIdx, C.rootMoves.end());
+// ---- Syzygy root-ranking policy constants ----
+//
+// TB_ROOT_USE_RULE50 is SF's `Syzygy50MoveRule` UCI option (default true). zug has no such
+// option and no reason for one: every game this engine plays — website, UCI, CCRL — is
+// played under the 50-move rule, and turning it off would make the ranking claim wins the
+// arbiter would score as draws. Named rather than inlined so the one place it is decided
+// is findable.
+constexpr bool TB_ROOT_USE_RULE50 = true;
+
+// TB_ROOT_RANK_DTZ is SF's `rankDTZ`: does the DTZ distance also order moves INSIDE the
+// certain-win band, or do all certain wins rank equally? SF passes false for the search
+// (~sf18-arm/src/thread.cpp:313) and true only when extending a finished PV out to mate
+// (~sf18-arm/src/search.cpp:2075). zug passes false too, and the reason is worth writing
+// down because the obvious objection — "zug's search cannot tell winning moves apart, so
+// it needs DTZ to break the tie" — was true before this change and is not true after it.
+//
+// It was true because WDL-in-search returned a flat ±(VALUE_TB_WIN - ply) for every move
+// in a ≤5-man position: the search was blind by construction. Zeroing C.tbCardinality (SF
+// tbprobe.cpp:1764-1766, done in start() below) removes exactly that blindness — inside a
+// DTZ-ranked root the search now runs on the real NNUE eval and real mate detection, which
+// is the same footing SF's search stands on when SF passes false.
+//
+// And the safety property does not depend on the search at all. A move ranks in the
+// certain band only if `dtz + cnt50 <= 99`, i.e. only if the position AFTER it still
+// satisfies dtz + rule50 <= 99 — so every move the root filter leaves in play preserves a
+// genuine TB_WIN, whichever one the search picks. Progress is forced too: cnt50 rises by
+// one every non-zeroing ply while the band's ceiling stays at 99, so the admissible dtz
+// falls monotonically and the group empties into a zeroing move (or mate) before the
+// halfmove clock can reach 100. false therefore costs nothing in correctness and buys the
+// thing SF wants it for: freedom to prefer a mate it can actually see over a line that is
+// merely one ply closer to the next capture.
+constexpr bool TB_ROOT_RANK_DTZ = false;
+
+// Advance the tbRank group window to cover pvIdx, if the previous group is exhausted
+// (SF search.cpp:343-350, verbatim). Called at the top of every PV line.
+//
+// BYTE IDENTITY: with no DTZ ranking all tbRanks are 0, so the very first call (pvIdx==0,
+// pvLast==0) walks pvLast all the way to rootMoves.size() and pvFirst stays 0 — the
+// window IS the whole list for every line, exactly the ranges that existed before.
+static inline void advance_rank_group(Context& C) {
+    if (C.pvIdx != C.pvLast) return;
+    int n = static_cast<int>(C.rootMoves.size());
+    C.pvFirst = C.pvLast;
+    for (C.pvLast++; C.pvLast < n; C.pvLast++)
+        if (C.rootMoves[C.pvLast].tbRank != C.rootMoves[C.pvFirst].tbRank) break;
+    // Terminal root: rootMoves is EMPTY but the ID loop still runs one root negamax for
+    // its mated_in()/VALUE_DRAW return (see start()'s "case 2"). SF returns before this
+    // point in that case; zug does not, so clamp rather than hand the sorts an iterator
+    // one past a zero-length vector.
+    if (C.pvLast > n) C.pvLast = n;
 }
 
-// Re-rank the lines ALREADY EMITTED, [0, pvIdx], once this line's aspiration loop
-// has settled on an exact score (SF search.cpp:424,
-// `stable_sort(rootMoves.begin() + pvFirst, rootMoves.begin() + pvIdx + 1)`; zug has
-// no TB-rank grouping, so pvFirst is always 0).
+// Re-rank the root moves the CURRENT line and every later line IN THIS RANK GROUP may
+// still use (SF search.cpp:383, `stable_sort(rootMoves.begin()+pvIdx, rootMoves.begin()+
+// pvLast)`). The sort MUST be stable: everything except the new PV (and, at moveCount==1,
+// the first move) was just reset to -VALUE_INFINITE, and stability is what preserves last
+// iteration's ordering for all of them. The [0, pvIdx) prefix is the already-emitted lines
+// and is deliberately frozen; [pvLast, end) is the strictly lower-ranked groups and must
+// stay below this one no matter what the search scored them.
+static inline void sort_root_moves(Context& C) {
+    std::stable_sort(C.rootMoves.begin() + C.pvIdx, C.rootMoves.begin() + C.pvLast);
+}
+
+// Re-rank the lines ALREADY EMITTED IN THIS RANK GROUP, [pvFirst, pvIdx], once this
+// line's aspiration loop has settled on an exact score (SF search.cpp:424,
+// `stable_sort(rootMoves.begin() + pvFirst, rootMoves.begin() + pvIdx + 1)`; pvFirst is
+// 0 for every position that is not DTZ-ranked at the root).
 //
 // This is what keeps the reported lines monotone. Line k is searched with its OWN
 // aspiration window, and its exact score can land ABOVE line k-1's — line k-1's
@@ -1341,19 +1435,51 @@ static inline void sort_root_moves(Context& C) {
 // BYTE IDENTITY: at multiPV==1 pvIdx is always 0, so this sorts a one-element range
 // — a no-op, and the single-PV tree is untouched.
 static inline void sort_emitted_lines(Context& C) {
-    std::stable_sort(C.rootMoves.begin(), C.rootMoves.begin() + C.pvIdx + 1);
+    std::stable_sort(C.rootMoves.begin() + C.pvFirst, C.rootMoves.begin() + C.pvIdx + 1);
 }
 
 // SF search.cpp:1019 root filter: is `m` still in play for the CURRENT PV line,
-// i.e. in rootMoves[pvIdx..end)? Everything before pvIdx has already been emitted
-// as an earlier line and must not be searched again.
-//
-// BYTE IDENTITY: the caller guards this on `C.pvIdx != 0`, so at multiPV==1 it is
-// never even called. That is not just an optimization — it is the proof: rootMoves
-// holds EVERY legal root move, so at pvIdx==0 the count over the whole list is 1
-// for every move the root loop can reach, and the filter can never skip anything.
+// i.e. in rootMoves[pvIdx..pvLast)? Everything before pvIdx has already been emitted
+// as an earlier line and must not be searched again; everything from pvLast on is in a
+// STRICTLY LOWER Syzygy rank group and must not be searched for this line at all — that
+// exclusion is what makes DTZ dominate, since a move the root loop never tries can never
+// raise alpha and become C.rootBestMove.
 static inline bool root_move_in_play(Context& C, Move m) {
-    return std::count(C.rootMoves.begin() + C.pvIdx, C.rootMoves.end(), m) > 0;
+    return std::count(C.rootMoves.begin() + C.pvIdx, C.rootMoves.begin() + C.pvLast, m) > 0;
+}
+
+// Is the root filter capable of excluding anything at all? Only when an earlier line has
+// been emitted (pvIdx > 0) or a lower-ranked group exists (pvLast < size).
+//
+// BYTE IDENTITY: this is the guard that keeps the single-PV, non-TB search free of the
+// filter entirely. rootMoves holds EVERY legal root move and pvLast is its size, so at
+// pvIdx==0 the count over the whole list is 1 for every move the root loop can reach —
+// the filter could not skip anything, and is never even called.
+static inline bool root_filter_active(const Context& C) {
+    return C.pvIdx != 0 || C.pvLast < static_cast<int>(C.rootMoves.size());
+}
+
+// The score to REPORT for one root move (SF search.cpp:2138-2139: `bool tb =
+// worker.tbConfig.rootInTB && std::abs(v) <= VALUE_TB; v = tb ? rootMoves[i].tbScore : v`).
+//
+// This is a PRESENTATION override and nothing else. The search runs on real scores from
+// end to end — prevScore, the aspiration seeds, TIMEMAN, OPTIMISM and the root sort all
+// keep reading rm.score, unchanged. What changes is only what a caller is told (the UCI
+// `info` line, the serve layer's eval object), because inside a DTZ-ranked root the
+// tablebase knows the position's true value exactly and the search's own number is an
+// eval of something already decided.
+//
+// A real MATE score survives: SF's `std::abs(v) <= VALUE_TB` guard admits only non-mate
+// scores, which in zug's constants (types.h:72-76, VALUE_TB_WIN sits BELOW
+// VALUE_MATE_IN_MAX_PLY exactly so TB scores cannot masquerade as mates) is precisely
+// !is_mate_score(v). A found forced mate is strictly more information than "tablebase
+// win" and must not be overwritten by it.
+//
+// BYTE IDENTITY: returns v untouched whenever the root was not DTZ-ranked.
+static inline int reported_score(const Context& C, int v, const RootMove* rm) {
+    if (!C.tbRootInTB || rm == nullptr) return v;
+    if (v == -VALUE_INFINITE) v = VALUE_ZERO; // SF search.cpp:2135-2136
+    return is_mate_score(v) ? v : rm->tbScore;
 }
 
 // #13 is_shuffling (SF18 search.cpp:145-152, VERIFIED): a dead 4-ply single-piece
@@ -2460,11 +2586,20 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
     // Syzygy WDL-in-search (gomachine internal/search/search.go:1312): in a TB-cardinality
     // position with no castling, trust the tablebase verdict directly and return. Gated:
     // not root (ply>0 — the root is owned by DTZ), not in check, not a singular probe, no
-    // castling rights, and piece count within the loaded tables. Draw/blessed/cursed all
+    // castling rights, and piece count within C.tbCardinality. Draw/blessed/cursed all
     // return VALUE_DRAW. Default-off (C.tune.syzygy) + requires TB::loaded().
+    //
+    // C.tbCardinality (SF's Tablebases::Config::cardinality, set in start()) is
+    // TB::max_pieces() — the old hardcoded gate, byte-identical — EXCEPT when the root was
+    // DTZ-ranked, where SF zeroes it (tbprobe.cpp:1764-1766) and so does zug. Inside a
+    // DTZ-ranked root this probe is actively harmful: every child is a TB hit, every
+    // winning move returns the same flat ±(VALUE_TB_WIN - ply), and the search degenerates
+    // to move ordering — which is precisely how a won ending gets shuffled into a 50-move
+    // draw. The root ranking already guarantees only win-preserving moves are searched, so
+    // the search's job here is to find the MATE, and for that it needs the real eval.
     if (C.tune.syzygy && TB::loaded() && ss->ply > 0 && !ss->inCheck && !excluded
         && pos.castling_rights() == 0
-        && (unsigned) BB::popcount(pos.pieces()) <= TB::max_pieces()) {
+        && BB::popcount(pos.pieces()) <= C.tbCardinality) {
         int wdl;
         if (TB::probe_wdl(pos, wdl)) {
             if (wdl > 0)  return VALUE_TB_WIN - ss->ply;
@@ -2788,11 +2923,12 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         Move m = pick_next(cur, list.end());
         if (m == excluded) continue;
         if (!pos.legal(m)) continue;
-        // MultiPV root filter (SF search.cpp:1019): skip root moves already emitted
-        // as an earlier PV line. Guarded on pvIdx!=0 so the single-PV search never
-        // even evaluates it — see root_move_in_play() for why that is an identity,
-        // not an approximation.
-        if (rootNode && C.pvIdx != 0 && !root_move_in_play(C, m)) continue;
+        // MultiPV + Syzygy-rank root filter (SF search.cpp:1019): skip root moves already
+        // emitted as an earlier PV line, and root moves in a lower DTZ rank group.
+        // Guarded on root_filter_active() so the ordinary single-PV search never even
+        // evaluates it — see root_move_in_play() for why that is an identity, not an
+        // approximation.
+        if (rootNode && root_filter_active(C) && !root_move_in_play(C, m)) continue;
         moveCount++;
         ss->moveCount = moveCount; // #10 PCM: a child reads (ss-1)->moveCount to learn
                                    // how late its parent tried the move that led into it.
@@ -3545,7 +3681,10 @@ void print_pv(Context& C, Position& pos, Stack* ss, int depth, int score, int64_
     // test/multipv_identity.sh, whose whole job is to prove that.
     if (C.multiPV <= 1) {
         std::cout << "info depth " << depth << " score ";
-        print_score(score);
+        // Syzygy root score override (SF search.cpp:2138-2139). No-op unless the root was
+        // DTZ-ranked; see reported_score(). rootMoves[0] IS line 0 here — the ID loop
+        // stable-sorts it to the front after every root search.
+        print_score(reported_score(C, score, C.rootMoves.empty() ? nullptr : &C.rootMoves[0]));
         std::cout << " nodes " << nodes << " nps " << nps
                   << " time " << ms << " hashfull " << C.tt.hashfull() << " pv";
         for (int i = 0; i < ss->pvLen; ++i)
@@ -3564,7 +3703,7 @@ void print_pv(Context& C, Position& pos, Stack* ss, int depth, int score, int64_
         const RootMove& rm = C.rootMoves[i];
         if (rm.score == -VALUE_INFINITE) break; // line never completed (interrupted iteration)
         std::cout << "info depth " << depth << " multipv " << (i + 1) << " score ";
-        print_score(rm.score);
+        print_score(reported_score(C, rm.score, &rm));
         std::cout << " nodes " << nodes << " nps " << nps
                   << " time " << ms << " hashfull " << C.tt.hashfull() << " pv";
         for (Move m : rm.pv)
@@ -3806,7 +3945,10 @@ Result run_lazy_smp(std::vector<Context*>& workers, TranspositionTable& tt,
     // stays alive + unmutated for the whole search (caller joins before reuse).
     std::vector<Position> positions(threads, rootPos);
     std::vector<Result>   results(threads);
-    std::vector<std::thread> helpers;
+    // NativeThread, not std::thread: each helper runs the same start() the driver does,
+    // and macOS hands a plain std::thread only ~544KB of stack — not enough for a search
+    // that recurses past ~86 plies (native_thread.h has the measurements).
+    std::vector<zug::NativeThread> helpers;
     helpers.reserve(threads - 1);
 
     // Tag each worker with its index (SMPDIV reads it for per-thread aspiration
@@ -4067,6 +4209,51 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
         for (const ExtMove& em : rootList)
             if (pos.legal(em.move)) C.rootMoves.emplace_back(em.move);
     }
+    // ---- Syzygy root DTZ ranking (SF Tablebases::rank_root_moves,
+    //      ~sf18-arm/src/syzygy/tbprobe.cpp:1717, called from thread.cpp:313) ----
+    //
+    // WHY HERE. This is the one point EVERY entry path crosses exactly once: UCI goes
+    // start_smp → (threads<=1) start() or run_lazy_smp → N× start(); the HTTP serve layer
+    // goes start_group → run_lazy_smp → the same start(). Before this, DTZ lived in
+    // start_smp alone, so /bestmove, /candidates, /analyze, /analyze-game, bot games and
+    // engine-vs-engine — the entire website — never saw it, and shuffled won ≤5-man
+    // endings into 50-move draws. Putting the ranking anywhere else means two call sites,
+    // which is exactly the split that caused the bug.
+    //
+    // Thread safety: N Lazy-SMP workers reach this concurrently and Fathom's DTZ path is
+    // not thread-safe. TB::rank_root_moves serializes the probe on its own mutex — see the
+    // dtz_mutex() comment in zug_tb.cpp for why serialize-and-duplicate beats
+    // compute-once-and-thread-it-through here.
+    C.tbRootInTB = false;
+    C.tbCardinality = TB::loaded() ? static_cast<int>(TB::max_pieces()) : 0;
+    if (C.tune.syzygy && C.tune.tbRootRank && TB::loaded() && !C.rootMoves.empty()
+        && pos.castling_rights() == 0
+        && BB::popcount(pos.pieces()) <= C.tbCardinality) {
+        // rankDTZ (SF's flag, tbprobe.cpp:1607): does DTZ also order moves INSIDE the
+        // certain-win band? SF passes false for the search (thread.cpp:313) and true only
+        // when extending a finished PV to mate (search.cpp:2075), and zug follows it —
+        // see TB_ROOT_RANK_DTZ for the full argument, which turns on this probe zeroing
+        // C.tbCardinality three lines below.
+        std::vector<TB::RootRank> ranks;
+        if (TB::rank_root_moves(pos, TB_ROOT_USE_RULE50, TB_ROOT_RANK_DTZ, ranks)) {
+            for (const TB::RootRank& rr : ranks)
+                if (RootMove* rm = find_root_move(C, rr.move)) {
+                    rm->tbRank  = rr.rank;
+                    rm->tbScore = rr.score;
+                }
+            C.tbRootInTB = true;
+            // SF tbprobe.cpp:1758-1761. The ONE sort that crosses rank groups; from here
+            // on the ID loop only ever sorts within [pvFirst, pvLast). Stable, so moves
+            // sharing a rank keep the movegen order they were built in.
+            std::stable_sort(C.rootMoves.begin(), C.rootMoves.end(),
+                             [](const RootMove& a, const RootMove& b) { return a.tbRank > b.tbRank; });
+            // SF tbprobe.cpp:1764-1766: DTZ is available, so stop probing WDL inside the
+            // search. See the in-search probe's own comment for why this is the half of
+            // the fix that lets the search find the mate instead of tying every winning
+            // move at ±(VALUE_TB_WIN - ply).
+            C.tbCardinality = 0;
+        }
+    }
     // SF search.cpp:310, `multiPV = std::min(multiPV, rootMoves.size())`. The extra
     // max(1,...) keeps a TERMINAL root (no legal moves) running exactly one root
     // negamax — its mated_in()/VALUE_DRAW return is load-bearing for the Result (see
@@ -4074,6 +4261,8 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
     C.multiPV = std::max(1, std::min(C.limits.multiPV < 1 ? 1 : C.limits.multiPV,
                                      static_cast<int>(C.rootMoves.size())));
     C.pvIdx = 0;
+    C.pvFirst = 0;
+    C.pvLast = 0;
     C.rootBestMoveChangesIter = 0;
     int maxDepth = C.limits.depth ? C.limits.depth : MAX_PLY - 1;
 
@@ -4143,6 +4332,13 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
         // falls back on (SF search.cpp:330-331).
         for (RootMove& rm : C.rootMoves) rm.prevScore = rm.score;
 
+        // Reset the Syzygy rank-group window for this iteration (SF search.cpp:336-337).
+        // Without a DTZ-ranked root this is a no-op: the first advance_rank_group() call
+        // below walks pvLast straight to rootMoves.size() and the "window" is the whole
+        // list, exactly as before.
+        C.pvFirst = 0;
+        C.pvLast  = 0;
+
         // ---- MultiPV loop (SF search.cpp:341) ----
         // One full root search per reported line; each pass is restricted to the root
         // moves not yet emitted, so all N lines finish at THIS depth and their scores
@@ -4152,6 +4348,9 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
         // the byte-identity contract for the single-PV tree.
         int score = 0;
         for (C.pvIdx = 0; C.pvIdx < C.multiPV; ++C.pvIdx) {
+            // Move the [pvFirst, pvLast) rank window on once this group is exhausted
+            // (SF search.cpp:343-350). Every sort and the root filter live inside it.
+            advance_rank_group(C);
             // Aspiration windows
             int lineScore;
             if (depth <= 4) {
@@ -4260,7 +4459,10 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
         // change; now purely local to this call, so two concurrent start()
         // calls never share it).
         lastResult.bestMove = C.rootBestMove;
-        lastResult.score = score;
+        // Syzygy root score override (SF search.cpp:2138-2139) — a reporting-only swap,
+        // see reported_score(). `score` itself stays the true search score above and is
+        // what prevScore/TIMEMAN/OPTIMISM keep reading.
+        lastResult.score = reported_score(C, score, C.rootMoves.empty() ? nullptr : &C.rootMoves[0]);
         lastResult.depth = depth;
         lastResult.nodes = C.nodeCount;
         lastResult.pv.assign(ss->pv, ss->pv + ss->pvLen);
@@ -4289,7 +4491,7 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
                 // than report a sentinel score.
                 if (rm.score == -VALUE_INFINITE) break;
                 Line ln;
-                ln.score = rm.score;
+                ln.score = reported_score(C, rm.score, &rm);
                 ln.depth = depth;
                 ln.pv = rm.pv;
                 lastResult.lines.push_back(ln);
@@ -4453,45 +4655,17 @@ void start(Position& pos, const Limits& lim) {
 }
 
 // ---- Lazy SMP driver ----
+//
+// Syzygy root DTZ used to live HERE, as a short-circuit that returned a single DTZ move
+// with `nodes 0` and no search at all. That placement was the bug: start_smp is the UCI
+// entry point only, so the HTTP serve path (start_group → run_lazy_smp) never reached it
+// and the whole website played won ≤5-man endings on flat WDL alone. The short-circuit
+// shape also forced two exclusions it could never shed — it had to be skipped under
+// MultiPV (it can only ever produce one line) and while pondering (it would emit a
+// bestmove during the UCI ponder hold). Both are gone: DTZ is now a RANKING applied in
+// Search::start() (the one function every entry path crosses), the engine always runs a
+// real search, and the rank grouping constrains which moves that search may choose.
 Result start_smp(Position& rootPos, const Limits& limits, int threads) {
-    // Syzygy root DTZ (gomachine internal/engine/tablebase.go): before ANY search, if the
-    // root is a TB-cardinality position with no castling, probe DTZ for the DTZ-OPTIMAL
-    // converting move and return it directly — this is the half WDL-in-search lacks (WDL is
-    // flat across winning moves, so without this the engine can shuffle a won ending into a
-    // 50-move draw). Runs here on the driver thread, single-threaded BEFORE workers spawn, so
-    // Fathom's non-thread-safe DTZ path is safe. Gated: C.tune.syzygy + TB::loaded().
-    // Skipped while pondering: an instant DTZ bestmove would break the UCI ponder hold (the
-    // search must not emit until ponderhit/stop). WDL-in-search still guides the ponder search.
-    // Also skipped under MultiPV > 1: the caller asked for N ranked lines and this path can
-    // only ever produce one, so run the real search instead (WDL-in-search still scores every
-    // line correctly inside a TB position). multiPV<=1 keeps the instant short-circuit exactly
-    // as before.
-    if (!limits.ponderMode && limits.multiPV <= 1) {
-        Context& C0 = default_ctx_ref();
-        if (C0.tune.syzygy && TB::loaded() && rootPos.castling_rights() == 0
-            && (unsigned) BB::popcount(rootPos.pieces()) <= TB::max_pieces()) {
-            Move tbMove = TB::probe_root(rootPos);
-            if (tbMove != MOVE_NONE) {
-                int wdl = 0;
-                TB::probe_wdl(rootPos, wdl);
-                int score = wdl > 0 ? VALUE_TB_WIN : (wdl < 0 ? -VALUE_TB_WIN : VALUE_DRAW);
-                Result r;
-                r.bestMove = tbMove;
-                r.score = score;
-                r.depth = 0;
-                r.nodes = 0;
-                r.pv.assign(1, tbMove);
-                { Line ln; ln.score = score; ln.depth = 0; ln.pv = r.pv; r.lines.push_back(ln); }
-                if (!limits.silent) {
-                    std::cout << "info depth 0 score cp " << score << " nodes 0 pv "
-                              << move_to_uci(tbMove) << "\n";
-                    std::cout << "bestmove " << move_to_uci(tbMove) << std::endl;
-                }
-                return r;
-            }
-        }
-    }
-
     // Threads<=1: the exact pre-SMP single-thread path. default_context() is
     // bound to the global TT + defaultStop, resetShared defaults to true, and
     // limits.silent is untouched — so the tree, the bestmove, and every

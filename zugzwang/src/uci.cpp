@@ -19,13 +19,17 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include "native_thread.h"  // NativeThread: 8MB stacks (SF ~sf18-arm/src/thread_win32_osx.h)
 
 static const char* START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 static const char* ENGINE_NAME = "hce 1.0";
 static const char* ENGINE_AUTHOR = "Claude (HCE)";
 
 static Position pos;
-static std::thread searchThread;
+// The search runs here, NOT on the stdin-reading main thread — and it must be a
+// NativeThread: a deep search needs >1MB of stack and macOS gives a plain std::thread
+// only ~544KB (see native_thread.h for the measured frame sizes and the crash it fixes).
+static zug::NativeThread searchThread;
 static int ttSizeMB = 128;
 static int engineThreads = 1; // UCI "Threads" option — Lazy SMP worker count (1 = single-thread)
 // UCI "MultiPV": how many principal variations `go` should report. 1 (the default) is
@@ -210,7 +214,7 @@ static void go_cmd(std::istringstream& is) {
         Search::request_stop(false);
         int elo = uciElo, gd = limits.depth, gmt = limits.movetime;
         int64_t gn = limits.nodes;
-        searchThread = std::thread([elo, gd, gmt, gn]() {
+        searchThread = zug::NativeThread([elo, gd, gmt, gn]() {
             std::vector<uint64_t> hist;
             Rating::WeakResult wr = Rating::best_move_for_rating_single(
                 Search::default_context(), pos, elo, gd, gmt, gn, hist);
@@ -231,7 +235,7 @@ static void go_cmd(std::istringstream& is) {
     // helper threads before returning, so stop_search()'s join still cleanly
     // waits for the entire (multi-threaded) search to finish.
     int nThreads = engineThreads;
-    searchThread = std::thread([limits, nThreads]() { Search::start_smp(pos, limits, nThreads); });
+    searchThread = zug::NativeThread([limits, nThreads]() { Search::start_smp(pos, limits, nThreads); });
 #endif
 }
 

@@ -69,10 +69,32 @@ struct RootMove {
     // Sort in DESCENDING score order (SF search.h:93-96): best line first, ties
     // broken by the previous iteration's score so a genuinely stable ranking
     // survives an iteration where several moves failed low together.
+    //
+    // tbRank comes FIRST, ahead of any search score. A Syzygy DTZ rank is knowledge,
+    // not an estimate — a move that keeps a won ending inside the halfmove clock must
+    // never be displaced by a move the search happens to like better this iteration.
+    // SF gets the same effect structurally, by only ever sorting WITHIN one tbRank
+    // group (~sf18-arm/src/search.cpp:341-350/383/424); zug does both — the group
+    // machinery is ported below AND the comparator is rank-primary, so no future
+    // stable_sort over a mixed range can silently reorder across ranks.
+    //
+    // BYTE IDENTITY: every tbRank is 0 unless the root was DTZ-ranked, and then the
+    // first term is 0 != 0 == false for every pair and this is the old comparator
+    // exactly.
     bool operator<(const RootMove& m) const {
+        if (m.tbRank != tbRank) return m.tbRank < tbRank;
         return m.score != score ? m.score < score : m.prevScore < prevScore;
     }
     bool operator==(const Move& m) const { return pv[0] == m; }
+
+    // Syzygy root ranking (SF RootMove::tbRank/tbScore, ~sf18-arm/src/search.h:107-108).
+    // Both stay 0 for every position that is not DTZ-ranked at the root, which is every
+    // position with >TB_LARGEST men, with castling rights, or on a box with no tables.
+    // tbRank is an ORDERING KEY ONLY — it is never compared against a score, never
+    // reported, and never enters the tree. tbScore is a REPORTING override (see
+    // start()/print_pv): the search still runs on real scores throughout.
+    int  tbRank  = 0;
+    int  tbScore = 0;
 
     Move move = MOVE_NONE;
     int  score     = -VALUE_INFINITE; // this iteration's score (clobbered every search)

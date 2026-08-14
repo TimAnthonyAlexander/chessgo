@@ -3,7 +3,7 @@
 // there is no filesystem in the browser to point it at, and the wasm build
 // deliberately excludes the syzygy sources entirely (Makefile.wasm), so
 // nothing in this build ever links Fathom. search.cpp still calls
-// TB::loaded()/probe_wdl()/probe_root() unconditionally (gated at RUNTIME by
+// TB::loaded()/probe_wdl()/rank_root_moves() unconditionally (gated at RUNTIME by
 // `C.tune.syzygy && TB::loaded()`), so those symbols must exist for the link
 // to succeed — this file supplies them as permanent no-ops: TB::loaded() is
 // always false, so every TB::-gated branch in search.cpp is dead code at
@@ -18,6 +18,9 @@ bool init(const char*) { return false; }
 bool loaded() { return false; }
 unsigned max_pieces() { return 0; }
 bool probe_wdl(const Position&, int&) { return false; }
-Move probe_root(const Position&) { return MOVE_NONE; }
+bool rank_root_moves(Position&, bool, bool, std::vector<RootRank>& out) {
+    out.clear();
+    return false;  // "not ranked" — start() falls straight through to the ordinary search
+}
 
 }  // namespace TB
