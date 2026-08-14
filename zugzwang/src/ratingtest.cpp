@@ -262,6 +262,16 @@ int probe_main(int samples, int truthDepth, int threads) {
             bucketFens[b]++;
             std::printf("  %-52s %+7d cp  %2d moves  -> %s\n", std::string(kProbeFens[f]).substr(0, 52).c_str(),
                         t.best, int(t.score.size()), kBuckets[b].name);
+            // Per-position cpl for THIS position, before it is folded into the bucket
+            // aggregate below. A bucket mean is an average over as few as three
+            // positions and most decided positions score 0 for every rung, so a single
+            // position routinely IS the bucket — and without this line there is no way
+            // to tell which one, or which rung it punished. See the CHECKS section for
+            // why the strongest rungs are the ones a position like that punishes.
+            std::printf("      per-rating cpl:");
+            for (size_t ri = 0; ri < kLadder.size(); ++ri)
+                std::printf("  %d=%.0f/max%d", kLadder[ri], local[ri][b].mean(), local[ri][b].maxLoss);
+            std::printf("\n");
             std::fflush(stdout);
             for (size_t ri = 0; ri < kLadder.size(); ++ri)
                 for (int bb = 0; bb < kNumBuckets; ++bb) {
@@ -316,6 +326,43 @@ int probe_main(int samples, int truthDepth, int threads) {
     // 1. Rating separation must hold INSIDE every bucket. This is the check the
     //    old model failed: it separated beautifully at |eval| < 200 and not at
     //    all above it.
+    //
+    //    KNOWN, DIAGNOSED, NOT A LADDER DEFECT: the `1200+` bucket flags a `mono`
+    //    inversion on most runs, at a rung that MOVES from run to run (2200 in one
+    //    set of four runs, 2800 in the next). It is a defect of this MEASUREMENT,
+    //    and the per-position line printed above is what shows it.
+    //
+    //    The bot is capped at kFillerDepthCap = 8 plies of ranking sight; the oracle
+    //    it is scored against runs at truthDepth = 14. Wherever those two disagree
+    //    about the best move, the bot is charged the difference — and the STRONGEST
+    //    rungs are charged it hardest, because a near-zero selection window pins them
+    //    to their own capped-depth best EVERY sample, while a wide window lets a weak
+    //    rung stumble onto the oracle's move by luck and dilute the cell. Certainty is
+    //    what the metric punishes, so the inversion sits wherever the disagreement is.
+    //
+    //    Worked example, `8/2k5/3p4/p2P1p2/P2P1P2/8/8/4K3 w - - 0 1` (a blocked pawn
+    //    ending, 5 legal moves, in the 1200+ bucket). MultiPV, this engine, today:
+    //      depth  8  e1f2 +1117 | e1d1 +227   <- the bot's own view, 890cp apart
+    //      depth 14  e1d1 +1628 | e1f2 +1564  <- the oracle, 64cp apart the other way
+    //    Rating 2800 (window 3cp, cap 10cp) therefore plays e1f2 30 times out of 30
+    //    and measures 74cpl; rating 2500 (window 31cp) measures 37; rating 1000
+    //    (window 249cp, ranking at depth 2, where the two moves are 1cp apart) splits
+    //    its samples and also measures ~37. Same effect in a lost position with a
+    //    search instability at one depth: a run where the depth-6 ranking preferred
+    //    a move the depth-14 oracle scores 419cp worse put rating 2200 at 391cpl in
+    //    that cell while 1800 and 2500 measured 0.
+    //
+    //    The bucket cannot absorb any of that: it holds 8 positions, most of them
+    //    decided positions every rung plays perfectly (0cpl), so one such cell IS the
+    //    bucket mean. More samples do not help — the offending cell is deterministic.
+    //    The `0-200` and `200-600` buckets, whose positions all carry real per-move
+    //    signal, separate monotonically and are the ones to read.
+    //
+    //    Deliberately NOT "fixed" by loosening this check or by re-recording the
+    //    numbers. A fix means changing what the metric measures — scoring the bot
+    //    against an oracle it is allowed to see, or requiring a bucket to hold enough
+    //    positions that no single one can carry it — and that is a redesign of the
+    //    gate, not a patch to it.
     for (int b = 0; b < kNumBuckets; ++b) {
         if (!stats[0][b].n) continue;
         // Sampling noise makes strict step-by-step monotonicity too brittle, so
