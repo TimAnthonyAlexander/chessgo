@@ -13,6 +13,8 @@ cd "$(dirname "$0")/.."
 
 [ -e syzygy ] || { echo "tb_eval_wire: no syzygy/ tables — nothing to test" >&2; exit 1; }
 
-make -s zugzwang || { echo "tb_eval_wire: build failed" >&2; exit 1; }
+# tbdefend is the oracle for assertion (e): it decides which positions are cursed
+# wins / blessed losses, so the suite never takes its own word for it.
+make -s zugzwang tbdefend || { echo "tb_eval_wire: build failed" >&2; exit 1; }
 
 exec python3 test/tb_eval_wire.py "$@"

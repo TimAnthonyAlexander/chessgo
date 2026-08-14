@@ -129,6 +129,22 @@ external GUIs expect the large cp there, exactly as SF prints it. Gate:
 PHP mirrors the band in `App\Services\EngineEval`, the browser in
 `frontend/src/lib/engineEval.ts`, iOS in `ios/chessgo/Models/EngineEval.swift`.
 
+**A CURSED win reports 0.00, not the band value.** `reported_score`
+(`src/search.cpp`) substitutes the root's `tbScore` for the search's own number
+on a DTZ-ranked root, and `tbScore` is three different kinds of number: in the
+certain bands (`±VALUE_TB_WIN`) and the draw band it is the position's true
+rule50-aware value, but in the cursed-win / blessed-loss band it is SF's 1..49cp
+"keep pressing" *ordering incentive* (`tbprobe.cpp:1669`), and under the 50-move
+rule a cursed win is a draw. Reporting the incentive printed −47 above a PV that
+walked into the 50-move draw, so `TB::RootRank::cursed` marks that band and it
+reports `VALUE_DRAW` instead. `tbRank` — the ordering, which is what keeps the
+attacker pressing and the defender holding — is untouched in every band.
+Reporting the *search's* number there instead is not an option: a DTZ-ranked root
+zeroes `C.tbCardinality`, so inside it the search has no tablebase knowledge at
+all (measured −109/−64 across two runs of the same dead-drawn position, and +696
+on a drawn KQvKR). Gate: assertion (e) of `./test/tb_eval_wire.sh`, whose cursed
+cases are generated from `tools/tbdefend` at clock `101 − dtz`.
+
 ### Concurrent search-context pool
 
 `serve` runs N independent `Search::Context`s (default `min(hardware_concurrency, 6)`;

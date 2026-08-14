@@ -1493,11 +1493,51 @@ static inline bool root_filter_active(const Context& C) {
 // !is_mate_score(v). A found forced mate is strictly more information than "tablebase
 // win" and must not be overwritten by it.
 //
+// THE CURSED BAND REPORTS A DRAW (rm->tbCursed — zug DEPARTS from SF here, deliberately).
+// tbScore is three different kinds of number depending on which branch of SF's expression
+// produced it (tbprobe.cpp:1669-1677, ported verbatim in zug_tb.cpp):
+//   * ±VALUE_TB_WIN, a certain win/loss  — the position's true value under the 50-move rule;
+//   * VALUE_DRAW                          — the position's true value under the 50-move rule;
+//   * the 1..50cp cursed-win / blessed-loss band — NOT a value at all. SF's own comment
+//     ("assign at least 1 cp to cursed wins and let it grow to 49 cp as the position gets
+//     closer to a real win") describes an ORDERING INCENTIVE. Under the 50-move rule a
+//     cursed win IS a draw: that is what "cursed" means.
+// So the override is kept in every band — the tablebase is the authority on a ≤5-man root,
+// and that does not stop being true when the win is spent — but in the cursed band it
+// reports the tablebase's actual verdict, VALUE_DRAW, instead of the incentive. Reporting
+// the incentive is what made `8/3k1KPb/8/8/8/5N2/8/8 b - - 98 106` print -47 above a PV
+// (Be4 g8=Q Bd5 Kxg8 …) that walks into the 50-move draw and ends in bare KN vs K.
+//
+// WHY NOT "just report the search score" in this band. Measured, on this exact position:
+// -109, then -64 on a re-run. A DTZ-ranked root zeroes C.tbCardinality (SF
+// tbprobe.cpp:1764, ported at the ranking call site), which switches the in-search WDL
+// probe off for the whole search — so inside a ranked root the search is the one authority
+// with NO tablebase knowledge at all, and its number is an NNUE count of a knight it will
+// never mate with. That is the +314.96 bug one order of magnitude smaller, and it is not
+// even stable across runs. The search is only the better authority where it can see the
+// draw, and here it structurally cannot.
+//
+// A found MATE still outranks all three branches, and is now checked FIRST so that
+// precedence holds in the cursed band too. The search is rule50-aware, so a mate it
+// reports fits inside the halfmove clock by construction and is strictly more information
+// than "drawn by the 50-move rule".
+//
+// ORDERING IS UNAFFECTED IN EVERY BAND. tbRank still sorts the root and still drives the
+// [pvFirst, pvLast) group filter, so the engine keeps preferring the cursed win that
+// minimizes dtz + cnt50 — it presses exactly as hard as before, it just no longer claims
+// half a pawn for it. This is a reporting change and nothing else.
+//
+// UCI is included here, unlike the JSON `tb` tag (serve_json.h), which UCI is deliberately
+// exempt from. That exemption exists because a GUI has nowhere to put a second field and
+// expects the large cp for a verdict; it says nothing about the cursed band, where both
+// the old number and the new one are near zero and only one of them is true.
+//
 // BYTE IDENTITY: returns v untouched whenever the root was not DTZ-ranked.
 static inline int reported_score(const Context& C, int v, const RootMove* rm) {
     if (!C.tbRootInTB || rm == nullptr) return v;
     if (v == -VALUE_INFINITE) v = VALUE_ZERO; // SF search.cpp:2135-2136
-    return is_mate_score(v) ? v : rm->tbScore;
+    if (is_mate_score(v)) return v;
+    return rm->tbCursed ? VALUE_DRAW : rm->tbScore;
 }
 
 // #13 is_shuffling (SF18 search.cpp:145-152, VERIFIED): a dead 4-ply single-piece
@@ -4376,8 +4416,9 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
         if (TB::rank_root_moves(pos, TB_ROOT_USE_RULE50, TB_ROOT_RANK_DTZ, ranks)) {
             for (const TB::RootRank& rr : ranks)
                 if (RootMove* rm = find_root_move(C, rr.move)) {
-                    rm->tbRank  = rr.rank;
-                    rm->tbScore = rr.score;
+                    rm->tbRank   = rr.rank;
+                    rm->tbScore  = rr.score;
+                    rm->tbCursed = rr.cursed;
                 }
             C.tbRootInTB = true;
             // SF tbprobe.cpp:1758-1761. The ONE sort that crosses rank groups; from here

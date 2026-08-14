@@ -95,6 +95,11 @@ struct RootMove {
     // start()/print_pv): the search still runs on real scores throughout.
     int  tbRank  = 0;
     int  tbScore = 0;
+    // TB::RootRank::cursed — is tbScore the cursed-win/blessed-loss BAND value (1..50cp),
+    // an ordering incentive, rather than this move's true rule50-aware value (a draw)?
+    // Such a move REPORTS VALUE_DRAW; its ORDERING (tbRank) is untouched, in every band.
+    // See reported_score().
+    bool tbCursed = false;
 
     Move move = MOVE_NONE;
     int  score     = -VALUE_INFINITE; // this iteration's score (clobbered every search)

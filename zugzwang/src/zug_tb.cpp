@@ -241,11 +241,25 @@ bool rank_root_moves(Position& pos, bool useRule50, bool rankDTZ, std::vector<Ro
                   : rank > -bound  ? (std::min(-3, rank + (MAX_DTZ / 2 - 200)) * 100) / 200
                                    : -VALUE_TB_WIN;
 
+        // Which BRANCH of the expression above produced `score`? The two middle ones —
+        // 0 < |rank| < bound — are the cursed-win / blessed-loss band, whose value is a
+        // deliberate fiction: SF's own comment calls it "assign at least 1 cp to cursed
+        // wins and let it grow to 49 cp as the position gets closer to a real win", i.e.
+        // an incentive to keep pressing, not the position's value — under the 50-move rule
+        // a cursed win IS a draw. The outer branches are different in kind: ±VALUE_TB_WIN
+        // and VALUE_DRAW are what the tablebase says the position is actually worth.
+        // reported_score() (search.cpp) reports the outer branches as they are and reports
+        // this one as VALUE_DRAW, and this flag is how it tells them apart — derived from
+        // the band, not from the magnitude of `score` (at rank == bound the certain branch
+        // fires with dtz + cnt50 == 100, so magnitude alone would misclassify it).
+        const bool cursed = rank != 0 && rank < bound && rank > -bound;
+
         RootRank rr;
-        rr.move  = m;
-        rr.rank  = rank;
-        rr.score = score;
-        rr.dtz   = dtz;
+        rr.move   = m;
+        rr.rank   = rank;
+        rr.score  = score;
+        rr.dtz    = dtz;
+        rr.cursed = cursed;
         out.push_back(rr);
     }
 

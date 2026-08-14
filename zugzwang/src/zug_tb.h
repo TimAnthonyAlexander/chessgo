@@ -82,6 +82,16 @@ struct RootRank {
     int  score = 0;  // SF tbScore, mapped onto ZUG's value scale (see zug_tb.cpp).
     int  dtz   = 0;  // signed DTZ from the ROOT, in plies. Diagnostics/tools only —
                      // rank/score already fold it in. 0 = draw.
+
+    // Is `score` a CURSED WIN / BLESSED LOSS band value — the 1..50cp ordering nudge —
+    // rather than this move's true rule50-aware value? True exactly for the two middle
+    // branches of the tbScore expression in zug_tb.cpp (0 < |rank| < bound). The
+    // distinction has to leave this struct because `score` alone cannot carry it: in the
+    // certain bands (±VALUE_TB_WIN) and in the draw band (0) score IS the position's
+    // value; in this band it deliberately is not, and reporting it produced a header that
+    // contradicted its own PV. reported_score() (search.cpp) reports VALUE_DRAW here —
+    // the tablebase's actual verdict on a spent win — and leaves ORDERING alone.
+    bool cursed = false;
 };
 
 // Rank EVERY legal root move of `pos` by Syzygy DTZ, SF-style. Returns false (and leaves
