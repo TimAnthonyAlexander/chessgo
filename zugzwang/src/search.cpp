@@ -4419,6 +4419,7 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
                     rm->tbRank   = rr.rank;
                     rm->tbScore  = rr.score;
                     rm->tbCursed = rr.cursed;
+                    rm->tbDtz    = rr.dtz;
                 }
             C.tbRootInTB = true;
             // SF tbprobe.cpp:1758-1761. The ONE sort that crosses rank groups; from here
@@ -4465,6 +4466,7 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
     if (C.tune.histDecay) decay_history_table(C);
 
     Result lastResult;
+    lastResult.tbRanked = C.tbRootInTB;
     int prevScore = 0;
     Move lastBest = MOVE_NONE;
     // TIMEMAN per-iteration scaling state (only used when C.tmScaled). Stormphrax limit.cpp:
@@ -4673,6 +4675,12 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
                 ln.score = reported_score(C, rm.score, &rm);
                 ln.depth = depth;
                 ln.pv = rm.pv;
+                // The root ranking, carried out verbatim for Rating::root_scores. `score`
+                // above has already collapsed the bands (every certain win is the same
+                // VALUE_TB_WIN), which is right for REPORTING and useless for RANKING.
+                ln.tbRank   = rm.tbRank;
+                ln.tbDtz    = rm.tbDtz;
+                ln.tbCursed = rm.tbCursed;
                 lastResult.lines.push_back(ln);
             }
             if (lastResult.lines.empty()) {
@@ -4794,6 +4802,9 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
         lastResult.nodes = C.nodeCount;
         lastResult.pv.assign(1, best);
         lastResult.lines.clear();
+        // The synthesized line below carries no ranking, and tbRank==0 is the DRAW band
+        // — indistinguishable from "never ranked" unless this says so.
+        lastResult.tbRanked = false;
     }
     // Result::lines is a promise: ALWAYS at least one entry, always mirroring the
     // scalar fields. Covers the fallback above and any path where no iteration ever
@@ -4804,6 +4815,7 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
         ln.depth = lastResult.depth;
         ln.pv = lastResult.pv;
         lastResult.lines.push_back(ln);
+        lastResult.tbRanked = false; // synthesized line, no ranking on it (see above)
     }
     // Ponder/infinite hold (SF search.cpp:210-216): the UCI protocol forbids emitting
     // bestmove while pondering or in an `infinite` search until the GUI sends `stop`/

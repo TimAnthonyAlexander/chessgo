@@ -52,9 +52,19 @@ struct LevelConfig {
 LevelConfig config_for_rating(int rating);
 
 // Root move + its score from the ranking mover's perspective (higher = better).
+//
+// TWO scores, deliberately. `score` is what the engine REPORTS for this move (the
+// eval bar, the UCI info line, WeakResult::score). `selScore` is what the ladder
+// SELECTS on. They are the same number everywhere except in a Syzygy-DTZ-ranked
+// root, where reporting and ranking genuinely want different things: reporting
+// must say "tablebase win" (one flat verdict for every winning move, which is the
+// truth), while selection needs to tell those winning moves APART or the softmax
+// samples them uniformly and the whole ladder collapses to a dice roll. See
+// tb_selection_score() in rating.cpp.
 struct RootMove {
     Move move = MOVE_NONE;
     int score = 0;
+    int selScore = 0;
 };
 
 // Result of a (possibly weakened) rating-path search: `pv` is the full principal

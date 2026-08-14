@@ -1,7 +1,9 @@
 #include "rating.h"
 #include "rules.h"
 #include "search.h"
+#include "types.h" // is_mate_score
 #include "weakening.h"
+#include <algorithm>
 #include <cmath>
 
 namespace Rating {
@@ -9,6 +11,108 @@ namespace Rating {
 namespace {
 
 constexpr int kWorstMoveDepth = 6;
+
+// ---------------------------------------------------------------------------
+// SYZYGY ROOT -> SELECTION SCORE
+// ---------------------------------------------------------------------------
+// Weakening::pick measures a move's error as `bestScore - score` in centipawns.
+// In a DTZ-ranked root the score it was handed is the REPORTED score, and
+// reported_score() (search.cpp) deliberately collapses that: every certain win
+// is the identical VALUE_TB_WIN, every cursed win and every blessed loss is
+// VALUE_DRAW. Those are the right numbers to SHOW — a tablebase win is one
+// verdict, not a spectrum — and they are useless to select on, because they make
+// `loss` exactly 0 for every winning move. The severity cap then filters nothing
+// and the softmax samples the winning moves UNIFORMLY, at every rung of the
+// ladder. Measured on the reported game position `8/6Pb/5K2/4N3/4k3/8/8/8 w - -
+// 71 93`, 30 samples per rung: ratings 800/1600/2400/2800 all spread their picks
+// across the same 7 winning moves in the same flat proportions, and e5g6 (one of
+// the two DTZ-optimal moves) came up 4/30, 1/30, 5/30, 5/30 — flat, and no
+// better than the 1-in-7 a blind draw would give, at every rating. After, same
+// four rungs: the two optimal moves take 11/30, 14/30, 30/30, 30/30 of the
+// picks — the top two rungs play nothing else, the bottom one is still nearly
+// free, which is what a ladder is supposed to look like.
+//
+// THIS IS THE SATURATION FAILURE FROM weakening.h, IN A NEW PLACE. That
+// post-mortem is about win-probability selection: `wp` saturates once either
+// side is up a piece, so cap and softmax both multiplied a quantity that was
+// already ~0 exactly where the bad play happened, and no coefficient could reach
+// it. The shape here is identical — the selection quantity is CONSTANT across
+// the moves that matter — and so is the symptom: uniform-random play with zero
+// rating separation. It is not fixable by tuning the window or the cap for the
+// same reason it was not fixable there. The fix has to restore a real spread to
+// the quantity being differenced, which is what this function does.
+//
+// WHY DTZ PLIES AND NOT tbRank. tbRank is the right ORDERING and it is what the
+// full-strength search uses, but it cannot carry a gradient here: zug passes
+// rankDTZ=false (TB_ROOT_RANK_DTZ, search.cpp — SF does too), so every certain
+// win ranks at exactly MAX_DTZ and the band is flat by construction. DTZ is the
+// quantity that actually varies, and it is the one that matters: what loses a
+// won ≤5-man ending is not choosing a losing move — the band filter makes that
+// impossible — it is WASTING the halfmove clock. Measured mechanism, from a full
+// game trace at rating 2000 on that position: every White move stayed a genuine
+// TB_WIN, and `rule50 + dtz` still climbed 46 -> 48 -> 50 -> 52 -> 56 ... -> 100
+// over 30 moves, two to four plies at a time, until the clock ate the win. A
+// move that is Δ plies off the DTZ optimum costs exactly Δ plies of budget, and
+// the budget is ~100 plies for the whole conversion. So DTZ ply is the unit the
+// error is actually measured in, and every other candidate (rank distance, a
+// synthesized cp from the eval) is a proxy for it.
+//
+// THE MAPPING. Two levels, because the quantity has two levels:
+//
+//   * BAND (certain win > cursed win > draw > blessed loss > certain loss) is a
+//     step of kBandCp, far larger than any rung's severity cap (780cp at the
+//     weakest). Trading a certain win for a cursed one is not "a worse move",
+//     it is throwing away the game result, and no rung of the ladder may do it.
+//     That is today's behaviour (the VALUE_TB_WIN gap already made it
+//     unreachable) and this preserves it deliberately.
+//   * DTZ inside the band is `kCpPerWastedPly` per ply, clamped to kMaxDtzCp so
+//     the within-band term can never reach across a band step.
+//
+// `-dtz` is "goodness" in every band at once: a winner wants dtz small (fewer
+// plies to the zeroing move), a loser wants dtz very negative (a longer
+// defence), and a draw is 0. So one linear term serves all five bands, and it
+// also restores to this path the "keep pressing" gradient inside the cursed band
+// that f4b68e5 removed from REPORTING (correctly — a cursed win is a draw, and
+// saying so is not the same as playing for it).
+//
+// SCALE. kCpPerWastedPly is set from the ladder's own two ends, not guessed:
+//   * it must EXCEED the strongest weakened rung's severity cap (10cp at 2800)
+//     so that rung is DTZ-deterministic — 2850 and up plays unweakened and
+//     converts, and the rung just below it must not fall off a cliff;
+//   * it must stay small enough that the weakest rung's window (300cp at 700)
+//     still spans the whole spread of a real root, so a 700 bot stays nearly as
+//     free as it is today. 25cp/ply puts 12 wasted plies inside that window.
+// 25 also makes the ~2-4 ply granularity of real root DTZ spreads (the position
+// above offers dtz 15,15,19,19,19,19,23 — Δ ∈ {0,4,8}) land at 100cp and 200cp,
+// i.e. squarely inside the ladder's middle rungs rather than under all of them
+// or over all of them. Measured end-to-end by ./test/tb_rating.sh; refit there,
+// not by reasoning.
+constexpr int kCpPerWastedPly = 25;
+// The within-band term is clamped so it can never reach across a band step, and
+// so a garbage DTZ out of the tables cannot either. 120 plies covers the real
+// range comfortably (the longest ≤5-man DTZ is around 100), and the band step is
+// set above clamp + the weakest rung's 780cp cap, so the closest two bands ever
+// come is 2000cp — no rung of the ladder can trade a certain win for a cursed
+// one, a draw for a loss, or any other band swap.
+constexpr int kMaxDtzCp = 3000; // 120 plies
+constexpr int kBandCp   = 5000; // > kMaxDtzCp + the weakest rung's severity cap
+
+// Selection score for one root move of a DTZ-ranked root. `tbRank`/`tbCursed`
+// name the band (rank>0 win, ==0 draw, <0 loss; cursed splits certain from
+// spent), `tbDtz` orders inside it. `reported` is the move's reported score and
+// is passed through UNCHANGED when it is a real mate: a forced mate the search
+// actually found is strictly more information than "tablebase win", it converts
+// faster than DTZ does, and Weakening::pick's protectWinningMate must still see
+// it. Never called for an unranked root (Search::Result::tbRanked).
+int tb_selection_score(int reported, int tbRank, int tbDtz, bool tbCursed) {
+    if (is_mate_score(reported)) return reported;
+
+    int band = tbRank > 0 ? (tbCursed ? 1 : 2)
+             : tbRank < 0 ? (tbCursed ? -1 : -2)
+                          : 0;
+    int dtzTerm = std::max(-kMaxDtzCp, std::min(kMaxDtzCp, -tbDtz * kCpPerWastedPly));
+    return band * kBandCp + dtzTerm;
+}
 
 // Ranks every legal move at `pos` to `rankDepth` plies (mover-relative) with ONE
 // MultiPV search over all root moves.
@@ -47,14 +151,20 @@ std::vector<RootMove> root_scores(Search::Context& ctx, Position& pos, int rankD
     Search::Result r = Search::start(ctx, pos, lim);
     nodesOut += r.nodes;
 
+    // `score` is the REPORTED score; `selScore` is what the ladder selects on. They
+    // differ only in a Syzygy-DTZ-ranked root — see tb_selection_score() above for
+    // why reporting and selection cannot be the same number there.
     for (const Search::Line& l : r.lines)
-        if (!l.pv.empty()) out.push_back({l.pv[0], l.score});
+        if (!l.pv.empty())
+            out.push_back({l.pv[0], l.score,
+                           r.tbRanked ? tb_selection_score(l.score, l.tbRank, l.tbDtz, l.tbCursed)
+                                      : l.score});
 
     // Defensive: a search stopped before completing even depth 1 reports no
     // lines. Fall back to the plain legal-move list so the caller still gets a
     // move (all at an equal, if uninformative, score — never a mixed scale).
     if (out.empty())
-        for (const ExtMove& em : ml) out.push_back({em.move, 0});
+        for (const ExtMove& em : ml) out.push_back({em.move, 0, 0});
 
     return out;
 }
@@ -70,7 +180,7 @@ WeakResult pick_weakened(const std::vector<RootMove>& roots, const LevelConfig& 
     std::vector<Weakening::Candidate> cands;
     cands.reserve(roots.size());
     for (size_t i = 0; i < roots.size(); ++i)
-        cands.push_back({static_cast<int>(i), roots[i].score});
+        cands.push_back({static_cast<int>(i), roots[i].selScore});
 
     Weakening::SoftmaxConfig sc;
     sc.windowCp = cfg.windowCp;
@@ -283,9 +393,13 @@ WeakResult best_move_worst(Search::Context& ctx, Position& pos, const std::vecto
     int64_t nodesUsed = 0;
     auto roots = root_scores(ctx, pos, kWorstMoveDepth, 0, nodesUsed);
     if (roots.empty()) return WeakResult{};
+    // Ranked on selScore for the same reason pick_weakened is: in a DTZ-ranked root
+    // every certain loss REPORTS the identical -VALUE_TB_WIN, so `score` cannot tell
+    // "mated fastest" from "resists longest" and the worst-move picker would have
+    // been choosing between them at random.
     RootMove worst = roots[0];
     for (const RootMove& rm : roots)
-        if (rm.score < worst.score) worst = rm;
+        if (rm.selScore < worst.selScore) worst = rm;
     return WeakResult{worst.move, worst.score, kWorstMoveDepth, nodesUsed, {worst.move}};
 }
 

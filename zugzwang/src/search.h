@@ -49,6 +49,15 @@ struct Line {
     int depth = 0;
     int selDepth = 0;
     std::vector<Move> pv;
+    // Syzygy root ranking for THIS line's root move, copied from RootMove below and
+    // meaningful only when Result::tbRanked. Carried out of the search for exactly one
+    // consumer: Rating::root_scores, which cannot rank a DTZ-ranked root from `score`
+    // because reported_score() collapses every certain win onto the identical
+    // VALUE_TB_WIN (and every cursed win onto VALUE_DRAW). See tb_selection_score()
+    // in rating.cpp for what it does with them. Nothing in the search reads these.
+    int  tbRank   = 0;
+    int  tbDtz    = 0;
+    bool tbCursed = false;
 };
 
 // Root move bookkeeping, ported from SF's RootMove (~sf18-arm/src/search.h:85-110).
@@ -100,6 +109,14 @@ struct RootMove {
     // Such a move REPORTS VALUE_DRAW; its ORDERING (tbRank) is untouched, in every band.
     // See reported_score().
     bool tbCursed = false;
+    // TB::RootRank::dtz — signed DTZ from the ROOT, in plies, for this move (0 = draw).
+    // Positive = the mover wins and SMALLER is better; negative = the mover loses and
+    // more negative (a longer defence) is better; so `-tbDtz` is "goodness" in every
+    // band at once. Like tbRank it never enters the tree; unlike tbRank it is not even
+    // an ordering key for the search — it exists so the WEAKENED ladder has a real
+    // gradient inside a rank band, which tbRank cannot give it (TB_ROOT_RANK_DTZ is
+    // false, so every certain win ranks identically at MAX_DTZ). See rating.cpp.
+    int  tbDtz = 0;
 
     Move move = MOVE_NONE;
     int  score     = -VALUE_INFINITE; // this iteration's score (clobbered every search)
@@ -131,6 +148,10 @@ struct Result {
     // lines[0].depth == depth. Callers that only want the best move keep reading
     // the scalars and are entirely unaffected.
     std::vector<Line> lines;
+    // Was this root DTZ-ranked (Context::tbRootInTB)? When false the tb* fields on
+    // every Line are 0/false and must not be read as a verdict — 0 is also the DRAW
+    // rank, so "no ranking" and "ranked as a draw" are indistinguishable without this.
+    bool tbRanked = false;
 };
 
 // ---- Concurrent search contexts ----

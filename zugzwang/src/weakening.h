@@ -52,6 +52,24 @@
 // is directly calibratable — it is the same unit as ACPL, the standard measure
 // of human accuracy, so `windowCp` can be fitted to a target strength instead of
 // guessed. `zugzwang ratingtest` measures both.
+//
+// THE GENERAL LESSON, which this model has now been bitten by TWICE. The failure
+// above is not "win probability is the wrong formula" — it is that `pick()`
+// differences the caller's scores, so it inherits whatever degeneracy those
+// scores have. Any quantity that goes CONSTANT across the moves that matter
+// makes the cap and the softmax no-ops together and collapses every rung of the
+// ladder to one uniform draw, and no retune can reach it.
+//
+// The second instance was a Syzygy tablebase root: `Rating::root_scores` handed
+// pick() the REPORTED score, and in a DTZ-ranked root every certain win reports
+// the identical VALUE_TB_WIN (search.cpp's reported_score — correct for
+// reporting, a verdict is one number). Same shape, same symptom, same measured
+// result: ratings 800 through 2800 all sampled the winning moves uniformly, and
+// conversion of a won ≤5-man ending was flat at ~0.3 across the whole ladder.
+// The fix is the same in kind as the one above — restore a real spread to the
+// quantity being differenced (there, DTZ plies; see tb_selection_score() in
+// rating.cpp) — never to widen a window or relax the cap. Gate:
+// ./test/tb_rating.sh, which fails a FLAT conversion curve specifically.
 #include <cstdint>
 #include <random>
 #include <vector>

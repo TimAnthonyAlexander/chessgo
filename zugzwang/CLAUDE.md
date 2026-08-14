@@ -238,6 +238,32 @@ the **engine** decides how to play at that strength. No caller does strength mat
 - **No phase/endgame scaling.** A previous revision widened the window ×3 and the
   cap ×2 and cut 3 ply in endgames; it only deepened the collapse. See the note
   in `rating.cpp`.
+- **A Syzygy-ranked root selects on DTZ, not on the reported score.** Reporting
+  and ranking want different numbers there: `reported_score` collapses every
+  certain win onto one `VALUE_TB_WIN` (right — a verdict is one number), which
+  made `pick`'s cpLoss exactly 0 for every winning move, so the cap filtered
+  nothing and the softmax sampled them uniformly *at every rung*. That is the
+  saturation failure above in a second place, and it was live: conversion of a
+  won ≤5-man ending measured 0.33/0.27/0.34/0.28/0.37/0.38 across ratings
+  800…2800 (n=120 each) — flat. `Search::Line` now carries `tbRank/tbDtz/
+  tbCursed` out of the search and `tb_selection_score` (`rating.cpp`) turns them
+  into a selection cp: a band step of 5000cp (certain win > cursed > draw >
+  blessed loss > certain loss — larger than any rung's cap, so no bot may ever
+  trade a band) plus **25cp per wasted DTZ ply** inside it, clamped to ±3000.
+  DTZ plies are the unit because the thing that loses a won ending is not
+  choosing a losing move — the band makes that impossible — it is spending the
+  halfmove clock: a move Δ plies off the DTZ optimum costs exactly Δ of a ~100-ply
+  budget (traced at rating 2000: every move a genuine TB_WIN, `rule50+dtz`
+  climbing 46→48→50→…→100). A real mate the search found overrides all of it.
+  Same numbers after: 0.29/0.39/0.48/0.52/0.88/0.98.
+
+**A third gate — `./test/tb_rating.sh` — is mandatory alongside `probe`/`gauntlet`
+after touching `rating.cpp` or `weakening.cpp`.** It plays won ≤5-man endings with
+White = `/bestmove` + `limits.rating` and Black = `tools/tbdefend` (perfect DTZ
+defence), and asserts the top rung converts, the curve rises with rating, and —
+the one that catches this class of bug — that the curve is **not flat**. A weak
+rung failing to convert is expected and allowed; a ladder where every rung
+converts the same is the defect.
 
 **Test it — `./zugzwang ratingtest`:**
 
