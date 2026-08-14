@@ -765,6 +765,67 @@ struct Context {
         // dir is byte-identical either way. Kill-switch: env TBWDLSF=0, which restores the
         // old flat/ungated probe byte-for-byte (see the block in negamax).
         bool tbWdlSf = true;
+        // ---- TBWINCAP (2026-08-14): time cap on a root the tablebase has already decided
+        // is a CERTAIN win. Milliseconds; 0 = off.
+        //
+        // WHAT IT DOES. When the root was DTZ-ranked (tbRootInTB) and the TOP rank group is
+        // the certain-win band, start()'s per-iteration soft-limit check clamps the soft
+        // limit to this many ms. Nothing else changes: the same search runs, on the same
+        // tree, over the same root move list, and only stops earlier between iterations.
+        //
+        // WHY IT CANNOT COST STRENGTH. The [pvFirst, pvLast) window confines the search to
+        // ONE rank group, and with TB_ROOT_RANK_DTZ == false every certain win lands on the
+        // identical rank MAX_DTZ while a cursed win can only reach MAX_DTZ/2 — so whenever
+        // the top group is certain, EVERY move the search may return is certain. A move is
+        // certain only if `dtz + cnt50 <= 99` (zug_tb.cpp), i.e. only if the position after
+        // it still fits inside the halfmove clock, so the win is preserved whichever of them
+        // is played and however shallow the search was when it chose. Progress is forced by
+        // the same inequality: cnt50 rises every non-zeroing ply while the ceiling stays at
+        // 99, so the admissible dtz falls monotonically and the group empties into a zeroing
+        // move or a mate. The tablebase, not the search, is what makes the win here — see
+        // TB_ROOT_RANK_DTZ's comment, which is the same argument.
+        //
+        // WHY IT IS WORTH DOING. Before the root ranking existed, the UCI path answered a
+        // solved root instantly (a DTZ move, nodes 0). Wave 1 replaced that short-circuit
+        // with a real search, which is right for move CHOICE and wrong for the CLOCK: at
+        // TC 8+0.08 a solved KNPvKB root went 9ms -> 659ms, i.e. the engine spends a full
+        // move's budget re-deciding something the tables already decided, over and over,
+        // for the whole conversion. On the site (fixed movetimeMs, no clock) the same time
+        // is latency and server CPU.
+        //
+        // SCOPE. Deliberately NOT applied when multiPV > 1: /candidates and the whole
+        // weakened-bot ladder (Rating::root_scores runs MultiPV over every legal move) want
+        // every line scored, and the ladder's DTZ selection reads tbRank/tbDtz off those
+        // lines. Also inert whenever there is no soft time limit at all (fixed depth, nodes,
+        // infinite), so bench/SPSA/golden are byte-identical, and inert in every band except
+        // a certain win — a drawn, cursed or lost root is exactly where the SEARCH, not the
+        // tablebase, is the authority on practical chances, and it keeps its full budget.
+        // (So `8/5KPb/2k5/8/8/5N2/8/8 w - - 99 107`, a root the halfmove clock has already
+        // drawn, is deliberately NOT capped and still takes its full ~265ms.)
+        //
+        // WHY 100 AND NOT LESS. `24/24` is not a sensitive enough arbiter to pick the
+        // number — every cap from 200 down to 20 passes tb_conversion. The sensitive
+        // measure is TOTAL PLIES TO MATE over the suite's 24 positions, i.e. how long the
+        // conversion takes, and it does bite below 100. Measured, --movetime 200, sum over
+        // all 24 conversions, repeated runs (the suite is time-limited, so it is not
+        // deterministic):
+        //     cap 0 (off): 956 1018 996 912 1000 930 916   mean  961
+        //     cap 100:     1006 1006  982 1002             mean  999   (+3.9%, ~1.5 SE)
+        //     cap 50:      1002 1082 1104                  mean 1063  (+10.6%, ~3.6 SE)
+        //     cap 20:      1288                                       (+34%)
+        // 100 is the smallest cap whose conversions are indistinguishable from uncapped;
+        // 50 is measurably slower and 20 is plainly worse. Latency at 100, UCI, TC 8+0.08,
+        // `8/6Pb/5K2/4N3/4k3/8/8/8 w - - 71 93`: 580ms -> 120ms, with the non-TB control
+        // position unchanged at ~645ms. Re-measure this curve before moving the number.
+        //
+        // PRECEDENT. SF has no tablebase-specific cap, but it has this exact shape for the
+        // other "the result cannot change" case — `if (rootMoves.size() == 1) totalTime =
+        // std::min(502.0, totalTime);` (~sf18-arm/src/search.cpp:510-512), a std::min
+        // applied to the already-scaled soft limit, for the same reason and with a far
+        // more generous constant.
+        //
+        // Kill-switch: env TBWINCAP=0 (any other value overrides the cap, in ms).
+        int  tbWinCapMs = 100;
         // ---- Move Overhead (2026-07-20): reserved per-move slack (ms) for GUI/OS/network
         // latency, subtracted from remaining time in set_time_limits' clock branch. UCI
         // spin option "Move Overhead" (SF/SP default 10; zug ships 40 = the old hardcoded
@@ -1103,6 +1164,7 @@ struct Context {
             if (off("SYZYGY")) syzygy = false; // shipped default-on; kill-switch (path-gated by TB::loaded())
             if (off("TBROOTRANK")) tbRootRank = false; // shipped default-on; kill-switch
             if (off("TBWDLSF")) tbWdlSf = false; // shipped default-on; kill-switch (restores the old flat probe)
+            if (const char* e = getenv("TBWINCAP")) { int v = atoi(e); if (v >= 0) tbWinCapMs = v; } // 0 = off
             if (const char* e = getenv("MOVEOVERHEAD")) { int v = atoi(e); if (v >= 0) moveOverhead = v; }
             if (const char* e = getenv("CONTEMPT")) contempt = atoi(e); // cp; 0 = off
             if (off("TIMEMAN")) timeMan = false; // shipped default-on (+28 Elo TC-SPRT); kill-switch
@@ -1271,6 +1333,12 @@ struct Context {
     //   rank grouping guarantees it can only ever choose among moves that keep the win.
     bool    tbRootInTB    = false;
     int     tbCardinality = 0;
+    // tbCertainWin: rootInTB AND the TOP rank group is the CERTAIN-win band, i.e. every
+    // move the [pvFirst, pvLast) window can hand back keeps a genuine, clock-fitting
+    // TB_WIN. Read by exactly one thing — the Tune::tbWinCapMs soft-limit clamp in start()
+    // — and set at the ranking call site below. See the tbWinCapMs comment for why the
+    // top group being certain makes every candidate in it interchangeable for the result.
+    bool    tbCertainWin  = false;
     // NODEEFFORT (SF search.cpp:1308/1346/487-508, sf_18): the per-root-move
     // node-count accrual now lives in RootMove::effort (SF's own home for it),
     // replacing the old `unordered_map<Move,int64_t> rootMoveEffort` — same values,
@@ -4403,6 +4471,7 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
     // dtz_mutex() comment in zug_tb.cpp for why serialize-and-duplicate beats
     // compute-once-and-thread-it-through here.
     C.tbRootInTB = false;
+    C.tbCertainWin = false;
     C.tbCardinality = TB::loaded() ? static_cast<int>(TB::max_pieces()) : 0;
     if (C.tune.syzygy && C.tune.tbRootRank && TB::loaded() && !C.rootMoves.empty()
         && pos.castling_rights() == 0
@@ -4432,6 +4501,13 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
             // the fix that lets the search find the mate instead of tying every winning
             // move at ±(VALUE_TB_WIN - ply).
             C.tbCardinality = 0;
+            // Is the TOP rank group the certain-win band? rootMoves is now sorted by rank,
+            // so rootMoves[0] IS the top group. `rank > 0 && !cursed` is precisely SF's
+            // `rank >= bound` branch (zug_tb.cpp): a certain win, and the ONLY branch that
+            // sets tbScore to +VALUE_TB_WIN. Everything sharing that rank is certain too,
+            // and nothing outside the band can reach it (a cursed win tops out at
+            // MAX_DTZ/2). Only the tbWinCapMs clamp reads this.
+            C.tbCertainWin = C.rootMoves[0].tbRank > 0 && !C.rootMoves[0].tbCursed;
         }
     }
     // SF search.cpp:310, `multiPV = std::min(multiPV, rootMoves.size())`. The extra
@@ -4766,6 +4842,16 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
             // Never let the scaled soft limit exceed the hard cap.
             if (C.timeLimitHard && softLimit > C.timeLimitHard) softLimit = C.timeLimitHard;
         }
+        // TBWINCAP: the tablebase has already decided this root is a certain win and the
+        // rank-group window admits only certain-win moves, so more thinking cannot change
+        // the result — clamp the budget. Applied AFTER all the TIMEMAN scaling above so it
+        // is a hard ceiling on the scaled number, never a floor: a search that was already
+        // going to stop sooner still stops sooner. `softLimit &&` keeps it inert on the
+        // no-time-limit paths (fixed depth, nodes, infinite), where introducing a wall
+        // would silently truncate a caller that asked for a depth. See Tune::tbWinCapMs.
+        if (C.tbCertainWin && C.multiPV == 1 && C.tune.tbWinCapMs > 0
+            && softLimit && softLimit > C.tune.tbWinCapMs)
+            softLimit = C.tune.tbWinCapMs;
         if (!C.limits.infinite && !ponderFlag.load(std::memory_order_relaxed)
             && softLimit && elapsed(C) >= softLimit) break;
         if (C.limits.nodes && C.nodeCount >= C.limits.nodes) break;
