@@ -111,14 +111,18 @@ class Serve:
     """A private `zugzwang serve`. Owns rules for both paths, and White's moves
     on --path serve."""
 
-    def __init__(self, root, movetime, quiet=True):
+    def __init__(self, root, movetime, quiet=True, env=None):
         self.root = root
         self.movetime = movetime
         self.port = free_port()
         self.log = subprocess.DEVNULL if quiet else None
+        # `env` overlays the inherited environment, so a caller can bring the engine up
+        # with e.g. TBROOTRANK=0 — the search flags are read once at startup, so the only
+        # way to test a non-default one is to start a serve that owns it.
+        childEnv = dict(os.environ, **env) if env else None
         self.proc = subprocess.Popen(
             [os.path.join(root, "zugzwang"), "serve", "-addr", "127.0.0.1:%d" % self.port],
-            cwd=root, stdout=self.log, stderr=self.log)
+            cwd=root, stdout=self.log, stderr=self.log, env=childEnv)
         deadline = time.time() + 60
         while time.time() < deadline:
             if self.proc.poll() is not None:
@@ -137,11 +141,21 @@ class Serve:
         return json.loads(urllib.request.urlopen(req, timeout=300).read())
 
     def bestmove(self, fen):
+        mv, info, _score = self.bestmove_score(fen)
+        return mv, info
+
+    def bestmove_score(self, fen):
+        """As bestmove(), plus the engine's OWN reported score as (kind, value) —
+        ("cp", n) in the engine's internal centipawn units, or ("mate", n)."""
         r = self.post("/bestmove", {"fen": fen, "limits": {"movetime": self.movetime}})
         if not r.get("bestmove"):
             raise RuntimeError("serve /bestmove returned none: %s" % r.get("reason"))
         ev = r.get("eval") or {}
-        return r["bestmove"], "eval=%s%s d=%s" % (ev.get("type", "?"), ev.get("value", "?"), r.get("depth"))
+        info = "eval=%s%s d=%s" % (ev.get("type", "?"), ev.get("value", "?"), r.get("depth"))
+        score = None
+        if ev.get("type") in ("cp", "mate") and isinstance(ev.get("value"), int):
+            score = (ev["type"], ev["value"])
+        return r["bestmove"], info, score
 
     def stop(self):
         self.proc.kill()
@@ -180,9 +194,14 @@ class Uci:
         self._wait("readyok")
 
     def bestmove(self, fen):
+        mv, info, _score = self.bestmove_score(fen)
+        return mv, info
+
+    def bestmove_score(self, fen):
+        """As bestmove(), plus the last `info ... score X N` parsed into (kind, value)."""
         self._send("position fen " + fen)
         self._send("go movetime %d" % self.movetime)
-        score, depth = "?", "?"
+        score, depth, parsed = "?", "?", None
         while True:
             line = self.proc.stdout.readline()
             if not line:
@@ -192,8 +211,14 @@ class Uci:
                 parts = line.split()
                 if "depth" in parts:
                     depth = parts[parts.index("depth") + 1]
+                bits = score.split()
+                if len(bits) >= 2 and bits[0] in ("cp", "mate"):
+                    try:
+                        parsed = (bits[0], int(bits[1]))
+                    except ValueError:
+                        parsed = None
             if line.startswith("bestmove"):
-                return line.split()[1], "score=%s d=%s" % (score, depth)
+                return line.split()[1], "score=%s d=%s" % (score, depth), parsed
 
     def stop(self):
         self.proc.kill()

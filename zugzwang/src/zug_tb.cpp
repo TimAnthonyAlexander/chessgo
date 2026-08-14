@@ -36,7 +36,20 @@ bool probe_wdl(const Position& pos, int& result) {
         pos.pieces(KNIGHT), pos.pieces(PAWN),
         ep_for_fathom(pos), pos.side_to_move() == WHITE);
     if (res == TB_RESULT_FAILED) return false;
-    result = (res == TB_WIN) ? 1 : (res == TB_LOSS) ? -1 : 0;  // blessed/cursed → draw
+    // Hand the caller all FIVE verdicts, on SF's WDLScore scale (~sf18-arm/src/syzygy/
+    // tbprobe.h:34: WDLLoss=-2, WDLBlessedLoss=-1, WDLDraw=0, WDLCursedWin=+1,
+    // WDLWin=+2), which is exactly Fathom's own internal scale: tb_probe_wdl_impl
+    // returns `v + 2` off probe_wdl()'s -2..+2 (src/syzygy/tbprobe.cpp:556), so the
+    // conversion is the single subtraction below and nothing is inferred.
+    //
+    // This used to normalize to +1/0/-1 with cursed/blessed FOLDED INTO DRAW. That fold
+    // is what the search has to make, not what the probe has to make: SF scores a cursed
+    // win `VALUE_DRAW + 2 * wdl * drawScore` = +2cp (search.cpp:823-828), strictly
+    // better than a dead draw because the opponent still has 50 moves in which to err —
+    // and it is a different BOUND (EXACT, not LOWER), which is what stops the search
+    // treating a spent win like a live one. Folding here threw both away before the
+    // caller could see them.
+    result = static_cast<int>(res) - 2;
     return true;
 }
 

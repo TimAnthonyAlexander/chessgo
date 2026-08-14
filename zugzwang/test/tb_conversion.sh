@@ -13,6 +13,11 @@
 #   ./test/tb_conversion.sh --movetime 500 -v
 #
 # Any arguments are passed straight through to tb_conversion.py.
+#
+# This suite gates the ROOT DTZ ranking. Since that landed, a <=5-man root is ranked,
+# which zeroes C.tbCardinality and switches the IN-SEARCH WDL probe off for the whole
+# search — so these 24 positions barely exercise it. That half has its own gate:
+# ./test/tb_insearch.sh [--deep].
 set -uo pipefail
 cd "$(dirname "$0")/.."
 

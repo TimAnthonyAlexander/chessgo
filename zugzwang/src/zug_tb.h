@@ -4,8 +4,27 @@
 #include <vector>
 
 // Syzygy endgame tablebase probing (Fathom, vendored in src/syzygy/). Ported from
-// gomachine's internal/syzygy integration (measured +18.8 Elo root-DTZ + +30.5 Elo
-// WDL-in-search). Position→Fathom bitboard mapping is 1:1 (both a1=0..h8=63 LERF).
+// gomachine's internal/syzygy integration. Position→Fathom bitboard mapping is 1:1
+// (both a1=0..h8=63 LERF).
+//
+// The inherited gomachine numbers were "+18.8 Elo root-DTZ, +30.5 Elo WDL-in-search".
+// The second one needs a note, because what it measured no longer exists. Measured
+// here, 24 ≤5-man roots at fixed depth 26 with the root DTZ ranking switched off:
+// the old ungated flat probe finished the whole set in 13,946 nodes, against
+// 20,506,758 for the current one. That 1500x is the "+30.5 Elo" — and it is the same
+// mechanism that drew won endings, because every winning move returned the identical
+// flat ±(VALUE_TB_WIN - ply) and the search had nothing left to choose with. It was
+// already gone before this file's rule50 gate landed: the root ranking zeroes
+// Search::Context::tbCardinality, which switches the in-search probe off entirely
+// inside a ranked root. Same 24 roots in the SHIPPED configuration measure
+// 56,053,174 nodes byte-identically before and after the gate.
+//
+// Where the in-search probe still runs — a root with more men than the tables hold,
+// searching down into ≤5-man nodes, which is most of a real game — the SF-shaped
+// version is FASTER, not slower: 16 six- and seven-man won roots at fixed depth 24
+// go 14,004,212 nodes / 9,150 ms → 12,210,330 / 8,057 (-12.8% nodes, -11.9% time).
+// Keeping cursed/blessed as an EXACT bound and writing the verdict to the TT at
+// depth+6 more than pays for the probes the rule50 gate removes.
 namespace TB {
 
 // Initialize from a Syzygy directory. Returns true iff at least one table loaded
@@ -16,9 +35,28 @@ bool     loaded();      // true once init() succeeded
 unsigned max_pieces();  // TB_LARGEST — probe only when popcount(occupied) <= this
 
 // WDL probe for internal search nodes. Returns false on a miss/failed probe; on a hit
-// sets `result` to a NORMALIZED verdict: +1 = win, 0 = draw, -1 = loss (Fathom's
-// blessed-loss/cursed-win fold to draw, matching gomachine — the 50-move rule makes them
-// draws). Caller MUST gate: castling_rights()==0 and popcount<=max_pieces(). Lock-free.
+// sets `result` to the RAW five-valued verdict from the side to move's point of view, on
+// SF's WDLScore scale (~sf18-arm/src/syzygy/tbprobe.h:34):
+//
+//     -2 loss   -1 blessed loss   0 draw   +1 cursed win   +2 win
+//
+// The caller does the drawScore mapping, exactly as SF's Step 5 does (search.cpp:823-830).
+// It used to return a normalized +1/0/-1 with cursed/blessed folded to draw; see the fold
+// comment in zug_tb.cpp for why that fold belongs at the call site and not here.
+//
+// PRECONDITIONS THE CALLER MUST ENFORCE — all three, no exceptions:
+//   * castling_rights() == 0   (Fathom's Pos carries no castling state)
+//   * popcount(occupied) <= max_pieces()
+//   * rule50_count() == 0
+// The last one is not optional and is not a tuning choice. This calls tb_probe_wdl_impl
+// directly, and Fathom's own wrapper `tb_probe_wdl` (src/syzygy/tbprobe.h:220-223) refuses
+// with TB_RESULT_FAILED when rule50 != 0 for a documented reason: the WDL tables answer
+// "is this won with a FRESH halfmove clock", so at rule50 > 0 a position whose win no
+// longer fits inside the counter still reads +2. SF gates on `pos.rule50_count() == 0`
+// (~sf18-arm/src/search.cpp:809) for the same reason. Skipping it is how a dead-drawn
+// KNPvKB read +314.96 for 16 straight moves in a real game.
+//
+// Lock-free / thread-safe (unlike the DTZ path below).
 bool probe_wdl(const Position& pos, int& result);
 
 // ---- Root DTZ ranking (SF Tablebases::root_probe, ~sf18-arm/src/syzygy/tbprobe.cpp:1603,

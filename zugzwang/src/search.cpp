@@ -748,6 +748,23 @@ struct Context {
         // with no resolvable syzygy/ dir is byte-identical either way. Kill-switch:
         // env TBROOTRANK=0, which restores the flat-WDL behaviour exactly.
         bool tbRootRank = true;
+        // ---- TBWDLSF (2026-08-14): the IN-SEARCH WDL probe, ported onto SF's Step 5
+        // (~sf18-arm/src/search.cpp:801-853). SHIPPED default-ON, and like TBROOTRANK this
+        // is a correctness fix rather than a strength experiment. The old block was wrong
+        // in three independent ways and each one is a real, reproduced misbehaviour:
+        //   1. no `rule50_count() == 0` gate. WDL answers "won with a FRESH clock", so a
+        //      win the halfmove counter has already eaten still read as a full win — the
+        //      dead-drawn KNPvKB that reported +314.96 for 16 moves in the reported game.
+        //   2. cursed win / blessed loss were folded into a flat draw, so the search could
+        //      not prefer a spent win (where the opponent still has 50 moves to err) over
+        //      a real draw, and — worse — scored it with the wrong BOUND.
+        //   3. the verdict was a hard `return`, amputating the subtree unconditionally.
+        //      SF returns only when the bound actually cuts and otherwise keeps the value
+        //      as an alpha raise (LOWER) or a maxValue ceiling (UPPER) and searches on.
+        // Subordinate to `syzygy` and TB::loaded(), so a box with no resolvable syzygy/
+        // dir is byte-identical either way. Kill-switch: env TBWDLSF=0, which restores the
+        // old flat/ungated probe byte-for-byte (see the block in negamax).
+        bool tbWdlSf = true;
         // ---- Move Overhead (2026-07-20): reserved per-move slack (ms) for GUI/OS/network
         // latency, subtracted from remaining time in set_time_limits' clock branch. UCI
         // spin option "Move Overhead" (SF/SP default 10; zug ships 40 = the old hardcoded
@@ -1085,6 +1102,7 @@ struct Context {
             if (on("FULLPROBCUT")) fullProbCut = true;
             if (off("SYZYGY")) syzygy = false; // shipped default-on; kill-switch (path-gated by TB::loaded())
             if (off("TBROOTRANK")) tbRootRank = false; // shipped default-on; kill-switch
+            if (off("TBWDLSF")) tbWdlSf = false; // shipped default-on; kill-switch (restores the old flat probe)
             if (const char* e = getenv("MOVEOVERHEAD")) { int v = atoi(e); if (v >= 0) moveOverhead = v; }
             if (const char* e = getenv("CONTEMPT")) contempt = atoi(e); // cp; 0 = off
             if (off("TIMEMAN")) timeMan = false; // shipped default-on (+28 Elo TC-SPRT); kill-switch
@@ -2583,28 +2601,133 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
         if (alpha >= beta) return alpha;
     }
 
-    // Syzygy WDL-in-search (gomachine internal/search/search.go:1312): in a TB-cardinality
-    // position with no castling, trust the tablebase verdict directly and return. Gated:
-    // not root (ply>0 — the root is owned by DTZ), not in check, not a singular probe, no
-    // castling rights, and piece count within C.tbCardinality. Draw/blessed/cursed all
-    // return VALUE_DRAW. Default-off (C.tune.syzygy) + requires TB::loaded().
+    // bestValue / maxValue are declared HERE, not at the move loop, because Step 5 below
+    // can seed both — SF declares them at node entry and initializes them in Step 1
+    // (~sf18-arm/src/search.cpp:647, :662-663). maxValue is the tablebase CEILING: a
+    // probe that says "this node is lost" but whose value did not fall below alpha does
+    // not get to end the node, it gets to cap it, and the cap is applied once at the very
+    // bottom (search.cpp:1455-1456 / the `std::min` just before the ttPv propagation).
+    //
+    // BYTE IDENTITY: with the probe never firing, bestValue is still -VALUE_INFINITE when
+    // the move loop starts and maxValue is still VALUE_INFINITE, so the closing
+    // `std::min(bestValue, maxValue)` is the identity. Everything between here and the
+    // move loop that can return early (RFP, null move, ProbCut) is `!PvNode`-gated, and
+    // Step 5 only ever seeds bestValue/alpha under PvNode — so a seeded value can never
+    // be silently discarded by one of those returns.
+    int bestValue = -VALUE_INFINITE;
+    int maxValue  = VALUE_INFINITE;
+
+    // ---- Step 5. Syzygy WDL-in-search (~sf18-arm/src/search.cpp:801-853) ----
+    //
+    // In a TB-cardinality position with no castling, ask the WDL tables what this node is
+    // worth. Gates, and what each one is actually for:
+    //   * ply > 0          — the root is owned by the DTZ ranking, not by WDL.
+    //   * !excluded        — SF's !excludedMove: a singular verification must measure the
+    //                        SEARCH, not short-circuit to a table.
+    //   * castling_rights()== 0 and popcount <= C.tbCardinality — Fathom preconditions.
+    //   * rule50_count() == 0 — SF search.cpp:809. THE fix. The WDL tables answer "is this
+    //     won starting from a fresh halfmove clock"; they know nothing about the clock the
+    //     game actually carries. zug calls tb_probe_wdl_impl directly, which skips the
+    //     rule50 != 0 refusal Fathom's own wrapper performs (src/syzygy/tbprobe.h:220-223),
+    //     so without this gate a win the counter has already eaten reads +2 = full win.
+    //     That is how a dead-drawn KNPvKB reported +314.96 for 16 consecutive moves.
+    //   * !ss->inCheck     — zug's own gate, NOT SF's (SF probes in check too). Kept: it is
+    //     orthogonal to all three defects being fixed here, it only ever removes probes,
+    //     and dropping it would be an unmeasured behaviour change riding along on a
+    //     correctness fix. Worth revisiting on its own with its own SPRT.
+    //
+    // NOT ported: SF's probeDepth half of the gate,
+    // `(piecesCount < cardinality || depth >= tbConfig.probeDepth)` (search.cpp:808).
+    // It is dead code at zug's configuration, twice over. SF's cardinality comes from
+    // the SyzygyProbeLimit option, default 7 (~sf18-arm/src/engine.cpp:136), and when
+    // that exceeds MaxCardinality — 5 here, which is what is on disk — SF itself sets
+    // probeDepth = 0 (tbprobe.cpp:1736-1740), making the clause vacuous. Even pinning
+    // SyzygyProbeLimit to exactly 5 leaves probeDepth at its default 1
+    // (engine.cpp:132), and this block only ever runs at depth >= 1, since `depth <= 0`
+    // dispatched to qsearch at the top of negamax. zug's C.tbCardinality is always
+    // TB::max_pieces(), so there is no configuration in which the clause can decide
+    // anything. Porting it would add a branch that is provably never false.
     //
     // C.tbCardinality (SF's Tablebases::Config::cardinality, set in start()) is
-    // TB::max_pieces() — the old hardcoded gate, byte-identical — EXCEPT when the root was
-    // DTZ-ranked, where SF zeroes it (tbprobe.cpp:1764-1766) and so does zug. Inside a
-    // DTZ-ranked root this probe is actively harmful: every child is a TB hit, every
-    // winning move returns the same flat ±(VALUE_TB_WIN - ply), and the search degenerates
-    // to move ordering — which is precisely how a won ending gets shuffled into a 50-move
-    // draw. The root ranking already guarantees only win-preserving moves are searched, so
-    // the search's job here is to find the MATE, and for that it needs the real eval.
+    // TB::max_pieces() — the old hardcoded gate — EXCEPT when the root was DTZ-ranked,
+    // where SF zeroes it (tbprobe.cpp:1764-1766) and so does zug. Inside a DTZ-ranked root
+    // this probe is actively harmful: every child is a TB hit, every winning move returns
+    // the same flat ±(VALUE_TB_WIN - ply), and the search degenerates to move ordering —
+    // which is precisely how a won ending gets shuffled into a 50-move draw. The root
+    // ranking already guarantees only win-preserving moves are searched, so the search's
+    // job here is to find the MATE, and for that it needs the real eval.
     if (C.tune.syzygy && TB::loaded() && ss->ply > 0 && !ss->inCheck && !excluded
         && pos.castling_rights() == 0
+        && (!C.tune.tbWdlSf || pos.rule50_count() == 0)
         && BB::popcount(pos.pieces()) <= C.tbCardinality) {
-        int wdl;
+        int wdl;  // SF WDLScore scale: -2 loss, -1 blessed loss, 0 draw, +1 cursed, +2 win
         if (TB::probe_wdl(pos, wdl)) {
-            if (wdl > 0)  return VALUE_TB_WIN - ss->ply;
-            if (wdl < 0)  return -VALUE_TB_WIN + ss->ply;
-            return VALUE_DRAW;
+            if (!C.tune.tbWdlSf) {
+                // ---- LEGACY, TBWDLSF=0 ----------------------------------------------
+                // The pre-2026-08-14 block, byte-for-byte: no rule50 gate, cursed/blessed
+                // folded to a flat draw, and an unconditional return. probe_wdl's old
+                // +1/0/-1 normalization is reproduced exactly by the ±2 comparisons (it
+                // mapped TB_WIN→+1 and TB_LOSS→-1 and everything else→0, i.e. the two
+                // extremes of the five-valued scale and nothing between them).
+                if (wdl >= 2)  return VALUE_TB_WIN - ss->ply;
+                if (wdl <= -2) return -VALUE_TB_WIN + ss->ply;
+                return VALUE_DRAW;
+            }
+
+            // drawScore is SF's `tbConfig.useRule50 ? 1 : 0` (search.cpp:821). zug plays
+            // every game under the 50-move rule and has no option to say otherwise — see
+            // TB_ROOT_USE_RULE50, which is the same decision for the root ranking — so
+            // this is 1, and the `!= 1` arms below are dead by construction, not by luck.
+            constexpr int drawScore = TB_ROOT_USE_RULE50 ? 1 : 0;
+
+            // SF's `Value tbValue = VALUE_TB - ss->ply` (search.cpp:825). SF's VALUE_TB is
+            // the top of its tablebase band (VALUE_MATE - MAX_PLY - 1); zug's is
+            // VALUE_TB_WIN (types.h:76), which is the value this block already returned.
+            // NOT a raw magnitude copy — see the same substitution in zug_tb.cpp.
+            const int tbValue = VALUE_TB_WIN - ss->ply;
+
+            // search.cpp:827-830. The middle arm is the whole point of keeping five
+            // values: a cursed win scores VALUE_DRAW + 2*(+1)*1 = +2cp on zug's pawn=100
+            // scale (types.h), i.e. barely above a dead draw. It is not a win — the
+            // halfmove clock has already taken that — but it is still the side of the draw
+            // you want to be on, because the defender has to keep finding moves for 50 of
+            // them. Blessed loss is the mirror at -2cp.
+            int value = wdl < -drawScore ? -tbValue
+                      : wdl >  drawScore ?  tbValue
+                                         : VALUE_DRAW + 2 * wdl * drawScore;
+
+            Bound b = wdl < -drawScore ? BOUND_UPPER
+                    : wdl >  drawScore ? BOUND_LOWER
+                                       : BOUND_EXACT;
+
+            // search.cpp:836-845. THE OTHER HALF OF THE FIX: return only when the bound
+            // genuinely cuts. The old code returned unconditionally, which amputated the
+            // subtree — a "this node is lost" verdict that does not fall below alpha still
+            // ended the node, so the search never got to find out how the loss is defended
+            // (or that the PV runs somewhere else entirely).
+            //
+            // Stored depth is SF's `std::min(MAX_PLY - 1, depth + 6)`: a table verdict is
+            // exact regardless of depth, so it is worth more than the depth that produced
+            // it — but not infinitely more, hence the +6 rather than MAX_PLY. ttPv/eval
+            // follow the house convention at zug's other store sites.
+            if (b == BOUND_EXACT || (b == BOUND_LOWER ? value >= beta : value <= alpha)) {
+                C.tt.store(tte, pos.key(), C.tt.value_to_tt(value, ss->ply),
+                           C.tune.ttPvOn ? ss->ttPv : PvNode, b,
+                           std::min(MAX_PLY - 1, depth + 6), MOVE_NONE, VALUE_NONE);
+                return value;
+            }
+
+            // search.cpp:847-853. Non-cutting bound in a PV node: keep it as information
+            // instead of throwing it away. LOWER raises the floor (and alpha); UPPER
+            // becomes the ceiling applied at the bottom of the node.
+            if (PvNode) {
+                if (b == BOUND_LOWER) {
+                    bestValue = value;
+                    alpha     = std::max(alpha, bestValue);
+                } else {
+                    maxValue = value;
+                }
+            }
         }
     }
 
@@ -2909,7 +3032,9 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
     }
 
     ExtMove* cur = list.begin();
-    int bestValue = -VALUE_INFINITE;
+    // bestValue/maxValue are declared up at Step 5 (the Syzygy WDL probe), which may
+    // already have seeded them — see the comment there. bestValue is -VALUE_INFINITE at
+    // this point in every search that did not hit a tablebase, which is what it always was.
     Move bestMove = MOVE_NONE;
     int moveCount = 0;
     StateInfo st;
@@ -3631,6 +3756,19 @@ int negamax(Context& C, Position& pos, Stack* ss, int alpha, int beta, int depth
             }
         }
     }
+
+    // Apply the Step-5 tablebase CEILING (~sf18-arm/src/search.cpp:1455-1456, verbatim
+    // including the PvNode guard and the placement — after every history update, before
+    // the ttPv propagation and the TT store, so both of those see the capped value).
+    // maxValue is VALUE_INFINITE unless a WDL probe reported a loss whose value did not
+    // fall below alpha, so this is the identity in every search that never hit a table.
+    //
+    // The `moveCount == 0` early return above deliberately bypasses it, unlike SF (which
+    // assigns bestValue there and falls through). That is not reachable with effect: a
+    // node with no legal moves is mate or stalemate, and a probe that set maxValue said
+    // "the side to move is LOST", which rules stalemate out and makes mated_in(ply) — the
+    // value that return produces — already lower than any maxValue a loss can carry.
+    if (PvNode) bestValue = std::min(bestValue, maxValue);
 
     // #5 ttPv: a node that fails low keeps its PV bit if its parent was on a PV —
     // SF propagates the "was live" mark forward so pruning stays cautious there.

@@ -1,0 +1,46 @@
+# Deep tablebase-conversion positions — see test/tb_insearch.py (`--deep`).
+#
+# Every line is `<FEN> ; <material> <oracle verdict at the stated clock>`, and every
+# one is a 6- or 7-MAN position that White WINS. This set exists because the ≤5-man
+# suite (test/tb_positions.epd) cannot reach the in-search WDL probe at all any more:
+# a ≤5-man root is DTZ-ranked, which zeroes C.tbCardinality and switches the in-search
+# probe OFF for the whole search (src/search.cpp, start()). The probe therefore only
+# runs under a root the ROOT probe could not rank — in practice a root with MORE men
+# than the tables hold, whose search descends into ≤5-man nodes. That is also the
+# common case in a real game: the board is 6+ men long before it is 5.
+#
+# ORACLE. Syzygy cannot judge these roots (the tables are 5-man), so each line was
+# verified with Stockfish 18 (/Users/tim.alexander/sf18-arm/src/stockfish, 6 threads,
+# 8s, AT THE STATED HALFMOVE CLOCK — SF's search is clock-aware, so a win the counter
+# had already eaten would show as ~0). Only positions where SF returned a MATE score
+# or a tablebase-band score are here; nothing was kept on a "looks winning" cp value.
+# SF was run WITHOUT SyzygyPath: SF18 SIGBUSes on this machine whenever it probes our
+# table files, which is an SF/box problem and not ours — at depth 46-133 with no
+# tables it is still a far stronger oracle than the position needs.
+#
+# HIGH CLOCK. Half the set is the same position with a high halfmove clock, chosen so
+# SF still returns a mate at that clock. Those are the lines that matter for the
+# in-search probe's rule50 gate: without it, a search descending into ≤5-man nodes
+# reads "won with a fresh clock" for a clock that is nearly spent.
+#
+# Re-verify:  gawk -F' ;' '!/^#/&&NF{print $1}' test/tb_positions_deep.epd | <sf-oracle>
+
+# ---- 6-man ----
+8/8/3n4/2b1k3/8/8/8/RK5R w - - 0 1 ; KRRvKBN   SF mate 17 (d47)
+8/8/3n4/2b1k3/8/8/8/RK5R w - - 60 1 ; KRRvKBN   SF mate 16 (d51)  HIGH CLOCK
+2r5/6k1/8/8/1P6/8/R7/K6R w - - 0 1 ; KRRPvKR   SF mate 10 (d97)
+2r5/6k1/8/8/1P6/8/R7/K6R w - - 74 1 ; KRRPvKR   SF mate 10 (d80)  HIGH CLOCK
+8/8/7p/6k1/2BN1N2/4K3/8/8 w - - 0 1 ; KBNNvKP   SF mate 15 (d67)
+8/8/7p/6k1/2BN1N2/4K3/8/8 w - - 66 1 ; KBNNvKP   SF mate 12 (d73)  HIGH CLOCK
+4r3/7k/7p/6P1/8/8/8/K2Q4 w - - 0 1 ; KQPvKRP   SF mate 12 (d69)
+4r3/7k/7p/6P1/8/8/8/K2Q4 w - - 84 1 ; KQPvKRP   SF mate 12 (d70)  HIGH CLOCK
+
+# ---- 7-man ----
+3r2k1/p7/8/8/8/8/1P6/R5KR w - - 0 1 ; KRRPvKRP  SF mate 21 (d57)
+3r2k1/p7/8/8/8/8/1P6/R5KR w - - 55 1 ; KRRPvKRP  SF mate 17 (d64)  HIGH CLOCK
+3r2k1/8/5n2/8/8/8/8/R1B3KR w - - 0 1 ; KRRBvKRN  SF cp 8183 (d27)
+3r2k1/8/5n2/8/8/8/8/R1B3KR w - - 70 1 ; KRRBvKRN  SF mate 20 (d46)  HIGH CLOCK
+8/8/7p/6k1/2BN1N2/4K3/1P6/8 w - - 0 1 ; KBNNPvKP  SF mate 8 (d83)
+8/8/7p/6k1/2BN1N2/4K3/1P6/8 w - - 88 1 ; KBNNPvKP  SF mate 8 (d78)  HIGH CLOCK
+4r3/7k/7p/6P1/1P6/8/8/K2Q4 w - - 0 1 ; KQPPvKRP  SF mate 9 (d133)
+4r3/7k/7p/6P1/1P6/8/8/K2Q4 w - - 80 1 ; KQPPvKRP  SF mate 9 (d132)  HIGH CLOCK
