@@ -110,14 +110,24 @@ static void position_cmd(std::istringstream& is) {
 
     // Tier 2: well-formed but illegal (e.g. the side not to move is already in
     // check). pos.set() itself cannot crash here (both kings are present per
-    // tier 1), but searching from an illegal position is meaningless — reject
-    // and fall back to a known-good position rather than silently misbehaving.
-    pos.set(fen);
-    if (!Rules::position_legal(pos)) {
+    // tier 1), but searching from an illegal position is meaningless — reject it.
+    //
+    // Validated on a SCRATCH position, not on `pos`, so a rejected FEN leaves the
+    // real position exactly as tier 1 leaves it: untouched, including whatever
+    // move history a `position startpos moves ...` had built up. Tier 2 used to
+    // `pos.set(START_FEN)` here, which made the two tiers disagree about what a
+    // rejected `position` command does — and the START_FEN branch is the worse of
+    // the two, because a GUI that ignores `info string` (they all may) then gets a
+    // perfectly confident bestmove for the STARTING POSITION rather than an error.
+    // That is how both illegal fixtures in test/golden_eval.txt came to report the
+    // start position's eval (69) instead of failing visibly.
+    Position probe;
+    probe.set(fen);
+    if (!Rules::position_legal(probe)) {
         std::cout << "info string illegal position: side not to move is in check, or a king is missing" << std::endl;
-        pos.set(START_FEN);
-        return;
+        return; // pos left untouched, exactly as in tier 1
     }
+    pos.set(fen);
 
     if (token == "moves")
         while (is >> token) {
