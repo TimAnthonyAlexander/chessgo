@@ -2,6 +2,8 @@
 
 namespace App\Services\Tutor;
 
+use App\Services\EngineEval;
+
 /**
  * The metric definitions. This is the single source of truth for what every
  * Tutor number MEANS, and it is deliberately the only place either corpus is
@@ -312,6 +314,21 @@ class TutorMetrics
             // not the other, biasing White's ACPL between the two. The rule is
             // enforced here rather than in the producers so it cannot drift.
             if ($i === 0) {
+                continue;
+            }
+
+            // A TABLEBASE verdict is not an evaluation, so no metric defined on
+            // this class may be computed across one. Syzygy says "won", not "won
+            // by this much": the number attached to it is a wire convention
+            // ({@see EngineEval}), and differencing it against a real eval would
+            // manufacture a cp loss out of a change of units. Both plies are
+            // checked because the metric is a DELTA — one tablebase endpoint is
+            // enough to poison it.
+            //
+            // Corpus-symmetric, like the $i === 0 rule above: the Lichess dump's
+            // %eval annotations carry no tablebase verdicts at all, so this skips
+            // nothing there and cannot bias the comparison.
+            if (EngineEval::isTb($before['evalWhite'] ?? null) || EngineEval::isTb($after['evalWhite'] ?? null)) {
                 continue;
             }
 

@@ -25,6 +25,7 @@ import {
 import Board from '../components/Board'
 import Clock from '../components/Clock'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
+import { toWhiteEval } from '../lib/engineEval'
 import MoveList from '../components/MoveList'
 import GameModeCard from '../components/GameModeCard'
 import NewBadge from '../components/NewBadge'
@@ -523,8 +524,7 @@ export default function BotGame() {
                     return // aborted or engine error — keep the last shown eval
                 }
                 if (cancelled || !r.eval) continue
-                const white = stm === 'w' ? r.eval.value : -r.eval.value
-                setAnalyzedEval({ type: r.eval.type, white })
+                setAnalyzedEval(toWhiteEval(r.eval, stm))
                 if (r.eval.type === 'mate') return // mate found — deeper won't change it
                 if (r.depth != null && r.depth < depth) return // hit time ceiling — settled
             }

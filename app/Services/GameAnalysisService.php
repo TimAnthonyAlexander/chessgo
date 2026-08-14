@@ -534,6 +534,10 @@ class GameAnalysisService
         if (!is_array($eval)) {
             return 0;
         }
+        // A tablebase verdict lands on ±EngineEval::TB_CP here rather than the
+        // raw 31497 — decisive, bounded, and comparable against a real eval on
+        // the other side of the move (cpLoss diffs two of these).
+        $eval = EngineEval::sanitize($eval);
         $value = (int) ($eval['value'] ?? 0);
         if (($eval['type'] ?? 'cp') === 'mate') {
             return $value >= 0 ? self::MATE_CP - $value : -self::MATE_CP - $value;
@@ -547,16 +551,27 @@ class GameAnalysisService
      * move) are synthesized from the game result so the bar fills to the winner.
      *
      * @param array<string, mixed> $p
-     * @return array{type: string, white: int}
+     * @return array{type: string, white: int, tb?: string}
      */
     private function whiteEval(array $p, string $stm, string $result): array
     {
         $eval = $p['eval'] ?? null;
         if (is_array($eval)) {
+            $eval = EngineEval::sanitize($eval);
             $value = (int) ($eval['value'] ?? 0);
             $white = $stm === 'w' ? $value : -$value;
 
-            return ['type' => ($eval['type'] ?? 'cp') === 'mate' ? 'mate' : 'cp', 'white' => $white];
+            $out = ['type' => ($eval['type'] ?? 'cp') === 'mate' ? 'mate' : 'cp', 'white' => $white];
+
+            // A tablebase verdict is side-to-move-relative like the value it
+            // rides on, so it flips with it. Black to move and losing by
+            // tablebase IS White winning by tablebase.
+            $tb = EngineEval::tbOf($eval);
+            if ($tb !== null) {
+                $out['tb'] = $stm === 'w' ? $tb : EngineEval::flip($tb);
+            }
+
+            return $out;
         }
 
         // Terminal: derive from the final result.

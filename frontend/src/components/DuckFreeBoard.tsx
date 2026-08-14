@@ -12,6 +12,7 @@ import {
 import Board from './Board'
 import BoardPage from './BoardPage'
 import EvalBar, { type WhiteEval } from './EvalBar'
+import { toWhiteEval } from '../lib/engineEval'
 import { ActionBtn, ErrorBanner, NavBtn, PANEL_SHADOW } from './PanelUI'
 import { duckEval, duckLegalMoves, duckPlay, type Color } from '../api/client'
 import { statusLabel } from '../lib/chess'
@@ -100,8 +101,7 @@ export default function DuckFreeBoard({ onExit }: { onExit: () => void }) {
                 if (cancelled) return
                 if (r.eval) {
                     // Convert the side-to-move eval to White-relative for the bar.
-                    const white = r.sideToMove === 'w' ? r.eval.value : -r.eval.value
-                    setEv({ type: r.eval.type, white })
+                    setEv(toWhiteEval(r.eval, r.sideToMove))
                 } else {
                     setEv(null)
                 }

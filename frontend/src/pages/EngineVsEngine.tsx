@@ -28,6 +28,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import Board from '../components/Board'
 import BoardPage from '../components/BoardPage'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
+import { toWhiteEval } from '../lib/engineEval'
 import MoveList from '../components/MoveList'
 import OpeningPanel from '../components/OpeningPanel'
 import { buildFromMoves } from '../lib/analysisTree'
@@ -499,10 +500,7 @@ export default function EngineVsEngine() {
                 // eval bar from the mover's returned eval (mover = current side to move,
                 // converted to White-relative).
                 if (isSelfVariant(variant) && res.eval) {
-                    setWhiteEval({
-                        type: res.eval.type,
-                        white: sideToMove === 'w' ? res.eval.value : -res.eval.value,
-                    })
+                    setWhiteEval(toWhiteEval(res.eval, sideToMove))
                 }
                 const gameOver = res.status !== 'ongoing' || !!res.claimableDraws?.includes('fifty')
                 playForSan(res.san ?? res.bestmove, gameOver) // move/capture/end cue
@@ -570,8 +568,7 @@ export default function EngineVsEngine() {
         analyze(fen, { movetime: 300 })
             .then((r) => {
                 if (cancelled || !r.eval) return
-                const white = sideToMove === 'w' ? r.eval.value : -r.eval.value
-                setWhiteEval({ type: r.eval.type, white })
+                setWhiteEval(toWhiteEval(r.eval, sideToMove))
             })
             .catch(() => {}) // a transient analyze failure just leaves the last eval shown
         return () => {

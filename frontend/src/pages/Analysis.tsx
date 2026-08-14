@@ -32,6 +32,7 @@ import DuckFreeBoard from '../components/DuckFreeBoard'
 import BoardPage from '../components/BoardPage'
 import EngineLines, { loadLineCount, saveLineCount } from '../components/EngineLines'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
+import { toWhiteEval } from '../lib/engineEval'
 import LocalEngineControl from '../components/LocalEngineControl'
 import MoveTree from '../components/MoveTree'
 import OpeningPanel from '../components/OpeningPanel'
@@ -559,10 +560,9 @@ export default function Analysis() {
 
         const top = winner.lines[0]
         const stm = current.fen.split(' ')[1] === 'b' ? 'b' : 'w'
-        const white = stm === 'w' ? top.eval.value : -top.eval.value
         setAnalysisLines(winner.lines)
         linesCache.current.set(nodeId, { lines: winner.lines, opening: null })
-        setTree((t) => annotateEval(t, nodeId, { type: top.eval.type, white }, top.bestmove, top.pv, top.depth))
+        setTree((t) => annotateEval(t, nodeId, toWhiteEval(top.eval, stm), top.bestmove, top.pv, top.depth))
         setEvalSource((m) => (m[nodeId] === winner.source ? m : { ...m, [nodeId]: winner.source }))
     }, [localEngineOn, localRace.lines, cacheLines, current.id, current.fen])
 
@@ -774,12 +774,11 @@ export default function Analysis() {
                             ),
                         )
                     } else {
-                        const white = stm === 'w' ? r.eval.value : -r.eval.value
                         setTree((t) =>
                             annotateEval(
                                 t,
                                 nodeId,
-                                { type: r.eval!.type, white },
+                                toWhiteEval(r.eval, stm),
                                 r.bestmove,
                                 r.pv ?? [],
                                 got,
@@ -838,9 +837,7 @@ export default function Analysis() {
                 if (cancelled || !r.bestmove) return
                 // Flip Stockfish's side-to-move eval to White's POV (from the FEN).
                 const stm = fen.split(' ')[1] === 'b' ? 'b' : 'w'
-                const evalWhite: WhiteEval | null = r.eval
-                    ? { type: r.eval.type, white: stm === 'w' ? r.eval.value : -r.eval.value }
-                    : null
+                const evalWhite: WhiteEval | null = toWhiteEval(r.eval, stm)
                 setSfBest({ fen, uci: r.bestmove, evalWhite })
             } catch {
                 // Stockfish unavailable or request aborted — leave the arrow off.

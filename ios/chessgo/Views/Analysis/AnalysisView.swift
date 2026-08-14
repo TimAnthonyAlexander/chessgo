@@ -248,7 +248,10 @@ struct AnalysisView: View {
         if let live = driver.liveEval?.eval { return live }
         guard let whiteEval = driver.currentStep?.evalWhite else { return nil }
         let sideRelative = sideToMove == .white ? whiteEval.value : -whiteEval.value
-        return EvalScore(type: whiteEval.type, value: sideRelative)
+        // The tablebase verdict is White-relative here, like the value, so it
+        // flips with it.
+        let tb = sideToMove == .white ? whiteEval.tbVerdict : whiteEval.tbVerdict?.flipped
+        return EvalScore(type: whiteEval.type, value: sideRelative, tb: tb?.rawValue)
     }
 
     // MARK: - Step controls

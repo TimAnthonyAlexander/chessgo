@@ -349,6 +349,59 @@ class EvalCacheServiceTest extends TestCase
     /**
      * Build a minimal /analyze-shaped result array and put() it.
      */
+    // --- tablebase verdicts are never cached ---
+
+    /**
+     * The cache key drops the halfmove clock (normalizeKey), and the halfmove
+     * clock is exactly what decides whether a Syzygy win is real or cursed — so
+     * the same key legitimately has two different answers. The row also has no
+     * column for the `tb` tag, so storing one would downgrade the verdict back
+     * to a bare "+10.00". A TB probe is instant; nothing is lost by re-deriving.
+     */
+    public function test_put_refuses_a_tablebase_verdict(): void
+    {
+        $this->service->put(self::START_FEN, [
+            'eval' => ['type' => 'cp', 'value' => 1000, 'tb' => 'win'],
+            'bestmove' => 'e2e4',
+            'pv' => ['e2e4'],
+            'depth' => 30,
+        ]);
+
+        $this->assertNull(EvalCache::firstWhere('fen_key', '=', $this->service->normalizeKey(self::START_FEN)));
+    }
+
+    public function test_put_refuses_a_raw_pre_fix_tablebase_value(): void
+    {
+        $this->service->put(self::START_FEN, [
+            'eval' => ['type' => 'cp', 'value' => 31497], // VALUE_TB_WIN, untagged
+            'bestmove' => 'e2e4',
+            'pv' => ['e2e4'],
+            'depth' => 30,
+        ]);
+
+        $this->assertNull(EvalCache::firstWhere('fen_key', '=', $this->service->normalizeKey(self::START_FEN)));
+    }
+
+    /**
+     * Rows written before put() learned to refuse verdicts are still on disk.
+     * Serving one would render "+314.97", so it reads as a miss and the engine
+     * re-derives it with its tag.
+     */
+    public function test_get_treats_a_stored_raw_tablebase_value_as_a_miss(): void
+    {
+        $entry = new EvalCache();
+        $entry->fen_key = $this->service->normalizeKey(self::START_FEN);
+        $entry->depth = 30;
+        $entry->multipv = 1;
+        $entry->eval_type = 'cp';
+        $entry->eval_value = 31497;
+        $entry->source = 'zugzwang';
+        $entry->nodes = 0;
+        $entry->save();
+
+        $this->assertNull($this->service->get(self::START_FEN, 20, 1));
+    }
+
     private function putResult(string $fen, int $depth, int $multipv, int $nodes = 0): void
     {
         $lines = [];

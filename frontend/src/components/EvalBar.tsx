@@ -1,11 +1,16 @@
 import { useEffect, useRef } from 'react'
 import { Box } from '@mui/material'
 import type { Color } from '../api/client'
+import { tbValueText, type TbVerdict } from '../lib/engineEval'
 
 /** Engine evaluation expressed from White's perspective. */
 export interface WhiteEval {
     type: 'cp' | 'mate'
     white: number // cp (centipawns) or signed mate distance; + favors White
+    // Set only when the position is solved by Syzygy. `white` is then a
+    // stand-in (±TB_CP), not a measurement — render the verdict, not the
+    // number. White-relative like `white`: 'win' means White wins.
+    tb?: TbVerdict
 }
 
 interface EvalBarProps {
@@ -42,6 +47,10 @@ const GOMACHINE_CP_SCALE = 0.5 // gomachine cp ≈ 2× hot → ÷2 onto SF scale
 // white for every large eval). SF passes scale 1; gomachine passes 0.5.
 function whiteWinPercent(ev: WhiteEval | null, scale: number = 1): number {
     if (!ev) return 50
+    // A tablebase verdict is certainty, so the bar fills like a mate does. Its
+    // cp stand-in would peg the bar at ~96% anyway; this makes it exact and
+    // stops the number driving it.
+    if (ev.tb) return ev.tb === 'win' ? 100 : 0
     if (ev.type === 'mate') return ev.white > 0 ? 100 : ev.white < 0 ? 0 : 50
     const cp = Math.max(-1000, Math.min(1000, ev.white * scale))
     return 50 + 50 * (2 / (1 + Math.exp(-LICHESS_CP_K * cp)) - 1)
@@ -50,6 +59,9 @@ function whiteWinPercent(ev: WhiteEval | null, scale: number = 1): number {
 // Just the value: pawns (e.g. "2.0") or "M" + moves. No sign, no percentage.
 function evalLabel(ev: WhiteEval | null): string {
     if (!ev) return '0.0'
+    // The label prints at the winning side's end of the bar, so the side is
+    // already said by where it sits — "TB", like "M3", carries no sign here.
+    if (ev.tb) return 'TB'
     if (ev.type === 'mate') return `M${Math.abs(ev.white)}`
     return (Math.abs(ev.white) / 100).toFixed(1)
 }
@@ -59,6 +71,7 @@ function evalLabel(ev: WhiteEval | null): string {
 // "Mate in 3 for Black".
 function evalValueText(ev: WhiteEval | null): string {
     if (!ev) return 'Evaluation unavailable'
+    if (ev.tb) return tbValueText(ev.tb)
     if (ev.type === 'mate') {
         const side = ev.white > 0 ? 'White' : 'Black'
         return `Mate in ${Math.abs(ev.white)} for ${side}`
@@ -83,7 +96,7 @@ export default function EvalBar({ ev, orientation, sfEv, sfColor = '#b06bff' }: 
     // SCALE NOTE) so the fill and the SF second-opinion line agree when the engines do.
     const whitePct = whiteWinPercent(shown, GOMACHINE_CP_SCALE)
     const sfPct = sfEv ? whiteWinPercent(sfEv) : 0
-    const whiteAhead = shown ? shown.white >= 0 : true
+    const whiteAhead = shown?.tb ? shown.tb === 'win' : shown ? shown.white >= 0 : true
     const whiteAnchor = orientation === 'w' ? 'bottom' : 'top' // White grows from its own side
 
     // The single value prints at the winning side's end of the bar.

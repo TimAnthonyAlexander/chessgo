@@ -13,6 +13,7 @@
 #include "sf_uci.h"
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <map>
 #include <sstream>
 
@@ -55,8 +56,7 @@ std::vector<std::string> uci_pv(const std::vector<Move>& pv) {
 // a book record stores mate/score directly rather than one VALUE_MATE-
 // relative int, so there's no mate-distance arithmetic to do here.
 json book_eval_json(const Book::BookEntry& e) {
-    if (e.mate != 0) return json{{"type", "mate"}, {"value", e.mate}};
-    return json{{"type", "cp"}, {"value", e.score}};
+    return eval_json_parts(e.mate, e.score);
 }
 
 // ---- opening NAME/ECO classification (gomachine's openingFor/Classify) ----
@@ -765,9 +765,26 @@ json sf_best_move(const json& body) {
         return json{{"bestmove", nullptr}, {"reason", "no legal move"}};
     }
 
-    json evalObj = res.hasScore
-        ? json{{"type", res.isMate ? "mate" : "cp"}, {"value", res.value}}
-        : json{{"type", "cp"}, {"value", 0}};
+    // Stockfish reports a TABLEBASE verdict over UCI as `cp 20000 - plies` for a win
+    // and `-20000 - plies` for a loss (TB_CP, ~/sf18-arm/src/uci.cpp:531-541), which is
+    // the same defect as zugzwang's own raw VALUE_TB_WIN: a consumer dividing by 100
+    // renders "+200.00". SF's own non-decisive cp is bounded well under this band (a
+    // Score is only InternalUnits when !is_decisive), so |cp| >= SF_TB_CP_FLOOR is an
+    // unambiguous TB tag. Normalize it onto the same {value, tb} shape eval_json emits
+    // so the site's Stockfish and the site's own engine read identically.
+    constexpr int SF_TB_CP_FLOOR = 19000; // < 20000 - MAX_PLY, > any real SF cp
+    json evalObj;
+    if (!res.hasScore) {
+        evalObj = json{{"type", "cp"}, {"value", 0}};
+    } else if (res.isMate) {
+        evalObj = json{{"type", "mate"}, {"value", res.value}};
+    } else if (std::abs(res.value) >= SF_TB_CP_FLOOR) {
+        const bool win = res.value > 0;
+        evalObj = json{{"type", "cp"}, {"value", win ? TB_EVAL_CP : -TB_EVAL_CP},
+                       {"tb", win ? "win" : "loss"}};
+    } else {
+        evalObj = json{{"type", "cp"}, {"value", res.value}};
+    }
 
     return json{
         {"bestmove", res.bestmove},
@@ -875,8 +892,7 @@ json crazyhouse_best_move(const json& body) {
     std::string sanStr = zh_san(z, m); // computed BEFORE mutating z
     zh_apply(z, m);
 
-    json evalObj = (res.mate != 0) ? json{{"type", "mate"}, {"value", res.mate}}
-                                    : json{{"type", "cp"}, {"value", res.score}};
+    json evalObj = eval_json_parts(res.mate, res.score);
     return zh_result_json(json{{"bestmove", res.move}, {"san", sanStr}, {"eval", evalObj}}, z);
 }
 
@@ -984,8 +1000,7 @@ json duck_bestmove(const json& body) {
         throw ApiError{500, "search produced an illegal move"};
     }
 
-    json evalObj = (res.mate != 0) ? json{{"type", "mate"}, {"value", res.mate}}
-                                    : json{{"type", "cp"}, {"value", res.score}};
+    json evalObj = eval_json_parts(res.mate, res.score);
     return duck_result_json(
         json{{"bestmove", duck_result_move_string(res)}, {"san", sanStr}, {"eval", evalObj}}, ns, status);
 }
@@ -1054,8 +1069,7 @@ json duck_analyze_game(const json& body) {
             lim.movetimeMs = movetimeMs;
             DuckResult res = duck_best_move(stp, lim);
             if (res.hasMove) {
-                json evalObj = (res.mate != 0) ? json{{"type", "mate"}, {"value", res.mate}}
-                                                : json{{"type", "cp"}, {"value", res.score}};
+                json evalObj = eval_json_parts(res.mate, res.score);
                 out["eval"] = evalObj;
                 out["bestmove"] = duck_result_move_string(res);
                 out["bestSan"] = duck_san(stp, res.move, res.duck);
@@ -1176,8 +1190,7 @@ json antichess_bestmove(const json& body) {
     std::string sanStr = antichess_san(s, res.move); // computed BEFORE mutating s
     AntichessState ns = antichess_do_move(s, res.move);
 
-    json evalObj = (res.mate != 0) ? json{{"type", "mate"}, {"value", res.mate}}
-                                    : json{{"type", "cp"}, {"value", res.score}};
+    json evalObj = eval_json_parts(res.mate, res.score);
     return antichess_result_json(json{{"bestmove", res.move.uci()}, {"san", sanStr}, {"eval", evalObj}}, ns);
 }
 
@@ -1248,8 +1261,7 @@ json antichess_analyze_game(const json& body) {
             lim.movetimeMs = movetimeMs;
             AntichessResult r = ::antichess_best_move(sp, lim, history);
             if (r.hasMove) {
-                json evalObj = (r.mate != 0) ? json{{"type", "mate"}, {"value", r.mate}}
-                                              : json{{"type", "cp"}, {"value", r.score}};
+                json evalObj = eval_json_parts(r.mate, r.score);
                 out["eval"] = evalObj;
                 out["bestmove"] = r.move.uci();
                 out["bestSan"] = antichess_san(sp, r.move);
@@ -1394,8 +1406,7 @@ json secretqueen_bestmove(const json& body) {
     SecretQueenReveal reveal;
     SecretQueenState ns = ::secretqueen_do_move(s, res.move, capturedKing, reveal);
 
-    json evalObj = (res.mate != 0) ? json{{"type", "mate"}, {"value", res.mate}}
-                                   : json{{"type", "cp"}, {"value", res.score}};
+    json evalObj = eval_json_parts(res.mate, res.score);
     return secretqueen_result_json(
         json{{"bestmove", res.move.uci()}, {"san", sanStr}, {"eval", evalObj}, {"reveal", reveal_json(reveal)}}, ns);
 }

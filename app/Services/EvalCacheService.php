@@ -18,6 +18,16 @@ use App\Models\EvalCache;
  *      depends on state the key can't represent.
  *   2. put() never downgrades a stored entry — a fresher, shallower/narrower
  *      result can never overwrite a better one already cached.
+ *
+ * A TABLEBASE verdict ({@see EngineEval}) is never stored, and a stored row
+ * carrying one is treated as a miss. Two independent reasons:
+ *   - the row has no column for the `tb` tag, so caching one would silently
+ *     downgrade the verdict back to a bare "+10.00" — the exact thing `tb`
+ *     exists to stop;
+ *   - it is rule 1 again in its sharpest form. Whether a Syzygy win is real or
+ *     cursed is decided by the halfmove clock, which the key discards, so the
+ *     same key legitimately has two different answers.
+ * A TB probe is instant, so nothing is lost by re-deriving it.
  */
 class EvalCacheService
 {
@@ -147,6 +157,13 @@ class EvalCacheService
             return null;
         }
 
+        // Rows written before put() learned to refuse tablebase verdicts still
+        // hold a raw 31497. Serving one would render "+314.97"; treat it as a
+        // miss so the engine re-derives it (instantly) with its `tb` tag.
+        if (EngineEval::isTb(['type' => $entry->eval_type, 'value' => $entry->eval_value])) {
+            return null;
+        }
+
         $entry->used_at = date('Y-m-d H:i:s');
         $entry->save();
 
@@ -177,6 +194,11 @@ class EvalCacheService
         $evalValueIsNumeric = is_int($evalValue) || is_float($evalValue);
         if (!is_string($evalType) || !$evalValueIsNumeric || $depth <= 0) {
             // Nothing usable to cache (e.g. a terminal/instant result with no search).
+            return;
+        }
+
+        // Tablebase verdicts are not cacheable — see the class doc comment.
+        if (EngineEval::isTb($result['eval'] ?? null)) {
             return;
         }
 

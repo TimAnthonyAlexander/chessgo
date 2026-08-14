@@ -3,6 +3,7 @@
 namespace App\Services\Tutor;
 
 use App\Models\User;
+use App\Services\EngineEval;
 use BaseApi\App;
 
 /**
@@ -614,6 +615,16 @@ class TutorDrillBuilder
     private function moverEval(?array $evalWhite, string $side): ?float
     {
         if ($evalWhite === null || !isset($evalWhite['type'], $evalWhite['value'])) {
+            return null;
+        }
+
+        // A tablebase verdict reads as "no eval here", the same treatment
+        // TutorMetrics::perGame() gives it. Every caller of this method feeds
+        // the result into winProbability(), and the centipawn number riding on
+        // a Syzygy verdict is a wire convention ({@see EngineEval}), not a
+        // measurement — putting it through a win-probability curve invents a
+        // percentage out of a unit change.
+        if (EngineEval::isTb($evalWhite)) {
             return null;
         }
 

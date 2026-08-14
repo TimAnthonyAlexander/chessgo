@@ -96,15 +96,21 @@ FIFTY_MOVE_DRAW = (TB_BLESSED_LOSS, TB_CURSED_WIN)
 def claims_forced_result(score):
     """Is this reported score the engine claiming a forced win or loss?
 
-    Deliberately covers BOTH bands, and deliberately asserts on the engine's own
-    reported value rather than on any presentation of it: a mate claim and a
-    tablebase-band claim are equally wrong about a position that is a 50-move draw,
-    and a later change to how tablebase scores are DISPLAYED cannot make either of
-    them appear or disappear here.
+    Deliberately covers ALL THREE ways the engine can make the claim, and
+    deliberately asserts on the engine's own claim rather than on the size of the
+    number carrying it: a mate claim, a raw tablebase-band score, and an explicit
+    `tb` tag are equally wrong about a position that is a 50-move draw.
+
+    `tb` is how the JSON API states it since the wire format stopped printing raw
+    VALUE_TB_WIN (src/serve_json.h): a verdict now arrives as a bounded cp plus the
+    tag. The band check stays because the UCI path still reports raw, and because a
+    raw value reaching the JSON boundary is itself a failure worth catching here.
     """
     if score is None:
         return False, "no score reported"
-    kind, value = score
+    kind, value, tb = score
+    if tb is not None:
+        return True, "tb %s (cp %d)" % (tb, value)
     if kind == "mate":
         return True, "mate %d" % value
     if abs(value) >= TB_BAND_MIN:

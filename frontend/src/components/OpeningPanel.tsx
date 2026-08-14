@@ -10,6 +10,7 @@ import {
 } from '../api/client'
 import { gameOverAt, pathToNode, START_FEN, type Tree } from '../lib/analysisTree'
 import { MoveSan } from './MoveSan'
+import { tbLabel, tbWhite, type TbVerdict } from '../lib/engineEval'
 
 // How many candidate rows to request/show. The engine ranks best-first.
 const MAX_ROWS = 4
@@ -19,14 +20,16 @@ const MOVETIME = 350
 // Lichess "winning chances": the same sigmoid the vertical EvalBar uses, so a
 // per-move bar reads consistently with the main eval bar. Input is WHITE-relative
 // centipawns; output is White's share of the bar (0..100).
-function whiteWinPercent(type: 'cp' | 'mate', white: number): number {
+function whiteWinPercent(type: 'cp' | 'mate', white: number, tb?: TbVerdict): number {
+    if (tb) return tb === 'win' ? 100 : 0
     if (type === 'mate') return white > 0 ? 100 : white < 0 ? 0 : 50
     const cp = Math.max(-1000, Math.min(1000, white))
     return 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * cp)) - 1)
 }
 
-// "+1.8" / "-0.5" / "#3" / "-#2", from White's perspective.
-function evalText(type: 'cp' | 'mate', white: number): string {
+// "+1.8" / "-0.5" / "#3" / "-#2" / "TB", from White's perspective.
+function evalText(type: 'cp' | 'mate', white: number, tb?: TbVerdict): string {
+    if (tb) return tbLabel(tb)
     if (type === 'mate') return `${white < 0 ? '-' : ''}#${Math.abs(white)}`
     const v = white / 100
     return (v > 0 ? '+' : '') + v.toFixed(1)
@@ -310,9 +313,10 @@ function MoveRow({
     onHover?: (uci: string | null) => void
 }) {
     const white = stm === 'w' ? move.eval.value : -move.eval.value
-    const whitePct = whiteWinPercent(move.eval.type, white)
-    const text = evalText(move.eval.type, white)
-    const whiteBetter = white > 0
+    const tb = tbWhite(move.eval, stm) ?? undefined
+    const whitePct = whiteWinPercent(move.eval.type, white, tb)
+    const text = evalText(move.eval.type, white, tb)
+    const whiteBetter = tb ? tb === 'win' : white > 0
     // Tooltip = the opening this move leads to; empty (no tooltip) when unnamed.
     const tip = move.opening ? `${move.opening.eco} · ${move.opening.name}` : ''
 

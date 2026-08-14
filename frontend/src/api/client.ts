@@ -1,5 +1,8 @@
 // Typed client for the chessgo BaseAPI backend (SPEC §7 / VS-Bot endpoints).
 import type { Variant } from '../lib/variants'
+// A tablebase verdict rides on every eval object the engine emits; the shape
+// and the reason it exists are in lib/engineEval.ts.
+import type { TbVerdict } from '../lib/engineEval'
 
 const BASE = import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:6464'
 
@@ -30,7 +33,7 @@ export interface MoveEntry {
     san: string
     by: 'human' | 'bot'
     fen: string // position after this move (for history navigation)
-    eval?: { type: 'cp' | 'mate'; value: number }
+    eval?: { type: 'cp' | 'mate'; value: number; tb?: TbVerdict }
     duck?: string // Duck Chess: the duck's square after this move
     // Secret Queen: present on the move that unmasked a hidden queen (either
     // side's) — a non-pawn move from its square, reaching the last rank, or
@@ -146,7 +149,7 @@ export interface EngineVsMove {
     result: string | null
     sideToMove: Color | null
     claimableDraws: string[]
-    eval: { type: 'cp' | 'mate'; value: number } | null
+    eval: { type: 'cp' | 'mate'; value: number; tb?: TbVerdict } | null
     by: EngineSide
     reason?: string
     // Variant-specific board state carried per ply (null for standard/chess960).
@@ -255,7 +258,7 @@ export function guessEloGuess(id: string, guess: number): Promise<GuessReveal> {
 }
 
 export interface Analysis {
-    eval: { type: 'cp' | 'mate'; value: number } | null
+    eval: { type: 'cp' | 'mate'; value: number; tb?: TbVerdict } | null
     bestmove: string | null
     pv: string[] | null // principal variation (best line) as UCI moves from the position
     depth: number | null
@@ -275,7 +278,7 @@ export interface Analysis {
 export interface AnalysisLine {
     bestmove: string
     san: string
-    eval: { type: 'cp' | 'mate'; value: number }
+    eval: { type: 'cp' | 'mate'; value: number; tb?: TbVerdict }
     pv: string[]
     depth: number
     opening?: Opening | null // the opening this move leads to (book lookup, null if unnamed)
@@ -334,7 +337,7 @@ export function analyze(
 export interface SfAnalysis {
     bestmove: string | null // UCI of Stockfish's full-strength best move
     san: string | null
-    eval: { type: 'cp' | 'mate'; value: number } | null // side-to-move POV
+    eval: { type: 'cp' | 'mate'; value: number; tb?: TbVerdict } | null // side-to-move POV
 }
 
 /** Full-strength Stockfish best move for a position — the analysis board's
@@ -395,7 +398,7 @@ export function duckPlay(fen: string, duck: string, move: string): Promise<DuckP
  *  arrow). `eval` is from the side-to-move's perspective; `bestmove` is a composite
  *  "<pieceUci>:<duckSquare>". Abortable via `signal` (like `analyze`). */
 export interface DuckEval {
-    eval: { type: 'cp' | 'mate'; value: number } | null
+    eval: { type: 'cp' | 'mate'; value: number; tb?: TbVerdict } | null
     bestmove: string | null
     bestSan: string | null
     sideToMove: Color
@@ -441,7 +444,7 @@ export function duckEval(
  *  perspective (positive = side to move is winning, i.e. on track to shed its
  *  pieces); `bestmove` is a plain UCI (with a `k` suffix for a king promotion). */
 export interface AntichessEval {
-    eval: { type: 'cp' | 'mate'; value: number } | null
+    eval: { type: 'cp' | 'mate'; value: number; tb?: TbVerdict } | null
     bestmove: string | null
     bestSan: string | null
     sideToMove: Color
@@ -474,7 +477,7 @@ export interface Opening {
 export interface CandidateMove {
     uci: string
     san: string
-    eval: { type: 'cp' | 'mate'; value: number }
+    eval: { type: 'cp' | 'mate'; value: number; tb?: TbVerdict }
     pv: string[]
     depth: number
     opening: Opening | null // the opening this move leads to (null if unnamed)
@@ -548,6 +551,10 @@ export function getGame(id: string): Promise<LiveGameRecord> {
 export interface AnalysisEval {
     type: 'cp' | 'mate'
     white: number
+    // Present only when the position is solved by tablebase, in which case
+    // `white` is a stand-in (±TB_CP) and not a measurement. White-relative,
+    // like `white` itself: 'win' means White wins. See lib/engineEval.ts.
+    tb?: TbVerdict
 }
 
 export type AnalysisJudgment = 'best' | 'good' | 'inaccuracy' | 'mistake' | 'blunder'

@@ -38,6 +38,18 @@ class TutorMetricsTest extends TestCase
     }
 
     /**
+     * A tablebase verdict as the engine now sends it: a bounded cp stand-in
+     * plus the tag that says the number is not a measurement
+     * (zugzwang/src/serve_json.h).
+     *
+     * @return array{type: string, value: int, tb: string}
+     */
+    private function tb(string $verdict): array
+    {
+        return ['type' => 'cp', 'value' => $verdict === 'win' ? 1000 : -1000, 'tb' => $verdict];
+    }
+
+    /**
      * One entry of the `plies` shape perGame() expects. `npPieces`/`piece`
      * only matter for the phase/piece dimensions; default them to plausible
      * middlegame-ish values so tests that don't care about them still build
@@ -159,6 +171,87 @@ class TutorMetricsTest extends TestCase
 
         $this->assertSame(1, $white['moves'], 'White should have exactly 1 measured move (ply 2)');
         $this->assertEqualsWithDelta(500.0, $white['metrics']['acpl']['value'], 0.001, 'A 500cp loss on ply 2 (not ply 0) must be recorded in full');
+    }
+
+    // --- tablebase verdicts are not measurable ----------------------------
+
+    /**
+     * Syzygy says "won", not "won by this much". The centipawn number attached
+     * to a verdict is a wire convention (App\Services\EngineEval), so
+     * differencing it against a real eval manufactures a cp loss out of a
+     * change of units. Both endpoints of the delta are checked, because one
+     * verdict is enough to poison it.
+     */
+    public function test_a_move_into_a_tablebase_verdict_is_not_measured(): void
+    {
+        $plies = [
+            $this->ply($this->cp(300)),  // pos0
+            $this->ply($this->cp(300)),  // pos1
+            $this->ply($this->cp(300)),  // pos2 — White to move, ordinary eval
+            $this->ply($this->tb('win')), // pos3 — simplified into the tables
+            $this->ply($this->tb('win')), // pos4
+        ];
+
+        $white = $this->m->perGame($this->game('w', '1-0', $plies));
+
+        $this->assertSame(0, $white['moves'], 'the move that entered the tablebase must not be scored');
+        $this->assertArrayNotHasKey('acpl', $white['metrics']);
+    }
+
+    public function test_a_move_out_of_a_tablebase_verdict_is_not_measured(): void
+    {
+        $plies = [
+            $this->ply($this->cp(300)),
+            $this->ply($this->cp(300)),
+            $this->ply($this->tb('win')), // pos2 — White to move, solved
+            $this->ply($this->cp(-200)),  // pos3
+            $this->ply($this->cp(-200)),
+        ];
+
+        $white = $this->m->perGame($this->game('w', '1-0', $plies));
+
+        $this->assertSame(0, $white['moves']);
+    }
+
+    /**
+     * The raw 31497 that shipped to production carries no tag. It must be
+     * recognised anyway — otherwise an old cached analysis still injects a
+     * 315-pawn swing (clamped to EVAL_CLAMP, but still ~1500cp of nonsense).
+     */
+    public function test_a_raw_pre_fix_tablebase_value_is_also_skipped(): void
+    {
+        $plies = [
+            $this->ply($this->cp(300)),
+            $this->ply($this->cp(300)),
+            $this->ply($this->cp(300)),
+            $this->ply($this->cp(31497)), // VALUE_TB_WIN, untagged
+            $this->ply($this->cp(31497)),
+        ];
+
+        $white = $this->m->perGame($this->game('w', '1-0', $plies));
+
+        $this->assertSame(0, $white['moves']);
+    }
+
+    /**
+     * Corpus symmetry: the rule must not fire on ordinary evals, or it would
+     * quietly drop moves from one corpus and not the other. A +10.00 is a real
+     * evaluation and stays measured.
+     */
+    public function test_an_ordinary_ten_pawn_eval_is_still_measured(): void
+    {
+        $plies = [
+            $this->ply($this->cp(300)),
+            $this->ply($this->cp(300)),
+            $this->ply($this->cp(1000)),
+            $this->ply($this->cp(500)),
+            $this->ply($this->cp(500)),
+        ];
+
+        $white = $this->m->perGame($this->game('w', '1-0', $plies));
+
+        $this->assertSame(1, $white['moves']);
+        $this->assertEqualsWithDelta(500.0, $white['metrics']['acpl']['value'], 0.001);
     }
 
     // --- 3. eval clamping vs the per-move cap ------------------------------

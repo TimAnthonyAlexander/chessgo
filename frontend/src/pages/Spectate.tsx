@@ -5,6 +5,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import Board from '../components/Board'
 import Clock, { ClockBar } from '../components/Clock'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
+import { tbLabel, toWhiteEval } from '../lib/engineEval'
 import MoveList from '../components/MoveList'
 import { MoveSan } from '../components/MoveSan'
 import { Avatar, NavBtn, PANEL_SHADOW } from '../components/PanelUI'
@@ -114,8 +115,9 @@ export default function Spectate() {
             .then((r) => {
                 if (cancelled) return
                 if (r.eval) {
-                    const white = sideToMove === 'w' ? r.eval.value : -r.eval.value
-                    setWhiteEval({ type: r.eval.type, white })
+                    // `sideToMove` is optional; anything but 'w' was already
+                    // treated as Black here, so keep that reading.
+                    setWhiteEval(toWhiteEval(r.eval, sideToMove === 'w' ? 'w' : 'b'))
                 }
                 setBestUci(r.bestmove)
             })
@@ -462,8 +464,10 @@ function bestMoveSan(fen: string, uci: string): string {
     return pvToSan(fen, [uci])[0]?.san ?? uci
 }
 
-// Short eval from White's view: "+0.34", "-1.20", or "#3" / "-#2" for mate.
+// Short eval from White's view: "+0.34", "-1.20", "#3" / "-#2" for mate, or
+// "TB" / "-TB" when Syzygy has already settled it (lib/engineEval.ts).
 function evalText(ev: WhiteEval): string {
+    if (ev.tb) return tbLabel(ev.tb)
     if (ev.type === 'mate') return `${ev.white < 0 ? '-' : ''}#${Math.abs(ev.white)}`
     const v = ev.white / 100
     return (v > 0 ? '+' : '') + v.toFixed(2)

@@ -4,6 +4,7 @@ import { pvToSan } from '../lib/analysisTree'
 import { MoveSan } from './MoveSan'
 import type { AnalysisLine } from '../api/client'
 import type { WhiteEval } from './EvalBar'
+import { tbLabel, tbOf, type TbVerdict } from '../lib/engineEval'
 
 export const LINE_COUNT_KEY = 'chessgo.analysis.multipvLines'
 const LS_KEY = LINE_COUNT_KEY
@@ -16,7 +17,10 @@ export function loadLineCount(): number {
 export function saveLineCount(n: number): void {
     try { localStorage.setItem(LS_KEY, String(n)) } catch { /* ignore */ }
 }
-function evalText(type: 'cp' | 'mate', white: number): string {
+function evalText(type: 'cp' | 'mate', white: number, tb?: TbVerdict): string {
+    // A tablebase verdict replaces the number outright: a solved position has
+    // no evaluation to print, only a result. See lib/engineEval.ts.
+    if (tb) return tbLabel(tb)
     if (type === 'mate') return `${white < 0 ? '-' : ''}M${Math.abs(white)}`
     return (white > 0 ? '+' : '') + (white / 100).toFixed(2)
 }
@@ -89,7 +93,13 @@ export default function EngineLines({
 
     // Convert each line's UCI PV to SAN tokens.
     const allTokens = useMemo(() => shown.map((l): { tokens: { text: string; num: boolean; firstMove?: boolean }[]; ev: WhiteEval } => {
-        const ev: WhiteEval = { type: l.eval.type, white: l.eval.value }
+        // The verdict rides with the number exactly as this component reads
+        // it: no side flip here, because `white` is taken from `l.eval.value`
+        // unflipped too. Label and number always agree on who is winning.
+        const lineTb = tbOf(l.eval)
+        const ev: WhiteEval = lineTb
+            ? { type: l.eval.type, white: l.eval.value, tb: lineTb }
+            : { type: l.eval.type, white: l.eval.value }
         if (!l.pv || l.pv.length === 0) return { tokens: [], ev }
         const sans = pvToSan(fen, l.pv)
         let full = 1; let white = true
@@ -195,7 +205,7 @@ export default function EngineLines({
                                                color: row.ev.white > 0 ? '#15171c' : '#ece9e1',
                                                background: row.ev.white > 0 ? 'linear-gradient(180deg, #f3eee2, #e4dccb)' : row.ev.white === 0 ? 'var(--surface-2)' : '#15171c',
                                                boxShadow:'0 1px 2px rgba(0,0,0,0.25)', textAlign:'center' }}>
-                                        {evalText(row.ev.type, row.ev.white)}
+                                        {evalText(row.ev.type, row.ev.white, row.ev.tb)}
                                     </Box>
                                 </Box>
                             )

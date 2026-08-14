@@ -4,6 +4,7 @@ import { Eye, Radio } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import MiniBoard from '../components/MiniBoard'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
+import { toWhiteEval } from '../lib/engineEval'
 import TitleBadge from '../components/TitleBadge'
 import { analyze, getLiveGames, type LiveGameSummary, type LiveSide } from '../api/client'
 import { useAuth } from '../lib/auth'
@@ -219,8 +220,7 @@ function GameCard({
         analyze(game.fen, { movetime: 300, signal: ctrl.signal })
             .then((r) => {
                 if (cancelled || !r.eval) return
-                const white = game.sideToMove === 'w' ? r.eval.value : -r.eval.value
-                setWhiteEval({ type: r.eval.type, white })
+                setWhiteEval(toWhiteEval(r.eval, game.sideToMove))
             })
             .catch(() => {}) // aborted / transient failure → keep last shown eval
         return () => {

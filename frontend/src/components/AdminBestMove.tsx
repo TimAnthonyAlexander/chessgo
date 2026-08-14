@@ -4,6 +4,7 @@ import { analyze, duckEval, antichessEval, type Analysis, type Color } from '../
 import type { Square } from '../lib/chess'
 import { pvToSan } from '../lib/analysisTree'
 import { MoveSan } from './MoveSan'
+import { tbLabel, tbWhite } from '../lib/engineEval'
 
 // The from/to squares to whisper onto the board as pixel dots, plus the raw UCI
 // so the board's 'G' shortcut can play the move straight through.
@@ -44,6 +45,9 @@ interface BestDisplay {
 // instead of flipping with whose turn it is.
 function formatEval(e: Analysis['eval'], stm: Color): string {
     if (!e) return '—'
+    // A tablebase verdict, flipped to White-relative like the value below it.
+    const tb = tbWhite(e, stm)
+    if (tb) return tbLabel(tb)
     const white = stm === 'w' ? e.value : -e.value
     if (e.type === 'mate') return `${white < 0 ? '-' : ''}#${Math.abs(white)}`
     // Rounded to the nearest half-pawn — this is a quick admin glance, not analysis.

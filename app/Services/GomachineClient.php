@@ -165,6 +165,11 @@ class GomachineClient
      * `$multipv > 1` returns `lines`: the top N moves from ONE search, all at the
      * same depth (the engine's native MultiPV), each with the opening it leads to.
      *
+     * The `eval` object is `{type: 'cp'|'mate', value: int}` plus an OPTIONAL
+     * `tb: 'win'|'loss'` naming a Syzygy verdict, in which case `value` is a
+     * stand-in (±EngineEval::TB_CP) and not a measurement. Anything doing
+     * arithmetic on the number must consult {@see EngineEval} first.
+     *
      * @param string[] $history Prior-position FENs (root→previous). Naming only —
      *   the engine uses them to resolve the DEEPEST named opening along the line,
      *   for the position and for every line. Mirrors {@see candidates()}.

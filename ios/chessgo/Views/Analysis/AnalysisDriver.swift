@@ -238,7 +238,10 @@ final class AnalysisDriver: BoardControl {
                 fen: plyFen,
                 san: ply.move?.san,
                 uci: ply.move?.uci,
-                evalWhite: ply.evalWhite.map { EvalScore(type: $0.type, value: $0.white) },
+                // `Step.evalWhite` holds a WHITE-relative value in an
+                // EvalScore, so the verdict it carries is White-relative too;
+                // AnalysisView flips both together when it feeds the bar.
+                evalWhite: ply.evalWhite.map { EvalScore(type: $0.type, value: $0.white, tb: $0.tbVerdict?.rawValue) },
                 bestSan: ply.bestSan,
                 bestUci: ply.bestUci,
                 bestDepth: ply.bestDepth,

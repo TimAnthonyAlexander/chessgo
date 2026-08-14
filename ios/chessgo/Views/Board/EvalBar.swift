@@ -18,6 +18,9 @@ struct EvalBar: View {
 
     private var whitePercent: Double {
         guard let eval else { return 0.5 }
+        // A tablebase verdict is certainty, so the bar fills like a mate does
+        // rather than being driven by the cp stand-in riding on it.
+        if let tb = eval.tbWhite(sideToMove: sideToMove) { return tb == .win ? 1.0 : 0.0 }
         if eval.type == "mate" {
             let whiteRelative = sideToMove == .white ? eval.value : -eval.value
             return whiteRelative >= 0 ? 1.0 : 0.0
@@ -30,6 +33,9 @@ struct EvalBar: View {
 
     private var label: String {
         guard let eval else { return "" }
+        // The label sits at the winning side's end of the bar, so the side is
+        // already said by where it is — "TB", like "M3", carries no sign here.
+        if eval.tbVerdict != nil { return "TB" }
         if eval.type == "mate" {
             let whiteRelative = sideToMove == .white ? eval.value : -eval.value
             return "M\(abs(whiteRelative))"
@@ -85,6 +91,13 @@ struct EvalBar: View {
 
 #Preview("EvalBar — black to move, black ahead") {
     EvalBar(eval: EvalScore(type: "cp", value: 300), sideToMove: .black)
+        .frame(width: 28, height: 280)
+        .padding()
+        .background(Theme.Colors.background)
+}
+
+#Preview("EvalBar — tablebase win for white") {
+    EvalBar(eval: EvalScore(type: "cp", value: 1000, tb: "win"), sideToMove: .white)
         .frame(width: 28, height: 280)
         .padding()
         .background(Theme.Colors.background)

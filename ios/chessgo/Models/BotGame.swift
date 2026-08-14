@@ -6,6 +6,20 @@ import Foundation
 struct EvalScore: Codable, Sendable, Equatable {
     let type: String
     let value: Int
+    /// Optional Syzygy verdict ("win"/"loss"). When present, `value` is a
+    /// stand-in (±1000) and not a measurement — render the verdict, not the
+    /// number. See `Models/EngineEval.swift`.
+    let tb: String?
+
+    /// Explicit so `tb` can default: every existing `EvalScore(type:value:)`
+    /// call site keeps compiling, and Codable synthesis is unaffected (an
+    /// optional decodes via decodeIfPresent, so an engine that never sends
+    /// `tb` still decodes).
+    init(type: String, value: Int, tb: String? = nil) {
+        self.type = type
+        self.value = value
+        self.tb = tb
+    }
 }
 
 /// Secret Queen: what one move unmasked, if anything. Present on EVERY move

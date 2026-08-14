@@ -124,7 +124,7 @@ class TutorGameReader
 
     /**
      * @param array<string, mixed> $ply
-     * @return array{type: string, value: int}|null
+     * @return array{type: string, value: int, tb?: string}|null
      */
     private function evalOf(array $ply): ?array
     {
@@ -139,7 +139,17 @@ class TutorGameReader
             return null;
         }
 
-        return ['type' => $eval['type'] === 'mate' ? 'mate' : 'cp', 'value' => (int) $value];
+        $out = ['type' => $eval['type'] === 'mate' ? 'mate' : 'cp', 'value' => (int) $value];
+
+        // Carried, not interpreted: TutorMetrics is what decides that a
+        // tablebase verdict can't be measured. Dropping the tag here would hide
+        // it from the only class allowed to make that call.
+        $tb = $eval['tb'] ?? null;
+        if ($tb === 'win' || $tb === 'loss') {
+            $out['tb'] = $tb;
+        }
+
+        return $out;
     }
 
     /**

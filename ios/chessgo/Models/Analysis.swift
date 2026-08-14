@@ -77,6 +77,9 @@ struct AntichessAnalyzeResult: Decodable, Sendable {
 struct EvalWhiteScore: Decodable, Sendable {
     let type: String
     @DefaultZero var white: Int
+    /// Optional Syzygy verdict, already flipped to White-relative by the
+    /// server alongside `white`. See `Models/EngineEval.swift`.
+    let tb: String?
 }
 
 struct AnalysisMoveJudgment: Decodable, Sendable {

@@ -74,12 +74,25 @@ constexpr int MAX_PLY = 246;
 // Syzygy TB win/loss: decisive, above any eval, but BELOW mate-in-max-ply so TB scores
 // never masquerade as forced mates. `VALUE_TB_WIN - ply` stays < VALUE_MATE_IN_MAX_PLY.
 constexpr int VALUE_TB_WIN = VALUE_MATE_IN_MAX_PLY - MAX_PLY - 1;
+// Bottom of the TB band. The in-search WDL probe returns VALUE_TB_WIN - ply and the
+// root DTZ ranking returns a flat VALUE_TB_WIN, so every TB verdict that can reach a
+// caller lies in [VALUE_TB_WIN_IN_MAX_PLY, VALUE_TB_WIN]. Mirrors SF's
+// VALUE_TB_WIN_IN_MAX_PLY (~/sf18-arm/src/types.h:164).
+constexpr int VALUE_TB_WIN_IN_MAX_PLY = VALUE_TB_WIN - MAX_PLY;
 
 constexpr int mate_in(int ply) { return VALUE_MATE - ply; }
 constexpr int mated_in(int ply) { return -VALUE_MATE + ply; }
 
 inline bool is_mate_score(int v) {
     return v >= VALUE_MATE_IN_MAX_PLY || v <= -VALUE_MATE_IN_MAX_PLY;
+}
+
+// A decisive TABLEBASE verdict — not a forced mate, and not an evaluation. Splits the
+// band between VALUE_TB_WIN_IN_MAX_PLY and VALUE_MATE_IN_MAX_PLY out of "cp", the same
+// way SF's is_win/is_loss/is_decisive do (~/sf18-arm/src/types.h:170-180) so that the
+// UCI/JSON layers can report it as a verdict instead of a 315-pawn evaluation.
+inline bool is_tb_score(int v) {
+    return !is_mate_score(v) && (v >= VALUE_TB_WIN_IN_MAX_PLY || v <= -VALUE_TB_WIN_IN_MAX_PLY);
 }
 
 const std::string SQ_NAMES[65] = {

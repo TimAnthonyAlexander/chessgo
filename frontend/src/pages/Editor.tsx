@@ -19,6 +19,7 @@ import BoardEditor, { type Brush, EditorPalette } from '../components/BoardEdito
 import BoardPage from '../components/BoardPage'
 import ChallengeDialog from '../components/ChallengeDialog'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
+import { toWhiteEval } from '../lib/engineEval'
 import { ActionBtn } from '../components/PanelUI'
 import { analyze, type Color, nextPuzzle } from '../api/client'
 import { useAuth } from '../lib/auth'
@@ -83,9 +84,9 @@ export default function Editor() {
             analyze(fen, { movetime: 300, signal: ctrl.signal })
                 .then((r) => {
                     if (!r.eval) return
-                    // Engine reports from side-to-move's perspective; flip to White's.
-                    const white = active === 'w' ? r.eval.value : -r.eval.value
-                    setWhiteEval({ type: r.eval.type, white })
+                    // Engine reports from side-to-move's perspective; flip to
+                    // White's (value AND tablebase verdict).
+                    setWhiteEval(toWhiteEval(r.eval, active))
                 })
                 .catch(() => {}) // aborted / transient failure → keep last shown eval
         }, 250)

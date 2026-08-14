@@ -115,6 +115,20 @@ reveal invariants on every ply. Design + rules: `../docs/tasks/open/secret-queen
 The eval `{type,value}` object is converted to gomachine's shape so response
 schemas match the old engine.
 
+**A tablebase verdict is not an evaluation, and the JSON says so.** A Syzygy win
+is `VALUE_TB_WIN` = 31497 internally, and every consumer divides cp by 100 — so a
+won 5-man ending rendered as "+314.97" on the eval bar while the engine shuffled.
+`eval_json`/`eval_json_parts` (`src/serve_json.h`) emit
+`{"type":"cp","value":±1000,"tb":"win"|"loss"}` instead: `type` and `value` stay
+valid for a client that predates `tb` (there is a shipped iOS build in the wild),
+`tb` carries the truth, and 1000 is the frontend eval bar's existing ±1000 clamp.
+The same normalization is applied to the Stockfish proxy, whose UCI reports a
+verdict as `cp 20000 - plies`. **UCI output is deliberately untouched** — CCRL and
+external GUIs expect the large cp there, exactly as SF prints it. Gate:
+`./test/tb_eval_wire.sh` (no eval from any endpoint may carry `|cp| >= 31000`).
+PHP mirrors the band in `App\Services\EngineEval`, the browser in
+`frontend/src/lib/engineEval.ts`, iOS in `ios/chessgo/Models/EngineEval.swift`.
+
 ### Concurrent search-context pool
 
 `serve` runs N independent `Search::Context`s (default `min(hardware_concurrency, 6)`;

@@ -145,8 +145,15 @@ class Serve:
         return mv, info
 
     def bestmove_score(self, fen):
-        """As bestmove(), plus the engine's OWN reported score as (kind, value) —
-        ("cp", n) in the engine's internal centipawn units, or ("mate", n)."""
+        """As bestmove(), plus the engine's OWN reported score as (kind, value, tb).
+
+        ("cp", n, None) or ("mate", n, None) as before, and ("cp", n, "win"|"loss")
+        when the JSON carries the tablebase discriminator. The JSON no longer prints
+        a raw VALUE_TB_WIN — a verdict is reported as a bounded cp plus the `tb` tag
+        (src/serve_json.h) — so the tag IS the engine's claim here, and dropping it
+        would silently turn the claim into an ordinary evaluation. The UCI path
+        below still reports the raw band and keeps tb=None; that is deliberate, UCI
+        was left alone."""
         r = self.post("/bestmove", {"fen": fen, "limits": {"movetime": self.movetime}})
         if not r.get("bestmove"):
             raise RuntimeError("serve /bestmove returned none: %s" % r.get("reason"))
@@ -154,7 +161,7 @@ class Serve:
         info = "eval=%s%s d=%s" % (ev.get("type", "?"), ev.get("value", "?"), r.get("depth"))
         score = None
         if ev.get("type") in ("cp", "mate") and isinstance(ev.get("value"), int):
-            score = (ev["type"], ev["value"])
+            score = (ev["type"], ev["value"], ev.get("tb"))
         return r["bestmove"], info, score
 
     def stop(self):
@@ -198,7 +205,10 @@ class Uci:
         return mv, info
 
     def bestmove_score(self, fen):
-        """As bestmove(), plus the last `info ... score X N` parsed into (kind, value)."""
+        """As bestmove(), plus the last `info ... score X N` parsed into
+        (kind, value, tb). UCI has no `tb` field and is not getting one, so the third
+        slot is always None here and the raw tablebase band is what identifies a
+        verdict — see Serve.bestmove_score."""
         self._send("position fen " + fen)
         self._send("go movetime %d" % self.movetime)
         score, depth, parsed = "?", "?", None
@@ -214,7 +224,7 @@ class Uci:
                 bits = score.split()
                 if len(bits) >= 2 and bits[0] in ("cp", "mate"):
                     try:
-                        parsed = (bits[0], int(bits[1]))
+                        parsed = (bits[0], int(bits[1]), None)
                     except ValueError:
                         parsed = None
             if line.startswith("bestmove"):

@@ -91,6 +91,9 @@ struct OpeningPanel: View {
     /// `EvalBar` so every number on the analysis screen reads consistently.
     private func evalLabel(_ eval: EvalScore?, sideToMove: PieceColor) -> String {
         guard let eval else { return "—" }
+        // A tablebase verdict replaces the number outright: a solved position
+        // has no evaluation to print, only a result.
+        if let tb = eval.tbWhite(sideToMove: sideToMove) { return tb.label }
         let whiteRelative = sideToMove == .white ? eval.value : -eval.value
         if eval.type == "mate" { return "M\(whiteRelative)" }
         return String(format: "%+.1f", Double(whiteRelative) * 0.5 / 100)
