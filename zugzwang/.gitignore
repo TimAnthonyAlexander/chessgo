@@ -38,6 +38,9 @@ test/.tmp_web_net*.bin
 # checked in (mirrors tools/netweb_writer above).
 tools/book_export
 
+# tools/tbdefend build artifact — built by `make tbdefend`, never checked in.
+tools/tbdefend
+
 # SPSA runtime checkpoint (spsa/tune.py) — resumable state, not source
 spsa/state.json
 spsa/state.json.tmp

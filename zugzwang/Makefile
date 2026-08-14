@@ -65,6 +65,18 @@ book_export: tools/book_export.cpp src/book.cpp src/position.cpp src/bitboard.cp
        src/nnue_net.cpp src/nnue_features.cpp src/nnue_eval.cpp src/nnue_accumulator.cpp
 	$(CXX) $(CXXFLAGS) -Isrc -o tools/book_export $^
 
+# tbdefend: perfect Syzygy DTZ oracle — the opponent AND the judge for the
+# tablebase-conversion suite (test/tb_conversion.py). Fathom's root probe
+# returns the DTZ-maximizing move for a losing side (the hardest 50-move-rule
+# stalling defence) and a WDL that already accounts for the halfmove clock.
+# Standalone: rules only, no search, no serve. See tools/tbdefend.cpp.
+#   Usage: ./tools/tbdefend [--path syzygy] [FEN ...]   (else reads FENs on stdin)
+tbdefend: tools/tbdefend.cpp src/position.cpp src/bitboard.cpp \
+       src/zobrist.cpp src/movegen.cpp src/rules.cpp src/weakening.cpp src/antichess.cpp \
+       src/nnue_net.cpp src/nnue_features.cpp src/nnue_eval.cpp src/nnue_accumulator.cpp \
+       src/syzygy/tbprobe.cpp
+	$(CXX) $(CXXFLAGS) -Isrc -o tools/tbdefend $^
+
 # nnue_web_format_test: proves the float32 and pre-quantized loaders produce a
 # byte-identical Net + identical eval on golden FENs, and that a corrupted
 # pre-quantized file is refused. See test/nnue_web_format_test.cpp.
@@ -87,8 +99,8 @@ secretqueen_test: test/secretqueen_test.cpp test/secretqueen_test_stubs.cpp src/
 
 clean:
 	rm -f $(TARGET) perft_test $(OBJ) $(DEP) tools/netweb_writer test/nnue_web_format_test \
-	      test/secretqueen_test tools/book_export
+	      test/secretqueen_test tools/book_export tools/tbdefend
 
 -include $(DEP)
 
-.PHONY: all clean perft netweb nnue_web_format_test secretqueen_test book_export
+.PHONY: all clean perft netweb nnue_web_format_test secretqueen_test book_export tbdefend

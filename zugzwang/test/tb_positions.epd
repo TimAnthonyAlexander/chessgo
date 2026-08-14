@@ -1,0 +1,46 @@
+# Tablebase-conversion suite positions — see test/tb_conversion.py.
+#
+# Every line is `<FEN> ; <material> dtz=<D> budget=<rule50+D>/100`, and every
+# one is a position White WINS according to Syzygy AT THE STATED HALFMOVE
+# CLOCK: Fathom's root probe reports TB_WIN, which by dtz_to_wdl()
+# (src/syzygy/tbprobe.cpp:559) means `dtz + rule50 <= 100`. Generated and then
+# re-verified at the stated clock with ./tools/tbdefend — a position that were
+# only winnable at clock 0 would make the whole suite lie, since the suite's
+# core assertion is that the win survives the 50-move counter.
+#
+# The first three are the endgame from the reported production game (KNP vs KB,
+# a genuine win — Stockfish 18 gives mate in 18 from the fresh-clock version).
+# Through the HTTP serve path the engine shuffled its knight for 28 plies at a
+# flat +314.96 and drew it; through UCI, which is the only caller of
+# TB::probe_root, it mated.
+#
+# Several lines carry a deliberately TIGHT budget (90+/100). That is the actual
+# failure mode: with a fresh clock even an aimless engine stumbles into the win
+# eventually, so a suite of clock-0 positions would pass on the broken code.
+#
+# Regenerate/verify:  ./tools/tbdefend < <(gawk -F' ;' '!/^#/&&NF{print $1}' test/tb_positions.epd)
+
+8/6Pb/5K2/4N3/4k3/8/8/8 w - - 71 93 ; KNPvKB  (game position) dtz=15 budget=86/100
+8/6Pb/5K2/4N3/4k3/8/8/8 w - - 0 93 ; KNPvKB  (game position, fresh clock) dtz=15 budget=15/100
+8/6Pb/3k1K2/4N3/8/8/8/8 w - - 0 101 ; KNPvKB  (game, later) dtz=19 budget=19/100
+7k/8/P7/b7/8/8/5K1N/8 w - - 0 1 ; KNPvKB  dtz=19 budget=19/100
+8/8/5P1k/2K5/5n2/8/6B1/8 w - - 0 1 ; KBPvKN  dtz=19 budget=19/100
+r7/2P4k/8/8/6R1/8/6K1/8 w - - 30 61 ; KRPvKR  dtz=15 budget=45/100
+7k/8/8/1Q6/4K3/8/8/4r3 w - - 0 1 ; KQvKR   dtz=17 budget=17/100
+1k6/8/6b1/2K5/2R5/8/8/8 w - - 0 1 ; KRvKB   dtz=12 budget=12/100
+8/4R3/8/6n1/3K4/8/8/2k5 w - - 40 71 ; KRvKN   dtz=14 budget=54/100
+8/B1n5/8/1K6/4B3/8/3k4/8 w - - 40 71 ; KBBvKN  dtz=53 budget=93/100  TIGHT
+8/N4p2/6k1/8/3N4/5K2/8/8 w - - 68 85 ; KNNvKP  dtz=26 budget=94/100  TIGHT
+8/2PK4/8/8/8/8/2b5/4k3 w - - 0 1 ; KPvKB   dtz=7  budget=7/100
+8/8/2b5/K3k3/8/Q7/8/8 w - - 0 1 ; KQvKB   dtz=13 budget=13/100
+8/k3PQ2/8/8/8/K7/8/q7 w - - 42 72 ; KQPvKQ  dtz=53 budget=95/100  TIGHT
+k1N5/8/8/5K2/8/8/8/B7 w - - 0 1 ; KBNvK   dtz=48 budget=48/100
+8/8/2kBN3/8/8/8/8/K7 w - - 34 60 ; KBNvK   dtz=60 budget=94/100  TIGHT
+8/7b/4k3/8/8/4P3/2R5/K7 w - - 0 1 ; KRPvKB  dtz=13 budget=13/100
+3K4/8/8/8/5Q2/kn6/8/8 w - - 0 1 ; KQvKN   dtz=21 budget=21/100
+1k6/8/8/6R1/5R2/8/7K/3q4 w - - 0 1 ; KRRvKQ  dtz=16 budget=16/100
+k7/8/6nP/8/8/6P1/1K6/8 w - - 0 1 ; KPPvKN  dtz=13 budget=13/100
+7k/8/1P2b3/8/4B3/7K/8/8 w - - 0 1 ; KBPvKB  dtz=13 budget=13/100
+8/2P5/1n6/8/8/3NK3/2k5/8 w - - 0 1 ; KNPvKN  dtz=17 budget=17/100
+8/R7/7p/6k1/1K6/8/8/8 w - - 0 1 ; KRvKP   dtz=13 budget=13/100
+8/6K1/8/8/8/2Q5/4pk2/8 w - - 60 81 ; KQvKP   dtz=33 budget=93/100  TIGHT
