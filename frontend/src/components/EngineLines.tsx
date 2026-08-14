@@ -4,7 +4,7 @@ import { pvToSan } from '../lib/analysisTree'
 import { MoveSan } from './MoveSan'
 import type { AnalysisLine } from '../api/client'
 import type { WhiteEval } from './EvalBar'
-import { tbLabel, tbOf, type TbVerdict } from '../lib/engineEval'
+import { tbLabel, toWhiteEval, type TbVerdict } from '../lib/engineEval'
 
 export const LINE_COUNT_KEY = 'chessgo.analysis.multipvLines'
 const LS_KEY = LINE_COUNT_KEY
@@ -92,14 +92,17 @@ export default function EngineLines({
     const depth = evalDepth ?? shown[0]?.depth ?? null
 
     // Convert each line's UCI PV to SAN tokens.
+    const stm: 'w' | 'b' = fen.split(' ')[1] === 'b' ? 'b' : 'w'
     const allTokens = useMemo(() => shown.map((l): { tokens: { text: string; num: boolean; firstMove?: boolean }[]; ev: WhiteEval } => {
-        // The verdict rides with the number exactly as this component reads
-        // it: no side flip here, because `white` is taken from `l.eval.value`
-        // unflipped too. Label and number always agree on who is winning.
-        const lineTb = tbOf(l.eval)
-        const ev: WhiteEval = lineTb
-            ? { type: l.eval.type, white: l.eval.value, tb: lineTb }
-            : { type: l.eval.type, white: l.eval.value }
+        // The engine scores from the SIDE TO MOVE's point of view; WhiteEval is
+        // White-relative, as its name says. Reading l.eval.value straight into
+        // `white` printed every line negated on Black's turn (right magnitude,
+        // wrong sign) — and inverted the chip's light/dark fill with it, since
+        // that keys off ev.white > 0. Analysis.tsx already routes the eval bar
+        // and the tree annotation through toWhiteEval; the line list was the one
+        // consumer that skipped it. toWhiteEval flips the tb verdict alongside
+        // the number, so label and number still agree on who is winning.
+        const ev: WhiteEval = toWhiteEval(l.eval, stm) ?? { type: l.eval.type, white: l.eval.value }
         if (!l.pv || l.pv.length === 0) return { tokens: [], ev }
         const sans = pvToSan(fen, l.pv)
         let full = 1; let white = true
@@ -115,7 +118,7 @@ export default function EngineLines({
         return { tokens: out, ev }
         // `shown` is a fresh array every render, so depending on it defeated the
         // memo entirely; it is fully derived from these three, which are stable.
-    }), [fen, lines, numLines])
+    }), [fen, stm, lines, numLines])
 
     // Engine off hides the LINES, never the header — the on/off Toggle lives in
     // that header, so returning null for the whole panel (as this used to) left
