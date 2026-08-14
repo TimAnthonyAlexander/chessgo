@@ -145,6 +145,25 @@ all (measured −109/−64 across two runs of the same dead-drawn position, and 
 on a drawn KQvKR). Gate: assertion (e) of `./test/tb_eval_wire.sh`, whose cursed
 cases are generated from `tools/tbdefend` at clock `101 − dtz`.
 
+**A root the tablebase has already won gets 100ms, not a full move's budget**
+(`Tune::tbWinCapMs`, env `TBWINCAP=0` to disable). The root DTZ ranking replaced
+a UCI-only instant-return short-circuit with a real search on every entry path,
+which took a solved KNPvKB root from 9ms to 580ms at TC 8+0.08 — a whole move's
+budget, every move, for the entire conversion. When the root is DTZ-ranked AND
+the top rank group is the **certain-win** band, `start()`'s per-iteration soft
+limit is clamped: with `TB_ROOT_RANK_DTZ == false` every certain win ranks at
+`MAX_DTZ` and a cursed one tops out at `MAX_DTZ/2`, so that top group is
+homogeneous and every move in it keeps `dtz + cnt50 <= 99` — the win survives
+whichever one a shallower search picks. Same shape as SF's
+`if (rootMoves.size() == 1) totalTime = std::min(502.0, totalTime)`. Inert at
+`multiPV > 1` (so `/candidates` and the whole weakened ladder are untouched),
+inert with no soft time limit (bench/SPSA/golden byte-identical), and inert in
+the draw, cursed and loss bands, where the SEARCH is the authority on practical
+chances. 100 is measured: `tb_conversion` passes 24/24 at every cap from 200 to
+20, so it cannot pick the number — total plies to mate can, and 100 is
+indistinguishable from uncapped (mean 999 vs 961) while 50 is +10.6% and 20 is
++34%. Re-measure that curve before moving it.
+
 ### Concurrent search-context pool
 
 `serve` runs N independent `Search::Context`s (default `min(hardware_concurrency, 6)`;
