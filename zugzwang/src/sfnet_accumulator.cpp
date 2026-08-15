@@ -73,7 +73,12 @@ bool sfnet_prefetch_enabled() {
 // byte-identical fallback/debug oracle — same convention as nnue_accumulator.cpp's
 // lazy_acc_enabled().
 bool sfnet_lazyacc_enabled() {
-    static const bool on = [] { const char* e = getenv("SFNETLAZYACC"); return e && e[0] == '1'; }();
+    // Default ON as of the amd64 confirmation (Wave 9): +8.4% arm64, +10.0% amd64 with
+    // interleaved paired reps (lazy ON won 4/4 on coalla; a first single-pass run read
+    // -2.2% purely from SPSA contention on the box — pair your reps here, the absolutes
+    // drift). SFNETLAZYACC=0 is the kill-switch back to the eager path, which is retained
+    // verbatim below and is what the acc gate diffs against.
+    static const bool on = [] { const char* e = getenv("SFNETLAZYACC"); return !(e && e[0] == '0'); }();
     return on;
 }
 
