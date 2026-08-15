@@ -3,6 +3,10 @@
 #include "nnue.h"
 #include "nnue_internal.h"   // SATFIX reads the L1 rail count (g_satdiag.l1live)
 #include "nnue_accumulator.h"
+#include "engine_backend.h"
+#ifdef SFNET_BACKEND
+#include "sfnet.h"
+#endif
 #include <cstdlib>
 #include <cmath>
 
@@ -512,6 +516,17 @@ int sat_substitute(const Position& pos, int raw, int mode) {
 // NNUE dispatch: route the static eval through the loaded net when present,
 // else fall back to the hand-crafted eval. Both return stm-relative centipawns.
 int Eval::evaluate(const Position& pos) {
+#ifdef SFNET_BACKEND
+    // SF backend (Wave 4 of the SF-net experiment, docs/sfnet-wave4.md): no SATFIX/
+    // HCEBLEND/MATGRAD/EVALCOMPLEXITY here — all four are calibrated to our own net's
+    // saturation behaviour, not SF's. AccStack::eval() / SFNet::evaluate() already
+    // return the POST-PROCESSED SF value (nnue/complexity/material/rule50 — SFNet's own
+    // rule50 term, so RULE50DAMP must never also run on this path), with no cp rescale
+    // (that is Wave 5). See sfnet.h's AccStack doc comment for the accumulator itself.
+    if (!SFNet::loaded()) return hce_evaluate(pos);
+    EngineAccStack* a = pos.nnue_acc();
+    return a ? a->eval(pos) : SFNet::evaluate(pos);
+#else
     if (!NNUE::loaded()) return hce_evaluate(pos);
     // In-search: read the incremental accumulator the search maintains on the position.
     // Outside search (no stack attached): the from-scratch net eval.
@@ -530,6 +545,7 @@ int Eval::evaluate(const Position& pos) {
     if (matgrad_enabled())  v += material_gradient(pos, raw);
     if (hceblend_enabled()) v += hce_blend(pos, raw);
     return v;
+#endif
 }
 
 // HCEBLEND root-gate (see eval.h): arm the blend for this search iff the ROOT is clearly
@@ -537,9 +553,14 @@ int Eval::evaluate(const Position& pos) {
 // independently from its own root copy; disarms when HCEBLEND is off.
 void Eval::begin_search(const Position& rootPos) {
     if (!hceblend_enabled()) { g_hceblend_active = false; return; }
+    // NOTE: hceblend_enabled() defaults ON (env kill-switch), and under SFNET_BACKEND
+    // Eval::evaluate() above never calls hce_blend() at all, so g_hceblend_active being
+    // computed here is inert dead state on that path — this only needs to COMPILE under
+    // either backend (EngineAccStack), not gate anything additionally. Not one of the
+    // five sites the wave spec names explicitly; see docs/sfnet-wave4.md.
     int raw;
-    if (!NNUE::loaded())                              raw = hce_evaluate(rootPos);
-    else if (NNUE::AccStack* a = rootPos.nnue_acc())  raw = a->eval(rootPos);
-    else                                              raw = NNUE::evaluate(rootPos);
+    if (!NNUE::loaded())                                    raw = hce_evaluate(rootPos);
+    else if (EngineAccStack* a = rootPos.nnue_acc())        raw = a->eval(rootPos);
+    else                                                     raw = NNUE::evaluate(rootPos);
     g_hceblend_active = (raw < -HceRootLostThresh);
 }

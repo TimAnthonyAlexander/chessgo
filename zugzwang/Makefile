@@ -116,12 +116,29 @@ sfnet_eval_test: test/sfnet_eval_test.cpp src/sfnet_load.cpp src/sfnet_eval.cpp 
        src/nnue_eval.cpp src/nnue_accumulator.cpp
 	$(CXX) $(CXXFLAGS) -Isrc -o test/sfnet_eval_test $^
 
+# sfnet_acc_test: Wave 4 gate for the SF-net experiment backend — the incremental
+# accumulator (src/sfnet_accumulator.cpp). Walks a real do_move/undo_move tree off the
+# 560-FEN corpus plus targeted edge-case FENs (castling/en passant/promotion/mirror-
+# crossing king moves, hardcoded in the test — sfnet_corpus.epd itself never changes)
+# and compares the incremental state against evaluate_raw()'s from-scratch oracle at
+# every node. MUST be built with -DSFNET_BACKEND: EngineAccStack (src/engine_backend.h)
+# has to resolve to SFNet::AccStack for Position::set_nnue_acc(&stack) to compile.
+#   Usage: make sfnet_acc_test && ./test/sfnet_acc_test <net.nnue> test/sfnet_corpus.epd [--depth N]
+#   Add ASSERT=1 to also compile SFNet::AccStack::eval()'s own -DNNUE_ASSERT self-check
+#   (redundant with this test's explicit eval_pair() comparison, but matches the
+#   engine's own `make ASSERT=1` convention for this class of gate).
+sfnet_acc_test: test/sfnet_acc_test.cpp src/sfnet_load.cpp src/sfnet_eval.cpp \
+       src/sfnet_accumulator.cpp src/position.cpp src/bitboard.cpp src/zobrist.cpp \
+       src/movegen.cpp src/rules.cpp src/weakening.cpp src/antichess.cpp \
+       src/nnue_net.cpp src/nnue_features.cpp src/nnue_eval.cpp src/nnue_accumulator.cpp
+	$(CXX) $(CXXFLAGS) -DSFNET_BACKEND -Isrc -o test/sfnet_acc_test $^
+
 clean:
 	rm -f $(TARGET) perft_test $(OBJ) $(DEP) tools/netweb_writer test/nnue_web_format_test \
 	      test/secretqueen_test tools/book_export tools/tbdefend test/sfnet_load_test \
-	      test/sfnet_eval_test
+	      test/sfnet_eval_test test/sfnet_acc_test
 
 -include $(DEP)
 
 .PHONY: all clean perft netweb nnue_web_format_test secretqueen_test book_export tbdefend \
-        sfnet_load_test sfnet_eval_test
+        sfnet_load_test sfnet_eval_test sfnet_acc_test

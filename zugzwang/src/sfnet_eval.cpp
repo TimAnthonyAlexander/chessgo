@@ -10,16 +10,28 @@
 //   - bucket selection + OutputScale division: nnue/network.cpp (Network::evaluate)
 //   - fc_0/ac_sqr_0/ac_0/fc_1/ac_1/fc_2 + the neuron-15 bypass: nnue/nnue_architecture.h
 //     (propagate()), nnue/layers/{affine_transform,clipped_relu,sqr_clipped_relu}.h
+//   - post-processing blend (Wave 4): evaluate.cpp's Eval::evaluate (nnue/complexity/
+//     material/rule50), optimism = 0.
 // Anything the written spec (docs/tasks/open/sf-net-experiment.md) got wrong or left
 // ambiguous, and how it was resolved against the source above, is recorded in
-// docs/sfnet-wave2.md.
+// docs/sfnet-wave2.md (Waves 2/3) and docs/sfnet-wave4.md (Wave 4).
 //
 // Threat features are NOT reimplemented here — src/nnue_features.cpp's
 // NNUE::active_features() is bit-identical to SF's FullThreats (see
 // sf-net-experiment.md §2), so this file calls it and rebases its threat indices
 // (which carry OUR net's +12288 PsqSize offset) onto SF's own 0-based 79856 space.
+//
+// This file also holds the DEFINITIONS of the helpers sfnet_internal.h declares
+// (BaseTables, base_tables, base_indices, die, forward_pass, post_process) — that
+// header exists so src/sfnet_accumulator.cpp (Wave 4's incremental accumulator) can
+// reuse this exact code rather than re-deriving it. Moving code out of the old private
+// anonymous namespace into named SFNet scope is a LINKAGE change only; every value
+// below is byte-for-byte what Waves 2/3 already validated bit-exact against Stockfish
+// over 560 positions (test/sfnet_corpus_ref.tsv) — re-verified after this refactor via
+// `make sfnet_eval_test && ./test/sfnet_eval_test --self-check ...` (see docs/sfnet-wave4.md).
 
 #include "sfnet.h"
+#include "sfnet_internal.h"
 #include "position.h"
 #include "nnue_features.h"
 #include "nnue_arch.h"
@@ -35,14 +47,10 @@
 #include <vector>
 
 namespace SFNet {
-namespace {
 
-inline std::int32_t clampi(std::int32_t v, std::int32_t lo, std::int32_t hi) {
-    return v < lo ? lo : (v > hi ? hi : v);
-}
-
+// ---- shared fatal-error helper (declared in sfnet_internal.h) ----
 [[noreturn]] void die(const char* what) {
-    std::fprintf(stderr, "SFNet::evaluate_raw: %s\n", what);
+    std::fprintf(stderr, "SFNet: %s\n", what);
     std::abort();
 }
 
@@ -53,78 +61,64 @@ inline std::int32_t clampi(std::int32_t v, std::int32_t lo, std::int32_t hi) {
 // PieceSquareIndex[COLOR_NB][PIECE_NB] convention comment: "W - us, B - them"). Built
 // off our own Piece enum, which is byte-identical to SF's (W_PAWN=1..W_KING=6,
 // B_PAWN=9..B_KING=14, NO_PIECE=0, PIECE_NB=16 with two unused slots at 7 and 15).
-constexpr int PsPlaneSize = 64;
-constexpr int KingPlaneOffset = 10 * PsPlaneSize;  // 640 — shared W/B king plane
-
-struct BaseTables {
-    int pieceSquareIndex[COLOR_NB][PIECE_NB]{};  // plane offset per (perspective, piece)
-    int kingBuckets[SQUARE_NB]{};                // bucket*704, indexed by ksq^flip (UNmirrored)
-    int orientTbl[SQUARE_NB]{};                  // 7 (files a-d) or 0 (files e-h), indexed by raw ksq
-
-    BaseTables() {
-        for (int persp = WHITE; persp <= BLACK; ++persp) {
-            for (int pc = 0; pc < PIECE_NB; ++pc) {
-                if (pc == NO_PIECE || pc == 7 || pc == 15) {
-                    pieceSquareIndex[persp][pc] = 0;  // unused slots; never looked up
-                    continue;
-                }
-                const Piece piece = Piece(pc);
-                const PieceType pt = type_of(piece);
-                if (pt == KING) {
-                    pieceSquareIndex[persp][pc] = KingPlaneOffset;
-                    continue;
-                }
-                // "W" plane = perspective's own colour, "B" plane = the other colour.
-                const bool isOwn = (color_of(piece) == Color(persp));
-                const int plane = (int(pt) - 1) * 2 + (isOwn ? 0 : 1);
-                pieceSquareIndex[persp][pc] = plane * PsPlaneSize;
+// PsPlaneSize/KingPlaneOffset and BaseTables itself are declared in sfnet_internal.h
+// (shared with sfnet_accumulator.cpp, Wave 4) — this is their one definition, moved
+// here verbatim from what used to be this file's private anonymous namespace (linkage
+// change only; the values below are byte-for-byte what Wave 2/3 already validated).
+BaseTables::BaseTables() {
+    for (int persp = WHITE; persp <= BLACK; ++persp) {
+        for (int pc = 0; pc < PIECE_NB; ++pc) {
+            if (pc == NO_PIECE || pc == 7 || pc == 15) {
+                pieceSquareIndex[persp][pc] = 0;  // unused slots; never looked up
+                continue;
             }
+            const Piece piece = Piece(pc);
+            const PieceType pt = type_of(piece);
+            if (pt == KING) {
+                pieceSquareIndex[persp][pc] = KingPlaneOffset;
+                continue;
+            }
+            // "W" plane = perspective's own colour, "B" plane = the other colour.
+            const bool isOwn = (color_of(piece) == Color(persp));
+            const int plane = (int(pt) - 1) * 2 + (isOwn ? 0 : 1);
+            pieceSquareIndex[persp][pc] = plane * PsPlaneSize;
         }
-
-        // half_ka_v2_hm.h:75-85, transcribed verbatim and cross-checked directly against
-        // ~/sf18-arm — SF's KingBuckets[SQUARE_NB] is indexed by the RAW SF Square enum
-        // (A1=0..H8=63, identical numbering to ours), so row 0 of the literal listing IS
-        // squares A1..H1: KingBuckets[A1] == 28*704. See docs/sfnet-wave2.md for why the
-        // task spec's own "read rank 8 down to rank 1" framing of this table is backwards
-        // and should be ignored in favour of the "KingBuckets[A1] == 28*704" sentence.
-        static const int bucketOf[SQUARE_NB] = {
-            28, 29, 30, 31, 31, 30, 29, 28,
-            24, 25, 26, 27, 27, 26, 25, 24,
-            20, 21, 22, 23, 23, 22, 21, 20,
-            16, 17, 18, 19, 19, 18, 17, 16,
-            12, 13, 14, 15, 15, 14, 13, 12,
-             8,  9, 10, 11, 11, 10,  9,  8,
-             4,  5,  6,  7,  7,  6,  5,  4,
-             0,  1,  2,  3,  3,  2,  1,  0,
-        };
-        for (int s = 0; s < SQUARE_NB; ++s) kingBuckets[s] = bucketOf[s] * PsqDims / 32;
-
-        // OrientTBL: king canonicalised to files e-h (opposite mirror sense from our own
-        // net's make_xform, which canonicalises to a-d). File-only, so built directly
-        // rather than transcribed — confirmed file-only against half_ka_v2_hm.h's literal
-        // 64-entry table (every rank repeats the same 8-file pattern).
-        for (int s = 0; s < SQUARE_NB; ++s)
-            orientTbl[s] = (file_of(Square(s)) <= 3) ? 7 : 0;
     }
-};
+
+    // half_ka_v2_hm.h:75-85, transcribed verbatim and cross-checked directly against
+    // ~/sf18-arm — SF's KingBuckets[SQUARE_NB] is indexed by the RAW SF Square enum
+    // (A1=0..H8=63, identical numbering to ours), so row 0 of the literal listing IS
+    // squares A1..H1: KingBuckets[A1] == 28*704. See docs/sfnet-wave2.md for why the
+    // task spec's own "read rank 8 down to rank 1" framing of this table is backwards
+    // and should be ignored in favour of the "KingBuckets[A1] == 28*704" sentence.
+    static const int bucketOf[SQUARE_NB] = {
+        28, 29, 30, 31, 31, 30, 29, 28,
+        24, 25, 26, 27, 27, 26, 25, 24,
+        20, 21, 22, 23, 23, 22, 21, 20,
+        16, 17, 18, 19, 19, 18, 17, 16,
+        12, 13, 14, 15, 15, 14, 13, 12,
+         8,  9, 10, 11, 11, 10,  9,  8,
+         4,  5,  6,  7,  7,  6,  5,  4,
+         0,  1,  2,  3,  3,  2,  1,  0,
+    };
+    for (int s = 0; s < SQUARE_NB; ++s) kingBuckets[s] = bucketOf[s] * PsqDims / 32;
+
+    // OrientTBL: king canonicalised to files e-h (opposite mirror sense from our own
+    // net's make_xform, which canonicalises to a-d). File-only, so built directly
+    // rather than transcribed — confirmed file-only against half_ka_v2_hm.h's literal
+    // 64-entry table (every rank repeats the same 8-file pattern).
+    for (int s = 0; s < SQUARE_NB; ++s)
+        orientTbl[s] = (file_of(Square(s)) <= 3) ? 7 : 0;
+}
 
 const BaseTables& base_tables() {
     static const BaseTables T;
     return T;
 }
 
-// make_index — half_ka_v2_hm.cpp's HalfKAv2_hm::make_index, verbatim structure:
-//   flip  = 56 * perspective
-//   index = (s ^ OrientTBL[ksq] ^ flip) + PieceSquareIndex[perspective][pc] + KingBuckets[ksq ^ flip]
-// `ksq` is the perspective's OWN king square, un-flipped (both OrientTBL and the flip
-// XOR on `s` use the raw ksq; only the KingBuckets lookup uses ksq^flip).
-inline int make_base_index(const BaseTables& T, Color persp, Square s, Piece pc, Square ksq) {
-    const int flip = 56 * int(persp);
-    return (int(s) ^ T.orientTbl[ksq] ^ flip) + T.pieceSquareIndex[persp][pc]
-         + T.kingBuckets[int(ksq) ^ flip];
-}
-
 // Active base-feature indices for one perspective, from scratch off the board.
+// (make_base_index itself is declared `inline` in sfnet_internal.h — one definition,
+// shared by both translation units.)
 void base_indices(const BaseTables& T, const Position& pos, Color persp, std::vector<int>& out) {
     out.clear();
     const Square ksq = pos.king_square(persp);
@@ -136,12 +130,11 @@ void base_indices(const BaseTables& T, const Position& pos, Color persp, std::ve
     }
 }
 
-// ---- Accumulators (per perspective, two independent feature sets) ------------------
-struct HalfAcc {
-    std::int16_t accumulation[HalfDimensions];
-    std::int32_t psqtAccumulation[PSQTBuckets];
-};
+namespace {
 
+// ---- Accumulators (per perspective, two independent feature sets) ------------------
+// SFNet::HalfAcc (sfnet.h) is the shared per-perspective-per-feature-set state; this
+// pairs two of them (PSQ base + FullThreats) the way build_accumulators below fills them.
 struct Accumulators {
     HalfAcc psq[COLOR_NB];  // seeded from net.biases[]
     HalfAcc thr[COLOR_NB];  // seeded from zero — no threat bias array, no psqt bias at all
@@ -188,31 +181,25 @@ void build_accumulators(const Position& pos, const Net& net, Accumulators& acc) 
 
 }  // namespace
 
-EvalPair evaluate_raw(const Position& pos) {
-    assert(!pos.in_check());
-    if (!loaded()) die("no net loaded");
+// forward_pass — declared in sfnet_internal.h, shared verbatim by evaluate_raw (below)
+// and SFNet::AccStack::eval (src/sfnet_accumulator.cpp, Wave 4). This is the exact
+// arithmetic evaluate_raw used to run inline before the Wave 4 refactor — moved into
+// its own function, not rewritten (see docs/sfnet-wave4.md's byte-identical-refactor
+// note: `make sfnet_eval_test --self-check` still passes 560/560 after this move).
+EvalPair forward_pass(const HalfAcc psq[2], const HalfAcc thr[2], const Color persp[2], int bucket) {
     const Net& net = SFNet::net();
-
-    Accumulators acc;
-    build_accumulators(pos, net, acc);
-
-    // network.cpp: Network::evaluate — bucket picks BOTH the psqt column and the layer
-    // stack; the same popcount, no separate "material" concept.
-    const int bucket = (BB::popcount(pos.pieces()) - 1) / 4;
-    const Color stm = pos.side_to_move();
-    const Color persp[2] = {stm, ~stm};
 
     // Feature transformer: pairwise clamp+multiply, own-perspective block first
     // (nnue_feature_transformer.h transform(), UseThreats branch, scalar path).
     std::uint8_t ft[HalfDimensions];
     constexpr int Half = HalfDimensions / 2;  // 512
     for (int p = 0; p < 2; ++p) {
-        const HalfAcc& psq = acc.psq[persp[p]];
-        const HalfAcc& thr = acc.thr[persp[p]];
+        const HalfAcc& ps = psq[persp[p]];
+        const HalfAcc& th = thr[persp[p]];
         const int offset = Half * p;
         for (int j = 0; j < Half; ++j) {
-            std::int32_t s0 = std::int32_t(psq.accumulation[j]) + std::int32_t(thr.accumulation[j]);
-            std::int32_t s1 = std::int32_t(psq.accumulation[j + Half]) + std::int32_t(thr.accumulation[j + Half]);
+            std::int32_t s0 = std::int32_t(ps.accumulation[j]) + std::int32_t(th.accumulation[j]);
+            std::int32_t s1 = std::int32_t(ps.accumulation[j + Half]) + std::int32_t(th.accumulation[j + Half]);
             s0 = clampi(s0, 0, 255);
             s1 = clampi(s1, 0, 255);
             ft[offset + j] = std::uint8_t((unsigned(s0) * unsigned(s1)) / 512u);
@@ -220,10 +207,10 @@ EvalPair evaluate_raw(const Position& pos) {
     }
 
     // psqt: own-minus-enemy for both feature sets, averaged.
-    std::int32_t psqt = acc.psq[persp[0]].psqtAccumulation[bucket]
-                       - acc.psq[persp[1]].psqtAccumulation[bucket];
-    psqt = (psqt + acc.thr[persp[0]].psqtAccumulation[bucket]
-                 - acc.thr[persp[1]].psqtAccumulation[bucket]) / 2;
+    std::int32_t psqtOut = psq[persp[0]].psqtAccumulation[bucket]
+                          - psq[persp[1]].psqtAccumulation[bucket];
+    psqtOut = (psqtOut + thr[persp[0]].psqtAccumulation[bucket]
+                        - thr[persp[1]].psqtAccumulation[bucket]) / 2;
 
     // Layer stack `bucket` — fc_0 (16 outputs, neuron 15 is a linear bypass) ->
     // sqr-clipped-relu(0..14) ‖ clipped-relu(0..14) -> fc_1 (32) -> clipped-relu -> fc_2 (1).
@@ -272,7 +259,57 @@ EvalPair evaluate_raw(const Position& pos) {
     const std::int32_t fwd = fc0[L2] * (600 * OutputScale) / (127 * (1 << WeightScaleBits));
     const std::int32_t positionalRaw = fc2 + fwd;
 
-    return EvalPair{int(psqt / OutputScale), int(positionalRaw / OutputScale)};
+    return EvalPair{int(psqtOut / OutputScale), int(positionalRaw / OutputScale)};
+}
+
+EvalPair evaluate_raw(const Position& pos) {
+    assert(!pos.in_check());
+    if (!loaded()) die("no net loaded");
+    const Net& net = SFNet::net();
+
+    Accumulators acc;
+    build_accumulators(pos, net, acc);
+
+    // network.cpp: Network::evaluate — bucket picks BOTH the psqt column and the layer
+    // stack; the same popcount, no separate "material" concept.
+    const int bucket = (BB::popcount(pos.pieces()) - 1) / 4;
+    const Color stm = pos.side_to_move();
+    const Color persp[2] = {stm, ~stm};
+
+    return forward_pass(acc.psq, acc.thr, persp, bucket);
+}
+
+// post_process — declared in sfnet_internal.h. SF's evaluate.cpp blend (nnue/
+// complexity/material/rule50), reproduced verbatim (see docs/sfnet-wave4.md — this was
+// cross-checked directly against ~/sf18-arm/src/evaluate.cpp's Eval::evaluate, not just
+// against the written task spec): optimism is fixed at 0 (no root-average-score plumbing
+// yet — that is a later wave), so its `optimism * (7191 + material) / 77871` term drops
+// out entirely, and no cp rescale is applied (Wave 5). All-integer, all truncating
+// division, in the exact order SF computes them.
+//
+// Position::non_pawn_material(Color) in THIS codebase returns a bool (see position.h) —
+// deliberately NOT used here; material is computed piece-by-piece with SF's own values.
+int post_process(EvalPair ev, const Position& pos) {
+    std::int32_t nnue = (125 * ev.psqt + 131 * ev.positional) / 128;
+    const std::int32_t complexity = std::abs(ev.psqt - ev.positional);
+    nnue -= nnue * complexity / 18236;
+
+    constexpr std::int32_t KnightValue = 781, BishopValue = 825, RookValue = 1276, QueenValue = 2538;
+    const std::int32_t pawns = pos.count(WHITE, PAWN) + pos.count(BLACK, PAWN);
+    const std::int32_t nonPawnMaterial =
+        KnightValue * (pos.count(WHITE, KNIGHT) + pos.count(BLACK, KNIGHT)) +
+        BishopValue * (pos.count(WHITE, BISHOP) + pos.count(BLACK, BISHOP)) +
+        RookValue   * (pos.count(WHITE, ROOK)   + pos.count(BLACK, ROOK))   +
+        QueenValue  * (pos.count(WHITE, QUEEN)  + pos.count(BLACK, QUEEN));
+    const std::int32_t material = 534 * pawns + nonPawnMaterial;
+
+    std::int32_t v = (nnue * (77871 + material)) / 77871;  // optimism = 0
+    v -= v * pos.rule50_count() / 199;
+    return int(v);
+}
+
+int evaluate(const Position& pos) {
+    return post_process(evaluate_raw(pos), pos);
 }
 
 bool self_check(const Position& pos, std::string* why) {

@@ -4,6 +4,10 @@
 #include "eval.h"
 #include "nnue.h"
 #include "nnue_accumulator.h"
+#include "engine_backend.h"
+#ifdef SFNET_BACKEND
+#include "sfnet.h"
+#endif
 #include "tt.h"
 #include "bitboard.h"
 #include "zobrist.h"
@@ -520,7 +524,19 @@ struct Context {
         // the OPPOSITE of the session's washes (which all decayed from a phantom +15). The
         // one retrain-free win of the batch. Kill-switch: env RULE50DAMP=0. Byte-identical
         // to the old engine only at rule50=0 (early game); damps eval as the shuffle climbs.
+        //
+        // SFNET_BACKEND (Wave 4 of the SF-net experiment, docs/sfnet-wave4.md): defaults
+        // OFF there instead — Eval::evaluate's SF path (SFNet::AccStack::eval /
+        // SFNet::evaluate, via SFNet::post_process) already applies SF's OWN
+        // `v -= v * rule50_count() / 199` as part of its post-processing, so applying this
+        // one too would double-damp. Still env-overridable (RULE50DAMP=1) for anyone who
+        // deliberately wants to test double-damping; the default is the only thing that
+        // changes.
+#ifdef SFNET_BACKEND
+        bool rule50Damp    = false;
+#else
         bool rule50Damp    = true;
+#endif
         int  rule50DampDiv = 199;    // SF's divisor (SP uses 200); higher = gentler
         // ---- EVALCOMPLEXITY (2026-07-24, eval-mine): SF evaluate.cpp:76-78 shrinks the eval
         // toward 0 by nnueComplexity=|psqt-positional| (v -= v*complexity/18236) — a "distrust
@@ -1131,6 +1147,7 @@ struct Context {
             if (on("QSCHECKS")) qsChecks = true;
             if (const char* e = getenv("QSCHECKSN")) { int v = atoi(e); if (v >= 1) qsChecksN = v; }
             if (off("RULE50DAMP")) rule50Damp = false; // shipped default-on; kill-switch
+            if (on("RULE50DAMP"))  rule50Damp = true;  // SFNET_BACKEND defaults this off; force-on override
             if (const char* e = getenv("RULE50DAMPDIV")) { int v = atoi(e); if (v > 0) rule50DampDiv = v; }
             if (on("EVALCOMPLEXITY")) evalComplexity = true;
             if (const char* e = getenv("EVALCOMPLEXITYDIV")) { int v = atoi(e); if (v > 0) evalComplexityDiv = v; }
@@ -1382,7 +1399,7 @@ struct Context {
     // touched when tune.nmpSf is on; harmless dead field otherwise.
     int     nmpMinPly = 0;
 
-    NNUE::AccStack accStack; // per-search incremental accumulator (was a
+    EngineAccStack accStack; // per-search incremental accumulator (was a
                               // function-local `static` — one shared instance
                               // for ALL searches — before this change; fine
                               // single-threaded but a straight-up data race

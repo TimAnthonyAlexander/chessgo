@@ -1,6 +1,9 @@
 #include "position.h"
 #include "zobrist.h"
 #include "nnue_accumulator.h"
+#ifdef SFNET_BACKEND
+#include "sfnet.h"
+#endif
 #include <sstream>
 #include <cctype>
 #include <cstring>

@@ -57,3 +57,4 @@ spsa/__pycache__/
 # different matter and stays generated (tools/netweb_writer).
 test/sfnet_load_test
 test/sfnet_eval_test
+test/sfnet_acc_test

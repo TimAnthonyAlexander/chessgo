@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <string>
 #include <vector>
+#include "types.h"
 
 // SFNet — a second NNUE backend that evaluates with a Stockfish 18 network inside
 // OUR search. Experiment only; see ../docs/tasks/open/sf-net-experiment.md.
@@ -19,6 +20,7 @@
 // apart means our net's generated code is provably untouched.
 
 class Position;
+namespace NNUE { struct BoardSnapshot; }
 
 namespace SFNet {
 
@@ -112,5 +114,117 @@ EvalPair evaluate_raw(const Position& pos);
 // a one-line reason. This is a checked-invariant probe, not a correctness oracle — it
 // cannot tell you the *numbers* are right, only that no index escaped its array.
 bool self_check(const Position& pos, std::string* why = nullptr);
+
+// ---- Wave 4: post-processing + incremental accumulator ----
+// docs/tasks/open/sf-net-experiment.md §A/§B, docs/sfnet-wave4.md.
+
+// HalfAcc — one feature set's state for one perspective: the FT half (int16, width
+// HalfDimensions) plus its psqt lanes (int32, width PSQTBuckets). AccStack keeps two
+// of these per perspective (PSQ base + FullThreats — see AccStack's doc comment) and
+// forward_pass (sfnet_internal.h, shared by evaluate_raw and AccStack::eval) consumes
+// exactly this shape, so both the from-scratch oracle and the incremental accumulator
+// run the identical forward-pass code over identically-shaped state.
+struct HalfAcc {
+    std::int16_t accumulation[HalfDimensions];
+    std::int32_t psqtAccumulation[PSQTBuckets];
+};
+
+// evaluate — from-scratch SF eval, POST-PROCESSED (§3.5's nnue/complexity/material/
+// rule50 blend, optimism = 0, no cp rescale — that is Wave 5). Mirrors NNUE::evaluate:
+// the path taken when no accumulator is attached to the Position. Requires
+// SFNet::loaded().
+int evaluate(const Position& pos);
+
+// AccStack — the SF backend's incremental accumulator. Exposes the SAME six methods as
+// NNUE::AccStack (nnue_accumulator.h): AccStack(); reset(pos); push(pos);
+// push_delta(oldb, pos); pushNull(); pop(); eval(pos) — so src/engine_backend.h's
+// EngineAccStack alias can select either backend at compile time with identical call
+// sites everywhere else in the engine.
+//
+// State per node: TWO feature sets (PSQ base, FullThreats) x TWO perspectives, each a
+// HalfAcc. The base seeds from net.biases; the threat accumulation and BOTH psqt
+// accumulators seed from zero (§3.3 — there is no threat bias array and no psqt bias
+// at all).
+//
+// Refresh rules are DELIBERATELY DIFFERENT from our own net's AccStack — this is the
+// whole risk this wave is about, see docs/sfnet-wave4.md for what got verified:
+//   - threat: gated on the MIRROR BIT ONLY (NNUE::perspective_mirror) — a king move
+//     that crosses a king-bucket boundary without crossing the mirror line keeps
+//     threats on the delta path, reusing NNUE::changed_edges_delta(...,
+//     baseSkipW=true, baseSkipB=true) (bit-identical to SF's FullThreats — proven in
+//     Wave 2/3). Excluded threat indices (>= ThreatDims) never reach the accumulator.
+//   - base: COARSER than our own net — ANY king move of a perspective forces a full
+//     base rebuild for that perspective (SF's HalfKAv2_hm has no bucket-aware cheap
+//     path). A non-king-move's base delta is derived directly from the changed
+//     squares (D = XOR of per-(color,type) occupancy, the same technique
+//     nnue_features.cpp's own base-768 D-loop uses) — NOT nnue_features.cpp's base
+//     delta itself, which is in OUR base space and is the wrong basis for HalfKAv2_hm.
+//
+// Under -DNNUE_ASSERT, eval() rebuilds both feature sets from scratch (via
+// evaluate_raw, the Wave 2/3 oracle) and aborts on ANY drift from the incrementally
+// maintained state — same discipline as NNUE::AccStack (nnue_accumulator.cpp:750-768).
+// Gated at test/sfnet_acc_test.cpp.
+class AccStack {
+public:
+    AccStack();
+
+    // reset rebuilds slot 0 from scratch for pos and points the stack at it (sp = 0).
+    void reset(const Position& pos);
+
+    // push computes the child slot by fully re-enumerating and rebuilding BOTH feature
+    // sets for BOTH perspectives off the current board (pos == the child, called after
+    // Position::do_move has fully formed it) — the parity/debug path taken when
+    // THREATDELTA=0 (position.cpp's useDelta gate is shared with the default backend;
+    // see docs/sfnet-wave4.md).
+    void push(const Position& pos);
+
+    // push_delta is the move-aware path (position.cpp's default, THREATDELTA=1):
+    // `oldb` is the pre-move board snapshot Position::do_move captures BEFORE
+    // mutating in place; `pos` is the fully-formed child. See the class comment above
+    // for the refresh rules.
+    void push_delta(const NNUE::BoardSnapshot& oldb, const Position& pos);
+
+    // pushNull duplicates the top slot — a null move changes no piece placement, so
+    // every accumulator half is unchanged.
+    void pushNull();
+
+    // pop discards the top slot (call after Position::undo_move / undo_null_move).
+    void pop() { --sp_; }
+
+    // eval returns the POST-PROCESSED SF value (nnue/complexity/material/rule50 blend,
+    // optimism = 0, no cp rescale) of the top accumulator. With -DNNUE_ASSERT it first
+    // checks the incremental (psqt, positional) pair against evaluate_raw()'s
+    // from-scratch rebuild and aborts on any drift.
+    int eval(const Position& pos);
+
+    // eval_pair — the pre-post-processing (psqt, positional) pair, i.e. eval() minus
+    // the NNUE_ASSERT check and the post_process call. NOT one of the six methods
+    // EngineAccStack's alias depends on (NNUE::AccStack has no equivalent) — this
+    // exists purely so test/sfnet_acc_test.cpp (Wave 4's gate) can compare the
+    // incremental state against evaluate_raw()'s oracle at every node of a real
+    // do_move/undo_move tree and report a (checked, failed) count, instead of relying
+    // solely on -DNNUE_ASSERT's hard abort-on-drift.
+    EvalPair eval_pair(const Position& pos) const;
+
+private:
+    struct Slot {
+        HalfAcc psq[COLOR_NB];  // seeded from net.biases
+        HalfAcc thr[COLOR_NB];  // seeded from zero
+    };
+
+    // Deepest reachable ply is bounded by MAX_PLY; +8 slack for the child pushed at
+    // the deepest node — same bound NNUE::AccStack uses (nnue_accumulator.h).
+    static constexpr int NumSlots = MAX_PLY + 8;
+
+    void build_base(HalfAcc& h, const Position& pos, Color persp) const;
+    void build_threat(HalfAcc& h, const Position& pos, Color persp) const;
+    void delta_base(HalfAcc& dst, const HalfAcc& src, const NNUE::BoardSnapshot& oldb,
+                    const Position& child, Color persp) const;
+    void delta_threat_apply(HalfAcc& dst, const HalfAcc& src,
+                            const std::vector<int>& sub, const std::vector<int>& add) const;
+
+    std::vector<Slot> slots_;
+    int sp_ = 0;
+};
 
 }  // namespace SFNet
