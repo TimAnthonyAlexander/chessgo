@@ -38,11 +38,15 @@
 #include "tt.h"
 #include "weakening.h"
 #include "zobrist.h"
+#ifdef SFNET_BACKEND
+#include "sfnet.h"
+#endif
 
 #include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <iostream>
@@ -78,9 +82,26 @@ void engine_init() {
     // sizes per-group tables in init_pool(). This entry point does neither, so
     // without this the first probe search dereferences a null table.
     TT.resize(128);
+#ifdef SFNET_BACKEND
+    // Wave 5 §A: see uci.cpp's identical block for the rationale (fatal, not HCE fallback —
+    // ratingtest's numbers are meaningless if it silently measured HCE instead of the SF net).
+    {
+        const char* p = getenv("SFNET_NET");
+        const std::string sfNetPath = (p && *p) ? p : "sfnet.nnue";
+        if (SFNet::load(sfNetPath.c_str())) {
+            std::cerr << "SFNet: loaded " << sfNetPath << " (SFNET_BACKEND build)\n";
+        } else {
+            std::cerr << "SFNet: FATAL — failed to load " << sfNetPath
+                       << "; SFNET_BACKEND requires a working SF net (refusing to silently "
+                          "fall back to HCE)\n";
+            std::exit(1);
+        }
+    }
+#else
     if (!NNUE::load("net.nnue"))
         std::cerr << "ratingtest: WARNING — net.nnue absent, falling back to the hand-crafted "
                      "eval. Numbers below will NOT reflect the shipped engine.\n";
+#endif
     Book::shared().load("book.bin");
     Openings::load("openings.bin");
 }

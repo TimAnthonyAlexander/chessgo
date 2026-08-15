@@ -133,12 +133,41 @@ sfnet_acc_test: test/sfnet_acc_test.cpp src/sfnet_load.cpp src/sfnet_eval.cpp \
        src/nnue_net.cpp src/nnue_features.cpp src/nnue_eval.cpp src/nnue_accumulator.cpp
 	$(CXX) $(CXXFLAGS) -DSFNET_BACKEND -Isrc -o test/sfnet_acc_test $^
 
+# sfnet: a SEPARATE playable binary (zugzwang_sfnet) with the SF-net backend baked in —
+# docs/sfnet-wave5.md §A. Compiles the FULL engine SRC list (main.cpp, uci.cpp, serve.cpp,
+# ratingtest.cpp, everything) plus the three SF-backend TUs, all under -DSFNET_BACKEND, so
+# uci/serve/ratingtest's startup paths take their SFNET_BACKEND branch and load the SF net
+# (env SFNET_NET, else cwd-relative sfnet.nnue) instead of net.nnue.
+#
+# Objects land in objs_sfnet/, NOT src/ alongside the normal build's .o files — those are
+# compiled with different flags (-DSFNET_BACKEND) and must never be linked into (or silently
+# reused by) `./zugzwang`. `make && make sfnet && make` is checked to leave both binaries
+# correct: the objs_sfnet/ tree is untouched by a plain `make`, and src/*.o is untouched by
+# `make sfnet` (see docs/sfnet-wave5.md for the explicit verification).
+#   Usage: make sfnet && ./zugzwang_sfnet
+SFNET_TARGET = zugzwang_sfnet
+SFNET_OBJDIR = objs_sfnet
+SFNET_SRC    = $(SRC) src/sfnet_load.cpp src/sfnet_eval.cpp src/sfnet_accumulator.cpp
+SFNET_OBJ    = $(patsubst src/%.cpp,$(SFNET_OBJDIR)/%.o,$(SFNET_SRC))
+SFNET_DEP    = $(SFNET_OBJ:.o=.d)
+
+sfnet: $(SFNET_TARGET)
+
+$(SFNET_TARGET): $(SFNET_OBJ)
+	$(CXX) $(CXXFLAGS) -DSFNET_BACKEND $(LDFLAGS) -o $@ $(SFNET_OBJ)
+
+$(SFNET_OBJDIR)/%.o: src/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -DSFNET_BACKEND -MMD -MP -c $< -o $@
+
 clean:
-	rm -f $(TARGET) perft_test $(OBJ) $(DEP) tools/netweb_writer test/nnue_web_format_test \
-	      test/secretqueen_test tools/book_export tools/tbdefend test/sfnet_load_test \
-	      test/sfnet_eval_test test/sfnet_acc_test
+	rm -f $(TARGET) $(SFNET_TARGET) perft_test $(OBJ) $(DEP) tools/netweb_writer \
+	      test/nnue_web_format_test test/secretqueen_test tools/book_export tools/tbdefend \
+	      test/sfnet_load_test test/sfnet_eval_test test/sfnet_acc_test
+	rm -rf $(SFNET_OBJDIR)
 
 -include $(DEP)
+-include $(SFNET_DEP)
 
 .PHONY: all clean perft netweb nnue_web_format_test secretqueen_test book_export tbdefend \
-        sfnet_load_test sfnet_eval_test sfnet_acc_test
+        sfnet_load_test sfnet_eval_test sfnet_acc_test sfnet

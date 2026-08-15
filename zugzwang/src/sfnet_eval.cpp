@@ -287,6 +287,39 @@ EvalPair evaluate_raw(const Position& pos) {
 // out entirely, and no cp rescale is applied (Wave 5). All-integer, all truncating
 // division, in the exact order SF computes them.
 //
+// ---- Wave 5: the centipawn scale fit (docs/sfnet-wave5.md) ----
+// SF's post-processed `v` (below) is on SF's own internal Value scale, not zug's
+// pawn=100 cp scale that RFP/razoring/futility/SEE margins are tuned against — so it
+// needs a rescale, or an SPRT would measure the mis-scaling rather than the net.
+//
+// SFNETK is that rescale, an integer PERCENT (SFNETK=100 == x1.00), read once from the
+// env (same static-lambda-once pattern as THREATGATE/THREATDELTA in nnue_features.cpp)
+// so it is tunable per SPRT run with no rebuild. Default 48 (k=0.48, i.e. ~100/208):
+// this is NOT a fit against our own net's per-position cp — see docs/sfnet-wave5.md for
+// why that corpus fit doesn't converge to a stable number (our net rails on nearly every
+// position in the 560-FEN corpus, even the "most live" subset) — it is the SAME SF
+// eval-scale -> zug pawn=100 ratio (PawnValue=208, ~sf18-arm/src/types.h:185) this
+// codebase already uses in three other places to port SF's own margin constants onto
+// zug's scale: Tune::capFutBase/capFutSlope (search.cpp ~995-1006, "ratio 100/208 ~=
+// 0.4808"), Tune::capFutHistCoeff (same block), and RAZORQUAD (search.cpp ~3049-3052,
+// "zug/SF pawn-value ratio 100/208"). A controlled material ladder (Wave 3's own
+// instrument, tools/sfnet_material_ladder.py — SUB rungs, which hold the psqt bucket
+// FIXED across a deficit of 400-580cp) measures our_eval/sf_full independently at
+// 0.485 / 0.478 / 0.410 across three rungs — corroborating 0.48 from a controlled
+// measurement, not the noisy real-game corpus. See docs/sfnet-wave5.md for both.
+namespace {
+int sfnet_k_percent() {
+    static const int k = [] {
+        if (const char* e = std::getenv("SFNETK")) {
+            const int v = std::atoi(e);
+            if (v > 0) return v;
+        }
+        return 48;
+    }();
+    return k;
+}
+}  // namespace
+
 // Position::non_pawn_material(Color) in THIS codebase returns a bool (see position.h) —
 // deliberately NOT used here; material is computed piece-by-piece with SF's own values.
 int post_process(EvalPair ev, const Position& pos) {
@@ -305,6 +338,7 @@ int post_process(EvalPair ev, const Position& pos) {
 
     std::int32_t v = (nnue * (77871 + material)) / 77871;  // optimism = 0
     v -= v * pos.rule50_count() / 199;
+    v = (v * sfnet_k_percent()) / 100;  // Wave 5: SF Value scale -> zug pawn=100 cp scale
     return int(v);
 }
 

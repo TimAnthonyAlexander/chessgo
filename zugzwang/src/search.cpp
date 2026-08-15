@@ -4436,7 +4436,11 @@ Result start(Context& C, Position& pos, const Limits& lim, bool resetShared) {
     // by this Context alone — no longer a function-local `static` shared by
     // every concurrent search (that was safe single-threaded, but a data race
     // once two searches could run at once; see Context's doc comment).
-    bool useAcc = NNUE::loaded();
+    // engine_backend_loaded() (engine_backend.h): NNUE::loaded() under the default
+    // backend, SFNet::loaded() under SFNET_BACKEND — see its doc comment. Was
+    // hardcoded to NNUE::loaded(), which meant the SF backend's accumulator (Wave 4)
+    // never actually attached to a real search until this was fixed (Wave 5 §A).
+    bool useAcc = engine_backend_loaded();
     if (useAcc) { C.accStack.reset(pos); pos.set_nnue_acc(&C.accStack); }
 
     // HCEBLEND root-gate: arm the HCE-resolution blend for THIS search only if the root
