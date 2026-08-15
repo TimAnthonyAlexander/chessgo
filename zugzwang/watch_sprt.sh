@@ -11,10 +11,11 @@ trap cleanup INT TERM
 printf '\033[?25l'                   # hide cursor
 # Real time control, read from the log's START line (don't hardcode). sprt_tc.sh writes
 # "TC=8+0.08", sprt_flag.sh writes "MT=0.1s"; sprt.sh (fixed movetime) has neither → 100ms.
-tclabel=$(grep -am1 -oE 'TC=[0-9+.]+|MT=[0-9.]+s' "$LOG" 2>/dev/null | head -1)
+tclabel=$(grep -am1 -oE 'TC=[0-9+.]+|MT=[0-9.]+s|D=[0-9]+' "$LOG" 2>/dev/null | head -1)
 case "$tclabel" in
   TC=*) tclabel="${tclabel#TC=} clock" ;;   # e.g. "8+0.08 clock"
   MT=*) tclabel="${tclabel#MT=}/move" ;;     # e.g. "0.1s/move"
+  D=*)  tclabel="depth ${tclabel#D=}" ;;     # sprt_depth.sh — fixed depth, speed removed
   *)    tclabel="100 ms/move" ;;             # sprt.sh legacy default
 esac
 while :; do
