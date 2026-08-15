@@ -256,11 +256,16 @@ class AnticheatService
      * against a rating-band expectation and flags engine_correlation and/or
      * accuracy_rating_mismatch. Marks the game scanned (idempotent).
      *
+     * $includeAdmins scores admin sides too. It exists to CALIBRATE the
+     * thresholds against known-clean strong play (an admin's own games are the
+     * only large sample we can be sure isn't cheating), so the script only
+     * accepts it in dry-run — an admin flag is never worth writing.
+     *
      * @return list<array<string, mixed>> the flags raised (or, in dry-run, that
      *   WOULD be raised) — each {user_id, user_name, category, severity, detail,
      *   meta}. Empty when the game is skipped or nothing tripped.
      */
-    public function scanEngineCorrelation(Game $game, bool $dryRun = false): array
+    public function scanEngineCorrelation(Game $game, bool $dryRun = false, bool $includeAdmins = false): array
     {
         try {
             if ($game->ac_scanned && !$dryRun) {
@@ -283,12 +288,13 @@ class AnticheatService
             $whiteUser = $game->white_user_id !== null && !$game->white_is_bot ? User::find($game->white_user_id) : null;
             $blackUser = $game->black_user_id !== null && !$game->black_is_bot ? User::find($game->black_user_id) : null;
 
-            // Admins are never flagged (they analyze / test legitimately).
+            // Admins are never flagged (they analyze / test legitimately), unless
+            // this is a calibration pass.
             $candidates = [];
-            if ($whiteUser instanceof User && !$this->isAdmin($whiteUser)) {
+            if ($whiteUser instanceof User && ($includeAdmins || !$this->isAdmin($whiteUser))) {
                 $candidates = array_merge($candidates, $this->scoreSide($game, $whiteUser, 'w', $summary['w'] ?? [], $plies));
             }
-            if ($blackUser instanceof User && !$this->isAdmin($blackUser)) {
+            if ($blackUser instanceof User && ($includeAdmins || !$this->isAdmin($blackUser))) {
                 $candidates = array_merge($candidates, $this->scoreSide($game, $blackUser, 'b', $summary['b'] ?? [], $plies));
             }
 
@@ -308,6 +314,42 @@ class AnticheatService
     }
 
     /**
+     * Every measurement one side of one analyzed game produces, WITHOUT applying
+     * any threshold — the single definition of what this signal observes, so the
+     * scan and the calibration report can never disagree about the numbers.
+     *
+     * @param array<string, mixed> $sideSummary GameAnalysisService per-color summary (acpl, accuracy…).
+     * @param list<array<string, mixed>> $plies    Per-ply nodes (for the top-1 match rate).
+     * @return array<string, mixed>|null null when the game is too short to measure.
+     */
+    private function measureSide(Game $game, User $user, string $side, array $sideSummary, array $plies): ?array
+    {
+        $ownMoves = $this->countOwnMoves($plies, $side);
+        if ($ownMoves < 20) {
+            return null; // short game — move-quality stats are too noisy to trust
+        }
+
+        $rating = (int) $user->{'rating_' . $game->category};
+        $accuracy = (float) ($sideSummary['accuracy'] ?? 0.0);
+
+        return [
+            'user_id' => (string) $user->id,
+            'user_name' => (string) $user->name,
+            'game_id' => $game->hub_game_id,
+            'side' => $side,
+            'category' => $game->category,
+            'rating' => $rating,
+            'own_moves' => $ownMoves,
+            'acpl' => (int) ($sideSummary['acpl'] ?? 999),
+            'expected_acpl' => $this->expectedAcpl($rating),
+            'accuracy' => $accuracy,
+            'expected_accuracy' => $this->expectedAccuracy($rating),
+            't1_match' => $this->topOneMatchRate($plies, $side),
+            'best_streak' => $this->longestBestStreak($plies, $side),
+        ];
+    }
+
+    /**
      * Score one side of an analyzed game against its rating band, returning the
      * candidate flags (so the caller can apply or preview them).
      *
@@ -317,49 +359,100 @@ class AnticheatService
      */
     private function scoreSide(Game $game, User $user, string $side, array $sideSummary, array $plies): array
     {
-        $ownMoves = $this->countOwnMoves($plies, $side);
-        if ($ownMoves < 20) {
-            return []; // short game — move-quality stats are too noisy to trust
+        $m = $this->measureSide($game, $user, $side, $sideSummary, $plies);
+        if ($m === null) {
+            return [];
         }
 
-        $rating = (int) $user->{'rating_' . $game->category};
-        $acpl = (int) ($sideSummary['acpl'] ?? 999);
-        $accuracy = (float) ($sideSummary['accuracy'] ?? 0.0);
-        $t1 = $this->topOneMatchRate($plies, $side);
+        return $this->judge($m);
+    }
+
+    /**
+     * Apply the thresholds to one measurement. Split out from measurement so the
+     * calibration report can show what a threshold change WOULD do.
+     *
+     * @param array<string, mixed> $m a {@see measureSide()} row.
+     * @return list<array<string, mixed>>
+     */
+    private function judge(array $m): array
+    {
+        $rating = (int) $m['rating'];
+        $acpl = (int) $m['acpl'];
+        $expAcpl = (int) $m['expected_acpl'];
+        $t1 = (float) $m['t1_match'];
+        $accuracy = (float) $m['accuracy'];
+        $ownMoves = (int) $m['own_moves'];
         $out = [];
 
         // engine_correlation: ACPL well below band expectation AND a high share of
         // moves matching the engine's #1. Both together (not either alone) — a
         // strong player can post low ACPL, and forced lines inflate match rate.
-        $expAcpl = $this->expectedAcpl($rating);
         if ($acpl <= (int) round($expAcpl * 0.5) && $t1 >= 0.60) {
             $severe = $acpl <= (int) round($expAcpl * 0.33) && $t1 >= 0.72;
             $out[] = [
-                'user_id' => (string) $user->id,
-                'user_name' => (string) $user->name,
+                'user_id' => $m['user_id'],
+                'user_name' => $m['user_name'],
                 'category' => self::CAT_ENGINE_CORRELATION,
                 'severity' => $severe ? 'high' : 'medium',
                 'detail' => sprintf('ACPL %d (band expects ~%d) with %d%% top-1 match over %d moves', $acpl, $expAcpl, (int) round($t1 * 100), $ownMoves),
-                'meta' => ['rating' => $rating, 'acpl' => $acpl, 'expected_acpl' => $expAcpl, 't1_match' => round($t1, 3), 'own_moves' => $ownMoves, 'game_id' => $game->hub_game_id],
+                'meta' => ['rating' => $rating, 'acpl' => $acpl, 'expected_acpl' => $expAcpl, 't1_match' => round($t1, 3), 'own_moves' => $ownMoves, 'game_id' => $m['game_id']],
             ];
         }
 
         // accuracy_rating_mismatch: the rating-normalized headline — playing far
         // above the accuracy the player's rating predicts.
-        $expAcc = $this->expectedAccuracy($rating);
+        $expAcc = (float) $m['expected_accuracy'];
         $accGap = $accuracy - $expAcc;
         if ($accGap >= 12.0) {
             $out[] = [
-                'user_id' => (string) $user->id,
-                'user_name' => (string) $user->name,
+                'user_id' => $m['user_id'],
+                'user_name' => $m['user_name'],
                 'category' => self::CAT_ACCURACY_RATING_MISMATCH,
                 'severity' => $accGap >= 20.0 ? 'high' : 'medium',
                 'detail' => sprintf('%.1f%% accuracy vs ~%.0f%% expected for rating %d (+%.1f)', $accuracy, $expAcc, $rating, $accGap),
-                'meta' => ['rating' => $rating, 'accuracy' => $accuracy, 'expected_accuracy' => $expAcc, 'gap' => round($accGap, 1), 'own_moves' => $ownMoves, 'game_id' => $game->hub_game_id],
+                'meta' => ['rating' => $rating, 'accuracy' => $accuracy, 'expected_accuracy' => $expAcc, 'gap' => round($accGap, 1), 'own_moves' => $ownMoves, 'game_id' => $m['game_id']],
             ];
         }
 
         return $out;
+    }
+
+    /**
+     * Measure one game without judging it — what {@see scanEngineCorrelation()}
+     * saw, thresholds not applied. For scripts/anticheat_scan.php --stats.
+     *
+     * @return list<array<string, mixed>> one {@see measureSide()} row per scored side.
+     */
+    public function measureGame(Game $game, bool $includeAdmins = false): array
+    {
+        try {
+            if (!$game->rated || ($game->variant !== '' && $game->variant !== 'standard' && $game->variant !== 'duck')) {
+                return [];
+            }
+
+            $payload = $this->analysis->analyze($game);
+            $summary = is_array($payload['summary'] ?? null) ? $payload['summary'] : [];
+            $plies = is_array($payload['plies'] ?? null) ? $payload['plies'] : [];
+
+            $out = [];
+            foreach (['w' => $game->white_user_id, 'b' => $game->black_user_id] as $side => $userId) {
+                $isBot = $side === 'w' ? $game->white_is_bot : $game->black_is_bot;
+                $user = $userId !== null && !$isBot ? User::find($userId) : null;
+                if (!$user instanceof User || (!$includeAdmins && $this->isAdmin($user))) {
+                    continue;
+                }
+                $m = $this->measureSide($game, $user, $side, $summary[$side] ?? [], $plies);
+                if ($m !== null) {
+                    $m['flags'] = array_column($this->judge($m), 'category');
+                    $out[] = $m;
+                }
+            }
+
+            return $out;
+        } catch (Throwable $e) {
+            $this->logger->error('anticheat measureGame failed for ' . $game->hub_game_id . ': ' . $e->getMessage());
+            return [];
+        }
     }
 
     /** Count a side's own moves in the analyzed plies. */
@@ -393,6 +486,27 @@ class AnticheatService
         }
 
         return $moves > 0 ? $best / $moves : 0.0;
+    }
+
+    /**
+     * Longest run of consecutive own moves that matched the engine's #1. A
+     * whole-game rate hides burst assistance (a handful of engine moves at the
+     * critical moment); the streak is what shows it.
+     */
+    private function longestBestStreak(array $plies, string $side): int
+    {
+        $best = 0;
+        $run = 0;
+        foreach ($plies as $node) {
+            $move = $node['move'] ?? null;
+            if (!is_array($move) || ($move['color'] ?? '') !== $side) {
+                continue;
+            }
+            $run = ($move['isBest'] ?? false) === true ? $run + 1 : 0;
+            $best = max($best, $run);
+        }
+
+        return $best;
     }
 
     /**
