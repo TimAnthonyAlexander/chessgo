@@ -287,7 +287,50 @@ scalar float order (bit-exact eval):
 
 Deploy: `git pull` → `composer install --no-dev` → `php mason migrate:apply -y` →
 rebuild Go + zugzwang → `bun run build` (with `VITE_API_URL`) → restart the
-systemd units + php-fpm → `nginx -s reload`.
+systemd units + php-fpm → `nginx -s reload`. That is what `chessgo-deploy`
+(a function in `~/.zshrc`) runs.
+
+**The deploy is incremental.** Measured 2026-08-15 on the prod box (4-core amd64,
+prod services live): 3.1s when nothing changed, ~16s for a frontend change, ~22s
+for an engine change, 28.5s for `--full`. Of the 3.1s floor, 1.5s is the `git
+pull` round trip. Only a from-scratch C++ rebuild — a toolchain change or a fresh
+checkout — still costs ~88s, and that time is real compiler work, not waste:
+31 TUs of `-O3 -march=native -flto` (46.7s of CPU, ~24s wall at `-j4`) plus a
+14.4s whole-program LTO link. Each expensive step is gated on its own inputs — zugzwang on
+`make`'s dependency graph, the frontend on a hash of its sources, the book seed
+on `book.bin`, the browser net on `net.nnue`, composer on `composer.lock` — and
+**service restarts are gated on
+the built binary's hash**, which matters beyond speed: restarting `chessgo-hub`
+drops every live game, so a frontend-only deploy must not touch it. Gate state
+lives in `.deploy-stamps/` (gitignored). Run `chessgo-deploy --full` to force
+every step and restart everything — needed after changing a systemd unit, `.env`,
+or nginx, since no gate can see those.
+
+**The gates are content-addressed, never path-based.** "Did `frontend/` appear in
+the pull?" is the tempting cheap version and it is wrong twice over: it misses
+uncommitted edits made directly on the box (which is a normal state here — the
+working tree is not always clean), and it is a second, weaker copy of a
+dependency graph `make` already maintains correctly. Hashing inputs cannot be
+fooled by either. Keep it that way when adding a step.
+
+Two things make the incremental path safe, and both are load-bearing:
+`zugzwang/Makefile` tracks the toolchain in `.buildflags` (so flipping `CXX` or
+`ASSERT=1` still forces a full rebuild — that was the only thing the old
+`make clean` bought, at 39s per deploy), and `netweb`/`book_export` are real file
+targets rather than `.PHONY` (as phony targets they recompiled 12 TUs through LTO
+on every deploy). Verified: a clean build and an incremental one produce a
+byte-identical binary.
+
+**Raw compile speedups that were measured and rejected** (don't re-try these
+without new evidence): `-j` above `nproc` is a wash on 4 cores (34.6s unlimited
+vs 36.2s at `-j4`); a precompiled header for `vendor/httplib.h` — the single
+most expensive header, 7.0s on its own, and `serve.cpp` is the slowest TU at
+10.4s — recovers only 1.7s, because the cost is template instantiation rather
+than parsing, and it wants a 117 MB `.gch` rebuilt on every flag change. The one
+untested lever is dropping `-flto` (the 14.4s link): a no-LTO build measured the
+same wall-clock overall, but whether it costs engine strength could not be
+resolved here — fixed-depth runs contradicted each other between repetitions on
+a box with prod on 4 cores. That needs a quiet machine and an SPRT, not a guess.
 
 ### Critical prod gotchas
 
