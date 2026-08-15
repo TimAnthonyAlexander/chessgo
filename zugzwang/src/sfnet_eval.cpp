@@ -32,6 +32,7 @@
 
 #include "sfnet.h"
 #include "sfnet_internal.h"
+#include "sfnet_simd.h"
 #include "position.h"
 #include "nnue_features.h"
 #include "nnue_arch.h"
@@ -159,7 +160,11 @@ void build_accumulators(const Position& pos, const Net& net, Accumulators& acc) 
         for (const int idx : baseIdx) {
             if (idx < 0 || idx >= PsqDims) die("base feature index out of range");
             const std::int16_t* w = &net.weights[std::size_t(idx) * HalfDimensions];
+#if SFNET_USE_SIMD
+            simd::col_add_i16<HalfDimensions>(psq.accumulation, w);
+#else
             for (int j = 0; j < HalfDimensions; ++j) psq.accumulation[j] += w[j];
+#endif
             const std::int32_t* p = &net.psqt[std::size_t(idx) * PSQTBuckets];
             for (int k = 0; k < PSQTBuckets; ++k) psq.psqtAccumulation[k] += p[k];
         }
@@ -172,7 +177,11 @@ void build_accumulators(const Position& pos, const Net& net, Accumulators& acc) 
             const int idx = v - NNUE::PsqSize;
             if (idx < 0 || idx >= ThreatDims) die("threat feature index out of range");
             const std::int8_t* w = &net.threatWeights[std::size_t(idx) * HalfDimensions];
+#if SFNET_USE_SIMD
+            simd::col_add_i8widen_i16<HalfDimensions>(thr.accumulation, w);
+#else
             for (int j = 0; j < HalfDimensions; ++j) thr.accumulation[j] += w[j];
+#endif
             const std::int32_t* p = &net.threatPsqt[std::size_t(idx) * PSQTBuckets];
             for (int k = 0; k < PSQTBuckets; ++k) thr.psqtAccumulation[k] += p[k];
         }
@@ -196,6 +205,9 @@ EvalPair forward_pass(const HalfAcc psq[2], const HalfAcc thr[2], const Color pe
     for (int p = 0; p < 2; ++p) {
         const HalfAcc& ps = psq[persp[p]];
         const HalfAcc& th = thr[persp[p]];
+#if SFNET_USE_SIMD
+        simd::pairwise_combine_sf(ps.accumulation, th.accumulation, ft + Half * p, Half);
+#else
         const int offset = Half * p;
         for (int j = 0; j < Half; ++j) {
             std::int32_t s0 = std::int32_t(ps.accumulation[j]) + std::int32_t(th.accumulation[j]);
@@ -204,6 +216,7 @@ EvalPair forward_pass(const HalfAcc psq[2], const HalfAcc thr[2], const Color pe
             s1 = clampi(s1, 0, 255);
             ft[offset + j] = std::uint8_t((unsigned(s0) * unsigned(s1)) / 512u);
         }
+#endif
     }
 
     // psqt: own-minus-enemy for both feature sets, averaged.
@@ -218,10 +231,14 @@ EvalPair forward_pass(const HalfAcc psq[2], const HalfAcc thr[2], const Color pe
 
     std::int32_t fc0[Fc0Out];
     for (int i = 0; i < Fc0Out; ++i) {
-        std::int32_t sum = L.fc0b[i];
         const std::int8_t* w = &L.fc0w[i * HalfDimensions];
+#if SFNET_USE_SIMD
+        fc0[i] = L.fc0b[i] + simd::dot_u8i8_sf(ft, w, HalfDimensions);
+#else
+        std::int32_t sum = L.fc0b[i];
         for (int j = 0; j < HalfDimensions; ++j) sum += std::int32_t(w[j]) * std::int32_t(ft[j]);
         fc0[i] = sum;
+#endif
     }
 
     // sqr_clipped_relu.h: min(127, (int64)fc0[i]*fc0[i] >> (2*WeightScaleBits+7)).
@@ -239,17 +256,25 @@ EvalPair forward_pass(const HalfAcc psq[2], const HalfAcc thr[2], const Color pe
 
     std::int32_t fc1[L3];
     for (int o = 0; o < L3; ++o) {
-        std::int32_t sum = L.fc1b[o];
         const std::int8_t* w = &L.fc1w[o * Fc1InPadded];
+#if SFNET_USE_SIMD
+        fc1[o] = L.fc1b[o] + simd::dot_u8i8_sf(in1, w, Fc1InPadded);
+#else
+        std::int32_t sum = L.fc1b[o];
         for (int i = 0; i < Fc1InPadded; ++i) sum += std::int32_t(w[i]) * std::int32_t(in1[i]);
         fc1[o] = sum;
+#endif
     }
 
     std::uint8_t a1[L3];
     for (int o = 0; o < L3; ++o) a1[o] = std::uint8_t(clampi(fc1[o] >> WeightScaleBits, 0, 127));
 
+#if SFNET_USE_SIMD
+    std::int32_t fc2 = L.fc2b[0] + simd::dot_u8i8_sf(a1, L.fc2w, Fc2In);
+#else
     std::int32_t fc2 = L.fc2b[0];
     for (int i = 0; i < Fc2In; ++i) fc2 += std::int32_t(L.fc2w[i]) * std::int32_t(a1[i]);
+#endif
 
     // nnue_architecture.h propagate(): fwdOut = fc0[FC_0_OUTPUTS] * (600*OutputScale) /
     // (127 * (1<<WeightScaleBits)) = fc0[15] * 9600 / 8128, plain int32 arithmetic (one

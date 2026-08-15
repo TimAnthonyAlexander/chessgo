@@ -20,6 +20,7 @@
 // ours).
 
 #include "sfnet_internal.h"
+#include "sfnet_simd.h"
 #include "nnue_features.h"
 #include "nnue_arch.h"
 #include "position.h"
@@ -33,6 +34,48 @@
 
 namespace SFNet {
 
+namespace {
+
+// SFNETPREFETCH — software-prefetch the NEXT feature's weight column while the
+// arithmetic on the CURRENT one runs, in every loop that streams through
+// net.weights (46 MB) or net.threatWeights (82 MB) — both far larger than any
+// cache, so column touches here are cold-cache-miss-bound the same way our own
+// net's apply_diff is (see nnue_accumulator.cpp's APPLYPREFETCH, "measured at
+// ~26% of node self-time... memory-bandwidth-bound"). Wave 6's own `sample`
+// profile on this machine shows the SAME shape: forward_pass (compute-bound,
+// small cache-resident buffers) dropped ~37% after SIMD, but
+// AccStack::delta_threat_apply (streaming the 82 MB array) did not shrink
+// proportionally — consistent with it being latency/bandwidth-bound rather than
+// ALU-bound, which is exactly the case a prefetch hint (not more vector width)
+// addresses.
+//
+// Mirrors apply_prefetch_enabled()'s exact arch-gated convention (nnue_accumulator.cpp):
+// the hint is x86-tuned (these column indices are feature-scattered, not a stream the
+// HW prefetcher already covers); default ON amd64, default OFF arm64 (unproven benefit
+// there — this machine can only measure arm64). SFNETPREFETCH=1/0 forces either arch.
+bool sfnet_prefetch_enabled() {
+    static const bool on = [] {
+        const char* e = getenv("SFNETPREFETCH");
+        if (e) return e[0] == '1';
+#if defined(__aarch64__) || defined(__ARM_NEON)
+        return false;   // arm64: unproven, default OFF
+#else
+        return true;    // amd64/x86: mirrors APPLYPREFETCH's shipped amd64 win
+#endif
+    }();
+    return on;
+}
+
+// Bit-exactness: __builtin_prefetch is a pure cache-occupancy hint — it never touches a
+// register or a value the algorithm reads, so its presence or absence cannot change any
+// accumulator's contents. Same argument as apply_diff's APPLYPREFETCH block.
+inline void prefetch_col(const void* p) {
+    __builtin_prefetch(p, /*rw=*/0, /*locality=*/3);
+    __builtin_prefetch(reinterpret_cast<const char*>(p) + 64, 0, 3);
+}
+
+}  // namespace
+
 AccStack::AccStack() : slots_(NumSlots) {}
 
 // ---- full rebuilds --------------------------------------------------------------
@@ -45,10 +88,20 @@ void AccStack::build_base(HalfAcc& h, const Position& pos, Color persp) const {
     const BaseTables& T = base_tables();
     std::vector<int> idx;
     base_indices(T, pos, persp, idx);
-    for (const int i : idx) {
+    const bool pf = sfnet_prefetch_enabled();
+    for (std::size_t n = 0; n < idx.size(); ++n) {
+        const int i = idx[n];
         if (i < 0 || i >= PsqDims) die("base rebuild index out of range");
+        if (pf && n + 1 < idx.size()) {
+            const int ni = idx[n + 1];
+            if (ni >= 0 && ni < PsqDims) prefetch_col(&net.weights[std::size_t(ni) * HalfDimensions]);
+        }
         const std::int16_t* w = &net.weights[std::size_t(i) * HalfDimensions];
+#if SFNET_USE_SIMD
+        simd::col_add_i16<HalfDimensions>(h.accumulation, w);
+#else
         for (int j = 0; j < HalfDimensions; ++j) h.accumulation[j] += w[j];
+#endif
         const std::int32_t* p = &net.psqt[std::size_t(i) * PSQTBuckets];
         for (int k = 0; k < PSQTBuckets; ++k) h.psqtAccumulation[k] += p[k];
     }
@@ -61,11 +114,21 @@ void AccStack::build_threat(HalfAcc& h, const Position& pos, Color persp) const 
 
     NNUE::Features feat;
     NNUE::active_features(pos, persp, feat);
-    for (const int v : feat.threat) {
-        const int idx = v - NNUE::PsqSize;
+    const bool pf = sfnet_prefetch_enabled();
+    const std::vector<int>& thr = feat.threat;
+    for (std::size_t n = 0; n < thr.size(); ++n) {
+        const int idx = thr[n] - NNUE::PsqSize;
         if (idx < 0 || idx >= ThreatDims) die("threat rebuild index out of range");
+        if (pf && n + 1 < thr.size()) {
+            const int ni = thr[n + 1] - NNUE::PsqSize;
+            if (ni >= 0 && ni < ThreatDims) prefetch_col(&net.threatWeights[std::size_t(ni) * HalfDimensions]);
+        }
         const std::int8_t* w = &net.threatWeights[std::size_t(idx) * HalfDimensions];
+#if SFNET_USE_SIMD
+        simd::col_add_i8widen_i16<HalfDimensions>(h.accumulation, w);
+#else
         for (int j = 0; j < HalfDimensions; ++j) h.accumulation[j] += w[j];
+#endif
         const std::int32_t* p = &net.threatPsqt[std::size_t(idx) * PSQTBuckets];
         for (int k = 0; k < PSQTBuckets; ++k) h.psqtAccumulation[k] += p[k];
     }
@@ -99,7 +162,11 @@ void AccStack::delta_base(HalfAcc& dst, const HalfAcc& src, const NNUE::BoardSna
             const int idx = make_base_index(T, persp, s, op, ksq);
             if (idx < 0 || idx >= PsqDims) die("base delta index out of range (sub)");
             const std::int16_t* w = &net.weights[std::size_t(idx) * HalfDimensions];
+#if SFNET_USE_SIMD
+            simd::col_sub_i16<HalfDimensions>(dst.accumulation, w);
+#else
             for (int j = 0; j < HalfDimensions; ++j) dst.accumulation[j] -= w[j];
+#endif
             const std::int32_t* p = &net.psqt[std::size_t(idx) * PSQTBuckets];
             for (int k = 0; k < PSQTBuckets; ++k) dst.psqtAccumulation[k] -= p[k];
         }
@@ -107,7 +174,11 @@ void AccStack::delta_base(HalfAcc& dst, const HalfAcc& src, const NNUE::BoardSna
             const int idx = make_base_index(T, persp, s, np, ksq);
             if (idx < 0 || idx >= PsqDims) die("base delta index out of range (add)");
             const std::int16_t* w = &net.weights[std::size_t(idx) * HalfDimensions];
+#if SFNET_USE_SIMD
+            simd::col_add_i16<HalfDimensions>(dst.accumulation, w);
+#else
             for (int j = 0; j < HalfDimensions; ++j) dst.accumulation[j] += w[j];
+#endif
             const std::int32_t* p = &net.psqt[std::size_t(idx) * PSQTBuckets];
             for (int k = 0; k < PSQTBuckets; ++k) dst.psqtAccumulation[k] += p[k];
         }
@@ -124,19 +195,42 @@ void AccStack::delta_threat_apply(HalfAcc& dst, const HalfAcc& src,
                                   const std::vector<int>& sub, const std::vector<int>& add) const {
     dst = src;
     const Net& net = SFNet::net();
-    for (const int v : sub) {
-        const int idx = v - NNUE::PsqSize;
+    const bool pf = sfnet_prefetch_enabled();
+
+    auto rebased = [](int v) { return v - NNUE::PsqSize; };
+    for (std::size_t n = 0; n < sub.size(); ++n) {
+        const int idx = rebased(sub[n]);
         if (idx < 0 || idx >= ThreatDims) die("threat delta index out of range (sub)");
+        if (pf) {
+            // Lookahead crosses into `add` once `sub` is exhausted, so the LAST sub
+            // column's arithmetic overlaps the FIRST add column's fetch too.
+            int ni = -1;
+            if (n + 1 < sub.size()) ni = rebased(sub[n + 1]);
+            else if (!add.empty())  ni = rebased(add[0]);
+            if (ni >= 0 && ni < ThreatDims) prefetch_col(&net.threatWeights[std::size_t(ni) * HalfDimensions]);
+        }
         const std::int8_t* w = &net.threatWeights[std::size_t(idx) * HalfDimensions];
+#if SFNET_USE_SIMD
+        simd::col_sub_i8widen_i16<HalfDimensions>(dst.accumulation, w);
+#else
         for (int j = 0; j < HalfDimensions; ++j) dst.accumulation[j] -= w[j];
+#endif
         const std::int32_t* p = &net.threatPsqt[std::size_t(idx) * PSQTBuckets];
         for (int k = 0; k < PSQTBuckets; ++k) dst.psqtAccumulation[k] -= p[k];
     }
-    for (const int v : add) {
-        const int idx = v - NNUE::PsqSize;
+    for (std::size_t n = 0; n < add.size(); ++n) {
+        const int idx = rebased(add[n]);
         if (idx < 0 || idx >= ThreatDims) die("threat delta index out of range (add)");
+        if (pf && n + 1 < add.size()) {
+            const int ni = rebased(add[n + 1]);
+            if (ni >= 0 && ni < ThreatDims) prefetch_col(&net.threatWeights[std::size_t(ni) * HalfDimensions]);
+        }
         const std::int8_t* w = &net.threatWeights[std::size_t(idx) * HalfDimensions];
+#if SFNET_USE_SIMD
+        simd::col_add_i8widen_i16<HalfDimensions>(dst.accumulation, w);
+#else
         for (int j = 0; j < HalfDimensions; ++j) dst.accumulation[j] += w[j];
+#endif
         const std::int32_t* p = &net.threatPsqt[std::size_t(idx) * PSQTBuckets];
         for (int k = 0; k < PSQTBuckets; ++k) dst.psqtAccumulation[k] += p[k];
     }
