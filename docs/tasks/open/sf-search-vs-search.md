@@ -19,6 +19,21 @@ already ships SF's razoring constants pre-scaled by exactly it (`485 → 233`,
 two agree. Anything below that contradicts `razorQuad`'s constants is an arithmetic
 error, not a discovery.
 
+> **DOUBT RAISED — do not act on the table below without settling this first.**
+> Our `RfpTtHitCoeff` defaults to **23**, and SF's RFP is `futilityMult = 76 - 23*!ttHit`.
+> That 23 is identical and UNSCALED, and our `rfpMargin = 84` sits next to SF's 76 — so
+> our RFP margins look like they were ported at SF's RAW scale, never converted by
+> 0.481. SPSA then moved rfpMargin 75→84, *away* from where a 0.48 rescale would put it
+> (~37), which is what you would expect if 84 is already near-optimal for our eval.
+> If that reading is right, the "we are 2.3x wider" and "2-5x wider" rows below are
+> wrong, and the k=0.481 lens does not apply to margins at all — 0.481 was fitted on
+> eval LEVELS, and a margin's correct scale depends on the eval's spread in the regime
+> where it bites, which is not the same quantity.
+> Being settled empirically instead of by more source-reading: an SPRT of
+> `RfpMargin=60` vs `84` on our own engine, same binary both sides (the margins are
+> UCI-settable, so no rebuild). If narrowing wins, the table is right; if it washes or
+> loses, SPSA already found the optimum and the table is an artifact of a bad conversion.
+
 First pass, **unverified beyond a read of both sources** — confirm each before acting:
 
 | lever | ours | SF18 | in our cp | note |
