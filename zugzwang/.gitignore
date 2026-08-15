@@ -66,3 +66,4 @@ test/sfnet_acc_test
 zugzwang_sfnet
 objs_sfnet/
 sfnet.nnue
+test/sfnet_sparsity_probe

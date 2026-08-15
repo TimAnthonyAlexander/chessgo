@@ -40,6 +40,8 @@
 
 #include <cstdint>
 #include <cstddef>
+#include <cstring>
+#include <vector>
 
 // SFNET_USE_SIMD — whether the CALL SITES in sfnet_eval.cpp/sfnet_accumulator.cpp
 // route through simd:: at all, as opposed to keeping Wave 5's original inline loops
@@ -666,6 +668,232 @@ inline std::int32_t dot_u8i8_sf(const std::uint8_t* a, const std::int8_t* w, int
 }
 
 #endif
+
+// =====================================================================================
+// Wave 8 -- fc_0 block-sparse input, ported from SF's AffineTransformSparseInput
+// (~/sf18-arm/src/nnue/layers/affine_transform_sparse_input.h). Read docs/sfnet-wave8.md
+// for the measurement that motivates this: over test/sfnet_corpus.epd, forward_pass's
+// `ft[HalfDimensions]` activation is 82.2% zero PER BYTE (mean), and 56.0% of its
+// 4-byte chunks are ALL-zero (mean nonzero-chunk fraction 0.4395) -- so a chunk-driven
+// dot that skips all-zero chunks does roughly 2.28x less work than the dense loop, for
+// fc_0 specifically (fc_1/fc_2 are NOT touched -- see the comment block below).
+//
+// ONLY fc_0 gets this treatment, matching SF's own net: AffineTransformSparseInput
+// requires OutputDimensions % 16 == 0 (SF's static_assert), and Fc0Out (=16, sfnet.h)
+// is the only layer in this stack that satisfies it AND has a genuinely sparse input
+// (fc_1/fc_2's inputs are clipped_relu/sqr_clipped_relu outputs, not the raw pairwise-
+// combine activation, and SF's own net does not apply sparse-input to them either).
+//
+// Two load-time-vs-runtime pieces, mirroring the FT permutation above:
+//   1. `fc0_permute_weights_inplace()` -- ONE-TIME, at load (sfnet_load.cpp): reindexes
+//      each stack's `fc0w` from the file's natural row-major (output-major) order into
+//      SF's `get_weight_index_scrambled()` layout, so that for a given 4-byte INPUT
+//      chunk, all 16 outputs' 4 weight bytes for that chunk are contiguous (64 bytes =
+//      exactly one AVX512 register or 4 NEON registers -- see fc0_sparse_forward below).
+//      Ported verbatim from the header above (`get_weight_index_scrambled`, ChunkSize=4,
+//      the SSSE3/NEON8-capable branch -- this codebase's SIMD tiers all qualify).
+//   2. `fc0_sparse_forward()` -- every search call: scans `ft[]` for nonzero 4-byte
+//      chunks (`fc0_find_nnz`, scalar -- see the note on why below) and, for each one,
+//      broadcasts its 4 bytes and dots them against that chunk's scrambled weight block
+//      for ALL 16 outputs via ONE widening dot instruction (AVX512VNNI's vpdpbusd,
+//      NEON's vdotq_s32, or AVX2's maddubs+madd pair) -- never touching a zero chunk's
+//      weights at all. Ported from `propagate()`'s VNNI branch (same file, lines
+//      ~311-337) minus the 3-way-unrolled dependency-chain split (SF's own comment
+//      calls that a latency-hiding trick, not a correctness requirement, and this port
+//      keeps a single accumulator per output group for a first, simpler, gate-passable
+//      version -- flagged as a possible follow-up, not attempted this wave).
+//
+// find_nnz itself is DELIBERATELY scalar here, not SF's SIMD/lookup-table version
+// (affine_transform_sparse_input.h:80-169, `_mm512_maskz_compress_epi16` / the portable
+// 256-entry `Lookup.offset_indices` LUT): find_nnz only decides WHICH chunks to visit,
+// so a scalar bug there would silently DROP a genuinely-nonzero chunk's contribution --
+// unlike every other kernel in this file, its correctness is load-bearing for the
+// *value*, not just the speed, of the result. A plain "does this int32-sized chunk
+// equal zero" scan is trivially and obviously correct, and its own cost (256 compares
+// over `HalfDimensions=1024`) is small next to what it's skipping in fc_0's dot. If a
+// future wave wants the SIMD find_nnz too, port it against the same 560/560 gate this
+// wave already proves the scalar version against, not on faith.
+//
+// Bit-exactness argument for the dot itself: the accumulation order changes (chunk-
+// major/output-simultaneous instead of output-major/input-sequential), but int32
+// addition is associative and commutative on the values it actually sums (no
+// saturation ever fires, by the same magnitude bound `dot_u8i8_sf`'s comment already
+// establishes: ft in [0,127], weights in [-128,127], each product's magnitude <=16256,
+// and int32 accumulation of up to 256 such products per output is nowhere near
+// overflow) -- summing the SAME set of (input-times-weight) terms in a different order
+// yields the identical int32 total. Zero chunks contribute exactly 0 to every output by
+// construction (every one of their 4 input bytes is 0), so skipping them changes
+// nothing about the sum. Gated end to end by the SAME 560/560 sfnet_eval_test diff and
+// 11,089,304-node sfnet_acc_test drift check every other sfnet gate uses -- this
+// argument is why it was expected to pass, not a substitute for running it.
+// =====================================================================================
+
+#if defined(SFNET_FC0_SPARSE)
+
+constexpr int kFc0ChunkSize = 4;
+
+// SF's get_weight_index_scrambled (affine_transform_sparse_input.h:210-213), transcribed
+// verbatim: i = o*paddedIn + d (the file's natural row-major order) maps to
+// c*outDims*ChunkSize + o*ChunkSize + b, where c=d/ChunkSize (chunk index) and
+// b=d%ChunkSize (byte within the chunk) -- i.e. chunk-major, then output, then byte.
+inline int fc0_scrambled_index(int i, int outDims, int paddedIn) {
+    const int cs = kFc0ChunkSize;
+    return (i / cs) % (paddedIn / cs) * outDims * cs + i / paddedIn * cs + i % cs;
+}
+
+// Self-check: the scramble must be a bijection over [0, outDims*paddedIn) -- same
+// "prove it's a genuine permutation before trusting it" gate as Wave 7's
+// ft_perm_order_self_check, run at load time before any real weight is touched.
+inline bool fc0_scramble_self_check(int outDims, int paddedIn) {
+    const std::size_t total = std::size_t(outDims) * std::size_t(paddedIn);
+    std::vector<bool> seen(total, false);
+    for (int i = 0; i < int(total); ++i) {
+        const int s = fc0_scrambled_index(i, outDims, paddedIn);
+        if (s < 0 || std::size_t(s) >= total || seen[std::size_t(s)]) return false;
+        seen[std::size_t(s)] = true;
+    }
+    return true;
+}
+
+// Applies the scramble to one stack's fc0w, in place, once, at load.
+inline void fc0_permute_weights_inplace(std::int8_t* w, int outDims, int paddedIn) {
+    const std::size_t total = std::size_t(outDims) * std::size_t(paddedIn);
+    std::vector<std::int8_t> buf(total);
+    for (int i = 0; i < int(total); ++i)
+        buf[std::size_t(fc0_scrambled_index(i, outDims, paddedIn))] = w[i];
+    std::memcpy(w, buf.data(), buf.size());
+}
+
+// Scalar find_nnz -- see the block comment above for why this stays scalar. Treats
+// ft[] as HalfDim/4 chunks of 4 bytes each; a chunk is "nonzero" if ANY byte in it is.
+// Returns the count; fills nnzOut[0..count) with chunk indices (ascending).
+template <int HalfDim>
+inline int fc0_find_nnz(const std::uint8_t* ft, int* nnzOut) {
+    int count = 0;
+    for (int c = 0; c < HalfDim / 4; ++c) {
+        std::uint32_t v;
+        std::memcpy(&v, ft + c * 4, 4);
+        if (v != 0) nnzOut[count++] = c;
+    }
+    return count;
+}
+
+// fc0_sparse_forward -- Fc0Out is fixed at 16 by construction (this codebase's own
+// architecture, sfnet.h); callers assert that at the call site, since sfnet.h's
+// constants aren't visible from this standalone header. `wScrambled` must already be
+// permuted by fc0_permute_weights_inplace with outDims=16, paddedIn=HalfDim. `bias`
+// and `out` are both 16-wide int32.
+#if defined(__AVX512VNNI__) && defined(SFNET_X86_SIMD)
+#include <immintrin.h>
+
+template <int HalfDim>
+inline void fc0_sparse_forward(const std::uint8_t* ft, const std::int8_t* wScrambled,
+                                const std::int32_t* bias, std::int32_t* out) {
+    __m512i acc = _mm512_loadu_si512(reinterpret_cast<const void*>(bias));  // 16 int32 lanes
+    int nnz[HalfDim / 4];
+    const int count = fc0_find_nnz<HalfDim>(ft, nnz);
+    for (int k = 0; k < count; ++k) {
+        const int c = nnz[k];
+        std::int32_t in32;
+        std::memcpy(&in32, ft + c * 4, 4);
+        const __m512i inVec = _mm512_set1_epi32(in32);  // 16x replica of the 4-byte chunk
+        const __m512i wVec =
+            _mm512_loadu_si512(reinterpret_cast<const void*>(wScrambled + std::size_t(c) * 64));
+        acc = _mm512_dpbusd_epi32(acc, inVec, wVec);  // all 16 outputs, one instruction
+    }
+    _mm512_storeu_si512(reinterpret_cast<void*>(out), acc);
+}
+
+#elif defined(__AVX2__) && defined(SFNET_X86_SIMD)
+#include <immintrin.h>
+
+// No VNNI: two 8-wide groups (outputs 0-7, 8-15) per chunk, via the same
+// maddubs+madd combo dot_u8i8_sf's AVX2 tier already uses and already proves exact
+// for this net's magnitude bounds (see that block's comment).
+template <int HalfDim>
+inline void fc0_sparse_forward(const std::uint8_t* ft, const std::int8_t* wScrambled,
+                                const std::int32_t* bias, std::int32_t* out) {
+    __m256i acc0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(bias));      // outputs 0-7
+    __m256i acc1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(bias + 8));  // outputs 8-15
+    const __m256i ones16 = _mm256_set1_epi16(1);
+    int nnz[HalfDim / 4];
+    const int count = fc0_find_nnz<HalfDim>(ft, nnz);
+    for (int k = 0; k < count; ++k) {
+        const int c = nnz[k];
+        std::int32_t in32;
+        std::memcpy(&in32, ft + c * 4, 4);
+        const __m256i inVec = _mm256_set1_epi32(in32);
+        const std::int8_t* block = wScrambled + std::size_t(c) * 64;
+        const __m256i w0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(block));
+        const __m256i w1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(block + 32));
+        acc0 = _mm256_add_epi32(acc0, _mm256_madd_epi16(_mm256_maddubs_epi16(inVec, w0), ones16));
+        acc1 = _mm256_add_epi32(acc1, _mm256_madd_epi16(_mm256_maddubs_epi16(inVec, w1), ones16));
+    }
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(out), acc0);
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(out + 8), acc1);
+}
+
+#elif defined(__ARM_FEATURE_DOTPROD)
+#include <arm_neon.h>
+
+// Four 4-wide groups (vdotq_s32 -- s8 x s8 -> s32, 4 lanes) per chunk. ft is reinterpreted
+// as signed int8 (top bit never set, values in [0,127] -- identical trick and proof to
+// dot_u8i8_sf's own ARM_FEATURE_DOTPROD tier above).
+template <int HalfDim>
+inline void fc0_sparse_forward(const std::uint8_t* ft, const std::int8_t* wScrambled,
+                                const std::int32_t* bias, std::int32_t* out) {
+    int32x4_t acc0 = vld1q_s32(bias);
+    int32x4_t acc1 = vld1q_s32(bias + 4);
+    int32x4_t acc2 = vld1q_s32(bias + 8);
+    int32x4_t acc3 = vld1q_s32(bias + 12);
+    int nnz[HalfDim / 4];
+    const int count = fc0_find_nnz<HalfDim>(ft, nnz);
+    for (int k = 0; k < count; ++k) {
+        const int c = nnz[k];
+        std::uint32_t in32;
+        std::memcpy(&in32, ft + c * 4, 4);
+        const int8x16_t inVec = vreinterpretq_s8_u32(vdupq_n_u32(in32));  // 4x replica
+        const std::int8_t* block = wScrambled + std::size_t(c) * 64;
+        const int8x16_t w0 = vld1q_s8(block);
+        const int8x16_t w1 = vld1q_s8(block + 16);
+        const int8x16_t w2 = vld1q_s8(block + 32);
+        const int8x16_t w3 = vld1q_s8(block + 48);
+        acc0 = vdotq_s32(acc0, inVec, w0);
+        acc1 = vdotq_s32(acc1, inVec, w1);
+        acc2 = vdotq_s32(acc2, inVec, w2);
+        acc3 = vdotq_s32(acc3, inVec, w3);
+    }
+    vst1q_s32(out, acc0);
+    vst1q_s32(out + 4, acc1);
+    vst1q_s32(out + 8, acc2);
+    vst1q_s32(out + 12, acc3);
+}
+
+#else
+
+// Scalar fallback -- still algorithmically sparse (skips zero chunks entirely), just
+// no widening-dot instruction. Correct on every architecture, including one with none
+// of the SIMD feature macros above defined.
+template <int HalfDim>
+inline void fc0_sparse_forward(const std::uint8_t* ft, const std::int8_t* wScrambled,
+                                const std::int32_t* bias, std::int32_t* out) {
+    for (int o = 0; o < 16; ++o) out[o] = bias[o];
+    int nnz[HalfDim / 4];
+    const int count = fc0_find_nnz<HalfDim>(ft, nnz);
+    for (int k = 0; k < count; ++k) {
+        const int c = nnz[k];
+        const std::int8_t* block = wScrambled + std::size_t(c) * 64;
+        const std::int32_t in0 = ft[c * 4], in1 = ft[c * 4 + 1], in2 = ft[c * 4 + 2], in3 = ft[c * 4 + 3];
+        for (int o = 0; o < 16; ++o) {
+            out[o] += in0 * std::int32_t(block[o * 4 + 0]) + in1 * std::int32_t(block[o * 4 + 1])
+                    + in2 * std::int32_t(block[o * 4 + 2]) + in3 * std::int32_t(block[o * 4 + 3]);
+        }
+    }
+}
+
+#endif  // fc0_sparse_forward tiers
+
+#endif  // SFNET_FC0_SPARSE
 
 }  // namespace simd
 }  // namespace SFNet

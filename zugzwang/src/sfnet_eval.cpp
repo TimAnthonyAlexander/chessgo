@@ -49,6 +49,11 @@
 
 namespace SFNet {
 
+// ---- Wave 8 sparsity probe globals (declared in sfnet_internal.h) ----
+bool g_sfnet_probe_sparsity = false;
+int g_sfnet_last_zero_count = -1;
+int g_sfnet_last_nonzero_chunks4 = -1;
+
 // ---- shared fatal-error helper (declared in sfnet_internal.h) ----
 [[noreturn]] void die(const char* what) {
     std::fprintf(stderr, "SFNet: %s\n", what);
@@ -219,6 +224,21 @@ EvalPair forward_pass(const HalfAcc psq[2], const HalfAcc thr[2], const Color pe
 #endif
     }
 
+    // Wave 8: sparsity probe — read-only, does not touch ft[] or any downstream value.
+    if (g_sfnet_probe_sparsity) {
+        int zeros = 0;
+        for (int j = 0; j < HalfDimensions; ++j)
+            if (ft[j] == 0) ++zeros;
+        g_sfnet_last_zero_count = zeros;
+
+        int nonzeroChunks = 0;
+        for (int c = 0; c < HalfDimensions / 4; ++c) {
+            const int base = c * 4;
+            if (ft[base] | ft[base + 1] | ft[base + 2] | ft[base + 3]) ++nonzeroChunks;
+        }
+        g_sfnet_last_nonzero_chunks4 = nonzeroChunks;
+    }
+
     // psqt: own-minus-enemy for both feature sets, averaged.
     std::int32_t psqtOut = psq[persp[0]].psqtAccumulation[bucket]
                           - psq[persp[1]].psqtAccumulation[bucket];
@@ -230,6 +250,13 @@ EvalPair forward_pass(const HalfAcc psq[2], const HalfAcc thr[2], const Color pe
     const LayerStack& L = net.stacks[bucket];
 
     std::int32_t fc0[Fc0Out];
+#if defined(SFNET_FC0_SPARSE)
+    // Wave 8: block-sparse fc_0 -- see sfnet_simd.h's block comment and
+    // docs/sfnet-wave8.md. Fixed at Fc0Out==16 by construction; the kernels above assume
+    // it, so nail that assumption down here rather than leave it implicit.
+    static_assert(Fc0Out == 16, "fc0_sparse_forward's SIMD tiers assume exactly 16 outputs");
+    simd::fc0_sparse_forward<HalfDimensions>(ft, L.fc0w, L.fc0b, fc0);
+#else
     for (int i = 0; i < Fc0Out; ++i) {
         const std::int8_t* w = &L.fc0w[i * HalfDimensions];
 #if SFNET_USE_SIMD
@@ -240,6 +267,7 @@ EvalPair forward_pass(const HalfAcc psq[2], const HalfAcc thr[2], const Color pe
         fc0[i] = sum;
 #endif
     }
+#endif  // SFNET_FC0_SPARSE
 
     // sqr_clipped_relu.h: min(127, (int64)fc0[i]*fc0[i] >> (2*WeightScaleBits+7)).
     // clipped_relu.h:     clamp(fc0[i] >> WeightScaleBits, 0, 127).

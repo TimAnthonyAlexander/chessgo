@@ -116,6 +116,18 @@ sfnet_eval_test: test/sfnet_eval_test.cpp src/sfnet_load.cpp src/sfnet_eval.cpp 
        src/nnue_eval.cpp src/nnue_accumulator.cpp
 	$(CXX) $(CXXFLAGS) -Isrc -o test/sfnet_eval_test $^
 
+# sfnet_sparsity_probe: Wave 8 first step — measures how many of forward_pass's 1024
+# ft[] activations are exactly zero over test/sfnet_corpus.epd, the number that decides
+# whether SF's AffineTransformSparseInput fc_0 (find_nnz + scrambled weight layout) is
+# worth porting here at all. Read-only instrumentation (SFNet::g_sfnet_probe_sparsity),
+# same link set as sfnet_eval_test since it drives the same evaluate_raw() path.
+#   Usage: make sfnet_sparsity_probe && ./test/sfnet_sparsity_probe <net.nnue> <fens.epd>
+sfnet_sparsity_probe: test/sfnet_sparsity_probe.cpp src/sfnet_load.cpp src/sfnet_eval.cpp \
+       src/position.cpp src/bitboard.cpp src/zobrist.cpp src/movegen.cpp src/rules.cpp \
+       src/weakening.cpp src/antichess.cpp src/nnue_net.cpp src/nnue_features.cpp \
+       src/nnue_eval.cpp src/nnue_accumulator.cpp
+	$(CXX) $(CXXFLAGS) -Isrc -o test/sfnet_sparsity_probe $^
+
 # sfnet_acc_test: Wave 4 gate for the SF-net experiment backend — the incremental
 # accumulator (src/sfnet_accumulator.cpp). Walks a real do_move/undo_move tree off the
 # 560-FEN corpus plus targeted edge-case FENs (castling/en passant/promotion/mirror-
@@ -163,11 +175,11 @@ $(SFNET_OBJDIR)/%.o: src/%.cpp
 clean:
 	rm -f $(TARGET) $(SFNET_TARGET) perft_test $(OBJ) $(DEP) tools/netweb_writer \
 	      test/nnue_web_format_test test/secretqueen_test tools/book_export tools/tbdefend \
-	      test/sfnet_load_test test/sfnet_eval_test test/sfnet_acc_test
+	      test/sfnet_load_test test/sfnet_eval_test test/sfnet_acc_test test/sfnet_sparsity_probe
 	rm -rf $(SFNET_OBJDIR)
 
 -include $(DEP)
 -include $(SFNET_DEP)
 
 .PHONY: all clean perft netweb nnue_web_format_test secretqueen_test book_export tbdefend \
-        sfnet_load_test sfnet_eval_test sfnet_acc_test sfnet
+        sfnet_load_test sfnet_eval_test sfnet_acc_test sfnet sfnet_sparsity_probe

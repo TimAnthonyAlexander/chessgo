@@ -60,4 +60,22 @@ EvalPair forward_pass(const HalfAcc psq[2], const HalfAcc thr[2], const Color pe
 // (incremental) so there is exactly one implementation of the blend too.
 int post_process(EvalPair ev, const Position& pos);
 
+// ---- Wave 8: fc_0 sparsity probe (docs/sfnet-wave8.md) ----------------------------
+// Read-only instrumentation of forward_pass's `ft[HalfDimensions]` activation vector —
+// how many of the 1024 uint8 lanes are exactly zero after the pairwise clamp, which is
+// the number that decides whether SF's AffineTransformSparseInput fc_0 (find_nnz +
+// scrambled weight layout) could pay off here at all. Off by default (single bool
+// check per forward_pass call, zero cost when false, and never changes ft[] or the
+// returned EvalPair — the arithmetic is untouched either way, so this cannot affect
+// any bit-exactness gate). g_sfnet_last_zero_count is overwritten by every forward_pass
+// call while the probe is on; test/sfnet_sparsity_probe.cpp reads it right after each
+// evaluate_raw() call, single-threaded, before the next call can clobber it.
+extern bool g_sfnet_probe_sparsity;
+extern int g_sfnet_last_zero_count;
+// Same probe, but at SF's own ChunkSize=4 granularity (a 4-byte group counts as
+// "nonzero" if ANY of its 4 bytes is nonzero) — the number that actually predicts
+// AffineTransformSparseInput's speedup, since find_nnz skips whole 4-byte chunks, not
+// individual bytes. HalfDimensions/4 = 256 chunks.
+extern int g_sfnet_last_nonzero_chunks4;
+
 }  // namespace SFNet

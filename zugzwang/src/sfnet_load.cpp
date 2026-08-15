@@ -228,6 +228,18 @@ bool load(const char* path) {
     simd::ft_permute(g_net.threatWeights.data(), g_net.threatWeights.size(), simd::kFtPermOrder);
 #endif
 
+    // ---- Wave 8: scramble fc_0's weights for the block-sparse dot (docs/sfnet-wave8.md) ----
+    // Same "self-check the permutation before trusting it" convention as the FT permute
+    // above. Only fc_0 (Fc0Out=16, HalfDimensions=1024 -- already a multiple of
+    // kFc0ChunkSize=4, so PaddedInputDimensions == HalfDimensions, no padding needed)
+    // gets this; fc_1/fc_2 weights are untouched.
+#if defined(SFNET_FC0_SPARSE)
+    if (!simd::fc0_scramble_self_check(Fc0Out, HalfDimensions))
+        return fail("fc_0 sparse-weight scramble failed its own bijection self-check");
+    for (int i = 0; i < LayerStacks; ++i)
+        simd::fc0_permute_weights_inplace(g_net.stacks[std::size_t(i)].fc0w, Fc0Out, HalfDimensions);
+#endif
+
     g_net.ok = true;
     return true;
 }
