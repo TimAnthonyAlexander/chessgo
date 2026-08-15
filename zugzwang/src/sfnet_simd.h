@@ -1,10 +1,11 @@
 #pragma once
-// SFNet Wave 6 — SIMD kernels for the SF backend's hot path (accumulator column
+// SFNet Wave 6/7 — SIMD kernels for the SF backend's hot path (accumulator column
 // add/sub, the feature-transformer pairwise activation, and the fc_0/fc_1/fc_2
 // widening dot product). Every kernel here is PROVABLY bit-exact with the scalar
 // formula it replaces — see each block's comment for the argument — not merely
-// "close enough". Included only by sfnet_eval.cpp and sfnet_accumulator.cpp,
-// mirroring sfnet_internal.h's own sharing convention.
+// "close enough". Included by sfnet_eval.cpp and sfnet_accumulator.cpp (the two
+// TUs that run the kernels), and by sfnet_load.cpp (Wave 7 — needs the FT
+// permutation helpers below to reorder the net's weights once, at load time).
 //
 // Arch-detection idiom copied from src/nnue_eval.cpp / src/nnue_accumulator.cpp
 // (this codebase's existing pattern): a #if/#elif ladder on compiler-defined arch
@@ -62,6 +63,100 @@ namespace simd {
 inline std::int32_t clampi32(std::int32_t v, std::int32_t lo, std::int32_t hi) {
     return v < lo ? lo : (v > hi ? hi : v);
 }
+
+// =====================================================================================
+// Wave 7 -- FT weight permutation. SF permutes biases/weights/threatWeights ONCE at
+// load time (nnue_feature_transformer.h's permute_weights()/PackusEpi16Order) so its
+// packus-based pairwise-combine kernel (pairwise_combine_sf below, AVX512/AVX2 tiers)
+// can narrow int16->uint8 with ONE packus per two vectors, instead of the lane-split
+// dance the pre-Wave-7 kernel used to dodge packus's cross-vector interleave. Verified
+// against ~/sf18-arm/src/nnue/nnue_feature_transformer.h:52,105-145 and simd.h's
+// vec_packus_16/MaxChunkSize definitions, not guessed.
+//
+// The permutation ONLY reorders the 1024-wide "j" (HalfDimensions) index, applied
+// identically to every feature column of every array that ever feeds the accumulator
+// (biases seeds it, weights/threatWeights add to it) -- so col_add_i16/col_sub_i16/
+// col_add_i8widen_i16/col_sub_i8widen_i16 below need NO changes: they still compute
+// acc[j] +=/-= col[j] over a relabeled j, and since biases/weights/threatWeights are
+// ALL relabeled the SAME way, "acc[j]" and "col[j]" still refer to the same underlying
+// feature lane after permutation as before it. Only the routines that need "j" to mean
+// a SPECIFIC natural-order position -- the packus-based pairwise_combine_sf -- need to
+// know about this at all, and even there the permutation is chosen (by SF, ported
+// verbatim here) so packus's own physical interleave exactly cancels it, landing the
+// OUTPUT `ft[]` buffer back in natural order for fc_0's (unpermuted) weights to dot
+// against unchanged.
+//
+// ONLY the tiers that actually use a raw packus instruction (AVX512BW+VL, AVX2, both
+// rewritten below) need this. Scalar and NEON keep their existing widen-add-clamp-
+// narrow sequence, which has no packus to compensate for -- permuting for them would
+// be a correct but useless relabeling, so SFNET_FT_PERMUTE stays 0 there rather than
+// permuting for tidiness.
+#if defined(__AVX512BW__) && defined(__AVX512VL__) && defined(SFNET_X86_SIMD)
+#define SFNET_FT_PERMUTE 1
+// nnue_feature_transformer.h:111 (_mm512_packus_epi16 branch), transcribed verbatim.
+inline constexpr std::size_t kFtPermOrder[8] = {0, 2, 4, 6, 1, 3, 5, 7};
+#elif defined(__AVX2__) && defined(SFNET_X86_SIMD)
+#define SFNET_FT_PERMUTE 1
+// nnue_feature_transformer.h:117 (_mm256_packus_epi16 branch), transcribed verbatim.
+inline constexpr std::size_t kFtPermOrder[8] = {0, 2, 1, 3, 4, 6, 5, 7};
+#else
+#define SFNET_FT_PERMUTE 0
+#endif
+
+#if SFNET_FT_PERMUTE
+// Permutes `data` (n elements of T, n a multiple of 64) in 64-element chunks: each
+// chunk splits into 8 sub-blocks of 8 elements, reordered by `order`. Port of SF's
+// permute<BlockSize>() (nnue_feature_transformer.h:52), specialized to typed elements
+// instead of raw bytes -- SF's BlockSize is always exactly 8 elements' worth of bytes
+// for both its callers (16 bytes = 8 x int16 for biases/weights, 8 bytes = 8 x int8
+// for threatWeights), so "8 elements" is the one invariant this port keeps, and T can
+// be int16_t or int8_t (or, for the order-table self-check below, a plain int).
+template <typename T>
+void ft_permute(T* data, std::size_t n, const std::size_t order[8]) {
+    constexpr std::size_t kSubBlock = 8;
+    constexpr std::size_t kChunk = kSubBlock * 8;  // 64
+    T buf[kChunk];
+    for (std::size_t base = 0; base + kChunk <= n; base += kChunk) {
+        for (std::size_t j = 0; j < 8; ++j)
+            for (std::size_t e = 0; e < kSubBlock; ++e)
+                buf[j * kSubBlock + e] = data[base + order[j] * kSubBlock + e];
+        for (std::size_t k = 0; k < kChunk; ++k) data[base + k] = buf[k];
+    }
+}
+
+// Self-check: permute() by `order` then permute() by order's OWN inverse must recover
+// the original array exactly. This is the "prove it's correctly inverted" gate the
+// task calls for -- it runs on a synthetic [0..1023] array (not real net data; the
+// order table's correctness doesn't depend on what's being permuted), so it costs
+// nothing and needs no real weights loaded yet. A mistranscribed order table is
+// EXACTLY the failure mode this catches: it would still "permute" (produce some
+// array), still pass every other load-time sanity check, and only show up later as a
+// plausible-looking but wrong eval -- the outcome the task calls "the worst possible".
+inline bool ft_perm_order_self_check(const std::size_t order[8]) {
+    std::size_t inv[8]{};
+    for (std::size_t i = 0; i < 8; ++i) inv[order[i]] = i;
+    // inv must itself be a permutation of 0..7 covering every slot exactly once --
+    // if `order` had a duplicate or an out-of-range entry, some inv[k] would be left
+    // at its zero-init default while another was overwritten twice.
+    bool seen[8] = {};
+    for (std::size_t i = 0; i < 8; ++i) {
+        if (order[i] >= 8 || seen[order[i]]) return false;
+        seen[order[i]] = true;
+    }
+
+    constexpr std::size_t N = 1024;  // HalfDimensions -- any multiple of 64 would do
+    int original[N];
+    for (std::size_t i = 0; i < N; ++i) original[i] = int(i);
+    int a[N];
+    for (std::size_t i = 0; i < N; ++i) a[i] = original[i];
+
+    ft_permute(a, N, order);
+    ft_permute(a, N, inv);
+    for (std::size_t i = 0; i < N; ++i)
+        if (a[i] != original[i]) return false;
+    return true;
+}
+#endif  // SFNET_FT_PERMUTE
 
 // =====================================================================================
 // col_add_i16 / col_sub_i16 -- acc[j] +=/-= col[j] over n int16 lanes. Plain wraparound
@@ -300,74 +395,116 @@ inline void pairwise_combine_sf_scalar(const std::int16_t* ps, const std::int16_
 
 #if defined(__AVX512BW__) && defined(__AVX512VL__) && defined(SFNET_X86_SIMD)
 
-// 16 output lanes/iter. AVX512's cvtepi32_epi16 / cvtepi16_epi8 are TRUNCATING narrow
-// conversions with plain lane-0..N-1 -> lane-0..N-1 semantics (unlike the legacy SSE/AVX2
-// "pack" instructions, which interleave two source registers) -- no permute fix-up
-// needed, and safe to use un-saturated here because every value narrowed is already
-// proven in-range ([0,255] for s0/s1, [0,127] for the final byte) before the narrow.
+// Wave 7: SF's own algorithm (nnue_feature_transformer.h:264-379, UseThreats branch),
+// ported instruction-for-instruction rather than the Wave 6 widen/narrow-int32 kernel
+// it replaces. Requires ps/th to be laid out per kFtPermOrder (sfnet_load.cpp permutes
+// net.biases/weights/threatWeights exactly once, at load) -- see the SFNET_FT_PERMUTE
+// block above for why that's a zero-runtime-cost precondition, not a per-call cost.
+//
+// Two things earn the "still bit-exact" claim, both re-derived independently against
+// the scalar reference above (not just trusted because SF ships it):
+//
+//  1. Asymmetric clamp + packus's own saturation == the reference's symmetric clamp.
+//     `sum0` gets the FULL clamp(-,0,255); `sum1` gets ONLY the upper clamp (min 255),
+//     left free to go negative. Case acc1>=0: sum1==clamp(acc1,0,255), identical to the
+//     reference -- no discrepancy. Case acc1<0: sum1<0 while sum0>=0 (it WAS fully
+//     clamped), so sum0*sum1<=0, and packus's saturating int16->uint8 narrow maps any
+//     non-positive input to 0 -- exactly clamp(acc1,0,255)=0 times anything. Holds for
+//     either operand being the "asymmetric" one, which is how SF assigns it (first
+//     half gets the full clamp, second half the partial one) and how this port keeps it.
+//  2. The shift(7)+mulhi+packus sequence computes the same value as widen/clamp/mullo/
+//     shift-right-9/narrow. sum0 in [0,255]<<7 = [0,32640] (fits int16, no sign issue).
+//     mulhi returns the top 16 bits of the true 32-bit product sum0*sum1, i.e.
+//     floor(sum0*sum1 / 65536) = floor((clamp0*128*clamp1) / 65536) = floor(clamp0*
+//     clamp1 / 512) -- the reference's exact formula, and mulhi's arithmetic top-half
+//     extraction is floor-correct for negative products too (case 1 already showed the
+//     only way to get one collapses to 0 either way).
+//
+// kFtPermOrder is chosen (by SF, transcribed here) so that packus's own physical
+// 128-bit-lane interleave, applied to data pre-shuffled by that order, cancels out --
+// `out[]` lands back in the SAME natural sequential order the Wave 6 kernel produced,
+// which is why fc_0's weights (unpermuted) don't need to change at all. The 560/560
+// bit-exact gate (test/sfnet_corpus_ref.tsv) is what actually proves this end to end;
+// the two arguments above are why it was expected to, not a substitute for running it.
 inline void pairwise_combine_sf(const std::int16_t* ps, const std::int16_t* th,
                                 std::uint8_t* out, int half) {
+    const __m512i Zero = _mm512_setzero_si512();
+    const __m512i Max255 = _mm512_set1_epi16(255);
+    constexpr int shift = 7;
     int j = 0;
-    for (; j + 16 <= half; j += 16) {
-        __m256i ps_lo = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ps + j));
-        __m256i ps_hi = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ps + j + half));
-        __m256i th_lo = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(th + j));
-        __m256i th_hi = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(th + j + half));
+    for (; j + 64 <= half; j += 64) {
+        __m512i in0a = _mm512_loadu_si512(reinterpret_cast<const void*>(ps + j));
+        __m512i in0b = _mm512_loadu_si512(reinterpret_cast<const void*>(ps + j + 32));
+        __m512i in1a = _mm512_loadu_si512(reinterpret_cast<const void*>(ps + half + j));
+        __m512i in1b = _mm512_loadu_si512(reinterpret_cast<const void*>(ps + half + j + 32));
+        __m512i t0a = _mm512_loadu_si512(reinterpret_cast<const void*>(th + j));
+        __m512i t0b = _mm512_loadu_si512(reinterpret_cast<const void*>(th + j + 32));
+        __m512i t1a = _mm512_loadu_si512(reinterpret_cast<const void*>(th + half + j));
+        __m512i t1b = _mm512_loadu_si512(reinterpret_cast<const void*>(th + half + j + 32));
 
-        __m512i s0 = _mm512_add_epi32(_mm512_cvtepi16_epi32(ps_lo), _mm512_cvtepi16_epi32(th_lo));
-        __m512i s1 = _mm512_add_epi32(_mm512_cvtepi16_epi32(ps_hi), _mm512_cvtepi16_epi32(th_hi));
-        const __m512i zero = _mm512_setzero_si512();
-        const __m512i c255 = _mm512_set1_epi32(255);
-        s0 = _mm512_min_epi32(_mm512_max_epi32(s0, zero), c255);
-        s1 = _mm512_min_epi32(_mm512_max_epi32(s1, zero), c255);
+        __m512i acc0a = _mm512_add_epi16(in0a, t0a);
+        __m512i acc0b = _mm512_add_epi16(in0b, t0b);
+        __m512i acc1a = _mm512_add_epi16(in1a, t1a);
+        __m512i acc1b = _mm512_add_epi16(in1b, t1b);
 
-        __m256i s0_16 = _mm512_cvtepi32_epi16(s0);   // truncating narrow, in-range -> exact
-        __m256i s1_16 = _mm512_cvtepi32_epi16(s1);
-        __m256i prod = _mm256_mullo_epi16(s0_16, s1_16);   // exact low-16 (product < 2^16)
-        __m256i p = _mm256_srli_epi16(prod, 9);            // logical shift, value >= 0
-        __m128i packed = _mm256_cvtepi16_epi8(p);          // truncating narrow, in [0,127]
-        _mm_storeu_si128(reinterpret_cast<__m128i*>(out + j), packed);
+        __m512i sum0a = _mm512_slli_epi16(_mm512_max_epi16(_mm512_min_epi16(acc0a, Max255), Zero), shift);
+        __m512i sum0b = _mm512_slli_epi16(_mm512_max_epi16(_mm512_min_epi16(acc0b, Max255), Zero), shift);
+        __m512i sum1a = _mm512_min_epi16(acc1a, Max255);   // upper clamp only -- see argument (1) above
+        __m512i sum1b = _mm512_min_epi16(acc1b, Max255);
+
+        __m512i pa = _mm512_mulhi_epi16(sum0a, sum1a);
+        __m512i pb = _mm512_mulhi_epi16(sum0b, sum1b);
+
+        _mm512_storeu_si512(reinterpret_cast<void*>(out + j), _mm512_packus_epi16(pa, pb));
     }
     if (j < half) pairwise_combine_sf_scalar(ps + j, th + j, out + j, half - j);
-    // NOTE: the scalar tail above re-derives s0/s1 from a WINDOW starting at ps+j, which
-    // is only correct because pairwise_combine_sf_scalar re-reads ps[j+half] relative to
-    // its own `half` argument (half-j here) -- see the call site's actual usage, which
-    // always passes j==half (no tail, HalfDimensions/2=512 is exactly divisible by 16),
-    // so this path is dead in practice but kept correct rather than omitted.
+    // Dead in practice (half=512 is exactly divisible by 64), kept correct rather than
+    // omitted -- same convention as the tail note this replaced. NOTE: this scalar
+    // fallback assumes NATURAL-order ps/th, so it is only reachable (and only correct)
+    // when SFNET_FT_PERMUTE is 0 for this build; it is unreachable here by construction
+    // (half%64==0), so the mismatch never fires, but is flagged rather than silently relied on.
 }
 
 #elif defined(__AVX2__) && defined(SFNET_X86_SIMD)
 
-// 8 output lanes/iter: widen 8-of-16 int16 lanes to int32 via the 256-wide cvtepi16_epi32
-// (covers all 8 in one instruction), clamp, then narrow via the 128-bit-only
-// _mm_packs_epi32 -- safe because each 256i32 is explicitly split into its two 128-bit
-// halves (castsi256_si128 / extracti128_si256) BEFORE packing, so there is no cross-
-// 128-lane interleave to fix up (that interleave problem only arises when packing two
-// full 256-bit registers with the AVX2 "pack" instructions directly).
+// Wave 7: same port as the AVX512 tier above, at half the width (nnue_feature_
+// transformer.h's vec_t=__m256i, MaxChunkSize=32 for USE_AVX2). Same two bit-exactness
+// arguments apply verbatim (mulhi/packus width doesn't change either proof). Requires
+// ps/th permuted by kFtPermOrder's AVX2 branch (see the SFNET_FT_PERMUTE block above).
 inline void pairwise_combine_sf(const std::int16_t* ps, const std::int16_t* th,
                                 std::uint8_t* out, int half) {
+    const __m256i Zero = _mm256_setzero_si256();
+    const __m256i Max255 = _mm256_set1_epi16(255);
+    constexpr int shift = 7;
     int j = 0;
-    for (; j + 8 <= half; j += 8) {
-        __m128i ps_lo = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ps + j));
-        __m128i ps_hi = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ps + j + half));
-        __m128i th_lo = _mm_loadu_si128(reinterpret_cast<const __m128i*>(th + j));
-        __m128i th_hi = _mm_loadu_si128(reinterpret_cast<const __m128i*>(th + j + half));
+    for (; j + 32 <= half; j += 32) {
+        __m256i in0a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ps + j));
+        __m256i in0b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ps + j + 16));
+        __m256i in1a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ps + half + j));
+        __m256i in1b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(ps + half + j + 16));
+        __m256i t0a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(th + j));
+        __m256i t0b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(th + j + 16));
+        __m256i t1a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(th + half + j));
+        __m256i t1b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(th + half + j + 16));
 
-        __m256i s0 = _mm256_add_epi32(_mm256_cvtepi16_epi32(ps_lo), _mm256_cvtepi16_epi32(th_lo));
-        __m256i s1 = _mm256_add_epi32(_mm256_cvtepi16_epi32(ps_hi), _mm256_cvtepi16_epi32(th_hi));
-        const __m256i zero = _mm256_setzero_si256();
-        const __m256i c255 = _mm256_set1_epi32(255);
-        s0 = _mm256_min_epi32(_mm256_max_epi32(s0, zero), c255);
-        s1 = _mm256_min_epi32(_mm256_max_epi32(s1, zero), c255);
+        __m256i acc0a = _mm256_add_epi16(in0a, t0a);
+        __m256i acc0b = _mm256_add_epi16(in0b, t0b);
+        __m256i acc1a = _mm256_add_epi16(in1a, t1a);
+        __m256i acc1b = _mm256_add_epi16(in1b, t1b);
 
-        __m128i s0_16 = _mm_packs_epi32(_mm256_castsi256_si128(s0), _mm256_extracti128_si256(s0, 1));
-        __m128i s1_16 = _mm_packs_epi32(_mm256_castsi256_si128(s1), _mm256_extracti128_si256(s1, 1));
-        __m128i prod = _mm_mullo_epi16(s0_16, s1_16);
-        __m128i p = _mm_srli_epi16(prod, 9);
-        __m128i packed = _mm_packus_epi16(p, p);   // values in [0,127] -> saturation never fires
-        _mm_storel_epi64(reinterpret_cast<__m128i*>(out + j), packed);
+        __m256i sum0a = _mm256_slli_epi16(_mm256_max_epi16(_mm256_min_epi16(acc0a, Max255), Zero), shift);
+        __m256i sum0b = _mm256_slli_epi16(_mm256_max_epi16(_mm256_min_epi16(acc0b, Max255), Zero), shift);
+        __m256i sum1a = _mm256_min_epi16(acc1a, Max255);
+        __m256i sum1b = _mm256_min_epi16(acc1b, Max255);
+
+        __m256i pa = _mm256_mulhi_epi16(sum0a, sum1a);
+        __m256i pb = _mm256_mulhi_epi16(sum0b, sum1b);
+
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(out + j), _mm256_packus_epi16(pa, pb));
     }
     if (j < half) pairwise_combine_sf_scalar(ps + j, th + j, out + j, half - j);
+    // Dead in practice (half=512 is exactly divisible by 32) -- see the AVX512 tier's
+    // identical note above.
 }
 
 #elif defined(__aarch64__) || defined(__ARM_NEON)

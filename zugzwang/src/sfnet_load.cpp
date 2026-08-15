@@ -6,6 +6,7 @@
 // if the two disagree about any array, one of them is wrong.
 
 #include "sfnet.h"
+#include "sfnet_simd.h"
 
 #include <array>
 #include <cstdio>
@@ -208,6 +209,24 @@ bool load(const char* path) {
     // Trailing bytes mean we misread a shape somewhere above and happened to land short.
     f.peek();
     if (!f.eof()) return fail("trailing bytes after the last layer stack");
+
+    // ---- Wave 7: permute the FT arrays for the packus-based pairwise-combine tiers ----
+    // Only the AVX512BW+VL/AVX2 kernels need this (see sfnet_simd.h's SFNET_FT_PERMUTE
+    // block) -- SFNET_FT_PERMUTE is 0 for scalar/NEON builds, so this whole block
+    // compiles out there and net.weights/biases/threatWeights stay in the natural
+    // (file) order those tiers already expect.
+    //
+    // The self-check runs FIRST, before any real array is touched: if the order table
+    // doesn't invert cleanly, permuting anyway would produce a load that succeeds and
+    // an engine that plays with a silently wrong eval -- the exact failure mode this
+    // wave was warned is worse than refusing to load at all.
+#if SFNET_FT_PERMUTE
+    if (!simd::ft_perm_order_self_check(simd::kFtPermOrder))
+        return fail("FT permutation order failed its own involution self-check");
+    simd::ft_permute(g_net.biases.data(), g_net.biases.size(), simd::kFtPermOrder);
+    simd::ft_permute(g_net.weights.data(), g_net.weights.size(), simd::kFtPermOrder);
+    simd::ft_permute(g_net.threatWeights.data(), g_net.threatWeights.size(), simd::kFtPermOrder);
+#endif
 
     g_net.ok = true;
     return true;
