@@ -5,11 +5,28 @@ the gap is net and how much is search. **No Stockfish code is linked, copied or
 vendored.** We write an SF-format loader and an SF-architecture forward pass
 ourselves, as a second backend selected by a switch on the loaded net file.
 
-Sources studied: `~/sf18-arm` @ tag `sf_18` (the threats fork) and `zugzwang/src/nnue_*`.
-The file-format spec in §3 was validated by parsing the real
-`nn-c288c895ea92.nnue` byte-for-byte: it consumes all **108,919,594** bytes with zero
-remainder, and the FT hash, arch hash and top-level hash recomputed from the format
-rules match the values embedded in the file (`0x8F2344B8`, `0x63336A4A`, `0xEC102EF2`).
+Sources studied: `~/sf18-arm` @ tag `sf_18` (the official SF18 release) and
+`zugzwang/src/nnue_*`.
+
+**§3 is executable, not a claim.** `zugzwang/tools/sfnet_parse.py` is a stdlib-only
+reference parser that recomputes the FT hash, the arch hash and the top-level hash from
+SF's rules — nothing is read out of the file and compared to itself — then walks the
+whole net. Both nets pass with zero remainder:
+
+```
+$ python3 tools/sfnet_parse.py ~/sf18-arm/src/nn-c288c895ea92.nnue          # big
+      feature-transformer hash           0x8f2344b8
+      layer-stack (arch) hash            0x63336a4a
+      top-level network hash             0xec102ef2
+consumed 108,919,594 of 108,919,594 bytes; remainder 0    RESULT: PASS
+
+$ python3 tools/sfnet_parse.py ~/sf18-arm/src/nn-37f18f62d772.nnue --small  # small
+      0x7f234db8 / 0x6333712a / 0x1c103c92
+consumed 3,519,630 of 3,519,630 bytes; remainder 0        RESULT: PASS
+```
+
+`--full` additionally LEB128-decodes the 23M-entry weights array (~5s). That is step 1
+of §6 already banked; the C++ loader has a byte-exact oracle to be diffed against.
 
 ## 1. Shape of the change
 
@@ -22,10 +39,11 @@ One engine, two NNUE architectures, chosen at load time:
 - `Eval::evaluate` (`eval.cpp:514`) is the single **NNUE-dispatch** point — the only
   function that runs a forward pass — so the backend branch lives there and nowhere
   else. It is *not* the only source of a node's score: since 2026-08-14 a ≤5-man node
-  returns a WDL-derived value directly (`search.cpp:2699-2760`, default-on `TBWDLSF`)
-  without calling either backend, and a DTZ-ranked root's *reported* score is
-  overridden for output only (`reported_score()`, `search.cpp:1536-1541`). Neither
-  needs a backend branch; both are listed so the single-dispatch claim isn't misread.
+  returns a WDL-derived value directly (`search.cpp:2769-2790`, default-on `TBWDLSF`,
+  parsed `search.cpp:1166`) without calling either backend, and a DTZ-ranked root's
+  *reported* score is overridden for output only (`reported_score()`,
+  `search.cpp:1604-1610`). Neither needs a backend branch; both are listed so the
+  single-dispatch claim isn't misread.
 - Our net's code paths stay **compile-time constant and byte-identical** (see §5:
   template on an arch traits struct, instantiate ours exactly as today).
 
@@ -79,15 +97,27 @@ if !(byte & 0x80):
     value = (shift >= 32 || !(byte & 0x40)) ? result : result | ~((1 << shift) - 1)
 ```
 
-Feature transformer (big net, `HalfDimensions = 1024`), in order:
+Feature transformer (big net, `HalfDimensions = 1024`), in order. "payload" is the
+LEB128 byte count the frame declares; a framed array costs `payload + 21` on disk
+(17 magic + 4 length):
 
-| # | array | type | count | encoding | bytes |
-|---|---|---|---|---|---|
-| — | sub-header hash `0x8F2344B8` | u32 | 1 | raw | 4 |
-| 1 | `biases` | i16 | 1024 | LEB128 | 1,266 |
-| 2 | `threatWeights` | **i8** | 79856×1024 = 81,772,544 | **raw LE, uncompressed** | 81,772,544 |
-| 3 | `weights` | i16 | 1024×22528 = 23,068,672 | LEB128 | 25,529,985 |
-| 4 | `threatPsqtWeights` **then** `psqtWeights` | i32 | 638,848 + 180,224 | LEB128, **one call, one blob** | 1,474,579 |
+| # | array | type | count | encoding | payload | on disk |
+|---|---|---|---|---|---|---|
+| — | sub-header hash `0x8F2344B8` | u32 | 1 | raw | — | 4 |
+| 1 | `biases` | i16 | 1024 | LEB128 | 1,245 | 1,266 |
+| 2 | `threatWeights` | **i8** | 79856×1024 = 81,772,544 | **raw LE, uncompressed** | — | 81,772,544 |
+| 3 | `weights` | i16 | 1024×22528 = 23,068,672 | LEB128 | 25,529,964 | 25,529,985 |
+| 4 | `threatPsqtWeights` **then** `psqtWeights` | i32 | 638,848 + 180,224 | LEB128, **one call, one blob** | 1,474,558 | 1,474,579 |
+
+Measured value ranges, useful as a loader sanity check: `biases` [−207, 162],
+`threatWeights` [−128, 127], `weights` [−719, 900], `threatPsqtWeights`
+[−4575, 4749], `psqtWeights` [−45382, 43060].
+
+The FT sub-header hash is not a magic number to hardcode — it is
+`FullThreats::HashValue ^ (HalfDimensions * 2)` = `0x8F234CB8 ^ 2048` = `0x8F2344B8`
+(`nnue_feature_transformer.h:126-130`, `full_threats.h:41`). The small net's is
+`HalfKAv2_hm::HashValue ^ 256` = `0x7F234CB8 ^ 256` = `0x7F234DB8`. The header hash is
+`FT hash ^ arch hash`, so it moves with either.
 
 Then 8 layer stacks, each: `u32 hash = 0x63336A4A`, then raw little-endian
 (never LEB128):
@@ -102,7 +132,9 @@ Then 8 layer stacks, each: `u32 hash = 0x63336A4A`, then raw little-endian
 
 Per stack 17,640 bytes; ×8 = 141,120. Total `96 + 108,778,378 + 141,120 = 108,919,594`.
 
-`ac_sqr_0` is not in the read chain at all. Ignore `permute_weights()` /
+`ac_sqr_0` is in neither the read chain nor the **hash** chain — `Arch::get_hash_value`
+(`nnue_architecture.h:74-86`) folds fc_0, ac_0, fc_1, ac_1, fc_2 and skips it, even
+though `propagate` runs it. Ignore `permute_weights()` /
 `PackusEpi16Order` and `get_weight_index_scrambled()` entirely — both are in-memory
 SIMD layout tricks; the file is always natural row-major, and `write_parameters`
 un-permutes before writing, so this holds regardless of which CPU produced the file.
@@ -190,13 +222,14 @@ Do **not** use SF's `to_cp` (phase-dependent cubic divisor) — it would make th
 scale move with material under margins that assume it doesn't.
 
 **Three** of these terms already exist on our side, all applied in `corrected_eval`
-(`search.cpp:1789-1799`) — don't port any of them twice:
+(`search.cpp:1856-1871`) — don't port any of them twice:
 
-- `RULE50DAMP` (default **on**, parsed `search.cpp:1072`): `v -= v * rule50_count() / 199`
-  — already exactly SF's formula.
-- `OPTIMISM` (default **off**, parsed `search.cpp:1085-1087`, applied `1771-1780,1799`):
+- `RULE50DAMP` (default **on**, parsed `search.cpp:1133`, applied `1865`):
+  `v -= v * rule50_count() / 199` — already exactly SF's formula.
+- `OPTIMISM` (default **off**, parsed `search.cpp:1146`, `optimism_term` at
+  `1839-1849`, applied `1867`):
   `optimism = scale*avg/(|avg|+stretch)`, then a material-weighted term.
-- `EVALCOMPLEXITY` (default **off**, parsed `search.cpp:1074`, applied `1795`):
+- `EVALCOMPLEXITY` (default **off**, parsed `search.cpp:1135`, applied `1863`):
   `v -= v*|corr|/2600`, using the correction-history residual as a complexity proxy
   **because our single-scalar net has no `psqt`/`positional` pair to difference**.
   With the SF backend we get the real `|psqt - positional|` for the first time — so
@@ -230,7 +263,10 @@ architecture change to our own net rather than more mitigations.
 
 ## 5. Our-side refactor (minimum churn)
 
-Every dimension is currently a `constexpr` used as an array bound: `Slot::w[H]/b[H]`
+Every dimension is currently a namespace-scope `constexpr` in `nnue_arch.h:11-21`
+(`InputDim=768`, `NumKingBuckets=16`, `PsqSize=12288`, `ThreatBlock=79856`,
+`InputTotal=92144`, `H=512`, `D2=16`, `D3=32`, `NB=8`) — that file is what the traits
+struct replaces. They are used as array bounds throughout: `Slot::w[H]/b[H]`
 (`nnue_accumulator.h:97-98`), `FinnyEntry::acc[H]` (`:222`), `Net`'s vectors sized
 `InputTotal*H`, `NB*D2*H`, … (`nnue_net.h:13-24`), and `constexpr half = H/2`, `float
 l1[D2]`, `uint8_t aq[H]`, `int16_t accW[H]` in the kernels (`nnue_eval.cpp:211,237,
@@ -278,14 +314,15 @@ Dispatch points that need a backend branch:
   walks the root moves with real `do_move`/`undo_move`, then restores. Added
   2026-08-14. Backend-agnostic as written, but it has to keep compiling against
   whatever `nnueAcc` becomes.
-- startup loads — `serve.cpp:190`, `uci.cpp:296`, `ratingtest.cpp:81`
+- startup loads — `serve.cpp:190`, `uci.cpp:306`, `ratingtest.cpp:81`
 - `fill_board_snapshot` (`position.cpp:324`) is board-state only — no branch needed
 
 ## 6. Validation ladder — pass each before the next
 
-1. **Parse**: consume exactly 108,919,594 bytes, zero remainder, and recompute
-   `0x8F2344B8` / `0x63336A4A` / `0xEC102EF2` from the format rules and match the
-   file. (Already demonstrated during research — reproduce it in our loader's test.)
+1. **Parse** — **DONE**, and reproducible: `python3 tools/sfnet_parse.py <net>` consumes
+   exactly 108,919,594 bytes with zero remainder and matches all three recomputed
+   hashes; `--small` does the same for the 3,519,630-byte small net. The C++ loader's
+   test is "agree with this script array for array", not a fresh investigation.
 2. **Per-position numbers**: `stockfish`'s `eval` prints a per-bucket table with
    Material (psqt) and Positional (layers) columns, taken straight from
    `trace_evaluate` *before* any post-processing. Those printed values pass through
@@ -316,9 +353,13 @@ Both nets are on disk: `~/sf18-arm/src/nn-c288c895ea92.nnue` (big, 104 MB) and
   one rescaled scalar under margins tuned to our own distribution. Test 3 is
   directional.
 - SF switches to the small net at `|simple_eval| > 962` and re-evaluates with the big
-  net when the small one returns `|nnue| < 277`. We start big-net-only; say so with
-  the numbers, and add the small net later (same code path minus threats, plus the
-  ×2 weight doubling that must **never** be applied to the big net).
+  net when the small one returns `|nnue| < 277` (`evaluate.cpp:49,66-72`). We start
+  big-net-only; say so with the numbers, and add the small net later. Its shape is
+  parsed and confirmed: HalfKAv2_hm only, `HalfDimensions = 128`, no threat arrays,
+  same 15/32/8 tail, `fc_0` in 128 → out 16, 3,304 B per stack. Two differences that
+  are not optional — the FT clamp is `0..127*2` instead of `0..255`, and
+  `scale_weights(true)` doubles `weights` and `biases` on read. Both fire **only** in
+  the `!UseThreats` branch and must never touch the big net.
 - SF's net was trained on SF self-play for SF's search. "Stronger in SF" does not
   imply "stronger in ours" — the difference between tests 1 and 3 is exactly that.
 - Speed: ~128 MB of weights touched (82 MB int8 threats + 46 MB int16 base) against
@@ -327,7 +368,9 @@ Both nets are on disk: `~/sf18-arm/src/nn-c288c895ea92.nnue` (big, 104 MB) and
 ## 8. Order of work (~4–7 days)
 
 1. Loader + scalar from-scratch forward pass, validated to steps 1–3 above. This is
-   the bulk of the new code and is testable with no search involvement.
+   the bulk of the new code and is testable with no search involvement. Step 1 is
+   already banked (`tools/sfnet_parse.py`), so the loader starts against a working
+   oracle rather than against the spec.
 2. Arch templating of `Net`/`AccStack`/kernels; our net proven byte-identical.
 3. Incremental path: reuse the threat delta as-is, write the base half's refresh
    (SF's coarser any-king-move rule), prove step 4 under `ASSERT=1`.

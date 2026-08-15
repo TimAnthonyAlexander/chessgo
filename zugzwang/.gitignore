@@ -55,3 +55,5 @@ spsa/__pycache__/
 # the engine source changes, and committing them is what keeps emscripten off
 # the production box: the deploy just needs `git pull`. The 94 MB net is a
 # different matter and stays generated (tools/netweb_writer).
+test/sfnet_load_test
+test/sfnet_eval_test

@@ -1,3 +1,20 @@
+# zugzwang tools
+
+## `sfnet_parse.py` — Stockfish `.nnue` reference parser
+
+Stdlib-only parser/validator for SF18 evaluation files. Recomputes the feature-transformer,
+layer-stack and top-level hashes from SF's own rules (nothing is read from the file and
+compared to itself), then walks every array and asserts zero remainder.
+
+```
+python3 tools/sfnet_parse.py ~/sf18-arm/src/nn-c288c895ea92.nnue           # big threats net
+python3 tools/sfnet_parse.py ~/sf18-arm/src/nn-37f18f62d772.nnue --small   # 128-wide small net
+python3 tools/sfnet_parse.py <net> --full                                  # also decode the 23M weights (~5s)
+```
+
+It is the oracle for the SF-backend loader in `../docs/tasks/open/sf-net-experiment.md`.
+No Stockfish code is used or vendored — only the format is reproduced.
+
 # Puzzle solve-rate benchmark
 
 Measures engine strength on real Lichess positions (the 200K-puzzle `puzzle` table)

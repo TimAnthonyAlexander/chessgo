@@ -97,10 +97,31 @@ secretqueen_test: test/secretqueen_test.cpp test/secretqueen_test_stubs.cpp src/
        src/movegen.cpp src/weakening.cpp
 	$(CXX) $(CXXFLAGS) -o test/secretqueen_test $^
 
+# sfnet_load_test: Wave 1 gate for the SF-net experiment backend — the C++ loader must
+# agree array for array with tools/sfnet_parse.py, and must REFUSE the small net and a
+# truncated file. Standalone: the loader has no engine dependencies at all.
+#   Usage: make sfnet_load_test && ./test/sfnet_load_test <big.nnue> [small.nnue]
+sfnet_load_test: test/sfnet_load_test.cpp src/sfnet_load.cpp
+	$(CXX) $(CXXFLAGS) -Isrc -o test/sfnet_load_test $^
+
+# sfnet_eval_test: Wave 2 gate for the SF-net experiment backend — builds and runs the
+# from-scratch (no incremental accumulator, no SIMD) forward pass over a FEN corpus.
+# Reuses NNUE::active_features() (src/nnue_features.cpp) for the threat half, which is
+# why this pulls in the same link set as nnue_web_format_test rather than the loader
+# test's standalone two files.
+#   Usage: make sfnet_eval_test && ./test/sfnet_eval_test [--self-check] <net.nnue> <fens.epd>
+sfnet_eval_test: test/sfnet_eval_test.cpp src/sfnet_load.cpp src/sfnet_eval.cpp \
+       src/position.cpp src/bitboard.cpp src/zobrist.cpp src/movegen.cpp src/rules.cpp \
+       src/weakening.cpp src/antichess.cpp src/nnue_net.cpp src/nnue_features.cpp \
+       src/nnue_eval.cpp src/nnue_accumulator.cpp
+	$(CXX) $(CXXFLAGS) -Isrc -o test/sfnet_eval_test $^
+
 clean:
 	rm -f $(TARGET) perft_test $(OBJ) $(DEP) tools/netweb_writer test/nnue_web_format_test \
-	      test/secretqueen_test tools/book_export tools/tbdefend
+	      test/secretqueen_test tools/book_export tools/tbdefend test/sfnet_load_test \
+	      test/sfnet_eval_test
 
 -include $(DEP)
 
-.PHONY: all clean perft netweb nnue_web_format_test secretqueen_test book_export tbdefend
+.PHONY: all clean perft netweb nnue_web_format_test secretqueen_test book_export tbdefend \
+        sfnet_load_test sfnet_eval_test
