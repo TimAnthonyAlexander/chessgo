@@ -1475,11 +1475,17 @@ function Board({
                                 'sq',
                                 light ? 'light' : 'dark',
                                 inputEnabled ? 'interactive' : '',
-                                // Occupancy as a plain class instead of a `:has(.piece)`
-                                // selector in Board.css — `:has()` is relational and
-                                // forces wider style invalidation on every piece
-                                // mount/unmount; this is computed here anyway.
-                                piece ? 'has-piece' : '',
+                                // "This player can pick this piece up" — the SAME
+                                // predicate onPointerDown/activateCursor use, so the
+                                // grab cursor and hover ring (Board.css) can never
+                                // offer a piece that a press wouldn't actually select:
+                                // your own pieces in a game (premoves included), the
+                                // side to move in analysis, nothing at all while input
+                                // is off or duck/pick mode owns the board. A plain
+                                // class instead of a `:has(.piece)` selector — `:has()`
+                                // is relational and forces wider style invalidation on
+                                // every piece mount/unmount; this is computed here anyway.
+                                inputEnabled && ownPieceAt(sq) ? 'movable' : '',
                                 selected === sq ? 'sel' : '',
                                 isLast ? 'last' : '',
                                 isPremove ? 'premove' : '',
