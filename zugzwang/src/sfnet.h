@@ -164,6 +164,26 @@ int evaluate(const Position& pos);
 // evaluate_raw, the Wave 2/3 oracle) and aborts on ANY drift from the incrementally
 // maintained state — same discipline as NNUE::AccStack (nnue_accumulator.cpp:750-768).
 // Gated at test/sfnet_acc_test.cpp.
+//
+// SFNETLAZYACC (Wave 9, default OFF — see sfnet_accumulator.cpp sfnet_lazyacc_enabled):
+// deferred-apply accumulator, mirroring NNUE::AccStack's LAZYACC (nnue_accumulator.h/
+// .cpp) against THIS net's shape. The eager scheme above streams weight columns out of
+// net.weights (~46 MB) / net.threatWeights (~82 MB) on every push/push_delta, but most
+// children are cut (TT hit / terminal / beta cutoff) before their accumulator is ever
+// read by eval() — same "most pushes are wasted work" argument LAZYACC's doc comment
+// makes for our own net. When SFNETLAZYACC=1, push/push_delta/pushNull only RECORD the
+// pending refresh-or-delta into the new top Slot; eval_pair() materializes on demand,
+// walking up from the deepest clean ancestor and replaying the recorded deltas in
+// order — byte-identical to the eager result (same delta lists, same int16/int32
+// column adds, just applied later; commute/associate argument identical to LAZYACC's).
+//
+// One real difference from LAZYACC: our own net's AccStack tracks ONE clean flag per
+// slot (w[]/b[] always refresh/delta together). Here base and threat have DIFFERENT
+// refresh gates (base: any king move of that perspective; threat: the mirror bit
+// only — see the refresh-rules paragraph above), so a slot can be clean for one
+// feature set and dirty for the other at the same ply. Slot therefore carries FOUR
+// independent clean/refresh flags (cleanPsq/cleanThr x WHITE/BLACK) and materialize()
+// walks each of the 4 halves back to ITS OWN nearest clean ancestor independently.
 class AccStack {
 public:
     AccStack();
@@ -203,13 +223,39 @@ public:
     // exists purely so test/sfnet_acc_test.cpp (Wave 4's gate) can compare the
     // incremental state against evaluate_raw()'s oracle at every node of a real
     // do_move/undo_move tree and report a (checked, failed) count, instead of relying
-    // solely on -DNNUE_ASSERT's hard abort-on-drift.
-    EvalPair eval_pair(const Position& pos) const;
+    // solely on -DNNUE_ASSERT's hard abort-on-drift. Non-const (Wave 9): under
+    // SFNETLAZYACC it must call materialize(), which writes into slots_.
+    EvalPair eval_pair(const Position& pos);
 
 private:
     struct Slot {
         HalfAcc psq[COLOR_NB];  // seeded from net.biases
         HalfAcc thr[COLOR_NB];  // seeded from zero
+
+        // --- SFNETLAZYACC (Wave 9, default OFF — see sfnet_accumulator.cpp
+        // sfnet_lazyacc_enabled). See the class comment above for why base and threat
+        // need INDEPENDENT clean/refresh state instead of one shared pair. When lazy
+        // materialization is enabled, push/push_delta/pushNull no longer populate
+        // psq[]/thr[] eagerly — they only RECORD what would need to happen, and
+        // clean{Psq,Thr} track whether psq[]/thr[] currently hold that recorded
+        // result. materialize(k) is the only place that ever turns a dirty half clean.
+        bool cleanPsq[COLOR_NB] = {false, false};  // true iff psq[c] is up to date
+        bool cleanThr[COLOR_NB] = {false, false};  // true iff thr[c] is up to date
+        bool refPsq[COLOR_NB] = {false, false};    // true => psq[c] is a from-scratch
+                                                    // refresh (psqFeats[c] holds the
+                                                    // enumerated base indices); false =>
+                                                    // a delta from the parent's psq[c]
+                                                    // (psqSub[c]/psqAdd[c], applied via
+                                                    // apply_base_delta)
+        bool refThr[COLOR_NB] = {false, false};    // same, for thr[c]/thrFeats[c]/
+                                                    // thrSub[c]+thrAdd[c]
+        std::vector<int> psqFeats[COLOR_NB];       // used when refPsq[c]
+        std::vector<int> thrFeats[COLOR_NB];       // used when refThr[c] (SF-space
+                                                    // threat idx, +NNUE::PsqSize offset,
+                                                    // same encoding active_features()
+                                                    // already produces)
+        std::vector<int> psqSub[COLOR_NB], psqAdd[COLOR_NB];  // used when !refPsq[c]
+        std::vector<int> thrSub[COLOR_NB], thrAdd[COLOR_NB];  // used when !refThr[c]
     };
 
     // Deepest reachable ply is bounded by MAX_PLY; +8 slack for the child pushed at
@@ -222,6 +268,32 @@ private:
                     const Position& child, Color persp) const;
     void delta_threat_apply(HalfAcc& dst, const HalfAcc& src,
                             const std::vector<int>& sub, const std::vector<int>& add) const;
+
+    // --- SFNETLAZYACC helpers (Wave 9) ---
+    // threat_indices — the enumeration half of build_threat, split out so it can be
+    // called eagerly (pos is live) while the expensive apply is deferred to
+    // apply_threat_refresh. Byte-identical list to what build_threat's own
+    // active_features() call would produce.
+    void threat_indices(const Position& pos, Color persp, std::vector<int>& out) const;
+    // apply_base_refresh / apply_threat_refresh — the apply half of build_base /
+    // build_threat, taking an already-enumerated feature list instead of re-deriving
+    // it from a (possibly long-gone, by materialize() time) Position.
+    void apply_base_refresh(HalfAcc& h, const std::vector<int>& feats) const;
+    void apply_threat_refresh(HalfAcc& h, const std::vector<int>& feats) const;
+    // compute_base_delta — the enumeration half of delta_base (the D-loop), split out
+    // so it can be called eagerly (oldb + child are both live at push_delta time)
+    // while apply_base_delta's column streaming is deferred to materialize().
+    void compute_base_delta(const NNUE::BoardSnapshot& oldb, const Position& child, Color persp,
+                            std::vector<int>& sub, std::vector<int>& add) const;
+    void apply_base_delta(HalfAcc& dst, const HalfAcc& src,
+                          const std::vector<int>& sub, const std::vector<int>& add) const;
+    // materialize brings slots_[k]'s FOUR halves (psq/thr x WHITE/BLACK) up to date,
+    // each walking independently to its own deepest clean ancestor and replaying the
+    // recorded refresh/delta forward — same bit-exactness argument as NNUE::AccStack's
+    // materialize (nnue_accumulator.cpp): every recorded list is a pure function of
+    // boards that were live at push time, and int16/int32 column add/sub commute and
+    // associate, so applying it later is identical to applying it immediately.
+    void materialize(int k);
 
     std::vector<Slot> slots_;
     int sp_ = 0;
