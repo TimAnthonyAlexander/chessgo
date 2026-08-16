@@ -111,6 +111,21 @@ NEWPARAMS = [
 ]
 MARGINS2_PARAMS = [
     # name              start min  max  c_end     (SPSA_SET=margins2, 2026-08-15)
+    #
+    # RESULT: RAN AND REJECTED — do not re-run this as-is expecting a different answer.
+    # 4000 iterations completed; final theta was
+    #   RfpMargin=86 RazorMargin=327 FutSlope=108 SeeQuietCoeff=17
+    #   NmpEvalDiv=172 SingularMargin=43 FutBase=101 CaptSeeCoeff=7
+    # Confirmation SPRT of that vector vs the defaults below, same binary both sides,
+    # 100ms, full 1600 games: -3.47 +/- 8.93, LLR -0.61. Not an improvement.
+    #
+    # Read it as "this tune did not find a better basin", NOT as "the current vector is
+    # jointly optimal" — 8 games per iteration is noise-dominated and SPSA can miss. What
+    # it does retire is the specific hypothesis that unpinning FutBase/CaptSeeCoeff was
+    # leaving Elo on the table: both were free to move (FutBase ran 0->101, CaptSeeCoeff
+    # 23->7) and the result still did not beat base. Mid-run wander was large on
+    # SingularMargin (35->18->43) and NmpEvalDiv (120->91->172), which suggests the
+    # objective is flat in those directions rather than that those endpoints mean much.
     # MARGIN_PARAMS re-run from the CURRENT accepted defaults, with the two margins it had
     # to leave out put back. Its exclusion note ("their base values sit below the UCI option
     # min (40)") is STALE: the engine now reports `FutBase min 0` and `CaptSeeCoeff min 0`,
