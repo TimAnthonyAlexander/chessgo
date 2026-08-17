@@ -67,3 +67,7 @@ zugzwang_sfnet
 objs_sfnet/
 sfnet.nnue
 test/sfnet_sparsity_probe
+
+# toolchain stamp: makes objects depend on CXX/CXXFLAGS so a compiler or flag
+# change rebuilds itself, which is what lets the deploy skip `make clean`.
+.buildflags

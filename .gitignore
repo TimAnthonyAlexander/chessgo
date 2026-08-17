@@ -30,3 +30,7 @@ frontend/node_modules
 /scratch_match.sh
 ios/ios.xcodeproj/project.xcworkspace/xcuserdata/tim.alexander.xcuserdatad/UserInterfaceState.xcuserstate
 __pycache__/
+
+# per-step input stamps written by chessgo-deploy (see ~/.zshrc) so an
+# unchanged step can be skipped on the next deploy.
+.deploy-stamps/

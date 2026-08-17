@@ -83,10 +83,25 @@ if (missingWasm.length > 0) {
 }
 
 fs.mkdirSync(PUBLIC_LOCAL_ENGINE_DIR, { recursive: true })
+// Copy only what actually differs — same principle the net uses below. An
+// unconditional copy rewrote these four files on every run, and since this
+// script runs as `prebuild`, the fresh mtimes made public/ look changed to
+// anything downstream that fingerprints it (chessgo-deploy's frontend gate),
+// forcing a full 12s vite build on deploys where nothing had changed.
+const copied = []
 for (const name of WASM_ARTIFACTS) {
-    fs.copyFileSync(path.join(ZUGZWANG_DIR, name), path.join(PUBLIC_LOCAL_ENGINE_DIR, name))
+    const src = path.join(ZUGZWANG_DIR, name)
+    const dest = path.join(PUBLIC_LOCAL_ENGINE_DIR, name)
+    const srcBuf = fs.readFileSync(src)
+    if (fs.existsSync(dest) && fs.readFileSync(dest).equals(srcBuf)) continue
+    fs.writeFileSync(dest, srcBuf)
+    copied.push(name)
 }
-log(`copied ${WASM_ARTIFACTS.join(', ')} -> public/local-engine/`)
+log(
+    copied.length > 0
+        ? `copied ${copied.join(', ')} -> public/local-engine/`
+        : `wasm artifacts unchanged (${WASM_ARTIFACTS.length} files) — nothing copied`,
+)
 
 // --- 2. the net: content-hash name it, copy, precompress -------------------
 

@@ -34,13 +34,27 @@ endif
 
 all: $(TARGET)
 
+# .buildflags: the toolchain half of the dependency graph. -MMD -MP tracks which
+# HEADERS an object needs, but nothing tracks the FLAGS it was compiled with, so
+# flipping CXX (clang++ <-> g++) or ASSERT=1 used to leave stale objects behind —
+# which is the only reason a deploy ever needed `make clean` (a full 39s rebuild
+# on every deploy, even when not one .cpp had changed). Stamping the toolchain
+# into a file that every object depends on makes that case rebuild itself, so an
+# incremental build is safe unconditionally. Rewritten only when the string
+# actually differs, or it would itself force a rebuild every time.
+BUILDFLAGS := $(CXX) | $(CXXFLAGS) | $(LDFLAGS)
+.buildflags: .FORCE
+	@[ "$$(cat $@ 2>/dev/null)" = "$(BUILDFLAGS)" ] || { \
+	  echo "$(BUILDFLAGS)" > $@; echo "  toolchain changed -> full rebuild"; }
+.FORCE:
+
 # Per-object compilation so `make -j` fans the 22 TUs across cores; -MMD -MP tracks
 # header deps so incremental (no `make clean`) rebuilds only what changed. The link
 # step re-runs whole-program LTO — -flto=auto parallelizes its LTRANS jobs.
 $(TARGET): $(OBJ)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $(OBJ)
 
-%.o: %.cpp
+%.o: %.cpp .buildflags
 	$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
 perft: src/perft.cpp src/position.cpp src/bitboard.cpp src/zobrist.cpp src/movegen.cpp \
@@ -52,18 +66,27 @@ perft: src/perft.cpp src/position.cpp src/bitboard.cpp src/zobrist.cpp src/moveg
 # format (src/nnue_web_format.h). Standalone — only needs the loader, not the
 # engine — so it does not disturb the main build. See tools/netweb_writer.cpp.
 #   Usage: ./tools/netweb_writer <input-float32-net> <output-prequantized-net>
-netweb: tools/netweb_writer.cpp src/nnue_net.cpp
-	$(CXX) $(CXXFLAGS) -Isrc -o tools/netweb_writer $^
+#   `netweb` stays the name you type; the real target is the BINARY, so it only
+#   relinks when its sources change (as a .PHONY recipe it rebuilt on every
+#   deploy — cheap here at ~1.7s, but see book_export for the same bug at 17s).
+netweb: tools/netweb_writer
+tools/netweb_writer: tools/netweb_writer.cpp src/nnue_net.cpp .buildflags
+	$(CXX) $(CXXFLAGS) -Isrc -o $@ $(filter %.cpp,$^)
 
 # book_export: BFS-walks from the start position + gomachine's opening suites,
 # probing book.bin (keys-only, no FENs stored) at each node to recover the
 # FEN for every reachable book entry. Standalone tool for the eval_cache bulk
 # import (scripts/import_book_evals.php). See tools/book_export.cpp.
 #   Usage: ./tools/book_export [--book=book.bin] [--max-ply=40] [--max-nodes=N] [-o out.tsv] [seed.epd ...]
-book_export: tools/book_export.cpp src/book.cpp src/position.cpp src/bitboard.cpp \
+#   As with netweb, the real target is the BINARY. This one recompiles 12 TUs
+#   through LTO — 17s, and as a .PHONY target it paid that on EVERY deploy even
+#   though book.bin changes a few times a year.
+book_export: tools/book_export
+tools/book_export: tools/book_export.cpp src/book.cpp src/position.cpp src/bitboard.cpp \
        src/zobrist.cpp src/movegen.cpp src/rules.cpp src/weakening.cpp src/antichess.cpp \
-       src/nnue_net.cpp src/nnue_features.cpp src/nnue_eval.cpp src/nnue_accumulator.cpp
-	$(CXX) $(CXXFLAGS) -Isrc -o tools/book_export $^
+       src/nnue_net.cpp src/nnue_features.cpp src/nnue_eval.cpp src/nnue_accumulator.cpp \
+       .buildflags
+	$(CXX) $(CXXFLAGS) -Isrc -o $@ $(filter %.cpp,$^)
 
 # tbdefend: perfect Syzygy DTZ oracle — the opponent AND the judge for the
 # tablebase-conversion suite (test/tb_conversion.py). Fathom's root probe
@@ -168,12 +191,14 @@ sfnet: $(SFNET_TARGET)
 $(SFNET_TARGET): $(SFNET_OBJ)
 	$(CXX) $(CXXFLAGS) -DSFNET_BACKEND $(LDFLAGS) -o $@ $(SFNET_OBJ)
 
-$(SFNET_OBJDIR)/%.o: src/%.cpp
+# .buildflags here too, for the same reason the default objects have it: a compiler
+# or flag change must rebuild these rather than silently mixing toolchains.
+$(SFNET_OBJDIR)/%.o: src/%.cpp .buildflags
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -DSFNET_BACKEND -MMD -MP -c $< -o $@
 
 clean:
-	rm -f $(TARGET) $(SFNET_TARGET) perft_test $(OBJ) $(DEP) tools/netweb_writer \
+	rm -f $(TARGET) $(SFNET_TARGET) perft_test $(OBJ) $(DEP) .buildflags tools/netweb_writer \
 	      test/nnue_web_format_test test/secretqueen_test tools/book_export tools/tbdefend \
 	      test/sfnet_load_test test/sfnet_eval_test test/sfnet_acc_test test/sfnet_sparsity_probe
 	rm -rf $(SFNET_OBJDIR)
@@ -181,5 +206,5 @@ clean:
 -include $(DEP)
 -include $(SFNET_DEP)
 
-.PHONY: all clean perft netweb nnue_web_format_test secretqueen_test book_export tbdefend \
+.PHONY: all clean perft netweb nnue_web_format_test secretqueen_test book_export tbdefend .FORCE \
         sfnet_load_test sfnet_eval_test sfnet_acc_test sfnet sfnet_sparsity_probe
