@@ -281,9 +281,17 @@ reverse-proxies the API and `/ws`; PHP under PHP-FPM (`www-data`); the Go hub +
 engine as systemd units run as `tim`. **zugzwang needs its own service on `:6476`**
 (a `chessgo-zugzwang` unit) or set `ENGINE_PRIMARY=gomachine`.
 
-**Prod amd64 build (zugzwang):** build with `-ffp-contract=off` to match Go's
-scalar float order (bit-exact eval):
-`g++ -std=c++17 -O3 -flto -DNDEBUG -march=native -ffp-contract=off -pthread -o zugzwang src/*.cpp`.
+**Prod amd64 build (zugzwang):** `cd zugzwang && make -j CXX=g++`. The Makefile
+already carries `-ffp-contract=off` (needed to match Go's scalar float order for a
+bit-exact eval) and `-march=native`, and its `SRC` list is the authority on which
+translation units belong in the engine.
+
+**Do not build with `g++ ... src/*.cpp`.** That glob was documented here previously and
+is wrong twice over: it pulls in `src/wasm_main.cpp`, which includes `<emscripten.h>` and
+fails any native build, and it would also sweep in `src/sfnet_*.cpp` — the separate
+Stockfish-net experiment backend, which belongs only in `make sfnet`'s `zugzwang_sfnet`
+binary and never in the engine we ship. `chessgo-deploy` on lairner has always used
+`make`; the glob was stale documentation, not a live path.
 
 Deploy: `git pull` → `composer install --no-dev` → `php mason migrate:apply -y` →
 rebuild Go + zugzwang → `bun run build` (with `VITE_API_URL`) → restart the

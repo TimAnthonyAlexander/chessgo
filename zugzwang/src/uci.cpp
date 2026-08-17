@@ -5,6 +5,9 @@
 #include "eval.h"
 #include "nnue.h"
 #include "nnue_internal.h"   // SATDIAG rail counters, reported by the `eval` command
+#ifdef SFNET_BACKEND
+#include "sfnet.h"
+#endif
 #include "nnue_arch.h"
 #include "tt.h"
 #include "bitboard.h"
@@ -13,6 +16,7 @@
 #include "zug_tb.h"
 #include "rating.h"
 #include "rules.h"
+#include <cstdlib>
 #include <iostream>
 #include <sstream>
 #include <thread>
@@ -303,10 +307,30 @@ void uci_init() {
     Eval::init();
     Search::init();
 #ifndef __EMSCRIPTEN__
+#ifdef SFNET_BACKEND
+    // Wave 5 §A (docs/tasks/open/sf-net-experiment.md): SFNET_BACKEND builds load the SF
+    // net instead of ours — env SFNET_NET if set, else the cwd-relative "sfnet.nnue"
+    // symlink (same convention as net.nnue). A failed load is FATAL, not a silent HCE
+    // fallback: Eval::evaluate's SFNET_BACKEND branch returns hce_evaluate() whenever
+    // !SFNet::loaded(), which would otherwise make an SPRT measure HCE vs HCE.
+    {
+        const char* p = getenv("SFNET_NET");
+        const std::string sfNetPath = (p && *p) ? p : "sfnet.nnue";
+        if (SFNet::load(sfNetPath.c_str())) {
+            std::cerr << "SFNet: loaded " << sfNetPath << " (SFNET_BACKEND build)\n";
+        } else {
+            std::cerr << "SFNet: FATAL — failed to load " << sfNetPath
+                       << "; SFNET_BACKEND requires a working SF net (refusing to silently "
+                          "fall back to HCE)\n";
+            std::exit(1);
+        }
+    }
+#else
     if (NNUE::load("net.nnue"))
         std::cerr << "NNUE: loaded net.nnue\n";
     else
         std::cerr << "NNUE: net.nnue absent — using HCE\n";
+#endif
     if (book.load("book.bin"))
         std::cerr << "Book: loaded book.bin\n";
     else

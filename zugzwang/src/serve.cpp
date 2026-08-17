@@ -13,6 +13,9 @@
 #include "zug_tb.h"
 #include "eval.h"
 #include "nnue.h"
+#ifdef SFNET_BACKEND
+#include "sfnet.h"
+#endif
 #include "openings.h"
 #include "position.h"
 #include "search.h"
@@ -25,6 +28,7 @@
 #include <algorithm>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <list>
@@ -187,11 +191,27 @@ int serve_main(int argc, char** argv) {
     Zobrist::init();
     Eval::init();
     Search::init();
+#ifdef SFNET_BACKEND
+    // Wave 5 §A: see uci.cpp's identical block for the rationale (fatal, not HCE fallback).
+    {
+        const char* p = getenv("SFNET_NET");
+        const std::string sfNetPath = (p && *p) ? p : "sfnet.nnue";
+        if (SFNet::load(sfNetPath.c_str())) {
+            std::cerr << "SFNet: loaded " << sfNetPath << " (SFNET_BACKEND build)\n";
+        } else {
+            std::cerr << "SFNet: FATAL — failed to load " << sfNetPath
+                       << "; SFNET_BACKEND requires a working SF net (refusing to silently "
+                          "fall back to HCE)\n";
+            std::exit(1);
+        }
+    }
+#else
     if (NNUE::load("net.nnue")) {
         std::cerr << "NNUE: loaded net.nnue\n";
     } else {
         std::cerr << "NNUE: net.nnue absent — using HCE\n";
     }
+#endif
     // Opening book (same GMBK file/path convention as the UCI path's
     // book.bin): absent/unusable is non-fatal — /bestmove just falls through
     // to search, exactly like a missing net falls through to HCE above.

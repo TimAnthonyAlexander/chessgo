@@ -227,6 +227,46 @@ default-on, +2.82%), `APPLYPREFETCH` (prefetch next FT column, **amd64-default-o
 verdicts: `docs/tasks/open/pretrain-posttrain-campaign.md`. The dominant `apply_diff` threat-
 column bandwidth (19.3%) is the remaining prize — needs **int8-QAT (August retrain)**.
 
+## Second NNUE backend: Stockfish's net in our search (`src/sfnet_*`)
+
+`make sfnet` builds **`zugzwang_sfnet`**, a separate binary that evaluates with
+**Stockfish 18's own network** inside our search. Built to separate "how much of the gap
+to SF is the net" from "how much is the search" — a question that was unfalsifiable while
+the two were fused. Results: **`../docs/tasks/done/sf-net-experiment-results.md`**.
+Open follow-ups: `../docs/tasks/open/sfnet-followups.md`.
+
+**No Stockfish code is linked, copied or vendored** — an independent implementation of the
+published format and forward pass, written against `~/sf18-arm` as a spec. The `.nnue`
+weights are GPLv3 data from the Stockfish project.
+
+- **Selected at COMPILE time**, never at runtime: `-DSFNET_BACKEND` switches
+  `EngineAccStack` (`src/engine_backend.h`) between `NNUE::AccStack` and
+  `SFNet::AccStack`. Without it the production engine's generated code is unchanged — its
+  search output is byte-identical to main, verified, not assumed.
+- Loads `sfnet.nnue` (or `$SFNET_NET`). **A failed load is fatal, deliberately** — a
+  silent HCE fallback would let an SPRT measure nothing and look fine doing it.
+- `SFNETK` (percent, default 48 = 100/208) scales SF `Value` units to our cp;
+  `SFNETLAZYACC=0` kills the deferred accumulator. `RULE50DAMP` defaults OFF here because
+  `SFNet::post_process` already applies SF's own rule50 term.
+
+Gates — run all three after touching `src/sfnet_*`:
+```
+make sfnet_load_test && ./test/sfnet_load_test <big.nnue> <small.nnue>
+make sfnet_eval_test && ./test/sfnet_eval_test <big.nnue> test/sfnet_corpus.epd   # diff vs test/sfnet_corpus_ref.tsv
+make sfnet_acc_test  && ./test/sfnet_acc_test  <big.nnue> test/sfnet_corpus.epd   # 11,089,304 nodes, 0 drift
+```
+The eval gate is **bit-exact against Stockfish's own `(psqt, positional)` integers** over
+560 positions spanning all 8 buckets and all four king-mirror combinations — the reference
+TSV is committed, the throwaway patched SF that produced it is not. `tools/sfnet_parse.py`
+is a stdlib-only reference parser for the file format and the loader's oracle.
+
+**Two findings from this that matter to OUR net**, both measured:
+`docs/sfnet-rail-comparison.md` shows our eval railing to a per-bucket constant on **100%**
+of positions once a side is down N+B+R, where SF's linear psqt head stays monotonic in
+material (12/12 bucket-fixed bases vs our 2/12) — an architecture argument for the retrain.
+And ~**88% of our Elo gap to Stockfish survives handing our engine Stockfish's exact
+eval**, so the gap is search and implementation rather than the network.
+
 ## Bot strength ladder (`src/rating.cpp`, `src/weakening.cpp`)
 
 Every below-full-strength bot on the site — the `/bot` picker, hub matchmaking

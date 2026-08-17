@@ -97,10 +97,89 @@ secretqueen_test: test/secretqueen_test.cpp test/secretqueen_test_stubs.cpp src/
        src/movegen.cpp src/weakening.cpp
 	$(CXX) $(CXXFLAGS) -o test/secretqueen_test $^
 
+# sfnet_load_test: Wave 1 gate for the SF-net experiment backend — the C++ loader must
+# agree array for array with tools/sfnet_parse.py, and must REFUSE the small net and a
+# truncated file. Standalone: the loader has no engine dependencies at all.
+#   Usage: make sfnet_load_test && ./test/sfnet_load_test <big.nnue> [small.nnue]
+sfnet_load_test: test/sfnet_load_test.cpp src/sfnet_load.cpp
+	$(CXX) $(CXXFLAGS) -Isrc -o test/sfnet_load_test $^
+
+# sfnet_eval_test: Wave 2 gate for the SF-net experiment backend — builds and runs the
+# from-scratch (no incremental accumulator, no SIMD) forward pass over a FEN corpus.
+# Reuses NNUE::active_features() (src/nnue_features.cpp) for the threat half, which is
+# why this pulls in the same link set as nnue_web_format_test rather than the loader
+# test's standalone two files.
+#   Usage: make sfnet_eval_test && ./test/sfnet_eval_test [--self-check] <net.nnue> <fens.epd>
+sfnet_eval_test: test/sfnet_eval_test.cpp src/sfnet_load.cpp src/sfnet_eval.cpp \
+       src/position.cpp src/bitboard.cpp src/zobrist.cpp src/movegen.cpp src/rules.cpp \
+       src/weakening.cpp src/antichess.cpp src/nnue_net.cpp src/nnue_features.cpp \
+       src/nnue_eval.cpp src/nnue_accumulator.cpp
+	$(CXX) $(CXXFLAGS) -Isrc -o test/sfnet_eval_test $^
+
+# sfnet_sparsity_probe: Wave 8 first step — measures how many of forward_pass's 1024
+# ft[] activations are exactly zero over test/sfnet_corpus.epd, the number that decides
+# whether SF's AffineTransformSparseInput fc_0 (find_nnz + scrambled weight layout) is
+# worth porting here at all. Read-only instrumentation (SFNet::g_sfnet_probe_sparsity),
+# same link set as sfnet_eval_test since it drives the same evaluate_raw() path.
+#   Usage: make sfnet_sparsity_probe && ./test/sfnet_sparsity_probe <net.nnue> <fens.epd>
+sfnet_sparsity_probe: test/sfnet_sparsity_probe.cpp src/sfnet_load.cpp src/sfnet_eval.cpp \
+       src/position.cpp src/bitboard.cpp src/zobrist.cpp src/movegen.cpp src/rules.cpp \
+       src/weakening.cpp src/antichess.cpp src/nnue_net.cpp src/nnue_features.cpp \
+       src/nnue_eval.cpp src/nnue_accumulator.cpp
+	$(CXX) $(CXXFLAGS) -Isrc -o test/sfnet_sparsity_probe $^
+
+# sfnet_acc_test: Wave 4 gate for the SF-net experiment backend — the incremental
+# accumulator (src/sfnet_accumulator.cpp). Walks a real do_move/undo_move tree off the
+# 560-FEN corpus plus targeted edge-case FENs (castling/en passant/promotion/mirror-
+# crossing king moves, hardcoded in the test — sfnet_corpus.epd itself never changes)
+# and compares the incremental state against evaluate_raw()'s from-scratch oracle at
+# every node. MUST be built with -DSFNET_BACKEND: EngineAccStack (src/engine_backend.h)
+# has to resolve to SFNet::AccStack for Position::set_nnue_acc(&stack) to compile.
+#   Usage: make sfnet_acc_test && ./test/sfnet_acc_test <net.nnue> test/sfnet_corpus.epd [--depth N]
+#   Add ASSERT=1 to also compile SFNet::AccStack::eval()'s own -DNNUE_ASSERT self-check
+#   (redundant with this test's explicit eval_pair() comparison, but matches the
+#   engine's own `make ASSERT=1` convention for this class of gate).
+sfnet_acc_test: test/sfnet_acc_test.cpp src/sfnet_load.cpp src/sfnet_eval.cpp \
+       src/sfnet_accumulator.cpp src/position.cpp src/bitboard.cpp src/zobrist.cpp \
+       src/movegen.cpp src/rules.cpp src/weakening.cpp src/antichess.cpp \
+       src/nnue_net.cpp src/nnue_features.cpp src/nnue_eval.cpp src/nnue_accumulator.cpp
+	$(CXX) $(CXXFLAGS) -DSFNET_BACKEND -Isrc -o test/sfnet_acc_test $^
+
+# sfnet: a SEPARATE playable binary (zugzwang_sfnet) with the SF-net backend baked in —
+# docs/sfnet-wave5.md §A. Compiles the FULL engine SRC list (main.cpp, uci.cpp, serve.cpp,
+# ratingtest.cpp, everything) plus the three SF-backend TUs, all under -DSFNET_BACKEND, so
+# uci/serve/ratingtest's startup paths take their SFNET_BACKEND branch and load the SF net
+# (env SFNET_NET, else cwd-relative sfnet.nnue) instead of net.nnue.
+#
+# Objects land in objs_sfnet/, NOT src/ alongside the normal build's .o files — those are
+# compiled with different flags (-DSFNET_BACKEND) and must never be linked into (or silently
+# reused by) `./zugzwang`. `make && make sfnet && make` is checked to leave both binaries
+# correct: the objs_sfnet/ tree is untouched by a plain `make`, and src/*.o is untouched by
+# `make sfnet` (see docs/sfnet-wave5.md for the explicit verification).
+#   Usage: make sfnet && ./zugzwang_sfnet
+SFNET_TARGET = zugzwang_sfnet
+SFNET_OBJDIR = objs_sfnet
+SFNET_SRC    = $(SRC) src/sfnet_load.cpp src/sfnet_eval.cpp src/sfnet_accumulator.cpp
+SFNET_OBJ    = $(patsubst src/%.cpp,$(SFNET_OBJDIR)/%.o,$(SFNET_SRC))
+SFNET_DEP    = $(SFNET_OBJ:.o=.d)
+
+sfnet: $(SFNET_TARGET)
+
+$(SFNET_TARGET): $(SFNET_OBJ)
+	$(CXX) $(CXXFLAGS) -DSFNET_BACKEND $(LDFLAGS) -o $@ $(SFNET_OBJ)
+
+$(SFNET_OBJDIR)/%.o: src/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -DSFNET_BACKEND -MMD -MP -c $< -o $@
+
 clean:
-	rm -f $(TARGET) perft_test $(OBJ) $(DEP) tools/netweb_writer test/nnue_web_format_test \
-	      test/secretqueen_test tools/book_export tools/tbdefend
+	rm -f $(TARGET) $(SFNET_TARGET) perft_test $(OBJ) $(DEP) tools/netweb_writer \
+	      test/nnue_web_format_test test/secretqueen_test tools/book_export tools/tbdefend \
+	      test/sfnet_load_test test/sfnet_eval_test test/sfnet_acc_test test/sfnet_sparsity_probe
+	rm -rf $(SFNET_OBJDIR)
 
 -include $(DEP)
+-include $(SFNET_DEP)
 
-.PHONY: all clean perft netweb nnue_web_format_test secretqueen_test book_export tbdefend
+.PHONY: all clean perft netweb nnue_web_format_test secretqueen_test book_export tbdefend \
+        sfnet_load_test sfnet_eval_test sfnet_acc_test sfnet sfnet_sparsity_probe

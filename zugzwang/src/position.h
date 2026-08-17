@@ -2,10 +2,11 @@
 #include "types.h"
 #include "bitboard.h"
 #include "move.h"
+#include "engine_backend.h"
 #include <string>
 #include <vector>
 
-namespace NNUE { class AccStack; struct BoardSnapshot; }
+namespace NNUE { struct BoardSnapshot; }
 
 struct StateInfo {
     // Copied/updated on make_move
@@ -85,8 +86,10 @@ public:
     // Incremental NNUE accumulator: attached by the search for its duration (null
     // otherwise, so perft / UCI move-application / tests take the from-scratch eval
     // path). When set, do_move/undo_move/do_null_move/undo_null_move drive it in lockstep.
-    NNUE::AccStack* nnue_acc() const { return nnueAcc; }
-    void set_nnue_acc(NNUE::AccStack* a) { nnueAcc = a; }
+    // EngineAccStack (src/engine_backend.h) is NNUE::AccStack, or SFNet::AccStack when
+    // built with -DSFNET_BACKEND — a compile-time choice, resolved with zero runtime cost.
+    EngineAccStack* nnue_acc() const { return nnueAcc; }
+    void set_nnue_acc(EngineAccStack* a) { nnueAcc = a; }
 
     // LAZYACC2: fills `out` with this position's CURRENT piece placement + the
     // (game-fixed) castling-rook-origin squares — the byte-exact equivalent of
@@ -193,7 +196,7 @@ private:
     // Computed once in set() by refresh_castling_mask(); mirrors gomachine's
     // Position.castleMask.
     int castlingRightsMask[SQUARE_NB];
-    NNUE::AccStack* nnueAcc = nullptr;
+    EngineAccStack* nnueAcc = nullptr;
     // Display-only FEN fullmove counter (SPSA/search/perft never read this —
     // it exists purely so fen() round-trips correctly for the HTTP serve
     // layer, which the search's own move-application never needed before).

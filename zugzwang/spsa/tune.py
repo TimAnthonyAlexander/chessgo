@@ -109,9 +109,50 @@ NEWPARAMS = [
     ("RfpTtHitCoeff",   23,      5,     50,     4),
     ("SingCorrDiv", 230673,  80000, 500000, 30000),
 ]
+MARGINS2_PARAMS = [
+    # name              start min  max  c_end     (SPSA_SET=margins2, 2026-08-15)
+    #
+    # RESULT: RAN AND REJECTED — do not re-run this as-is expecting a different answer.
+    # 4000 iterations completed; final theta was
+    #   RfpMargin=86 RazorMargin=327 FutSlope=108 SeeQuietCoeff=17
+    #   NmpEvalDiv=172 SingularMargin=43 FutBase=101 CaptSeeCoeff=7
+    # Confirmation SPRT of that vector vs the defaults below, same binary both sides,
+    # 100ms, full 1600 games: -3.47 +/- 8.93, LLR -0.61. Not an improvement.
+    #
+    # Read it as "this tune did not find a better basin", NOT as "the current vector is
+    # jointly optimal" — 8 games per iteration is noise-dominated and SPSA can miss. What
+    # it does retire is the specific hypothesis that unpinning FutBase/CaptSeeCoeff was
+    # leaving Elo on the table: both were free to move (FutBase ran 0->101, CaptSeeCoeff
+    # 23->7) and the result still did not beat base. Mid-run wander was large on
+    # SingularMargin (35->18->43) and NmpEvalDiv (120->91->172), which suggests the
+    # objective is flat in those directions rather than that those endpoints mean much.
+    # MARGIN_PARAMS re-run from the CURRENT accepted defaults, with the two margins it had
+    # to leave out put back. Its exclusion note ("their base values sit below the UCI option
+    # min (40)") is STALE: the engine now reports `FutBase min 0` and `CaptSeeCoeff min 0`,
+    # so the clamp that blocked them is gone and they have sat pinned at their defaults
+    # through every joint tune since for no remaining reason.
+    #
+    # The point of re-running is joint-vs-solo, not a fresh start: each of these is
+    # individually at a value that won or held its own SPRT, which does NOT make the vector
+    # jointly optimal — one-at-a-time optimisation settles on a ridge where every single
+    # step is downhill and a correlated one is not. Evidence it matters is already in this
+    # file: see lmrcluster ("positive basin where each term washes solo") and histmargin's
+    # "works in combination" hypothesis. A direct check of the same idea — RfpMargin 84->60
+    # alone — measured -5.9 +/- 9.5 over 1238 games, i.e. the axis is locally downhill,
+    # which says nothing about the joint optimum.
+    ("RfpMargin",         84,  40, 130,   5),
+    ("RazorMargin",      222, 100, 350,  12),
+    ("FutSlope",         107,  40, 150,   6),
+    ("SeeQuietCoeff",     17,  10,  45,   2),
+    ("NmpEvalDiv",       120,  80, 400,  16),
+    ("SingularMargin",    35,  16,  80,   3),
+    ("FutBase",            0,   0, 220,  11),   # newly unblocked
+    ("CaptSeeCoeff",      23,   0, 180,   9),   # newly unblocked
+]
 _SPSA_SET = os.environ.get("SPSA_SET", "capthist")
 PARAMS = {"margins": MARGIN_PARAMS, "lmrcluster": LMRCLUSTER_PARAMS,
-          "histmargin": HISTMARGIN_PARAMS, "newparams": NEWPARAMS}.get(_SPSA_SET, CAPTHIST_PARAMS)
+          "histmargin": HISTMARGIN_PARAMS, "newparams": NEWPARAMS,
+          "margins2": MARGINS2_PARAMS}.get(_SPSA_SET, CAPTHIST_PARAMS)
 NAMES = [p[0] for p in PARAMS]
 START = {p[0]: float(p[1]) for p in PARAMS}
 LO = {p[0]: p[2] for p in PARAMS}
