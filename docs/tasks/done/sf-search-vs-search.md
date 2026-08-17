@@ -1,3 +1,27 @@
+# RESOLVED — see ../done/sf-net-experiment-results.md
+
+Both halves of this task were answered, and the static half was answered NEGATIVELY.
+
+**The games half ran.** `zugzwang_sfnet` vs `stockfish` (test 3): −203.83 ± 18.71 over 800
+games. `zugzwang` vs `stockfish` (test 4): −214.85 ± 18.38. So holding the net constant
+leaves ~88% of the gap standing. Live follow-ups moved to ../open/sfnet-followups.md.
+
+**The static half was wrong, and the table below is retained only as a worked example of
+the error.** Converting margins with `k = 0.481` produced "our RFP slope is 2.3x wider
+than SF's" and "our singular margin 2-5x wider". A direct SPRT settled it: `RfpMargin`
+84→60 measured **−5.89 ± 9.54 over 1238 games**, and a subsequent 4000-iteration joint
+SPSA over the whole margin set was rejected at −3.47 ± 8.93. The category error: `k` was
+fitted on eval LEVELS, while a pruning margin's correct size depends on the eval's SPREAD
+in the regime where it fires. Those are different quantities and one does not convert the
+other.
+
+The one row that survives is structural rather than numeric: **SF18's null-move reduction
+(`R = 7 + depth/3`) has no eval term at all**, while ours SPSA-tunes `nmpEvalDiv`. That is
+a shape difference, not a tuning difference, and is still untested. (Note `NMPSF` — the SF
+null-move rewrite — measured −0.00 under a sighted eval, so temper expectations.)
+
+---
+
 # SF18 vs zugzwang on the SAME net — how much of the gap is search
 
 Tests 3 and 4 of `sf-net-experiment.md` §7, now unblocked: with `zugzwang_sfnet`
