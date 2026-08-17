@@ -343,3 +343,41 @@ concretely, rather than leaving it as an open question.
 verdicts stand regardless of what `zugzwang_sfnet` shows — a sighted eval cannot make a
 history table or a TT-bound comparison behave differently, and re-running them there would
 just be spending SPRT budget to confirm a result the mechanism already guarantees.
+
+---
+
+## RESULT (2026-08-17): the hypothesis does not hold
+
+All five tier-1 candidates re-tested under the SIGHTED eval — both arms
+`zugzwang_sfnet`, lever ON vs explicitly OFF, 100ms, 1000 games each:
+
+| lever | under SF's net | previously, our net |
+|---|---|---|
+| `CORRMARGIN` | −2.08 ± 10.98 | −9.3 |
+| `RFPDEEP`    | −5.21 ± 9.98  | −5.8 |
+| `RAZORQUAD`  | −9.73 ± 10.57 | wash |
+| `NMPSF`      | −0.00 ± 10.19 | −27 / wash |
+| `CAPFUT`     | +2.08 ± 11.02 | noisy |
+
+**None flipped positive.** The idea was that these levers gate on `eval`, and were
+condemned on a net that rails to a per-bucket constant on 100% of decided positions —
+so a sighted eval should exonerate the good ones. It exonerates none of them.
+
+Two honest qualifications, neither of which rescues it:
+
+- Error bars are ±10-11 Elo and no run hit an SPRT bound, so a true +5 could still hide
+  in any of these. What is excluded is a LARGE win, which is what the hypothesis
+  predicted (`NMPSF` was −27 with our net; if eval blindness were the cause, a sighted
+  eval should have moved it decisively positive, not to exactly 0.00).
+- `CORRMARGIN` (−9.3 → −2.1) and `NMPSF` (−27 → 0.00) did drift toward neutral, so the
+  eval was probably doing *some* damage. But drifting to zero is not the same as being
+  good, and `RAZORQUAD` moved the other way (−9.7).
+
+**What this closes off:** the ~189 Elo of our gap to Stockfish that survives holding the
+net constant is NOT sitting in these already-written, already-rejected levers waiting
+for a better eval. Recovering it means new search work or implementation speed, not
+re-running the ledger. Do not re-propose this without a materially different argument.
+
+**What it does not touch:** the retrain case. Wave 3's rail measurement stands on its own
+— our net going blind in decided positions is a defect regardless of whether it happens
+to be what condemned these particular levers.
