@@ -17,7 +17,7 @@ import {
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import Board from '../components/Board'
-import BoardPage from '../components/BoardPage'
+import BoardPage, { useBoardLayout } from '../components/BoardPage'
 import ChatPanel from '../components/ChatPanel'
 import Clock, { ClockBar } from '../components/Clock'
 import LiveModeCard from '../components/LiveModeCard'
@@ -585,13 +585,59 @@ export default function LiveGame() {
     // The player's own rating for this pool (shown in the "You" bar; hidden under zen).
     const myRating = userRatingFor(user, g.variant, g.pool)
 
+    // The one thing that genuinely differs between the two page layouts: WHERE the
+    // player rows go. Lichess stacks them inside the right panel, top and bottom,
+    // with the move list between; chess.com hangs them off the board as full-width
+    // strips. Same two components either way — built here once, handed to whichever
+    // slot the active layout wants, so the two arrangements can never drift apart.
+    const chesscom = useBoardLayout() === 'chesscom'
+    const barVariant = chesscom ? 'strip' : 'rail'
+    const opponentBar = (
+        <PlayerBar
+            name={g.opponent.name}
+            title={g.opponent.title}
+            rating={g.opponent.anon || !prefs.showOpponentRating ? null : g.opponent.rating}
+            getMs={opponentGetMs}
+            active={!g.ended && g.sideToMove === other(g.color)}
+            running={!g.ended && g.moves.length >= 2}
+            initialMs={g.timeControl.base}
+            mat={mat}
+            color={other(g.color)}
+            online={g.opponentOnline}
+            divider="bottom"
+            zen={zen}
+            variant={barVariant}
+        />
+    )
+    const myBar = (
+        <PlayerBar
+            name="You"
+            title={user?.title}
+            rating={myRating}
+            getMs={myGetMs}
+            active={myTurn}
+            running={!g.ended && g.moves.length >= 2}
+            initialMs={g.timeControl.base}
+            mat={mat}
+            color={g.color}
+            divider="top"
+            zen={zen}
+            variant={barVariant}
+        />
+    )
+
     return (
         <BoardPage
             // Right card is compact by design (a fixed 7-row move list), so it shrinks
             // to its content and centres against the board. The LEFT column stays full
             // board-height with the chat filling whatever the cards above it leave —
-            // Lichess's live layout.
+            // Lichess's live layout. Ignored by the chess.com layout, whose rail is
+            // always full height.
             rightFit
+            // Board-hugging player strips — chess.com only. Left undefined for Lichess,
+            // where the same two bars live inside the right panel instead.
+            top={chesscom ? opponentBar : undefined}
+            bottom={chesscom ? myBar : undefined}
             left={
                 <>
                 {isCrazyhouse && (
@@ -617,7 +663,10 @@ export default function LiveGame() {
                         <LiveModeCard pool={g.pool} rated={g.rated} variant={g.variant} />
                     )}
                     {!zen && g.variant === 'standard' && <LiveOpening fen={g.fen} />}
-                    {!zen && prefs.showCaptured && (
+                    {/* Not in the chess.com layout: there the player strips carry the
+                        captured pieces themselves, and this panel would just repeat
+                        them a second time in the rail. */}
+                    {!zen && prefs.showCaptured && !chesscom && (
                         <CapturedPanel
                             mat={mat}
                             opponentColor={other(g.color)}
@@ -710,25 +759,9 @@ export default function LiveGame() {
                         </Box>
                     )}
 
-                    {/* Opponent */}
-                    <PlayerBar
-                        name={g.opponent.name}
-                        title={g.opponent.title}
-                        rating={
-                            g.opponent.anon || !prefs.showOpponentRating
-                                ? null
-                                : g.opponent.rating
-                        }
-                        getMs={opponentGetMs}
-                        active={!g.ended && g.sideToMove === other(g.color)}
-                        running={!g.ended && g.moves.length >= 2}
-                        initialMs={g.timeControl.base}
-                        mat={mat}
-                        color={other(g.color)}
-                        online={g.opponentOnline}
-                        divider="bottom"
-                        zen={zen}
-                    />
+                    {/* Opponent — in the chess.com layout this same bar is a strip
+                        above the board instead, so the panel omits it here. */}
+                    {!chesscom && opponentBar}
 
                     {/* Moves — a FIXED 7 rows: padded with empty rows when the game is
                         shorter and scrolling (auto-following the latest move) once it's
@@ -1037,20 +1070,8 @@ export default function LiveGame() {
                         </Box>
                     )}
 
-                    {/* You */}
-                    <PlayerBar
-                        name="You"
-                        title={user?.title}
-                        rating={myRating}
-                        getMs={myGetMs}
-                        active={myTurn}
-                        running={!g.ended && g.moves.length >= 2}
-                        initialMs={g.timeControl.base}
-                        mat={mat}
-                        color={g.color}
-                        divider="top"
-                        zen={zen}
-                    />
+                    {/* You — a strip below the board in the chess.com layout. */}
+                    {!chesscom && myBar}
 
                     <ConfirmDialog
                         open={confirmResignOpen}
@@ -1335,6 +1356,7 @@ const PlayerBar = memo(function PlayerBar({
     online,
     divider,
     zen = false,
+    variant = 'rail',
 }: {
     name: string
     title?: Title | null
@@ -1352,11 +1374,18 @@ const PlayerBar = memo(function PlayerBar({
     divider?: 'top' | 'bottom'
     /** Zen mode: suppress the rating badge, captured strip and clock (just the name). */
     zen?: boolean
+    /** Where this bar is standing.
+     *  `rail` — a narrow row inside the right panel, separated from its neighbours by
+     *  a hairline. The Lichess arrangement, and the default.
+     *  `strip` — a standalone board-width band hugging the board, with its own card
+     *  chrome. The chess.com arrangement, used when BoardPage is in that layout. */
+    variant?: 'rail' | 'strip'
 }) {
     const { captured, glyphColor } = sideMaterial(mat, color)
     // Single-key subscription — only re-renders this bar when the preference
     // itself changes, not on every settings edit.
     const showCaptured = useSetting('showCaptured')
+    const strip = variant === 'strip'
     return (
         <Box
             sx={{
@@ -1365,11 +1394,25 @@ const PlayerBar = memo(function PlayerBar({
                 alignItems: 'center',
                 gap: 1.25,
                 px: 1.75,
-                py: 1.25,
-                bgcolor: 'var(--bg-2)',
-                borderTop: divider === 'top' ? '1px solid var(--line-soft)' : undefined,
-                borderBottom: divider === 'bottom' ? '1px solid var(--line-soft)' : undefined,
                 overflow: 'hidden',
+                // A rail row is a band inside the panel, divided from its neighbours by
+                // a hairline; a strip is a standalone card that fills the height the
+                // layout reserved for it.
+                ...(strip
+                    ? {
+                          height: { xs: 'auto', md: '100%' },
+                          py: { xs: 1.25, md: 0 },
+                          bgcolor: 'var(--surface)',
+                          border: '1px solid var(--line-soft)',
+                          borderRadius: 'var(--panel-radius)',
+                      }
+                    : {
+                          py: 1.25,
+                          bgcolor: 'var(--bg-2)',
+                          borderTop: divider === 'top' ? '1px solid var(--line-soft)' : undefined,
+                          borderBottom:
+                              divider === 'bottom' ? '1px solid var(--line-soft)' : undefined,
+                      }),
             }}
         >
             <Avatar small>
@@ -1402,13 +1445,19 @@ const PlayerBar = memo(function PlayerBar({
                     </Typography>
                 )}
             </Box>
-            {/* Compact strip in the bar on MOBILE only — on desktop the captured
-                pieces live in the roomy left-column CapturedPanel (no wrapping). */}
+            {/* Rail: compact strip in the bar on MOBILE only — on desktop the captured
+                pieces live in the roomy left-column CapturedPanel (no wrapping).
+                Strip: shown at every breakpoint, because in that layout the strip IS
+                where captured material lives — there's no column beside the board to
+                defer to, and the board-width band has room for it. */}
             {!zen && showCaptured && (
                 <CapturedGlyphs
                     captured={captured}
                     glyphColor={glyphColor}
-                    sx={{ display: { xs: 'flex', md: 'none' }, maxWidth: 150 }}
+                    sx={{
+                        display: strip ? 'flex' : { xs: 'flex', md: 'none' },
+                        maxWidth: strip ? 260 : 150,
+                    }}
                 />
             )}
             {!zen && (

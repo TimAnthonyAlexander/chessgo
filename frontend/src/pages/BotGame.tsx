@@ -8,6 +8,7 @@ import {
     ToggleButtonGroup,
     Typography,
 } from '@mui/material'
+import type { SxProps, Theme } from '@mui/material'
 import {
     Bot,
     ChevronLeft,
@@ -29,7 +30,7 @@ import { toWhiteEval } from '../lib/engineEval'
 import MoveList from '../components/MoveList'
 import GameModeCard from '../components/GameModeCard'
 import NewBadge from '../components/NewBadge'
-import BoardPage from '../components/BoardPage'
+import BoardPage, { useBoardLayout } from '../components/BoardPage'
 import { ActionBtn, Avatar, ErrorBanner, NavBtn } from '../components/PanelUI'
 import TitleBadge from '../components/TitleBadge'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -839,11 +840,44 @@ export default function BotGame() {
             ? 'bright'
             : 'dim'
 
+    // Captured material for the player strips, from the SHOWN board so they track
+    // history review. MovePanel derives the same thing for its own rows; only one
+    // of the two ever renders, and both read the same fen.
+    const boardMat = useMemo(() => computeMaterial(boardFen), [boardFen])
+
+    // Where the player rows go is the one thing that genuinely differs between the
+    // two board-page layouts: inside the move panel for Lichess, hanging off the
+    // board as full-width strips for chess.com. Same two components either way.
+    const chesscom = useBoardLayout() === 'chesscom'
+    const strips = chesscom && !!game
+    const rowCtx: PlayerRowCtx | null = game
+        ? { game, mat: boardMat, ongoing, thinking, zen: prefs.zenMode && ongoing }
+        : null
+
     return (
         <BoardPage
             // Right card is compact by design (a fixed 7-row move list), so it shrinks
-            // to its content and centres against the board, same as LiveGame.
+            // to its content and centres against the board, same as LiveGame. Ignored
+            // by the chess.com layout, whose rail is always full height.
             rightFit
+            // Board-hugging player strips — chess.com only, and only once a game
+            // exists (the setup screen has no players to show).
+            top={
+                strips && rowCtx ? (
+                    <BotPlayerRow ctx={rowCtx} rating={rating} variant="strip" />
+                ) : undefined
+            }
+            bottom={
+                strips && rowCtx ? (
+                    <HumanPlayerRow
+                        ctx={rowCtx}
+                        humanTitle={user?.title}
+                        caption={caption}
+                        statusTone={statusTone}
+                        variant="strip"
+                    />
+                ) : undefined
+            }
             left={
                 <>
                     {isCrazyhouse && game && (
@@ -902,6 +936,7 @@ export default function BotGame() {
                         bestFen={boardFen}
                         bestMyTurn={interactive && !isCrazyhouse}
                         onBestHint={setBestHint}
+                        playerRows={!chesscom}
                         gameStartFen={startFen ?? START_FEN}
                     />
                 ) : designating ? (
@@ -1048,6 +1083,232 @@ const TONE_COLOR: Record<StatusTone, string> = {
     dim: 'var(--text-dim)',
 }
 
+// ---------------------------------------------------------------------------
+// The two player rows of a bot game, as standalone components.
+//
+// They exist apart from MovePanel because WHERE they go is the one thing that
+// genuinely differs between the app's two board-page layouts: the Lichess layout
+// stacks them inside the move panel (top and bottom, `rail`), the chess.com layout
+// hangs them off the board as full-width bands (`strip`). Same components, same
+// values, two homes — which is what keeps the two arrangements from drifting.
+// ---------------------------------------------------------------------------
+
+/** Everything both rows read off the live game, built once by whoever renders
+ *  them: MovePanel in the Lichess layout, the page itself in the chess.com one. */
+interface PlayerRowCtx {
+    game: Game
+    /** Material for the SHOWN board, so the rows track history review like the
+     *  eval bar does. */
+    mat: ReturnType<typeof computeMaterial>
+    ongoing: boolean
+    /** A move request is in flight — clocks freeze rather than guess. */
+    thinking: boolean
+    /** Zen mode: hide the rating chrome. */
+    zen: boolean
+}
+
+type RowVariant = 'rail' | 'strip'
+
+/** A row's shell: the panel row it has always been, or a standalone card that
+ *  fills the height the chess.com layout reserved for its strip. Passing the rail
+ *  styling through untouched is deliberate — the Lichess arrangement is the
+ *  default and must stay pixel-identical. */
+function rowSx(variant: RowVariant, rail: SxProps<Theme>): SxProps<Theme> {
+    if (variant !== 'strip') return rail
+    return {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 1.25,
+        px: 1.75,
+        minWidth: 0,
+        overflow: 'hidden',
+        height: { xs: 'auto', md: '100%' },
+        py: { xs: 1.25, md: 0 },
+        bgcolor: 'var(--surface)',
+        border: '1px solid var(--line-soft)',
+        borderRadius: 'var(--panel-radius)',
+    }
+}
+
+function capturedBy(mat: ReturnType<typeof computeMaterial>, c: Color): string[] {
+    return c === 'w' ? mat.capturedByWhite : mat.capturedByBlack
+}
+
+function advantageOf(mat: ReturnType<typeof computeMaterial>, c: Color): number {
+    const d = c === 'w' ? mat.diff : -mat.diff
+    return d > 0 ? d : 0
+}
+
+/** How strong the opponent is for the move you're about to face, and how far that
+ *  has fallen from full strength. The server recomputes effective_rating from the
+ *  move history on every serialization, so this tracks the handicap live;
+ *  `fallback` only covers a payload predating the field. Shared so the panel and
+ *  the page can never advertise two different numbers for the same bot. */
+function effectiveRatingOf(game: Game, fallback: number): number {
+    return game.effective_rating ?? game.rating ?? fallback
+}
+
+function handicapDropOf(game: Game, effective: number): number {
+    return FIXED_STRENGTH_VARIANTS.includes(game.variant) ? FULL_STRENGTH_RATING - effective : 0
+}
+
+function BotPlayerRow({
+    ctx: { game, mat, ongoing, thinking, zen },
+    rating,
+    variant = 'rail',
+}: {
+    ctx: PlayerRowCtx
+    /** Fallback strength for a payload with no effective_rating. */
+    rating: number
+    variant?: RowVariant
+}) {
+    const showCaptured = useSetting('showCaptured')
+    const showOpponentRating = useSetting('showOpponentRating')
+    const human = game.human_color
+    const opp = other(human)
+    const captured = (c: Color) => capturedBy(mat, c)
+    const advantage = (c: Color) => advantageOf(mat, c)
+    const effectiveRating = effectiveRatingOf(game, rating)
+    const handicapDrop = handicapDropOf(game, effectiveRating)
+    return (
+        <Box
+            sx={rowSx(variant, {
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1.25,
+                px: 1.75,
+                py: 1.5,
+                bgcolor: 'var(--bg-2)',
+                borderBottom: '1px solid var(--line-soft)',
+            })}
+        >
+            <Avatar>
+                <Bot size={18} />
+            </Avatar>
+            <Box sx={{ minWidth: 0, lineHeight: 1.2 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                    <Typography
+                        sx={{
+                            fontFamily: 'var(--font-display)',
+                            fontWeight: 700,
+                            fontSize: 15.5,
+                        }}
+                    >
+                        Zugzwang
+                    </Typography>
+                    <NewBadge />
+                </Box>
+                {/* Zen mode hides the rating chrome (distraction-free play); the
+                    showOpponentRating preference gates it independently, same as
+                    LiveGame's opponent rating readout.
+
+                    Always the server's effective_rating, never the stored one:
+                    Fading and Glass Jaw keep a full-strength sentinel in `rating`
+                    and weaken per move, so `rating` would advertise a frozen
+                    "~3500 Elo" for an opponent that is already far weaker. The
+                    drop from full strength rides alongside it, so the handicap is
+                    something you can watch happen rather than infer. */}
+                {!zen && showOpponentRating && (
+                    <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
+                        Engine · {ratingLabel(effectiveRating)}
+                        {handicapDrop > 0 && (
+                            <Box
+                                component="span"
+                                sx={{
+                                    fontFamily: 'var(--font-mono)',
+                                    fontWeight: 700,
+                                    color: '#ca4a4a',
+                                    ml: 0.75,
+                                }}
+                            >
+                                −{handicapDrop}
+                            </Box>
+                        )}
+                    </Typography>
+                )}
+            </Box>
+            {showCaptured && (
+                <MaterialStrip pieces={captured(opp)} color={human} adv={advantage(opp)} />
+            )}
+            {/* Bot's clock — only when this game has a time control at all; an
+                untimed game renders none of this (no empty clock furniture). */}
+            {game.time_control && (
+                <Box sx={{ ml: 'auto' }}>
+                    <Clock
+                        getMs={() => remainingMs(game, opp)}
+                        active={ongoing && !thinking && game.side_to_move === opp}
+                        running={ongoing}
+                    />
+                </Box>
+            )}
+        </Box>
+    )
+}
+
+function HumanPlayerRow({
+    ctx: { game, mat, ongoing, thinking },
+    humanTitle,
+    caption,
+    statusTone,
+    variant = 'rail',
+}: {
+    ctx: PlayerRowCtx
+    humanTitle?: Title | null
+    caption: string
+    statusTone: StatusTone
+    variant?: RowVariant
+}) {
+    const showCaptured = useSetting('showCaptured')
+    const human = game.human_color
+    const opp = other(human)
+    const captured = (c: Color) => capturedBy(mat, c)
+    const advantage = (c: Color) => advantageOf(mat, c)
+    // In the narrow panel row the clock sits inline, right after the captured
+    // pieces, and the status caption takes the far right. A board-width strip is
+    // too wide for that — the clock ends up marooned in the middle — so there the
+    // flex order flips to put the clock hard right, matching the bot's strip above
+    // the board. DOM order is unchanged, so the rail row renders exactly as before.
+    const strip = variant === 'strip'
+    const order = (n: number) => (strip ? { order: n } : undefined)
+    return (
+        <Box sx={rowSx(variant, { display: 'flex', alignItems: 'center', gap: 1.25 })}>
+            <Avatar small>
+                <User size={15} />
+            </Avatar>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
+                <TitleBadge title={humanTitle} />
+                <Typography
+                    sx={{
+                        fontFamily: 'var(--font-display)',
+                        fontWeight: 700,
+                        fontSize: 14.5,
+                    }}
+                >
+                    You
+                </Typography>
+            </Box>
+            {showCaptured && (
+                <MaterialStrip pieces={captured(human)} color={opp} adv={advantage(human)} />
+            )}
+            {game.time_control && (
+                <Box sx={order(3)}>
+                    <Clock
+                        getMs={() => remainingMs(game, human)}
+                        active={ongoing && !thinking && game.side_to_move === human}
+                        running={ongoing}
+                    />
+                </Box>
+            )}
+            <Box sx={{ flex: 1, ...order(1) }} />
+            <Typography
+                sx={{ fontSize: 13, fontWeight: 600, color: TONE_COLOR[statusTone], ...order(2) }}
+            >
+                {caption}
+            </Typography>
+        </Box>
+    )
+}
+
 function MovePanel({
     game,
     rating,
@@ -1078,6 +1339,7 @@ function MovePanel({
     bestMyTurn,
     onBestHint,
     gameStartFen,
+    playerRows = true,
 }: {
     game: Game
     rating: number
@@ -1117,25 +1379,22 @@ function MovePanel({
     bestMyTurn: boolean
     onBestHint: (hint: { from: Square; to: Square; uci: string } | null) => void
     gameStartFen: string
+    /** Render the two player rows inside this panel. True for the Lichess layout;
+     *  false for the chess.com one, where the page renders the same two rows as
+     *  board-width strips above and below the board. */
+    playerRows?: boolean
 }) {
     // Captured-material readout for the player rows, derived from the SHOWN board
-    // (so it tracks history review, like the eval bar). `captured(c)` = the pieces
-    // color `c` has taken (its opponent's color); `advantage(c)` = c's point lead.
+    // so it tracks history review, like the eval bar.
     const mat = useMemo(() => computeMaterial(bestFen), [bestFen])
     // Whether the shown ply is the live position — disables "Next" in the control
     // row below (mirrors LiveGame's atLive).
     const atLive = shownPly === game.moves.length
-    // Single-key subscriptions — only re-render this panel when one of these
-    // preferences itself changes.
-    const showCaptured = useSetting('showCaptured')
-    const showOpponentRating = useSetting('showOpponentRating')
     const human = game.human_color
-    const opp = other(human)
-    const captured = (c: Color) => (c === 'w' ? mat.capturedByWhite : mat.capturedByBlack)
-    const advantage = (c: Color) => {
-        const d = c === 'w' ? mat.diff : -mat.diff
-        return d > 0 ? d : 0
-    }
+    // What the two player rows read. Built here for the Lichess layout, where they
+    // sit inside this panel; the page builds the same thing for the chess.com
+    // layout, where they hang off the board instead.
+    const rowCtx: PlayerRowCtx = { game, mat, ongoing, thinking, zen }
 
     const navigate = useNavigate()
 
@@ -1168,15 +1427,6 @@ function MovePanel({
         }
     }, [ongoing, game.id, game.variant, game.moves, gameStartFen, human, blunderInfo])
 
-    // How strong the opponent is for the move you're about to face, and how far
-    // that has fallen from full strength. The server recomputes effective_rating
-    // from the move history on every serialization, so this tracks the handicap
-    // live; `rating` is only the fallback for a payload predating the field.
-    const effectiveRating = game.effective_rating ?? game.rating ?? rating
-    const handicapDrop = FIXED_STRENGTH_VARIANTS.includes(game.variant)
-        ? FULL_STRENGTH_RATING - effectiveRating
-        : 0
-
     // A linear tree of the game so far, so the engine-owned OpeningPanel can name
     // the opening (and show candidate lines) for the live position during play.
     const book = useMemo(
@@ -1207,78 +1457,9 @@ function MovePanel({
                 width: '100%',
             }}
         >
-            {/* Opponent */}
-            <Box
-                sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 1.25,
-                    px: 1.75,
-                    py: 1.5,
-                    bgcolor: 'var(--bg-2)',
-                    borderBottom: '1px solid var(--line-soft)',
-                }}
-            >
-                <Avatar>
-                    <Bot size={18} />
-                </Avatar>
-                <Box sx={{ minWidth: 0, lineHeight: 1.2 }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                        <Typography
-                            sx={{
-                                fontFamily: 'var(--font-display)',
-                                fontWeight: 700,
-                                fontSize: 15.5,
-                            }}
-                        >
-                            Zugzwang
-                        </Typography>
-                        <NewBadge />
-                    </Box>
-                    {/* Zen mode hides the rating chrome (distraction-free play); the
-                        showOpponentRating preference gates it independently, same as
-                        LiveGame's opponent rating readout.
-
-                        Always the server's effective_rating, never the stored one:
-                        Fading and Glass Jaw keep a full-strength sentinel in `rating`
-                        and weaken per move, so `rating` would advertise a frozen
-                        "~3500 Elo" for an opponent that is already far weaker. The
-                        drop from full strength rides alongside it, so the handicap is
-                        something you can watch happen rather than infer. */}
-                    {!zen && showOpponentRating && (
-                        <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
-                            Engine · {ratingLabel(effectiveRating)}
-                            {handicapDrop > 0 && (
-                                <Box
-                                    component="span"
-                                    sx={{
-                                        fontFamily: 'var(--font-mono)',
-                                        fontWeight: 700,
-                                        color: '#ca4a4a',
-                                        ml: 0.75,
-                                    }}
-                                >
-                                    −{handicapDrop}
-                                </Box>
-                            )}
-                        </Typography>
-                    )}
-                </Box>
-                {showCaptured && (
-                    <MaterialStrip pieces={captured(opp)} color={human} adv={advantage(opp)} />
-                )}
-                {/* Bot's clock — only when this game has a time control at all; an
-                    untimed game renders none of this (no empty clock furniture). */}
-                {game.time_control && (
-                    <Box sx={{ ml: 'auto' }}>
-                        <Clock
-                            getMs={() => remainingMs(game, opp)}
-                            active={ongoing && !thinking && game.side_to_move === opp}
-                            running={ongoing}
-                        />
-                    </Box>
-                )}
-            </Box>
+            {/* Opponent — a strip above the board in the chess.com layout, where the
+                page renders it instead. */}
+            {playerRows && <BotPlayerRow ctx={rowCtx} rating={rating} />}
 
             {error && <ErrorBanner>{error}</ErrorBanner>}
             {/* Secret Queen's reveal moment — reuses ErrorBanner's shell (the panel's
@@ -1367,39 +1548,15 @@ function MovePanel({
                     gap: 1.25,
                 }}
             >
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
-                    <Avatar small>
-                        <User size={15} />
-                    </Avatar>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
-                        <TitleBadge title={humanTitle} />
-                        <Typography
-                            sx={{
-                                fontFamily: 'var(--font-display)',
-                                fontWeight: 700,
-                                fontSize: 14.5,
-                            }}
-                        >
-                            You
-                        </Typography>
-                    </Box>
-                    {showCaptured && (
-                        <MaterialStrip pieces={captured(human)} color={opp} adv={advantage(human)} />
-                    )}
-                    {game.time_control && (
-                        <Clock
-                            getMs={() => remainingMs(game, human)}
-                            active={ongoing && !thinking && game.side_to_move === human}
-                            running={ongoing}
-                        />
-                    )}
-                    <Box sx={{ flex: 1 }} />
-                    <Typography
-                        sx={{ fontSize: 13, fontWeight: 600, color: TONE_COLOR[statusTone] }}
-                    >
-                        {caption}
-                    </Typography>
-                </Box>
+                {/* You — a strip below the board in the chess.com layout. */}
+                {playerRows && (
+                    <HumanPlayerRow
+                        ctx={rowCtx}
+                        humanTitle={humanTitle}
+                        caption={caption}
+                        statusTone={statusTone}
+                    />
+                )}
 
                 {/* Secret Queen isn't understood by the standard/duck/antichess engine
                     paths AdminBestMove queries (a hidden queen has no analogue there),

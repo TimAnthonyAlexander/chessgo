@@ -288,6 +288,19 @@ function BoardTab({ query = '' }: { query?: string }) {
 
     return (
         <>
+            {!searching && <SectionHeading>Layout</SectionHeading>}
+            <SegmentRow
+                label="Page layout"
+                hint="Board centered between two columns, or beside a single rail with player strips"
+                value={prefs.boardLayout}
+                options={[
+                    { value: 'lichess', label: 'Center board' },
+                    { value: 'chesscom', label: 'Side rail' },
+                ]}
+                onChange={(v) => settingsStore.set('boardLayout', v as Prefs['boardLayout'])}
+                query={query}
+            />
+
             {(!searching || matches(query, 'Board')) && (
                 <>
                     <SectionHeading>Board — {boardLabel}</SectionHeading>

@@ -25,8 +25,15 @@ export type ArrowColor = 'green' | 'blue' | 'red' | 'yellow'
 export type Notation = 'san' | 'figurine'
 export type ConfirmMove = 'never' | 'slow' | 'always'
 export type ClockTenths = 'never' | 'lowtime' | 'always'
+/** Which board-page layout the whole app renders. See components/boardPage/. */
+export type BoardLayout = 'lichess' | 'chesscom'
 
 export interface Prefs {
+    // --- Layout ---
+    /** The structural layout of every board page: the Lichess-style centered board
+     *  with two flanking columns, or the chess.com-style left-anchored board with
+     *  player strips above/below it and a single right rail. */
+    boardLayout: BoardLayout
     // --- Board display ---
     showLegalMoves: boolean
     showCoordinates: CoordMode
@@ -79,6 +86,7 @@ export interface Prefs {
 }
 
 export const DEFAULTS: Prefs = {
+    boardLayout: 'lichess',
     showLegalMoves: true,
     showCoordinates: 'inside',
     highlightLastMove: true,
@@ -132,6 +140,7 @@ function sanitize(raw: unknown): Prefs {
         const v = r[k]
         if (typeof v === 'number' && isFinite(v)) (out[k] as number) = Math.min(hi, Math.max(lo, v))
     }
+    oneOf('boardLayout', ['lichess', 'chesscom'] as const)
     bool('showLegalMoves')
     oneOf('showCoordinates', ['inside', 'outside', 'off'] as const)
     bool('highlightLastMove')
