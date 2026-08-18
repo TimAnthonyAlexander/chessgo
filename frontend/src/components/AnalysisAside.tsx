@@ -28,6 +28,7 @@ export default function AnalysisAside({
     onEnableDuck,
     getPgn,
     onImportPgn,
+    omitMaterial = false,
 }: {
     fen: string
     onLoadFen: (fen: string) => void
@@ -45,6 +46,9 @@ export default function AnalysisAside({
     // Called with a successfully parsed pasted PGN — the caller owns loading it
     // into the board. Import is a no-op (button hidden) when this is absent.
     onImportPgn?: (parsed: ParsedPgn) => void
+    // Side-rail layout: the Material block heads the engine panel instead (see
+    // MaterialHeader), so this column leaves it out rather than showing it twice.
+    omitMaterial?: boolean
 }) {
     const mat = useMemo(() => computeMaterial(fen), [fen])
     // Single-key subscription — showCaptured gates this card the same way it
@@ -61,7 +65,7 @@ export default function AnalysisAside({
                 width: '100%',
             }}
         >
-            {showCaptured && <MaterialCard mat={mat} />}
+            {showCaptured && !omitMaterial && <MaterialCard mat={mat} />}
             {showSetup && (
                 <PositionCard fen={fen} onLoadFen={onLoadFen} onEnableDuck={onEnableDuck} />
             )}
@@ -81,15 +85,26 @@ export default function AnalysisAside({
     )
 }
 
-function Card({ label, children }: { label: string; children: React.ReactNode }) {
+function Card({
+    label,
+    children,
+    flat = false,
+}: {
+    label: string
+    children: React.ReactNode
+    // Drop the card's own chrome and end in a hairline, so it can head another
+    // panel as its first block instead of standing as a separate card.
+    flat?: boolean
+}) {
     return (
         <Box
             sx={{
-                border: '1px solid var(--line-soft)',
-                borderRadius: 'var(--panel-radius)',
+                border: flat ? 'none' : '1px solid var(--line-soft)',
+                borderBottom: flat ? '1px solid var(--line-soft)' : undefined,
+                borderRadius: flat ? 0 : 'var(--panel-radius)',
                 bgcolor: 'var(--surface)',
                 overflow: 'hidden',
-                boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+                boxShadow: flat ? 'none' : '0 18px 50px -28px rgba(0,0,0,0.8)',
             }}
         >
             <Typography
@@ -113,9 +128,20 @@ function Card({ label, children }: { label: string; children: React.ReactNode })
     )
 }
 
-function MaterialCard({ mat }: { mat: Material }) {
+/** The Material block as a PANEL HEADER — what the side-rail layout puts at the top
+ *  of the engine panel so the rail reads as one continuous box: material first,
+ *  then the engine lines. Renders nothing when the showCaptured preference is off,
+ *  exactly like the column card it replaces. */
+export function MaterialHeader({ fen }: { fen: string }) {
+    const mat = useMemo(() => computeMaterial(fen), [fen])
+    const showCaptured = useSetting('showCaptured')
+    if (!showCaptured) return null
+    return <MaterialCard mat={mat} flat />
+}
+
+function MaterialCard({ mat, flat = false }: { mat: Material; flat?: boolean }) {
     return (
-        <Card label="Material">
+        <Card label="Material" flat={flat}>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
                 <SideRow
                     label="White"

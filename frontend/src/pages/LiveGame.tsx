@@ -143,6 +143,14 @@ export default function LiveGame() {
     const prefs = usePrefs()
     const isAdmin = user?.role === 'admin'
 
+    // WHERE the player rows go is the one thing that genuinely differs between the
+    // two page layouts: the centered layout stacks them inside the right panel, top
+    // and bottom, with the move list between; the side rail hangs them off the board
+    // as full-width strips. Same two components either way — built once below and
+    // handed to whichever slot the active layout wants, so the arrangements can't
+    // drift apart. Read HERE, above the `if (!g)` early return further down: a hook
+    // placed after a conditional return runs on some renders and not others.
+    const chesscom = useBoardLayout() === 'chesscom'
     const [sound, setSound] = useState(soundEnabled())
     // Resign confirmation modal (only used when the confirmResign pref is on).
     const [confirmResignOpen, setConfirmResignOpen] = useState(false)
@@ -585,12 +593,6 @@ export default function LiveGame() {
     // The player's own rating for this pool (shown in the "You" bar; hidden under zen).
     const myRating = userRatingFor(user, g.variant, g.pool)
 
-    // The one thing that genuinely differs between the two page layouts: WHERE the
-    // player rows go. Lichess stacks them inside the right panel, top and bottom,
-    // with the move list between; chess.com hangs them off the board as full-width
-    // strips. Same two components either way — built here once, handed to whichever
-    // slot the active layout wants, so the two arrangements can never drift apart.
-    const chesscom = useBoardLayout() === 'chesscom'
     const barVariant = chesscom ? 'strip' : 'rail'
     const opponentBar = (
         <PlayerBar
@@ -659,7 +661,10 @@ export default function LiveGame() {
                         flex: 1,
                     }}
                 >
-                    {!zen && (
+                    {/* Not in the side-rail layout: there this is the move panel's own
+                        header row, so the two read as one continuous box rather than
+                        two cards stacked in the rail. */}
+                    {!zen && !chesscom && (
                         <LiveModeCard pool={g.pool} rated={g.rated} variant={g.variant} />
                     )}
                     {!zen && g.variant === 'standard' && <LiveOpening fen={g.fen} />}
@@ -722,6 +727,14 @@ export default function LiveGame() {
                         width: '100%',
                     }}
                 >
+                    {/* Side-rail layout: the game's mode (category, time control,
+                        rated/casual) heads the panel instead of standing as its own
+                        card in the rail — one continuous box, mode first, then the
+                        moves. The centered layout keeps it as a left-column card. */}
+                    {!zen && chesscom && (
+                        <LiveModeCard flat pool={g.pool} rated={g.rated} variant={g.variant} />
+                    )}
+
                     {/* This game is one of a tournament's pairings — a prominent,
                         always-reachable way back, since the arena only pairs us
                         again once we ask from that page (never automatically).
@@ -1401,7 +1414,11 @@ const PlayerBar = memo(function PlayerBar({
                 ...(strip
                     ? {
                           height: { xs: 'auto', md: '100%' },
-                          py: { xs: 1.25, md: 0 },
+                          // Real vertical padding even at full height: the clock cell
+                          // draws a border when active, and with no padding that border
+                          // reaches the strip's top and bottom edges and covers the
+                          // ClockBar along the bottom.
+                          py: { xs: 1.25, md: 0.75 },
                           bgcolor: 'var(--surface)',
                           border: '1px solid var(--line-soft)',
                           borderRadius: 'var(--panel-radius)',
@@ -1462,7 +1479,7 @@ const PlayerBar = memo(function PlayerBar({
             )}
             {!zen && (
                 <Box sx={{ ml: 'auto' }}>
-                    <Clock getMs={getMs} active={active} running={running} />
+                    <Clock getMs={getMs} active={active} running={running} compact={strip} />
                 </Box>
             )}
             {/* Full-bleed along the bottom of the whole row, not just under the

@@ -16,6 +16,11 @@ interface ClockProps {
      * the `clockBar` progress bar. Optional: omit when it isn't known (untimed
      * games) and the bar simply doesn't render, rather than guessing. */
     initialMs?: number
+    /** Tighten the cell to fit a fixed-height row. The digits keep their size; the
+     * cell drops the inherited 1.5 line-height and some vertical padding, which is
+     * what stops its border from reaching the edges of a board-width player strip
+     * (and, in a row that also draws a ClockBar, from covering that 3px bar). */
+    compact?: boolean
 }
 
 // Escalating urgency tiers — ONE hue per tier, applied to BOTH the text and the
@@ -75,7 +80,7 @@ function format(ms: number, tenths: ClockTenths): string {
  * `getMs`, a closure over the authoritative remaining time; when the game advances
  * the closure's identity changes and the display snaps to truth.
  */
-export default function Clock({ getMs, active, running = true }: ClockProps) {
+export default function Clock({ getMs, active, running = true, compact = false }: ClockProps) {
     // Single-key subscription (not usePrefs()): only re-renders when this one
     // setting changes (rare, user-driven), so it adds nothing beyond the tick
     // interval, which already re-renders this leaf every 200ms while running.
@@ -90,8 +95,9 @@ export default function Clock({ getMs, active, running = true }: ClockProps) {
                 fontSize: 26,
                 fontWeight: 600,
                 letterSpacing: '0.02em',
+                lineHeight: compact ? 1.1 : undefined,
                 px: 1.75,
-                py: 0.75,
+                py: compact ? 0.5 : 0.75,
                 borderRadius: 1.5,
                 minWidth: 96,
                 textAlign: 'center',

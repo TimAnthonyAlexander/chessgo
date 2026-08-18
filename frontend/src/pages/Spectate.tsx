@@ -11,7 +11,7 @@ import { MoveSan } from '../components/MoveSan'
 import { Avatar, NavBtn, PANEL_SHADOW } from '../components/PanelUI'
 import TitleBadge from '../components/TitleBadge'
 import BoardActions from '../components/BoardActions'
-import BoardPage from '../components/BoardPage'
+import BoardPage, { useBoardLayout } from '../components/BoardPage'
 import SpectateInfoCard from '../components/SpectateInfoCard'
 import { analyze, type Color, type MoveEntry } from '../api/client'
 import { pvToSan, START_FEN } from '../lib/analysisTree'
@@ -67,6 +67,9 @@ export default function Spectate() {
     const backLabel = g?.tournamentId ? 'Back to tournament' : 'Back to Watch'
     const [sound, setSound] = useState(soundEnabled())
     const prefs = usePrefs()
+    // Read above the `if (!g)` early return below — a hook after a conditional
+    // return runs on some renders and not others, which React rejects outright.
+    const chesscom = useBoardLayout() === 'chesscom'
 
     function toggleSound() {
         const next = !sound
@@ -200,21 +203,59 @@ export default function Spectate() {
         fen: '',
     }))
 
+    // Built once and placed by layout: rows inside the game panel for the centered
+    // layout, board-width strips hugging the board for the side rail. The strips
+    // follow the BOARD's orientation — a flipped spectator board would otherwise
+    // show black's clock under white's pieces.
+    const blackBar = (
+        <PlayerBar
+            side={g.black}
+            getMs={() => spectateRemaining(g, 'b')}
+            active={!g.over && g.sideToMove === 'b' && g.moves.length >= 2}
+            running={!g.over && g.moves.length >= 2}
+            initialMs={g.timeControl.base}
+            divider="bottom"
+            variant={chesscom ? 'strip' : 'rail'}
+        />
+    )
+    const whiteBar = (
+        <PlayerBar
+            side={g.white}
+            getMs={() => spectateRemaining(g, 'w')}
+            active={!g.over && g.sideToMove === 'w' && g.moves.length >= 2}
+            running={!g.over && g.moves.length >= 2}
+            initialMs={g.timeControl.base}
+            divider="top"
+            variant={chesscom ? 'strip' : 'rail'}
+        />
+    )
+    const topBar = orientation === 'w' ? blackBar : whiteBar
+    const bottomBar = orientation === 'w' ? whiteBar : blackBar
+
+    // The same card is either a rail card (centered layout) or the game panel's
+    // header block (side rail), never both.
+    const infoCardProps = {
+        pool: g.pool,
+        variant: g.variant,
+        fen: g.fen,
+        rated: g.rated,
+        live: !g.over,
+    }
+
     return (
         <BoardPage
             // Right card is compact by design (a fixed 7-row move list), so it shrinks
             // to its content and centres against the board — matching LiveGame.
             rightFit
             evalBar={evalBarVisible ? <EvalBar ev={whiteEval} orientation={orientation} /> : undefined}
-            left={
-                <SpectateInfoCard
-                    pool={g.pool}
-                    variant={g.variant}
-                    fen={g.fen}
-                    rated={g.rated}
-                    live={!g.over}
-                />
-            }
+            // Side-rail layout: this card heads the game panel instead of standing
+            // as its own card in the rail — one continuous box, mode first, then the
+            // moves. The centered layout keeps it as a left-column card.
+            left={chesscom ? undefined : <SpectateInfoCard {...infoCardProps} />}
+            // Board-hugging player strips — side rail only. Undefined for the centered
+            // layout, where the same two bars live inside the game panel.
+            top={chesscom ? topBar : undefined}
+            bottom={chesscom ? bottomBar : undefined}
             right={
                 <Box
                     sx={{
@@ -232,6 +273,8 @@ export default function Spectate() {
                         width: '100%',
                     }}
                 >
+                    {chesscom && <SpectateInfoCard {...infoCardProps} flat />}
+
                     {/* Admin engine overlay controls */}
                     {isAdmin && (
                         <AdminControls
@@ -254,15 +297,9 @@ export default function Spectate() {
                         />
                     )}
 
-                    {/* Black (top) */}
-                    <PlayerBar
-                        side={g.black}
-                        getMs={() => spectateRemaining(g, 'b')}
-                        active={!g.over && g.sideToMove === 'b' && g.moves.length >= 2}
-                        running={!g.over && g.moves.length >= 2}
-                        initialMs={g.timeControl.base}
-                        divider="bottom"
-                    />
+                    {/* Black (top) — a strip above the board in the side-rail layout,
+                        where the page hands it to the layout instead. */}
+                    {!chesscom && blackBar}
 
                     {/* Fixed 7 rows: padded when the game is short, scrolling (and
                         auto-following the latest move) once it's longer, so the panel
@@ -366,15 +403,8 @@ export default function Spectate() {
                         </Box>
                     )}
 
-                    {/* White (bottom) */}
-                    <PlayerBar
-                        side={g.white}
-                        getMs={() => spectateRemaining(g, 'w')}
-                        active={!g.over && g.sideToMove === 'w' && g.moves.length >= 2}
-                        running={!g.over && g.moves.length >= 2}
-                        initialMs={g.timeControl.base}
-                        divider="top"
-                    />
+                    {/* White (bottom) — a strip below the board in the side-rail layout. */}
+                    {!chesscom && whiteBar}
                 </Box>
             }
         >
@@ -401,6 +431,7 @@ function PlayerBar({
     running,
     initialMs,
     divider,
+    variant = 'rail',
 }: {
     side: SpectateSide
     getMs: () => number
@@ -409,7 +440,14 @@ function PlayerBar({
     /** The time control's initial time (ms), for the clockBar strip. */
     initialMs?: number
     divider?: 'top' | 'bottom'
+    /** Where this bar is standing.
+     *  `rail` — a narrow row inside the game panel, hairline-divided from its
+     *  neighbours. The centered layout's arrangement, and the default.
+     *  `strip` — a standalone board-width band hugging the board, with its own card
+     *  chrome. The side-rail layout's arrangement. */
+    variant?: 'rail' | 'strip'
 }) {
+    const strip = variant === 'strip'
     return (
         <Box
             sx={{
@@ -418,11 +456,25 @@ function PlayerBar({
                 alignItems: 'center',
                 gap: 1.25,
                 px: 1.75,
-                py: 1.25,
-                bgcolor: 'var(--bg-2)',
-                borderTop: divider === 'top' ? '1px solid var(--line-soft)' : undefined,
-                borderBottom: divider === 'bottom' ? '1px solid var(--line-soft)' : undefined,
                 overflow: 'hidden',
+                ...(strip
+                    ? {
+                          height: { xs: 'auto', md: '100%' },
+                          // Real vertical padding even at full height: an active clock
+                          // cell draws a border, and with no padding that border reaches
+                          // the strip's edges and covers the ClockBar along the bottom.
+                          py: { xs: 1.25, md: 0.75 },
+                          bgcolor: 'var(--surface)',
+                          border: '1px solid var(--line-soft)',
+                          borderRadius: 'var(--panel-radius)',
+                      }
+                    : {
+                          py: 1.25,
+                          bgcolor: 'var(--bg-2)',
+                          borderTop: divider === 'top' ? '1px solid var(--line-soft)' : undefined,
+                          borderBottom:
+                              divider === 'bottom' ? '1px solid var(--line-soft)' : undefined,
+                      }),
             }}
         >
             <Avatar small>
@@ -451,7 +503,7 @@ function PlayerBar({
                 </Box>
             </Box>
             <Box sx={{ ml: 'auto' }}>
-                <Clock getMs={getMs} active={active} running={running} />
+                <Clock getMs={getMs} active={active} running={running} compact={strip} />
             </Box>
             {/* Full-bleed along the bottom of the whole row, not just under the digits. */}
             <ClockBar getMs={getMs} active={active} running={running} initialMs={initialMs} />

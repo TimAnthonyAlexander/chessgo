@@ -17,6 +17,7 @@ export default function SpectateInfoCard({
     fen,
     rated,
     live,
+    flat = false,
 }: {
     pool: string
     variant: Variant
@@ -24,6 +25,13 @@ export default function SpectateInfoCard({
     rated: boolean
     /** Game still in progress — drives the Live marker. */
     live: boolean
+    /** Drop this card's own chrome and end in a hairline, so it can head the game
+     *  panel as its first block instead of standing as a separate card. The
+     *  side-rail layout uses this: mode first, then the moves, one continuous box.
+     *  The contents are unchanged — unlike the game pages' mode cards, this one
+     *  also carries the captured-material readout, and the side rail has no player
+     *  strips to move that into. */
+    flat?: boolean
 }) {
     const cat = categoryFor(pool)
     const mat = useMemo(() => computeMaterial(fen), [fen])
@@ -36,11 +44,12 @@ export default function SpectateInfoCard({
         <Box
             sx={{
                 display: { xs: 'none', md: 'block' },
-                bgcolor: 'var(--surface)',
-                border: '1px solid var(--line-soft)',
-                borderRadius: 'var(--panel-radius)',
-                p: 2.5,
-                boxShadow: PANEL_SHADOW,
+                bgcolor: flat ? 'var(--bg-2)' : 'var(--surface)',
+                border: flat ? 'none' : '1px solid var(--line-soft)',
+                borderBottom: flat ? '1px solid var(--line-soft)' : undefined,
+                borderRadius: flat ? 0 : 'var(--panel-radius)',
+                p: flat ? 1.75 : 2.5,
+                boxShadow: flat ? 'none' : PANEL_SHADOW,
             }}
         >
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>

@@ -1,5 +1,6 @@
 import { Box, Typography } from '@mui/material'
 import { Infinity as InfinityIcon } from 'lucide-react'
+import { CATEGORY_META, categoryFor } from '../lib/timeControl'
 import { type Variant, VARIANT_LABEL } from '../lib/variants'
 import { UNLOSABLE_RATING } from '../lib/botSettings'
 
@@ -17,9 +18,20 @@ import { UNLOSABLE_RATING } from '../lib/botSettings'
 export default function GameModeCard({
     rating,
     variant = 'standard',
+    timeControl = null,
+    flat = false,
 }: {
     rating: number
     variant?: Variant
+    /** The game's "base+inc" pool, or null for an untimed game. Bot games gained
+     *  real clocks, so this card must not keep announcing "Untimed" beside a
+     *  running one — timed games show their pool and their category's icon. */
+    timeControl?: string | null
+    /** Render as a panel HEADER rather than a standalone card: no chrome of its
+     *  own, a single compact row, and a hairline under it. Used by the side-rail
+     *  layout, where this sits as the first row of the move panel so the two read
+     *  as one continuous box. */
+    flat?: boolean
 }) {
     // "Unlosable" is Standard rules with a sentinel rating, so it headlines by
     // strength rather than variant; every other Standard game stays "Casual".
@@ -29,6 +41,46 @@ export default function GameModeCard({
             : variant === 'standard'
               ? 'Casual'
               : VARIANT_LABEL[variant]
+    const timed = !!timeControl && timeControl !== 'untimed'
+    const Icon = timed ? CATEGORY_META[categoryFor(timeControl)].Icon : InfinityIcon
+    const clockLabel = timed ? timeControl : 'Untimed'
+
+    if (flat)
+        return (
+            <Box
+                sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 1,
+                    px: 1.75,
+                    py: 1.25,
+                    bgcolor: 'var(--bg-2)',
+                    borderBottom: '1px solid var(--line-soft)',
+                }}
+            >
+                <Box sx={{ display: 'flex', color: 'var(--accent)' }}>
+                    <Icon size={17} />
+                </Box>
+                <Typography
+                    sx={{ fontFamily: 'var(--font-display)', fontSize: 17, fontWeight: 700 }}
+                >
+                    {title}
+                </Typography>
+                <Box sx={{ flex: 1 }} />
+                <Typography
+                    sx={{
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 11,
+                        letterSpacing: '0.2em',
+                        textTransform: 'uppercase',
+                        color: 'var(--text-dim)',
+                    }}
+                >
+                    {clockLabel}
+                </Typography>
+            </Box>
+        )
+
     return (
         <Box
             sx={{
@@ -40,7 +92,7 @@ export default function GameModeCard({
             }}
         >
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'var(--accent)' }}>
-                <InfinityIcon size={17} />
+                <Icon size={17} />
                 <Typography
                     sx={{
                         fontFamily: 'var(--font-mono)',
@@ -50,7 +102,7 @@ export default function GameModeCard({
                         color: 'var(--text-dim)',
                     }}
                 >
-                    Untimed
+                    {clockLabel}
                 </Typography>
             </Box>
 

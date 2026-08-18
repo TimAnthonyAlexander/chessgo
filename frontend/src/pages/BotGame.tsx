@@ -890,12 +890,18 @@ export default function BotGame() {
                             onSelect={drops.selectPocket}
                         />
                     )}
-                    <Box sx={{ display: { xs: 'none', md: 'block' } }}>
-                        <GameModeCard
-                            rating={game?.rating ?? rating}
-                            variant={game?.variant ?? variant}
-                        />
-                    </Box>
+                    {/* In the side-rail layout an ONGOING game's mode heads the move
+                        panel instead, so the two read as one continuous box. The setup
+                        screen has no move panel to head, so it keeps the card. */}
+                    {!(chesscom && game) && (
+                        <Box sx={{ display: { xs: 'none', md: 'block' } }}>
+                            <GameModeCard
+                                rating={game?.rating ?? rating}
+                                variant={game?.variant ?? variant}
+                                timeControl={game?.time_control ?? timeControl}
+                            />
+                        </Box>
+                    )}
                 </>
             }
             evalBar={
@@ -937,6 +943,16 @@ export default function BotGame() {
                         bestMyTurn={interactive && !isCrazyhouse}
                         onBestHint={setBestHint}
                         playerRows={!chesscom}
+                        header={
+                            chesscom ? (
+                                <GameModeCard
+                                    flat
+                                    rating={game.rating}
+                                    variant={game.variant}
+                                    timeControl={game.time_control}
+                                />
+                            ) : undefined
+                        }
                         gameStartFen={startFen ?? START_FEN}
                     />
                 ) : designating ? (
@@ -1123,7 +1139,9 @@ function rowSx(variant: RowVariant, rail: SxProps<Theme>): SxProps<Theme> {
         minWidth: 0,
         overflow: 'hidden',
         height: { xs: 'auto', md: '100%' },
-        py: { xs: 1.25, md: 0 },
+        // Real vertical padding even at full height: an active clock cell draws a
+        // border, and with no padding that border reaches the strip's edges.
+        py: { xs: 1.25, md: 0.75 },
         bgcolor: 'var(--surface)',
         border: '1px solid var(--line-soft)',
         borderRadius: 'var(--panel-radius)',
@@ -1296,6 +1314,7 @@ function HumanPlayerRow({
                         getMs={() => remainingMs(game, human)}
                         active={ongoing && !thinking && game.side_to_move === human}
                         running={ongoing}
+                        compact={strip}
                     />
                 </Box>
             )}
@@ -1340,6 +1359,7 @@ function MovePanel({
     onBestHint,
     gameStartFen,
     playerRows = true,
+    header,
 }: {
     game: Game
     rating: number
@@ -1383,6 +1403,10 @@ function MovePanel({
      *  false for the chess.com one, where the page renders the same two rows as
      *  board-width strips above and below the board. */
     playerRows?: boolean
+    /** An optional first row for the panel — the side-rail layout passes the game
+     *  mode here so it heads the moves rather than sitting in the rail as its own
+     *  card. */
+    header?: ReactNode
 }) {
     // Captured-material readout for the player rows, derived from the SHOWN board
     // so it tracks history review, like the eval bar.
@@ -1457,6 +1481,8 @@ function MovePanel({
                 width: '100%',
             }}
         >
+            {header}
+
             {/* Opponent — a strip above the board in the chess.com layout, where the
                 page renders it instead. */}
             {playerRows && <BotPlayerRow ctx={rowCtx} rating={rating} />}

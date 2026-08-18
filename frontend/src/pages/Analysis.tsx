@@ -24,12 +24,12 @@ import {
     Zap,
 } from 'lucide-react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import AnalysisAside from '../components/AnalysisAside'
+import AnalysisAside, { MaterialHeader } from '../components/AnalysisAside'
 import Board from '../components/Board'
 import BlunderRewind, { BlunderRewindBanner } from '../components/BlunderRewind'
 import ConfirmDialog from '../components/ConfirmDialog'
 import DuckFreeBoard from '../components/DuckFreeBoard'
-import BoardPage from '../components/BoardPage'
+import BoardPage, { useBoardLayout } from '../components/BoardPage'
 import EngineLines, { loadLineCount, saveLineCount } from '../components/EngineLines'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import { toWhiteEval } from '../lib/engineEval'
@@ -209,6 +209,7 @@ export default function Analysis() {
     const importStartFen = navState?.startFen ?? START_FEN
 
     const prefs = usePrefs()
+    const chesscom = useBoardLayout() === 'chesscom'
 
     const [tree, setTree] = useState<Tree>(() => createTree(START_FEN))
     const [currentId, setCurrentId] = useState(0)
@@ -1145,6 +1146,7 @@ export default function Analysis() {
                     onEnableDuck={!id ? () => setDuckFree(true) : undefined}
                     getPgn={getPgn}
                     onImportPgn={onImportPgn}
+                    omitMaterial={chesscom}
                 />
             }
             evalBar={
@@ -1179,6 +1181,11 @@ export default function Analysis() {
                         maxHeight: { xs: '72vh', md: 'none' },
                     }}
                 >
+                    {/* Side-rail layout: material heads the panel rather than sitting
+                        in the rail as its own card — one continuous box, material
+                        first, then the engine lines. */}
+                    {chesscom && <MaterialHeader fen={current.fen} />}
+
                     <EngineLines
                         engineOn={engineOn}
                         onToggleEngine={toggleEngine}
