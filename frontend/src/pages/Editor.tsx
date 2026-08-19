@@ -156,10 +156,10 @@ export default function Editor() {
                     sx={{
                         width: '100%',
                         border: '1px solid var(--line-soft)',
-                        borderRadius: 'var(--panel-radius)',
+                        borderRadius: 'var(--radius)',
                         bgcolor: 'var(--surface)',
                         overflow: 'hidden',
-                        boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+                        boxShadow: 'var(--shadow)',
                     }}
                 >
                     <PanelHeader />
@@ -254,7 +254,7 @@ export default function Editor() {
                                         color: 'var(--text)',
                                         bgcolor: 'var(--bg)',
                                         border: `1px solid ${pasteErr ? 'var(--danger, #e5484d)' : 'var(--line)'}`,
-                                        borderRadius: '8px',
+                                        borderRadius: 'var(--radius)',
                                         px: 1.25,
                                         py: 1,
                                         outline: 'none',
@@ -289,7 +289,7 @@ export default function Editor() {
                                         color: 'var(--text-dim)',
                                         bgcolor: 'var(--bg)',
                                         border: '1px solid var(--line-soft)',
-                                        borderRadius: '8px',
+                                        borderRadius: 'var(--radius)',
                                         px: 1.25,
                                         py: 0.85,
                                         whiteSpace: 'nowrap',
@@ -314,7 +314,7 @@ export default function Editor() {
                                             color: copied ? 'var(--accent)' : 'var(--text-dim)',
                                             bgcolor: 'var(--surface-2)',
                                             border: '1px solid var(--line)',
-                                            borderRadius: '8px',
+                                            borderRadius: 'var(--radius)',
                                             transition: 'color .15s, background-color .15s',
                                             '&:hover': {
                                                 color: 'var(--accent)',
@@ -415,10 +415,10 @@ function PaletteCard({ brush, onPick }: { brush: Brush; onPick: (b: Brush) => vo
         <Box
             sx={{
                 border: '1px solid var(--line-soft)',
-                borderRadius: 'var(--panel-radius)',
+                borderRadius: 'var(--radius)',
                 bgcolor: 'var(--surface)',
                 overflow: 'hidden',
-                boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+                boxShadow: 'var(--shadow)',
             }}
         >
             <Typography
@@ -501,13 +501,10 @@ function CastleChip({
                         fontSize: 15,
                         fontWeight: 700,
                         cursor: disabled ? 'default' : 'pointer',
-                        color: disabled ? 'var(--muted)' : on ? '#15171c' : 'var(--text-dim)',
-                        background:
-                            on && !disabled
-                                ? 'linear-gradient(180deg, #e3b56a, #d8a657)'
-                                : 'var(--surface-2)',
+                        color: disabled ? 'var(--muted)' : on ? 'var(--on-accent)' : 'var(--text-dim)',
+                        background: on && !disabled ? 'var(--accent-fill)' : 'var(--surface-2)',
                         border: `1px solid ${on && !disabled ? 'var(--accent)' : 'var(--line)'}`,
-                        borderRadius: '9px',
+                        borderRadius: 'var(--radius)',
                         opacity: disabled ? 0.45 : 1,
                         transition: 'color .15s, background .15s, border-color .15s',
                         '&:hover': disabled ? {} : { borderColor: 'var(--accent-line)' },
@@ -554,7 +551,7 @@ function ToolBtn({
                 color: 'var(--text)',
                 bgcolor: 'var(--surface-2)',
                 border: '1px solid var(--line)',
-                borderRadius: '9px',
+                borderRadius: 'var(--radius)',
                 opacity: disabled ? 0.55 : 1,
                 transition: 'color .15s, background-color .15s, border-color .15s, transform .05s',
                 '&:hover': disabled
@@ -579,7 +576,7 @@ const toggleSx = {
     '& .MuiToggleButton-root': {
         color: 'var(--text-dim)',
         border: '1px solid var(--line)',
-        borderRadius: '10px !important',
+        borderRadius: 'var(--radius) !important',
         textTransform: 'none',
         fontFamily: 'var(--font-display)',
         fontWeight: 600,
@@ -588,10 +585,10 @@ const toggleSx = {
         transition: 'color .15s, background .15s, border-color .15s',
         '&:hover': { background: 'var(--line)', color: 'var(--accent)' },
         '&.Mui-selected': {
-            color: '#15171c',
-            background: 'linear-gradient(180deg, #e3b56a, #d8a657)',
+            color: 'var(--on-accent)',
+            background: 'var(--accent-fill)',
             borderColor: 'var(--accent)',
-            '&:hover': { background: 'linear-gradient(180deg, #e7bd76, #dcab5d)' },
+            '&:hover': { background: 'var(--accent-fill-hover)' },
         },
     },
 }

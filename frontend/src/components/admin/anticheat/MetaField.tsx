@@ -20,7 +20,7 @@ export default function MetaField({
             sx={{
                 bgcolor: 'var(--surface-2)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: '8px',
+                borderRadius: 'var(--radius)',
                 px: 1.125,
                 py: 0.875,
                 minWidth: 0,

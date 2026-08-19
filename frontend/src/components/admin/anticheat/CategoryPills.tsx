@@ -25,7 +25,7 @@ export default function CategoryPills({ counts }: { counts: Record<string, numbe
                                 gap: 0.375,
                                 px: 0.625,
                                 height: 22,
-                                borderRadius: '6px',
+                                borderRadius: 'var(--radius)',
                                 bgcolor: active
                                     ? `color-mix(in srgb, ${color} 16%, transparent)`
                                     : 'var(--surface-2)',

@@ -19,7 +19,10 @@ export function buildTheme(seed: MuiSeed): Theme {
             text: { primary: seed.text, secondary: seed.textSecondary },
             divider: seed.divider,
         },
-        shape: { borderRadius: 12 },
+        // Square corners everywhere. This one line squares off every MUI primitive
+        // that derives from theme.shape (Paper, Card, Menu, Chip, inputs, …); the
+        // overrides below cover the components that hardcode their own radius.
+        shape: { borderRadius: 0 },
         typography: {
             fontFamily: "'Hanken Grotesk', system-ui, sans-serif",
             h1: { fontFamily: "'Fraunces', Georgia, serif", fontWeight: 600, letterSpacing: '-0.01em' },
@@ -33,7 +36,7 @@ export function buildTheme(seed: MuiSeed): Theme {
             MuiButton: {
                 defaultProps: { disableElevation: true },
                 styleOverrides: {
-                    root: { borderRadius: 10, paddingInline: 18, paddingBlock: 9 },
+                    root: { borderRadius: 0, paddingInline: 18, paddingBlock: 9 },
                 },
             },
             MuiPaper: {
@@ -52,7 +55,7 @@ export function buildTheme(seed: MuiSeed): Theme {
                         color: 'var(--text)',
                         fontFamily: 'var(--font-mono)',
                         fontSize: 13,
-                        borderRadius: 8,
+                        borderRadius: 0,
                         paddingInline: 10,
                         paddingBlock: 6,
                     },
@@ -68,7 +71,7 @@ export function buildTheme(seed: MuiSeed): Theme {
                         backgroundColor: 'var(--surface)',
                         backgroundImage: 'none',
                         border: '1px solid var(--line)',
-                        borderRadius: 14,
+                        borderRadius: 0,
                     },
                 },
             },

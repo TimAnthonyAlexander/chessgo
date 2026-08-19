@@ -98,7 +98,7 @@ function MetricTile({ label, value, color }: { label: string; value: string; col
             sx={{
                 bgcolor: 'var(--surface-2)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: '10px',
+                borderRadius: 'var(--radius)',
                 p: 1.25,
             }}
         >
@@ -148,7 +148,7 @@ function CategoryBar({ label, value, max }: { label: string; value: number; max:
             <Box
                 sx={{
                     height: 7,
-                    borderRadius: '999px',
+                    borderRadius: 'var(--radius)',
                     bgcolor: 'var(--surface-2)',
                     overflow: 'hidden',
                 }}
@@ -158,7 +158,7 @@ function CategoryBar({ label, value, max }: { label: string; value: number; max:
                         width: `${(value / max) * 100}%`,
                         height: '100%',
                         bgcolor: '#ca4a4a',
-                        borderRadius: '999px',
+                        borderRadius: 'var(--radius)',
                     }}
                 />
             </Box>

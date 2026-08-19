@@ -32,13 +32,13 @@ function evalText(type: 'cp' | 'mate', white: number, tb?: TbVerdict): string {
 function Toggle({ on, onChange }: { on: boolean; onChange: () => void }) {
     return (
         <Box component="button" onClick={onChange} aria-label="Toggle engine"
-            sx={{ position:'relative', flexShrink:0, width:34, height:20, borderRadius:10, border:'none', cursor:'pointer',
+            sx={{ position:'relative', flexShrink:0, width:34, height:20, borderRadius:'var(--radius)', border:'none', cursor:'pointer',
                   bgcolor: on ? 'var(--accent)' : 'var(--surface-2)', transition:'background-color .2s', p:0 }}>
             {/* translateX, not `left`, so the knob is laid out once at the inset and
                 only transformed — a compositor-only animation, and it cannot be
                 re-resolved against a track whose width changed. */}
             <Box sx={{ position:'absolute', top:2, left:2, width:16, height:16,
-                       borderRadius:'50%', bgcolor:'var(--text)',
+                       borderRadius:'var(--radius)', bgcolor:'var(--text)',
                        transform: on ? 'translateX(14px)' : 'translateX(0)',
                        transition:'transform .2s' }} />
         </Box>
@@ -127,7 +127,7 @@ export default function EngineLines({
     // written for exactly this and had been dead code ever since.
     return (
         <Box sx={{ bgcolor:'var(--bg-2)',
-            background: engineOn ? 'linear-gradient(180deg, rgba(216,166,87,0.06), rgba(216,166,87,0) 60%), var(--bg-2)' : 'var(--bg-2)' }}>
+            background: 'var(--bg-2)' }}>
             <Box sx={{ display:'flex', alignItems:'center', gap:1.25, px:1.5, pt:1.25, pb:0.5 }}>
                 <Tooltip title={engineOn ? 'Turn engine off' : 'Turn engine on'} arrow placement="top">
                     <Toggle on={engineOn} onChange={onToggleEngine} />
@@ -140,7 +140,7 @@ export default function EngineLines({
                 {engineOn && depth != null && sourceBadge === 'cache' && (
                     <Tooltip title="Served from the shared server cache — a stored evaluation, often far deeper than a fresh search would reach here" arrow placement="top">
                         <Typography sx={{ fontFamily:'var(--font-mono)', fontSize:9.5, fontWeight:700, letterSpacing:0.8, textTransform:'uppercase',
-                            color:'var(--text-dim)', border:'1px solid var(--line)', borderRadius:'4px', px:0.5, py:'1px', cursor:'default',
+                            color:'var(--text-dim)', border:'1px solid var(--line)', borderRadius:'var(--radius)', px:0.5, py:'1px', cursor:'default',
                             flexShrink:0, whiteSpace:'nowrap' }}>
                             Cloud
                         </Typography>
@@ -161,7 +161,7 @@ export default function EngineLines({
                         {[1,2,3,4,5].map((n) => (
                             <Box key={n} component="button" onClick={() => { setNumLines(n); saveLineCount(n) }}
                                 aria-label={`Show ${n} line${n>1?'s':''}`}
-                                sx={{ width:19, height:19, borderRadius:'5px', cursor:'pointer', fontFamily:'var(--font-mono)', fontSize:10.5, fontWeight:700, lineHeight:1,
+                                sx={{ width:19, height:19, borderRadius:'var(--radius)', cursor:'pointer', fontFamily:'var(--font-mono)', fontSize:10.5, fontWeight:700, lineHeight:1,
                                       color: numLines===n ? 'var(--accent)' : 'var(--text-dim)',
                                       bgcolor: numLines===n ? 'var(--accent-soft)' : 'transparent',
                                       border:`1px solid ${numLines===n ? 'var(--accent-line)' : 'var(--line)'}`,
@@ -173,9 +173,9 @@ export default function EngineLines({
                 <Box sx={{ display:'flex', flexDirection:'column', gap:0.15 }}>
                     {shown.length === 0 ? (
                         isDuck && mainSan ? (
-                            <Box sx={{ display:'grid', gridTemplateColumns:'1fr auto', alignItems:'baseline', gap:0.85, px:0.5, py:0.45, borderRadius:'6px', bgcolor:'var(--accent-soft)', border:'1px solid var(--accent-line)' }}>
+                            <Box sx={{ display:'grid', gridTemplateColumns:'1fr auto', alignItems:'baseline', gap:0.85, px:0.5, py:0.45, borderRadius:'var(--radius)', bgcolor:'var(--accent-soft)', border:'1px solid var(--accent-line)' }}>
                                 <Typography sx={{ fontFamily:'var(--font-mono)', fontSize:12.5, color:'var(--text)' }}>{mainSan}</Typography>
-                                <Box sx={{ fontFamily:'var(--font-mono)', fontSize:11.5, fontWeight:700, px:0.65, py:0.25, borderRadius:'4px', color:'#ece9e1', background:'#15171c', boxShadow:'0 1px 2px rgba(0,0,0,0.25)', textAlign:'center' }}>?</Box>
+                                <Box sx={{ fontFamily:'var(--font-mono)', fontSize:11.5, fontWeight:700, px:0.65, py:0.25, borderRadius:'var(--radius)', color:'var(--eval-white)', background:'var(--eval-black)', textAlign:'center' }}>?</Box>
                             </Box>
                         ) : (
                             <Typography sx={{ fontSize:12, color:'var(--muted)', fontStyle:'italic' }}>Analysing…</Typography>
@@ -188,7 +188,7 @@ export default function EngineLines({
                                     onClick={() => onPlayLine(line.pv)}
                                     onMouseEnter={onHoverMove ? () => onHoverMove(line.bestmove) : undefined}
                                     onMouseLeave={onHoverMove ? () => onHoverMove(null) : undefined}
-                                    sx={{ display:'grid', gridTemplateColumns:'1fr auto', alignItems:'baseline', gap:0.85, px:0.5, py:0.45, borderRadius:'6px', cursor:'pointer',
+                                    sx={{ display:'grid', gridTemplateColumns:'1fr auto', alignItems:'baseline', gap:0.85, px:0.5, py:0.45, borderRadius:'var(--radius)', cursor:'pointer',
                                           transition:'background-color .12s', bgcolor: i===0 ? 'var(--accent-soft)' : 'transparent',
                                           border: i===0 ? '1px solid var(--accent-line)' : '1px solid transparent',
                                           '&:hover':{ bgcolor: i===0 ? 'var(--accent-soft)' : 'var(--line)' } }}>
@@ -198,16 +198,16 @@ export default function EngineLines({
                                                 sx={{ display: t.firstMove ? 'inline-block' : 'inline', color: t.num ? 'var(--muted)' : 'var(--text)',
                                                       fontWeight: t.num ? 400 : 600, mr: t.num ? 0.35 : 0.7,
                                                       bgcolor: t.firstMove ? 'color-mix(in srgb, var(--accent) 22%, transparent)' : 'transparent',
-                                                      borderRadius: t.firstMove ? '4px' : undefined, px: t.firstMove ? 0.5 : undefined, py: t.firstMove ? '1px' : undefined,
+                                                      borderRadius: 'var(--radius)', px: t.firstMove ? 0.5 : undefined, py: t.firstMove ? '1px' : undefined,
                                                       border: t.firstMove ? '1px solid color-mix(in srgb, var(--accent) 65%, transparent)' : 'none' }}>
                                                 {t.num ? t.text : <MoveSan san={t.text} />}
                                             </Box>
                                         ))}
                                     </Typography>
-                                    <Box sx={{ fontFamily:'var(--font-mono)', fontSize:11.5, fontWeight:700, px:0.65, py:0.25, borderRadius:'4px',
-                                               color: row.ev.white > 0 ? '#15171c' : '#ece9e1',
-                                               background: row.ev.white > 0 ? 'linear-gradient(180deg, #f3eee2, #e4dccb)' : row.ev.white === 0 ? 'var(--surface-2)' : '#15171c',
-                                               boxShadow:'0 1px 2px rgba(0,0,0,0.25)', textAlign:'center' }}>
+                                    <Box sx={{ fontFamily:'var(--font-mono)', fontSize:11.5, fontWeight:700, px:0.65, py:0.25, borderRadius:'var(--radius)',
+                                               color: row.ev.white > 0 ? 'var(--eval-black)' : 'var(--eval-white)',
+                                               background: row.ev.white > 0 ? 'var(--eval-white)' : row.ev.white === 0 ? 'var(--surface-2)' : 'var(--eval-black)',
+                                               textAlign:'center' }}>
                                         {evalText(row.ev.type, row.ev.white, row.ev.tb)}
                                     </Box>
                                 </Box>

@@ -115,7 +115,7 @@ export default function EvalBar({ ev, orientation, sfEv, sfColor = '#b06bff' }: 
                 position: 'relative',
                 width: { xs: 26, md: 38 },
                 flexShrink: 0,
-                borderRadius: '3px',
+                borderRadius: 'var(--radius)',
                 overflow: 'hidden',
                 bgcolor: '#191c22', // black's region (background)
                 border: '1px solid var(--line-soft)',
@@ -130,7 +130,7 @@ export default function EvalBar({ ev, orientation, sfEv, sfColor = '#b06bff' }: 
                     right: 0,
                     [whiteAnchor]: 0,
                     height: `${whitePct}%`,
-                    background: 'linear-gradient(180deg, #f3eee2, #e4dccb)',
+                    background: 'var(--eval-white)',
                     transition: 'height 0.45s cubic-bezier(0.4, 0, 0.2, 1)',
                 }}
             />
@@ -166,7 +166,6 @@ export default function EvalBar({ ev, orientation, sfEv, sfColor = '#b06bff' }: 
                         height: '2px',
                         transform: whiteAnchor === 'bottom' ? 'translateY(50%)' : 'translateY(-50%)',
                         background: sfColor,
-                        boxShadow: `0 0 6px ${sfColor}`,
                         opacity: 0.9,
                         transition: `${whiteAnchor} 0.45s cubic-bezier(0.4, 0, 0.2, 1)`,
                         pointerEvents: 'none',

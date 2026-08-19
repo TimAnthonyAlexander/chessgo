@@ -266,7 +266,7 @@ export default function Spectate() {
                         flexDirection: 'column',
                         bgcolor: 'var(--surface)',
                         border: '1px solid var(--line-soft)',
-                        borderRadius: 'var(--panel-radius)',
+                        borderRadius: 'var(--radius)',
                         overflow: 'hidden',
                         boxShadow: PANEL_SHADOW,
                         alignSelf: { md: 'stretch' },
@@ -466,7 +466,7 @@ function PlayerBar({
                           py: { xs: 1.25, md: 0.75 },
                           bgcolor: 'var(--surface)',
                           border: '1px solid var(--line-soft)',
-                          borderRadius: 'var(--panel-radius)',
+                          borderRadius: 'var(--radius)',
                       }
                     : {
                           py: 1.25,
@@ -671,11 +671,9 @@ function Toggle({ on }: { on: boolean }) {
                 flexShrink: 0,
                 width: 38,
                 height: 22,
-                borderRadius: 999,
+                borderRadius: 'var(--radius)',
                 bgcolor: on ? 'var(--accent)' : 'var(--surface-2)',
-                boxShadow: on
-                    ? '0 0 0 1px var(--accent-line), 0 0 12px -3px rgba(216, 166, 87, 0.7)'
-                    : 'inset 0 0 0 1px var(--line)',
+                boxShadow: on ? '0 0 0 1px var(--accent-line)' : 'inset 0 0 0 1px var(--line)',
                 transition: 'background-color .22s ease, box-shadow .22s ease',
             }}
         >
@@ -686,12 +684,12 @@ function Toggle({ on }: { on: boolean }) {
                     left: 3,
                     width: 16,
                     height: 16,
-                    borderRadius: '50%',
-                    bgcolor: on ? '#15171c' : 'var(--text-dim)',
+                    borderRadius: 'var(--radius)',
+                    bgcolor: on ? 'var(--on-accent)' : 'var(--text-dim)',
                     transform: on ? 'translateX(16px)' : 'translateX(0)',
                     transition:
                         'transform .24s cubic-bezier(.34, 1.4, .5, 1), background-color .22s ease',
-                    boxShadow: '0 1px 3px rgba(0, 0, 0, 0.45)',
+                    boxShadow: 'var(--shadow)',
                 }}
             />
         </Box>

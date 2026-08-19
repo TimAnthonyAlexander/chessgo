@@ -33,10 +33,10 @@ export default function PendingMoveBar({
                 gap: 0.75,
                 px: 1.25,
                 py: 0.75,
-                borderRadius: '10px',
+                borderRadius: 'var(--radius)',
                 bgcolor: 'rgba(0,0,0,0.74)',
                 border: '1px solid var(--accent-line)',
-                boxShadow: '0 10px 34px -12px rgba(0,0,0,0.75)',
+                boxShadow: 'var(--shadow)',
             }}
         >
             <Typography

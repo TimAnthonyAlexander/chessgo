@@ -54,7 +54,7 @@ export default function CategoryBreakdown({ counts }: { counts: Record<string, n
                             <Box
                                 sx={{
                                     height: 7,
-                                    borderRadius: '999px',
+                                    borderRadius: 'var(--radius)',
                                     bgcolor: 'var(--surface-2)',
                                     overflow: 'hidden',
                                 }}
@@ -64,7 +64,7 @@ export default function CategoryBreakdown({ counts }: { counts: Record<string, n
                                         width: `${active ? Math.max(pct, 4) : 0}%`,
                                         height: '100%',
                                         bgcolor: color,
-                                        borderRadius: '999px',
+                                        borderRadius: 'var(--radius)',
                                         transition: 'width .3s ease',
                                     }}
                                 />

@@ -36,7 +36,7 @@ export default function ConfirmDialog({
                     sx: {
                         bgcolor: 'var(--surface)',
                         border: '1px solid var(--line)',
-                        borderRadius: 3,
+                        borderRadius: 'var(--radius)',
                         width: '90vw',
                         maxWidth: 380,
                     },

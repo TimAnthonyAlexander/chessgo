@@ -720,7 +720,7 @@ export default function LiveGame() {
                         flexDirection: 'column',
                         bgcolor: 'var(--surface)',
                         border: '1px solid var(--line-soft)',
-                        borderRadius: 'var(--panel-radius)',
+                        borderRadius: 'var(--radius)',
                         overflow: 'hidden',
                         boxShadow: PANEL_SHADOW,
                         alignSelf: { md: 'stretch' },
@@ -1153,22 +1153,22 @@ export default function LiveGame() {
                         sx={{
                             px: 1.75,
                             py: 0.9,
-                            borderRadius: '999px',
+                            borderRadius: 'var(--radius)',
                             bgcolor: 'rgba(16,17,21,0.86)',
                             border: '1px solid rgba(255,255,255,0.14)',
-                            boxShadow: '0 10px 30px -12px rgba(0,0,0,0.9)',
+                            boxShadow: 'var(--shadow)',
                             display: 'flex',
                             alignItems: 'center',
                             gap: 0.9,
                         }}
                     >
-                        <Crown size={15} style={{ color: '#e9c168', flexShrink: 0 }} />
+                        <Crown size={15} style={{ color: 'var(--accent)', flexShrink: 0 }} />
                         <Typography
                             sx={{
                                 fontFamily: 'var(--font-display)',
                                 fontWeight: 600,
                                 fontSize: 13.5,
-                                color: '#f3eee2',
+                                color: 'var(--text)',
                                 whiteSpace: 'nowrap',
                             }}
                         >
@@ -1209,17 +1209,17 @@ export default function LiveGame() {
                             gap: 1,
                             px: 2,
                             py: 1,
-                            borderRadius: '10px',
+                            borderRadius: 'var(--radius)',
                             bgcolor: 'rgba(0,0,0,0.74)',
                             border: '1px solid var(--accent-line)',
-                            boxShadow: '0 10px 34px -12px rgba(0,0,0,0.75)',
+                            boxShadow: 'var(--shadow)',
                         }}
                     >
                         <Box
                             sx={{
                                 width: 9,
                                 height: 9,
-                                borderRadius: '50%',
+                                borderRadius: 'var(--radius)',
                                 bgcolor: 'var(--accent)',
                                 animation: 'pulse 1.1s ease-in-out infinite',
                                 '@keyframes pulse': {
@@ -1332,7 +1332,7 @@ const CapturedPanel = memo(function CapturedPanel({
                 py: 1.25,
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: 'var(--panel-radius)',
+                borderRadius: 'var(--radius)',
                 boxShadow: PANEL_SHADOW,
             }}
         >
@@ -1421,7 +1421,7 @@ const PlayerBar = memo(function PlayerBar({
                           py: { xs: 1.25, md: 0.75 },
                           bgcolor: 'var(--surface)',
                           border: '1px solid var(--line-soft)',
-                          borderRadius: 'var(--panel-radius)',
+                          borderRadius: 'var(--radius)',
                       }
                     : {
                           py: 1.25,
@@ -1544,7 +1544,7 @@ const LiveOpening = memo(function LiveOpening({ fen }: { fen: string }) {
                 py: 1,
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: 'var(--panel-radius)',
+                borderRadius: 'var(--radius)',
                 boxShadow: PANEL_SHADOW,
             }}
         >
@@ -1558,7 +1558,7 @@ const LiveOpening = memo(function LiveOpening({ fen }: { fen: string }) {
                     color: 'var(--accent)',
                     bgcolor: 'var(--accent-soft)',
                     border: '1px solid var(--accent-line)',
-                    borderRadius: '5px',
+                    borderRadius: 'var(--radius)',
                     px: 0.6,
                     py: '1px',
                     flexShrink: 0,
@@ -1597,7 +1597,7 @@ function OfferBanner({
         <Box
             sx={{
                 p: 1,
-                borderRadius: '10px',
+                borderRadius: 'var(--radius)',
                 bgcolor: 'var(--accent-soft)',
                 border: '1px solid var(--accent-line)',
                 display: 'flex',

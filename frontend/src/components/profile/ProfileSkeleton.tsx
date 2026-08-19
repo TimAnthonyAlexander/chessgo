@@ -24,7 +24,7 @@ export default function ProfileSkeleton() {
                     sx={{
                         width: 58,
                         height: 58,
-                        borderRadius: '14px',
+                        borderRadius: 'var(--radius)',
                         bgcolor: 'var(--surface-2)',
                         flexShrink: 0,
                     }}
@@ -48,19 +48,19 @@ export default function ProfileSkeleton() {
                     <Box>
                         <SkeletonBar w={80} h={14} />
                         <SkeletonBar w="60%" h={28} sx={{ mt: 1.5 }} />
-                        <SkeletonBar h={8} sx={{ mt: 1.5, borderRadius: '999px' }} />
+                        <SkeletonBar h={8} sx={{ mt: 1.5, borderRadius: 'var(--radius)' }} />
                     </Box>
                     <Box sx={{ pt: 2.5, borderTop: '1px solid var(--line-soft)' }}>
                         <SkeletonBar w={80} h={14} sx={{ mb: 2 }} />
                         {Array.from({ length: 4 }).map((_, i) => (
-                            <SkeletonBar key={i} h={28} sx={{ mb: 1, borderRadius: '10px' }} />
+                            <SkeletonBar key={i} h={28} sx={{ mb: 1, borderRadius: 'var(--radius)' }} />
                         ))}
                     </Box>
                 </Box>
                 <Panel>
                     <SkeletonBar w={80} h={14} sx={{ mb: 2 }} />
                     {Array.from({ length: 6 }).map((_, i) => (
-                        <SkeletonBar key={i} h={40} sx={{ mb: 1, borderRadius: '10px' }} />
+                        <SkeletonBar key={i} h={40} sx={{ mb: 1, borderRadius: 'var(--radius)' }} />
                     ))}
                 </Panel>
             </Box>

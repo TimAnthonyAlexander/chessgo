@@ -27,7 +27,7 @@ const pillSx = {
     color: 'var(--text-dim)',
     bgcolor: 'transparent',
     border: '1px solid var(--line)',
-    borderRadius: '5px',
+    borderRadius: 'var(--radius)',
     px: 0.7,
     py: '2px',
     cursor: 'pointer',

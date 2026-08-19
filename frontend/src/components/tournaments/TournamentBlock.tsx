@@ -7,8 +7,6 @@ import type { LaneGroup } from './groups'
 import { GROUP_COLOR, parsePool } from './groups'
 import { formatMinutes, hhmm, poolSpeed, restrictionText, SPEED_LABEL } from './timing'
 
-const BLOCK_RADIUS = 4
-
 /** One timeline block: a 32px icon slot, the title, and a meta line
  * (`{clock}+{inc} {Rated|Casual}` + a person icon with the player count).
  * Absolutely positioned by its caller (`left`/`width` in px) inside its
@@ -68,7 +66,7 @@ export default function TournamentBlock({
                 px: 1,
                 overflow: 'hidden',
                 cursor: 'pointer',
-                borderRadius: `${BLOCK_RADIUS}px`,
+                borderRadius: 'var(--radius)',
                 border: `1px solid ${alpha(color, past ? 0.3 : 0.55)}`,
                 borderLeft: `3px solid ${alpha(color, past ? 0.35 : 1)}`,
                 bgcolor: alpha(color, past ? 0.06 : 0.14),
@@ -156,7 +154,7 @@ function BlockIcon({ t }: { t: TournamentSummary }) {
                     fontWeight: 700,
                     lineHeight: 1.3,
                     border: '1px solid currentColor',
-                    borderRadius: '4px',
+                    borderRadius: 'var(--radius)',
                     px: 0.4,
                 }}
             >

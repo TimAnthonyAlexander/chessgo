@@ -51,7 +51,7 @@ export function PlayingAside({
                     sx={{
                         width: 34,
                         height: 34,
-                        borderRadius: '10px',
+                        borderRadius: 'var(--radius)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',

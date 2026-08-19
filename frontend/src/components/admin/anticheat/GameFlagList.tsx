@@ -34,7 +34,7 @@ export default function GameFlagList({ flags }: { flags: FlagEvent[] }) {
                                     gap: 1,
                                     px: 1.25,
                                     py: 1,
-                                    borderRadius: '10px',
+                                    borderRadius: 'var(--radius)',
                                     bgcolor: 'var(--surface-2)',
                                     border: '1px solid var(--line-soft)',
                                     textDecoration: 'none',

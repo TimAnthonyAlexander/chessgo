@@ -35,7 +35,7 @@ export default function StandingsTable({
                     color: 'var(--muted)',
                     fontSize: 13.5,
                     border: '1px dashed var(--line)',
-                    borderRadius: '12px',
+                    borderRadius: 'var(--radius)',
                 }}
             >
                 No players yet.
@@ -47,7 +47,7 @@ export default function StandingsTable({
         <Box
             sx={{
                 border: '1px solid var(--line-soft)',
-                borderRadius: '12px',
+                borderRadius: 'var(--radius)',
                 bgcolor: 'var(--surface)',
                 overflow: 'hidden',
             }}

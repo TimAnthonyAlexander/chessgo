@@ -59,7 +59,7 @@ function NavRow({
                 fontWeight: 600,
                 letterSpacing: '0.01em',
                 color: 'var(--text-dim)',
-                borderRadius: '8px',
+                borderRadius: 'var(--radius)',
                 transition: 'color .12s ease, background .12s ease',
                 '&:hover, &:active': { color: 'var(--accent)', bgcolor: 'var(--accent-soft)' },
             }}
@@ -241,7 +241,7 @@ export default function MobileNavDrawer({
                                             fontSize: 14.5,
                                             fontWeight: 600,
                                             color: 'var(--text-dim)',
-                                            borderRadius: '8px',
+                                            borderRadius: 'var(--radius)',
                                             cursor: 'pointer',
                                             transition: 'color .12s ease, background .12s ease',
                                             '&:hover, &:active': {
@@ -270,7 +270,7 @@ export default function MobileNavDrawer({
                                         fontSize: 14.5,
                                         fontWeight: 600,
                                         color: 'var(--accent)',
-                                        borderRadius: '8px',
+                                        borderRadius: 'var(--radius)',
                                         cursor: 'pointer',
                                         transition: 'background .12s ease',
                                         '&:hover, &:active': { bgcolor: 'var(--accent-soft)' },

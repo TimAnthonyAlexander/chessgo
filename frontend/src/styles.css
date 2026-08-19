@@ -19,9 +19,12 @@
     --accent-soft: rgba(216, 166, 87, 0.14);
     --accent-soft-strong: rgba(216, 166, 87, 0.18);
     --accent-line: rgba(216, 166, 87, 0.4);
-    --accent-grad: linear-gradient(180deg, #e3b56a, #d8a657);
-    --accent-grad-hover: linear-gradient(180deg, #e7bd76, #dcab5d);
-    --on-accent: #15171c; /* near-black ink for text on the brass gradient */
+    /* The accent as a FILL (primary buttons, selected toggles) and its hover state.
+       Flat colors — there are no gradients in this UI, which is why the tokens are
+       named `-fill` and not `-grad`. Mirrored in lib/siteTheme.ts. */
+    --accent-fill: #d8a657;
+    --accent-fill-hover: #e0b16a;
+    --on-accent: #15171c; /* near-black ink for text on the accent fill */
 
     /* Status */
     --live: #7bb661; /* live/online green */
@@ -43,13 +46,25 @@
     --eval-white: #f3eee2; /* eval-bar white share */
     --eval-black: #191c22; /* eval-bar black share */
 
-    /* Corner radius for the cards that flank the board (the BoardPage side columns).
+    /* THE corner radius. One token, whole site, currently zero.
        (see the clock-bar-pulse keyframes below the :root block for the running-clock line)
-       Kept close to the board's own 5px (see .board in Board.css) so a panel sitting
-       beside the board reads as part of the same object rather than a rounder card
-       floating next to it. There is no site-wide radius scale — radii are per
-       component — so this token covers the board pages only, deliberately. */
-    --panel-radius: 9px;
+
+       Every corner in the chrome reads this — panels, cards, buttons, dialogs,
+       inputs, chips, badges, the board frame, the MUI overrides in theme.ts.
+       Nothing hardcodes a radius, so the entire app squares off (or rounds again)
+       from this single line. If you are adding a component and reaching for a
+       `borderRadius: '8px'`, that is the bug this token exists to prevent.
+
+       The only round things left are ON THE BOARD — legal-move dots, the check
+       glow, the Secret-Queen halo (Board.css). Those are shapes that carry
+       meaning, not decoration, so they are deliberately not themed. */
+    --radius: 0px;
+
+    /* THE elevation, same deal. Surfaces are separated by a hairline and a change
+       of colour, not by floating above the page, so this is `none`. Panels, menus,
+       popovers and dialogs all read it — see PANEL_SHADOW in components/PanelUI.tsx,
+       which is now just this token under an old name. */
+    --shadow: none;
 
     /* Board — Lichess-style cool grey-blue two-tone */
     --board-light: #dde2e6;
@@ -103,15 +118,11 @@ body {
 
 body {
     background-color: var(--bg);
-    /* The page backdrop (atmospheric glows / hairline grid / none) is chosen in the
-       Theme settings and painted via --backdrop-image by the site theme store
-       (lib/siteTheme.ts), tinted by the active accent. Defaults to the brass
-       atmosphere here so a no-JS / pre-init paint still has depth. */
-    background-image: var(
-        --backdrop-image,
-        radial-gradient(1100px 620px at 50% -8%, rgba(216, 166, 87, 0.06), transparent 70%),
-        radial-gradient(900px 600px at 88% 110%, rgba(79, 111, 104, 0.08), transparent 70%)
-    );
+    /* The page backdrop (flat / hairline grid) is chosen in the Theme settings and
+       painted via --backdrop-image by the site theme store (lib/siteTheme.ts).
+       Flat is the default and the pre-init paint: the canvas is one solid color,
+       never a wash. */
+    background-image: var(--backdrop-image, none);
     background-size: var(--backdrop-size, auto);
     background-position: center top;
     background-attachment: fixed;
@@ -181,7 +192,6 @@ a {
 }
 *::-webkit-scrollbar-thumb {
     background: var(--line);
-    border-radius: 8px;
 }
 
 @keyframes rise {
@@ -228,7 +238,6 @@ a {
     grid-template-rows: repeat(8, 1fr);
     aspect-ratio: 1;
     width: 100%;
-    border-radius: 8px;
     overflow: hidden;
 }
 .mini-sq {

@@ -27,7 +27,7 @@ export default function ArenaGamesList({ games }: { games: ArenaGame[] | null })
         <Box
             sx={{
                 border: '1px solid var(--line-soft)',
-                borderRadius: '12px',
+                borderRadius: 'var(--radius)',
                 bgcolor: 'var(--surface)',
                 overflow: 'hidden',
             }}
@@ -115,7 +115,7 @@ function Placeholder({ text }: { text: string }) {
                 color: 'var(--muted)',
                 fontSize: 13.5,
                 border: '1px dashed var(--line)',
-                borderRadius: '12px',
+                borderRadius: 'var(--radius)',
             }}
         >
             {text}

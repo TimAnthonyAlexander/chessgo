@@ -24,7 +24,7 @@ export default function ExactMatchBoards({ meta }: { meta: Record<string, unknow
                         gap: 0.75,
                         px: 1.25,
                         py: 0.625,
-                        borderRadius: '8px',
+                        borderRadius: 'var(--radius)',
                         bgcolor: 'color-mix(in srgb, #ca4a4a 18%, transparent)',
                         border: '1px solid color-mix(in srgb, #ca4a4a 46%, transparent)',
                         color: '#e06a6a',
@@ -99,7 +99,7 @@ function BoardCell({ title, fen, accent }: { title: string; fen: string | null; 
                 sx={{
                     width: '100%',
                     maxWidth: 180,
-                    borderRadius: '8px',
+                    borderRadius: 'var(--radius)',
                     overflow: 'hidden',
                     border: '2px solid',
                     borderColor: accent

@@ -849,8 +849,8 @@ function Card({ children, sx }: { children: ReactNode; sx?: object }) {
             sx={{
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: 'var(--panel-radius)',
-                boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+                borderRadius: 'var(--radius)',
+                boxShadow: 'var(--shadow)',
                 ...sx,
             }}
         >
@@ -876,7 +876,7 @@ function SetupAside({
                     sx={{
                         width: 34,
                         height: 34,
-                        borderRadius: '10px',
+                        borderRadius: 'var(--radius)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -1071,7 +1071,7 @@ function TimeFormatPicker({
                             gap: 0.25,
                             py: 1.4,
                             cursor: 'pointer',
-                            borderRadius: '12px',
+                            borderRadius: 'var(--radius)',
                             transition: 'background .15s, color .15s, border-color .15s',
                             color: active ? 'var(--accent)' : 'var(--text)',
                             bgcolor: active ? 'var(--accent-soft)' : 'var(--surface-2)',
@@ -1129,7 +1129,7 @@ function SummaryScreen({
                     sx={{
                         width: 40,
                         height: 40,
-                        borderRadius: '12px',
+                        borderRadius: 'var(--radius)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -1205,7 +1205,7 @@ function Stat({ value, label, color }: { value: string; label: string; color: st
                 alignItems: 'center',
                 gap: 0.25,
                 py: 1.5,
-                borderRadius: '12px',
+                borderRadius: 'var(--radius)',
                 bgcolor: 'var(--surface-2)',
                 border: '1px solid var(--line)',
             }}
@@ -1256,7 +1256,7 @@ function RunningAside({
                     sx={{
                         width: 34,
                         height: 34,
-                        borderRadius: '10px',
+                        borderRadius: 'var(--radius)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -1626,7 +1626,7 @@ function StatusCard({
                                 sx={{
                                     px: 0.85,
                                     py: 0.3,
-                                    borderRadius: '6px',
+                                    borderRadius: 'var(--radius)',
                                     fontSize: 11,
                                     color: 'var(--text-dim)',
                                     bgcolor: 'var(--surface-2)',
@@ -1792,7 +1792,7 @@ function HistoryBoxes({ history }: { history: Outcome[] }) {
                             minWidth: 26,
                             height: 26,
                             px: delta != null ? 0.85 : 0,
-                            borderRadius: '7px',
+                            borderRadius: 'var(--radius)',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
@@ -1854,7 +1854,7 @@ function ThemeSelect({ value, onChange }: { value: string; onChange: (v: string)
                 color: 'var(--text)',
                 fontSize: 14,
                 bgcolor: 'var(--surface-2)',
-                borderRadius: '10px',
+                borderRadius: 'var(--radius)',
                 '.MuiOutlinedInput-notchedOutline': { borderColor: 'var(--line)' },
                 '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--accent-line)' },
                 '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--accent)' },
@@ -1866,7 +1866,7 @@ function ThemeSelect({ value, onChange }: { value: string; onChange: (v: string)
                         sx: {
                             bgcolor: 'var(--surface)',
                             border: '1px solid var(--line)',
-                            borderRadius: '10px',
+                            borderRadius: 'var(--radius)',
                             mt: 0.5,
                         },
                     },
@@ -1891,7 +1891,7 @@ function Chip({ children }: { children: ReactNode }) {
                 gap: 0.5,
                 px: 1,
                 py: 0.4,
-                borderRadius: '8px',
+                borderRadius: 'var(--radius)',
                 fontSize: 12.5,
                 color: 'var(--text-dim)',
                 bgcolor: 'var(--surface-2)',

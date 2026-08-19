@@ -113,7 +113,7 @@ export default function ChallengeJoin() {
                             py: 1.5,
                             px: 2,
                             mt: 1,
-                            borderRadius: '12px',
+                            borderRadius: 'var(--radius)',
                             bgcolor: 'var(--surface-2)',
                             border: '1px solid var(--line)',
                         }}
@@ -156,7 +156,7 @@ export default function ChallengeJoin() {
                             py: 1,
                             width: '100%',
                             maxWidth: 360,
-                            borderRadius: '12px',
+                            borderRadius: 'var(--radius)',
                             bgcolor: 'var(--surface-2)',
                             border: '1px solid var(--line)',
                         }}

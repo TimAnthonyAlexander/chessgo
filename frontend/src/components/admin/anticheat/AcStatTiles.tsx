@@ -147,7 +147,7 @@ function Tile({
             sx={{
                 bgcolor: 'var(--surface-2)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: '10px',
+                borderRadius: 'var(--radius)',
                 px: 1.25,
                 py: 1.125,
             }}

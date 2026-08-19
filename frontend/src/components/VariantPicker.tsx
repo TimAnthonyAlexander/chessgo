@@ -154,7 +154,7 @@ const pickerSx = {
     '& .MuiToggleButton-root': {
         color: 'var(--text-dim)',
         border: '1px solid var(--line)',
-        borderRadius: '10px !important',
+        borderRadius: 'var(--radius) !important',
         textTransform: 'none',
         justifyContent: 'flex-start',
         px: 1.5,
@@ -162,10 +162,10 @@ const pickerSx = {
         transition: 'color .15s, background .15s, border-color .15s',
         '&:hover': { background: 'var(--line)', color: 'var(--accent)' },
         '&.Mui-selected': {
-            color: '#15171c',
-            background: 'linear-gradient(180deg, #e3b56a, #d8a657)',
+            color: 'var(--on-accent)',
+            background: 'var(--accent-fill)',
             borderColor: 'var(--accent)',
-            '&:hover': { background: 'linear-gradient(180deg, #e7bd76, #dcab5d)' },
+            '&:hover': { background: 'var(--accent-fill-hover)' },
         },
     },
 }
@@ -174,7 +174,7 @@ const selectSx = {
     width: '100%',
     color: 'var(--text)',
     bgcolor: 'var(--surface-2)',
-    borderRadius: '10px',
+    borderRadius: 'var(--radius)',
     '& .MuiSelect-select': { py: 1.1, px: 1.5 },
     '& .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--line)' },
     '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--accent)' },
@@ -187,8 +187,8 @@ const menuPaperSx = {
     mt: 0.5,
     bgcolor: 'var(--surface)',
     border: '1px solid var(--line)',
-    borderRadius: '10px',
-    boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+    borderRadius: 'var(--radius)',
+    boxShadow: 'var(--shadow)',
 }
 
 const menuItemSx = {

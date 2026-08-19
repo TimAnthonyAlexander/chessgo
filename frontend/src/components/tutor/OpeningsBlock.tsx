@@ -171,7 +171,7 @@ function Column({
                                 py: 0.75,
                                 mx: -1,
                                 px: 1,
-                                borderRadius: '8px',
+                                borderRadius: 'var(--radius)',
                                 cursor: 'pointer',
                                 color: 'var(--muted)',
                                 '&:hover': {
@@ -233,7 +233,7 @@ function OpeningRow({
                 py: 0.6,
                 mx: -1,
                 px: 1,
-                borderRadius: '8px',
+                borderRadius: 'var(--radius)',
                 textDecoration: 'none',
                 color: 'inherit',
                 '&:hover': { bgcolor: 'var(--surface-2)' },

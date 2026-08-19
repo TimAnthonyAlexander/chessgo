@@ -137,7 +137,7 @@ function PuzzlesBody({
                                 fontFamily: 'var(--font-mono)',
                                 color: 'var(--text-dim)',
                                 border: '1px solid var(--line)',
-                                borderRadius: '999px',
+                                borderRadius: 'var(--radius)',
                                 px: 1.1,
                                 py: 0.4,
                                 cursor: 'pointer',
@@ -280,7 +280,7 @@ function EvidenceLink({ gameRows }: { gameRows: TutorGameRow[] }) {
                     '&:focus-visible': {
                         outline: '1px solid var(--accent-line)',
                         outlineOffset: '2px',
-                        borderRadius: '4px',
+                        borderRadius: 'var(--radius)',
                     },
                 }}
             >

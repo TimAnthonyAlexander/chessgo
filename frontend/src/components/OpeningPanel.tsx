@@ -216,8 +216,7 @@ export default function OpeningPanel({
                     gap: 1,
                     px: 1.5,
                     py: 1,
-                    background:
-                        'linear-gradient(180deg, rgba(216,166,87,0.05), rgba(216,166,87,0) 70%), var(--bg-2)',
+                    background: 'var(--bg-2)',
                 }}
             >
                 <BookOpen size={15} style={{ color: 'var(--accent)', flexShrink: 0 }} />
@@ -233,7 +232,7 @@ export default function OpeningPanel({
                                 color: 'var(--accent)',
                                 bgcolor: 'var(--accent-soft)',
                                 border: '1px solid var(--accent-line)',
-                                borderRadius: '5px',
+                                borderRadius: 'var(--radius)',
                                 px: 0.6,
                                 py: '1px',
                                 flexShrink: 0,
@@ -334,7 +333,7 @@ function MoveRow({
                 gap: 1,
                 px: 0.5,
                 py: 0.5,
-                borderRadius: '6px',
+                borderRadius: 'var(--radius)',
                 cursor: 'pointer',
                 transition: 'background-color .12s',
                 '&:hover': { bgcolor: 'var(--line)' },
@@ -356,7 +355,7 @@ function MoveRow({
                 sx={{
                     position: 'relative',
                     height: 10,
-                    borderRadius: '3px',
+                    borderRadius: 'var(--radius)',
                     overflow: 'hidden',
                     bgcolor: '#191c22',
                     border: '1px solid var(--line-soft)',
@@ -369,7 +368,7 @@ function MoveRow({
                         top: 0,
                         bottom: 0,
                         width: `${whitePct}%`,
-                        background: 'linear-gradient(90deg, #f3eee2, #e4dccb)',
+                        background: 'var(--eval-white)',
                         transition: 'width .25s cubic-bezier(0.4,0,0.2,1)',
                     }}
                 />

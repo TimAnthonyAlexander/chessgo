@@ -16,7 +16,7 @@ export default function BotFillBadge() {
                     gap: 0.5,
                     px: 0.9,
                     py: 0.25,
-                    borderRadius: '999px',
+                    borderRadius: 'var(--radius)',
                     fontFamily: 'var(--font-mono)',
                     fontSize: 10.5,
                     fontWeight: 700,

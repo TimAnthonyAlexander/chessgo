@@ -61,7 +61,7 @@ export default function MoveTimeChart({ moveTimes }: { moveTimes: number[] }) {
                                         flex: '1 0 4px',
                                         minWidth: 4,
                                         height: `${h}%`,
-                                        borderRadius: '2px 2px 0 0',
+                                        borderRadius: 'var(--radius)',
                                         bgcolor: white ? WHITE_BAR : BLACK_BAR,
                                         opacity: 0.85,
                                         transition: 'opacity .1s ease',
@@ -91,7 +91,7 @@ function CvBadge({ label, color, times }: { label: string; color: string; times:
     const robotic = v != null && v < 0.3
     return (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <Box sx={{ width: 8, height: 8, borderRadius: '2px', bgcolor: color, flexShrink: 0 }} />
+            <Box sx={{ width: 8, height: 8, borderRadius: 'var(--radius)', bgcolor: color, flexShrink: 0 }} />
             <Typography sx={{ fontSize: 10.5, color: 'var(--muted)' }}>{label}</Typography>
             <Typography
                 sx={{

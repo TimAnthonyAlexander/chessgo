@@ -137,7 +137,7 @@ export default function CreateTournamentDialog({
                                     py: 0.4,
                                     fontSize: 12,
                                     fontFamily: 'var(--font-mono)',
-                                    borderRadius: '7px',
+                                    borderRadius: 'var(--radius)',
                                     border: '1px solid',
                                     borderColor: pool === p ? 'var(--accent-line)' : 'var(--line)',
                                     bgcolor: pool === p ? 'var(--accent-soft)' : 'transparent',

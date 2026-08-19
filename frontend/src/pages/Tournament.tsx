@@ -346,7 +346,7 @@ export default function Tournament() {
             <Box
                 sx={{
                     border: '1px solid var(--line-soft)',
-                    borderRadius: '14px',
+                    borderRadius: 'var(--radius)',
                     bgcolor: 'var(--surface)',
                     p: { xs: 2, md: 2.5 },
                     mb: { xs: 2.5, md: 3 },

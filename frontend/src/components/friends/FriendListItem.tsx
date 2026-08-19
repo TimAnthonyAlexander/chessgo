@@ -26,7 +26,7 @@ export default function FriendListItem({
                 gap: 1.5,
                 px: 1.5,
                 py: 1.25,
-                borderRadius: '10px',
+                borderRadius: 'var(--radius)',
                 border: '1px solid var(--line-soft)',
             }}
         >

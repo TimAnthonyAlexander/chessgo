@@ -76,7 +76,7 @@ export default function AuthDialog({
                     sx: {
                         bgcolor: 'var(--surface)',
                         border: '1px solid var(--line)',
-                        borderRadius: 3,
+                        borderRadius: 'var(--radius)',
                         minWidth: 360,
                     },
                 },

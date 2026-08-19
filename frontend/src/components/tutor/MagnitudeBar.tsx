@@ -41,7 +41,7 @@ export function MagnitudeBar({
                 position: 'relative',
                 height,
                 bgcolor: 'var(--surface-2)',
-                borderRadius: '2px',
+                borderRadius: 'var(--radius)',
             }}
         >
             <Box
@@ -54,7 +54,7 @@ export function MagnitudeBar({
                     minWidth: 2,
                     bgcolor: 'var(--text-dim)',
                     opacity,
-                    borderRadius: '2px 3px 3px 2px',
+                    borderRadius: 'var(--radius)',
                 }}
             />
         </Box>

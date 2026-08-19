@@ -3,8 +3,6 @@ import {
     Box,
     Button,
     Divider,
-    IconButton,
-    Tooltip,
     Typography,
     useMediaQuery,
     useTheme,
@@ -24,6 +22,7 @@ import MobileNavDrawer, { type MobileNavSection } from './MobileNavDrawer'
 import NotificationBell from './notifications/NotificationBell'
 import TitleBadge from './TitleBadge'
 import type { RatingCategory, User } from '../api/client'
+import IconBtn from './nav/IconBtn'
 import { type NavItem, isActive, navItems } from './nav/navModel'
 import SidebarNav from './SidebarNav'
 import { useSetting } from '../lib/settings'
@@ -198,7 +197,10 @@ export default function Layout() {
                     )}
                 </Box>
 
-                <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                {/* Same controls, same shapes, as the side rail's foot — both navs
+                    go through nav/IconBtn so a bell or a palette is one object with
+                    one hover, wherever it is rendered. */}
+                <Box sx={{ ml: 'auto', display: 'flex', alignItems: 'center', gap: 0.5 }}>
                     <NavStreak />
                     <NotificationBell />
                     <MobileNavDrawer
@@ -207,32 +209,12 @@ export default function Layout() {
                         onLogin={() => openAuth('login')}
                         onLogout={() => void authStore.logout()}
                     />
-                    <Tooltip title="Keyboard shortcuts">
-                        <IconButton
-                            aria-label="Keyboard shortcuts"
-                            size="small"
-                            onClick={() => setShortcutsOpen(true)}
-                            sx={{
-                                color: 'var(--text-dim)',
-                                '&:hover': { color: 'var(--accent)' },
-                            }}
-                        >
-                            <Keyboard size={18} />
-                        </IconButton>
-                    </Tooltip>
-                    <Tooltip title="Appearance">
-                        <IconButton
-                            aria-label="Appearance"
-                            size="small"
-                            onClick={() => setThemeOpen(true)}
-                            sx={{
-                                color: 'var(--text-dim)',
-                                '&:hover': { color: 'var(--accent)' },
-                            }}
-                        >
-                            <Palette size={18} />
-                        </IconButton>
-                    </Tooltip>
+                    <IconBtn label="Keyboard shortcuts" onClick={() => setShortcutsOpen(true)}>
+                        <Keyboard size={17} />
+                    </IconBtn>
+                    <IconBtn label="Appearance" onClick={() => setThemeOpen(true)}>
+                        <Palette size={17} />
+                    </IconBtn>
                     {user ? (
                         <UserMenu user={user} />
                     ) : (
@@ -357,8 +339,8 @@ function NavGroup({
                             p: 0.75,
                             bgcolor: 'var(--surface)',
                             border: '1px solid var(--line)',
-                            borderRadius: '11px',
-                            boxShadow: '0 20px 50px -24px rgba(0,0,0,0.85)',
+                            borderRadius: 'var(--radius)',
+                            boxShadow: 'var(--shadow)',
                         }}
                     >
                         {item.items.map((c) => {
@@ -375,7 +357,7 @@ function NavGroup({
                                     sx={{
                                         px: 1.25,
                                         py: 0.9,
-                                        borderRadius: '8px',
+                                        borderRadius: 'var(--radius)',
                                         fontSize: 13,
                                         fontWeight: 600,
                                         letterSpacing: '0.04em',
@@ -483,8 +465,8 @@ function UserMenu({ user }: { user: User }) {
                             p: 0.75,
                             bgcolor: 'var(--surface)',
                             border: '1px solid var(--line)',
-                            borderRadius: '11px',
-                            boxShadow: '0 20px 50px -24px rgba(0,0,0,0.85)',
+                            borderRadius: 'var(--radius)',
+                            boxShadow: 'var(--shadow)',
                         }}
                     >
                         <MenuAction
@@ -585,7 +567,7 @@ function MenuAction({
                 gap: 1,
                 px: 1.25,
                 py: 0.9,
-                borderRadius: '8px',
+                borderRadius: 'var(--radius)',
                 fontSize: 13.5,
                 fontWeight: 600,
                 color: 'var(--text-dim)',

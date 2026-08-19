@@ -16,9 +16,8 @@ export default function LiveStatsCard({ data }: { data: AdminDashboard['live'] }
                         sx={{
                             width: 8,
                             height: 8,
-                            borderRadius: '50%',
+                            borderRadius: 'var(--radius)',
                             bgcolor: 'var(--live)',
-                            boxShadow: '0 0 0 3px rgba(123, 182, 97, 0.18)',
                             mt: 0.75,
                         }}
                     />
@@ -49,7 +48,7 @@ function LiveRow({ icon, label, value }: { icon: ReactNode; label: string; value
                 gap: 1.25,
                 px: 1.25,
                 py: 1,
-                borderRadius: '10px',
+                borderRadius: 'var(--radius)',
                 bgcolor: 'var(--surface-2)',
             }}
         >

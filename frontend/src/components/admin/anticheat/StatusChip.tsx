@@ -14,13 +14,13 @@ export default function StatusChip({ status }: { status: FlagStatus }) {
                 gap: 0.625,
                 px: 1,
                 py: 0.375,
-                borderRadius: '999px',
+                borderRadius: 'var(--radius)',
                 bgcolor: `color-mix(in srgb, ${color} 14%, transparent)`,
                 border: `1px solid color-mix(in srgb, ${color} 38%, transparent)`,
                 lineHeight: 1,
             }}
         >
-            <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: color, flexShrink: 0 }} />
+            <Box sx={{ width: 6, height: 6, borderRadius: 'var(--radius)', bgcolor: color, flexShrink: 0 }} />
             <Typography
                 sx={{
                     fontSize: 11,

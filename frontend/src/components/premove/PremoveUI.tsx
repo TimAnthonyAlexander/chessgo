@@ -20,8 +20,8 @@ export function Card({ children, sx }: { children: ReactNode; sx?: object }) {
             sx={{
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: 'var(--panel-radius)',
-                boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+                borderRadius: 'var(--radius)',
+                boxShadow: 'var(--shadow)',
                 ...sx,
             }}
         >
@@ -39,7 +39,7 @@ export function Chip({ children }: { children: ReactNode }) {
                 gap: 0.5,
                 px: 1,
                 py: 0.4,
-                borderRadius: '8px',
+                borderRadius: 'var(--radius)',
                 fontSize: 12.5,
                 color: 'var(--text-dim)',
                 bgcolor: 'var(--surface-2)',
@@ -71,7 +71,7 @@ export function SideBadge({ color }: { color: 'w' | 'b' }) {
                 sx={{
                     width: 13,
                     height: 13,
-                    borderRadius: '50%',
+                    borderRadius: 'var(--radius)',
                     bgcolor: white ? '#f0efe9' : '#2b2926',
                     border: '1px solid',
                     borderColor: white ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.45)',

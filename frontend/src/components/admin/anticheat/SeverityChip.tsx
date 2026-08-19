@@ -20,13 +20,13 @@ export default function SeverityChip({
                 gap: 0.625,
                 px: dense ? 0.875 : 1,
                 py: 0.375,
-                borderRadius: '999px',
+                borderRadius: 'var(--radius)',
                 bgcolor: `color-mix(in srgb, ${color} 15%, transparent)`,
                 border: `1px solid color-mix(in srgb, ${color} 40%, transparent)`,
                 lineHeight: 1,
             }}
         >
-            <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: color, flexShrink: 0 }} />
+            <Box sx={{ width: 6, height: 6, borderRadius: 'var(--radius)', bgcolor: color, flexShrink: 0 }} />
             <Typography
                 sx={{
                     fontFamily: 'var(--font-mono)',

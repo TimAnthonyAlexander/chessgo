@@ -266,7 +266,7 @@ function ErrorScreen({ error }: { error: unknown }) {
                                 overflow: 'auto',
                                 bgcolor: 'var(--surface)',
                                 border: '1px solid var(--line-soft)',
-                                borderRadius: '10px',
+                                borderRadius: 'var(--radius)',
                                 fontFamily: 'var(--font-mono)',
                                 fontSize: 12,
                                 lineHeight: 1.65,
@@ -293,10 +293,10 @@ function PrimaryButton(props: ActionProps) {
         <Button
             {...props}
             sx={{
-                background: 'var(--accent-grad)',
+                background: 'var(--accent-fill)',
                 color: 'var(--on-accent)',
                 fontWeight: 700,
-                '&:hover': { background: 'var(--accent-grad-hover)' },
+                '&:hover': { background: 'var(--accent-fill-hover)' },
             }}
         />
     )

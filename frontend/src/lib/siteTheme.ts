@@ -15,8 +15,7 @@
 // Everything is applied as CSS custom properties on <html>, exactly like
 // boardTheme, so every component that reads a `var(--…)` token repaints for free.
 // initSiteTheme() runs synchronously in main.tsx BEFORE first paint, so there is
-// no theme flash. The default (dark + brass + atmosphere) reproduces the original
-// hand-authored look byte-for-byte, so existing users see zero change.
+// no theme flash. The default is dark + brass + flat.
 import { useSyncExternalStore } from 'react'
 
 export type ThemeMode = 'light' | 'dark' | 'system'
@@ -28,7 +27,7 @@ export type SitePaletteId =
     | 'harbor'
     | 'ember'
     | 'graphite'
-export type BackdropId = 'flat' | 'atmosphere' | 'grid'
+export type BackdropId = 'flat' | 'grid'
 
 // --- Color helpers ----------------------------------------------------------
 
@@ -47,7 +46,7 @@ function rgba(hex: string, a: number): string {
 }
 
 /** Mix a hex toward white (amt>0) or black (amt<0), amt in [-1,1]. Used to derive
- * the top of the accent gradient (a touch lighter) and its hover state. */
+ * the accent's hover state (a touch lighter). */
 function shade(hex: string, amt: number): string {
     const [r, g, b] = parseHex(hex)
     const t = amt < 0 ? 0 : 255
@@ -59,7 +58,7 @@ function shade(hex: string, amt: number): string {
 
 // --- Palette seeds ----------------------------------------------------------
 // A seed is the minimal set of colors that DEFINE a palette in one mode; expand()
-// derives the full variable map from it (accent-soft/line/gradient, premove, …) so
+// derives the full variable map from it (accent-soft/line/fill, premove, …) so
 // every palette is structurally identical and can't drift. Values are hand-picked
 // per (palette, mode) for legibility — in particular the accent doubles as button
 // background (with `onAccent` ink) AND as small text on a surface, so light-mode
@@ -76,7 +75,7 @@ interface Seed {
     textDim: string
     muted: string
     accent: string
-    /** Ink drawn ON the accent (button labels over the accent gradient). */
+    /** Ink drawn ON the accent (button labels over the accent fill). */
     onAccent: string
     /** Eval-bar shares (white/black material split); track the mode's contrast. */
     evalWhite: string
@@ -370,8 +369,10 @@ function expand(s: Seed): Record<string, string> {
         '--accent-soft': rgba(s.accent, 0.14),
         '--accent-soft-strong': rgba(s.accent, 0.18),
         '--accent-line': rgba(s.accent, 0.4),
-        '--accent-grad': `linear-gradient(180deg, ${shade(s.accent, 0.08)}, ${s.accent})`,
-        '--accent-grad-hover': `linear-gradient(180deg, ${shade(s.accent, 0.14)}, ${shade(s.accent, 0.05)})`,
+        // The accent as a FILL + its hover state. Flat colors; there are no
+        // gradients in this UI (see styles.css).
+        '--accent-fill': s.accent,
+        '--accent-fill-hover': shade(s.accent, 0.1),
         '--on-accent': s.onAccent,
         '--live': s.live,
         '--warn': s.warn,
@@ -389,50 +390,39 @@ function expand(s: Seed): Record<string, string> {
 
 // --- Backdrops --------------------------------------------------------------
 // The page background is `var(--bg)` painted with an optional `background-image`
-// held in `--backdrop-image` (styles.css reads it on <body>). Each backdrop is
-// tinted by the ACTIVE accent so the atmosphere stays cohesive with the palette.
+// held in `--backdrop-image` (styles.css reads it on <body>).
+//
+// There used to be a third option, "Atmosphere", which washed the canvas with two
+// soft accent radials. It is gone: the site is gradientless, so the canvas is
+// either one solid color or one solid color with hairlines on it. A persisted
+// 'atmosphere' choice falls back to Flat through asBackdrop().
 
 const BACKDROPS: { id: BackdropId; label: string; note: string }[] = [
-    { id: 'atmosphere', label: 'Atmosphere', note: 'Two soft accent glows' },
-    { id: 'flat', label: 'Flat', note: 'Solid — no gradient' },
+    { id: 'flat', label: 'Flat', note: 'One solid color' },
     { id: 'grid', label: 'Grid', note: 'Faint hairline lattice' },
 ]
 export const SITE_BACKDROPS = BACKDROPS
 
 /** A backdrop resolves to a `background-image` + matching `background-size` pair
- * (grid needs an explicit tile size; the radials size themselves). */
-function backdrop(
-    id: BackdropId,
-    accent: string,
-    line: string,
-    mode: ResolvedMode,
-): { image: string; size: string } {
-    if (id === 'flat') return { image: 'none', size: 'auto' }
+ * (grid needs an explicit tile size). The grid's hairlines are drawn with hard
+ * 1px colour stops — a gradient function used as a repeating rule, with no
+ * visible ramp anywhere in it. */
+function backdrop(id: BackdropId, line: string): { image: string; size: string } {
     if (id === 'grid') {
-        // A near-invisible lattice using the line color; hairlines on a 54px tile.
         const c = line
         return {
             image: `linear-gradient(${c} 1px, transparent 1px), linear-gradient(90deg, ${c} 1px, transparent 1px)`,
             size: '54px 54px',
         }
     }
-    // atmosphere: one warm glow top-center, one cooler glow bottom-right. Alpha is
-    // kept lower in light mode so the wash never muddies white surfaces.
-    const a1 = mode === 'dark' ? 0.07 : 0.05
-    const a2 = mode === 'dark' ? 0.06 : 0.04
-    return {
-        image:
-            `radial-gradient(1100px 620px at 50% -8%, ${rgba(accent, a1)}, transparent 70%),` +
-            `radial-gradient(900px 600px at 88% 110%, ${rgba(shade(accent, -0.15), a2)}, transparent 70%)`,
-        size: 'auto',
-    }
+    return { image: 'none', size: 'auto' }
 }
 
 // --- Store ------------------------------------------------------------------
 
 const DEFAULT_MODE: ThemeMode = 'dark'
 const DEFAULT_PALETTE: SitePaletteId = 'brass'
-const DEFAULT_BACKDROP: BackdropId = 'atmosphere'
+const DEFAULT_BACKDROP: BackdropId = 'flat'
 const LS_MODE = 'chessgo.site.mode'
 const LS_PALETTE = 'chessgo.site.palette'
 const LS_BACKDROP = 'chessgo.site.backdrop'
@@ -552,7 +542,7 @@ class SiteThemeStore {
      * used to render live preview tiles for each backdrop option in the picker. */
     backdropPreview(id: BackdropId): { image: string; size: string } {
         const seed = this.activeSeed()
-        return backdrop(id, seed.accent, seed.line, this.resolved)
+        return backdrop(id, seed.line)
     }
 
     private activeSeed(): Seed {
@@ -569,7 +559,7 @@ class SiteThemeStore {
             const root = document.documentElement
             const vars = expand(seed)
             for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v)
-            const bd = backdrop(this.backdrop, seed.accent, seed.line, this.resolved)
+            const bd = backdrop(this.backdrop, seed.line)
             root.style.setProperty('--backdrop-image', bd.image)
             root.style.setProperty('--backdrop-size', bd.size)
             // Native form controls (scrollbars, inputs) + selection follow the mode.

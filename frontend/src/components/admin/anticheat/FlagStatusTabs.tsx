@@ -29,7 +29,7 @@ export default function FlagStatusTabs({
                 display: 'inline-flex',
                 gap: 0.5,
                 p: 0.5,
-                borderRadius: '10px',
+                borderRadius: 'var(--radius)',
                 bgcolor: 'var(--surface-2)',
                 border: '1px solid var(--line-soft)',
                 flexWrap: 'wrap',
@@ -51,7 +51,7 @@ export default function FlagStatusTabs({
                             cursor: 'pointer',
                             px: 1.5,
                             py: 0.75,
-                            borderRadius: '7px',
+                            borderRadius: 'var(--radius)',
                             bgcolor: active
                                 ? `color-mix(in srgb, ${tab.color} 16%, transparent)`
                                 : 'transparent',

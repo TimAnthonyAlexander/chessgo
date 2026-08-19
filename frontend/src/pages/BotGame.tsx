@@ -1144,7 +1144,7 @@ function rowSx(variant: RowVariant, rail: SxProps<Theme>): SxProps<Theme> {
         py: { xs: 1.25, md: 0.75 },
         bgcolor: 'var(--surface)',
         border: '1px solid var(--line-soft)',
-        borderRadius: 'var(--panel-radius)',
+        borderRadius: 'var(--radius)',
     }
 }
 
@@ -1474,9 +1474,9 @@ function MovePanel({
                 flexDirection: 'column',
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: 'var(--panel-radius)',
+                borderRadius: 'var(--radius)',
                 overflow: 'hidden',
-                boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+                boxShadow: 'var(--shadow)',
                 alignSelf: { md: 'stretch' },
                 width: '100%',
             }}
@@ -1773,12 +1773,12 @@ function Setup({
             sx={{
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: 'var(--panel-radius)',
+                borderRadius: 'var(--radius)',
                 p: 2.75,
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 2.75,
-                boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+                boxShadow: 'var(--shadow)',
             }}
         >
             <Box>
@@ -1950,17 +1950,18 @@ const sliderSx = {
     '& .MuiSlider-thumb': {
         width: 18,
         height: 18,
-        bgcolor: '#f3eee2',
-        boxShadow: '0 1px 4px rgba(0,0,0,0.5)',
-        '&:hover, &.Mui-focusVisible': { boxShadow: '0 0 0 8px rgba(216,166,87,0.18)' },
-        '&.Mui-active': { boxShadow: '0 0 0 12px rgba(216,166,87,0.22)' },
+        borderRadius: 'var(--radius)',
+        bgcolor: 'var(--text)',
+        boxShadow: 'none',
+        '&:hover, &.Mui-focusVisible': { boxShadow: `0 0 0 6px var(--accent-soft)` },
+        '&.Mui-active': { boxShadow: `0 0 0 8px var(--accent-soft-strong)` },
     },
     '& .MuiSlider-mark': { bgcolor: 'var(--muted)', height: 4, opacity: 0.6 },
     '& .MuiSlider-markActive': { bgcolor: 'var(--accent)', opacity: 1 },
     '& .MuiSlider-valueLabel': {
         bgcolor: 'var(--surface-2)',
         color: 'var(--text)',
-        borderRadius: '6px',
+        borderRadius: 'var(--radius)',
         fontFamily: 'var(--font-mono)',
         fontWeight: 700,
     },
@@ -1972,7 +1973,7 @@ const toggleSx = {
     '& .MuiToggleButton-root': {
         color: 'var(--text-dim)',
         border: '1px solid var(--line)',
-        borderRadius: '10px !important',
+        borderRadius: 'var(--radius) !important',
         textTransform: 'none',
         fontFamily: 'var(--font-display)',
         fontWeight: 600,
@@ -1981,10 +1982,10 @@ const toggleSx = {
         transition: 'color .15s, background .15s, border-color .15s',
         '&:hover': { background: 'var(--line)', color: 'var(--accent)' },
         '&.Mui-selected': {
-            color: '#15171c',
-            background: 'linear-gradient(180deg, #e3b56a, #d8a657)',
+            color: 'var(--on-accent)',
+            background: 'var(--accent-fill)',
             borderColor: 'var(--accent)',
-            '&:hover': { background: 'linear-gradient(180deg, #e7bd76, #dcab5d)' },
+            '&:hover': { background: 'var(--accent-fill-hover)' },
         },
     },
 }

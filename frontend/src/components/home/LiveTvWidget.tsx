@@ -56,7 +56,7 @@ function PlayerStrip({
                     sx={{
                         width: 7,
                         height: 7,
-                        borderRadius: '50%',
+                        borderRadius: 'var(--radius)',
                         flexShrink: 0,
                         bgcolor: toMove ? 'var(--accent)' : 'var(--line)',
                     }}
@@ -118,7 +118,7 @@ function SkeletonStrip() {
                     sx={{
                         width: 7,
                         height: 7,
-                        borderRadius: '50%',
+                        borderRadius: 'var(--radius)',
                         flexShrink: 0,
                         bgcolor: 'var(--line)',
                     }}
@@ -282,7 +282,7 @@ export default function LiveTvWidget() {
         <Box
             sx={{
                 border: '1px solid var(--line-soft)',
-                borderRadius: '10px',
+                borderRadius: 'var(--radius)',
                 overflow: 'hidden',
                 bgcolor: 'var(--surface-2)',
             }}

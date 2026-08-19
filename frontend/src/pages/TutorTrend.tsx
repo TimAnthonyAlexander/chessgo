@@ -137,7 +137,7 @@ function FilterChip({
                 fontWeight: 600,
                 px: 1.5,
                 py: 0.6,
-                borderRadius: '999px',
+                borderRadius: 'var(--radius)',
                 cursor: 'pointer',
                 color: active ? 'var(--on-accent)' : 'var(--text-dim)',
                 bgcolor: active ? 'var(--accent)' : 'var(--surface-2)',

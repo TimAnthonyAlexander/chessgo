@@ -27,7 +27,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 9px;
+    border-radius: var(--radius);
     border: 1px solid var(--line);
     background: var(--surface-2);
     color: var(--text-dim);
@@ -52,7 +52,6 @@
 .pal-cell.active {
     border-color: var(--accent);
     background: var(--accent-soft);
-    box-shadow: 0 0 14px -4px rgba(216, 166, 87, 0.6);
 }
 .pal-cell.tool {
     color: var(--text-dim);

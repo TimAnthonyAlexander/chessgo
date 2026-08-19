@@ -12,7 +12,7 @@ export default function NewBadge() {
                 alignItems: 'center',
                 px: 0.75,
                 py: 0.25,
-                borderRadius: '999px',
+                borderRadius: 'var(--radius)',
                 bgcolor: 'var(--accent-soft)',
                 border: '1px solid var(--accent-line)',
                 fontFamily: 'var(--font-mono)',

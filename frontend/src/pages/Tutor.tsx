@@ -222,7 +222,7 @@ function ReportRow({ report, onOpen }: { report: TutorReportSummary; onOpen: () 
                 borderBottom: '1px solid var(--line-soft)',
                 cursor: clickable ? 'pointer' : 'default',
                 '&:hover': clickable ? { bgcolor: 'var(--surface-2)' } : undefined,
-                borderRadius: '8px',
+                borderRadius: 'var(--radius)',
                 px: 1,
             }}
         >

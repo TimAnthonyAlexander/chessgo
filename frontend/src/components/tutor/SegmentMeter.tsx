@@ -110,7 +110,7 @@ export default function SegmentMeter({
                             flex: 1,
                             minWidth: 3,
                             height,
-                            borderRadius: '1.5px',
+                            borderRadius: 'var(--radius)',
                             bgcolor: lit ? ink : 'var(--surface-2)',
                             opacity: lit ? opacity : 1,
                         }}

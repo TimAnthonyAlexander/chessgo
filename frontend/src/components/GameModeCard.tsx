@@ -86,9 +86,9 @@ export default function GameModeCard({
             sx={{
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: '14px',
+                borderRadius: 'var(--radius)',
                 p: 2.5,
-                boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+                boxShadow: 'var(--shadow)',
             }}
         >
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'var(--accent)' }}>

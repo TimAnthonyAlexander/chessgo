@@ -97,7 +97,7 @@ export default function DailyPuzzleWidget() {
             <Box
                 sx={{
                     border: '1px solid var(--line-soft)',
-                    borderRadius: '10px',
+                    borderRadius: 'var(--radius)',
                     overflow: 'hidden',
                     bgcolor: 'var(--surface-2)',
                 }}

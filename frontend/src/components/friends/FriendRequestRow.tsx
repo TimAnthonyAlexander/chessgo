@@ -23,7 +23,7 @@ export default function FriendRequestRow({
 }) {
     const name = request.name ?? 'Unknown player'
     return (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 1.5, py: 1, borderRadius: '10px' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 1.5, py: 1, borderRadius: 'var(--radius)' }}>
             <Box sx={{ minWidth: 0, flex: 1 }}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6 }}>
                     <TitleBadge title={request.title} />

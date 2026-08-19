@@ -32,7 +32,7 @@ export default function FlagBadge({
                 gap: 0.5,
                 px: 0.9,
                 py: 0.3,
-                borderRadius: '999px',
+                borderRadius: 'var(--radius)',
                 textDecoration: 'none',
                 fontFamily: 'var(--font-mono)',
                 fontSize: 11,

@@ -148,6 +148,38 @@ Manual: `./mason serve --screen` (API :6464), `zugzwang serve` (:6476),
   `-ls`/`-stop <name>`; each service runs in a `screen`. `chessgo-restart`
   rebuilds gomachine + zugzwang and restarts engine/zugzwang/hub (api & web untouched).
 
+## Frontend look: square, flat, gradientless (one token each)
+
+The chrome is deliberately undecorated, and every component reads the same tokens
+in `frontend/src/styles.css` rather than carrying its own values — a hardcoded
+`borderRadius: '8px'` or `boxShadow: '0 18px 50px …'` in a component IS the bug,
+because it is what made the UI drift component-by-component before.
+
+- **`--radius`** (currently `0px`) is THE corner radius: panels, cards, buttons,
+  dialogs, inputs, chips, badges, the board frame, and MUI's `shape.borderRadius`
+  in `theme.ts`. The only exceptions are three `border-radius: 50%` rules in
+  `components/Board.css` (legal-move dots/rings, the Secret-Queen badge and its
+  pick halo) where the circle carries meaning; they say so in a comment.
+- **`--shadow`** (currently `none`) is THE elevation. `PANEL_SHADOW` in
+  `components/PanelUI.tsx` is just this token under its old name.
+- **No gradients anywhere.** `--accent-fill` / `--accent-fill-hover` are flat
+  colours (the old names were `--accent-grad*`, which is why they are named
+  `-fill` now), and the page backdrop is Flat or a hairline Grid — the accent-glow
+  "Atmosphere" backdrop was removed, and a persisted choice falls back to Flat.
+  No accent glow box-shadows either.
+- **Palette-derived colours only.** `var(--accent)`, `var(--on-accent)`,
+  `var(--eval-white/-black)` etc., never a brass literal like `#d8a657` /
+  `#15171c` — those looked wrong in the five non-brass palettes. The categorical
+  data colours (`lib/timeControl.ts`, `profile/shared.ts`) are the exception, on
+  purpose: they must stay distinguishable from each other, not match the accent.
+- **Nav controls go through `components/nav/IconBtn.tsx`** — one square 30px cell
+  used by both the top bar and the side rail, so the bell/palette/shortcuts/logout
+  buttons cannot drift apart again. The notification panel is portalled to the body
+  and positioned by measurement (`place()` in `notifications/NotificationBell.tsx`):
+  right-aligned + below under the top bar, and it FLIPS to the right of the rail and
+  rides up off the bottom edge in the side layout, where a plain drop-down opened
+  99% off-screen.
+
 ## Product feature map (where each user-facing feature actually lives)
 
 Several of these are easy to *infer wrong* from the file tree, so: the mapping

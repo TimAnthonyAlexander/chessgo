@@ -98,7 +98,7 @@ export default function Clock({ getMs, active, running = true, compact = false }
                 lineHeight: compact ? 1.1 : undefined,
                 px: 1.75,
                 py: compact ? 0.5 : 0.75,
-                borderRadius: 1.5,
+                borderRadius: 'var(--radius)',
                 minWidth: 96,
                 textAlign: 'center',
                 color: active ? digitHueFor(ms) : 'var(--text-dim)',

@@ -118,7 +118,7 @@ export default function AdminUsers() {
                 <Box
                     sx={{
                         border: '1px solid var(--line-soft)',
-                        borderRadius: '12px',
+                        borderRadius: 'var(--radius)',
                         bgcolor: 'var(--surface)',
                         py: 6,
                         textAlign: 'center',

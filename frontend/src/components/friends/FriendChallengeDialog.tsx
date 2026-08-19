@@ -77,7 +77,7 @@ export default function FriendChallengeDialog({
                     sx: {
                         bgcolor: 'var(--surface)',
                         border: '1px solid var(--line)',
-                        borderRadius: '16px',
+                        borderRadius: 'var(--radius)',
                         minWidth: 340,
                         maxWidth: 400,
                     },
@@ -219,7 +219,7 @@ const presetSx = {
     gap: 0.75,
     '& .MuiToggleButtonGroup-grouped': {
         border: '1px solid var(--line) !important',
-        borderRadius: '10px !important',
+        borderRadius: 'var(--radius) !important',
         margin: 0,
         color: 'var(--text-dim)',
         fontSize: 13,
@@ -229,9 +229,9 @@ const presetSx = {
         '&:hover': { borderColor: 'var(--accent-line) !important', color: 'var(--text)' },
         '&.Mui-selected': {
             color: 'var(--on-accent)',
-            background: 'var(--accent-grad)',
+            background: 'var(--accent-fill)',
             borderColor: 'var(--accent) !important',
-            '&:hover': { background: 'var(--accent-grad)' },
+            '&:hover': { background: 'var(--accent-fill)' },
         },
     },
 }

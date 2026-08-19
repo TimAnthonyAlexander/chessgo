@@ -188,7 +188,7 @@ export default function ChallengeDialog({
                     sx: {
                         bgcolor: 'var(--surface)',
                         border: '1px solid var(--line)',
-                        borderRadius: '16px',
+                        borderRadius: 'var(--radius)',
                         minWidth: 360,
                         maxWidth: 420,
                     },
@@ -518,7 +518,7 @@ function InviteView({
                     gap: 1,
                     py: 1.5,
                     mb: 1.25,
-                    borderRadius: '12px',
+                    borderRadius: 'var(--radius)',
                     bgcolor: 'var(--surface-2)',
                     border: '1px solid var(--line)',
                 }}
@@ -546,7 +546,7 @@ function InviteView({
                     px: 1.5,
                     py: 1,
                     mb: 2,
-                    borderRadius: '12px',
+                    borderRadius: 'var(--radius)',
                     bgcolor: 'var(--surface-2)',
                     border: '1px solid var(--line)',
                 }}
@@ -622,7 +622,7 @@ function DirectSentView({ name, onClose }: { name: string; onClose: () => void }
                     justifyContent: 'center',
                     width: 48,
                     height: 48,
-                    borderRadius: '50%',
+                    borderRadius: 'var(--radius)',
                     bgcolor: 'var(--surface-2)',
                     border: '1px solid var(--accent-line)',
                     color: 'var(--accent)',
@@ -700,12 +700,12 @@ function Chip({
                 fontSize: small ? 13 : 13.5,
                 fontWeight: 600,
                 fontFamily: 'var(--font-display)',
-                borderRadius: '12px',
+                borderRadius: 'var(--radius)',
                 cursor: disabled ? 'not-allowed' : 'pointer',
                 opacity: disabled ? 0.4 : 1,
                 color: active ? 'var(--on-accent)' : 'var(--text-dim)',
                 background: active
-                    ? 'var(--accent-grad)'
+                    ? 'var(--accent-fill)'
                     : 'var(--surface-2)',
                 border: active
                     ? '1px solid var(--accent)'

@@ -44,7 +44,7 @@ function KeyChip({ children }: { children: string }) {
                 color: 'var(--text)',
                 bgcolor: 'var(--line-soft)',
                 border: '1px solid var(--line)',
-                borderRadius: '6px',
+                borderRadius: 'var(--radius)',
             }}
         >
             {children}
@@ -91,7 +91,7 @@ export default function ShortcutsDialog({ open, onClose }: { open: boolean; onCl
                     sx: {
                         bgcolor: 'var(--surface)',
                         border: '1px solid var(--line)',
-                        borderRadius: 3,
+                        borderRadius: 'var(--radius)',
                         width: '92vw',
                         maxWidth: 440,
                     },

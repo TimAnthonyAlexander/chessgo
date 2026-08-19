@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
-import { Box, IconButton, Tooltip, Typography } from '@mui/material'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { Box, IconButton, Typography } from '@mui/material'
 import { Bell, CheckCheck } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
+import IconBtn from '../nav/IconBtn'
 import {
     acceptChallenge,
     acceptFriendRequest,
@@ -20,6 +22,46 @@ import NotificationRow, { type NotificationContext } from './NotificationRow'
 
 const POLL_MS = 20_000
 
+const PANEL_W = 340
+const PANEL_MAX_H = 420
+/** Gap between the trigger and the panel, and the minimum clearance to any
+ *  viewport edge. */
+const GAP = 8
+
+/** Where to put the panel, given the trigger's box and the panel's real height.
+ *
+ *  One rule covers both navs, which is the point — the bell does not know or care
+ *  which one it is sitting in:
+ *
+ *  • Horizontally it right-aligns to the trigger, the normal drop-down behaviour
+ *    under the top bar. In the side rail that would push a 340px panel off the
+ *    left edge of the screen, so it FLIPS and opens to the RIGHT — past the rail's
+ *    own edge, not just the button's, so the panel sits beside the nav instead of
+ *    half on top of it. That is the chess.com side-rail behaviour.
+ *  • Vertically it drops below the trigger, and when that would run past the
+ *    bottom (the rail again, where the bell sits ~80px off the floor) it rides up
+ *    so the panel's bottom rests just inside the viewport instead.
+ *
+ *  Measured off the real panel height rather than the max, so a two-item list
+ *  sits against the bottom edge instead of floating 300px above it.
+ *
+ *  `flipFrom` is the x the flipped panel starts from — the enclosing <nav>'s right
+ *  edge when there is one, the trigger's own otherwise. */
+function place(rect: DOMRect, panelH: number, flipFrom: number): { top: number; left: number } {
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+
+    let left = rect.right - PANEL_W
+    if (left < GAP) left = flipFrom + GAP
+    left = Math.max(GAP, Math.min(left, vw - PANEL_W - GAP))
+
+    let top = rect.bottom + GAP
+    if (top + panelH + GAP > vh) top = vh - panelH - GAP
+    top = Math.max(GAP, top)
+
+    return { top, left }
+}
+
 /** Nav bell: unread badge + a dropdown of recent notifications. Polls
  * GET /notifications on a ~20s cadence, paused while the tab is hidden (and
  * caught up immediately when it becomes visible again). Logged-in only —
@@ -33,6 +75,8 @@ export default function NotificationBell() {
     const [open, setOpen] = useState(false)
     const [ctxById, setCtxById] = useState<Record<string, NotificationContext>>({})
     const wrapRef = useRef<HTMLDivElement | null>(null)
+    const panelRef = useRef<HTMLDivElement | null>(null)
+    const [pos, setPos] = useState<{ top: number; left: number } | null>(null)
 
     // --- polling (paused while hidden, caught up on visible) ---
     useEffect(() => {
@@ -74,11 +118,51 @@ export default function NotificationBell() {
         }
     }, [user])
 
+    // --- placement ---
+    // The panel is PORTALLED to the body and positioned `fixed`, for the same two
+    // reasons SidebarNav's flyout is: the rail is `position: sticky`, which opens a
+    // stacking context a child z-index cannot escape, and the panel has to be able
+    // to leave the rail's 232px column entirely. Measured after render (a layout
+    // effect, so it never paints at the wrong spot) because `place` needs the real
+    // panel height.
+    const reposition = useCallback(() => {
+        const el = wrapRef.current
+        const r = el?.getBoundingClientRect()
+        if (!el || !r) return
+        // The rail is the <nav> this bell lives in; in the top bar the flip never
+        // fires, so which element this resolves to there does not matter.
+        const nav = el.closest('nav')?.getBoundingClientRect()
+        setPos(place(r, panelRef.current?.offsetHeight ?? PANEL_MAX_H, nav?.right ?? r.right))
+    }, [])
+
+    useLayoutEffect(() => {
+        if (!open) {
+            setPos(null)
+            return
+        }
+        reposition()
+        // Recompute rather than close: the page behind can scroll while the panel
+        // is open (the rail is sticky, the content is not).
+        window.addEventListener('resize', reposition)
+        window.addEventListener('scroll', reposition, true)
+        return () => {
+            window.removeEventListener('resize', reposition)
+            window.removeEventListener('scroll', reposition, true)
+        }
+        // `items` is in the deps because the list growing changes the panel height,
+        // which changes where its bottom edge should sit.
+    }, [open, items, reposition])
+
     // --- close on outside click / Escape ---
     useEffect(() => {
         if (!open) return
         const onDown = (e: MouseEvent) => {
-            if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false)
+            const t = e.target as Node
+            // Both halves: the trigger, and the panel — which, portalled, is not a
+            // DOM descendant of the trigger, so a click inside it would otherwise
+            // read as "outside" and close the thing being clicked.
+            if (wrapRef.current?.contains(t) || panelRef.current?.contains(t)) return
+            setOpen(false)
         }
         const onKey = (e: KeyboardEvent) => {
             if (e.key === 'Escape') setOpen(false)
@@ -148,56 +232,61 @@ export default function NotificationBell() {
     if (!user) return null
 
     return (
-        <Box ref={wrapRef} sx={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-            <Tooltip title="Notifications">
-                <IconButton
-                    aria-label="Notifications"
-                    size="small"
-                    onClick={() => (open ? setOpen(false) : onOpen())}
-                    sx={{ color: open ? 'var(--accent)' : 'var(--text-dim)', '&:hover': { color: 'var(--accent)' } }}
-                >
-                    <Box sx={{ position: 'relative', display: 'flex' }}>
-                        <Bell size={18} />
-                        {unread > 0 && (
-                            <Box
-                                sx={{
-                                    position: 'absolute',
-                                    top: -5,
-                                    right: -7,
-                                    minWidth: 14,
-                                    height: 14,
-                                    px: '3px',
-                                    borderRadius: '7px',
-                                    bgcolor: 'var(--accent)',
-                                    color: 'var(--on-accent)',
-                                    fontSize: 9.5,
-                                    fontWeight: 700,
-                                    fontFamily: 'var(--font-mono)',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    lineHeight: 1,
-                                }}
-                            >
-                                {unread > 99 ? '99+' : unread}
-                            </Box>
-                        )}
-                    </Box>
-                </IconButton>
-            </Tooltip>
+        <Box ref={wrapRef} sx={{ display: 'flex', alignItems: 'center' }}>
+            <IconBtn
+                label="Notifications"
+                active={open}
+                onClick={() => (open ? setOpen(false) : onOpen())}
+            >
+                <Box sx={{ position: 'relative', display: 'flex' }}>
+                    <Bell size={17} />
+                    {unread > 0 && (
+                        <Box
+                            sx={{
+                                position: 'absolute',
+                                top: -5,
+                                right: -7,
+                                minWidth: 14,
+                                height: 14,
+                                px: '3px',
+                                borderRadius: 'var(--radius)',
+                                bgcolor: 'var(--accent)',
+                                color: 'var(--on-accent)',
+                                fontSize: 9.5,
+                                fontWeight: 700,
+                                fontFamily: 'var(--font-mono)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                lineHeight: 1,
+                            }}
+                        >
+                            {unread > 99 ? '99+' : unread}
+                        </Box>
+                    )}
+                </Box>
+            </IconBtn>
 
-            {open && (
-                <Box sx={{ position: 'absolute', top: '100%', right: 0, pt: 1, zIndex: 40 }}>
+            {open &&
+                createPortal(
                     <Box
+                        ref={panelRef}
                         sx={{
-                            width: 340,
-                            maxHeight: 420,
+                            position: 'fixed',
+                            top: `${pos?.top ?? 0}px`,
+                            left: `${pos?.left ?? 0}px`,
+                            // Hidden for the one layout pass between "rendered" and
+                            // "measured", so it never flashes at 0,0.
+                            visibility: pos ? 'visible' : 'hidden',
+                            zIndex: 1200,
+                            width: PANEL_W,
+                            maxHeight: PANEL_MAX_H,
                             display: 'flex',
                             flexDirection: 'column',
                             bgcolor: 'var(--surface)',
                             border: '1px solid var(--line)',
-                            borderRadius: '11px',
-                            boxShadow: '0 20px 50px -24px rgba(0,0,0,0.85)',
+                            borderRadius: 'var(--radius)',
+                            boxShadow: 'var(--shadow)',
                             overflow: 'hidden',
                         }}
                     >
@@ -254,9 +343,9 @@ export default function NotificationBell() {
                                 ))
                             )}
                         </Box>
-                    </Box>
-                </Box>
-            )}
+                    </Box>,
+                    document.body,
+                )}
         </Box>
     )
 }

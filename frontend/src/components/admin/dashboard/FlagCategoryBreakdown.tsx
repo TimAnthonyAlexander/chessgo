@@ -57,7 +57,7 @@ function CategoryBar({ label, value, max }: { label: string; value: number; max:
             <Box
                 sx={{
                     height: 8,
-                    borderRadius: '999px',
+                    borderRadius: 'var(--radius)',
                     bgcolor: 'var(--surface-2)',
                     overflow: 'hidden',
                 }}
@@ -67,7 +67,7 @@ function CategoryBar({ label, value, max }: { label: string; value: number; max:
                         width: `${pct}%`,
                         height: '100%',
                         bgcolor: 'var(--accent)',
-                        borderRadius: '999px',
+                        borderRadius: 'var(--radius)',
                         transition: 'width .3s ease',
                     }}
                 />

@@ -19,7 +19,7 @@ export default function SkeletonBar({
                 {
                     width: w,
                     height: h,
-                    borderRadius: '4px',
+                    borderRadius: 'var(--radius)',
                     bgcolor: 'var(--surface-2)',
                     animation: 'skBarPulse 1.4s ease-in-out infinite',
                     '@keyframes skBarPulse': {

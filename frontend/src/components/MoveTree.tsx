@@ -124,7 +124,7 @@ export default function MoveTree({ tree, currentId, onSelect }: Props) {
                     mr: 0.25,
                     m: 0,
                     border: 'none',
-                    borderRadius: '3px',
+                    borderRadius: 'var(--radius)',
                     fontFamily: 'var(--font-mono)',
                     fontSize: 12.5,
                     fontWeight: active ? 700 : 500,

@@ -6,7 +6,7 @@ import type { AdminGameCategory, AdminGameFilter } from '../../../api/client'
 const fieldSx = {
     '& .MuiOutlinedInput-root': {
         bgcolor: 'var(--surface-2)',
-        borderRadius: '10px',
+        borderRadius: 'var(--radius)',
         fontSize: 14,
         '& fieldset': { borderColor: 'var(--line-soft)' },
         '&:hover fieldset': { borderColor: 'var(--line)' },

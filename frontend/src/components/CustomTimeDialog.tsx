@@ -55,7 +55,7 @@ export default function CustomTimeDialog(props: CustomTimeDialogProps): JSX.Elem
                     sx: {
                         bgcolor: 'var(--surface)',
                         border: '1px solid var(--line)',
-                        borderRadius: '16px',
+                        borderRadius: 'var(--radius)',
                         minWidth: 360,
                         color: 'var(--text)',
                     },
@@ -102,7 +102,7 @@ export default function CustomTimeDialog(props: CustomTimeDialogProps): JSX.Elem
                         alignItems: 'center',
                         gap: 1.25,
                         p: 1.25,
-                        borderRadius: '12px',
+                        borderRadius: 'var(--radius)',
                         bgcolor: 'var(--surface-2)',
                         border: '1px solid var(--line-soft)',
                     }}

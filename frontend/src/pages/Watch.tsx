@@ -82,16 +82,6 @@ export default function Watch() {
     return (
         <Box sx={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
             <Box
-                aria-hidden
-                sx={{
-                    position: 'absolute',
-                    inset: 0,
-                    pointerEvents: 'none',
-                    background:
-                        'radial-gradient(ellipse 70% 50% at 50% -8%, rgba(216,166,87,0.08), transparent 62%)',
-                }}
-            />
-            <Box
                 sx={{
                     position: 'relative',
                     maxWidth: 1200,
@@ -184,7 +174,7 @@ function Placeholder({ text, spinner }: { text: string; spinner?: boolean }) {
                 justifyContent: 'center',
                 gap: 2,
                 minHeight: 200,
-                borderRadius: '16px',
+                borderRadius: 'var(--radius)',
                 border: '1px dashed var(--line)',
                 color: 'var(--muted)',
                 textAlign: 'center',
@@ -248,10 +238,10 @@ function GameCard({
                 position: 'relative',
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: '16px',
+                borderRadius: 'var(--radius)',
                 p: 1.5,
                 cursor: 'pointer',
-                boxShadow: '0 18px 50px -30px rgba(0,0,0,0.8)',
+                boxShadow: 'var(--shadow)',
                 transition: 'transform .12s ease, border-color .12s ease',
                 '&:hover': { transform: 'translateY(-2px)', borderColor: 'var(--accent-line)' },
                 '&:hover .watch-cta': { opacity: 1 },
@@ -274,7 +264,7 @@ function GameCard({
                             opacity: 0,
                             transition: 'opacity .12s ease',
                             background: 'rgba(10,11,14,0.32)',
-                            borderRadius: '8px',
+                            borderRadius: 'var(--radius)',
                             pointerEvents: 'none',
                         }}
                     >
@@ -285,9 +275,9 @@ function GameCard({
                                 gap: 0.75,
                                 px: 1.5,
                                 py: 0.75,
-                                borderRadius: '999px',
+                                borderRadius: 'var(--radius)',
                                 bgcolor: 'var(--accent)',
-                                color: '#15171c',
+                                color: 'var(--on-accent)',
                                 fontFamily: 'var(--font-display)',
                                 fontWeight: 700,
                                 fontSize: 12.5,
@@ -358,7 +348,7 @@ function PlayerRow({ side, ms, active }: { side: LiveSide; ms: number; active: b
                     fontWeight: 600,
                     px: 0.9,
                     py: 0.2,
-                    borderRadius: '6px',
+                    borderRadius: 'var(--radius)',
                     color: active ? 'var(--text)' : 'var(--text-dim)',
                     bgcolor: active ? 'var(--surface-2)' : 'transparent',
                     border: '1px solid',

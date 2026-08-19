@@ -30,7 +30,7 @@ export default function UserRecentGames({
                 <Box
                     sx={{
                         border: '1px solid var(--line-soft)',
-                        borderRadius: '12px',
+                        borderRadius: 'var(--radius)',
                         overflow: 'hidden',
                     }}
                 >
@@ -93,7 +93,7 @@ function GameRow({
                     width: 24,
                     height: 24,
                     flexShrink: 0,
-                    borderRadius: '7px',
+                    borderRadius: 'var(--radius)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -165,7 +165,7 @@ function GameRow({
                                 fontWeight: 700,
                                 color: 'var(--accent)',
                                 border: '1px solid var(--accent-line)',
-                                borderRadius: '4px',
+                                borderRadius: 'var(--radius)',
                                 px: 0.4,
                                 lineHeight: 1.3,
                             }}

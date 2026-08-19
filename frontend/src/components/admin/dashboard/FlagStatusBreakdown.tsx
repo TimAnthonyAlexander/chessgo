@@ -31,7 +31,7 @@ export default function FlagStatusBreakdown({ data }: { data: ByStatus }) {
                                 gap: 1,
                                 px: 1.25,
                                 py: 1,
-                                borderRadius: '10px',
+                                borderRadius: 'var(--radius)',
                                 bgcolor: 'var(--surface-2)',
                                 border: '1px solid var(--line-soft)',
                             }}
@@ -40,7 +40,7 @@ export default function FlagStatusBreakdown({ data }: { data: ByStatus }) {
                                 sx={{
                                     width: 8,
                                     height: 8,
-                                    borderRadius: '50%',
+                                    borderRadius: 'var(--radius)',
                                     bgcolor: color,
                                     flexShrink: 0,
                                 }}

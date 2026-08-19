@@ -48,7 +48,7 @@ export default function GamesTable({
         <Box
             sx={{
                 border: '1px solid var(--line-soft)',
-                borderRadius: '12px',
+                borderRadius: 'var(--radius)',
                 overflow: 'hidden',
                 bgcolor: 'var(--surface)',
             }}

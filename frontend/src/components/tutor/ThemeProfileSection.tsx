@@ -81,7 +81,7 @@ export default function ThemeProfileSection({ profile }: { profile?: TutorThemeP
                                     mx: -1,
                                     px: 1,
                                     py: 0.75,
-                                    borderRadius: '8px',
+                                    borderRadius: 'var(--radius)',
                                     minWidth: 0,
                                     '&:hover': { bgcolor: 'var(--surface-2)' },
                                     '&:focus-visible': { outline: '1px solid var(--accent-line)' },

@@ -23,7 +23,7 @@ export default function TitleBadge({ title }: { title: Title | null | undefined 
                 letterSpacing: '0.04em',
                 color: '#fff',
                 bgcolor: '#b3261e',
-                borderRadius: '3px',
+                borderRadius: 'var(--radius)',
                 px: '5px',
                 py: '3px',
                 flexShrink: 0,

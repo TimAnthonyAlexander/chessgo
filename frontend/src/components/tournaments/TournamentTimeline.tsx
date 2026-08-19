@@ -125,7 +125,7 @@ export default function TournamentTimeline({
                 overflowY: 'hidden',
                 WebkitOverflowScrolling: 'touch',
                 border: '1px solid var(--line-soft)',
-                borderRadius: '10px',
+                borderRadius: 'var(--radius)',
                 bgcolor: 'var(--surface)',
             }}
         >

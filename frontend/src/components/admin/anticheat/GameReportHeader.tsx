@@ -85,7 +85,7 @@ function PlayerName({
                 sx={{
                     width: 10,
                     height: 10,
-                    borderRadius: '50%',
+                    borderRadius: 'var(--radius)',
                     bgcolor: dot,
                     border: '1px solid var(--line)',
                     flexShrink: 0,
@@ -129,7 +129,7 @@ function Meta({
                 gap: 0.5,
                 px: 1,
                 py: 0.5,
-                borderRadius: '7px',
+                borderRadius: 'var(--radius)',
                 bgcolor: accent ? 'var(--accent-soft)' : 'var(--surface-2)',
                 border: '1px solid',
                 borderColor: accent ? 'var(--accent-line)' : 'var(--line-soft)',

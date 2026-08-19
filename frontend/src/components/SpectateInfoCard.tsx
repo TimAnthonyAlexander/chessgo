@@ -47,7 +47,7 @@ export default function SpectateInfoCard({
                 bgcolor: flat ? 'var(--bg-2)' : 'var(--surface)',
                 border: flat ? 'none' : '1px solid var(--line-soft)',
                 borderBottom: flat ? '1px solid var(--line-soft)' : undefined,
-                borderRadius: flat ? 0 : 'var(--panel-radius)',
+                borderRadius: 'var(--radius)',
                 p: flat ? 1.75 : 2.5,
                 boxShadow: flat ? 'none' : PANEL_SHADOW,
             }}
@@ -70,7 +70,7 @@ export default function SpectateInfoCard({
                             ml: 'auto',
                             px: 1,
                             py: 0.3,
-                            borderRadius: '6px',
+                            borderRadius: 'var(--radius)',
                             fontFamily: 'var(--font-mono)',
                             fontSize: 10.5,
                             fontWeight: 700,
@@ -103,7 +103,7 @@ export default function SpectateInfoCard({
                     sx={{
                         px: 1,
                         py: 0.3,
-                        borderRadius: '6px',
+                        borderRadius: 'var(--radius)',
                         fontSize: 10.5,
                         fontWeight: 700,
                         letterSpacing: '0.1em',
@@ -131,7 +131,7 @@ export default function SpectateInfoCard({
                         }}
                     >
                         <Box
-                            sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#7bb661' }}
+                            sx={{ width: 6, height: 6, borderRadius: 'var(--radius)', bgcolor: '#7bb661' }}
                         />
                         Live
                     </Box>

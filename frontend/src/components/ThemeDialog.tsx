@@ -82,7 +82,7 @@ export default function ThemeDialog({ open, onClose }: { open: boolean; onClose:
                     sx: {
                         bgcolor: 'var(--surface)',
                         border: '1px solid var(--line)',
-                        borderRadius: 3,
+                        borderRadius: 'var(--radius)',
                         width: '92vw',
                         maxWidth: 860,
                     },
@@ -258,7 +258,10 @@ function ThemeTab({ query = '' }: { query?: string }) {
                     <Box
                         sx={{
                             display: 'grid',
-                            gridTemplateColumns: 'repeat(3, 1fr)',
+                            // Fits the number of backdrops there actually are — it was
+                            // a hardcoded 3 while there were exactly 3, and left a
+                            // hole the day "Atmosphere" was dropped.
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
                             gap: 1.25,
                         }}
                     >
@@ -891,7 +894,7 @@ function selectionSx(selected: boolean) {
     return {
         border: selected ? '2px solid var(--accent)' : '2px solid var(--line)',
         bgcolor: selected ? 'var(--accent-soft)' : 'transparent',
-        borderRadius: 2,
+        borderRadius: 'var(--radius)',
         p: 1,
         cursor: 'pointer',
         transition: 'border-color 120ms, background-color 120ms',
@@ -998,7 +1001,7 @@ function PaletteCard({
                 {/* Miniature chrome in this palette's colors. */}
                 <Box
                     sx={{
-                        borderRadius: 1.5,
+                        borderRadius: 'var(--radius)',
                         overflow: 'hidden',
                         border: `1px solid ${sw.line}`,
                         bgcolor: sw.bg,
@@ -1012,7 +1015,7 @@ function PaletteCard({
                         sx={{
                             bgcolor: sw.surface,
                             border: `1px solid ${sw.line}`,
-                            borderRadius: 1,
+                            borderRadius: 'var(--radius)',
                             px: 0.75,
                             py: 0.6,
                             display: 'flex',
@@ -1020,19 +1023,19 @@ function PaletteCard({
                             gap: 0.5,
                         }}
                     >
-                        <Box sx={{ height: 5, width: '62%', borderRadius: 2, bgcolor: sw.text }} />
-                        <Box sx={{ height: 4, width: '88%', borderRadius: 2, bgcolor: sw.text, opacity: 0.35 }} />
+                        <Box sx={{ height: 5, width: '62%', borderRadius: 'var(--radius)', bgcolor: sw.text }} />
+                        <Box sx={{ height: 4, width: '88%', borderRadius: 'var(--radius)', bgcolor: sw.text, opacity: 0.35 }} />
                     </Box>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
                         <Box
                             sx={{
                                 height: 14,
                                 minWidth: 34,
-                                borderRadius: 2,
+                                borderRadius: 'var(--radius)',
                                 bgcolor: sw.accent,
                             }}
                         />
-                        <Box sx={{ height: 8, width: 8, borderRadius: '50%', bgcolor: sw.accent }} />
+                        <Box sx={{ height: 8, width: 8, borderRadius: 'var(--radius)', bgcolor: sw.accent }} />
                     </Box>
                 </Box>
                 <Typography
@@ -1073,7 +1076,7 @@ function BackdropCard({
             <Box
                 sx={{
                     height: 56,
-                    borderRadius: 1.5,
+                    borderRadius: 'var(--radius)',
                     border: '1px solid var(--line)',
                     bgcolor: 'var(--bg)',
                     backgroundImage: bd.image === 'none' ? undefined : bd.image,
@@ -1139,7 +1142,7 @@ function PieceCard({
                 sx={{
                     display: 'grid',
                     gridTemplateColumns: 'repeat(4, 1fr)',
-                    borderRadius: '6px',
+                    borderRadius: 'var(--radius)',
                     overflow: 'hidden',
                 }}
             >

@@ -115,7 +115,7 @@ function RatingTile({
             sx={{
                 bgcolor: accent ? 'var(--accent-soft)' : 'var(--surface-2)',
                 border: `1px solid ${accent ? 'var(--accent-line)' : 'var(--line-soft)'}`,
-                borderRadius: '12px',
+                borderRadius: 'var(--radius)',
                 p: 1.5,
             }}
         >

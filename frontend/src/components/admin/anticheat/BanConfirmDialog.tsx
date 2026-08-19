@@ -34,7 +34,7 @@ export default function BanConfirmDialog({
                     sx: {
                         bgcolor: 'var(--surface)',
                         border: '1px solid var(--line)',
-                        borderRadius: '14px',
+                        borderRadius: 'var(--radius)',
                         maxWidth: 420,
                     },
                 },

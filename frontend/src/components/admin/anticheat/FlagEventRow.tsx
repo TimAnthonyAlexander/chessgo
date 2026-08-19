@@ -31,7 +31,7 @@ export default function FlagEventRow({
         <Box
             sx={{
                 border: '1px solid var(--line-soft)',
-                borderRadius: '10px',
+                borderRadius: 'var(--radius)',
                 bgcolor: event.reviewed ? 'var(--bg-2)' : 'var(--surface)',
                 overflow: 'hidden',
                 transition: 'background .12s ease',
@@ -154,7 +154,7 @@ export default function FlagEventRow({
                                 gap: 0.625,
                                 px: 1.25,
                                 py: 0.625,
-                                borderRadius: '8px',
+                                borderRadius: 'var(--radius)',
                                 textDecoration: 'none',
                                 bgcolor: 'var(--accent-soft)',
                                 border: '1px solid var(--accent-line)',

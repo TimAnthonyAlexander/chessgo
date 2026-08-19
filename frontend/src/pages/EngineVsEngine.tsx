@@ -661,9 +661,9 @@ export default function EngineVsEngine() {
                         sx={{
                             bgcolor: 'var(--surface)',
                             border: '1px solid var(--line-soft)',
-                            borderRadius: 'var(--panel-radius)',
+                            borderRadius: 'var(--radius)',
                             p: 1.75,
-                            boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+                            boxShadow: 'var(--shadow)',
                         }}
                     >
                         <Label>Variant</Label>
@@ -715,7 +715,7 @@ export default function EngineVsEngine() {
                         sx={{
                             bgcolor: 'var(--surface)',
                             border: '1px solid var(--line-soft)',
-                            borderRadius: 'var(--panel-radius)',
+                            borderRadius: 'var(--radius)',
                             p: 1.75,
                             display: 'flex',
                             flexDirection: 'column',
@@ -790,7 +790,7 @@ export default function EngineVsEngine() {
                             sx={{
                                 bgcolor: 'var(--surface)',
                                 border: '1px solid var(--line-soft)',
-                                borderRadius: 'var(--panel-radius)',
+                                borderRadius: 'var(--radius)',
                                 p: 1.5,
                                 display: 'flex',
                                 flexDirection: 'column',
@@ -846,7 +846,7 @@ export default function EngineVsEngine() {
                             sx={{
                                 bgcolor: 'var(--surface)',
                                 border: '1px solid var(--line-soft)',
-                                borderRadius: 'var(--panel-radius)',
+                                borderRadius: 'var(--radius)',
                                 overflow: 'hidden',
                             }}
                         >
@@ -947,12 +947,12 @@ function SideControls({
             sx={{
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: 'var(--panel-radius)',
+                borderRadius: 'var(--radius)',
                 p: 1.75,
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 1,
-                boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+                boxShadow: 'var(--shadow)',
             }}
         >
             {/* Engine picker — only the engines the active variant can actually play
@@ -1110,9 +1110,9 @@ function SideControls({
     )
 }
 
-// Run control, styled to match the Analysis board's footer action buttons: a gold
-// gradient for the primary (Start/Pause) button, a quiet surface for the secondary
-// (Reset). `primary` maps to that gold "active" look.
+// Run control, styled to match the Analysis board's footer action buttons: the flat
+// accent fill for the primary (Start/Pause) button, a quiet surface for the secondary
+// (Reset). `primary` maps to that accent "active" look.
 function RunBtn({
     icon,
     label,
@@ -1138,21 +1138,17 @@ function RunBtn({
                 fontSize: 14,
                 fontWeight: 600,
                 letterSpacing: 0.2,
-                borderRadius: '10px',
+                borderRadius: 'var(--radius)',
                 gap: 0.4,
-                color: primary ? '#15171c' : 'var(--text)',
-                background: primary
-                    ? 'linear-gradient(180deg, #e3b56a, #d8a657)'
-                    : 'var(--surface-2)',
+                color: primary ? 'var(--on-accent)' : 'var(--text)',
+                background: primary ? 'var(--accent-fill)' : 'var(--surface-2)',
                 border: primary ? '1px solid var(--accent)' : '1px solid var(--line)',
-                boxShadow: primary ? '0 0 16px -4px rgba(216,166,87,0.6)' : 'none',
+                boxShadow: 'none',
                 transition: 'background-color .15s, color .15s, border-color .15s, box-shadow .2s',
                 '& .MuiButton-startIcon': { mr: 0.2 },
                 '&:hover': {
-                    background: primary
-                        ? 'linear-gradient(180deg, #e7bd76, #dcab5d)'
-                        : 'var(--line)',
-                    color: primary ? '#15171c' : 'var(--accent)',
+                    background: primary ? 'var(--accent-fill-hover)' : 'var(--line)',
+                    color: primary ? 'var(--on-accent)' : 'var(--accent)',
                     borderColor: primary ? 'var(--accent)' : 'var(--accent-line)',
                 },
                 '&:active': { transform: 'translateY(1px)' },
@@ -1249,7 +1245,12 @@ const sliderSx = {
     mb: 0,
     '& .MuiSlider-rail': { opacity: 0.4, bgcolor: 'var(--line)' },
     '& .MuiSlider-track': { border: 'none' },
-    '& .MuiSlider-thumb': { width: 16, height: 16, bgcolor: '#f3eee2' },
+    '& .MuiSlider-thumb': {
+        width: 16,
+        height: 16,
+        borderRadius: 'var(--radius)',
+        bgcolor: 'var(--text)',
+    },
 }
 
 // Matches the number field's outlined look so the engine dropdown reads as part of
@@ -1260,7 +1261,7 @@ const selectSx = {
     fontFamily: 'var(--font-display)',
     fontWeight: 600,
     fontSize: 13.5,
-    borderRadius: '10px',
+    borderRadius: 'var(--radius)',
     '& .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--line)' },
     '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--accent)' },
     '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--accent)' },
@@ -1292,15 +1293,15 @@ const toggleSx = {
     '& .MuiToggleButton-root': {
         color: 'var(--text-dim)',
         border: '1px solid var(--line)',
-        borderRadius: '10px !important',
+        borderRadius: 'var(--radius) !important',
         textTransform: 'none',
         fontFamily: 'var(--font-display)',
         fontWeight: 600,
         fontSize: 13.5,
         py: 0.7,
         '&.Mui-selected': {
-            color: '#15171c',
-            background: 'linear-gradient(180deg, #e3b56a, #d8a657)',
+            color: 'var(--on-accent)',
+            background: 'var(--accent-fill)',
             borderColor: 'var(--accent)',
         },
     },

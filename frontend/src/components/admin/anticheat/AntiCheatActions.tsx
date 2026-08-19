@@ -85,7 +85,7 @@ export default function AntiCheatActions({
                     display: 'flex',
                     gap: 0.5,
                     p: 0.5,
-                    borderRadius: '10px',
+                    borderRadius: 'var(--radius)',
                     bgcolor: 'var(--surface-2)',
                     border: '1px solid var(--line-soft)',
                     opacity: banned ? 0.55 : 1,
@@ -109,7 +109,7 @@ export default function AntiCheatActions({
                                 borderColor: active
                                     ? `color-mix(in srgb, ${color} 46%, transparent)`
                                     : 'transparent',
-                                borderRadius: '7px',
+                                borderRadius: 'var(--radius)',
                                 py: 0.875,
                                 bgcolor: active
                                     ? `color-mix(in srgb, ${color} 16%, transparent)`

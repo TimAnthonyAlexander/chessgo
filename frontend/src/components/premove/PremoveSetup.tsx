@@ -14,7 +14,7 @@ export function SetupAside({ bestStreak }: { bestStreak: number }) {
                     sx={{
                         width: 34,
                         height: 34,
-                        borderRadius: '10px',
+                        borderRadius: 'var(--radius)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -139,7 +139,7 @@ function FormatTile({
                 gap: 0.35,
                 py: 1.4,
                 cursor: 'pointer',
-                borderRadius: '12px',
+                borderRadius: 'var(--radius)',
                 transition: 'background .15s, color .15s, border-color .15s',
                 color: active ? 'var(--accent)' : 'var(--text)',
                 bgcolor: active ? 'var(--accent-soft)' : 'var(--surface-2)',

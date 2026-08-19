@@ -75,7 +75,7 @@ function StatTile({
             sx={{
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: '12px',
+                borderRadius: 'var(--radius)',
                 p: 1.5,
             }}
         >

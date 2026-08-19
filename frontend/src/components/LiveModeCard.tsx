@@ -79,9 +79,9 @@ function LiveModeCard({
             sx={{
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: '14px',
+                borderRadius: 'var(--radius)',
                 p: 2.5,
-                boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+                boxShadow: 'var(--shadow)',
             }}
         >
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'var(--accent)' }}>
@@ -134,7 +134,7 @@ function VariantChip({ variant, sx }: { variant: Variant; sx?: SxProps<Theme> })
             sx={{
                 px: 1,
                 py: 0.3,
-                borderRadius: '6px',
+                borderRadius: 'var(--radius)',
                 fontFamily: 'var(--font-mono)',
                 fontSize: 10.5,
                 fontWeight: 700,

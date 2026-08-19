@@ -397,11 +397,11 @@ function Card({ children, sx }: { children: React.ReactNode; sx?: object }) {
             sx={{
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: 'var(--panel-radius)',
+                borderRadius: 'var(--radius)',
                 p: 1.75,
                 display: 'flex',
                 flexDirection: 'column',
-                boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+                boxShadow: 'var(--shadow)',
                 ...sx,
             }}
         >
@@ -457,7 +457,12 @@ const sliderSx = {
     mt: 0.5,
     '& .MuiSlider-rail': { opacity: 0.4, bgcolor: 'var(--line)' },
     '& .MuiSlider-track': { border: 'none' },
-    '& .MuiSlider-thumb': { width: 18, height: 18, bgcolor: '#f3eee2' },
+    '& .MuiSlider-thumb': {
+        width: 18,
+        height: 18,
+        borderRadius: 'var(--radius)',
+        bgcolor: 'var(--text)',
+    },
 }
 
 const primaryBtnSx = {
@@ -466,11 +471,11 @@ const primaryBtnSx = {
     fontFamily: 'var(--font-display)',
     fontSize: 14.5,
     fontWeight: 700,
-    borderRadius: '10px',
-    color: '#15171c',
-    background: 'linear-gradient(180deg, #e3b56a, #d8a657)',
+    borderRadius: 'var(--radius)',
+    color: 'var(--on-accent)',
+    background: 'var(--accent-fill)',
     border: '1px solid var(--accent)',
-    boxShadow: '0 0 16px -4px rgba(216,166,87,0.6)',
-    '&:hover': { background: 'linear-gradient(180deg, #e7bd76, #dcab5d)' },
-    '&.Mui-disabled': { opacity: 0.6, color: '#15171c' },
+    boxShadow: 'none',
+    '&:hover': { background: 'var(--accent-fill-hover)' },
+    '&.Mui-disabled': { opacity: 0.6, color: 'var(--on-accent)' },
 }

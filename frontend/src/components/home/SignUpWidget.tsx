@@ -34,7 +34,7 @@ export default function SignUpWidget() {
                                 width: 28,
                                 height: 28,
                                 flexShrink: 0,
-                                borderRadius: '8px',
+                                borderRadius: 'var(--radius)',
                                 display: 'flex',
                                 alignItems: 'center',
                                 justifyContent: 'center',

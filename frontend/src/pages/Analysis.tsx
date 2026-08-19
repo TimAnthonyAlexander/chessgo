@@ -1179,10 +1179,10 @@ export default function Analysis() {
                         flexDirection: 'column',
                         minHeight: 0,
                         border: '1px solid var(--line-soft)',
-                        borderRadius: 'var(--panel-radius)',
+                        borderRadius: 'var(--radius)',
                         bgcolor: 'var(--surface)',
                         overflow: 'hidden',
-                        boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+                        boxShadow: 'var(--shadow)',
                         maxHeight: { xs: '72vh', md: 'none' },
                     }}
                 >
@@ -1441,22 +1441,18 @@ function AutoBtn({
                     fontSize: 14,
                     fontWeight: 600,
                     letterSpacing: 0.2,
-                    borderRadius: '10px',
+                    borderRadius: 'var(--radius)',
                     gap: 0.4,
-                    color: active ? '#15171c' : 'var(--text)',
-                    background: active
-                        ? 'linear-gradient(180deg, #e3b56a, #d8a657)'
-                        : 'var(--surface-2)',
+                    color: active ? 'var(--on-accent)' : 'var(--text)',
+                    background: active ? 'var(--accent-fill)' : 'var(--surface-2)',
                     border: active ? '1px solid var(--accent)' : '1px solid var(--line)',
-                    boxShadow: active ? '0 0 16px -4px rgba(216,166,87,0.6)' : 'none',
+                    boxShadow: 'none',
                     transition:
                         'background-color .15s, color .15s, border-color .15s, box-shadow .2s',
                     '& .MuiButton-startIcon': { mr: 0.2 },
                     '&:hover': {
-                        background: active
-                            ? 'linear-gradient(180deg, #e7bd76, #dcab5d)'
-                            : 'var(--line)',
-                        color: active ? '#15171c' : 'var(--accent)',
+                        background: active ? 'var(--accent-fill-hover)' : 'var(--line)',
+                        color: active ? 'var(--on-accent)' : 'var(--accent)',
                         borderColor: active ? 'var(--accent)' : 'var(--accent-line)',
                     },
                     '&:active': { transform: 'translateY(1px)' },
@@ -1518,12 +1514,11 @@ function NavBtn({
                     width: grow ? 'auto' : 44,
                     height: 42,
                     p: 0,
-                    borderRadius: '9px',
+                    borderRadius: 'var(--radius)',
                     color: active || tinted ? acc : 'var(--text-dim)',
                     bgcolor: active ? soft : 'transparent',
                     border: active ? `1px solid ${line}` : '1px solid transparent',
-                    boxShadow: active && tinted ? `0 0 14px -5px ${acc}` : 'none',
-                    transition: 'background-color .15s, color .15s, border-color .15s, box-shadow .2s',
+                    transition: 'background-color .15s, color .15s, border-color .15s',
                     '&:hover': {
                         color: acc,
                         bgcolor: active ? soft : tinted ? soft : 'var(--line)',
@@ -1621,7 +1616,7 @@ function Header({
                                 color: 'var(--accent)',
                                 bgcolor: 'var(--accent-soft)',
                                 border: '1px solid var(--accent-line)',
-                                borderRadius: '5px',
+                                borderRadius: 'var(--radius)',
                                 px: 0.6,
                                 py: '1px',
                                 flexShrink: 0,
@@ -1688,9 +1683,9 @@ function PlayerHead({ name, light }: { name: string; light?: boolean }) {
                 sx={{
                     width: 9,
                     height: 9,
-                    borderRadius: '50%',
+                    borderRadius: 'var(--radius)',
                     flexShrink: 0,
-                    bgcolor: light ? '#ece9e1' : '#15171c',
+                    bgcolor: light ? 'var(--eval-white)' : 'var(--eval-black)',
                     border: '1px solid var(--line)',
                 }}
             />

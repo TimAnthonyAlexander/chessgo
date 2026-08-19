@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Box, Button, Tooltip, Typography } from '@mui/material'
+import { Box, Button, Typography } from '@mui/material'
 import {
     ChevronRight,
     Eye,
@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { authStore } from '../lib/auth'
+import IconBtn from './nav/IconBtn'
 import { type NavItem, isActive, navItems } from './nav/navModel'
 import Logo from './Logo'
 import NavStreak from './NavStreak'
@@ -148,33 +149,14 @@ export default function SidebarNav({
                 )}
             </Box>
 
-            <Box sx={{ flexShrink: 0, borderTop: '1px solid var(--line-soft)', p: 1.25 }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, px: 0.5, pb: 1 }}>
-                    <NavStreak />
-                    <NotificationBell />
-                    <Box sx={{ flex: 1 }} />
-                    <Tooltip title="Keyboard shortcuts">
-                        <Box
-                            component="button"
-                            aria-label="Keyboard shortcuts"
-                            onClick={onOpenShortcuts}
-                            sx={iconBtnSx}
-                        >
-                            <Keyboard size={17} />
-                        </Box>
-                    </Tooltip>
-                    <Tooltip title="Appearance">
-                        <Box
-                            component="button"
-                            aria-label="Appearance"
-                            onClick={onOpenTheme}
-                            sx={iconBtnSx}
-                        >
-                            <Palette size={17} />
-                        </Box>
-                    </Tooltip>
-                </Box>
-
+            {/* The foot. Two rows, in this order and no other: WHO you are, then the
+                small stuff you rarely press. It used to be the other way round with
+                the utilities, the streak and the bell sharing one row against a
+                spacer, and logout as a third full-width row that read like a fifth
+                navigation destination — four different control shapes stacked in
+                three rows. Now every control in the strip is the same square cell
+                (nav/IconBtn), and the account row owns its own line. */}
+            <Box sx={{ flexShrink: 0, borderTop: '1px solid var(--line-soft)', p: 1 }}>
                 {user ? (
                     <Account user={user} />
                 ) : (
@@ -193,24 +175,32 @@ export default function SidebarNav({
                         Log in
                     </Button>
                 )}
+
+                <Box
+                    sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 0.25,
+                        mt: 0.5,
+                        // The streak is the only wide cell, so it leads and the
+                        // buttons trail; with nothing between them the row reads as
+                        // one strip rather than two clumps.
+                        justifyContent: 'flex-start',
+                    }}
+                >
+                    <NavStreak />
+                    <NotificationBell />
+                    <Box sx={{ flex: 1 }} />
+                    <IconBtn label="Keyboard shortcuts" onClick={onOpenShortcuts}>
+                        <Keyboard size={17} />
+                    </IconBtn>
+                    <IconBtn label="Appearance" onClick={onOpenTheme}>
+                        <Palette size={17} />
+                    </IconBtn>
+                </Box>
             </Box>
         </Box>
     )
-}
-
-const iconBtnSx = {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 30,
-    height: 30,
-    border: 'none',
-    borderRadius: '8px',
-    bgcolor: 'transparent',
-    color: 'var(--text-dim)',
-    cursor: 'pointer',
-    transition: 'color .12s ease, background .12s ease',
-    '&:hover': { color: 'var(--accent)', bgcolor: 'var(--line)' },
 }
 
 /** One navigable row. The single row shape in this file: top-level entries pass an
@@ -245,7 +235,7 @@ function Row({
                 pl: indent ? 4.25 : 1.25,
                 pr: 1.25,
                 py: indent ? 0.7 : 0.9,
-                borderRadius: '8px',
+                borderRadius: 'var(--radius)',
                 fontSize: indent ? 13 : 13.5,
                 fontWeight: 600,
                 letterSpacing: '0.02em',
@@ -333,7 +323,7 @@ function Section({
                     pr: 1,
                     py: 0.9,
                     border: 'none',
-                    borderRadius: '8px',
+                    borderRadius: 'var(--radius)',
                     font: 'inherit',
                     fontSize: 13.5,
                     fontWeight: 600,
@@ -401,8 +391,8 @@ function Section({
                                 p: 0.75,
                                 bgcolor: 'var(--surface)',
                                 border: '1px solid var(--line)',
-                                borderRadius: '11px',
-                                boxShadow: '0 20px 50px -24px rgba(0,0,0,0.85)',
+                                borderRadius: 'var(--radius)',
+                                boxShadow: 'var(--shadow)',
                             }}
                         >
                             {item.items.map((c) => (
@@ -423,25 +413,32 @@ function Section({
     )
 }
 
-/** The account block: identity, and the two destinations the top bar's user menu
- *  also offers — the profile, and logging out. Ratings are deliberately not
- *  repeated here; the profile this links to is where they live. */
+/** The account block: who you are, on one row, with log-out on the same row as a
+ *  trailing icon. Ratings are deliberately not repeated here; the profile this
+ *  links to is where they live.
+ *
+ *  Log-out is an icon rather than a labelled row on purpose. Spelled out at full
+ *  width it sat directly under the nav list in the same shape as the nav rows, so
+ *  the most destructive control in the rail looked exactly like "Watch" or
+ *  "Tools". As a trailing icon it is still one click and still labelled (tooltip
+ *  + aria-label) but it no longer competes with navigation. */
 function Account({ user }: { user: User }) {
     const navigate = useNavigate()
     return (
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.25 }}>
             <Box
                 component="button"
                 onClick={() => navigate(`/@/${encodeURIComponent(user.name)}`)}
                 sx={{
                     display: 'flex',
                     alignItems: 'center',
-                    gap: 1.25,
-                    width: '100%',
-                    px: 1.25,
-                    py: 0.9,
+                    gap: 1,
+                    flex: 1,
+                    minWidth: 0,
+                    px: 0.75,
+                    py: 0.75,
                     border: 'none',
-                    borderRadius: '8px',
+                    borderRadius: 'var(--radius)',
                     bgcolor: 'transparent',
                     color: 'var(--text)',
                     font: 'inherit',
@@ -456,15 +453,15 @@ function Account({ user }: { user: User }) {
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        width: 28,
-                        height: 28,
+                        width: 26,
+                        height: 26,
                         flexShrink: 0,
-                        borderRadius: '8px',
+                        borderRadius: 'var(--radius)',
                         border: '1px solid var(--line)',
                         color: 'var(--text-dim)',
                     }}
                 >
-                    <UserRound size={15} />
+                    <UserRound size={14} />
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, minWidth: 0 }}>
                     <TitleBadge title={user.title} />
@@ -482,34 +479,9 @@ function Account({ user }: { user: User }) {
                     </Typography>
                 </Box>
             </Box>
-            <Box
-                component="button"
-                onClick={() => void authStore.logout()}
-                sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 1.25,
-                    width: '100%',
-                    px: 1.25,
-                    py: 0.7,
-                    border: 'none',
-                    borderRadius: '8px',
-                    bgcolor: 'transparent',
-                    color: 'var(--text-dim)',
-                    font: 'inherit',
-                    fontSize: 13,
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    textAlign: 'left',
-                    transition: 'color .12s ease, background .12s ease',
-                    '&:hover': { color: 'var(--accent)', bgcolor: 'var(--line)' },
-                }}
-            >
-                <Box sx={{ display: 'flex', flexShrink: 0 }}>
-                    <LogOut size={15} />
-                </Box>
-                Log out
-            </Box>
+            <IconBtn label="Log out" onClick={() => void authStore.logout()}>
+                <LogOut size={15} />
+            </IconBtn>
         </Box>
     )
 }

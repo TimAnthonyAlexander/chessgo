@@ -41,7 +41,7 @@ export default function TutorReportSkeleton() {
                                 sx={{ display: 'flex', alignItems: 'center', gap: 2, py: 1 }}
                             >
                                 <SkeletonBar w="30%" h={13} />
-                                <SkeletonBar h={9} sx={{ flex: 1, borderRadius: '2px' }} />
+                                <SkeletonBar h={9} sx={{ flex: 1, borderRadius: 'var(--radius)' }} />
                                 <SkeletonBar w={40} h={13} />
                             </Box>
                         ))}

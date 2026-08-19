@@ -37,7 +37,7 @@ export default function ScanBacklogCard({ data }: { data: AdminDashboard['games'
                 sx={{
                     display: 'flex',
                     height: 10,
-                    borderRadius: '999px',
+                    borderRadius: 'var(--radius)',
                     overflow: 'hidden',
                     bgcolor: 'var(--surface-2)',
                 }}
@@ -61,7 +61,7 @@ export default function ScanBacklogCard({ data }: { data: AdminDashboard['games'
 function Legend({ color, label, value }: { color: string; label: string; value: number }) {
     return (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
-            <Box sx={{ width: 8, height: 8, borderRadius: '2px', bgcolor: color, flexShrink: 0 }} />
+            <Box sx={{ width: 8, height: 8, borderRadius: 'var(--radius)', bgcolor: color, flexShrink: 0 }} />
             <Typography
                 component="span"
                 sx={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 700 }}

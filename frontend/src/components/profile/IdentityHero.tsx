@@ -44,7 +44,7 @@ export default function IdentityHero({
                     width: 58,
                     height: 58,
                     flexShrink: 0,
-                    borderRadius: '14px',
+                    borderRadius: 'var(--radius)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',

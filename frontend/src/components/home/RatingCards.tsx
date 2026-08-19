@@ -55,7 +55,7 @@ export default function RatingCards() {
                             cursor: 'pointer',
                             bgcolor: 'var(--surface)',
                             border: '1px solid var(--line-soft)',
-                            borderRadius: '12px',
+                            borderRadius: 'var(--radius)',
                             p: 1.5,
                             transition: 'border-color 0.12s ease',
                             '&:hover': { borderColor: 'var(--accent-line)' },

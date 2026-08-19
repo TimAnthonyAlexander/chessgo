@@ -116,7 +116,7 @@ export default function GameReviewBoard({
                     display: 'flex',
                     flexDirection: 'column',
                     border: '1px solid var(--line-soft)',
-                    borderRadius: '12px',
+                    borderRadius: 'var(--radius)',
                     bgcolor: 'var(--surface)',
                     overflow: 'hidden',
                 }}
@@ -253,7 +253,7 @@ function NavBtn({
                     alignItems: 'center',
                     justifyContent: 'center',
                     py: 0.75,
-                    borderRadius: '7px',
+                    borderRadius: 'var(--radius)',
                     border: '1px solid',
                     borderColor: active ? 'var(--accent-line)' : 'transparent',
                     bgcolor: active ? 'var(--accent-soft)' : 'transparent',

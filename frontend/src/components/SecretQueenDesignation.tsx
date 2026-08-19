@@ -56,22 +56,22 @@ export function DesignationRibbon({ picked }: { picked: Square | null }) {
                 sx={{
                     px: 1.75,
                     py: 0.9,
-                    borderRadius: '999px',
+                    borderRadius: 'var(--radius)',
                     bgcolor: 'rgba(16,17,21,0.86)',
                     border: '1px solid rgba(255,255,255,0.14)',
-                    boxShadow: '0 10px 30px -12px rgba(0,0,0,0.9)',
+                    boxShadow: 'var(--shadow)',
                     display: 'flex',
                     alignItems: 'center',
                     gap: 0.9,
                 }}
             >
-                <Crown size={15} style={{ color: '#e9c168', flexShrink: 0 }} />
+                <Crown size={15} style={{ color: 'var(--accent)', flexShrink: 0 }} />
                 <Typography
                     sx={{
                         fontFamily: 'var(--font-display)',
                         fontWeight: 600,
                         fontSize: 13.5,
-                        color: '#f3eee2',
+                        color: 'var(--text)',
                         whiteSpace: 'nowrap',
                     }}
                 >
@@ -144,12 +144,12 @@ export function DesignationPanel({
             sx={{
                 bgcolor: 'var(--surface)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: 'var(--panel-radius)',
+                borderRadius: 'var(--radius)',
                 p: 2.75,
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 2,
-                boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+                boxShadow: 'var(--shadow)',
             }}
         >
             <Box>

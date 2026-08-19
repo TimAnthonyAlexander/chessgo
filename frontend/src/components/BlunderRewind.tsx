@@ -189,7 +189,7 @@ export default function BlunderRewind({
                         flexDirection: 'column',
                         minHeight: 0,
                         border: '1px solid var(--line-soft)',
-                        borderRadius: 'var(--panel-radius)',
+                        borderRadius: 'var(--radius)',
                         bgcolor: 'var(--surface)',
                         overflow: 'hidden',
                         boxShadow: PANEL_SHADOW,
@@ -321,8 +321,6 @@ function RewindHeader({
                 py: 1.25,
                 borderBottom: '1px solid var(--line-soft)',
                 bgcolor: 'var(--bg-2)',
-                background:
-                    'linear-gradient(180deg, rgba(216,166,87,0.08), rgba(216,166,87,0) 70%), var(--bg-2)',
                 display: 'flex',
                 alignItems: 'center',
                 gap: 1,
@@ -408,15 +406,14 @@ function ProgressDots({
                         sx={{
                             width: 20,
                             height: 20,
-                            borderRadius: '50%',
+                            borderRadius: 'var(--radius)',
                             cursor: 'pointer',
                             p: 0,
                             bgcolor: color,
                             border: current
                                 ? '2px solid var(--accent)'
                                 : '1px solid var(--line)',
-                            boxShadow: current ? '0 0 10px -2px var(--accent)' : 'none',
-                            transition: 'transform .1s, box-shadow .2s',
+                            transition: 'transform .1s',
                             '&:hover': { transform: 'translateY(-1px)' },
                         }}
                     />
@@ -442,7 +439,7 @@ function PromptCard({
         <Box
             sx={{
                 border: '1px solid var(--line-soft)',
-                borderRadius: '10px',
+                borderRadius: 'var(--radius)',
                 bgcolor: 'var(--bg-2)',
                 p: 1.5,
                 mb: 1.25,
@@ -496,7 +493,7 @@ function FeedbackCard({ puzzle, attempt }: { puzzle: BlunderPuzzle; attempt: Att
         <Box
             sx={{
                 border: `1px solid ${meta.color}55`,
-                borderRadius: '10px',
+                borderRadius: 'var(--radius)',
                 bgcolor: `${meta.color}12`,
                 p: 1.5,
             }}
@@ -574,7 +571,7 @@ function EvalChip({
             sx={{
                 flex: 1,
                 minWidth: 0,
-                borderRadius: '8px',
+                borderRadius: 'var(--radius)',
                 border: `1px solid ${highlight ? 'var(--accent-line)' : 'var(--line-soft)'}`,
                 bgcolor: highlight ? 'var(--accent-soft)' : 'var(--surface-2)',
                 px: 1,
@@ -643,7 +640,7 @@ function SummaryCard({
         <Box
             sx={{
                 border: '1px solid var(--accent-line)',
-                borderRadius: '10px',
+                borderRadius: 'var(--radius)',
                 bgcolor: 'var(--accent-soft)',
                 p: 1.5,
                 mb: 1.25,
@@ -696,13 +693,9 @@ export function BlunderRewindBanner({ count, onStart }: { count: number; onStart
                 border: 'none',
                 borderTopStyle: 'solid',
                 bgcolor: 'transparent',
-                background:
-                    'linear-gradient(180deg, rgba(216,166,87,0.10), rgba(216,166,87,0.02))',
+                background: 'var(--accent-soft)',
                 transition: 'background .15s',
-                '&:hover': {
-                    background:
-                        'linear-gradient(180deg, rgba(216,166,87,0.18), rgba(216,166,87,0.05))',
-                },
+                '&:hover': { background: 'var(--accent-soft-strong)' },
             }}
         >
             <Box
@@ -710,13 +703,12 @@ export function BlunderRewindBanner({ count, onStart }: { count: number; onStart
                     width: 34,
                     height: 34,
                     flexShrink: 0,
-                    borderRadius: '9px',
+                    borderRadius: 'var(--radius)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    color: '#15171c',
-                    background: 'linear-gradient(180deg, #e3b56a, #d8a657)',
-                    boxShadow: '0 0 14px -4px rgba(216,166,87,0.7)',
+                    color: 'var(--on-accent)',
+                    background: 'var(--accent-fill)',
                 }}
             >
                 <Zap size={18} />

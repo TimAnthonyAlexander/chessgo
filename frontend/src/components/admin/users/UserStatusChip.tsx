@@ -12,7 +12,7 @@ export default function UserStatusChip({ active }: { active: boolean }) {
                 gap: 0.5,
                 px: 0.9,
                 py: 0.25,
-                borderRadius: '999px',
+                borderRadius: 'var(--radius)',
                 fontFamily: 'var(--font-mono)',
                 fontSize: 10.5,
                 fontWeight: 700,
@@ -25,7 +25,7 @@ export default function UserStatusChip({ active }: { active: boolean }) {
         >
             <Box
                 component="span"
-                sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: color, flexShrink: 0 }}
+                sx={{ width: 6, height: 6, borderRadius: 'var(--radius)', bgcolor: color, flexShrink: 0 }}
             />
             {active ? 'Active' : 'Banned'}
         </Box>

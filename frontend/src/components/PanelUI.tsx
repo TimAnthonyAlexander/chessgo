@@ -2,10 +2,12 @@ import { type ReactNode } from 'react'
 import { Box, Tooltip } from '@mui/material'
 
 // Shared side-panel UI primitives, so the bot / live / analysis panels look and
-// behave identically. Apple-esque: rounded, restrained, gold accent.
+// behave identically. Square, flat, restrained, one accent.
 
-/** Card shadow used by every side panel + aside card. */
-export const PANEL_SHADOW = '0 18px 50px -28px rgba(0,0,0,0.8)'
+/** Card elevation used by every side panel + aside card. Reads the site token
+ *  (styles.css `--shadow`) rather than carrying its own value — the name is kept
+ *  because a lot of panels import it. */
+export const PANEL_SHADOW = 'var(--shadow)'
 
 /** Square avatar chip (player / opponent identity). */
 export function Avatar({ small, children }: { small?: boolean; children: ReactNode }) {
@@ -16,7 +18,7 @@ export function Avatar({ small, children }: { small?: boolean; children: ReactNo
                 width: d,
                 height: d,
                 flexShrink: 0,
-                borderRadius: '9px',
+                borderRadius: 'var(--radius)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -66,7 +68,7 @@ export function NavBtn({
                     justifyContent: 'center',
                     cursor: disabled ? 'default' : 'pointer',
                     border: active ? '1px solid var(--accent-line)' : '1px solid transparent',
-                    borderRadius: '9px',
+                    borderRadius: 'var(--radius)',
                     color: active ? 'var(--accent)' : 'var(--text-dim)',
                     bgcolor: active ? 'var(--accent-soft)' : 'transparent',
                     transition: 'background-color .15s, color .15s, border-color .15s',
@@ -103,11 +105,11 @@ export function ActionBtn({
     const styles =
         tone === 'primary'
             ? {
-                  color: '#15171c',
-                  background: 'linear-gradient(180deg, #e3b56a, #d8a657)',
+                  color: 'var(--on-accent)',
+                  background: 'var(--accent-fill)',
                   border: '1px solid var(--accent)',
-                  boxShadow: '0 0 18px -5px rgba(216,166,87,0.6)',
-                  hover: { background: 'linear-gradient(180deg, #e7bd76, #dcab5d)' },
+                  boxShadow: 'none',
+                  hover: { background: 'var(--accent-fill-hover)' },
               }
             : tone === 'danger'
               ? {
@@ -145,7 +147,7 @@ export function ActionBtn({
                 fontSize: large ? 15.5 : 14,
                 fontWeight: 600,
                 letterSpacing: 0.2,
-                borderRadius: '11px',
+                borderRadius: 'var(--radius)',
                 opacity: disabled ? 0.6 : 1,
                 color: styles.color,
                 background: styles.background,
@@ -177,7 +179,7 @@ export function ErrorBanner({ children, sx }: { children: ReactNode; sx?: object
                 color: '#e6a3a3',
                 bgcolor: 'rgba(202, 74, 74, 0.10)',
                 border: '1px solid rgba(202, 74, 74, 0.4)',
-                borderRadius: '10px',
+                borderRadius: 'var(--radius)',
                 ...sx,
             }}
         >

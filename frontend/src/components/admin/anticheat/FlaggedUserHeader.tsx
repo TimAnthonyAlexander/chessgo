@@ -102,7 +102,7 @@ function JumpLink({ to, icon, label }: { to: string; icon: React.ReactNode; labe
                 gap: 0.625,
                 px: 1.25,
                 py: 0.75,
-                borderRadius: '8px',
+                borderRadius: 'var(--radius)',
                 textDecoration: 'none',
                 bgcolor: 'var(--surface-2)',
                 border: '1px solid var(--line-soft)',
@@ -124,7 +124,7 @@ function Stat({ label, value }: { label: string; value: string }) {
             sx={{
                 bgcolor: 'var(--surface-2)',
                 border: '1px solid var(--line-soft)',
-                borderRadius: '8px',
+                borderRadius: 'var(--radius)',
                 px: 1.25,
                 py: 0.875,
             }}

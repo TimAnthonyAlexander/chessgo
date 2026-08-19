@@ -92,7 +92,7 @@ export default function LeaderboardWidget() {
                             gap: 0.5,
                             background: active ? 'var(--surface-2)' : 'none',
                             border: 'none',
-                            borderRadius: '999px',
+                            borderRadius: 'var(--radius)',
                             px: active ? 0.85 : 0.35,
                             py: 0.35,
                             lineHeight: 1,

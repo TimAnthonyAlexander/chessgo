@@ -105,7 +105,7 @@ export default function RecentGamesWidget() {
                                         width: 20,
                                         height: 20,
                                         flexShrink: 0,
-                                        borderRadius: '5px',
+                                        borderRadius: 'var(--radius)',
                                         display: 'flex',
                                         alignItems: 'center',
                                         justifyContent: 'center',
@@ -183,7 +183,7 @@ function SkeletonRows() {
                         sx={{
                             width: 14,
                             height: 12,
-                            borderRadius: '3px',
+                            borderRadius: 'var(--radius)',
                             bgcolor: 'var(--surface-2)',
                         }}
                     />
@@ -191,7 +191,7 @@ function SkeletonRows() {
                         <Box
                             sx={{
                                 height: 10,
-                                borderRadius: '3px',
+                                borderRadius: 'var(--radius)',
                                 bgcolor: 'var(--surface-2)',
                                 mb: 0.5,
                             }}
@@ -200,7 +200,7 @@ function SkeletonRows() {
                             sx={{
                                 height: 8,
                                 width: '70%',
-                                borderRadius: '3px',
+                                borderRadius: 'var(--radius)',
                                 bgcolor: 'var(--surface-2)',
                             }}
                         />
@@ -209,7 +209,7 @@ function SkeletonRows() {
                         sx={{
                             width: 30,
                             height: 12,
-                            borderRadius: '3px',
+                            borderRadius: 'var(--radius)',
                             bgcolor: 'var(--surface-2)',
                         }}
                     />
