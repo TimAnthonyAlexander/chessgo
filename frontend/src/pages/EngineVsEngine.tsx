@@ -11,6 +11,7 @@ import {
     Typography,
 } from '@mui/material'
 import {
+    BookOpen,
     Bot,
     Cpu,
     FlipVertical2,
@@ -26,13 +27,13 @@ import {
 } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import Board from '../components/Board'
-import BoardPage from '../components/BoardPage'
+import BoardPage, { useBoardLayout } from '../components/BoardPage'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import { toWhiteEval } from '../lib/engineEval'
 import MoveList from '../components/MoveList'
 import OpeningPanel from '../components/OpeningPanel'
 import { buildFromMoves } from '../lib/analysisTree'
-import { ErrorBanner, NavBtn } from '../components/PanelUI'
+import { ActionBtn, ErrorBanner, NavBtn, ToolMenu } from '../components/PanelUI'
 import {
     analyze,
     type Color,
@@ -164,23 +165,27 @@ interface SideConfig {
     depth: number // fixed search depth
 }
 
+// The matchup worth opening the page on: our engine at full strength against the
+// reference at full strength, same clock. zugzwang at 3500 (no weakening at all)
+// with the book on and neutral aggression, Stockfish Unleashed (uncapped), both on
+// 100ms/move.
 const DEFAULT_WHITE: SideConfig = {
-    engine: 'gomachine',
+    engine: 'zugzwang',
     rating: GOMA_RATING_MAX,
     aggr: 50,
-    book: false,
-    sfElo: 3000,
+    book: true,
+    sfElo: SF_UNLEASHED_UCI,
     limitKind: 'movetime',
-    movetime: 300,
+    movetime: 100,
     nodes: 100_000,
     depth: 12,
 }
 const DEFAULT_BLACK: SideConfig = { ...DEFAULT_WHITE, engine: 'stockfish' }
 
-// The left-card settings persist to localStorage, so whatever you last set becomes
-// your new defaults on the next visit. Key is versioned (v2) — the old single-engine
-// shape is intentionally not migrated.
-const SETTINGS_KEY = 'eve.settings.v3'
+// The side settings persist to localStorage, so whatever you last set becomes your
+// new defaults on the next visit. Key is versioned — an older shape (and, at v4, an
+// older set of defaults) is intentionally not migrated.
+const SETTINGS_KEY = 'eve.settings.v4'
 interface EveSettings {
     white: SideConfig
     black: SideConfig
@@ -313,6 +318,12 @@ function engineIcon(k: EngineKind) {
 export default function EngineVsEngine() {
     const { user, status: authStatus } = useAuth()
     const navigate = useNavigate()
+    // Read up here with the other hooks: the admin/loading guards below are early
+    // returns, and a hook after one of those would change hook order between renders.
+    const chesscom = useBoardLayout() === 'chesscom'
+    // Side rail only: the book readout shares the panel with the move list, so it's
+    // toggleable. The centered layout has the column room to always show it.
+    const [showBook, setShowBook] = useState(true)
     // A starting position carried over from the board editor ("Engine vs Engine
     // from this position"). Falls back to the standard start.
     const navFen = (useLocation().state as { fen?: string } | null)?.fen ?? null
@@ -653,220 +664,454 @@ export default function EngineVsEngine() {
             ? 'Paused'
             : ''
 
+    // --- The pieces both layouts are built from -----------------------------
+    //
+    // Defined once so the centered layout's two flanking columns and the side
+    // rail's single panel can't drift apart. Only the ARRANGEMENT differs: the
+    // centered layout can afford to stand every block open at once, the rail
+    // (one board-height column for what the other splits across two) puts the
+    // configuration behind popovers and spends its height on the move list.
+
+    // Top side's controls first: the top of the board is Black when White-oriented,
+    // White when flipped.
+    const topFirst = orientation === 'w' ? (['b', 'w'] as const) : (['w', 'b'] as const)
+
+    const variantPicker = (
+        <ToggleButtonGroup
+            exclusive
+            fullWidth
+            size="small"
+            value={variant}
+            onChange={(_, v) => v && changeVariant(v as EngineVsVariant)}
+            disabled={running}
+            sx={{ ...toggleSx, flexWrap: 'wrap' }}
+        >
+            {EVE_VARIANTS.map((v) => (
+                <ToggleButton key={v} value={v} sx={{ flex: '1 0 30%' }}>
+                    {VARIANT_LABEL[v]}
+                </ToggleButton>
+            ))}
+        </ToggleButtonGroup>
+    )
+
+    const controlsFor = (c: Color, flat: boolean) => (
+        <SideControls
+            key={c}
+            flat={flat}
+            cfg={c === 'w' ? white : black}
+            onChange={(patch) =>
+                c === 'w'
+                    ? setWhite((s) => ({ ...s, ...patch }))
+                    : setBlack((s) => ({ ...s, ...patch }))
+            }
+            disabled={running}
+            variant={variant}
+        />
+    )
+
+    const matchupRows = topFirst.map((c) => {
+        const cfg = c === 'w' ? white : black
+        return (
+            <MatchupRow
+                key={c}
+                icon={engineIcon(cfg.engine)}
+                name={engineName(cfg.engine)}
+                detail={sideDetail(cfg)}
+                side={c}
+            />
+        )
+    })
+
+    const editStart = () => navigate('/editor', { state: { fen: startFen } })
+    const analyseGame = () =>
+        navigate('/analysis', { state: { moves: moves.map((m) => m.uci), startFen } })
+    const playBot = () => navigate('/bot', { state: { fen } })
+    // The analysis board is standard-mechanics (it handles chess960 via the FEN) but
+    // doesn't understand the self-variants; /bot starts a standard game from the FEN.
+    const analyseDisabled = isSelfVariant(variant) || moves.length === 0
+    const playBotDisabled = running || variant !== 'standard'
+
+    const runControls = (
+        <>
+            <RunBtn
+                primary
+                icon={running ? <Pause size={16} /> : <Play size={16} />}
+                label={running ? 'Pause' : over ? 'Play again' : 'Start'}
+                onClick={toggleRun}
+            />
+            <RunBtn icon={<RotateCcw size={16} />} label="Reset" onClick={reset} />
+        </>
+    )
+
+    // Crazyhouse "in hand": pockets for the shown position (top = Black when
+    // White-oriented). Display-only in this admin view.
+    const pockets =
+        variant === 'crazyhouse' && shownPockets ? (
+            <>
+                <Pocket
+                    color={orientation === 'w' ? 'b' : 'w'}
+                    pocket={shownPockets}
+                    selected={null}
+                    interactive={false}
+                    onSelect={() => {}}
+                />
+                <Pocket
+                    color={orientation}
+                    pocket={shownPockets}
+                    selected={null}
+                    interactive={false}
+                    onSelect={() => {}}
+                />
+            </>
+        ) : null
+
+    // Book info: opening name + candidate-move eval bars for the live position
+    // (engine-owned). Hover a move for its arrow + opening; click to open that line
+    // in the analysis board. Standard-only — the opening book is keyed to the
+    // standard start; chess960 and the self-variants have no book.
+    const openingPanel =
+        variant === 'standard' ? (
+            <OpeningPanel
+                tree={bookTree}
+                currentId={bookNodeId}
+                engineOn
+                onMove={(uci) =>
+                    navigate('/analysis', {
+                        state: { moves: [...moves.map((m) => m.uci), uci], startFen },
+                    })
+                }
+                onHoverMove={setHoverUci}
+            />
+        ) : null
+
+    const flipBtn = (
+        <NavBtn label="Flip board" onClick={() => setOrientation((o) => (o === 'w' ? 'b' : 'w'))}>
+            <FlipVertical2 size={18} />
+        </NavBtn>
+    )
+    const soundBtn = (
+        <NavBtn label={sound ? 'Mute' : 'Unmute'} onClick={toggleSound}>
+            {sound ? <Volume2 size={18} /> : <VolumeX size={18} />}
+        </NavBtn>
+    )
+
     return (
         <BoardPage
+            // The side rail has no second column: everything below is folded into the
+            // one panel instead, so nothing stacks under it.
             left={
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                    <Box
-                        sx={{
-                            bgcolor: 'var(--surface)',
-                            border: '1px solid var(--line-soft)',
-                            borderRadius: 'var(--radius)',
-                            p: 1.75,
-                            boxShadow: 'var(--shadow)',
-                        }}
-                    >
-                        <Label>Variant</Label>
-                        <ToggleButtonGroup
-                            exclusive
-                            fullWidth
-                            size="small"
-                            value={variant}
-                            onChange={(_, v) => v && changeVariant(v as EngineVsVariant)}
-                            disabled={running}
-                            sx={{ ...toggleSx, flexWrap: 'wrap' }}
+                chesscom ? undefined : (
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                        <Box
+                            sx={{
+                                bgcolor: 'var(--surface)',
+                                border: '1px solid var(--line-soft)',
+                                borderRadius: 'var(--panel-radius)',
+                                p: 1.75,
+                                boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+                            }}
                         >
-                            {EVE_VARIANTS.map((v) => (
-                                <ToggleButton key={v} value={v} sx={{ flex: '1 0 30%' }}>
-                                    {VARIANT_LABEL[v]}
-                                </ToggleButton>
-                            ))}
-                        </ToggleButtonGroup>
-                    </Box>
+                            <Label>Variant</Label>
+                            {variantPicker}
+                        </Box>
 
-                    {/* Top player's card first: the top of the board is Black when
-                        White-oriented, White when flipped. */}
-                    {(orientation === 'w' ? (['b', 'w'] as const) : (['w', 'b'] as const)).map(
-                        (c) =>
-                            c === 'w' ? (
-                                <SideControls
-                                    key="w"
-                                    cfg={white}
-                                    onChange={(patch) => setWhite((s) => ({ ...s, ...patch }))}
-                                    disabled={running}
-                                    variant={variant}
-                                />
-                            ) : (
-                                <SideControls
-                                    key="b"
-                                    cfg={black}
-                                    onChange={(patch) => setBlack((s) => ({ ...s, ...patch }))}
-                                    disabled={running}
-                                    variant={variant}
-                                />
-                            ),
-                    )}
-                </Box>
+                        {topFirst.map((c) => controlsFor(c, false))}
+                    </Box>
+                )
             }
             evalBar={<EvalBar ev={whiteEval} orientation={orientation} />}
             right={
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                chesscom ? (
+                    /* One board-height panel. Every fixed block is `flexShrink: 0` and
+                       the move list is the only thing that grows, so the panel is
+                       exactly the rail's height and the moves get whatever the chrome
+                       doesn't — no page-length rail, no second scrollbar. */
                     <Box
                         sx={{
-                            bgcolor: 'var(--surface)',
-                            border: '1px solid var(--line-soft)',
-                            borderRadius: 'var(--radius)',
-                            p: 1.75,
+                            width: '100%',
+                            flex: { md: 1 },
                             display: 'flex',
                             flexDirection: 'column',
-                            gap: 1,
+                            minHeight: 0,
+                            border: '1px solid var(--line-soft)',
+                            borderRadius: 'var(--panel-radius)',
+                            bgcolor: 'var(--surface)',
+                            overflow: 'hidden',
+                            boxShadow: '0 18px 50px -28px rgba(0,0,0,0.8)',
+                            maxHeight: { xs: '72vh', md: 'none' },
                         }}
                     >
-                        {(orientation === 'w' ? (['b', 'w'] as const) : (['w', 'b'] as const)).map(
-                            (c) => {
-                                const cfg = c === 'w' ? white : black
-                                return (
-                                    <MatchupRow
-                                        key={c}
-                                        icon={engineIcon(cfg.engine)}
-                                        name={engineName(cfg.engine)}
-                                        detail={sideDetail(cfg)}
-                                        side={c}
-                                    />
-                                )
-                            },
-                        )}
-                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
-                            <Typography
-                                sx={{ fontSize: 13, fontWeight: 600, color: 'var(--text-dim)' }}
-                            >
-                                {caption}
-                            </Typography>
-                            <Box sx={{ flex: 1 }} />
-                            <NavBtn
-                                label="Edit start position"
-                                onClick={() => navigate('/editor', { state: { fen: startFen } })}
-                                disabled={running}
-                            >
-                                <SquarePen size={18} />
-                            </NavBtn>
-                            <NavBtn
-                                label="Analyse"
-                                onClick={() =>
-                                    navigate('/analysis', {
-                                        state: { moves: moves.map((m) => m.uci), startFen },
-                                    })
-                                }
-                                // Analysis board is standard-mechanics (handles chess960
-                                // via the FEN) but doesn't understand the self-variants.
-                                disabled={isSelfVariant(variant) || moves.length === 0}
-                            >
-                                <Telescope size={18} />
-                            </NavBtn>
-                            <NavBtn
-                                label="Play a bot from here"
-                                onClick={() => navigate('/bot', { state: { fen } })}
-                                // The /bot entry starts a standard game from the FEN.
-                                disabled={running || variant !== 'standard'}
-                            >
-                                <Bot size={18} />
-                            </NavBtn>
-                            <NavBtn
-                                label="Flip board"
-                                onClick={() => setOrientation((o) => (o === 'w' ? 'b' : 'w'))}
-                            >
-                                <FlipVertical2 size={18} />
-                            </NavBtn>
-                            <NavBtn label={sound ? 'Mute' : 'Unmute'} onClick={toggleSound}>
-                                {sound ? <Volume2 size={18} /> : <VolumeX size={18} />}
-                            </NavBtn>
-                        </Box>
-                    </Box>
-
-                    {/* Crazyhouse "in hand": pockets for the shown position (top =
-                        Black when White-oriented). Display-only in this admin view. */}
-                    {variant === 'crazyhouse' && shownPockets && (
+                        {/* Setup and the two engine configs — the three tall blocks the
+                            centered layout keeps standing in its left column. They're
+                            set once and then watched, so a popover each costs one row
+                            instead of ~740px, and the matchup line below says what
+                            they're currently set to. */}
                         <Box
                             sx={{
-                                bgcolor: 'var(--surface)',
-                                border: '1px solid var(--line-soft)',
-                                borderRadius: 'var(--radius)',
-                                p: 1.5,
+                                flexShrink: 0,
+                                display: 'flex',
+                                gap: 0.75,
+                                px: 1,
+                                py: 1,
+                                borderBottom: '1px solid var(--line-soft)',
+                                bgcolor: 'var(--bg-2)',
+                            }}
+                        >
+                            <ToolMenu label="Setup" width={330}>
+                                {(close) => (
+                                    <Box
+                                        sx={{
+                                            display: 'flex',
+                                            flexDirection: 'column',
+                                            gap: 1.25,
+                                        }}
+                                    >
+                                        <Box>
+                                            <Label>Variant</Label>
+                                            {variantPicker}
+                                        </Box>
+                                        <Box
+                                            onClick={close}
+                                            sx={{
+                                                display: 'flex',
+                                                flexDirection: 'column',
+                                                gap: 1,
+                                            }}
+                                        >
+                                            <ActionBtn
+                                                tone="neutral"
+                                                icon={<SquarePen size={16} />}
+                                                label="Edit start position"
+                                                onClick={editStart}
+                                                disabled={running}
+                                            />
+                                            <ActionBtn
+                                                tone="neutral"
+                                                icon={<Telescope size={16} />}
+                                                label="Analyse this game"
+                                                onClick={analyseGame}
+                                                disabled={analyseDisabled}
+                                            />
+                                            <ActionBtn
+                                                tone="neutral"
+                                                icon={<Bot size={16} />}
+                                                label="Play a bot from here"
+                                                onClick={playBot}
+                                                disabled={playBotDisabled}
+                                            />
+                                        </Box>
+                                    </Box>
+                                )}
+                            </ToolMenu>
+                            <ToolMenu label="White" width={330}>
+                                {() => controlsFor('w', true)}
+                            </ToolMenu>
+                            <ToolMenu label="Black" width={330}>
+                                {() => controlsFor('b', true)}
+                            </ToolMenu>
+                        </Box>
+
+                        {/* What the menus are currently set to — the one thing that has
+                            to be readable without opening anything. */}
+                        <Box
+                            sx={{
+                                flexShrink: 0,
+                                px: 1.5,
+                                py: 1.25,
                                 display: 'flex',
                                 flexDirection: 'column',
                                 gap: 0.75,
+                                borderBottom: '1px solid var(--line-soft)',
                             }}
                         >
-                            <Label>In hand</Label>
-                            <Pocket
-                                color={orientation === 'w' ? 'b' : 'w'}
-                                pocket={shownPockets}
-                                selected={null}
-                                interactive={false}
-                                onSelect={() => {}}
-                            />
-                            <Pocket
-                                color={orientation}
-                                pocket={shownPockets}
-                                selected={null}
-                                interactive={false}
-                                onSelect={() => {}}
+                            {matchupRows}
+                        </Box>
+
+                        <Box
+                            sx={{
+                                flexShrink: 0,
+                                display: 'flex',
+                                gap: 1,
+                                px: 1.25,
+                                py: 1,
+                                borderBottom: '1px solid var(--line-soft)',
+                                bgcolor: 'var(--bg-2)',
+                            }}
+                        >
+                            {runControls}
+                        </Box>
+
+                        {error && <ErrorBanner>{error}</ErrorBanner>}
+
+                        {pockets && (
+                            <Box
+                                sx={{
+                                    flexShrink: 0,
+                                    px: 1.5,
+                                    py: 1,
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: 0.75,
+                                    borderBottom: '1px solid var(--line-soft)',
+                                }}
+                            >
+                                <Label>In hand</Label>
+                                {pockets}
+                            </Box>
+                        )}
+
+                        {/* The only growing block: it takes the whole remainder instead
+                            of the centered layout's fixed 420px. */}
+                        <Box sx={{ flex: 1, minHeight: 120, display: 'flex' }}>
+                            <MoveList
+                                fill
+                                moves={moves}
+                                currentPly={shownPly}
+                                onSelectPly={selectPly}
                             />
                         </Box>
-                    )}
 
-                    {/* Run controls */}
-                    <Box sx={{ display: 'flex', gap: 1 }}>
-                        <RunBtn
-                            primary
-                            icon={running ? <Pause size={16} /> : <Play size={16} />}
-                            label={running ? 'Pause' : over ? 'Play again' : 'Start'}
-                            onClick={toggleRun}
-                        />
-                        <RunBtn icon={<RotateCcw size={16} />} label="Reset" onClick={reset} />
+                        {/* Under the move list, same place the centered layout puts it,
+                            toggled from the footer. The one SHRINKABLE block in the
+                            panel: when the rail is short it gives way and scrolls
+                            inside itself, so it can never push the footer out of a
+                            panel that clips its overflow. */}
+                        {showBook && openingPanel && (
+                            <Box sx={{ flexShrink: 1, minHeight: 0, overflowY: 'auto' }}>
+                                {openingPanel}
+                            </Box>
+                        )}
+
+                        <Box
+                            sx={{
+                                flexShrink: 0,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 1,
+                                px: 1.25,
+                                py: 0.75,
+                                borderTop: '1px solid var(--line-soft)',
+                                bgcolor: 'var(--bg-2)',
+                            }}
+                        >
+                            <Typography
+                                sx={{
+                                    minWidth: 0,
+                                    fontSize: 13,
+                                    fontWeight: 600,
+                                    color: 'var(--text-dim)',
+                                    whiteSpace: 'nowrap',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                }}
+                            >
+                                {caption}
+                            </Typography>
+                            <Box sx={{ ml: 'auto', display: 'flex', gap: 0.5 }}>
+                                {openingPanel && (
+                                    <NavBtn
+                                        label="Opening book"
+                                        onClick={() => setShowBook((v) => !v)}
+                                        active={showBook}
+                                    >
+                                        <BookOpen size={18} />
+                                    </NavBtn>
+                                )}
+                                {flipBtn}
+                                {soundBtn}
+                            </Box>
+                        </Box>
                     </Box>
-
-                    {error && <ErrorBanner>{error}</ErrorBanner>}
-                    <Box sx={{ height: 420, display: 'flex' }}>
-                        <MoveList
-                            fill
-                            moves={moves}
-                            currentPly={shownPly}
-                            onSelectPly={selectPly}
-                        />
-                    </Box>
-
-                    {/* Book info: opening name + candidate-move eval bars for the live
-                        position (engine-owned). Hover a move for its arrow + opening;
-                        click to open that line in the analysis board. Standard-only —
-                        the opening book is keyed to the standard start; chess960 and the
-                        self-variants have no book. */}
-                    {variant === 'standard' && (
+                ) : (
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
                         <Box
                             sx={{
                                 bgcolor: 'var(--surface)',
                                 border: '1px solid var(--line-soft)',
-                                borderRadius: 'var(--radius)',
-                                overflow: 'hidden',
+                                borderRadius: 'var(--panel-radius)',
+                                p: 1.75,
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 1,
                             }}
                         >
-                            <OpeningPanel
-                                tree={bookTree}
-                                currentId={bookNodeId}
-                                engineOn
-                                onMove={(uci) =>
-                                    navigate('/analysis', {
-                                        state: {
-                                            moves: [...moves.map((m) => m.uci), uci],
-                                            startFen,
-                                        },
-                                    })
-                                }
-                                onHoverMove={setHoverUci}
+                            {matchupRows}
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
+                                <Typography
+                                    sx={{ fontSize: 13, fontWeight: 600, color: 'var(--text-dim)' }}
+                                >
+                                    {caption}
+                                </Typography>
+                                <Box sx={{ flex: 1 }} />
+                                <NavBtn
+                                    label="Edit start position"
+                                    onClick={editStart}
+                                    disabled={running}
+                                >
+                                    <SquarePen size={18} />
+                                </NavBtn>
+                                <NavBtn
+                                    label="Analyse"
+                                    onClick={analyseGame}
+                                    disabled={analyseDisabled}
+                                >
+                                    <Telescope size={18} />
+                                </NavBtn>
+                                <NavBtn
+                                    label="Play a bot from here"
+                                    onClick={playBot}
+                                    disabled={playBotDisabled}
+                                >
+                                    <Bot size={18} />
+                                </NavBtn>
+                                {flipBtn}
+                                {soundBtn}
+                            </Box>
+                        </Box>
+
+                        {pockets && (
+                            <Box
+                                sx={{
+                                    bgcolor: 'var(--surface)',
+                                    border: '1px solid var(--line-soft)',
+                                    borderRadius: 'var(--panel-radius)',
+                                    p: 1.5,
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: 0.75,
+                                }}
+                            >
+                                <Label>In hand</Label>
+                                {pockets}
+                            </Box>
+                        )}
+
+                        <Box sx={{ display: 'flex', gap: 1 }}>{runControls}</Box>
+
+                        {error && <ErrorBanner>{error}</ErrorBanner>}
+                        <Box sx={{ height: 420, display: 'flex' }}>
+                            <MoveList
+                                fill
+                                moves={moves}
+                                currentPly={shownPly}
+                                onSelectPly={selectPly}
                             />
                         </Box>
-                    )}
-                </Box>
+
+                        {openingPanel && (
+                            <Box
+                                sx={{
+                                    bgcolor: 'var(--surface)',
+                                    border: '1px solid var(--line-soft)',
+                                    borderRadius: 'var(--panel-radius)',
+                                    overflow: 'hidden',
+                                }}
+                            >
+                                {openingPanel}
+                            </Box>
+                        )}
+                    </Box>
+                )
             }
         >
             <Board
@@ -919,6 +1164,7 @@ function SideControls({
     onChange,
     disabled,
     variant,
+    flat = false,
 }: {
     cfg: SideConfig
     onChange: (patch: Partial<SideConfig>) => void
@@ -927,6 +1173,9 @@ function SideControls({
     // knobs apply: Stockfish is standard-only; the self-variants (crazyhouse/duck/
     // antichess) ignore aggression + the opening book and have no worst-move stop.
     variant: EngineVsVariant
+    // Drop the card chrome — for the side rail, where this is the body of a popover
+    // that already supplies the surface and the padding.
+    flat?: boolean
 }) {
     const allowedEngines = enginesForVariant(variant)
     // Self-search variants have their own engine with its own rating→strength
@@ -945,14 +1194,14 @@ function SideControls({
     return (
         <Box
             sx={{
-                bgcolor: 'var(--surface)',
-                border: '1px solid var(--line-soft)',
-                borderRadius: 'var(--radius)',
-                p: 1.75,
+                bgcolor: flat ? 'transparent' : 'var(--surface)',
+                border: flat ? 'none' : '1px solid var(--line-soft)',
+                borderRadius: flat ? 0 : 'var(--radius)',
+                p: flat ? 0 : 1.75,
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 1,
-                boxShadow: 'var(--shadow)',
+                boxShadow: flat ? 'none' : 'var(--shadow)',
             }}
         >
             {/* Engine picker — only the engines the active variant can actually play
