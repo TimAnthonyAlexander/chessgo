@@ -33,7 +33,7 @@ import { toWhiteEval } from '../lib/engineEval'
 import MoveList from '../components/MoveList'
 import OpeningPanel from '../components/OpeningPanel'
 import { buildFromMoves } from '../lib/analysisTree'
-import { ActionBtn, ErrorBanner, NavBtn, ToolMenu } from '../components/PanelUI'
+import { ActionBtn, Avatar, ErrorBanner, NavBtn, ToolMenu } from '../components/PanelUI'
 import {
     analyze,
     type Color,
@@ -722,6 +722,22 @@ export default function EngineVsEngine() {
         )
     })
 
+    // Board-hugging identity bands — the side rail's answer to "who is playing which
+    // colour". A readout inside the panel can't answer that while you're watching the
+    // pieces, which is the only time you actually ask.
+    const engineStrip = (c: Color) => {
+        const cfg = c === 'w' ? white : black
+        return (
+            <EngineStrip
+                icon={engineIcon(cfg.engine)}
+                name={engineName(cfg.engine)}
+                detail={sideDetail(cfg)}
+                side={c}
+                thinking={running && !over && atLive && sideToMoveOf(renderFen) === c}
+            />
+        )
+    }
+
     const editStart = () => navigate('/editor', { state: { fen: startFen } })
     const analyseGame = () =>
         navigate('/analysis', { state: { moves: moves.map((m) => m.uci), startFen } })
@@ -797,6 +813,11 @@ export default function EngineVsEngine() {
 
     return (
         <BoardPage
+            // Side rail only. The centered layout would render these board-width above
+            // and below the board too, on top of the matchup card its right column
+            // already shows.
+            top={chesscom ? engineStrip(topFirst[0]) : undefined}
+            bottom={chesscom ? engineStrip(topFirst[1]) : undefined}
             // The side rail has no second column: everything below is folded into the
             // one panel instead, so nothing stacks under it.
             left={
@@ -911,22 +932,8 @@ export default function EngineVsEngine() {
                             </ToolMenu>
                         </Box>
 
-                        {/* What the menus are currently set to — the one thing that has
-                            to be readable without opening anything. */}
-                        <Box
-                            sx={{
-                                flexShrink: 0,
-                                px: 1.5,
-                                py: 1.25,
-                                display: 'flex',
-                                flexDirection: 'column',
-                                gap: 0.75,
-                                borderBottom: '1px solid var(--line-soft)',
-                            }}
-                        >
-                            {matchupRows}
-                        </Box>
-
+                        {/* No matchup block here: the two strips hugging the board say
+                            who's on which side, permanently and next to the pieces. */}
                         <Box
                             sx={{
                                 flexShrink: 0,
@@ -1127,6 +1134,99 @@ export default function EngineVsEngine() {
                 duck={shownDuck}
             />
         </BoardPage>
+    )
+}
+
+// One engine as a board-width band. The active side is outlined in the accent while
+// it searches, so which engine is on the clock reads without looking anywhere else.
+function EngineStrip({
+    icon,
+    name,
+    detail,
+    side,
+    thinking,
+}: {
+    icon: React.ReactNode
+    name: string
+    detail: string
+    side: Color
+    thinking: boolean
+}) {
+    return (
+        <Box
+            sx={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1.25,
+                px: 1.75,
+                overflow: 'hidden',
+                height: { xs: 'auto', md: '100%' },
+                py: { xs: 1.25, md: 0.75 },
+                bgcolor: 'var(--surface)',
+                border: `1px solid ${thinking ? 'var(--accent-line)' : 'var(--line-soft)'}`,
+                borderRadius: 'var(--radius)',
+                transition: 'border-color .2s',
+            }}
+        >
+            <Avatar small>{icon}</Avatar>
+            <Box sx={{ minWidth: 0 }}>
+                <Typography
+                    noWrap
+                    sx={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: 14.5 }}
+                >
+                    {name}
+                </Typography>
+                <Typography
+                    noWrap
+                    sx={{
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 11.5,
+                        color: 'var(--text-dim)',
+                        lineHeight: 1.25,
+                    }}
+                >
+                    {detail}
+                </Typography>
+            </Box>
+            <Box sx={{ flex: 1 }} />
+            {thinking && (
+                <Typography
+                    sx={{
+                        flexShrink: 0,
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 11,
+                        color: 'var(--accent)',
+                        letterSpacing: 0.5,
+                    }}
+                >
+                    thinking…
+                </Typography>
+            )}
+            {/* The piece colour, as the piece colour. A word on its own has to be read;
+                a filled square is just seen. */}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexShrink: 0 }}>
+                <Box
+                    sx={{
+                        width: 13,
+                        height: 13,
+                        borderRadius: '3px',
+                        bgcolor: side === 'w' ? '#efeae0' : '#1c1e23',
+                        border: '1px solid var(--line)',
+                    }}
+                />
+                <Typography
+                    sx={{
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 11,
+                        color: 'var(--muted)',
+                        textTransform: 'uppercase',
+                        letterSpacing: 0.8,
+                    }}
+                >
+                    {side === 'w' ? 'White' : 'Black'}
+                </Typography>
+            </Box>
+        </Box>
     )
 }
 
