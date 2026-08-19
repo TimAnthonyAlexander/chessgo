@@ -7,6 +7,7 @@ import CreateTournamentDialog from '../components/tournaments/CreateTournamentDi
 import TournamentTimeline from '../components/tournaments/TournamentTimeline'
 import { useNow } from '../components/tournaments/timing'
 import { useAuth } from '../lib/auth'
+import { fullBleedSx } from '../lib/fullBleed'
 
 // Steady poll for the public list — status flips (scheduled → running →
 // finished) and player counts change server-side without any local signal to
@@ -111,17 +112,12 @@ export default function Tournaments() {
                 </Box>
             ) : (
                 // Full-bleed break-out: the page column is capped at 1160px, but the
-                // timeline wants every pixel it can get. `100vw` + a negative margin
-                // escapes the column without touching the shared Layout; the global
-                // `overflow-x: clip` backstop (styles.css) keeps this from ever
-                // producing a sideways page scrollbar.
-                <Box
-                    sx={{
-                        width: '100vw',
-                        marginLeft: 'calc(50% - 50vw)',
-                        px: { xs: 1.5, md: 3 },
-                    }}
-                >
+                // timeline wants every pixel it can get. `fullBleedSx` escapes the
+                // column and spans the CONTENT area — which is not the viewport when
+                // the side-rail nav is on; the global `overflow-x: clip` backstop
+                // (styles.css) keeps this from ever producing a sideways page
+                // scrollbar.
+                <Box sx={fullBleedSx()}>
                     <TournamentTimeline
                         tournaments={tournaments}
                         now={now}

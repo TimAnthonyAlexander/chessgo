@@ -24,7 +24,7 @@ import TitleBadge from './TitleBadge'
 import type { RatingCategory, User } from '../api/client'
 import IconBtn from './nav/IconBtn'
 import { type NavItem, isActive, navItems } from './nav/navModel'
-import SidebarNav from './SidebarNav'
+import SidebarNav, { SIDEBAR_W } from './SidebarNav'
 import { useSetting } from '../lib/settings'
 
 // Shared through the router Outlet so any routed page (e.g. the homepage
@@ -147,6 +147,16 @@ export default function Layout() {
                     display: 'flex',
                     flexDirection: 'column',
                     ...(sidebar ? { minHeight: { md: '100dvh' } } : {}),
+                    // How much of the viewport is NOT this column — i.e. the nav rail
+                    // to its left, 0 whenever there isn't one (top-bar layout, or the
+                    // side layout below `md`, where SidebarNav hides itself).
+                    //
+                    // Pages that break out of their own max-width column to go
+                    // full-bleed need this: `100vw` is the whole window, which in the
+                    // side layout is the column PLUS the rail, so a naive break-out
+                    // runs 232px too wide and slides under the nav. See `fullBleedSx`
+                    // in lib/fullBleed.ts, which is the only thing that should read it.
+                    '--nav-rail-w': sidebar ? { xs: '0px', md: `${SIDEBAR_W}px` } : '0px',
                 }}
             >
             <Box
