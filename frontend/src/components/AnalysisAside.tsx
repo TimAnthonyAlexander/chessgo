@@ -1,8 +1,7 @@
 import { useMemo, useState } from 'react'
-import { Box, Popover, Tooltip, Typography } from '@mui/material'
+import { Box, Tooltip, Typography } from '@mui/material'
 import {
     Check,
-    ChevronDown,
     Copy,
     Dices,
     Download,
@@ -19,6 +18,7 @@ import { computeMaterial, type Material } from '../lib/material'
 import { copyText, downloadPgn, fromPgn, pgnFilename, type ParsedPgn } from '../lib/pgn'
 import { useSetting } from '../lib/settings'
 import BoardActions from './BoardActions'
+import { ToolMenu } from './PanelUI'
 
 // Returns the FEN if chess.js accepts it, else null.
 function validFen(fen: string): string | null {
@@ -168,103 +168,6 @@ export function AnalysisToolbar({
                 </ToolMenu>
             )}
         </Box>
-    )
-}
-
-/** One button in the toolbar row plus the panel it opens. A real Popover (portalled,
- *  positioned against the button) rather than an absolutely-positioned dropdown,
- *  because the engine panel it sits in is `overflow: hidden` and would clip one. */
-function ToolMenu({
-    icon,
-    label,
-    width,
-    children,
-}: {
-    icon: React.ReactNode
-    label: string
-    width: number
-    /** Rendered with a `close` callback so an action inside can dismiss the menu. */
-    children: (close: () => void) => React.ReactNode
-}) {
-    const [anchor, setAnchor] = useState<HTMLElement | null>(null)
-    const open = anchor !== null
-    const close = () => setAnchor(null)
-
-    return (
-        <>
-            <Box
-                component="button"
-                onClick={(e: React.MouseEvent<HTMLElement>) =>
-                    setAnchor(open ? null : e.currentTarget)
-                }
-                aria-haspopup="true"
-                aria-expanded={open}
-                sx={{
-                    flex: 1,
-                    minWidth: 0,
-                    height: 32,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 0.6,
-                    cursor: 'pointer',
-                    fontFamily: 'var(--font-display)',
-                    fontSize: 12.5,
-                    fontWeight: 600,
-                    letterSpacing: 0.2,
-                    color: open ? 'var(--accent)' : 'var(--text)',
-                    bgcolor: open ? 'var(--accent-soft)' : 'var(--surface-2)',
-                    border: `1px solid ${open ? 'var(--accent-line)' : 'var(--line)'}`,
-                    borderRadius: 'var(--radius)',
-                    transition: 'color .15s, background-color .15s, border-color .15s',
-                    '&:hover': {
-                        color: 'var(--accent)',
-                        bgcolor: 'var(--line)',
-                        borderColor: 'var(--accent-line)',
-                    },
-                }}
-            >
-                {icon}
-                <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {label}
-                </Box>
-                <ChevronDown
-                    size={13}
-                    style={{
-                        flexShrink: 0,
-                        opacity: 0.55,
-                        transform: open ? 'rotate(180deg)' : 'none',
-                        transition: 'transform .15s',
-                    }}
-                />
-            </Box>
-
-            <Popover
-                open={open}
-                anchorEl={anchor}
-                onClose={close}
-                anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-                transformOrigin={{ vertical: 'top', horizontal: 'left' }}
-                marginThreshold={12}
-                slotProps={{
-                    paper: {
-                        sx: {
-                            mt: 0.75,
-                            width,
-                            maxWidth: 'calc(100vw - 24px)',
-                            p: 1.5,
-                            bgcolor: 'var(--surface)',
-                            backgroundImage: 'none',
-                            border: '1px solid var(--line)',
-                            borderRadius: 'var(--radius)',
-                            boxShadow: 'var(--shadow)',
-                        },
-                    },
-                }}
-            >
-                {children(close)}
-            </Popover>
-        </>
     )
 }
 

@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Box, Button, type SxProps, type Theme, Typography } from '@mui/material'
 import {
+    AlertTriangle,
     Check,
     ChevronLeft,
     ChevronRight,
@@ -8,6 +9,9 @@ import {
     Flag,
     FlipVertical2,
     Handshake,
+    Play,
+    RotateCcw,
+    Telescope,
     Trophy,
     Undo2,
     User,
@@ -22,7 +26,7 @@ import ChatPanel from '../components/ChatPanel'
 import Clock, { ClockBar } from '../components/Clock'
 import LiveModeCard from '../components/LiveModeCard'
 import MoveList from '../components/MoveList'
-import { ActionBtn, Avatar, NavBtn, PANEL_SHADOW } from '../components/PanelUI'
+import { ActionBtn, Avatar, NavBtn, PANEL_SHADOW, ToolBtn, ToolMenu } from '../components/PanelUI'
 import TitleBadge from '../components/TitleBadge'
 import {
     candidates,
@@ -657,7 +661,15 @@ export default function LiveGame() {
                         display: { xs: 'none', md: 'flex' },
                         flexDirection: 'column',
                         gap: 2,
-                        minHeight: 0,
+                        // Centered layout: this is a board-height column of its own, so
+                        // it must be free to shrink below its content and let the chat
+                        // scroll internally.
+                        // Side rail: there is no second column — this sits UNDER the move
+                        // panel in the one rail and gets only what the panel leaves, which
+                        // post-game is close to nothing. Keeping the content floor here
+                        // (and dropping the spacer + half-height rule below) makes the
+                        // rail scroll instead of crushing the chat.
+                        minHeight: chesscom ? undefined : 0,
                         flex: 1,
                     }}
                 >
@@ -678,14 +690,22 @@ export default function LiveGame() {
                             humanColor={g.color}
                         />
                     )}
-                    {/* Grows to eat whatever the game cards above don't use, pinning the
-                        chat to the bottom half. */}
-                    <Box sx={{ flex: 1, minHeight: 0 }} />
-                    {/* The chat is exactly the bottom half of the column (which is the
-                        board's height), regardless of how many cards sit above it.
-                        `0 0 50%` — no grow, no shrink, so it's a fixed half rather than
-                        whatever is left over. */}
-                    <Box sx={{ flex: '0 0 50%', minHeight: 0, display: 'flex' }}>
+                    {/* Centered layout only: grows to eat whatever the game cards above
+                        don't use, pinning the chat to the bottom half. */}
+                    {!chesscom && <Box sx={{ flex: 1, minHeight: 0 }} />}
+                    {/* Centered layout: the chat is exactly the bottom half of the column
+                        (which is the board's height), regardless of how many cards sit
+                        above it — `0 0 50%`, no grow, no shrink.
+                        Side rail: "half the column" means nothing when there is no column,
+                        and half of the panel's leftovers is a handful of pixels. It takes
+                        whatever the rail leaves instead, with a floor it can't go under. */}
+                    <Box
+                        sx={
+                            chesscom
+                                ? { flex: 1, minHeight: 200, display: 'flex' }
+                                : { flex: '0 0 50%', minHeight: 0, display: 'flex' }
+                        }
+                    >
                         <ChatPanel messages={g.messages} onSend={sendChat} disabled={g.ended} />
                     </Box>
                 </Box>
@@ -772,6 +792,22 @@ export default function LiveGame() {
                         </Box>
                     )}
 
+                    {/* Side rail, finished game: the result and every post-game action
+                        head the panel instead of sitting in a footer under the move
+                        list. The footer version is a result line, a rating line, up to
+                        four buttons squeezed into one row and a five-button BoardActions
+                        stack — roughly 420px that appears the instant the game ends, all
+                        of it taken out of the chat below. Here it's a result line and a
+                        three-cell row, and it's at the top where the actions are. */}
+                    {chesscom && g.ended && (
+                        <GameOverBar
+                            g={g}
+                            ratingDelta={ratingDelta}
+                            blunderCount={blunderCount}
+                            isSecretQueen={isSecretQueen}
+                        />
+                    )}
+
                     {/* Opponent — in the chess.com layout this same bar is a strip
                         above the board instead, so the panel omits it here. */}
                     {!chesscom && opponentBar}
@@ -825,7 +861,9 @@ export default function LiveGame() {
                         </Box>
                     </Box>
 
-                    {/* Draw / takeback / resign while playing, or the result when over */}
+                    {/* Draw / takeback / resign while playing, or the result when over.
+                        The side rail has already shown the over case at the top of the
+                        panel (GameOverBar), so it gets nothing here. */}
                     {!g.ended ? (
                         <Box
                             sx={{
@@ -908,7 +946,7 @@ export default function LiveGame() {
                                 />
                             </Box>
                         </Box>
-                    ) : (
+                    ) : chesscom ? null : (
                         <Box
                             sx={{
                                 p: 1.25,
@@ -1583,6 +1621,223 @@ const LiveOpening = memo(function LiveOpening({ fen }: { fen: string }) {
         </Box>
     )
 })
+
+// The finished-game header for the side-rail layout: what the game ended as, and
+// every way out of it, in one line of text and one row of cells.
+//
+// The centered layout's footer can afford to stack these — it has a second column
+// and the chat lives there. The rail doesn't: the panel and the chat share one
+// board-height column, so the ~420px the footer grows by when a game ends comes
+// straight out of the chat. Grouping is by what the player does next, not by what
+// the buttons are: rematch and requeue are the two hot paths and stay one click;
+// analysing, editing, playing the position on and leaving are one click deeper.
+function GameOverBar({
+    g,
+    ratingDelta,
+    blunderCount,
+    isSecretQueen,
+}: {
+    g: LiveGameState
+    ratingDelta: { id: string; after: number; delta: number } | null
+    blunderCount: { id: string; count: number } | null
+    isSecretQueen: boolean
+}) {
+    const navigate = useNavigate()
+    // null while the analysis is still in flight — distinct from a measured zero,
+    // which is worth saying out loud.
+    const blunders = blunderCount && blunderCount.id === g.id ? blunderCount.count : null
+    const delta = g.rated && ratingDelta && ratingDelta.id === g.id ? ratingDelta : null
+    // Duck has no analysable standard position and Secret Queen's reveal moves
+    // aren't legal standard chess, so neither replays through the standard analyzer.
+    const analysable = g.variant !== 'duck' && !isSecretQueen
+    const aborted = g.reason === 'aborted' || g.status === 'aborted'
+    // The game (not the position) is the thing worth analysing after it ends, so it
+    // gets a cell of its own rather than a line in the menu. An abort has no game to
+    // replay; when that's the case the cell goes to requeueing instead.
+    const canAnalyze = analysable && !aborted
+    const newGame = () => {
+        gameSocket.queue(g.pool)
+        navigate('/')
+    }
+    // Requeueing is in the row only when Analyse isn't — never in both places.
+    const newGameInRow = !canAnalyze && !g.tournamentId
+
+    return (
+        <Box
+            sx={{
+                flexShrink: 0,
+                px: 1.25,
+                py: 1,
+                borderBottom: '1px solid var(--line-soft)',
+                bgcolor: 'var(--bg-2)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 1,
+            }}
+        >
+            {/* Result and rating change on ONE line — two centered lines of display
+                type is a lot of vertical for six words and a number. */}
+            <Box
+                sx={{
+                    display: 'flex',
+                    alignItems: 'baseline',
+                    justifyContent: 'center',
+                    flexWrap: 'wrap',
+                    gap: 1,
+                }}
+            >
+                <Typography
+                    sx={{
+                        fontFamily: 'var(--font-display)',
+                        fontSize: 15.5,
+                        fontWeight: 700,
+                    }}
+                >
+                    {resultText(g)}
+                </Typography>
+                {delta && (
+                    <Typography
+                        sx={{
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: 12.5,
+                            fontWeight: 700,
+                            color: 'var(--text-dim)',
+                        }}
+                    >
+                        {delta.after}{' '}
+                        <Box
+                            component="span"
+                            sx={{
+                                color:
+                                    delta.delta > 0
+                                        ? 'var(--good, #7bb661)'
+                                        : delta.delta < 0
+                                          ? 'var(--danger, #e07a5f)'
+                                          : 'var(--text-dim)',
+                            }}
+                        >
+                            ({delta.delta > 0 ? '+' : ''}
+                            {delta.delta})
+                        </Box>
+                    </Typography>
+                )}
+            </Box>
+
+            {/* The arena never pairs us again on its own (see socket.ts's
+                arenaGameEnded handling) — say so, since nothing else implies it. */}
+            {g.tournamentId && (
+                <Typography sx={{ fontSize: 12, color: 'var(--text-dim)', textAlign: 'center' }}>
+                    Head back to the tournament for your next pairing.
+                </Typography>
+            )}
+
+            {/* An incoming rematch offer is a decision, not an action — it keeps its
+                full banner above the row rather than becoming a cell. */}
+            {g.rematchOffer === 'theirs' && (
+                <OfferBanner
+                    label="Opponent wants a rematch"
+                    onAccept={() => gameSocket.acceptRematch()}
+                    onDecline={() => gameSocket.declineRematch()}
+                />
+            )}
+
+            <Box sx={{ display: 'flex', gap: 0.75, minWidth: 0 }}>
+                {g.tournamentId && (
+                    <ToolBtn
+                        accent
+                        icon={<Trophy size={14} />}
+                        label="Tournament"
+                        onClick={() => navigate(`/tournaments/${g.tournamentId}`)}
+                    />
+                )}
+                {g.rematchOffer === 'mine' ? (
+                    <ToolBtn label="Offered…" onClick={() => gameSocket.cancelRematch()} />
+                ) : g.rematchOffer === 'theirs' ? null : (
+                    <ToolBtn
+                        accent={!g.tournamentId}
+                        icon={<RotateCcw size={14} />}
+                        label="Rematch"
+                        onClick={() => gameSocket.offerRematch()}
+                    />
+                )}
+                {canAnalyze ? (
+                    <ToolBtn
+                        icon={<Telescope size={14} />}
+                        label="Analyse"
+                        onClick={() => navigate(`/analysis/${g.id}`)}
+                    />
+                ) : newGameInRow ? (
+                    <ToolBtn icon={<Play size={14} />} label="New game" onClick={newGame} />
+                ) : null}
+                <ToolMenu label="More" width={300}>
+                    {(close) => (
+                        <Box
+                            onClick={close}
+                            sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}
+                        >
+                            {!g.tournamentId && !newGameInRow && (
+                                <ActionBtn
+                                    tone="primary"
+                                    icon={<Play size={16} />}
+                                    label="New game"
+                                    onClick={newGame}
+                                />
+                            )}
+                            {/* An arena pairs you itself, so requeueing isn't offered —
+                                a direct rematch still is, just not as the lead action. */}
+                            {g.tournamentId && g.rematchOffer !== 'theirs' && (
+                                <ActionBtn
+                                    tone="neutral"
+                                    icon={<RotateCcw size={16} />}
+                                    label={g.rematchOffer === 'mine' ? 'Offered…' : 'Rematch'}
+                                    onClick={() =>
+                                        g.rematchOffer === 'mine'
+                                            ? gameSocket.cancelRematch()
+                                            : gameSocket.offerRematch()
+                                    }
+                                />
+                            )}
+                            {/* A count baked into the button once it's ready. A measured
+                                zero says so in words rather than leaving a dead button —
+                                the same trade the footer makes, minus the button. */}
+                            {blunders === 0 && (
+                                <Typography sx={{ fontSize: 12.5, color: 'var(--text-dim)' }}>
+                                    No blunders this game.
+                                </Typography>
+                            )}
+                            {blunders !== null && blunders > 0 && (
+                                <ActionBtn
+                                    tone="neutral"
+                                    icon={<AlertTriangle size={16} />}
+                                    label={`Review ${blunders} blunder${blunders === 1 ? '' : 's'}`}
+                                    onClick={() => navigate(`/analysis/${g.id}?rewind=1`)}
+                                />
+                            )}
+                            {/* Play the final position on somewhere else. Both analysis
+                                entries are omitted: the game one is the row's Analyse
+                                cell, and "analyse this position" post-game lands on a
+                                position the game view already opens on. */}
+                            {analysable && (
+                                <BoardActions
+                                    fen={g.fen}
+                                    omit={['analyze-game', 'analyze-position']}
+                                />
+                            )}
+                            <ActionBtn
+                                tone="neutral"
+                                label="Lobby"
+                                onClick={() => {
+                                    gameSocket.leave()
+                                    navigate('/')
+                                }}
+                            />
+                        </Box>
+                    )}
+                </ToolMenu>
+            </Box>
+        </Box>
+    )
+}
 
 function OfferBanner({
     label,
