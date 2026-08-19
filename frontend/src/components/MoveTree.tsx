@@ -197,7 +197,13 @@ export default function MoveTree({ tree, currentId, onSelect }: Props) {
         <Box
             sx={{
                 flex: 1,
-                minHeight: 0,
+                // A floor, not a size: this is the only flex-growing child of the
+                // panel it lives in, so it is also the only one that gives way when
+                // the panel's fixed blocks add up to more than the rail is tall —
+                // and with minHeight:0 alone "gives way" means collapsing to nothing
+                // and the move list silently disappearing. Better to clip the block
+                // below than to lose the moves.
+                minHeight: 110,
                 position: 'relative',
                 overflowY: { xs: 'auto', md: 'visible' },
             }}

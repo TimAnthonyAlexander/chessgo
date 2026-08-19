@@ -1,6 +1,17 @@
 import { useMemo, useState } from 'react'
-import { Box, Tooltip, Typography } from '@mui/material'
-import { Check, Copy, Dices, Download, FileInput, Link2, RotateCcw } from 'lucide-react'
+import { Box, Popover, Tooltip, Typography } from '@mui/material'
+import {
+    Check,
+    ChevronDown,
+    Copy,
+    Dices,
+    Download,
+    FileInput,
+    FileText,
+    Link2,
+    RotateCcw,
+    SquarePen,
+} from 'lucide-react'
 import { Chess } from 'chess.js'
 import { START_FEN } from '../lib/analysisTree'
 import { random960 } from '../lib/variants'
@@ -28,7 +39,6 @@ export default function AnalysisAside({
     onEnableDuck,
     getPgn,
     onImportPgn,
-    omitMaterial = false,
 }: {
     fen: string
     onLoadFen: (fen: string) => void
@@ -46,9 +56,6 @@ export default function AnalysisAside({
     // Called with a successfully parsed pasted PGN — the caller owns loading it
     // into the board. Import is a no-op (button hidden) when this is absent.
     onImportPgn?: (parsed: ParsedPgn) => void
-    // Side-rail layout: the Material block heads the engine panel instead (see
-    // MaterialHeader), so this column leaves it out rather than showing it twice.
-    omitMaterial?: boolean
 }) {
     const mat = useMemo(() => computeMaterial(fen), [fen])
     // Single-key subscription — showCaptured gates this card the same way it
@@ -65,7 +72,7 @@ export default function AnalysisAside({
                 width: '100%',
             }}
         >
-            {showCaptured && !omitMaterial && <MaterialCard mat={mat} />}
+            {showCaptured && <MaterialCard mat={mat} />}
             {showSetup && (
                 <PositionCard fen={fen} onLoadFen={onLoadFen} onEnableDuck={onEnableDuck} />
             )}
@@ -82,6 +89,182 @@ export default function AnalysisAside({
                 <BoardActions fen={fen} omit={['analyze-position']} playDisabled={playBotDisabled} />
             )}
         </Box>
+    )
+}
+
+/** The same three blocks as the column above (position setup, game/PGN, board
+ *  cross-links) collapsed into ONE row of menu buttons — what the side-rail layout
+ *  puts at the very top of the engine panel.
+ *
+ *  The rail is a single fixed-height column shared with the move tree, so three
+ *  stacked cards cost the move list its entire height (it's the only `flex: 1`
+ *  child, so it's the one that collapses to nothing when the rail overflows). Each
+ *  block therefore lives in a popover anchored to its own button: opening one
+ *  paints over the board instead of pushing anything, so the row costs 48px flat
+ *  and nothing in the panel moves when a menu opens or closes. */
+export function AnalysisToolbar({
+    fen,
+    onLoadFen,
+    playBotDisabled = false,
+    showSetup = true,
+    hideActions = false,
+    onEnableDuck,
+    getPgn,
+    onImportPgn,
+}: {
+    fen: string
+    onLoadFen: (fen: string) => void
+    playBotDisabled?: boolean
+    showSetup?: boolean
+    hideActions?: boolean
+    onEnableDuck?: () => void
+    getPgn?: () => string
+    onImportPgn?: (parsed: ParsedPgn) => void
+}) {
+    return (
+        <Box
+            sx={{
+                flexShrink: 0,
+                display: 'flex',
+                gap: 0.75,
+                px: 1,
+                py: 1,
+                borderBottom: '1px solid var(--line-soft)',
+                bgcolor: 'var(--bg-2)',
+            }}
+        >
+            {showSetup && (
+                <ToolMenu icon={<Dices size={14} />} label="Position" width={340}>
+                    {(close) => (
+                        <PositionBody
+                            fen={fen}
+                            onLoadFen={onLoadFen}
+                            onEnableDuck={onEnableDuck}
+                            onDone={close}
+                        />
+                    )}
+                </ToolMenu>
+            )}
+            <ToolMenu icon={<FileText size={14} />} label="Game" width={340}>
+                {(close) => (
+                    <GameBody
+                        getPgn={getPgn}
+                        onImportPgn={showSetup ? onImportPgn : undefined}
+                        onDone={close}
+                    />
+                )}
+            </ToolMenu>
+            {!hideActions && (
+                <ToolMenu icon={<SquarePen size={14} />} label="Board" width={300}>
+                    {(close) => (
+                        <Box onClick={close}>
+                            <BoardActions
+                                fen={fen}
+                                omit={['analyze-position']}
+                                playDisabled={playBotDisabled}
+                            />
+                        </Box>
+                    )}
+                </ToolMenu>
+            )}
+        </Box>
+    )
+}
+
+/** One button in the toolbar row plus the panel it opens. A real Popover (portalled,
+ *  positioned against the button) rather than an absolutely-positioned dropdown,
+ *  because the engine panel it sits in is `overflow: hidden` and would clip one. */
+function ToolMenu({
+    icon,
+    label,
+    width,
+    children,
+}: {
+    icon: React.ReactNode
+    label: string
+    width: number
+    /** Rendered with a `close` callback so an action inside can dismiss the menu. */
+    children: (close: () => void) => React.ReactNode
+}) {
+    const [anchor, setAnchor] = useState<HTMLElement | null>(null)
+    const open = anchor !== null
+    const close = () => setAnchor(null)
+
+    return (
+        <>
+            <Box
+                component="button"
+                onClick={(e: React.MouseEvent<HTMLElement>) =>
+                    setAnchor(open ? null : e.currentTarget)
+                }
+                aria-haspopup="true"
+                aria-expanded={open}
+                sx={{
+                    flex: 1,
+                    minWidth: 0,
+                    height: 32,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 0.6,
+                    cursor: 'pointer',
+                    fontFamily: 'var(--font-display)',
+                    fontSize: 12.5,
+                    fontWeight: 600,
+                    letterSpacing: 0.2,
+                    color: open ? 'var(--accent)' : 'var(--text)',
+                    bgcolor: open ? 'var(--accent-soft)' : 'var(--surface-2)',
+                    border: `1px solid ${open ? 'var(--accent-line)' : 'var(--line)'}`,
+                    borderRadius: '8px',
+                    transition: 'color .15s, background-color .15s, border-color .15s',
+                    '&:hover': {
+                        color: 'var(--accent)',
+                        bgcolor: 'var(--line)',
+                        borderColor: 'var(--accent-line)',
+                    },
+                }}
+            >
+                {icon}
+                <Box component="span" sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {label}
+                </Box>
+                <ChevronDown
+                    size={13}
+                    style={{
+                        flexShrink: 0,
+                        opacity: 0.55,
+                        transform: open ? 'rotate(180deg)' : 'none',
+                        transition: 'transform .15s',
+                    }}
+                />
+            </Box>
+
+            <Popover
+                open={open}
+                anchorEl={anchor}
+                onClose={close}
+                anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+                transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+                marginThreshold={12}
+                slotProps={{
+                    paper: {
+                        sx: {
+                            mt: 0.75,
+                            width,
+                            maxWidth: 'calc(100vw - 24px)',
+                            p: 1.5,
+                            bgcolor: 'var(--surface)',
+                            backgroundImage: 'none',
+                            border: '1px solid var(--line)',
+                            borderRadius: '11px',
+                            boxShadow: '0 20px 50px -24px rgba(0,0,0,0.85)',
+                        },
+                    },
+                }}
+            >
+                {children(close)}
+            </Popover>
+        </>
     )
 }
 
@@ -128,15 +311,116 @@ function Card({
     )
 }
 
-/** The Material block as a PANEL HEADER — what the side-rail layout puts at the top
- *  of the engine panel so the rail reads as one continuous box: material first,
- *  then the engine lines. Renders nothing when the showCaptured preference is off,
- *  exactly like the column card it replaces. */
+/** Material as a single 32px band at the top of the engine panel — what the
+ *  side-rail layout shows instead of the column's Material card. The card is three
+ *  labelled rows and a header, ~145px; in a rail that also has to hold the move
+ *  tree that's most of a move list. Same information, one line: each side's captures
+ *  and, on whichever side is ahead, by how much. Renders nothing when the
+ *  showCaptured preference is off, exactly like the card it replaces. */
 export function MaterialHeader({ fen }: { fen: string }) {
     const mat = useMemo(() => computeMaterial(fen), [fen])
     const showCaptured = useSetting('showCaptured')
     if (!showCaptured) return null
-    return <MaterialCard mat={mat} flat />
+    return (
+        <Box
+            sx={{
+                flexShrink: 0,
+                display: 'flex',
+                alignItems: 'stretch',
+                height: 32,
+                px: 1.25,
+                borderBottom: '1px solid var(--line-soft)',
+                bgcolor: 'var(--bg-2)',
+            }}
+        >
+            <MiniPile
+                label="White"
+                pieces={mat.capturedByWhite}
+                color="b"
+                adv={mat.diff > 0 ? mat.diff : 0}
+            />
+            <Box sx={{ width: '1px', bgcolor: 'var(--line-soft)', my: 0.75, mx: 1.25 }} />
+            <MiniPile
+                label="Black"
+                pieces={mat.capturedByBlack}
+                color="w"
+                adv={mat.diff < 0 ? -mat.diff : 0}
+            />
+        </Box>
+    )
+}
+
+// One side of the compact material band. Pieces are nowrap and clipped rather than
+// wrapped: the band's height is fixed so the panel below it can't be shoved down by
+// a position with a lot of captures.
+function MiniPile({
+    label,
+    pieces,
+    color,
+    adv,
+}: {
+    label: string
+    pieces: string[]
+    color: 'w' | 'b'
+    adv: number
+}) {
+    return (
+        <Box sx={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 0.75 }}>
+            <Typography
+                sx={{
+                    flexShrink: 0,
+                    fontSize: 10,
+                    fontWeight: 700,
+                    letterSpacing: 1,
+                    textTransform: 'uppercase',
+                    color: 'var(--muted)',
+                }}
+            >
+                {label}
+            </Typography>
+            <Box
+                sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    minWidth: 0,
+                    overflow: 'hidden',
+                }}
+            >
+                {pieces.length === 0 ? (
+                    <Typography sx={{ fontSize: 12, color: 'var(--muted)' }}>—</Typography>
+                ) : (
+                    pieces.map((t, i) => (
+                        <Box
+                            key={i}
+                            component="img"
+                            src={`/piece/cburnett/${color}${t}.svg`}
+                            alt={t}
+                            sx={{
+                                width: 17,
+                                height: 17,
+                                flexShrink: 0,
+                                ml: i > 0 && pieces[i - 1] === t ? '-6px' : 0,
+                            }}
+                        />
+                    ))
+                )}
+            </Box>
+            {adv > 0 && (
+                <Typography
+                    sx={{
+                        ml: 'auto',
+                        flexShrink: 0,
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 12,
+                        fontWeight: 700,
+                        color: 'var(--accent)',
+                    }}
+                >
+                    +{adv}
+                </Typography>
+            )}
+        </Box>
+    )
 }
 
 function MaterialCard({ mat, flat = false }: { mat: Material; flat?: boolean }) {
@@ -230,16 +514,26 @@ function SideRow({
     )
 }
 
+interface GameBodyProps {
+    getPgn?: () => string
+    onImportPgn?: (parsed: ParsedPgn) => void
+    /** Called once an action is finished — lets the popover host dismiss itself.
+     *  Absent in the column layout, where the block is a permanently open card. */
+    onDone?: () => void
+}
+
 // Copy/Download PGN, Copy link, and Import PGN. Copy link never depends on a
 // prop (it's just the current URL); the PGN actions individually disappear
 // when their prop isn't supplied by the caller.
-function GameCard({
-    getPgn,
-    onImportPgn,
-}: {
-    getPgn?: () => string
-    onImportPgn?: (parsed: ParsedPgn) => void
-}) {
+function GameCard(props: GameBodyProps) {
+    return (
+        <Card label="Game">
+            <GameBody {...props} />
+        </Card>
+    )
+}
+
+function GameBody({ getPgn, onImportPgn, onDone }: GameBodyProps) {
     const [pasteOpen, setPasteOpen] = useState(false)
     const [pasteVal, setPasteVal] = useState('')
     const [pasteErr, setPasteErr] = useState<string | null>(null)
@@ -256,6 +550,7 @@ function GameCard({
         setPasteOpen(false)
         setPasteVal('')
         setPasteErr(null)
+        onDone?.()
     }
 
     const copyPgn = async () => {
@@ -281,105 +576,114 @@ function GameCard({
     }
 
     return (
-        <Card label="Game">
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                <Box sx={{ display: 'flex', gap: 1 }}>
-                    {getPgn && (
-                        <>
-                            <AsideBtn
-                                icon={copiedPgn ? <Check size={15} /> : <Copy size={15} />}
-                                label={copiedPgn ? 'Copied' : 'Copy PGN'}
-                                onClick={copyPgn}
-                            />
-                            <AsideBtn
-                                icon={<Download size={15} />}
-                                label="Download PGN"
-                                onClick={downloadCurrentPgn}
-                            />
-                        </>
-                    )}
-                    <AsideBtn
-                        icon={copiedLink ? <Check size={15} /> : <Link2 size={15} />}
-                        label={copiedLink ? 'Copied' : 'Copy link'}
-                        onClick={copyLink}
-                    />
-                </Box>
-
-                {onImportPgn && (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <Box sx={{ display: 'flex', gap: 1 }}>
+                {getPgn && (
                     <>
                         <AsideBtn
-                            icon={<FileInput size={15} />}
-                            label="Import PGN…"
-                            active={pasteOpen}
-                            onClick={() => {
-                                setPasteOpen((v) => !v)
-                                setPasteErr(null)
-                            }}
+                            icon={copiedPgn ? <Check size={15} /> : <Copy size={15} />}
+                            label={copiedPgn ? 'Copied' : 'Copy PGN'}
+                            onClick={copyPgn}
                         />
-
-                        {pasteOpen && (
-                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
-                                <Box
-                                    component="textarea"
-                                    autoFocus
-                                    value={pasteVal}
-                                    placeholder="Paste a PGN…"
-                                    rows={5}
-                                    onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => {
-                                        setPasteVal(e.target.value)
-                                        setPasteErr(null)
-                                    }}
-                                    sx={{
-                                        width: '100%',
-                                        boxSizing: 'border-box',
-                                        resize: 'vertical',
-                                        fontFamily: 'var(--font-mono)',
-                                        fontSize: 12,
-                                        color: 'var(--text)',
-                                        bgcolor: 'var(--bg)',
-                                        border: `1px solid ${pasteErr ? 'var(--danger, #e5484d)' : 'var(--line)'}`,
-                                        borderRadius: '8px',
-                                        px: 1.25,
-                                        py: 1,
-                                        outline: 'none',
-                                        '&:focus': {
-                                            borderColor: pasteErr
-                                                ? 'var(--danger, #e5484d)'
-                                                : 'var(--accent-line)',
-                                        },
-                                        '&::placeholder': { color: 'var(--muted)' },
-                                    }}
-                                />
-                                {pasteErr && (
-                                    <Typography
-                                        sx={{ fontSize: 11.5, color: 'var(--danger, #e5484d)' }}
-                                    >
-                                        {pasteErr}
-                                    </Typography>
-                                )}
-                                <AsideBtn icon={<FileInput size={15} />} label="Load" onClick={submitImport} />
-                            </Box>
-                        )}
+                        <AsideBtn
+                            icon={<Download size={15} />}
+                            label="Download PGN"
+                            onClick={downloadCurrentPgn}
+                        />
                     </>
                 )}
+                <AsideBtn
+                    icon={copiedLink ? <Check size={15} /> : <Link2 size={15} />}
+                    label={copiedLink ? 'Copied' : 'Copy link'}
+                    onClick={copyLink}
+                />
             </Box>
+
+            {onImportPgn && (
+                <>
+                    <AsideBtn
+                        icon={<FileInput size={15} />}
+                        label="Import PGN…"
+                        active={pasteOpen}
+                        onClick={() => {
+                            setPasteOpen((v) => !v)
+                            setPasteErr(null)
+                        }}
+                    />
+
+                    {pasteOpen && (
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                            <Box
+                                component="textarea"
+                                autoFocus
+                                value={pasteVal}
+                                placeholder="Paste a PGN…"
+                                rows={5}
+                                onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => {
+                                    setPasteVal(e.target.value)
+                                    setPasteErr(null)
+                                }}
+                                sx={{
+                                    width: '100%',
+                                    boxSizing: 'border-box',
+                                    resize: 'vertical',
+                                    fontFamily: 'var(--font-mono)',
+                                    fontSize: 12,
+                                    color: 'var(--text)',
+                                    bgcolor: 'var(--bg)',
+                                    border: `1px solid ${pasteErr ? 'var(--danger, #e5484d)' : 'var(--line)'}`,
+                                    borderRadius: '8px',
+                                    px: 1.25,
+                                    py: 1,
+                                    outline: 'none',
+                                    '&:focus': {
+                                        borderColor: pasteErr
+                                            ? 'var(--danger, #e5484d)'
+                                            : 'var(--accent-line)',
+                                    },
+                                    '&::placeholder': { color: 'var(--muted)' },
+                                }}
+                            />
+                            {pasteErr && (
+                                <Typography sx={{ fontSize: 11.5, color: 'var(--danger, #e5484d)' }}>
+                                    {pasteErr}
+                                </Typography>
+                            )}
+                            <AsideBtn icon={<FileInput size={15} />} label="Load" onClick={submitImport} />
+                        </Box>
+                    )}
+                </>
+            )}
+        </Box>
+    )
+}
+
+interface PositionBodyProps {
+    fen: string
+    onLoadFen: (fen: string) => void
+    onEnableDuck?: () => void
+    /** See GameBodyProps.onDone. */
+    onDone?: () => void
+}
+
+function PositionCard(props: PositionBodyProps) {
+    return (
+        <Card label="Position">
+            <PositionBody {...props} />
         </Card>
     )
 }
 
-function PositionCard({
-    fen,
-    onLoadFen,
-    onEnableDuck,
-}: {
-    fen: string
-    onLoadFen: (fen: string) => void
-    onEnableDuck?: () => void
-}) {
+function PositionBody({ fen, onLoadFen, onEnableDuck, onDone }: PositionBodyProps) {
     const [pasteOpen, setPasteOpen] = useState(false)
     const [pasteVal, setPasteVal] = useState('')
     const [pasteErr, setPasteErr] = useState(false)
     const [copied, setCopied] = useState(false)
+
+    const load = (next: string) => {
+        onLoadFen(next)
+        onDone?.()
+    }
 
     const submitPaste = () => {
         const ok = validFen(pasteVal)
@@ -391,6 +695,7 @@ function PositionCard({
         setPasteOpen(false)
         setPasteVal('')
         setPasteErr(false)
+        onDone?.()
     }
 
     const copyFen = async () => {
@@ -404,131 +709,132 @@ function PositionCard({
     }
 
     return (
-        <Card label="Position">
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                <Box sx={{ display: 'flex', gap: 1 }}>
-                    <AsideBtn
-                        icon={<RotateCcw size={15} />}
-                        label="New game"
-                        onClick={() => onLoadFen(START_FEN)}
-                    />
-                    <AsideBtn
-                        icon={<Dices size={15} />}
-                        label="Chess960"
-                        onClick={() => onLoadFen(random960())}
-                    />
-                    {onEnableDuck && (
-                        <AsideBtn
-                            icon={
-                                <Box component="span" sx={{ fontSize: 15, lineHeight: 1 }}>
-                                    🦆
-                                </Box>
-                            }
-                            label="Duck Chess"
-                            onClick={onEnableDuck}
-                        />
-                    )}
-                </Box>
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <Box sx={{ display: 'flex', gap: 1 }}>
                 <AsideBtn
-                    icon={<FileInput size={15} />}
-                    label="Paste FEN…"
-                    active={pasteOpen}
-                    onClick={() => {
-                        setPasteOpen((v) => !v)
-                        setPasteErr(false)
-                    }}
+                    icon={<RotateCcw size={15} />}
+                    label="New game"
+                    onClick={() => load(START_FEN)}
                 />
-
-                {pasteOpen && (
-                    <Box
-                        component="input"
-                        autoFocus
-                        value={pasteVal}
-                        placeholder="Paste a FEN, then Enter"
-                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                            setPasteVal(e.target.value)
-                            setPasteErr(false)
-                        }}
-                        onKeyDown={(e: React.KeyboardEvent) => {
-                            if (e.key === 'Enter') submitPaste()
-                            else if (e.key === 'Escape') setPasteOpen(false)
-                        }}
-                        sx={{
-                            width: '100%',
-                            boxSizing: 'border-box',
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: 12,
-                            color: 'var(--text)',
-                            bgcolor: 'var(--bg)',
-                            border: `1px solid ${pasteErr ? '#ca4a4a' : 'var(--line)'}`,
-                            borderRadius: '8px',
-                            px: 1.25,
-                            py: 1,
-                            outline: 'none',
-                            '&:focus': { borderColor: pasteErr ? '#ca4a4a' : 'var(--accent-line)' },
-                            '&::placeholder': { color: 'var(--muted)' },
+                <AsideBtn
+                    icon={<Dices size={15} />}
+                    label="Chess960"
+                    onClick={() => load(random960())}
+                />
+                {onEnableDuck && (
+                    <AsideBtn
+                        icon={
+                            <Box component="span" sx={{ fontSize: 15, lineHeight: 1 }}>
+                                🦆
+                            </Box>
+                        }
+                        label="Duck Chess"
+                        onClick={() => {
+                            onEnableDuck()
+                            onDone?.()
                         }}
                     />
                 )}
+            </Box>
+            <AsideBtn
+                icon={<FileInput size={15} />}
+                label="Paste FEN…"
+                active={pasteOpen}
+                onClick={() => {
+                    setPasteOpen((v) => !v)
+                    setPasteErr(false)
+                }}
+            />
 
-                <Box sx={{ height: '1px', bgcolor: 'var(--line-soft)', my: 0.5 }} />
-
-                <Typography
+            {pasteOpen && (
+                <Box
+                    component="input"
+                    autoFocus
+                    value={pasteVal}
+                    placeholder="Paste a FEN, then Enter"
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                        setPasteVal(e.target.value)
+                        setPasteErr(false)
+                    }}
+                    onKeyDown={(e: React.KeyboardEvent) => {
+                        if (e.key === 'Enter') submitPaste()
+                        else if (e.key === 'Escape') setPasteOpen(false)
+                    }}
                     sx={{
-                        fontSize: 10.5,
-                        letterSpacing: 1.2,
-                        textTransform: 'uppercase',
-                        color: 'var(--muted)',
+                        width: '100%',
+                        boxSizing: 'border-box',
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 12,
+                        color: 'var(--text)',
+                        bgcolor: 'var(--bg)',
+                        border: `1px solid ${pasteErr ? '#ca4a4a' : 'var(--line)'}`,
+                        borderRadius: '8px',
+                        px: 1.25,
+                        py: 1,
+                        outline: 'none',
+                        '&:focus': { borderColor: pasteErr ? '#ca4a4a' : 'var(--accent-line)' },
+                        '&::placeholder': { color: 'var(--muted)' },
+                    }}
+                />
+            )}
+
+            <Box sx={{ height: '1px', bgcolor: 'var(--line-soft)', my: 0.5 }} />
+
+            <Typography
+                sx={{
+                    fontSize: 10.5,
+                    letterSpacing: 1.2,
+                    textTransform: 'uppercase',
+                    color: 'var(--muted)',
+                }}
+            >
+                Current FEN
+            </Typography>
+            <Box sx={{ display: 'flex', alignItems: 'stretch', gap: 1 }}>
+                <Box
+                    sx={{
+                        flex: 1,
+                        minWidth: 0,
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: 11.5,
+                        color: 'var(--text-dim)',
+                        bgcolor: 'var(--bg)',
+                        border: '1px solid var(--line-soft)',
+                        borderRadius: '8px',
+                        px: 1.25,
+                        py: 0.85,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
                     }}
                 >
-                    Current FEN
-                </Typography>
-                <Box sx={{ display: 'flex', alignItems: 'stretch', gap: 1 }}>
+                    {fen}
+                </Box>
+                <Tooltip title={copied ? 'Copied!' : 'Copy FEN'} arrow>
                     <Box
+                        component="button"
+                        onClick={copyFen}
+                        aria-label="Copy FEN"
                         sx={{
-                            flex: 1,
-                            minWidth: 0,
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: 11.5,
-                            color: 'var(--text-dim)',
-                            bgcolor: 'var(--bg)',
-                            border: '1px solid var(--line-soft)',
+                            flexShrink: 0,
+                            width: 40,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            cursor: 'pointer',
+                            color: copied ? 'var(--accent)' : 'var(--text-dim)',
+                            bgcolor: 'var(--surface-2)',
+                            border: '1px solid var(--line)',
                             borderRadius: '8px',
-                            px: 1.25,
-                            py: 0.85,
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
+                            transition: 'color .15s, background-color .15s',
+                            '&:hover': { color: 'var(--accent)', bgcolor: 'var(--line)' },
                         }}
                     >
-                        {fen}
+                        {copied ? <Check size={16} /> : <Copy size={15} />}
                     </Box>
-                    <Tooltip title={copied ? 'Copied!' : 'Copy FEN'} arrow>
-                        <Box
-                            component="button"
-                            onClick={copyFen}
-                            aria-label="Copy FEN"
-                            sx={{
-                                flexShrink: 0,
-                                width: 40,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                cursor: 'pointer',
-                                color: copied ? 'var(--accent)' : 'var(--text-dim)',
-                                bgcolor: 'var(--surface-2)',
-                                border: '1px solid var(--line)',
-                                borderRadius: '8px',
-                                transition: 'color .15s, background-color .15s',
-                                '&:hover': { color: 'var(--accent)', bgcolor: 'var(--line)' },
-                            }}
-                        >
-                            {copied ? <Check size={16} /> : <Copy size={15} />}
-                        </Box>
-                    </Tooltip>
-                </Box>
+                </Tooltip>
             </Box>
-        </Card>
+        </Box>
     )
 }
 

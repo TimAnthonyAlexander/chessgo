@@ -24,7 +24,7 @@ import {
     Zap,
 } from 'lucide-react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import AnalysisAside, { MaterialHeader } from '../components/AnalysisAside'
+import AnalysisAside, { AnalysisToolbar, MaterialHeader } from '../components/AnalysisAside'
 import Board from '../components/Board'
 import BlunderRewind, { BlunderRewindBanner } from '../components/BlunderRewind'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -1136,18 +1136,23 @@ export default function Analysis() {
             left={
                 /* Left column: material + position cards (mirrors the sidebar width, so
             the board stays centered). Setup tools only in free mode — reviewing a
-            loaded game shows material alone. */
-                <AnalysisAside
-                    fen={current.fen}
-                    onLoadFen={loadPosition}
-                    playBotDisabled={over.over}
-                    showSetup={!id}
-                    hideActions={isDuck}
-                    onEnableDuck={!id ? () => setDuckFree(true) : undefined}
-                    getPgn={getPgn}
-                    onImportPgn={onImportPgn}
-                    omitMaterial={chesscom}
-                />
+            loaded game shows material alone.
+            The side-rail layout has no second column — everything here would stack
+            under the engine panel in the ONE rail and squeeze the move tree (the
+            rail's only flex child) out of existence. It gets AnalysisToolbar at the
+            top of the panel instead: the same three blocks, in popovers. */
+                chesscom ? undefined : (
+                    <AnalysisAside
+                        fen={current.fen}
+                        onLoadFen={loadPosition}
+                        playBotDisabled={over.over}
+                        showSetup={!id}
+                        hideActions={isDuck}
+                        onEnableDuck={!id ? () => setDuckFree(true) : undefined}
+                        getPgn={getPgn}
+                        onImportPgn={onImportPgn}
+                    />
+                )
             }
             evalBar={
                 prefs.showEvalBar ? (
@@ -1181,9 +1186,22 @@ export default function Analysis() {
                         maxHeight: { xs: '72vh', md: 'none' },
                     }}
                 >
-                    {/* Side-rail layout: material heads the panel rather than sitting
-                        in the rail as its own card — one continuous box, material
-                        first, then the engine lines. */}
+                    {/* Side-rail layout: the aside's three cards become one row of
+                        popover menus, and material a single band, both heading the
+                        panel rather than sitting in the rail as separate cards — one
+                        continuous box: tools, material, then the engine lines. */}
+                    {chesscom && (
+                        <AnalysisToolbar
+                            fen={current.fen}
+                            onLoadFen={loadPosition}
+                            playBotDisabled={over.over}
+                            showSetup={!id}
+                            hideActions={isDuck}
+                            onEnableDuck={!id ? () => setDuckFree(true) : undefined}
+                            getPgn={getPgn}
+                            onImportPgn={onImportPgn}
+                        />
+                    )}
                     {chesscom && <MaterialHeader fen={current.fen} />}
 
                     <EngineLines
