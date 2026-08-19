@@ -20,6 +20,13 @@
     grid-template-columns: repeat(2, 1fr);
     margin-top: 8px;
 }
+/* The piece cells are square because they hold a piece; these two hold a 16px
+   icon. Inheriting the square ratio at HALF the row's column count made them
+   ~150px tall each — a third of the palette block spent on two icons. */
+.editor-palette.tools .pal-cell {
+    aspect-ratio: auto;
+    height: 40px;
+}
 
 .pal-cell {
     position: relative;

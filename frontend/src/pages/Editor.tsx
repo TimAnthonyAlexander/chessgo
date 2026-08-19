@@ -16,11 +16,11 @@ import {
 } from 'lucide-react'
 import { Chess } from 'chess.js'
 import BoardEditor, { type Brush, EditorPalette } from '../components/BoardEditor'
-import BoardPage from '../components/BoardPage'
+import BoardPage, { useBoardLayout } from '../components/BoardPage'
 import ChallengeDialog from '../components/ChallengeDialog'
 import EvalBar, { type WhiteEval } from '../components/EvalBar'
 import { toWhiteEval } from '../lib/engineEval'
-import { ActionBtn } from '../components/PanelUI'
+import { ActionBtn, NavBtn } from '../components/PanelUI'
 import { analyze, type Color, nextPuzzle } from '../api/client'
 import { useAuth } from '../lib/auth'
 import { parseFen } from '../lib/chess'
@@ -46,6 +46,13 @@ function validFen(fen: string): string | null {
     }
 }
 
+// How the two interaction models work. Shown under the palette in both layouts.
+const EDITOR_HINTS = [
+    'Click a piece, then click squares to place it.',
+    'Drag-paint to fill; the pointer tool drags pieces.',
+    'Right-click a square to clear it.',
+]
+
 const CASTLE_RIGHTS: { code: string; label: string }[] = [
     { code: 'K', label: 'White O-O' },
     { code: 'Q', label: 'White O-O-O' },
@@ -56,6 +63,7 @@ const CASTLE_RIGHTS: { code: string; label: string }[] = [
 export default function Editor() {
     const navigate = useNavigate()
     const { user } = useAuth()
+    const chesscom = useBoardLayout() === 'chesscom'
     // Seeded from the analysis board ("Edit this board") or starts from scratch.
     const navFen = (useLocation().state as { fen?: string } | null)?.fen ?? null
     const [fen, setFen] = useState<string>(navFen || START_FEN)
@@ -147,235 +155,375 @@ export default function Editor() {
     const engineVsEngine = () => navigate('/engine-vs', { state: { fen } })
     const challengePlayer = () => setChallengeOpen(true)
 
-    return (
-        <BoardPage
-            left={<PaletteCard brush={brush} onPick={setBrush} />}
-            evalBar={<EvalBar ev={whiteEval} orientation={orientation} />}
-            right={
+    // --- The blocks both layouts are built from ------------------------------
+    //
+    // Same pieces, two arrangements. The centered layout has a column beside the
+    // board for the palette and can stand everything else open in the other one.
+    // The side rail has ONE column for both, so it leads with the palette — the
+    // only thing you touch more than once — and files the rest, all of it set
+    // once per position, behind two menus.
+
+    const sideToMoveBlock = (
+        <Box>
+            <Label>Side to move</Label>
+            <ToggleButtonGroup
+                exclusive
+                fullWidth
+                size="small"
+                value={active}
+                onChange={(_, v) => v && setActive(v as Active)}
+                sx={toggleSx}
+            >
+                <ToggleButton value="w">White</ToggleButton>
+                <ToggleButton value="b">Black</ToggleButton>
+            </ToggleButtonGroup>
+        </Box>
+    )
+
+    // Castling rights — only the structurally-possible ones are enabled.
+    const castlingBlock = (
+        <Box>
+            <Label>Castling</Label>
+            <Box sx={{ display: 'flex', gap: 0.75, mt: 1 }}>
+                {CASTLE_RIGHTS.map(({ code, label }) => (
+                    <CastleChip
+                        key={code}
+                        label={code}
+                        title={label}
+                        on={castling.includes(code)}
+                        disabled={!avail[code]}
+                        onClick={() => toggleCastle(code)}
+                    />
+                ))}
+            </Box>
+        </Box>
+    )
+
+    // `focus` only in the centered layout, where the field is revealed by a button
+    // press and the caret should follow. In the rail it's a permanent field in a
+    // menu you might have opened to flip the side to move — stealing focus there
+    // would be wrong.
+    const pasteField = (focus: boolean) => (
+        <Box>
+            <Box
+                component="input"
+                autoFocus={focus}
+                value={pasteVal}
+                placeholder="Paste a FEN, then Enter"
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                    setPasteVal(e.target.value)
+                    setPasteErr(false)
+                }}
+                onKeyDown={(e: React.KeyboardEvent) => {
+                    if (e.key === 'Enter') submitPaste()
+                    else if (e.key === 'Escape') setPasteOpen(false)
+                }}
+                sx={{
+                    width: '100%',
+                    boxSizing: 'border-box',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 12,
+                    color: 'var(--text)',
+                    bgcolor: 'var(--bg)',
+                    border: `1px solid ${pasteErr ? 'var(--danger, #e5484d)' : 'var(--line)'}`,
+                    borderRadius: 'var(--radius)',
+                    px: 1.25,
+                    py: 1,
+                    outline: 'none',
+                    '&:focus': {
+                        borderColor: pasteErr ? 'var(--danger, #e5484d)' : 'var(--accent-line)',
+                    },
+                    '&::placeholder': { color: 'var(--muted)' },
+                }}
+            />
+            {pasteErr && (
+                <Typography sx={{ fontSize: 11.5, color: 'var(--danger, #e5484d)', mt: 0.5 }}>
+                    Not a valid FEN.
+                </Typography>
+            )}
+        </Box>
+    )
+
+    const fenReadout = (
+        <Box sx={{ display: 'flex', alignItems: 'stretch', gap: 1 }}>
+            <Box
+                sx={{
+                    flex: 1,
+                    minWidth: 0,
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 11.5,
+                    color: 'var(--text-dim)',
+                    bgcolor: 'var(--bg)',
+                    border: '1px solid var(--line-soft)',
+                    borderRadius: 'var(--radius)',
+                    px: 1.25,
+                    py: 0.85,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                }}
+            >
+                {fen}
+            </Box>
+            <Tooltip title={copied ? 'Copied!' : 'Copy FEN'} arrow>
                 <Box
+                    component="button"
+                    onClick={copyFen}
+                    aria-label="Copy FEN"
                     sx={{
-                        width: '100%',
-                        border: '1px solid var(--line-soft)',
+                        flexShrink: 0,
+                        width: 40,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        cursor: 'pointer',
+                        color: copied ? 'var(--accent)' : 'var(--text-dim)',
+                        bgcolor: 'var(--surface-2)',
+                        border: '1px solid var(--line)',
                         borderRadius: 'var(--radius)',
-                        bgcolor: 'var(--surface)',
-                        overflow: 'hidden',
-                        boxShadow: 'var(--shadow)',
+                        transition: 'color .15s, background-color .15s',
+                        '&:hover': { color: 'var(--accent)', bgcolor: 'var(--line)' },
                     }}
                 >
-                    <PanelHeader />
+                    {copied ? <Check size={16} /> : <Copy size={15} />}
+                </Box>
+            </Tooltip>
+        </Box>
+    )
 
-                    <Box sx={{ p: 1.75, display: 'flex', flexDirection: 'column', gap: 1.75 }}>
-                        {/* Side to move */}
-                        <Box>
-                            <Label>Side to move</Label>
-                            <ToggleButtonGroup
-                                exclusive
-                                fullWidth
-                                size="small"
-                                value={active}
-                                onChange={(_, v) => v && setActive(v as Active)}
-                                sx={toggleSx}
-                            >
-                                <ToggleButton value="w">White</ToggleButton>
-                                <ToggleButton value="b">Black</ToggleButton>
-                            </ToggleButtonGroup>
-                        </Box>
+    const validityLine = (
+        <Typography
+            sx={{ fontSize: 12.5, color: valid.ok ? 'var(--muted)' : '#ca4a4a', minHeight: 18 }}
+        >
+            {valid.ok ? 'Legal position — ready to use.' : valid.reason}
+        </Typography>
+    )
 
-                        {/* Castling rights — only the structurally-possible ones are enabled. */}
-                        <Box>
-                            <Label>Castling</Label>
-                            <Box sx={{ display: 'flex', gap: 0.75, mt: 1 }}>
-                                {CASTLE_RIGHTS.map(({ code, label }) => (
-                                    <CastleChip
-                                        key={code}
-                                        label={code}
-                                        title={label}
-                                        on={castling.includes(code)}
-                                        disabled={!avail[code]}
-                                        onClick={() => toggleCastle(code)}
-                                    />
-                                ))}
-                            </Box>
-                        </Box>
+    // Where the position goes next. Every one of them needs a legal position.
+    const exits = (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+            <ActionBtn
+                tone="primary"
+                icon={<Microscope size={16} />}
+                label="Analyse this position"
+                onClick={analyse}
+                disabled={!valid.ok}
+            />
+            <ActionBtn
+                tone="neutral"
+                icon={<Bot size={16} />}
+                label="Play a bot from here"
+                onClick={playBot}
+                disabled={!valid.ok}
+            />
+            {user && (
+                <ActionBtn
+                    tone="neutral"
+                    icon={<UserPlus size={16} />}
+                    label="Challenge a player from here"
+                    onClick={challengePlayer}
+                    disabled={!valid.ok}
+                />
+            )}
+            {user?.role === 'admin' && (
+                <ActionBtn
+                    tone="neutral"
+                    icon={<Cpu size={16} />}
+                    label="Engine vs Engine from here"
+                    onClick={engineVsEngine}
+                    disabled={!valid.ok}
+                />
+            )}
+        </Box>
+    )
 
-                        {/* Tools */}
-                        <Box sx={{ display: 'flex', gap: 1 }}>
-                            <ToolBtn
-                                icon={<RotateCcw size={15} />}
-                                label="Start position"
-                                onClick={() => setFen(START_FEN)}
-                            />
-                            <ToolBtn
-                                icon={<Dices size={15} />}
-                                label={loadingRandom ? 'Loading…' : 'Random'}
-                                onClick={loadRandom}
-                                disabled={loadingRandom}
-                            />
-                            <ToolBtn
-                                icon={<Eraser size={15} />}
-                                label="Clear board"
-                                onClick={() => setFen(withClearedBoard(fen))}
-                            />
-                            <ToolBtn
-                                icon={<FlipVertical2 size={15} />}
-                                label="Flip"
-                                onClick={() => setOrientation((o) => (o === 'w' ? 'b' : 'w'))}
-                            />
-                            <ToolBtn
-                                icon={<FileInput size={15} />}
-                                label="Paste FEN"
-                                onClick={() => {
-                                    setPasteOpen((v) => !v)
-                                    setPasteErr(false)
-                                }}
-                            />
-                        </Box>
+    const startPosition = () => setFen(START_FEN)
+    const clearBoard = () => setFen(withClearedBoard(fen))
+    const flip = () => setOrientation((o) => (o === 'w' ? 'b' : 'w'))
 
-                        {pasteOpen && (
-                            <Box>
-                                <Box
-                                    component="input"
-                                    autoFocus
-                                    value={pasteVal}
-                                    placeholder="Paste a FEN, then Enter"
-                                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-                                        setPasteVal(e.target.value)
+    return (
+        <BoardPage
+            // The side rail has no second column, and the palette can't be the thing
+            // that gets pushed below a 600px settings panel — it's the page's one
+            // constantly-used control. It heads the single panel instead.
+            left={chesscom ? undefined : <PaletteCard brush={brush} onPick={setBrush} />}
+            evalBar={<EvalBar ev={whiteEval} orientation={orientation} />}
+            right={
+                chesscom ? (
+                    /* Content-sized, not stretched — an editor has no move list, so
+                       there's nothing here that could grow into a board-height panel.
+                       Which means the height is a BUDGET, not a constraint: at ~770px
+                       against a 582–1032px rail, everything is open. Nothing here goes
+                       behind a menu, because nothing has to.
+                       Order is by how often you touch it: the palette (constantly), the
+                       position's own state, what you built, where it goes. */
+                    <Box
+                        sx={{
+                            width: '100%',
+                            flex: '0 0 auto',
+                            border: '1px solid var(--line-soft)',
+                            borderRadius: 'var(--radius)',
+                            bgcolor: 'var(--surface)',
+                            overflow: 'hidden',
+                            boxShadow: 'var(--shadow)',
+                        }}
+                    >
+                        {/* The palette heads the panel. In the centered layout it's a
+                            card in the second column; here there is no second column,
+                            and it can't be the thing that ends up under everything
+                            else — it's the page's one constantly-used control. */}
+                        <Box sx={{ p: 1.75 }}>
+                            <EditorPalette brush={brush} onPick={setBrush} />
+
+                            {/* Whole-board tools, icon-only: what you reach for between
+                                placing pieces. Same five as the centered layout's tool
+                                row, one line instead of three. */}
+                            <Box sx={{ display: 'flex', gap: 0.5, mt: 1 }}>
+                                <NavBtn label="Start position" onClick={startPosition} grow>
+                                    <RotateCcw size={18} />
+                                </NavBtn>
+                                <NavBtn
+                                    label={loadingRandom ? 'Loading…' : 'Random position'}
+                                    onClick={loadRandom}
+                                    disabled={loadingRandom}
+                                    grow
+                                >
+                                    <Dices size={18} />
+                                </NavBtn>
+                                <NavBtn label="Clear board" onClick={clearBoard} grow>
+                                    <Eraser size={18} />
+                                </NavBtn>
+                                <NavBtn label="Flip board" onClick={flip} grow>
+                                    <FlipVertical2 size={18} />
+                                </NavBtn>
+                                <NavBtn
+                                    label="Paste FEN"
+                                    onClick={() => {
+                                        setPasteOpen((v) => !v)
                                         setPasteErr(false)
                                     }}
-                                    onKeyDown={(e: React.KeyboardEvent) => {
-                                        if (e.key === 'Enter') submitPaste()
-                                        else if (e.key === 'Escape') setPasteOpen(false)
-                                    }}
-                                    sx={{
-                                        width: '100%',
-                                        boxSizing: 'border-box',
-                                        fontFamily: 'var(--font-mono)',
-                                        fontSize: 12,
-                                        color: 'var(--text)',
-                                        bgcolor: 'var(--bg)',
-                                        border: `1px solid ${pasteErr ? 'var(--danger, #e5484d)' : 'var(--line)'}`,
-                                        borderRadius: 'var(--radius)',
-                                        px: 1.25,
-                                        py: 1,
-                                        outline: 'none',
-                                        '&:focus': {
-                                            borderColor: pasteErr
-                                                ? 'var(--danger, #e5484d)'
-                                                : 'var(--accent-line)',
-                                        },
-                                        '&::placeholder': { color: 'var(--muted)' },
-                                    }}
-                                />
-                                {pasteErr && (
-                                    <Typography
-                                        sx={{ fontSize: 11.5, color: 'var(--danger, #e5484d)', mt: 0.5 }}
-                                    >
-                                        Not a valid FEN.
-                                    </Typography>
-                                )}
+                                    active={pasteOpen}
+                                    grow
+                                >
+                                    <FileInput size={18} />
+                                </NavBtn>
                             </Box>
-                        )}
 
-                        {/* FEN readout */}
-                        <Box>
-                            <Label>FEN</Label>
-                            <Box sx={{ display: 'flex', alignItems: 'stretch', gap: 1, mt: 0.75 }}>
-                                <Box
+                            {pasteOpen && <Box sx={{ mt: 1 }}>{pasteField(true)}</Box>}
+
+                            <Box sx={{ height: '1px', bgcolor: 'var(--line-soft)', my: 1.5 }} />
+
+                            {EDITOR_HINTS.map((t) => (
+                                <Typography
+                                    key={t}
                                     sx={{
-                                        flex: 1,
-                                        minWidth: 0,
-                                        fontFamily: 'var(--font-mono)',
-                                        fontSize: 11.5,
-                                        color: 'var(--text-dim)',
-                                        bgcolor: 'var(--bg)',
-                                        border: '1px solid var(--line-soft)',
-                                        borderRadius: 'var(--radius)',
-                                        px: 1.25,
-                                        py: 0.85,
-                                        whiteSpace: 'nowrap',
-                                        overflow: 'hidden',
-                                        textOverflow: 'ellipsis',
+                                        fontSize: 12,
+                                        color: 'var(--muted)',
+                                        mb: 0.5,
+                                        lineHeight: 1.45,
                                     }}
                                 >
-                                    {fen}
-                                </Box>
-                                <Tooltip title={copied ? 'Copied!' : 'Copy FEN'} arrow>
-                                    <Box
-                                        component="button"
-                                        onClick={copyFen}
-                                        aria-label="Copy FEN"
-                                        sx={{
-                                            flexShrink: 0,
-                                            width: 40,
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            cursor: 'pointer',
-                                            color: copied ? 'var(--accent)' : 'var(--text-dim)',
-                                            bgcolor: 'var(--surface-2)',
-                                            border: '1px solid var(--line)',
-                                            borderRadius: 'var(--radius)',
-                                            transition: 'color .15s, background-color .15s',
-                                            '&:hover': {
-                                                color: 'var(--accent)',
-                                                bgcolor: 'var(--line)',
-                                            },
-                                        }}
-                                    >
-                                        {copied ? <Check size={16} /> : <Copy size={15} />}
-                                    </Box>
-                                </Tooltip>
-                            </Box>
+                                    • {t}
+                                </Typography>
+                            ))}
                         </Box>
 
-                        {/* Validity hint */}
-                        <Typography
+                        {/* The parts of the position the board can't show. */}
+                        <Box
                             sx={{
-                                fontSize: 12.5,
-                                color: valid.ok ? 'var(--muted)' : '#ca4a4a',
-                                minHeight: 18,
+                                px: 1.75,
+                                py: 1.75,
+                                borderTop: '1px solid var(--line-soft)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 1.75,
                             }}
                         >
-                            {valid.ok ? 'Legal position — ready to use.' : valid.reason}
-                        </Typography>
+                            {sideToMoveBlock}
+                            {castlingBlock}
+                        </Box>
 
-                        {/* Actions */}
-                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                            <ActionBtn
-                                tone="primary"
-                                icon={<Microscope size={16} />}
-                                label="Analyse this position"
-                                onClick={analyse}
-                                disabled={!valid.ok}
-                            />
-                            <ActionBtn
-                                tone="neutral"
-                                icon={<Bot size={16} />}
-                                label="Play a bot from here"
-                                onClick={playBot}
-                                disabled={!valid.ok}
-                            />
-                            {user && (
-                                <ActionBtn
-                                    tone="neutral"
-                                    icon={<UserPlus size={16} />}
-                                    label="Challenge a player from here"
-                                    onClick={challengePlayer}
-                                    disabled={!valid.ok}
+                        {/* What you built, and whether it's usable. */}
+                        <Box
+                            sx={{
+                                px: 1.75,
+                                py: 1.5,
+                                borderTop: '1px solid var(--line-soft)',
+                                bgcolor: 'var(--bg-2)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 1,
+                            }}
+                        >
+                            {validityLine}
+                            {fenReadout}
+                        </Box>
+
+                        {/* Where it goes next. */}
+                        <Box sx={{ p: 1.75, borderTop: '1px solid var(--line-soft)' }}>{exits}</Box>
+                    </Box>
+                ) : (
+                    <Box
+                        sx={{
+                            width: '100%',
+                            border: '1px solid var(--line-soft)',
+                            borderRadius: 'var(--radius)',
+                            bgcolor: 'var(--surface)',
+                            overflow: 'hidden',
+                            boxShadow: 'var(--shadow)',
+                        }}
+                    >
+                        <PanelHeader />
+
+                        <Box sx={{ p: 1.75, display: 'flex', flexDirection: 'column', gap: 1.75 }}>
+                            {sideToMoveBlock}
+                            {castlingBlock}
+
+                            {/* Tools */}
+                            <Box sx={{ display: 'flex', gap: 1 }}>
+                                <ToolBtn
+                                    icon={<RotateCcw size={15} />}
+                                    label="Start position"
+                                    onClick={startPosition}
                                 />
-                            )}
-                            {user?.role === 'admin' && (
-                                <ActionBtn
-                                    tone="neutral"
-                                    icon={<Cpu size={16} />}
-                                    label="Engine vs Engine from here"
-                                    onClick={engineVsEngine}
-                                    disabled={!valid.ok}
+                                <ToolBtn
+                                    icon={<Dices size={15} />}
+                                    label={loadingRandom ? 'Loading…' : 'Random'}
+                                    onClick={loadRandom}
+                                    disabled={loadingRandom}
                                 />
-                            )}
+                                <ToolBtn
+                                    icon={<Eraser size={15} />}
+                                    label="Clear board"
+                                    onClick={clearBoard}
+                                />
+                                <ToolBtn
+                                    icon={<FlipVertical2 size={15} />}
+                                    label="Flip"
+                                    onClick={flip}
+                                />
+                                <ToolBtn
+                                    icon={<FileInput size={15} />}
+                                    label="Paste FEN"
+                                    onClick={() => {
+                                        setPasteOpen((v) => !v)
+                                        setPasteErr(false)
+                                    }}
+                                />
+                            </Box>
+
+                            {pasteOpen && pasteField(true)}
+
+                            <Box>
+                                <Label>FEN</Label>
+                                <Box sx={{ mt: 0.75 }}>{fenReadout}</Box>
+                            </Box>
+
+                            {validityLine}
+                            {exits}
                         </Box>
                     </Box>
-                </Box>
+                )
             }
         >
             <BoardEditor fen={fen} orientation={orientation} brush={brush} onChange={setFen} />
@@ -440,13 +588,9 @@ function PaletteCard({ brush, onPick }: { brush: Brush; onPick: (b: Brush) => vo
             <Box sx={{ p: 1.75 }}>
                 <EditorPalette brush={brush} onPick={onPick} />
                 <Box sx={{ height: '1px', bgcolor: 'var(--line-soft)', my: 1.5 }} />
-                {[
-                    'Click a piece, then click squares to place it.',
-                    'Drag-paint to fill; the pointer tool drags pieces.',
-                    'Right-click a square to clear it.',
-                ].map((t, i) => (
+                {EDITOR_HINTS.map((t) => (
                     <Typography
-                        key={i}
+                        key={t}
                         sx={{ fontSize: 12, color: 'var(--muted)', mb: 0.5, lineHeight: 1.45 }}
                     >
                         • {t}
