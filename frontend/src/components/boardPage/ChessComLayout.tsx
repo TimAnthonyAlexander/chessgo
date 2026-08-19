@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import { Box } from '@mui/material'
 import type { BoardPageProps } from './types'
 import { BOARD_MAX, EDGE_GAP, GAP_EVAL_EXTRA, PAGE_PAD } from './types'
+import { SIDEBAR_W } from '../SidebarNav'
 
 // The chess.com-shaped board page. Same prop contract as the Lichess layout, a
 // different arrangement of it:
@@ -43,11 +44,15 @@ const STRIP_H = 56
 const STRIP_GAP = 8
 const STRIP_BLOCK = STRIP_H + STRIP_GAP
 
-// Nav + page padding, matching the Lichess layout's 112.
-const V_CHROME = 112
-// Horizontal room reserved besides the board: the eval bar's gap (unconditional),
-// the board↔rail gap, the rail, and the outer page padding.
-const H_RESERVE = GAP_EVAL_EXTRA + EDGE_GAP + RAIL_W + PAGE_PAD // = 466
+// Vertical chrome above and below the board. This layout comes with the DESKTOP
+// SIDEBAR nav (Layout renders one with the other), so unlike the centered layout
+// there is no 60px top bar to subtract at `md` — only the page's own py:3 top and
+// bottom. Every term here is only ever applied from `md` up, which is exactly where
+// the sidebar is shown, so the two assumptions can't come apart.
+const V_CHROME = PAGE_PAD // 48
+// Horizontal room reserved besides the board: the sidebar, the eval bar's gap
+// (unconditional), the board↔rail gap, the rail, and the outer page padding.
+const H_RESERVE = SIDEBAR_W + GAP_EVAL_EXTRA + EDGE_GAP + RAIL_W + PAGE_PAD // = 698
 
 /** The board square for this layout. `strips` reserves the two player strips. */
 function boardSize(strips: boolean): string {

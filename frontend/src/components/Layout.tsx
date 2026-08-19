@@ -24,73 +24,9 @@ import MobileNavDrawer, { type MobileNavSection } from './MobileNavDrawer'
 import NotificationBell from './notifications/NotificationBell'
 import TitleBadge from './TitleBadge'
 import type { RatingCategory, User } from '../api/client'
-
-// Nav model. A `link` is a plain top-level destination; a `menu` is a hover
-// dropdown of leaves whose own label may ALSO be a destination (e.g. "Play"
-// opens Online/Computer but itself goes to "/").
-interface Leaf {
-    label: string
-    to: string
-    // Router state carried on navigation — e.g. Play → Chess960/Duck Chess/Crazyhouse/
-    // Antichess land on Home ("/") and start quick pairing instantly via useHome's
-    // quickPair intent.
-    state?: { quickPair: 'chess960' | 'duck' | 'crazyhouse' | 'antichess' }
-}
-type NavItem =
-    | { kind: 'link'; label: string; to: string }
-    | { kind: 'menu'; label: string; to?: string; items: Leaf[] }
-
-function navItems(isAdmin: boolean, loggedIn: boolean, ready: boolean): NavItem[] {
-    const tools: Leaf[] = [
-        { label: 'Analysis', to: '/analysis' },
-        ...(isAdmin ? [{ label: 'Engine v Engine', to: '/engine-vs' }] : []),
-        { label: 'Editor', to: '/editor' },
-        { label: 'Tutor', to: '/tutor' },
-    ]
-    // While auth is still resolving, show only the items whose identity does not
-    // depend on the session (Play + Tournaments). The rest (Community/Watch,
-    // Tools, Admin) all appear at once when ready — no per-slot layout shifts.
-    const publicOnly: NavItem[] = [
-        {
-            kind: 'menu',
-            label: 'Play',
-            to: '/',
-            items: [
-                { label: 'Online', to: '/' },
-                { label: 'Computer', to: '/bot' },
-                { label: 'Puzzles', to: '/puzzles' },
-                { label: 'Premove Trainer', to: '/premove' },
-                { label: 'Chess960', to: '/', state: { quickPair: 'chess960' } },
-                { label: 'Duck Chess', to: '/', state: { quickPair: 'duck' } },
-                { label: 'Crazyhouse', to: '/', state: { quickPair: 'crazyhouse' } },
-                { label: 'Antichess', to: '/', state: { quickPair: 'antichess' } },
-                { label: 'Guess the Elo', to: '/guess-the-elo' },
-            ],
-        },
-        { kind: 'link', label: 'Tournaments', to: '/tournaments' },
-    ]
-    if (!ready) return publicOnly
-
-    return [
-        ...publicOnly,
-        loggedIn
-            ? {
-                  kind: 'menu' as const,
-                  label: 'Community',
-                  to: '/watch',
-                  items: [
-                      { label: 'Watch', to: '/watch' },
-                      { label: 'Friends', to: '/friends' },
-                  ],
-              }
-            : ({ kind: 'link' as const, label: 'Watch', to: '/watch' } as NavItem),
-        { kind: 'menu', label: 'Tools', to: '/analysis', items: tools },
-        ...(isAdmin ? [{ kind: 'link' as const, label: 'Admin', to: '/admin' }] : []),
-    ]
-}
-
-const isActive = (to: string, pathname: string): boolean =>
-    to === '/' ? pathname === '/' : pathname.startsWith(to)
+import { type NavItem, isActive, navItems } from './nav/navModel'
+import SidebarNav from './SidebarNav'
+import { useSetting } from '../lib/settings'
 
 // Shared through the router Outlet so any routed page (e.g. the homepage
 // sign-up CTA) can open the auth modal — login or straight to signup.
@@ -124,10 +60,21 @@ const linkSx = (active: boolean, real: boolean) => ({
     ...(real ? { '&:hover': { color: 'var(--accent)' } } : { cursor: 'default' }),
 })
 
-/** App shell: a flat, full-width top nav (Lichess-style) over the routed page. */
+/** App shell. Two navs, one model:
+ *
+ *  - Centered board layout — a flat, full-width top bar over the routed page.
+ *  - Side-rail board layout — a left sidebar beside the page, ON DESKTOP ONLY.
+ *
+ *  Below `md` the sidebar never renders and the top bar + drawer are used in both,
+ *  because a fixed 232px column is most of a phone screen. That is also why the
+ *  top bar is hidden by breakpoint rather than removed when the sidebar is on: the
+ *  same render has to serve both widths. */
 export default function Layout() {
     const { pathname } = useLocation()
     const { user, status } = useAuth()
+    // The board-layout preference picks the nav too: the side rail comes with the
+    // sidebar. Desktop only — see the note above.
+    const sidebar = useSetting('boardLayout') === 'chesscom'
     const [authOpen, setAuthOpen] = useState(false)
     const [authMode, setAuthMode] = useState<AuthMode>('login')
     const [themeOpen, setThemeOpen] = useState(false)
@@ -183,11 +130,31 @@ export default function Layout() {
     }, [])
 
     return (
-        <Box sx={{ minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
+        <Box sx={{ minHeight: '100%', display: 'flex', alignItems: 'stretch' }}>
+            {sidebar && (
+                <SidebarNav
+                    user={user}
+                    ready={status === 'ready'}
+                    onOpenAuth={() => openAuth('login')}
+                    onOpenTheme={() => setThemeOpen(true)}
+                    onOpenShortcuts={() => setShortcutsOpen(true)}
+                />
+            )}
+
+            <Box
+                sx={{
+                    flex: 1,
+                    minWidth: 0,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    ...(sidebar ? { minHeight: { md: '100dvh' } } : {}),
+                }}
+            >
             <Box
                 component="header"
                 sx={{
-                    display: 'flex',
+                    // With the sidebar on, the top bar is the MOBILE nav only.
+                    display: sidebar ? { xs: 'flex', md: 'none' } : 'flex',
                     alignItems: 'center',
                     gap: { xs: 2, md: 4 },
                     px: { xs: 2, md: 4 },
@@ -287,11 +254,27 @@ export default function Layout() {
                 </Box>
             </Box>
 
-            <Box component="main" sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+            {/* With the sidebar there is no top bar, and a short page (the homepage)
+                let the footer ride up into view. The PAGE — not just the column —
+                has to fill the viewport for that to stop: a 100dvh column still
+                shows a 289px footer, because the footer sits inside it. Giving main
+                itself the viewport height puts the footer's top edge at exactly the
+                fold. Board pages are unaffected: they already fill the viewport and
+                hide the footer outright. Desktop only, like the sidebar. */}
+            <Box
+                component="main"
+                sx={{
+                    flex: 1,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    ...(sidebar ? { minHeight: { md: '100dvh' } } : {}),
+                }}
+            >
                 <Outlet context={{ openAuth } satisfies LayoutOutletContext} />
             </Box>
 
             {!hideFooter(pathname) && <Footer />}
+            </Box>
 
             <AuthDialog
                 open={authOpen}
