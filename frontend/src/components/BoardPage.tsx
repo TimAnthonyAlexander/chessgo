@@ -13,6 +13,11 @@ import ChessComLayout from './boardPage/ChessComLayout'
 //   components/boardPage/LichessLayout.tsx   centered board, two flanking columns
 //   components/boardPage/ChessComLayout.tsx  left-anchored board + strips, one rail
 //
+// ChessComLayout is the DEFAULT (settings.ts `DEFAULTS.boardLayout`). It comes with
+// the desktop sidebar nav rather than the top bar — see Layout.tsx, which reads the
+// same preference — so the two always agree on how much chrome the board has to
+// share the viewport with.
+//
 // The preference is a single-key subscription, so switching layouts re-renders
 // every board page live with no reload.
 export default function BoardPage(props: BoardPageProps) {

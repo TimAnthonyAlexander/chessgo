@@ -86,7 +86,7 @@ export interface Prefs {
 }
 
 export const DEFAULTS: Prefs = {
-    boardLayout: 'lichess',
+    boardLayout: 'chesscom',
     showLegalMoves: true,
     showCoordinates: 'inside',
     highlightLastMove: true,
