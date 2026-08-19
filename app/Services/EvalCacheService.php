@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\EvalCache;
+use BaseApi\Database\DbException;
 
 /**
  * Read-through/write-through cache in front of the engine for `POST /analyze`
@@ -212,14 +213,59 @@ class EvalCacheService
             return;
         }
 
+        $pv = is_array($result['pv'] ?? null) ? $result['pv'] : [];
+        $bestmove = is_string($result['bestmove'] ?? null) ? $result['bestmove'] : null;
+
+        try {
+            $this->write($existing, $key, $depth, $multipv, $evalType, (int) $evalValue, $bestmove, $pv, $lines, $source, $nodes);
+        } catch (DbException) {
+            // Lost an insert race: two concurrent /analyze requests for the same
+            // position both missed the read above and both tried to INSERT, so
+            // MySQL rejected the loser on `uniq_eval_cache_fen_key`. The
+            // analysis itself already succeeded — a cache write must never fail
+            // the request. Re-read the winner's row and fold this result into it
+            // if it is still an improvement; that second write is an UPDATE, so
+            // it cannot hit the unique key again.
+            $winner = EvalCache::firstWhere('fen_key', '=', $key);
+            if (!$winner instanceof EvalCache || !$this->isBetter($multipv, $depth, $nodes, $winner)) {
+                return;
+            }
+
+            try {
+                $this->write($winner, $key, $depth, $multipv, $evalType, (int) $evalValue, $bestmove, $pv, $lines, $source, $nodes);
+            } catch (DbException) {
+                // Best-effort cache. Drop it.
+            }
+        }
+    }
+
+    /**
+     * Write $result onto $existing, or insert a new row when it is null.
+     *
+     * @param list<string> $pv
+     * @param list<array<string, mixed>> $lines
+     */
+    private function write(
+        ?EvalCache $existing,
+        string $key,
+        int $depth,
+        int $multipv,
+        string $evalType,
+        int $evalValue,
+        ?string $bestmove,
+        array $pv,
+        array $lines,
+        string $source,
+        int $nodes,
+    ): void {
         $entry = $existing instanceof EvalCache ? $existing : new EvalCache();
         $entry->fen_key = $key;
         $entry->depth = $depth;
         $entry->multipv = $multipv;
         $entry->eval_type = $evalType;
-        $entry->eval_value = (int) $evalValue;
-        $entry->bestmove = is_string($result['bestmove'] ?? null) ? $result['bestmove'] : null;
-        $entry->setPv(is_array($result['pv'] ?? null) ? $result['pv'] : []);
+        $entry->eval_value = $evalValue;
+        $entry->bestmove = $bestmove;
+        $entry->setPv($pv);
         $entry->setLines($lines);
         $entry->source = $source;
         $entry->nodes = $nodes;
