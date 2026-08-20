@@ -440,9 +440,13 @@ refused on a timed game.
 
 **Hub bots have manners, and they are per bot** (`gomachine/internal/hub/botoffers.go`).
 A fill-in bot answers takeback offers, answers draw offers, offers a draw of its
-own in a dead-level game, and resigns a lost one. **Every disposition
-(`player.takebackFriendly/acceptsDraws/offersDraws/resigns`) is rolled ONCE in
-`newBotPlayer` and fixed for that bot's life** — like the chat persona. Rolling per
+own in a dead-level game, resigns a lost one, asks for its OWN move back after
+blundering it away, and takes a rematch. **Every disposition (`player.`
+`takebackFriendly/acceptsDraws/offersDraws/resigns/asksTakeback/rematchFriendly`,
+plus `presence`) is rolled ONCE in `newBotPlayer` and fixed for that bot's
+life** — like the chat persona, and carried across a rematch by
+`newBotPlayerLike` (same person, so the opponent who gave you a takeback last
+game still does). Rolling per
 request would let a player re-ask until they got a yes, i.e. a 100% acceptance rate
 wearing a percentage label; `botoffers_test.go` pins that a re-ask never flips the
 answer. The eval driving "level" and "lost" is **free**: it rides back with every
@@ -453,9 +457,38 @@ read as 0.00 would have every one of their bots offering draws on move one. So i
 `zugzwang.go`'s mate handling: the engine's eval object is a **tagged union**, and
 reading `{"type":"mate","value":-2}` as −2cp makes "mated in 2" identical to dead
 equal, which is exactly the band a bot offers and accepts draws in. Bot-vs-bot games
-(fillers, arena) concede nothing — `botVsHumanSide` gates it. Pacing lives next
-door in `bot.go`: `botThinkDelay` + `classifyMove`, which snaps out forced replies
-and recaptures, hurries other captures, and nudges pawn moves along.
+(fillers, arena) concede nothing — `botVsHumanSide` gates it. Granting a bot's own
+takeback sets `game.botFullStrengthReplay` in `applyTakeback` (which knows the
+requesting colour, so it is a fact at the source), and the replacement move is
+searched at full strength — the weakening ladder is perfectly capable of picking
+the same blunder twice, and a bot that asks for a move back and repeats it is
+worse than one that never asks.
+
+**Bot pacing** (`bot.go`: `botThinkDelay`, `classifyMove`, `thinkFloors`) snaps out
+forced replies and recaptures, hurries other captures, nudges pawn moves, tanks
+2.5–5× for a move or two after the bot's own eval swings ≥120cp (`armCriticalThink`
+— blitz the quiet position, burn clock the move after it turns), and multiplies
+budget and floor by 1.6 in check, because a premove or pre-decided reply is illegal
+once you are checked. **The floor is applied LAST, after the clock caps, and that
+ordering is load-bearing**: clamp it to 30% of the remaining clock and each move
+takes 30% of what is left, a geometric decay that never reaches zero, so no bot
+could ever flag. Fillers carry a much higher floor (600–1200ms, ~400ms even in
+panic) so a Watch-lobby game genuinely burns down; backfill bots keep 250/90/60 so
+this never gifts a human a win on time. `TestFillerClockCanRunOut` pins it.
+
+**Presence** (`presence.go`) covers both sides of "nobody is there". A disconnect
+arms a grace timer on chess.com's published formula — `clamp((base + 40·inc)·0.1,
+30s, 180s)`, flat 15s when the absent side is a bot whose own eval reads lost — and
+resolves **automatically**; a claim button would never be clicked in a bot-vs-bot
+filler, which is the case the timer exists for. Adjudication reuses the flag path's
+`CanMate`, so abandoning against a bare king is a draw. It never arms before
+`clocksRunning()` (that window is `firstMoveTimeout`'s), which is why `applyMove`
+re-runs `refreshDisconnectGrace` — a player who dropped after their own first move
+but before the reply would otherwise have nothing armed and nothing to arm it later.
+Bots get a matching `botPresence`: present 88%, noShow 4% (the existing 30s abort
+ends it), drops 6% (offline 3–15s, always under the 30s grace minimum so it cannot
+self-adjudicate), leaves 2% (the grace timer resolves it). Arena games are excluded
+so an abandoned bot cannot leak out of the pairing pool.
 
 **PGN/FEN** live in `frontend/src/lib/pgn.ts` (`toPgn`/`fromPgn`/`downloadPgn`,
 tolerant of comments/NAGs/`%clk`/`%eval`/RAV), wired into `AnalysisAside.tsx`
