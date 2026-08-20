@@ -102,13 +102,8 @@ export default function GameOverModal({
                         bgcolor: 'var(--surface)',
                         border: '1px solid var(--line)',
                         borderRadius: 'var(--radius)',
-                        // MUI's Dialog paper ships elevation 24, i.e. a real drop
-                        // shadow, which this palette has no language for: surfaces
-                        // here are separated by a hairline and a change of colour,
-                        // never by floating. Routed through the token like every
-                        // other surface (PanelUI's PANEL_SHADOW is the same var)
-                        // so it follows --shadow if that ever stops being `none`.
-                        boxShadow: 'var(--shadow)',
+                        // Elevation is handled once for every dialog in theme.ts's
+                        // MuiDialog override, not re-declared per component.
                         width: '92vw',
                         maxWidth: 420,
                     },

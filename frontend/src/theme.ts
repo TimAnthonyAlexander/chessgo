@@ -72,6 +72,14 @@ export function buildTheme(seed: MuiSeed): Theme {
                         backgroundImage: 'none',
                         border: '1px solid var(--line)',
                         borderRadius: 0,
+                        // MUI ships Dialog paper at elevation 24, i.e. a large drop
+                        // shadow. Surfaces here are separated by a hairline and a
+                        // change of colour, never by floating above the page, so the
+                        // shadow reads as a stray from another design system. Routed
+                        // through --shadow (currently `none`) rather than hardcoding
+                        // `none`, so dialogs follow the token if it ever gains a value
+                        // — the same reason PanelUI's PANEL_SHADOW is just this var.
+                        boxShadow: 'var(--shadow)',
                     },
                 },
             },
