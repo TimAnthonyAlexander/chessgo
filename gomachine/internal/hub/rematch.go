@@ -1,6 +1,11 @@
 package hub
 
-import "time"
+import (
+	"time"
+
+	"github.com/timanthonyalexander/gomachine/internal/chess"
+	"github.com/timanthonyalexander/gomachine/internal/variant"
+)
 
 // Rematch: once a game ends, either participant may offer to play the same
 // opponent again — colors swapped, same time control / variant / rated flag.
@@ -13,6 +18,15 @@ import "time"
 // whether or not an offer is ever made — is indexed in h.rematchWindows and
 // swept by the ticker after rematchTTL, the same shape as challenge's TTL
 // reap (checkChallenges).
+//
+// A fill-in bot opponent answers a rematch offer too, the same shape as
+// takeback/draw offers against a bot (botoffers.go): rematchOffer arms
+// g.rematchAnswerAt when the side that owes the answer is a bot, and
+// checkBotRematches fires it after a human-ish beat. Without this, the
+// frontend's Rematch button — which never learns the opponent was a bot, by
+// design — sat "Offered…" for the full rematchTTL because nobody was ever
+// going to click accept. Bots never OFFER a rematch of their own; they only
+// answer one a human made.
 
 // rematchTTL bounds how long a finished game stays rematch-eligible: an
 // unanswered offer is dropped, and even with no offer at all the option
@@ -86,6 +100,13 @@ func (h *Hub) rematchOffer(c *Client) {
 	}
 	g.rematchPending, g.rematchBy = true, color
 	h.broadcastPlayers(g, mustJSON(out("rematchOffered", map[string]any{"gameId": g.id, "by": colorStr(color)})))
+
+	// The side that owes the answer has no client to press accept/decline if
+	// it's a fill-in bot — arm the same human-ish beat takeback/draw offers use
+	// against a bot (botOfferAnswerDelay) and let checkBotRematches answer it.
+	if _, isBot := g.botResponderTo(color); isBot {
+		g.rematchAnswerAt = time.Now().Add(botOfferAnswerDelay())
+	}
 }
 
 // rematchAccept starts the rematch. Only the side that did NOT make the
@@ -145,16 +166,162 @@ func (h *Hub) rematchCancel(c *Client) {
 // each time rather than replaying the prior game's; a rematch from the exact
 // same hand-picked position would be an odd, not requested, behavior.
 func (h *Hub) startRematch(g *game) {
+	// A bot side never had a *Client (a bot doesn't hold a socket), so reading
+	// white/black via .any() below would find nil for it and bail — silently
+	// swallowing every human-vs-bot rematch, accepted or not. Branch to the bot
+	// constructor BEFORE that read; g.white/g.black here are still the FINISHED
+	// game's sides, so isBot is exactly what it was during play.
+	if g.white.isBot || g.black.isBot {
+		h.startBotRematch(g)
+		return
+	}
 	// Either side may have several devices attached; startGameWith seats one of
 	// them and joinOtherSessions pulls the rest of that account in behind it.
 	white, black := g.black.any(), g.white.any() // swapped
 	h.disarmRematch(g)
 	if white == nil || black == nil {
 		return // a side has no client (shouldn't happen — disconnect already
-		// disarms the window — but never assume; a bot side never gets here
-		// either, since it never has a client to send rematchAccept from)
+		// disarms the window — but never assume)
 	}
 	h.startGameWith(white, black, g.tc, g.pool, g.rated, g.variant, g.id, "", "")
+}
+
+// startBotRematch is startRematch's branch for a human-vs-bot game. It can't
+// go through startGameWith — that function seats two *Client sides, and a bot
+// side never has one — so it follows startBotGame's registration shape
+// end to end instead (games/playerGames/markLive/activeGames/sendMatched/
+// joinOtherSessions/scheduleBotMove/maybeOpeningChat), the same set startBotGame
+// documents as easy to under-build.
+//
+// The bot side is reseated fresh via newBotPlayerLike(oldBot): same identity,
+// rating and manners as the bot the human just played, so the opponent reads
+// as the same person again rather than a stranger wearing the same name (see
+// newBotPlayerLike's doc). Colors swap exactly like the human-vs-human path:
+// the human gets whichever color the bot had last game.
+func (h *Hub) startBotRematch(g *game) {
+	oldBot, oldBotColor, ok := g.botVsHumanSide()
+	if !ok {
+		// Defensive: a filler (bot-vs-bot) game never arms a rematch window at
+		// all (finish() skips armRematch for g.filler), so this should be
+		// unreachable. Still, never build a "rematch" with no human in it —
+		// just close the window.
+		h.disarmRematch(g)
+		return
+	}
+	human := g.playerFor(oldBotColor.Opposite()).any()
+	h.disarmRematch(g)
+	if human == nil {
+		return // the human disconnected between the offer firing and this
+		// running — retireRematch handles the ordinary disconnect path, but a
+		// race between the two is not impossible; never assume.
+	}
+	newHumanColor := oldBotColor // swapped: the human gets the bot's old color
+
+	// A rematch never carries a custom start fen forward (see this file's doc
+	// above startRematch) — same rule as the human-vs-human path, just applied
+	// without startGameWith to enforce it. Chess960 still needs a genuinely
+	// fresh shuffled back rank rather than replaying the last one.
+	startFen := chess.StartFEN
+	if g.variant == variantChess960 {
+		startFen = chess.RandomChess960FEN()
+	}
+	st, err := variant.New(g.variant, startFen)
+	if err != nil {
+		return // defensive: our start FENs always parse
+	}
+
+	// Every variant the hub understands is rated; kept as the same guard
+	// startGameWith carries, so a future unrated variant can't slip a rated
+	// bot rematch through this second construction path.
+	rated := g.rated && (g.variant == variantStandard || g.variant == variantChess960 ||
+		g.variant == variantDuck || g.variant == variantCrazyhouse ||
+		g.variant == variantAntichess || g.variant == variantSecretQueen)
+
+	ng := &game{
+		id:        newID(),
+		state:     st,
+		tc:        g.tc,
+		pool:      g.pool,
+		rated:     rated,
+		clockMs:   [2]int64{g.tc.Base, g.tc.Base},
+		turnStart: time.Now(),
+		online:    [2]bool{true, true},
+		startFen:  startFen,
+		variant:   g.variant,
+		rematchOf: g.id,
+	}
+	if newHumanColor == chess.White {
+		ng.white = newPlayer(human)
+		ng.black = newBotPlayerLike(oldBot)
+	} else {
+		ng.white = newBotPlayerLike(oldBot)
+		ng.black = newPlayer(human)
+	}
+	// Carry the chat character over with the manners, for the same reason
+	// newBotPlayerLike carries the dispositions: this is the person you just
+	// played, and someone who was chatty last game and silent this one — or who
+	// opened with "hi" and then went cold in a rematch they agreed to — reads as
+	// two people sharing a name. Rolling a fresh persona here would undo the
+	// continuity the rest of this function exists to preserve.
+	ng.chat = g.chat
+	if ng.chat == nil {
+		ng.chat = newChatPersona()
+	}
+
+	human.game = ng
+	h.games[ng.id] = ng
+	h.playerGames[human.id.UserID] = ng
+	h.markLive(ng)
+	h.activeGames.Add(1)
+
+	// Secret Queen: designate the bot's side and arm the human's deadline
+	// BEFORE sendMatched, so its payload already carries needsDesignation —
+	// startBotGame orders it the same way, for the same reason.
+	if ng.variant == variantSecretQueen {
+		h.beginSecretQueenDesignation(ng)
+	}
+	h.sendMatched(ng, human, newHumanColor)
+	h.joinOtherSessions(ng, human) // open it on this account's other devices too
+	h.scheduleBotMove(ng)          // if the bot plays White, it moves first
+	h.maybeOpeningChat(ng)         // ...and it might open with a friendly "hi"
+}
+
+// checkBotRematches answers rematch offers standing against a bot once their
+// beat has elapsed, mirroring checkBotTakebacks/checkBotDraws in botoffers.go.
+// The verdict is the bot's fixed disposition (player.rematchFriendly, rolled
+// once in newBotPlayer), not a fresh roll — offering again after a decline
+// gets the same no every time.
+//
+// It iterates h.rematchWindows, not h.games: a finished game is deleted from
+// h.games at teardown (its whole reason for surviving past that is the
+// rematch window), so h.games has nothing left to range over by the time this
+// fires.
+//
+// Unlike takebacks/draws, "accept" here doesn't just flip a flag back on g —
+// there is no live game left to apply anything to. A friendly bot actually
+// STARTS the replacement (through startRematch's bot branch); an unfriendly
+// one clears the pending offer and sends the same rematchDeclined payload a
+// human decline would, so the player gets a real answer instead of riding out
+// the full rematchTTL in silence.
+func (h *Hub) checkBotRematches() {
+	now := time.Now()
+	for _, g := range h.rematchWindows {
+		if !g.rematchPending || g.rematchAnswerAt.IsZero() || now.Before(g.rematchAnswerAt) {
+			continue
+		}
+		bot, isBot := g.botResponderTo(g.rematchBy)
+		if !isBot {
+			g.rematchAnswerAt = time.Time{} // stale arming; a human answers for themselves
+			continue
+		}
+		if bot.rematchFriendly {
+			h.startRematch(g) // disarms the window itself
+			continue
+		}
+		g.rematchPending = false
+		g.rematchAnswerAt = time.Time{}
+		h.broadcastPlayers(g, mustJSON(out("rematchDeclined", map[string]any{"gameId": g.id})))
+	}
 }
 
 // checkRematches reclaims rematch windows past rematchTTL each tick — whether

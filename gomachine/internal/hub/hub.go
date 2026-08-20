@@ -493,6 +493,7 @@ func (h *Hub) Run() {
 			h.checkBotTakebacks()
 			h.checkBotDraws()
 			h.checkBotConcessions()
+			h.checkBotRematches()
 			h.checkSecretQueenDesignations()
 			h.matchWaiting()
 			h.checkBotFill()
@@ -958,6 +959,16 @@ func (h *Hub) applyTakeback(g *game) {
 	if g.sideToMove() != requester && target >= 1 {
 		target--
 		g.rebuildTo(target)
+	}
+	// A bot getting its OWN move back is the granted end of botAskTakeback: it
+	// threw something away, asked, and the human said yes. Search the replacement
+	// at full strength (game.botFullStrengthReplay) — the weakening ladder is
+	// perfectly capable of picking the same blunder a second time, and a bot that
+	// asks for a move back only to repeat it is worse than one that never asks.
+	// A takeback the HUMAN requested leaves this alone: the bot is being polite,
+	// not correcting itself, so it has no reason to suddenly play stronger.
+	if g.playerFor(requester).isBot {
+		g.botFullStrengthReplay = true
 	}
 	g.clearOffers()
 	h.broadcastState(g)

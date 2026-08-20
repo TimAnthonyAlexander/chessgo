@@ -359,6 +359,175 @@ func TestBotVsBotGamesNeverConcede(t *testing.T) {
 	}
 }
 
+// --- the bot's own takeback ask ---------------------------------------------
+
+// botBlunderGame is botOfferGame with the takeback-ask disposition pinned.
+func botBlunderGame(t *testing.T, h *Hub, asks bool) (*game, *player) {
+	t.Helper()
+	g, bot := botOfferGame(t, h)
+	bot.asksTakeback = asks
+	return g, bot
+}
+
+// A blunder-sized drop between a bot's own two most recent evals arms a
+// takeback ask ONLY when the bot's disposition allows it — the same
+// per-bot-not-per-request rule every other concession follows.
+func TestBotAsksTakebackOnlyWhenDisposed(t *testing.T) {
+	h := New(testSecret)
+	g, _ := botBlunderGame(t, h, true)
+	g.recordBotEval(chess.Black, 20)
+	h.considerBotConcession(g, chess.Black)
+	g.recordBotEval(chess.Black, 20-300) // a real blunder: -300 swing
+	h.considerBotConcession(g, chess.Black)
+	if g.botTakebackAskAt.IsZero() {
+		t.Fatal("a blunder-sized eval drop did not arm a takeback ask")
+	}
+
+	h2 := New(testSecret)
+	g2, _ := botBlunderGame(t, h2, false)
+	g2.recordBotEval(chess.Black, 20)
+	h2.considerBotConcession(g2, chess.Black)
+	g2.recordBotEval(chess.Black, 20-300)
+	h2.considerBotConcession(g2, chess.Black)
+	if !g2.botTakebackAskAt.IsZero() {
+		t.Error("a bot without the disposition armed a takeback ask")
+	}
+}
+
+// An ordinary eval dip — real chess, not a mouse slip — must not read as a
+// blunder worth asking a human to undo.
+func TestBotSmallEvalDropDoesNotArmTakeback(t *testing.T) {
+	h := New(testSecret)
+	g, _ := botBlunderGame(t, h, true)
+	g.recordBotEval(chess.Black, 20)
+	h.considerBotConcession(g, chess.Black)
+	g.recordBotEval(chess.Black, -60) // an 80cp dip: well under botBlunderCp
+	h.considerBotConcession(g, chess.Black)
+	if !g.botTakebackAskAt.IsZero() {
+		t.Error("an ordinary eval dip armed a takeback ask")
+	}
+}
+
+// A bot that blunders itself into an outright LOST position resigns instead of
+// asking for the move back — that branch returns first in considerBotConcession,
+// and the ask-arm's own isLostCp guard backs it up even before the resign
+// streak itself is satisfied.
+func TestBotLostDoesNotAskTakeback(t *testing.T) {
+	h := New(testSecret)
+	g, bot := botBlunderGame(t, h, true)
+	bot.resigns = true
+
+	g.recordBotEval(chess.Black, -50)
+	h.considerBotConcession(g, chess.Black)
+	g.recordBotEval(chess.Black, -950) // a blunder straight into a lost position
+	h.considerBotConcession(g, chess.Black)
+	if !g.botTakebackAskAt.IsZero() {
+		t.Error("bot asked for a takeback out of an already-lost position")
+	}
+
+	// Sustain the lost streak so resignation itself is confirmed too, not just
+	// the absence of an ask.
+	g.recordBotEval(chess.Black, -960)
+	h.considerBotConcession(g, chess.Black)
+	if g.botResignAt.IsZero() {
+		t.Fatal("sustained lost eval after the blunder did not arm a resignation")
+	}
+}
+
+// Once fired, the offer stands with `by` set to the bot's own colour, and the
+// per-game cap holds even if the bot keeps blundering afterward.
+func TestBotTakebackAskFiresThenCapsAtOnePerGame(t *testing.T) {
+	h := New(testSecret)
+	g, _ := botBlunderGame(t, h, true)
+	g.recordBotEval(chess.Black, 20)
+	h.considerBotConcession(g, chess.Black)
+	g.recordBotEval(chess.Black, -280)
+	h.considerBotConcession(g, chess.Black)
+	if g.botTakebackAskAt.IsZero() {
+		t.Fatal("blunder did not arm a takeback ask")
+	}
+
+	// Armed, but not yet — same beat convention as every other concession.
+	h.checkBotConcessions()
+	if g.takebackPending {
+		t.Fatal("ask fired before its beat elapsed")
+	}
+
+	g.botTakebackAskAt = time.Now().Add(-time.Millisecond)
+	h.checkBotConcessions()
+	if !g.takebackPending || g.takebackBy != chess.Black {
+		t.Fatalf("takeback offer not standing from the bot: pending=%v by=%v", g.takebackPending, g.takebackBy)
+	}
+	if !g.botTakebackAsked {
+		t.Fatal("botTakebackAsked not set once the offer fired")
+	}
+
+	// The human declines; the position is unchanged so the eval streak still
+	// reads as a fresh blunder, but the cap must hold regardless.
+	g.takebackPending = false
+	g.recordBotEval(chess.Black, -285)
+	h.considerBotConcession(g, chess.Black)
+	if !g.botTakebackAskAt.IsZero() {
+		t.Error("bot asked for a takeback a second time — one ask per game")
+	}
+}
+
+// The full-strength replay is set by applyTakeback (hub.go), which knows which
+// colour asked, so nothing has to infer "was this granted?" after the fact. A
+// bot getting its own move back gets the flag; a bot merely being polite about
+// a HUMAN's request does not.
+func TestApplyTakebackSetsFullStrengthReplayOnlyForTheBotsOwnAsk(t *testing.T) {
+	t.Run("bot asked and it was granted", func(t *testing.T) {
+		h := New(testSecret)
+		g, _ := botBlunderGame(t, h, true)
+		h.botAskTakeback(g) // stands the offer up from the bot
+		if g.takebackBy != chess.Black {
+			t.Fatalf("takebackBy = %v, want the bot (Black)", g.takebackBy)
+		}
+		h.applyTakeback(g)
+		if !g.botFullStrengthReplay {
+			t.Error("a granted self-request must search the replacement at full strength")
+		}
+	})
+
+	t.Run("human asked and the bot granted it", func(t *testing.T) {
+		h := New(testSecret)
+		g, _ := botBlunderGame(t, h, true)
+		g.takebackPending, g.takebackBy = true, chess.White // the human asks
+		h.applyTakeback(g)
+		if g.botFullStrengthReplay {
+			t.Error("a bot granting a human's takeback has no reason to play stronger")
+		}
+	})
+}
+
+// The flag is one-shot: it can only ever affect the single replacement move.
+func TestFullStrengthReplayConsumedExactlyOnce(t *testing.T) {
+	h := New(testSecret)
+	g, _ := botBlunderGame(t, h, true)
+	g.botFullStrengthReplay = true
+
+	if got := consumeFullStrengthReplay(g, 1500); got != fullStrengthRating {
+		t.Errorf("consumeFullStrengthReplay = %d, want fullStrengthRating (%d)", got, fullStrengthRating)
+	}
+	if g.botFullStrengthReplay {
+		t.Error("flag not cleared on read")
+	}
+	if got := consumeFullStrengthReplay(g, 1500); got != 1500 {
+		t.Errorf("consumeFullStrengthReplay fired twice: got %d, want the normal rating", got)
+	}
+}
+
+// A bot that never asked plays at its own weakened rating, which is the whole
+// point of the ladder — the override must not leak into ordinary moves.
+func TestFullStrengthReplayInertWithoutAnAsk(t *testing.T) {
+	h := New(testSecret)
+	g, _ := botBlunderGame(t, h, false)
+	if got := consumeFullStrengthReplay(g, 1500); got != 1500 {
+		t.Errorf("consumeFullStrengthReplay = %d, want the bot's normal rating", got)
+	}
+}
+
 // --- eval bookkeeping ------------------------------------------------------
 
 func TestBotEvalStreakAndHistoryBound(t *testing.T) {

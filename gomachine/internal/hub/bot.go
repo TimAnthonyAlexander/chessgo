@@ -277,6 +277,45 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variantID string
 	h.maybeOpeningChat(g)         // ...and it might open with a friendly "hi"
 }
 
+// fullStrengthRating is the value scheduleBotMove forwards as the search
+// `rating` (never displayRating) for the one move consumeFullStrengthReplay
+// overrides. Both backends' own top-of-ladder constant sits at 3500 — zugzwang's
+// RatingMax (zugzwang/src/weakening.h; RatingFull=2850 is where it already stops
+// weakening, so anything at or above that is clean, but RatingMax is the actual
+// documented ceiling and leaves no ambiguity about clamping) and gomachine's own
+// in-process emergency fallback's engine.RatingMax (internal/engine/rating.go) —
+// the two aren't wired together, just numerically re-anchored to the same CCRL
+// ceiling on 2026-07-01, which is what makes one constant here correct for both
+// the normal zugzwang-HTTP path and the emergency in-process path. NOT the same
+// number as a bot's normal displayed rating (bot.rating, capped at botRatingMax
+// = 2600 below) — that one is deliberately weak so a bot's everyday play matches
+// its advertised strength; this one exists solely to escape the ladder for a
+// single replayed move.
+const fullStrengthRating = 3500
+
+// consumeFullStrengthReplay resolves and clears game.botFullStrengthReplay,
+// returning the rating scheduleBotMove should actually search at: `normal`
+// unless the bot is redoing a move the human just handed back, in which case
+// fullStrengthRating.
+//
+// applyTakeback (hub.go) sets the flag, and it knows precisely when to: it has
+// the requesting colour in hand, so "the side getting its move back is a bot"
+// is a fact there rather than something to infer here. A declined request never
+// reaches applyTakeback at all, so nothing needs to distinguish the two after
+// the fact. One-shot: cleared on read, so it can only ever affect the single
+// replacement move.
+//
+// Called once per scheduled move on the Run goroutine, before the snapshot
+// crosses to a worker — same convention as consumeCriticalThink. Workers only
+// ever see the resolved rating in botSnapshot, never the flag.
+func consumeFullStrengthReplay(g *game, normal int) int {
+	if !g.botFullStrengthReplay {
+		return normal
+	}
+	g.botFullStrengthReplay = false
+	return fullStrengthRating
+}
+
 // scheduleBotMove starts async move computation when it is a bot's turn. Works
 // for human-vs-bot (one bot) and filler bot-vs-bot (both sides bots); a filler
 // game uses its own dedicated engine pool so it can't starve human bot-fill.
@@ -327,15 +366,22 @@ func (h *Hub) scheduleBotMove(g *game) {
 	if engines == nil {
 		return // the relevant pool isn't enabled
 	}
+	// Normally the search rating IS the bot's own displayed rating (zugzwang's
+	// ladder is human/FIDE-scale end-to-end — forward the display rating as-is).
+	// consumeFullStrengthReplay overrides just this one search, and only the
+	// exact move immediately after the human grants this bot's own takeback
+	// request — see its doc and botAskTakeback's for why. displayRating stays
+	// bot.rating either way: it drives botThinkDelay's pacing, not the search,
+	// and the bot should still LOOK like itself even on the one move it plays
+	// at full strength.
+	rating := consumeFullStrengthReplay(g, bot.rating)
 	go h.computeBotMove(botSnapshot{
-		gameID:     g.id,
-		ply:        len(g.moves),
-		fen:        g.state.FEN(),
-		history:    append([]uint64(nil), g.state.History()...),
-		fenHistory: g.fenHistory(),
-		// zugzwang's rating ladder is human/FIDE-scale end-to-end (RatingMin=700..
-		// RatingMax=2900, full strength at the top) — forward the display rating as-is.
-		rating:         bot.rating,
+		gameID:         g.id,
+		ply:            len(g.moves),
+		fen:            g.state.FEN(),
+		history:        append([]uint64(nil), g.state.History()...),
+		fenHistory:     g.fenHistory(),
+		rating:         rating,
 		displayRating:  bot.rating,
 		moveTimeCap:    moveTimeCap,
 		searchDepthCap: depthCap,

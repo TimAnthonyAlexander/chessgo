@@ -37,6 +37,8 @@ const (
 	botAcceptDrawChance     = 0.55 // takes a draw when offered one
 	botOfferDrawChance      = 0.20 // offers a draw itself — deliberately uncommon
 	botResignChance         = 0.50 // resigns a lost game rather than playing it out
+	botAskTakebackChance    = 0.50 // asks for its own move back after a blunder
+	botRematchAcceptChance  = 0.65 // takes a rematch — people who just played usually want another
 )
 
 // Eval thresholds, in centipawns from the BOT's point of view.
@@ -49,6 +51,19 @@ const (
 	// bot's own search talking, so it already folds in position — a queen down with
 	// compensation does not reach this, and a rook down in a hopeless ending does.
 	botResignCp = -900
+
+	// botBlunderCp is the SIGNED swing floor between a bot's own two most recent
+	// evals that counts as "I just threw something away", for
+	// considerBotConcession's takeback-ask arm. Signed, unlike criticalSwingCp's
+	// absolute swing (armCriticalThink), because only a move that made the bot's
+	// OWN position materially WORSE is a blunder worth undoing — a big jump the
+	// other way is the opponent's mistake, not a mouse slip, and must never arm
+	// this. Bigger in magnitude than criticalSwingCp (120): a hard-think trigger
+	// should catch anything unusual, but asking a human to hand a move back needs
+	// a real mistake, not ordinary re-search noise between two quiet positions.
+	// Comfortably short of botResignCp (-900) — that's "the game is over", this is
+	// "that one move was bad".
+	botBlunderCp = -250
 )
 
 // How long a read has to hold before the bot acts on it. A single search can spike
@@ -142,6 +157,23 @@ func (g *game) consumeCriticalThink(c chess.Color) float64 {
 	}
 	g.criticalThinksOwed[c]--
 	return criticalThinkMultMin + mrand.Float64()*(criticalThinkMultMax-criticalThinkMultMin)
+}
+
+// blunderedLastMove reports whether `c`'s own last move dropped its own eval by
+// at least botBlunderCp against the move before it (recordBotEval has already
+// appended the latest by the time this runs, same convention as
+// armCriticalThink). SIGNED, deliberately: a bot that just watched its OWN
+// score fall off a cliff blundered something; a bot whose score just jumped UP
+// watched the OPPONENT blunder, and asking for a takeback over good news would
+// be nonsensical. Self-search variants never call recordBotEval (they report no
+// score), so botEvals stays empty for them and this is always false — correct,
+// not worked around.
+func (g *game) blunderedLastMove(c chess.Color) bool {
+	e := g.botEvals[c]
+	if len(e) < 2 {
+		return false
+	}
+	return e[len(e)-1]-e[len(e)-2] <= botBlunderCp
 }
 
 // lastBotEval returns the bot's most recent score, ok=false if it has never
@@ -283,6 +315,22 @@ func (h *Hub) considerBotConcession(g *game, botColor chess.Color) {
 		return
 	}
 
+	// Ask for the move back: this bot's own last move dropped its own eval by
+	// botBlunderCp or more — a real mistake, not the position just resolving.
+	// Checked here, right after resignation and before the draw-offer arm below,
+	// because a blunder is "I just noticed" in the same sense a lost streak is,
+	// just smaller in magnitude — and it must never fire on a position that's
+	// already outright lost (isLostCp): a queen down isn't "can I have that
+	// back", it's the resignation branch above, which is why that one returns
+	// first. Guarded the same way the draw offer is below: one ask per game
+	// (botTakebackAsked) and never stacked on an offer already in flight
+	// (takebackPending, whichever side made it).
+	if bot.asksTakeback && !g.botTakebackAsked && g.botTakebackAskAt.IsZero() && !g.takebackPending {
+		if cp, ok := g.lastBotEval(botColor); ok && !isLostCp(cp) && g.blunderedLastMove(botColor) {
+			g.botTakebackAskAt = time.Now().Add(botConcessionDelay())
+		}
+	}
+
 	// One draw offer per game. A bot that asks every move until you cave is a
 	// worse opponent than one that never asks at all.
 	if bot.offersDraws && !g.botDrawOffered && !g.drawPending &&
@@ -303,6 +351,11 @@ func (h *Hub) checkBotConcessions() {
 		if !g.botResignAt.IsZero() && !now.Before(g.botResignAt) {
 			g.botResignAt = time.Time{}
 			h.botResign(g)
+			continue
+		}
+		if !g.botTakebackAskAt.IsZero() && !now.Before(g.botTakebackAskAt) {
+			g.botTakebackAskAt = time.Time{}
+			h.botAskTakeback(g)
 			continue
 		}
 		if !g.botDrawOfferAt.IsZero() && !now.Before(g.botDrawOfferAt) {
@@ -339,6 +392,32 @@ func (h *Hub) botOfferDraw(g *game) {
 	g.drawPending, g.drawBy = true, botColor
 	g.botDrawOffered = true
 	h.broadcastPlayers(g, mustJSON(out("drawOffered", map[string]any{
+		"gameId": g.id,
+		"by":     colorStr(botColor),
+	})))
+}
+
+// botAskTakeback puts a takeback offer up FROM the bot, over the exact same
+// wire payload a human offer produces (hub.go's takebackOffer sends
+// "takebackOffered" with gameId + by) — the human accepts or declines it with
+// the buttons they already have, and their reply lands in
+// takebackAccept/takebackDecline/applyTakeback completely unchanged; this file
+// never has to know how those work, only that they exist.
+//
+// If the human grants it, applyTakeback (hub.go) sees that the side getting its
+// move back is a bot and sets game.botFullStrengthReplay, so scheduleBotMove
+// searches the replacement at full strength rather than under the weakening
+// ladder. Without that, granting this ask would frequently just hand the same
+// blunder straight back — the bot asked for its move back and then played it
+// again, which is a worse look than never asking.
+func (h *Hub) botAskTakeback(g *game) {
+	_, botColor, ok := g.botVsHumanSide()
+	if !ok || g.over || g.takebackPending || len(g.moves) == 0 {
+		return
+	}
+	g.takebackPending, g.takebackBy = true, botColor
+	g.botTakebackAsked = true
+	h.broadcastPlayers(g, mustJSON(out("takebackOffered", map[string]any{
 		"gameId": g.id,
 		"by":     colorStr(botColor),
 	})))

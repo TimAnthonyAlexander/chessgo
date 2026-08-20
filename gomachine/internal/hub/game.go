@@ -35,6 +35,8 @@ type player struct {
 	acceptsDraws     bool // takes a draw when offered one in a position it isn't winning
 	offersDraws      bool // offers a draw of its own in a dead-level game
 	resigns          bool // resigns a lost game instead of playing it out
+	asksTakeback     bool // asks for a takeback after blundering one away itself
+	rematchFriendly  bool // takes a rematch when offered one after the game
 }
 
 // newPlayer builds a human side seated on its first connection.
@@ -53,7 +55,20 @@ func newBotPlayer(id auth.Identity, rating int) *player {
 		acceptsDraws:     mrand.Float64() < botAcceptDrawChance,
 		offersDraws:      mrand.Float64() < botOfferDrawChance,
 		resigns:          mrand.Float64() < botResignChance,
+		asksTakeback:     mrand.Float64() < botAskTakebackChance,
+		rematchFriendly:  mrand.Float64() < botRematchAcceptChance,
 	}
+}
+
+// newBotPlayerLike seats a FRESH bot side for the same person: same identity,
+// same rating, same manners. A rematch is against the opponent you just played,
+// so re-rolling their dispositions would mean the player who gave you a takeback
+// last game arbitrarily refusing this one — which reads as two different people
+// wearing one name. See rematch.go's bot rematch path.
+func newBotPlayerLike(p *player) *player {
+	clone := *p
+	clone.clients = nil // a fresh seat holds no sockets, and a bot never has any
+	return &clone
 }
 
 func (p *player) attach(c *Client) {
@@ -147,6 +162,26 @@ type game struct {
 	botResignAt    time.Time
 	botDrawOfferAt time.Time
 	botDrawOffered bool
+
+	// botTakebackAskAt / botTakebackAsked are the same arm-then-fire pattern for a
+	// bot asking for ITS OWN move back after throwing something away (botoffers.go).
+	// Capped at one per game for the same reason the draw offer is.
+	botTakebackAskAt time.Time
+	botTakebackAsked bool
+
+	// botFullStrengthReplay makes the bot search its NEXT move at full strength
+	// instead of its weakened rating. Set by applyTakeback when the side that got
+	// its move back is a bot — i.e. the bot asked for a blunder back and the human
+	// granted it. Without it the weakening ladder frequently reproduces the very
+	// move that was just undone, so the bot asks for a takeback and then plays the
+	// same blunder again, which is a worse look than never asking. Consumed once by
+	// scheduleBotMove (bot.go).
+	botFullStrengthReplay bool
+
+	// rematchAnswerAt is when a bot will answer a rematch offer standing against
+	// it, mirroring takebackAnswerAt/drawAnswerAt for the post-game window. Zero
+	// means nobody owes an answer. See rematch.go.
+	rematchAnswerAt time.Time
 
 	// botEvals is each bot side's own search score (centipawns, from THAT bot's
 	// point of view) for the last few moves it played, indexed by chess.Color. It
