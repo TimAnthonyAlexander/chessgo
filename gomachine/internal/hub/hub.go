@@ -479,6 +479,7 @@ func (h *Hub) Run() {
 			h.applyArenaSnapshots(snaps)
 		case <-ticker.C:
 			h.checkClocks()
+			h.checkBotTakebacks()
 			h.checkSecretQueenDesignations()
 			h.matchWaiting()
 			h.checkBotFill()
@@ -895,7 +896,51 @@ func (h *Hub) takebackOffer(c *Client) {
 		return
 	}
 	g.takebackPending, g.takebackBy = true, color
+	// A bot opponent has no client to press accept/decline, so the hub answers for
+	// it after a beat (checkBotTakebacks). A human opponent answers themselves.
+	if _, isBot := g.takebackResponder(); isBot {
+		g.takebackAnswerAt = time.Now().Add(botTakebackAnswerDelay())
+	}
 	h.broadcastPlayers(g, mustJSON(out("takebackOffered", map[string]any{"gameId": g.id, "by": colorStr(color)})))
+}
+
+// botTakebackAcceptChance is how likely a given fill-in bot is to be the kind of
+// opponent who gives takebacks — rolled ONCE per bot (player.takebackFriendly),
+// never per request. Roughly a coin flip, like asking a stranger online.
+const botTakebackAcceptChance = 0.50
+
+// botTakebackAnswerDelay is the pause before a bot answers a takeback offer: long
+// enough to read as someone noticing the request and deciding, short enough not to
+// feel abandoned. Real time, and it costs the bot nothing — the offering side is
+// the one on move, so it is the human's own clock that runs while they wait.
+func botTakebackAnswerDelay() time.Duration {
+	return time.Duration(1200+mrand.IntN(3300)) * time.Millisecond // 1.2s–4.5s
+}
+
+// checkBotTakebacks answers takeback offers standing against a bot opponent once
+// their beat has elapsed. The verdict is the BOT's fixed disposition
+// (player.takebackFriendly, rolled at creation), NOT a fresh roll — re-asking a
+// bot that said no gets the same no every time, so a player can't spam offers
+// until one lands. Runs on the Run goroutine (ticker).
+func (h *Hub) checkBotTakebacks() {
+	now := time.Now()
+	for _, g := range h.games {
+		if g.over || g.takebackAnswerAt.IsZero() || now.Before(g.takebackAnswerAt) {
+			continue
+		}
+		bot, isBot := g.takebackResponder()
+		if !isBot {
+			g.takebackAnswerAt = time.Time{} // stale arming; nothing owes an answer
+			continue
+		}
+		if bot.takebackFriendly {
+			h.applyTakeback(g) // clearOffers() disarms
+			continue
+		}
+		g.takebackPending = false
+		g.takebackAnswerAt = time.Time{}
+		h.broadcastPlayers(g, mustJSON(out("takebackDeclined", map[string]any{"gameId": g.id})))
+	}
 }
 
 func (h *Hub) takebackAccept(c *Client) {

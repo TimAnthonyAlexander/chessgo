@@ -1,6 +1,7 @@
 package hub
 
 import (
+	mrand "math/rand/v2"
 	"time"
 
 	"github.com/timanthonyalexander/gomachine/internal/auth"
@@ -22,6 +23,15 @@ type player struct {
 	id      auth.Identity
 	isBot   bool
 	rating  int // target Elo for a bot side (drives configForRating); unused for humans
+
+	// takebackFriendly is a bot side's ONE-TIME answer to "do you give takebacks?",
+	// rolled when the bot is created and then FIXED for the whole game (like the
+	// chat persona — see botchat.go's chatPersona). Some online opponents let you
+	// take a move back and some never do; which one you got is a property of the
+	// person, not of the individual request. Rolling per REQUEST would mean
+	// re-asking until you got a yes, which is both exploitable and nothing like
+	// playing a human. Meaningless for a human side (they answer for themselves).
+	takebackFriendly bool
 }
 
 // newPlayer builds a human side seated on its first connection.
@@ -29,9 +39,15 @@ func newPlayer(c *Client) *player {
 	return &player{clients: map[*Client]struct{}{c: {}}, id: c.id}
 }
 
-// newBotPlayer builds an engine side: an identity and a strength, no socket.
+// newBotPlayer builds an engine side: an identity, a strength, a fixed takeback
+// disposition, and no socket.
 func newBotPlayer(id auth.Identity, rating int) *player {
-	return &player{id: id, isBot: true, rating: rating}
+	return &player{
+		id:               id,
+		isBot:            true,
+		rating:           rating,
+		takebackFriendly: mrand.Float64() < botTakebackAcceptChance,
+	}
 }
 
 func (p *player) attach(c *Client) {
@@ -101,11 +117,19 @@ type game struct {
 	// `*By` color is the side that made the offer. Any committed move clears both
 	// (Lichess-style: a draw offer is declined by the opponent's reply, and a
 	// stale takeback request is dropped once the position changes). Against a bot
-	// opponent (no client) the offer is simply never answered.
+	// opponent (no client) a DRAW offer is simply never answered; a TAKEBACK is
+	// answered after takebackAnswerAt, per the bot's fixed disposition — see
+	// player.takebackFriendly and hub.go's checkBotTakebacks.
 	drawPending     bool
 	drawBy          chess.Color
 	takebackPending bool
 	takebackBy      chess.Color
+
+	// takebackAnswerAt is when a bot opponent will answer the standing takeback
+	// offer — a short, human-ish beat rather than an instant reflex reply. Zero
+	// means nobody owes an answer (no offer standing, or the responder is human
+	// and answers for themselves).
+	takebackAnswerAt time.Time
 
 	// Rematch (see rematch.go). Only meaningful once the game has ended:
 	// rematchArmedAt is stamped by armRematch at finish() and bounds the whole
@@ -335,10 +359,23 @@ func (g *game) applyMove(uci string) (string, bool) {
 	return san, true
 }
 
-// clearOffers drops any outstanding draw/takeback offer.
+// clearOffers drops any outstanding draw/takeback offer, including a bot's
+// pending answer to a takeback (there is no longer anything to answer).
 func (g *game) clearOffers() {
 	g.drawPending = false
 	g.takebackPending = false
+	g.takebackAnswerAt = time.Time{}
+}
+
+// takebackResponder returns the side that OWES an answer to the standing
+// takeback offer — the one that did not make it — and whether that side is a
+// bot (so the hub must answer on its behalf). ok=false when no offer stands.
+func (g *game) takebackResponder() (*player, bool) {
+	if !g.takebackPending {
+		return nil, false
+	}
+	p := g.playerFor(g.takebackBy.Opposite())
+	return p, p.isBot
 }
 
 // fenHistory reconstructs the FEN of every prior position — start position
