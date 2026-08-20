@@ -273,6 +273,7 @@ func (h *Hub) startBotRematch(g *game) {
 	h.playerGames[human.id.UserID] = ng
 	h.markLive(ng)
 	h.activeGames.Add(1)
+	h.armBotDrop(ng) // presence.go: a fresh game gets a fresh roll of ITS OWN absence, same disposition
 
 	// Secret Queen: designate the bot's side and arm the human's deadline
 	// BEFORE sendMatched, so its payload already carries needsDesignation —

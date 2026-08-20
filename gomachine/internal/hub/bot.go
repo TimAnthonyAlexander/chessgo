@@ -264,6 +264,7 @@ func (h *Hub) startBotGame(human *Client, tc timeControl, pool, variantID string
 	h.playerGames[human.id.UserID] = g
 	h.markLive(g)
 	h.activeGames.Add(1)
+	h.armBotDrop(g) // presence.go: schedule this bot's one absence, if its disposition rolled one
 
 	// Secret Queen: designate the bot's side immediately (see
 	// beginSecretQueenDesignation's doc) and arm the human's 15s deadline,
@@ -333,6 +334,28 @@ func (h *Hub) scheduleBotMove(g *game) {
 	// relies on this guard rather than each remembering to check first.
 	if g.variant == variantSecretQueen && !g.secretQueenReady() {
 		return
+	}
+	// presence.go's Feature B, gated to a genuine bot-vs-human, non-arena game
+	// (botVsHumanSide already excludes fillers; arenaID excludes arena bot-fill
+	// — see armBotDrop's doc for why arena must never see this at all).
+	if bot, botColor, ok := g.botVsHumanSide(); ok && g.arenaID == "" {
+		// A bot mid-"drop"/"leaves" (g.online flipped false by fireBotDrop) is
+		// scheduled NOTHING until it's back online — fireBotReturn re-calls
+		// scheduleBotMove the instant it flips online again, so a move that
+		// came due during the outage is suppressed, not lost.
+		if !g.online[botColor] {
+			return
+		}
+		// presenceNoShow: never plays a first move at all, White or Black —
+		// this falls through to the SAME 30s stall guard (firstMoveTimeout /
+		// checkClocks) that already aborts any game whose clock never
+		// started, so there is no separate "no result" path to get wrong for
+		// this disposition. clocksRunning() needs two plies, so this single
+		// check covers a White bot that never opens AND a Black bot that
+		// never answers White's first move.
+		if bot.presence == presenceNoShow && !g.clocksRunning() {
+			return
+		}
 	}
 	if variant.SelfSearches(g.variant) {
 		h.scheduleSelfSearchBotMove(g)

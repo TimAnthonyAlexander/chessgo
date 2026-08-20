@@ -37,6 +37,12 @@ type player struct {
 	resigns          bool // resigns a lost game instead of playing it out
 	asksTakeback     bool // asks for a takeback after blundering one away itself
 	rematchFriendly  bool // takes a rematch when offered one after the game
+
+	// presence is this bot's ONE fixed disposition for whether/how it is ever
+	// absent during its own game — see presence.go's package doc. Rolled once
+	// here like every manner above; presencePresent (the zero value) is inert,
+	// so a human side's unset field never does anything either.
+	presence botPresence
 }
 
 // newPlayer builds a human side seated on its first connection.
@@ -57,6 +63,7 @@ func newBotPlayer(id auth.Identity, rating int) *player {
 		resigns:          mrand.Float64() < botResignChance,
 		asksTakeback:     mrand.Float64() < botAskTakebackChance,
 		rematchFriendly:  mrand.Float64() < botRematchAcceptChance,
+		presence:         rollBotPresence(),
 	}
 }
 
@@ -246,6 +253,24 @@ type game struct {
 	chat              *chatPersona
 	chatCooldownUntil time.Time
 
+	// disconnectGraceSide / disconnectGraceAt are Feature A's automatic
+	// disconnect-resolution timer (presence.go): disconnectGraceAt is when the
+	// game resolves in favor of whichever side is still connected if
+	// disconnectGraceSide's side hasn't come back by then (zero =
+	// unarmed). Kept in sync by game.refreshDisconnectGrace, called from every
+	// place online state can change — hub.go's handleDisconnect/attachToGame
+	// and presence.go's fireBotDrop/fireBotReturn.
+	disconnectGraceSide chess.Color
+	disconnectGraceAt   time.Time
+
+	// botDropAt / botReturnAt are Feature B's arm-then-fire timers for a
+	// presenceDrops/presenceLeaves bot's one scripted absence (presence.go):
+	// botDropAt is when it goes offline, botReturnAt is when a presenceDrops
+	// bot (only) comes back. Zero means nothing armed/pending. See
+	// armBotDrop/checkBotDrops.
+	botDropAt   time.Time
+	botReturnAt time.Time
+
 	// teardownAt is set when a bot game ends and the farewell message is still in
 	// flight; teardown is deferred until the farewell lands or this deadline passes.
 	// The zero value means "teardown immediately" (the normal path for non-bot games
@@ -427,6 +452,15 @@ func (g *game) applyMove(uci string) (string, bool) {
 	g.moveTimes = append(g.moveTimes, now.Sub(g.turnStart).Milliseconds())
 	g.turnStart = now
 	g.clearOffers() // any move declines a pending draw and drops a stale takeback
+	// Re-evaluate the disconnect grace timer, because THIS move may be the one
+	// that starts the clocks: refreshDisconnectGrace refuses to arm while
+	// clocksRunning() is false (that window belongs to firstMoveTimeout), so a
+	// player who dropped after their own first move but before the reply landed
+	// left nothing armed and nothing to arm it later — the game then sat until
+	// their clock ran out, which on a 30+0 is the half-hour wait this feature
+	// exists to prevent. Idempotent per absence (see its "already counting down"
+	// guard), so calling it every move never restarts a running countdown.
+	g.refreshDisconnectGrace()
 	return san, true
 }
 

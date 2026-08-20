@@ -490,9 +490,11 @@ func (h *Hub) Run() {
 			h.applyArenaSnapshots(snaps)
 		case <-ticker.C:
 			h.checkClocks()
+			h.checkDisconnectGrace()
 			h.checkBotTakebacks()
 			h.checkBotDraws()
 			h.checkBotConcessions()
+			h.checkBotDrops()
 			h.checkBotRematches()
 			h.checkSecretQueenDesignations()
 			h.matchWaiting()
@@ -1225,6 +1227,11 @@ func (h *Hub) attachToGame(c *Client, g *game) {
 	wasOffline := !p.connected()
 	p.attach(c)
 	g.online[color] = true
+	// Feature A (presence.go): re-evaluate the grace timer now that this side
+	// is back — cancels it outright if the opponent is (still) online too, or
+	// re-arms a FRESH one for the opponent if THEY are the one still away (a
+	// mutual-outage edge case — see refreshDisconnectGrace's doc).
+	g.refreshDisconnectGrace()
 	c.game = g
 	h.dequeue(c)       // a connection in a game is never also waiting in a pool
 	h.dropChallenge(c) // …nor holding a pending invite
@@ -1232,8 +1239,8 @@ func (h *Hub) attachToGame(c *Client, g *game) {
 
 	// Only a genuine offline→online transition is news to the opponent; a second
 	// device joining a side that was already connected changes nothing for them.
-	if wasOffline && g.online[color.Opposite()] {
-		g.playerFor(color.Opposite()).send(mustJSON(out("opponentBack", map[string]any{"gameId": g.id})))
+	if wasOffline {
+		h.sendOpponentBack(g, color)
 	}
 }
 
@@ -1354,6 +1361,10 @@ func (h *Hub) handleDisconnect(c *Client) {
 		return // the account still has this game open on another device
 	}
 	g.online[color] = false
+	// Feature A (presence.go): arm/refresh the automatic grace timer for this
+	// absence BEFORE the opponentGone send below, so its payload can already
+	// carry the deadline.
+	g.refreshDisconnectGrace()
 	// Drop any pending offer so the still-connected player isn't left staring at a
 	// request the now-absent player can't answer.
 	if g.drawPending {
@@ -1364,9 +1375,7 @@ func (h *Hub) handleDisconnect(c *Client) {
 		g.takebackPending = false
 		h.broadcastPlayers(g, mustJSON(out("takebackDeclined", map[string]any{"gameId": g.id})))
 	}
-	if g.online[color.Opposite()] {
-		g.playerFor(color.Opposite()).send(mustJSON(out("opponentGone", map[string]any{"gameId": g.id})))
-	}
+	h.sendOpponentGone(g, color)
 }
 
 func (h *Hub) broadcast(g *game, data []byte) {
