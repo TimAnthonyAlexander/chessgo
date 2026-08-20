@@ -167,9 +167,7 @@ struct LiveGameView: View {
             }
             Spacer()
             if !game.opponentOnline, !game.ended {
-                Label("Away", systemImage: "wifi.slash")
-                    .font(Theme.caption())
-                    .foregroundStyle(Theme.Colors.warning)
+                DisconnectNotice(deadline: game.opponentGraceDeadline, outcome: game.opponentGraceOutcome)
             }
         }
     }

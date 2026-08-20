@@ -64,6 +64,7 @@ import { usePrefs, useSetting } from '../lib/settings'
 import ConfirmDialog from '../components/ConfirmDialog'
 import AdminBestMove from '../components/AdminBestMove'
 import BoardActions from '../components/BoardActions'
+import GameOverModal from '../components/GameOverModal'
 
 const other = (c: Color): Color => (c === 'w' ? 'b' : 'w')
 
@@ -414,6 +415,25 @@ export default function LiveGame() {
             sounds.end()
         }
     }, [g?.id, g?.ended])
+
+    // Game-over modal: opens the instant `g.ended` flips true, but only for a
+    // game we watched actually END this visit — `sawOngoing` records every id
+    // we've seen while still in progress, so loading straight into an already-
+    // finished game (a refresh, a shared link) never greets the player with a
+    // modal for a result they didn't just witness. `modalDismissedId` then
+    // latches per id: the async rating-delta poll (ratedRefresh above) re-renders
+    // this component up to ~5s after the game ends, and a plain `g.ended` check
+    // would reopen the modal on that re-render the moment the delta lands. A
+    // rematch's fresh game id clears both guards for free — dismissedId no
+    // longer matches, and the new id gets its own sawOngoing entry once it's
+    // seen ongoing.
+    const sawOngoing = useRef<Set<string>>(new Set())
+    useEffect(() => {
+        if (g && !g.ended) sawOngoing.current.add(g.id)
+    }, [g?.id, g?.ended])
+    const [modalDismissedId, setModalDismissedId] = useState<string | null>(null)
+    const gameOverModalOpen =
+        !!g && g.ended && sawOngoing.current.has(g.id) && modalDismissedId !== g.id
 
     // A rated game's rating change is AUTHORITATIVE on the persisted Game record
     // (white/black_rating_before/after) — the very same source the profile reads,
@@ -1134,6 +1154,12 @@ export default function LiveGame() {
                         danger
                         onConfirm={() => gameSocket.resign()}
                         onClose={() => setConfirmResignOpen(false)}
+                    />
+                    <GameOverModal
+                        open={gameOverModalOpen}
+                        g={g}
+                        ratingDelta={ratingDelta}
+                        onClose={() => setModalDismissedId(g.id)}
                     />
                 </Box>
                 )

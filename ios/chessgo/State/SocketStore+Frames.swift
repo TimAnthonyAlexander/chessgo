@@ -25,6 +25,16 @@ struct WsGameRef: Decodable, Sendable {
     let gameId: String
 }
 
+/// `opponentGone`/`opponentBack` share this shape. `graceDeadline`/
+/// `graceOutcome` are only ever present on `opponentGone`, and even then only
+/// once the hub's grace timer is actually armed (see `LiveGameState.
+/// opponentGraceDeadline`'s doc comment) — both optional here for that reason.
+struct WsPresence: Decodable, Sendable {
+    let gameId: String
+    let graceDeadline: Int64?
+    let graceOutcome: String?
+}
+
 /// `drawOffered`/`takebackOffered` share this shape. `by` is optional
 /// because `ws-protocol.md` documents it as sometimes-absent on
 /// `takebackOffered`; `drawOffered` always sends it but decoding it as
@@ -82,7 +92,9 @@ extension LiveGameState {
             result: nil,
             reason: nil,
             ended: false,
-            opponentOnline: true
+            opponentOnline: true,
+            opponentGraceDeadline: nil,
+            opponentGraceOutcome: nil
         )
     }
 
@@ -108,7 +120,9 @@ extension LiveGameState {
             result: nil,
             reason: nil,
             ended: resume.status != "ongoing",
-            opponentOnline: resume.opponentOnline
+            opponentOnline: resume.opponentOnline,
+            opponentGraceDeadline: nil,
+            opponentGraceOutcome: nil
         )
     }
 
@@ -123,7 +137,8 @@ extension LiveGameState {
             timeControl: timeControl, opponent: opponent, fen: state.fen, sideToMove: state.sideToMove,
             lastMove: state.lastMove, check: state.check, duck: state.duck, pocket: pocket,
             status: state.status, legalMoves: state.legalMoves, clock: state.clock, moves: moves,
-            result: result, reason: reason, ended: state.status != "ongoing", opponentOnline: opponentOnline
+            result: result, reason: reason, ended: state.status != "ongoing", opponentOnline: opponentOnline,
+            opponentGraceDeadline: opponentGraceDeadline, opponentGraceOutcome: opponentGraceOutcome
         )
     }
 
@@ -132,16 +147,29 @@ extension LiveGameState {
             id: id, color: color, rated: rated, variant: variant, pool: pool, timeControl: timeControl,
             opponent: opponent, fen: fen, sideToMove: sideToMove, lastMove: lastMove, check: check,
             duck: duck, pocket: pocket, status: end.status, legalMoves: [], clock: end.clock, moves: moves,
-            result: end.result, reason: end.reason, ended: true, opponentOnline: opponentOnline
+            result: end.result, reason: end.reason, ended: true, opponentOnline: opponentOnline,
+            opponentGraceDeadline: opponentGraceDeadline, opponentGraceOutcome: opponentGraceOutcome
         )
     }
 
-    func withOpponentOnline(_ online: Bool) -> LiveGameState {
-        LiveGameState(
+    /// Folds an `opponentGone`/`opponentBack` frame in. Coming back always
+    /// clears both grace fields; going offline takes whatever the frame
+    /// carries verbatim (including "neither", the pre-countdown case) rather
+    /// than preserving a stale deadline from an earlier drop — mirrors the
+    /// web's `setOpponentOnline` (`lib/socket.ts`).
+    func withOpponentPresence(online: Bool, graceDeadlineMs: Int64?, graceOutcome: String?) -> LiveGameState {
+        let deadline: Date? = online ? nil : graceDeadlineMs.map { Date(timeIntervalSince1970: Double($0) / 1000) }
+        // Spelled out rather than `flatMap(DisconnectGraceOutcome.init)`: the enum is
+        // Codable too, so a bare `.init` reference asks the compiler to choose between
+        // the synthesized `init?(rawValue:)` and `init(from:)`. Naming the one we mean
+        // costs nothing and can't resolve the wrong way.
+        let outcome: DisconnectGraceOutcome? = online ? nil : graceOutcome.flatMap { DisconnectGraceOutcome(rawValue: $0) }
+        return LiveGameState(
             id: id, color: color, rated: rated, variant: variant, pool: pool, timeControl: timeControl,
             opponent: opponent, fen: fen, sideToMove: sideToMove, lastMove: lastMove, check: check,
             duck: duck, pocket: pocket, status: status, legalMoves: legalMoves, clock: clock, moves: moves,
-            result: result, reason: reason, ended: ended, opponentOnline: online
+            result: result, reason: reason, ended: ended, opponentOnline: online,
+            opponentGraceDeadline: deadline, opponentGraceOutcome: outcome
         )
     }
 
@@ -153,7 +181,8 @@ extension LiveGameState {
             id: id, color: color, rated: rated, variant: variant, pool: pool, timeControl: timeControl,
             opponent: opponent, fen: fen, sideToMove: sideToMove, lastMove: lastMove, check: check,
             duck: duck, pocket: pocket, status: status, legalMoves: [], clock: clock, moves: moves,
-            result: result, reason: reason ?? "connectionLost", ended: true, opponentOnline: false
+            result: result, reason: reason ?? "connectionLost", ended: true, opponentOnline: false,
+            opponentGraceDeadline: nil, opponentGraceOutcome: nil
         )
     }
 }
@@ -173,7 +202,10 @@ extension LiveGameState {
         status: String = "ongoing",
         ended: Bool = false,
         result: String? = nil,
-        reason: String? = nil
+        reason: String? = nil,
+        opponentOnline: Bool = true,
+        opponentGraceDeadline: Date? = nil,
+        opponentGraceOutcome: DisconnectGraceOutcome? = nil
     ) -> LiveGameState {
         LiveGameState(
             id: "abc123def456",
@@ -201,7 +233,9 @@ extension LiveGameState {
             result: result,
             reason: reason,
             ended: ended,
-            opponentOnline: true
+            opponentOnline: opponentOnline,
+            opponentGraceDeadline: opponentGraceDeadline,
+            opponentGraceOutcome: opponentGraceOutcome
         )
     }
 }

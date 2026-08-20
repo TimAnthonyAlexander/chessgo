@@ -160,9 +160,14 @@ extension SocketStore {
         fetchPostGameResult(id: end.gameId)
     }
 
+    /// `opponentGone` handling doubles as an update, not a one-shot: the hub
+    /// refuses to arm the disconnect-grace countdown until the clocks are
+    /// running, so a drop during the opening plies sends `opponentGone` with
+    /// neither `graceDeadline` nor `graceOutcome`, and a second `opponentGone`
+    /// carrying both arrives once the timer actually starts.
     private func handleOpponentPresence(_ data: Data, online: Bool) {
-        guard let frame = try? decoder.decode(WsGameRef.self, from: data), let current = game, current.id == frame.gameId else { return }
-        game = current.withOpponentOnline(online)
+        guard let frame = try? decoder.decode(WsPresence.self, from: data), let current = game, current.id == frame.gameId else { return }
+        game = current.withOpponentPresence(online: online, graceDeadlineMs: frame.graceDeadline, graceOutcome: frame.graceOutcome)
     }
 
     private func handleDrawOffered(_ data: Data) {

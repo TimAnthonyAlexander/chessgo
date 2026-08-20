@@ -108,6 +108,14 @@ struct WsResume: Decodable, Sendable {
     let pocket: String?
 }
 
+/// What the hub's disconnect-grace expiry is worth to the viewer — it applies
+/// the same insufficient-material rule a flag does, so a present player isn't
+/// always awarded a win. Mirrors the web's `opponentGraceOutcome` union.
+enum DisconnectGraceOutcome: String, Codable, Sendable {
+    case win
+    case draw
+}
+
 struct WsEnd: Decodable, Sendable {
     let gameId: String
     let result: String?
@@ -141,4 +149,11 @@ struct LiveGameState: Decodable, Identifiable, Sendable {
     let reason: String?
     let ended: Bool
     let opponentOnline: Bool
+    /// Epoch-ms deadline the hub's disconnect-grace timer expires at, and what
+    /// happens then — both `nil` while the opponent is present, and also
+    /// `nil` for a beat after they drop: the hub refuses to arm the countdown
+    /// until the clocks are running, so the first `opponentGone` can carry
+    /// neither field and a second one arrives later with both.
+    let opponentGraceDeadline: Date?
+    let opponentGraceOutcome: DisconnectGraceOutcome?
 }
