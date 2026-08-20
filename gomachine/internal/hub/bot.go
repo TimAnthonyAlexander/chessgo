@@ -308,8 +308,8 @@ func (h *Hub) scheduleSelfSearchBotMove(g *game) {
 		}
 		// Pace with the same variant-agnostic delay as standard bots (real time, so it
 		// comes off the bot's clock).
-		obvious := isObviousMove(uci, lastMoveTo, legalCount)
-		delay := botThinkDelay(tc, remainingMs, legalCount, ply, rating, pieceCount, obvious)
+		mv := classifyMove(fen, uci, lastMoveTo, legalCount)
+		delay := botThinkDelay(tc, remainingMs, legalCount, ply, rating, pieceCount, mv)
 		if elapsed := time.Since(start); elapsed < delay {
 			time.Sleep(delay - elapsed)
 		}
@@ -455,8 +455,8 @@ func (h *Hub) computeBotMove(s botSnapshot, engines chan *engineHandle) {
 		return
 	}
 
-	obvious := isObviousMove(res.Move.String(), s.lastMoveTo, s.legalCount)
-	delay := botThinkDelay(s.tc, s.remainingMs, s.legalCount, s.ply, s.displayRating, s.pieceCount, obvious)
+	mv := classifyMove(s.fen, res.Move.String(), s.lastMoveTo, s.legalCount)
+	delay := botThinkDelay(s.tc, s.remainingMs, s.legalCount, s.ply, s.displayRating, s.pieceCount, mv)
 	if elapsed := time.Since(start); elapsed < delay {
 		time.Sleep(delay - elapsed)
 	}
@@ -543,7 +543,9 @@ const (
 // up sharply as its own clock runs low so it can actually win on time rather than
 // flag. It also speeds up as material comes off — an eight-piece endgame is
 // rattled out far quicker than a full-board middlegame, like a real player — and
-// SNAPS out `obvious` moves (forced or a recapture) near-instantly. Every move
+// it paces by the KIND of move it settled on (`mv`): forced replies and
+// recaptures SNAP out near-instantly, other captures come out clearly quicker
+// than a quiet move, and pawn moves are a touch quicker again. Every move
 // gets an independent, fat-tailed tempo jitter (occasional near-instant snaps and
 // occasional long tanks) so the cadence looks hand-played rather than a smooth
 // function of the state. The pause comes off the bot's clock (it's real time), so
@@ -551,7 +553,7 @@ const (
 // more than maxThinkMs absolute (keeps slow controls sane and the untimed first
 // move safely under the 30s first-move abort), and never below a human floor
 // (which itself drops in real time trouble so the bot can blitz).
-func botThinkDelay(tc timeControl, remainingMs int64, legalCount, ply, displayRating, pieceCount int, obvious bool) time.Duration {
+func botThinkDelay(tc timeControl, remainingMs int64, legalCount, ply, displayRating, pieceCount int, mv moveTraits) time.Duration {
 	// Rough per-move time budget: assume ~30 moves a side, plus the increment you
 	// get back each move. e.g. 1+0 → 2s, 3+0 → 6s, 5+0 → 10s, 10+0 → 20s, 3+2 → 8s.
 	perMove := float64(tc.Base)/30.0 + float64(tc.Inc)
@@ -578,12 +580,25 @@ func botThinkDelay(tc timeControl, remainingMs int64, legalCount, ply, displayRa
 	// Human irregularity: an independent per-move tempo multiplier so no two moves
 	// take a similar time even in the same kind of position — mostly a moderate
 	// spread, but deliberately fat-tailed with the odd near-instant snap and the odd
-	// long tank. An `obvious` move (forced or a recapture) instead gets a dedicated
+	// long tank. A snap move (forced or a recapture) instead gets a dedicated
 	// snap band — fast, but still varied so it isn't robotically identical.
-	if obvious {
+	if mv.snap() {
 		ms *= 0.15 + mrand.Float64()*0.25 // 0.15–0.40x: played almost at once
 	} else {
 		ms *= humanTempoJitter()
+		// A capture that isn't a recapture is still mostly pre-decided: you saw
+		// the piece hanging (or the trade coming) while the opponent was moving,
+		// so the hand goes out well before it would on a quiet move. Not as fast
+		// as a recapture — there's usually still a "do I want this trade" beat.
+		if mv.capture {
+			ms *= 0.55 + mrand.Float64()*0.20 // 0.55–0.75x
+		}
+		// Pawn moves are the cheapest to read: few destinations, and the ones that
+		// matter (a push you'd already planned, a recapture with a pawn) come out
+		// almost by reflex. A small nudge, not a snap.
+		if mv.pawnMove {
+			ms *= 0.80 + mrand.Float64()*0.15 // 0.80–0.95x
+		}
 	}
 
 	inOpening := ply/2 < openingFastMoves
@@ -697,21 +712,97 @@ func humanTempoJitter() float64 {
 	}
 }
 
-// isObviousMove reports whether a move is the kind a human plays almost without
-// thinking, so the bot should snap it out: a forced move (only one legal reply) or
-// a recapture (landing on the very square the opponent just moved to, i.e. taking
-// the piece they just placed there). Both are computed from state the hub already
-// has — no extra engine work — and hold for standard and self-search variants
-// alike. A true eval-based "only one good move" would need a per-move candidates
-// pass, deliberately not paid for here.
-func isObviousMove(moveUCI, lastMoveTo string, legalCount int) bool {
-	if legalCount <= 1 {
-		return true // forced: nothing to think about
+// moveTraits describes the KIND of move a bot settled on, so botThinkDelay can
+// pace it the way a human's hand actually moves: some moves are decided long
+// before it is your turn, and sitting on them for the full think budget is one
+// of the strongest tells that nobody is really there. Every trait is derived
+// from state the hub already has (the pre-move FEN, the UCI, the opponent's last
+// destination) — no extra engine work — and holds for standard chess and the
+// self-search variants alike. A true eval-based "only one good move" would need
+// a per-move candidates pass, deliberately not paid for here.
+type moveTraits struct {
+	forced    bool // only one legal reply — nothing to think about
+	recapture bool // lands on the square the opponent just moved to
+	capture   bool // takes something (including en passant)
+	pawnMove  bool // a pawn is doing the moving
+}
+
+// snap reports whether the move is the kind played almost without thinking, so
+// the bot should rattle it out rather than pause: a forced reply or a recapture.
+func (t moveTraits) snap() bool { return t.forced || t.recapture }
+
+// classifyMove reads a move's traits off the position it is played in. `fen` is
+// the pre-move FEN, `lastMoveTo` the destination square of the opponent's last
+// move ("" if none). Crazyhouse drops ("P@e4") carry no from-square, so they
+// classify as neither a capture nor a pawn move; Duck's composite UCI encodes
+// the piece move first, so its from/to read normally.
+func classifyMove(fen, moveUCI, lastMoveTo string, legalCount int) moveTraits {
+	t := moveTraits{forced: legalCount <= 1}
+	if len(moveUCI) < 4 {
+		return t
 	}
 	if lastMoveTo != "" && uciDest(moveUCI) == lastMoveTo {
-		return true // recapture on the opponent's last-touched square
+		t.recapture = true
 	}
-	return false
+	from, to := moveUCI[0:2], moveUCI[2:4]
+	mover := pieceAtFEN(fen, from)
+	if mover == 0 {
+		return t // a drop, or a from-square we can't read: no further traits
+	}
+	t.pawnMove = mover == 'P' || mover == 'p'
+	victim := pieceAtFEN(fen, to)
+	switch {
+	case victim != 0:
+		// Only an ENEMY piece is a capture — Chess960 encodes castling as
+		// king-takes-own-rook (e1h1), which is not one.
+		t.capture = isUpperPiece(mover) != isUpperPiece(victim)
+	case t.pawnMove && from[0] != to[0]:
+		t.capture = true // a pawn changing file onto an empty square: en passant
+	}
+	return t
+}
+
+// isUpperPiece reports whether a FEN piece glyph is White's (uppercase).
+func isUpperPiece(c byte) bool { return c >= 'A' && c <= 'Z' }
+
+// pieceAtFEN returns the FEN piece glyph standing on `sq` ("e4") in the
+// placement field of `fen`, or 0 if the square is empty or unreadable. It walks
+// the placement field textually rather than parsing the position, so it works
+// for every variant that shares that field: the trailing FEN fields and a
+// Crazyhouse pocket are cut off at the first space or '[', and Crazyhouse's
+// promoted-piece marker ('~') is skipped without consuming a file.
+func pieceAtFEN(fen, sq string) byte {
+	if len(sq) < 2 {
+		return 0
+	}
+	file, rank := int(sq[0]-'a'), int(sq[1]-'1')
+	if file < 0 || file > 7 || rank < 0 || rank > 7 {
+		return 0
+	}
+	wantRow := 7 - rank // the placement field runs rank 8 first
+	row, col := 0, 0
+	for i := 0; i < len(fen); i++ {
+		switch c := fen[i]; {
+		case c == ' ' || c == '[':
+			return 0 // past the placement field
+		case c == '/':
+			row++
+			col = 0
+		case c >= '1' && c <= '8':
+			col += int(c - '0')
+		case c == '~':
+			// promoted marker, belongs to the piece just read
+		default:
+			if row == wantRow && col == file {
+				return c
+			}
+			col++
+		}
+		if row > wantRow {
+			return 0
+		}
+	}
+	return 0
 }
 
 // uciDest returns the destination square of a UCI move ("e2e4" → "e4", "e7e8q" →
