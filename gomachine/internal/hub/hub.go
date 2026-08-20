@@ -123,6 +123,16 @@ type Hub struct {
 	botChatFn BotChatFunc
 	botChats  chan botChatResult
 
+	// botChatRecent is a small ring of the most recently emitted chat lines,
+	// across every game, normalized lowercase/trimmed. A short LLM prompt has
+	// only so many "natural" short lines to land on, so the same handful of
+	// attractor phrases ("gl hf", "just move") resurface across unrelated
+	// games — invisible to any one player's chat log, but the hub is the one
+	// process that sees the whole fleet, so it's the only place that can
+	// catch it. Checked and updated on the Run goroutine only (deliverBotChat),
+	// so it needs no lock.
+	botChatRecent *recentLines
+
 	// Spectator fillers: engine-vs-engine games kept running so the Watch page
 	// is never empty. They run on a SEPARATE, small engine pool so they can't
 	// starve human bot-fill, and only while someone is actually watching (JIT) —
@@ -400,6 +410,7 @@ func New(secret string) *Hub {
 		rematchWindows: map[string]*game{},
 		botMoves:       make(chan botMoveResult, 64),
 		botChats:       make(chan botChatResult, 64),
+		botChatRecent:  newRecentLines(50),
 
 		registerChallenges: make(chan registerChallengeReq),
 		onlineQueries:      make(chan onlineQuery),

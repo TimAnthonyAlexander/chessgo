@@ -48,42 +48,46 @@ type chatPersona struct {
 }
 
 // There are two kinds of online chess opponent, and both are here. The QUIET one
-// (most of them) types "hf" at the start, "gg" at the end, and otherwise treats
-// the chat box as furniture — if you pull an answer out of them it's two words
-// and defensive. The TALKER answers most lines, but is still terse and a bit odd,
-// friendly at the start and quick to sour. Nobody in here is a coach or a fan.
+// (the large majority) types "hf" at the start, "gg" at the end, and otherwise
+// treats the chat box as furniture — if you pull an answer out of them it's a
+// couple of words. The TALKER answers a bit more, but is still terse. Neither is
+// a coach, a fan, or an antagonist — an ordinary, mildly pleasant person who
+// mostly has better things to do than type.
 var quietChatStyles = []string{
-	"barely chats — hf at the start, gg at the end, and two-word answers at most if pushed",
-	"heads-down on the board, treats the chat box as an annoyance",
-	"curt and guarded, answers in one or two flat words or not at all",
-	"silent type, replies only when directly asked and even then says almost nothing",
+	"barely chats — hf at the start, gg at the end, a short friendly word if pushed",
+	"heads-down on the board, chat is an afterthought, but not unfriendly about it",
+	"easygoing and brief, answers in a few words and moves on",
+	"quiet type, replies only when directly asked and keeps it short and pleasant",
 }
 
 var talkerChatStyles = []string{
-	"friendly at the start but thin-skinned — goes cold and clipped the second they needle you",
-	"dry and sarcastic, one-liners only, never earnest",
-	"quietly cocky, small jabs when you're ahead, defensive when you're behind",
-	"a bit odd — short random remarks that don't quite follow the conversation",
-	"over-familiar and blunt, talks like you two have history",
+	"warm and casual, chats a little but keeps every line short",
+	"dry and understated, low-key funny, never earnest or gushing",
+	"relaxed and even-keeled whether winning or losing, a little wry",
+	"a bit scattered — short offhand remarks that don't quite follow the conversation",
+	"friendly and easy to talk to, but still says very little",
 }
 
-// newChatPersona rolls a stable chat character: mostly the quiet archetype (that
-// is what online chess actually looks like), sometimes the talker. The bucket
-// picks the reply probability AND the voice pool, so a quiet persona never draws
-// a chatty voice and vice-versa.
+// newChatPersona rolls a stable chat character: overwhelmingly the quiet
+// archetype (that is what online chess actually looks like), occasionally the
+// talker. The bucket picks the reply probability AND the voice pool, so a quiet
+// persona never draws a chatty voice and vice-versa. Both buckets were dialed
+// down hard from their original values — chat firing on nearly every message
+// (old quiet replyChance 0.14, talker 0.75) read as a bot eager to keep the
+// conversation going, which a real backfill opponent never is.
 func newChatPersona() *chatPersona {
-	if mrand.Float64() < 0.70 { // quiet: hf / gg and little else
+	if mrand.Float64() < 0.88 { // quiet: hf / gg and little else
 		return &chatPersona{
-			opens:       mrand.Float64() < 0.70,
-			replyChance: 0.14,
-			multiChance: 0.02,
+			opens:       mrand.Float64() < 0.15,
+			replyChance: 0.06,
+			multiChance: 0.01,
 			style:       quietChatStyles[mrand.IntN(len(quietChatStyles))],
 		}
 	}
-	return &chatPersona{ // talker: answers most lines, still short
-		opens:       mrand.Float64() < 0.85,
-		replyChance: 0.75,
-		multiChance: 0.12,
+	return &chatPersona{ // talker: answers more often, still short
+		opens:       mrand.Float64() < 0.30,
+		replyChance: 0.35,
+		multiChance: 0.04,
 		style:       talkerChatStyles[mrand.IntN(len(talkerChatStyles))],
 	}
 }
@@ -327,6 +331,61 @@ func (h *Hub) generateBotChat(gameID string, req BotChatRequest, initialDelay ti
 	}()
 }
 
+// recentLines is a small fixed-capacity ring of normalized strings, used to
+// catch a chat line the hub has already said somewhere else recently. It is
+// plain (no locking) because h.botChatRecent is only ever touched from
+// deliverBotChat on the Run goroutine, same as every other Hub field the chat
+// path reads.
+type recentLines struct {
+	lines []string       // ring buffer, oldest overwritten first
+	set   map[string]int // line -> count currently in the ring (a line can repeat)
+	next  int            // next slot to overwrite
+}
+
+func newRecentLines(capacity int) *recentLines {
+	return &recentLines{
+		lines: make([]string, 0, capacity),
+		set:   map[string]int{},
+	}
+}
+
+// normalizeChatLine folds a line down to the form the repetition check
+// compares on — lowercase and trimmed, so "GL HF", "gl hf ", and "gl hf" are
+// the same attractor phrase even though the generator never produces byte-
+// identical output twice.
+func normalizeChatLine(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// seen reports whether line is currently in the ring. Normalizes for you, so
+// callers hand it the raw line.
+func (r *recentLines) seen(line string) bool {
+	return r.set[normalizeChatLine(line)] > 0
+}
+
+// add records line in the ring (normalizing it the same way seen does),
+// evicting the oldest entry once the ring is full.
+func (r *recentLines) add(line string) {
+	line = normalizeChatLine(line)
+	ringCap := cap(r.lines)
+	if ringCap == 0 {
+		return
+	}
+	if len(r.lines) < ringCap {
+		r.lines = append(r.lines, line)
+		r.set[line]++
+		return
+	}
+	old := r.lines[r.next]
+	r.set[old]--
+	if r.set[old] <= 0 {
+		delete(r.set, old)
+	}
+	r.lines[r.next] = line
+	r.set[line]++
+	r.next = (r.next + 1) % ringCap
+}
+
 // deliverBotChat broadcasts a generated bot line on the Run goroutine. A game
 // that ended by the time this line was written is still delivered (the opponent
 // may be on the result screen, and a "gg" is just as appropriate there). If the
@@ -344,6 +403,30 @@ func (h *Hub) deliverBotChat(r botChatResult) {
 	text := sanitizeChat(r.text)
 	if text == "" {
 		return
+	}
+	// Cross-game repetition guard: a short LLM prompt only has so many
+	// "natural" short lines to land on, so the same attractor phrase turns up
+	// across unrelated games — invisible in any one game's own chat log, which
+	// is all the model or a single player ever sees. h.botChatRecent is the
+	// one thing that sees the whole fleet. On a hit we drop the line and say
+	// NOTHING rather than ask the generator to try again: chat here is
+	// optional flavour, a second network round-trip just to fill the same
+	// silence isn't worth the latency/cost, and a real opponent skipping a
+	// reply is exactly as natural as sending one.
+	//
+	// A suppressed FAREWELL still has to release the game: finish() deliberately
+	// keeps a bot game in h.games past its end so this delivery can find it, and
+	// the farewell is the likeliest line of all to be a repeat ("gg" is the whole
+	// vocabulary). Falling through to the botChatTeardownTimeout sweep instead
+	// would work, but it parks a finished game for five seconds for no reason.
+	if h.botChatRecent != nil && h.botChatRecent.seen(text) {
+		if r.farewell && g.over {
+			h.teardown(g)
+		}
+		return
+	}
+	if h.botChatRecent != nil {
+		h.botChatRecent.add(text)
 	}
 	g.appendChat(true, text)
 	h.broadcastPlayers(g, mustJSON(out("chat", map[string]any{

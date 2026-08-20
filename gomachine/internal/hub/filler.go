@@ -119,6 +119,42 @@ const (
 	fillerPuzzleChance = 0.8
 )
 
+// Filler think-floor bands (see bot.go's thinkFloors / scheduleFloors). A
+// human-facing backfill bot's floor is 250ms/90ms/60ms (bot.go's
+// backfillFloor*) — low enough that over a real 40-60 move game it barely dents
+// the clock, so a human-vs-bot game is essentially never decided on time. A
+// filler is cosmetic Watch-lobby eye-candy, but it's meant to LOOK like a real
+// game, and real games sometimes end on the clock rather than at the board —
+// checkFillers tops the lobby back up continuously, so a filler ending short on
+// time instead of by mate is the intended outcome, not a bug to route around.
+// Each band is randomized PER MOVE (fillerFloors) rather than fixed, so a
+// filler's pace doesn't read as a metronome the way one constant floor would.
+const (
+	// fillerFloorMsMin/Max is the normal-tier floor: 2.4x-4.8x the backfill
+	// floor, so a filler mid-game move visibly takes real time even when the
+	// position is trivial.
+	fillerFloorMsMin, fillerFloorMsMax int64 = 600, 1200
+	// fillerOpeningFloorMsMin/Max: still clearly quicker than the normal floor
+	// (real players do blitz known theory) but never near-zero, so a filler
+	// that races through an entire opening line still burns real clock.
+	fillerOpeningFloorMsMin, fillerOpeningFloorMsMax int64 = 250, 400
+	// fillerPanicFloorMsMin/Max: "a panic floor around 400ms rather than 60ms"
+	// — a filler deep in time trouble keeps burning real clock on every move,
+	// so flagging is a genuine possible ending instead of the game always
+	// surviving to reach mate.
+	fillerPanicFloorMsMin, fillerPanicFloorMsMax int64 = 350, 450
+)
+
+// fillerFloors picks this move's randomized floor triple for a Watch-lobby
+// filler game — see the const block above and thinkFloors' doc.
+func fillerFloors() thinkFloors {
+	return thinkFloors{
+		normal:  randRangeMs(fillerFloorMsMin, fillerFloorMsMax),
+		opening: randRangeMs(fillerOpeningFloorMsMin, fillerOpeningFloorMsMax),
+		panic:   randRangeMs(fillerPanicFloorMsMin, fillerPanicFloorMsMax),
+	}
+}
+
 // pickFillerStart chooses the seed position for a new filler: usually a random
 // realistic midgame FEN (when a pool is loaded), occasionally the opening. The
 // candidate is validated; anything unparseable falls back to the start position,

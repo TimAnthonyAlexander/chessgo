@@ -61,6 +61,27 @@ const (
 	botDrawMinPly        = 40 // no draw offers before move 20 — the opening is level by definition
 )
 
+// Critical-moment think — see armCriticalThink and botThinkDelay's criticalMult
+// handling. A real player who blitzes a quiet position then burns a big chunk of
+// clock the move right after it turns is the most recognizable human tempo
+// signature there is; this is what produces it.
+const (
+	// criticalSwingCp is how big a jump between a bot's own two most recent
+	// reported evals has to be to count as "something just happened" rather
+	// than the ordinary move-to-move noise of a re-searched line. The swing
+	// alone doesn't say WHO blundered — only that the position changed a lot.
+	// Roughly a pawn: comfortably above normal fluctuation, comfortably below
+	// "obviously lost" (botResignCp is -900, an order of magnitude past this).
+	criticalSwingCp = 120
+
+	// criticalThinkMultMin/Max bound the randomized multiplier botThinkDelay
+	// applies to the bot's own next one or two moves once a swing fires —
+	// 2.5x-5x rather than a fixed constant, so even a run of critical-moment
+	// thinks doesn't read as a metronome.
+	criticalThinkMultMin = 2.5
+	criticalThinkMultMax = 5.0
+)
+
 // botOfferAnswerDelay is the pause before a bot answers an offer: long enough to
 // read as someone noticing it and deciding, short enough not to feel abandoned.
 func botOfferAnswerDelay() time.Duration {
@@ -84,6 +105,43 @@ func (g *game) recordBotEval(c chess.Color, cp int) {
 		e = e[len(e)-botEvalHistory:]
 	}
 	g.botEvals[c] = e
+	g.armCriticalThink(c)
+}
+
+// armCriticalThink checks the swing between this bot's two most recent reported
+// evals (recordBotEval has just appended the latest) and, if it crosses
+// criticalSwingCp, arms a "just noticed" hard think for the bot's own next one or
+// two moves (game.criticalThinksOwed's doc; consumed by scheduleBotMove /
+// scheduleSelfSearchBotMove, applied by botThinkDelay's criticalMult). Mate
+// scores are normalized to a huge cp magnitude (zugzwang.go's mateScoreCp), so a
+// swing into or out of mate trips this the same way an ordinary blunder does —
+// that's correct and deliberately not special-cased.
+func (g *game) armCriticalThink(c chess.Color) {
+	e := g.botEvals[c]
+	if len(e) < 2 {
+		return
+	}
+	swing := e[len(e)-1] - e[len(e)-2]
+	if swing < 0 {
+		swing = -swing
+	}
+	if swing < criticalSwingCp {
+		return
+	}
+	g.criticalThinksOwed[c] = 1 + mrand.IntN(2) // owe the next 1 or 2 moves a hard think
+}
+
+// consumeCriticalThink spends one owed critical-moment think for `c`, if any is
+// armed, and returns the randomized multiplier botThinkDelay should apply this
+// move (1 = no effect). Called once per scheduled move (scheduleBotMove /
+// scheduleSelfSearchBotMove) on the Run goroutine, BEFORE the snapshot crosses
+// to the worker goroutine — the worker itself never touches g.criticalThinksOwed.
+func (g *game) consumeCriticalThink(c chess.Color) float64 {
+	if g.criticalThinksOwed[c] <= 0 {
+		return 1
+	}
+	g.criticalThinksOwed[c]--
+	return criticalThinkMultMin + mrand.Float64()*(criticalThinkMultMax-criticalThinkMultMin)
 }
 
 // lastBotEval returns the bot's most recent score, ok=false if it has never

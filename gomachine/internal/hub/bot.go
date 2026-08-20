@@ -56,6 +56,62 @@ type botSnapshot struct {
 	legalCount     int
 	pieceCount     int    // pieces left on the board — fewer ⇒ faster moves (endgame pace)
 	lastMoveTo     string // dest square of the opponent's last move ("" if none) — for recapture snap
+
+	// floors is this game's think-floor ladder (scheduleFloors) — a filler's is
+	// far higher than a human-facing backfill bot's, so a Watch-lobby game can
+	// genuinely be decided on the clock. See thinkFloors' doc.
+	floors thinkFloors
+	// criticalMult is >1 when this bot's own eval just swung ≥criticalSwingCp
+	// and this move owes a "just noticed" hard think (armCriticalThink,
+	// game.criticalThinksOwed) — 1 means no effect. Consumed (decremented) at
+	// schedule time, never read live off the Run goroutine here.
+	criticalMult float64
+	// inCheck is whether the BOT (the side about to move) is in check in the
+	// position it's about to move in — read once via g.status().Check at
+	// schedule time. See botThinkDelay's inCheck handling.
+	inCheck bool
+}
+
+// thinkFloors bundles the three floor tiers (normal / opening / time-trouble)
+// botThinkDelay picks a per-move minimum from, so a filler and a human-facing
+// backfill bot can run entirely different floor ladders through the same
+// function — see scheduleFloors, backfillFloor* below and the filler-floor
+// bands in filler.go.
+type thinkFloors struct {
+	normal, opening, panic int64 // milliseconds
+}
+
+// backfillFloor* are the human-facing bot's per-move minimum think — unchanged
+// from before this feature existed. This feature is about making the WATCH-
+// lobby filler clock genuinely burn down, not about touching how a bot paces
+// against a real human, so a backfill bot's floors stay exactly what they were.
+const (
+	backfillFloorMs        int64 = 250
+	backfillOpeningFloorMs int64 = 90
+	backfillPanicFloorMs   int64 = 60
+)
+
+// scheduleFloors picks the floor ladder for a game's next bot move: a filler
+// gets the much higher, randomized-per-move bands in filler.go's fillerFloors
+// (so the Watch lobby can genuinely decide a game on the clock); everything
+// else — a human-facing backfill bot, and arena/other bot-vs-bot games — keeps
+// the original fixed floors, untouched by this feature.
+func scheduleFloors(filler bool) thinkFloors {
+	if filler {
+		return fillerFloors()
+	}
+	return thinkFloors{normal: backfillFloorMs, opening: backfillOpeningFloorMs, panic: backfillPanicFloorMs}
+}
+
+// randRangeMs returns a uniformly random int64 in [lo, hi] — the shared jitter
+// helper for the filler floor bands (filler.go), which need a fresh random pick
+// per move rather than a fixed constant so the pacing doesn't read as a
+// metronome.
+func randRangeMs(lo, hi int64) int64 {
+	if hi <= lo {
+		return lo
+	}
+	return lo + mrand.Int64N(hi-lo+1)
 }
 
 // Bot-backfill wait is randomized per queued player (rather than a fixed delay)
@@ -288,6 +344,9 @@ func (h *Hub) scheduleBotMove(g *game) {
 		legalCount:     len(g.state.LegalMoves()),
 		pieceCount:     boardPieceCount(g.state.FEN()),
 		lastMoveTo:     uciDest(g.lastUci()),
+		floors:         scheduleFloors(g.filler),
+		criticalMult:   g.consumeCriticalThink(botColor),
+		inCheck:        g.status().Check,
 	}, engines)
 }
 
@@ -313,6 +372,18 @@ func (h *Hub) scheduleSelfSearchBotMove(g *game) {
 	legalCount := len(g.state.LegalMoves())
 	pieceCount := boardPieceCount(fen)
 	lastMoveTo := uciDest(g.lastUci())
+	// Self-search variants never run as a Watch-lobby filler (filler.go's
+	// startFillerGame only ever seeds standard chess), so this is always the
+	// backfill floor ladder today — scheduleFloors(g.filler) rather than a
+	// hardcoded backfill call so that stays true automatically if that ever
+	// changes. Evals aren't reported for these variants (selfSearchMove returns
+	// a move and nothing else — computeBotMove's doc), so criticalThinksOwed is
+	// never armed here and consumeCriticalThink is always a no-op; the read is
+	// kept for symmetry with the engine-pool path, not because it currently does
+	// anything.
+	floors := scheduleFloors(g.filler)
+	criticalMult := g.consumeCriticalThink(botColor)
+	inCheck := g.status().Check
 
 	go func() {
 		start := time.Now()
@@ -323,7 +394,7 @@ func (h *Hub) scheduleSelfSearchBotMove(g *game) {
 		// Pace with the same variant-agnostic delay as standard bots (real time, so it
 		// comes off the bot's clock).
 		mv := classifyMove(fen, uci, lastMoveTo, legalCount)
-		delay := botThinkDelay(tc, remainingMs, legalCount, ply, rating, pieceCount, mv)
+		delay := botThinkDelay(tc, remainingMs, legalCount, ply, rating, pieceCount, mv, floors, criticalMult, inCheck)
 		if elapsed := time.Since(start); elapsed < delay {
 			time.Sleep(delay - elapsed)
 		}
@@ -470,7 +541,7 @@ func (h *Hub) computeBotMove(s botSnapshot, engines chan *engineHandle) {
 	}
 
 	mv := classifyMove(s.fen, res.Move.String(), s.lastMoveTo, s.legalCount)
-	delay := botThinkDelay(s.tc, s.remainingMs, s.legalCount, s.ply, s.displayRating, s.pieceCount, mv)
+	delay := botThinkDelay(s.tc, s.remainingMs, s.legalCount, s.ply, s.displayRating, s.pieceCount, mv, s.floors, s.criticalMult, s.inCheck)
 	if elapsed := time.Since(start); elapsed < delay {
 		time.Sleep(delay - elapsed)
 	}
@@ -562,6 +633,14 @@ const (
 	lowTimeMs int64 = 30_000
 	// ...and below this it plays essentially as fast as it can.
 	panicTimeMs int64 = 10_000
+
+	// inCheckMult inflates both the central think budget and the floor when the
+	// bot is the one in check. A human this often has a premove or a half-
+	// decided reply already queued up; a check makes that illegal, so they have
+	// to actually stop and look rather than just executing what they'd planned —
+	// a genuine slowdown, not a paced-in flourish, which is why it scales the
+	// WHOLE budget rather than adding a fixed pause.
+	inCheckMult = 1.6
 )
 
 // botThinkDelay returns a randomized, human-ish pause before a bot's move, SCALED
@@ -575,12 +654,28 @@ const (
 // than a quiet move, and pawn moves are a touch quicker again. Every move
 // gets an independent, fat-tailed tempo jitter (occasional near-instant snaps and
 // occasional long tanks) so the cadence looks hand-played rather than a smooth
-// function of the state. The pause comes off the bot's clock (it's real time), so
-// it's bounded: never more than ~30% of the remaining clock (won't flag), never
-// more than maxThinkMs absolute (keeps slow controls sane and the untimed first
-// move safely under the 30s first-move abort), and never below a human floor
-// (which itself drops in real time trouble so the bot can blitz).
-func botThinkDelay(tc timeControl, remainingMs int64, legalCount, ply, displayRating, pieceCount int, mv moveTraits) time.Duration {
+// function of the state.
+//
+// Two more signals feed in, both real and both new: `inCheck` (the bot itself is
+// in check — see inCheckMult's doc) inflates the whole budget AND the floor, and
+// `criticalMult` (>1 when this move owes a "just noticed" think — see
+// armCriticalThink / game.criticalThinksOwed) overrides the budget with a hard
+// 2.5x-5x multiplier and pulls the floor up to at least the normal tier, so a
+// bot that just watched its own eval swing hard doesn't blitz the reply the way
+// a quiet move would.
+//
+// `floors` is the per-game floor ladder (scheduleFloors): a Watch-lobby filler
+// runs a far higher one than a human-facing backfill bot, so a filler game can
+// genuinely be decided on the clock instead of always reaching mate.
+//
+// The pause comes off the bot's clock (it's real time), so it's bounded: never
+// more than ~30% of the remaining clock (won't flag), never more than
+// maxThinkMs absolute (keeps slow controls sane and the untimed first move
+// safely under the 30s first-move abort). Both the floor AND the in-check/
+// critical-moment inflation are applied BEFORE those caps, not after — a raised
+// floor must never be able to push the think past them; the caps get the last
+// word, always.
+func botThinkDelay(tc timeControl, remainingMs int64, legalCount, ply, displayRating, pieceCount int, mv moveTraits, floors thinkFloors, criticalMult float64, inCheck bool) time.Duration {
 	// Rough per-move time budget: assume ~30 moves a side, plus the increment you
 	// get back each move. e.g. 1+0 → 2s, 3+0 → 6s, 5+0 → 10s, 10+0 → 20s, 3+2 → 8s.
 	perMove := float64(tc.Base)/30.0 + float64(tc.Inc)
@@ -646,8 +741,25 @@ func botThinkDelay(tc timeControl, remainingMs int64, legalCount, ply, displayRa
 		ms *= frac * frac
 	}
 
+	// In check: see inCheckMult's doc. Applied after the time-pressure shrink so
+	// it still shows up even in a fast-clock game, not swallowed by it.
+	if inCheck {
+		ms *= inCheckMult
+	}
+
+	// Critical moment: this bot's own eval just swung hard (armCriticalThink), so
+	// this move gets a real "wait, what happened" think rather than its ordinary
+	// pace — a final override on top of everything above, not a nudge, because
+	// the whole point is that the move visibly stands out from the ones around it.
+	if criticalMult > 1 {
+		ms *= criticalMult
+	}
+
 	out := int64(ms)
 
+	// The caps bound the COMPUTED think: no single move may eat 30% of what's left
+	// or run past maxThinkMs (which also keeps the untimed first move safely under
+	// the 30s abort).
 	if cap := remainingMs * 3 / 10; out > cap {
 		out = cap
 	}
@@ -655,14 +767,31 @@ func botThinkDelay(tc timeControl, remainingMs int64, legalCount, ply, displayRa
 	if out > maxThinkMs {
 		out = maxThinkMs
 	}
-	// Human floor — lower in the opening (theory comes out quick), and lower still
-	// in genuine time trouble so the bot can blitz.
-	floor := int64(250)
+
+	// Floor LAST, deliberately outranking the caps above — this is the only path by
+	// which any bot ever loses on time, and it is load-bearing for the filler.
+	// Clamping the floor to 30% of the remaining clock instead makes the clock decay
+	// geometrically and never reach zero, so a Watch-lobby game could not be decided
+	// on the clock however low the flag floor was set. The floor is bounded and
+	// small (a filler's is at most ~1.2s, a backfill bot's 250ms), so it can only
+	// bite in the last fraction of a second, which is exactly when a real player
+	// flags. A backfill bot keeps the original 250/90/60 ladder, so this does not
+	// start gifting wins to humans.
+	floor := floors.normal
 	if inOpening {
-		floor = 90
+		floor = floors.opening
 	}
 	if remainingMs < panicTimeMs {
-		floor = 60
+		floor = floors.panic
+	}
+	if criticalMult > 1 && floor < floors.normal {
+		// A critical-moment think must never collapse to the opening/panic
+		// floor — a real player doesn't blitz the move right after a blunder
+		// just because it's still early theory or the clock is low.
+		floor = floors.normal
+	}
+	if inCheck {
+		floor = int64(float64(floor) * inCheckMult)
 	}
 	if out < floor {
 		out = floor

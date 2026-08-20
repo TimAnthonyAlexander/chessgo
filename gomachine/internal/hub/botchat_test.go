@@ -141,6 +141,113 @@ func TestDeliverBotChatDropsStale(t *testing.T) {
 	}
 }
 
+func TestDeliverBotChatDropsRepeatedLine(t *testing.T) {
+	h := New(testSecret)
+	human, ch := humanPlayerWithSend("alice", 4)
+	g := newStdGame(t, "gid", human, botPlayerNamed("bot", 1))
+	h.games[g.id] = g
+
+	h.deliverBotChat(botChatResult{gameID: g.id, text: "gl hf"})
+	select {
+	case <-ch:
+	default:
+		t.Fatal("first occurrence of a line should be delivered")
+	}
+
+	// Same line again, different casing/whitespace — still a repeat.
+	h.deliverBotChat(botChatResult{gameID: g.id, text: "  GL HF  "})
+	select {
+	case data := <-ch:
+		t.Fatalf("repeated line should be dropped, got delivery: %s", data)
+	default:
+	}
+	if len(g.chatLog) != 1 {
+		t.Errorf("chatLog = %+v, want the dropped repeat NOT recorded", g.chatLog)
+	}
+
+	// A fresh line still goes out.
+	h.deliverBotChat(botChatResult{gameID: g.id, text: "nice"})
+	select {
+	case data := <-ch:
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if m["text"] != "nice" {
+			t.Errorf("text = %v, want nice", m["text"])
+		}
+	default:
+		t.Fatal("a fresh line should still be delivered")
+	}
+}
+
+func TestDeliverBotChatRepetitionGuardIsPerHubNotPerGame(t *testing.T) {
+	h := New(testSecret)
+	human1, ch1 := humanPlayerWithSend("alice", 4)
+	human2, ch2 := humanPlayerWithSend("carol", 4)
+	g1 := newStdGame(t, "g1", human1, botPlayerNamed("bot1", 1))
+	g2 := newStdGame(t, "g2", human2, botPlayerNamed("bot2", 1))
+	h.games[g1.id] = g1
+	h.games[g2.id] = g2
+
+	h.deliverBotChat(botChatResult{gameID: g1.id, text: "gl hf"})
+	select {
+	case <-ch1:
+	default:
+		t.Fatal("g1's line should be delivered")
+	}
+
+	// The SAME attractor phrase in an unrelated game is caught by the hub-wide
+	// ring, not just g1's own chat log.
+	h.deliverBotChat(botChatResult{gameID: g2.id, text: "gl hf"})
+	select {
+	case data := <-ch2:
+		t.Fatalf("cross-game repeat should be dropped, got: %s", data)
+	default:
+	}
+}
+
+func TestRecentLinesRingEvictsOldest(t *testing.T) {
+	r := newRecentLines(2)
+	r.add("one")
+	r.add("two")
+	if !r.seen("one") || !r.seen("two") {
+		t.Fatalf("both lines should be present before eviction")
+	}
+	r.add("three") // evicts "one"
+	if r.seen("one") {
+		t.Errorf("evicted line should no longer be seen")
+	}
+	if !r.seen("two") || !r.seen("three") {
+		t.Errorf("surviving lines should still be seen")
+	}
+}
+
+// TestChatPersonaMostlyQuiet pins the tone change: the population must be
+// mostly silent. A high mean reply chance is exactly the bug being fixed here
+// (bots that answer almost everything read as eager, not human), so this
+// samples a large population and checks the average, rather than pinning any
+// single roll (which the mrand source makes non-deterministic).
+func TestChatPersonaMostlyQuiet(t *testing.T) {
+	const n = 20000
+	var sumReply, sumOpens float64
+	for i := 0; i < n; i++ {
+		p := newChatPersona()
+		sumReply += p.replyChance
+		if p.opens {
+			sumOpens++
+		}
+	}
+	meanReply := sumReply / n
+	if meanReply > 0.15 {
+		t.Errorf("mean replyChance = %.3f, want a mostly-silent population (<=0.15)", meanReply)
+	}
+	openRate := sumOpens / n
+	if openRate > 0.30 {
+		t.Errorf("opening-greeting rate = %.3f, want <=0.30", openRate)
+	}
+}
+
 func TestMaterialAdvantage(t *testing.T) {
 	// Standard opening: even.
 	if n := materialAdvantage("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", chess.White); n != 0 {
@@ -169,5 +276,28 @@ func TestMaterialAdvantage(t *testing.T) {
 	// Both sides equal with queens off.
 	if n := materialAdvantage("rnb1kbnr/pppppppp/8/8/8/8/PPPPPPPP/RNB1KBNR w KQkq - 0 1", chess.White); n != 0 {
 		t.Errorf("both missing queens from White = %d, want 0", n)
+	}
+}
+
+// A farewell whose text is suppressed as a repeat must STILL release the game.
+// finish() keeps a bot game in h.games past its end purely so the farewell
+// delivery can find it, and "gg" is the likeliest repeat there is — so this is
+// the common case, not the corner one.
+func TestDeliverBotChatSuppressedFarewellStillTearsDown(t *testing.T) {
+	h := New(testSecret)
+	human, _ := humanPlayerWithSend("alice", 4)
+	g := newStdGame(t, "gid-farewell", human, botPlayerNamed("bot", 1))
+	h.games[g.id] = g
+
+	// Burn the line into the ring from an unrelated game first.
+	other := newStdGame(t, "gid-other", human, botPlayerNamed("bot2", 1))
+	h.games[other.id] = other
+	h.deliverBotChat(botChatResult{gameID: other.id, text: "gg"})
+
+	g.over = true
+	h.deliverBotChat(botChatResult{gameID: g.id, text: "gg", farewell: true})
+
+	if _, still := h.games[g.id]; still {
+		t.Error("suppressed farewell left the finished game parked in h.games")
 	}
 }

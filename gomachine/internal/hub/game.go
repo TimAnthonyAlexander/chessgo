@@ -156,6 +156,17 @@ type game struct {
 	// return a move and no score.
 	botEvals [2][]int
 
+	// criticalThinksOwed counts, per bot side (indexed by chess.Color), how many
+	// of ITS OWN next moves still owe a "critical moment" hard think — armed by
+	// armCriticalThink (botoffers.go) when that side's own eval swings
+	// ≥criticalSwingCp from the move before, consumed one at a time by
+	// scheduleBotMove / scheduleSelfSearchBotMove when they snapshot state for
+	// the next move. Zero means nothing owed. This is what lets a bot blitz a
+	// quiet position and then visibly tank the move right after something
+	// changes — the single most recognizable human tempo tell there is, and
+	// until this the pacing model had no way to produce it.
+	criticalThinksOwed [2]int
+
 	// Rematch (see rematch.go). Only meaningful once the game has ended:
 	// rematchArmedAt is stamped by armRematch at finish() and bounds the whole
 	// rematch window (rematchTTL) regardless of whether an offer is ever made —
