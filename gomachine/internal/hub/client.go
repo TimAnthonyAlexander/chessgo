@@ -33,11 +33,11 @@ type Client struct {
 
 	// Touched only by the hub goroutine:
 	game          *game
-	pool          string    // current queue pool, "" if not queued
-	queuedAt      time.Time // when the client entered its current pool (for bot backfill)
+	pool          string        // current queue pool, "" if not queued
+	queuedAt      time.Time     // when the client entered its current pool (for bot backfill)
 	botFillDelay  time.Duration // per-queue randomized wait before bot backfill (realism jitter)
-	watching      *game     // the game this client is spectating, if any
-	challengeCode string    // code of a pending private challenge this client created, "" if none
+	watching      *game         // the game this client is spectating, if any
+	challengeCode string        // code of a pending private challenge this client created, "" if none
 	// lastGame is the game this client just finished, kept around so it can
 	// offer/accept/decline/cancel a rematch with the same opponent. Cleared
 	// (see rematch.go's disarmRematch/retireRematch) once the rematch window

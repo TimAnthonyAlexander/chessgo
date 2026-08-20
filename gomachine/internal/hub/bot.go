@@ -23,6 +23,20 @@ type botMoveResult struct {
 	gameID string
 	ply    int // move count when the bot started thinking (staleness guard)
 	uci    string
+
+	// evalCp is the search's own score for the position it just moved in,
+	// centipawns from the BOT's point of view (zugzwang reports side-to-move
+	// relative, and the side to move IS the bot here). It rides along for free
+	// with every move, which is what lets a bot offer a draw or resign without
+	// the hub ever running a second search.
+	//
+	// evalKnown separates "the bot evaluated this at 0.00" from "no score came
+	// back" — the self-search variants (Duck, Crazyhouse, Antichess, Secret
+	// Queen) return a move and nothing else. Without the flag their silence
+	// would read as dead equal, and every one of their bots would start
+	// offering draws on move one.
+	evalCp    int
+	evalKnown bool
 }
 
 // botSnapshot is an immutable copy of everything a worker needs to pick a move,
@@ -462,7 +476,13 @@ func (h *Hub) computeBotMove(s botSnapshot, engines chan *engineHandle) {
 	}
 
 	select {
-	case h.botMoves <- botMoveResult{gameID: s.gameID, ply: s.ply, uci: res.Move.String()}:
+	case h.botMoves <- botMoveResult{
+		gameID:    s.gameID,
+		ply:       s.ply,
+		uci:       res.Move.String(),
+		evalCp:    res.Score,
+		evalKnown: true,
+	}:
 	case <-time.After(2 * time.Second):
 		// Run goroutine wedged/gone; drop rather than leak.
 	}
@@ -511,6 +531,7 @@ func (h *Hub) applyBotMove(r botMoveResult) {
 	if _, botColor, ok := g.botPlayer(); !ok || g.sideToMove() != botColor || len(g.moves) != r.ply {
 		return
 	}
+	botColor := g.sideToMove()
 	if _, ok := g.applyMove(r.uci); !ok {
 		return
 	}
@@ -519,6 +540,12 @@ func (h *Hub) applyBotMove(r botMoveResult) {
 	if st := g.status(); st.State != "ongoing" {
 		h.finish(g, st.Result, st.State)
 		return
+	}
+	// The move carried the bot's own read of the position — record it, and let it
+	// decide whether this is a game worth offering a draw in or giving up on.
+	if r.evalKnown {
+		g.recordBotEval(botColor, r.evalCp)
+		h.considerBotConcession(g, botColor)
 	}
 	// In a filler (bot-vs-bot) game the other side is also a bot, so keep it
 	// going. In a human-vs-bot game it is now the human's turn and this no-ops

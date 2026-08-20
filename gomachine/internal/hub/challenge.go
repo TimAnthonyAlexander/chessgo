@@ -53,9 +53,9 @@ type challenge struct {
 	// exactly these two identity subs. The first of the two to arrive over
 	// joinChallenge parks as waitingClient/waitingSub (mirroring how a
 	// client-created challenge's creator waits); the second starts the game.
-	serverSide  bool
-	creatorSub  string // identity sub the `color` preference is relative to
-	opponentSub string
+	serverSide    bool
+	creatorSub    string // identity sub the `color` preference is relative to
+	opponentSub   string
 	waitingClient *Client
 	waitingSub    string
 }

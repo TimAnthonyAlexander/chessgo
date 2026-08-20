@@ -136,10 +136,10 @@ type botChatResult struct {
 // OnBotChat registers the text generator for fill-in bot chat. Call before Run.
 func (h *Hub) OnBotChat(fn BotChatFunc) { h.botChatFn = fn }
 
-// chatBotSide returns the fill-in bot opponent and its color in a human-vs-bot
+// botVsHumanSide returns the fill-in bot opponent and its color in a human-vs-bot
 // game. ok=false for human-vs-human games and for engine-vs-engine fillers (no
 // human to chat with) — so chat only ever animates a real backfill opponent.
-func (g *game) chatBotSide() (*player, chess.Color, bool) {
+func (g *game) botVsHumanSide() (*player, chess.Color, bool) {
 	if g.filler {
 		return nil, 0, false
 	}
@@ -156,7 +156,7 @@ func (g *game) chatBotSide() (*player, chess.Color, bool) {
 // that opens (decided once, when the persona was rolled). Run-goroutine entry;
 // the work is off-loop.
 func (h *Hub) maybeOpeningChat(g *game) {
-	bot, _, ok := g.chatBotSide()
+	bot, _, ok := g.botVsHumanSide()
 	if !ok || h.botChatFn == nil || g.chat == nil || !g.chat.opens {
 		return
 	}
@@ -176,7 +176,7 @@ func (h *Hub) maybeOpeningChat(g *game) {
 // right after the human's message is recorded, so g.chatLog already includes it.
 // A cooldown keeps it from answering every line of a fast burst.
 func (h *Hub) maybeReplyChat(g *game) {
-	bot, botColor, ok := g.chatBotSide()
+	bot, botColor, ok := g.botVsHumanSide()
 	if !ok || h.botChatFn == nil || g.chat == nil || g.over {
 		return
 	}
@@ -221,12 +221,12 @@ func (h *Hub) maybeReplyChat(g *game) {
 
 // maybeGameOverChat is the bot's one-shot farewell when the game ends — a "gg",
 // "well played", or commiseration depending on how it ended. Called from finish()
-// BEFORE g.over flips to true (so chatBotSide still sees a live game). Every
+// BEFORE g.over flips to true (so botVsHumanSide still sees a live game). Every
 // persona fires one (the game IS ending — staying silent here reads as abandoned,
 // not "quiet"), but the wording fits the voice. The farewell is delivered
 // asynchronously; teardown is deferred until it lands (or a 5s timeout).
 func (h *Hub) maybeGameOverChat(g *game, result, reason string) {
-	bot, botColor, ok := g.chatBotSide()
+	bot, botColor, ok := g.botVsHumanSide()
 	if !ok || h.botChatFn == nil || g.chat == nil {
 		return
 	}
@@ -337,7 +337,7 @@ func (h *Hub) deliverBotChat(r botChatResult) {
 	if g == nil {
 		return
 	}
-	bot, botColor, ok := g.chatBotSide()
+	bot, botColor, ok := g.botVsHumanSide()
 	if !ok {
 		return
 	}

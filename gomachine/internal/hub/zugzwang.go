@@ -129,13 +129,40 @@ func (z *zugzwangClient) BestMove(ctx context.Context, fen string, fenHistory []
 		return engine.BestResult{}, fmt.Errorf("zugzwang: illegal/unparseable bestmove %q for fen %q", *out.BestMove, fen)
 	}
 
-	return engine.BestResult{
+	res := engine.BestResult{
 		Move:  move,
 		Score: out.Eval.Value,
 		Depth: out.Depth,
 		Nodes: out.Nodes,
 		Level: out.Level,
-	}, nil
+	}
+	// zugzwang's eval object is a TAGGED union: {"type":"mate","value":N} carries a
+	// signed mate DISTANCE IN MOVES, not centipawns (zugzwang/src/serve_json.h's
+	// eval_json). Reading Value without its Type makes "mated in 2" indistinguishable
+	// from "−2 centipawns" — i.e. from dead equal — so anything deciding on the score
+	// must get the mate case separated out here, at the boundary, rather than each
+	// caller remembering to ask. Score is normalized to a mate-magnitude centipawn so
+	// one signed number stays comparable; MateIn keeps the exact distance.
+	if out.Eval.Type == "mate" {
+		res.MateIn = out.Eval.Value
+		res.Score = mateScoreCp(out.Eval.Value)
+	}
+	return res, nil
+}
+
+// mateScoreCp renders a signed mate distance as a centipawn score far outside any
+// real evaluation, so callers comparing scores need no special case: mating is
+// hugely positive, being mated hugely negative, and a shorter mate outranks a
+// longer one. Mirrors the usual VALUE_MATE-minus-distance convention.
+func mateScoreCp(mateIn int) int {
+	const mateBase = 100_000
+	if mateIn > 0 {
+		return mateBase - mateIn
+	}
+	if mateIn < 0 {
+		return -mateBase - mateIn
+	}
+	return 0
 }
 
 // crazyhouseBestMoveResponse is zugzwang's /crazyhouse/bestmove response

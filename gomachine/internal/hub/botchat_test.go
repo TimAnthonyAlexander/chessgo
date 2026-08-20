@@ -36,21 +36,21 @@ func TestChatBotSideDistinguishesGames(t *testing.T) {
 
 	// human (white) vs bot (black): the bot side is Black.
 	g := newStdGame(t, "g1", human, bot)
-	if p, col, ok := g.chatBotSide(); !ok || col != chess.Black || p != bot {
-		t.Errorf("chatBotSide(human-vs-bot) = %v,%v,%v; want bot,Black,true", p, col, ok)
+	if p, col, ok := g.botVsHumanSide(); !ok || col != chess.Black || p != bot {
+		t.Errorf("botVsHumanSide(human-vs-bot) = %v,%v,%v; want bot,Black,true", p, col, ok)
 	}
 
 	// human vs human: no chat bot.
 	g = newStdGame(t, "g2", human, human2)
-	if _, _, ok := g.chatBotSide(); ok {
-		t.Errorf("chatBotSide(human-vs-human) ok = true; want false")
+	if _, _, ok := g.botVsHumanSide(); ok {
+		t.Errorf("botVsHumanSide(human-vs-human) ok = true; want false")
 	}
 
 	// filler (bot vs bot) is excluded even though both sides are bots.
 	g = newStdGame(t, "g3", botPlayerNamed("a", 1), botPlayerNamed("b", 1))
 	g.filler = true
-	if _, _, ok := g.chatBotSide(); ok {
-		t.Errorf("chatBotSide(filler) ok = true; want false")
+	if _, _, ok := g.botVsHumanSide(); ok {
+		t.Errorf("botVsHumanSide(filler) ok = true; want false")
 	}
 }
 

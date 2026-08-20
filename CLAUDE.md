@@ -438,6 +438,25 @@ then restamp. `botMovetimeMs()` caps engine think time by the bot's remaining
 clock. Untimed (`time_control` null) is the default and unchanged. Undo is
 refused on a timed game.
 
+**Hub bots have manners, and they are per bot** (`gomachine/internal/hub/botoffers.go`).
+A fill-in bot answers takeback offers, answers draw offers, offers a draw of its
+own in a dead-level game, and resigns a lost one. **Every disposition
+(`player.takebackFriendly/acceptsDraws/offersDraws/resigns`) is rolled ONCE in
+`newBotPlayer` and fixed for that bot's life** — like the chat persona. Rolling per
+request would let a player re-ask until they got a yes, i.e. a 100% acceptance rate
+wearing a percentage label; `botoffers_test.go` pins that a re-ask never flips the
+answer. The eval driving "level" and "lost" is **free**: it rides back with every
+bot move (`botMoveResult.evalCp` ← zugzwang's `/bestmove`), so nothing here runs a
+second search. `evalKnown` is load-bearing — the self-search variants (Duck,
+Crazyhouse, Antichess, Secret Queen) return a move and no score, and their silence
+read as 0.00 would have every one of their bots offering draws on move one. So is
+`zugzwang.go`'s mate handling: the engine's eval object is a **tagged union**, and
+reading `{"type":"mate","value":-2}` as −2cp makes "mated in 2" identical to dead
+equal, which is exactly the band a bot offers and accepts draws in. Bot-vs-bot games
+(fillers, arena) concede nothing — `botVsHumanSide` gates it. Pacing lives next
+door in `bot.go`: `botThinkDelay` + `classifyMove`, which snaps out forced replies
+and recaptures, hurries other captures, and nudges pawn moves along.
+
 **PGN/FEN** live in `frontend/src/lib/pgn.ts` (`toPgn`/`fromPgn`/`downloadPgn`,
 tolerant of comments/NAGs/`%clk`/`%eval`/RAV), wired into `AnalysisAside.tsx`
 (import, copy, download, copy link, copy/paste FEN) and `BoardActions.tsx`

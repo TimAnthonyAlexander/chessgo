@@ -24,14 +24,17 @@ type player struct {
 	isBot   bool
 	rating  int // target Elo for a bot side (drives configForRating); unused for humans
 
-	// takebackFriendly is a bot side's ONE-TIME answer to "do you give takebacks?",
-	// rolled when the bot is created and then FIXED for the whole game (like the
-	// chat persona — see botchat.go's chatPersona). Some online opponents let you
-	// take a move back and some never do; which one you got is a property of the
-	// person, not of the individual request. Rolling per REQUEST would mean
-	// re-asking until you got a yes, which is both exploitable and nothing like
-	// playing a human. Meaningless for a human side (they answer for themselves).
-	takebackFriendly bool
+	// A bot side's manners, each rolled ONCE when the bot is created and then FIXED
+	// for the whole game (like the chat persona — see botchat.go's chatPersona).
+	// Some online opponents let you take a move back, some take a draw, some resign
+	// when they're lost; which one you got is a property of the person, not of the
+	// individual request. Rolling per REQUEST would mean re-asking until you got a
+	// yes, which is both exploitable and nothing like playing a human. Meaningless
+	// for a human side (they answer for themselves). See botoffers.go.
+	takebackFriendly bool // grants takebacks
+	acceptsDraws     bool // takes a draw when offered one in a position it isn't winning
+	offersDraws      bool // offers a draw of its own in a dead-level game
+	resigns          bool // resigns a lost game instead of playing it out
 }
 
 // newPlayer builds a human side seated on its first connection.
@@ -39,14 +42,17 @@ func newPlayer(c *Client) *player {
 	return &player{clients: map[*Client]struct{}{c: {}}, id: c.id}
 }
 
-// newBotPlayer builds an engine side: an identity, a strength, a fixed takeback
-// disposition, and no socket.
+// newBotPlayer builds an engine side: an identity, a strength, a fixed set of
+// manners, and no socket.
 func newBotPlayer(id auth.Identity, rating int) *player {
 	return &player{
 		id:               id,
 		isBot:            true,
 		rating:           rating,
 		takebackFriendly: mrand.Float64() < botTakebackAcceptChance,
+		acceptsDraws:     mrand.Float64() < botAcceptDrawChance,
+		offersDraws:      mrand.Float64() < botOfferDrawChance,
+		resigns:          mrand.Float64() < botResignChance,
 	}
 }
 
@@ -116,20 +122,39 @@ type game struct {
 	// Pending draw / takeback offers. At most one of each may be outstanding; the
 	// `*By` color is the side that made the offer. Any committed move clears both
 	// (Lichess-style: a draw offer is declined by the opponent's reply, and a
-	// stale takeback request is dropped once the position changes). Against a bot
-	// opponent (no client) a DRAW offer is simply never answered; a TAKEBACK is
-	// answered after takebackAnswerAt, per the bot's fixed disposition — see
-	// player.takebackFriendly and hub.go's checkBotTakebacks.
+	// stale takeback request is dropped once the position changes). A bot opponent
+	// has no client to answer with, so the hub answers on its behalf after the
+	// matching *AnswerAt beat, per that bot's fixed disposition — see botoffers.go.
+	// A bot may also be the one OFFERING the draw (botOfferDraw).
 	drawPending     bool
 	drawBy          chess.Color
 	takebackPending bool
 	takebackBy      chess.Color
 
-	// takebackAnswerAt is when a bot opponent will answer the standing takeback
-	// offer — a short, human-ish beat rather than an instant reflex reply. Zero
-	// means nobody owes an answer (no offer standing, or the responder is human
-	// and answers for themselves).
+	// takebackAnswerAt / drawAnswerAt are when a bot opponent will answer the
+	// standing offer of each kind — a short, human-ish beat rather than an instant
+	// reflex reply. Zero means nobody owes an answer (no offer standing, or the
+	// responder is human and answers for themselves). See botoffers.go.
 	takebackAnswerAt time.Time
+	drawAnswerAt     time.Time
+
+	// The bot's own concessions, armed by considerBotConcession when its eval says
+	// the game is level or lost and fired later by checkBotConcessions — so it
+	// moves, sits there, and then gives up, rather than resigning in the same
+	// instant as its move. Zero means nothing armed. botDrawOffered caps it at one
+	// offer per game: a bot that asks every move until you cave is worse company
+	// than one that never asks.
+	botResignAt    time.Time
+	botDrawOfferAt time.Time
+	botDrawOffered bool
+
+	// botEvals is each bot side's own search score (centipawns, from THAT bot's
+	// point of view) for the last few moves it played, indexed by chess.Color. It
+	// rides along free with every bot move (botMoveResult.evalCp), which is what
+	// lets a bot judge "level" or "lost" without the hub ever running a search of
+	// its own. Empty for a human side and for the self-search variants, which
+	// return a move and no score.
+	botEvals [2][]int
 
 	// Rematch (see rematch.go). Only meaningful once the game has ended:
 	// rematchArmedAt is stamped by armRematch at finish() and bounds the whole
@@ -194,7 +219,7 @@ func (g *game) appendChat(fromBot bool, text string) {
 
 // humanName returns the display name of the non-bot side in a human-vs-bot game
 // (the bot's chat opponent). Falls back to White's name if both sides are bots
-// (never the case where this is used — chatBotSide guards that).
+// (never the case where this is used — botVsHumanSide guards that).
 func (g *game) humanName() string {
 	if g.white.isBot {
 		return g.black.id.Name
@@ -359,23 +384,15 @@ func (g *game) applyMove(uci string) (string, bool) {
 	return san, true
 }
 
-// clearOffers drops any outstanding draw/takeback offer, including a bot's
-// pending answer to a takeback (there is no longer anything to answer).
+// clearOffers drops any outstanding draw/takeback offer, including a bot's pending
+// answer to either (there is no longer anything to answer). It deliberately leaves
+// the bot's OWN armed concessions alone — those are not offers yet, and a bot that
+// decided to resign does not change its mind because the opponent moved.
 func (g *game) clearOffers() {
 	g.drawPending = false
 	g.takebackPending = false
 	g.takebackAnswerAt = time.Time{}
-}
-
-// takebackResponder returns the side that OWES an answer to the standing
-// takeback offer — the one that did not make it — and whether that side is a
-// bot (so the hub must answer on its behalf). ok=false when no offer stands.
-func (g *game) takebackResponder() (*player, bool) {
-	if !g.takebackPending {
-		return nil, false
-	}
-	p := g.playerFor(g.takebackBy.Opposite())
-	return p, p.isBot
+	g.drawAnswerAt = time.Time{}
 }
 
 // fenHistory reconstructs the FEN of every prior position — start position
