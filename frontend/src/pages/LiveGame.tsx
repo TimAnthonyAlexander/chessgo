@@ -610,6 +610,8 @@ export default function LiveGame() {
             mat={mat}
             color={other(g.color)}
             online={g.opponentOnline}
+            graceDeadline={g.opponentGraceDeadline}
+            graceOutcome={g.opponentGraceOutcome}
             divider="bottom"
             zen={zen}
             variant={barVariant}
@@ -1394,6 +1396,66 @@ const CapturedPanel = memo(function CapturedPanel({
 // clock fields it actually reads — so this bails on chat/offers/presence, which
 // used to re-render both player bars (and, via Clock's getMs-keyed effect,
 // re-arm the countdown interval) on every one of those events.
+/**
+ * What an absent opponent costs them, counted down live.
+ *
+ * "disconnected" on its own was the whole story before, which left the player
+ * watching a dead board with no idea the server was about to hand them the game
+ * — and then it simply ended. The hub arms a grace timer on every disconnect
+ * (presence.go) and now ships its deadline, so this says what is actually going
+ * to happen and when.
+ *
+ * The deadline can arrive AFTER the disconnect notice, because the hub refuses
+ * to start the countdown until the clocks are running, so this renders the bare
+ * "disconnected" until one shows up rather than assuming there is one.
+ */
+function DisconnectNotice({
+    deadline,
+    outcome,
+}: {
+    deadline?: number | null
+    outcome?: 'win' | 'draw' | null
+}) {
+    const [now, setNow] = useState(() => Date.now())
+    useEffect(() => {
+        if (!deadline) return
+        // Half-second tick, not one second: at a whole second the displayed
+        // number visibly skips values whenever the interval drifts past a
+        // boundary, which on a countdown someone is watching closely looks broken.
+        const id = setInterval(() => setNow(Date.now()), 500)
+        return () => clearInterval(id)
+    }, [deadline])
+
+    if (!deadline) {
+        return (
+            <Typography sx={{ fontSize: 11, color: 'var(--muted)', lineHeight: 1.1 }}>
+                disconnected
+            </Typography>
+        )
+    }
+
+    const left = Math.max(0, deadline - now)
+    const secs = Math.ceil(left / 1000)
+    const clock = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`
+    const verb = outcome === 'draw' ? 'draw in' : 'you win in'
+
+    return (
+        <Typography
+            sx={{
+                fontSize: 11,
+                lineHeight: 1.1,
+                // Warm up as it runs out: this is good news for the reader, and a
+                // number that never changes colour reads as decoration rather than
+                // as something with a deadline attached.
+                color: left <= 10_000 ? 'var(--accent)' : 'var(--muted)',
+                fontVariantNumeric: 'tabular-nums',
+            }}
+        >
+            disconnected · {verb} {clock}
+        </Typography>
+    )
+}
+
 const PlayerBar = memo(function PlayerBar({
     name,
     title,
@@ -1405,6 +1467,8 @@ const PlayerBar = memo(function PlayerBar({
     mat,
     color,
     online,
+    graceDeadline,
+    graceOutcome,
     divider,
     zen = false,
     variant = 'rail',
@@ -1422,6 +1486,12 @@ const PlayerBar = memo(function PlayerBar({
     mat: Material
     color: Color
     online?: boolean
+    /** Epoch ms this side's disconnect grace expires, null when nothing is
+     *  counting down. Only meaningful while `online === false`. */
+    graceDeadline?: number | null
+    /** What that expiry is worth to the viewer — the hub applies the same
+     *  insufficient-material rule a flag does, so this is not always a win. */
+    graceOutcome?: 'win' | 'draw' | null
     divider?: 'top' | 'bottom'
     /** Zen mode: suppress the rating badge, captured strip and clock (just the name). */
     zen?: boolean
@@ -1495,9 +1565,7 @@ const PlayerBar = memo(function PlayerBar({
                     )}
                 </Box>
                 {online === false && (
-                    <Typography sx={{ fontSize: 11, color: 'var(--muted)', lineHeight: 1.1 }}>
-                        disconnected
-                    </Typography>
+                    <DisconnectNotice deadline={graceDeadline} outcome={graceOutcome} />
                 )}
             </Box>
             {/* Rail: compact strip in the bar on MOBILE only — on desktop the captured

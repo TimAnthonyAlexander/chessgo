@@ -263,6 +263,12 @@ type game struct {
 	disconnectGraceSide chess.Color
 	disconnectGraceAt   time.Time
 
+	// graceAnnounced is the deadline the present side was last actually told
+	// about, so announceArmedGrace can spot a countdown that started (or was
+	// replaced) after their opponentGone already went out and send them the
+	// updated one. Never equal to a live disconnectGraceAt they don't know about.
+	graceAnnounced time.Time
+
 	// botDropAt / botReturnAt are Feature B's arm-then-fire timers for a
 	// presenceDrops/presenceLeaves bot's one scripted absence (presence.go):
 	// botDropAt is when it goes offline, botReturnAt is when a presenceDrops

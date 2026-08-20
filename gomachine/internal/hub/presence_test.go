@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -686,5 +687,101 @@ func TestGraceCountdownDoesNotRestartOnEveryMove(t *testing.T) {
 	}
 	if !g.disconnectGraceAt.Equal(first) {
 		t.Errorf("deadline moved from %v to %v — the countdown restarted", first, g.disconnectGraceAt)
+	}
+}
+
+// --- announcing a countdown that started late --------------------------------
+
+// drainFor returns the first message of type `want` on ch, or nil.
+func drainFor(ch chan []byte, want string) map[string]any {
+	for {
+		select {
+		case data := <-ch:
+			var m map[string]any
+			if json.Unmarshal(data, &m) != nil {
+				continue
+			}
+			if m["type"] == want {
+				return m
+			}
+		default:
+			return nil
+		}
+	}
+}
+
+// The deadline is not always known when the opponent vanishes: the hub refuses
+// to start the countdown until the clocks are running, so a player who drops
+// during the opening plies gets an opponentGone with nothing in it. The banner
+// would then read a bare "disconnected" right up until the game silently ended,
+// which is exactly the "I had no idea I was about to win" complaint. The ticker
+// has to send the deadline once it exists.
+func TestGraceIsAnnouncedWhenItArmsAfterTheDisconnectNotice(t *testing.T) {
+	h := New(testSecret)
+	human, ch := humanPlayerWithSend("alice", 8)
+	g, _ := botOfferGame(t, h) // one ply played, clocks not running yet
+	g.white = human
+	g.online = [2]bool{true, true}
+
+	// The bot drops before the clocks start: notice goes out, no deadline in it.
+	g.online[chess.Black] = false
+	g.refreshDisconnectGrace()
+	h.sendOpponentGone(g, chess.Black)
+	gone := drainFor(ch, "opponentGone")
+	if gone == nil {
+		t.Fatal("no opponentGone sent")
+	}
+	if _, has := gone["graceDeadline"]; has {
+		t.Error("a deadline was sent before the clocks started")
+	}
+
+	// The reply lands, the clocks start, and applyMove arms the countdown.
+	if _, ok := g.applyMove("e7e5"); !ok {
+		t.Fatal("apply e7e5")
+	}
+	if g.disconnectGraceAt.IsZero() {
+		t.Fatal("grace did not arm once the clocks started")
+	}
+
+	h.checkDisconnectGrace() // the ticker notices nobody has been told
+	second := drainFor(ch, "opponentGone")
+	if second == nil {
+		t.Fatal("the newly armed countdown was never announced")
+	}
+	if _, has := second["graceDeadline"]; !has {
+		t.Error("the announcement carried no deadline")
+	}
+	if second["graceOutcome"] != "win" {
+		t.Errorf("graceOutcome = %v, want win (full board, mate is possible)", second["graceOutcome"])
+	}
+
+	// And it is announced exactly once — a re-announcement every 200ms tick
+	// would restart the countdown in the UI forever.
+	h.checkDisconnectGrace()
+	if again := drainFor(ch, "opponentGone"); again != nil {
+		t.Error("the same countdown was announced twice")
+	}
+}
+
+// A player who cannot mate is told 'draw', not 'win' — the hub resolves it that
+// way (resolveDisconnectGrace reuses the flag path's CanMate), so promising a
+// win it will not deliver is worse than saying nothing.
+func TestGraceOutcomeIsDrawWhenThePresentSideCannotMate(t *testing.T) {
+	h := New(testSecret)
+	human, ch := humanPlayerWithSend("alice", 8)
+	// White has a bare king: whatever happens, White cannot mate.
+	g := newGraceTestGame(t, h, "4k3/8/8/8/8/8/6q1/4K3 w - - 0 1", timeControl{Base: 180_000})
+	g.white = human
+	padPlies(g, 2)
+	g.online = [2]bool{true, false}
+	g.refreshDisconnectGrace()
+	h.sendOpponentGone(g, chess.Black)
+
+	gone := drainFor(ch, "opponentGone")
+	if gone == nil {
+		t.Fatal("no opponentGone sent")
+	}
+	if gone["graceOutcome"] != "draw" {
+		t.Errorf("graceOutcome = %v, want draw (White cannot mate)", gone["graceOutcome"])
 	}
 }

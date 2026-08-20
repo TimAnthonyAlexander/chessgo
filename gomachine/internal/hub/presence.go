@@ -156,7 +156,15 @@ func (g *game) refreshDisconnectGrace() {
 func (h *Hub) checkDisconnectGrace() {
 	now := time.Now()
 	for _, g := range h.games {
-		if g.over || g.disconnectGraceAt.IsZero() || now.Before(g.disconnectGraceAt) {
+		if g.over {
+			continue
+		}
+		// Catch any countdown that armed without the present side being told —
+		// see announceArmedGrace. Doing it here rather than at each arming site
+		// means every path (disconnect, bot drop, and the move that starts the
+		// clocks) is covered by one hook that cannot be forgotten by the next one.
+		h.announceArmedGrace(g)
+		if g.disconnectGraceAt.IsZero() || now.Before(g.disconnectGraceAt) {
 			continue
 		}
 		h.resolveDisconnectGrace(g)
@@ -203,8 +211,40 @@ func (h *Hub) sendOpponentGone(g *game, awaySide chess.Color) {
 	payload := map[string]any{"gameId": g.id}
 	if !g.disconnectGraceAt.IsZero() {
 		payload["graceDeadline"] = g.disconnectGraceAt.UnixMilli()
+		// What the countdown is actually worth to the recipient, decided the same
+		// way resolveDisconnectGrace will decide it: a player who cannot mate gets
+		// a draw out of an abandonment, not a win, and a banner promising a win it
+		// then doesn't deliver is worse than no banner.
+		payload["graceOutcome"] = "draw"
+		if g.state.CanMate(awaySide.Opposite()) {
+			payload["graceOutcome"] = "win"
+		}
 	}
+	g.graceAnnounced = g.disconnectGraceAt
 	opp.send(mustJSON(out("opponentGone", payload)))
+}
+
+// announceArmedGrace tells the present side about a countdown that started
+// AFTER they were told their opponent was gone. The deadline is not always
+// known at disconnect time: refreshDisconnectGrace refuses to arm before
+// clocksRunning(), so a player who dropped during the first two plies gets
+// their opponentGone with no deadline in it, and the timer only starts on the
+// move that finally starts the clocks. Without this the banner would sit on
+// "disconnected" forever and the game would then just end, which is precisely
+// the "I had no idea I was about to win" complaint this exists to answer.
+//
+// Comparing against graceAnnounced rather than a bool also re-announces a
+// deadline that CHANGED (a fresh absence after a reconnect), so the countdown
+// on screen is never a stale one from an earlier disconnect.
+func (h *Hub) announceArmedGrace(g *game) {
+	if g.disconnectGraceAt.Equal(g.graceAnnounced) {
+		return
+	}
+	if g.disconnectGraceAt.IsZero() {
+		g.graceAnnounced = time.Time{} // disarmed; opponentBack already told them
+		return
+	}
+	h.sendOpponentGone(g, g.disconnectGraceSide)
 }
 
 // sendOpponentBack tells the side on the OTHER side of backSide that it just
@@ -213,6 +253,10 @@ func (h *Hub) sendOpponentGone(g *game, awaySide chess.Color) {
 // own drop ending) so the two can never emit a differently-shaped message
 // for what the client should treat as the same event.
 func (h *Hub) sendOpponentBack(g *game, backSide chess.Color) {
+	// Whether or not anyone is listening, the countdown they were told about is
+	// no longer running — clearing this is what lets a LATER absence announce its
+	// own fresh deadline instead of being mistaken for the one already on screen.
+	g.graceAnnounced = time.Time{}
 	opp := g.playerFor(backSide.Opposite())
 	if !opp.connected() {
 		return
@@ -248,10 +292,15 @@ const (
 // checks these in order and whatever doesn't match any of them is
 // presencePresent — there is no explicit "present" chance to keep in sync
 // with the other three.
+// Dialed down from the first cut (4%/6%/2%, i.e. something happening in about
+// one game in eight): played back to back that reads as a flaky site rather than
+// as the occasional real opponent with a bad connection. At these shares roughly
+// one game in thirty has any absence at all, and an outright abandonment is rare
+// enough to stay surprising.
 const (
-	presenceNoShowChance = 0.04
-	presenceDropsChance  = 0.06
-	presenceLeavesChance = 0.02
+	presenceNoShowChance = 0.010
+	presenceDropsChance  = 0.020
+	presenceLeavesChance = 0.005
 )
 
 // rollBotPresence rolls a bot's ONE presence disposition for the whole game

@@ -68,6 +68,15 @@ export interface LiveGameState {
     reason: string | null
     ended: boolean
     opponentOnline: boolean
+    /** Epoch ms at which an absent opponent's grace period expires and the hub
+     *  resolves the game on its own, or null when nobody is counting down. The
+     *  hub only knows this once the clocks have started, so it can arrive later
+     *  than the disconnect itself — see `graceDeadline` in `opponentGone`. */
+    opponentGraceDeadline: number | null
+    /** What that countdown is worth to us when it expires: the hub decides a
+     *  win or a draw by the same insufficient-material rule a flag uses, so a
+     *  player who cannot mate is told 'draw', not 'win'. */
+    opponentGraceOutcome: 'win' | 'draw' | null
     messages: ChatMessage[]
     drawOffer: OfferState
     takebackOffer: OfferState
@@ -198,6 +207,8 @@ function buildGame(m: Msg): LiveGameState {
         reason: null,
         ended: false,
         opponentOnline: true,
+        opponentGraceDeadline: null,
+        opponentGraceOutcome: null,
         messages: [],
         drawOffer: null,
         takebackOffer: null,
@@ -259,6 +270,8 @@ function buildResume(m: Msg): LiveGameState {
         reason: null,
         ended: m.status !== 'ongoing',
         opponentOnline: m.opponentOnline !== false,
+        opponentGraceDeadline: null,
+        opponentGraceOutcome: null,
         messages: [],
         drawOffer: null,
         takebackOffer: null,
@@ -742,7 +755,7 @@ class GameSocket {
                 this.applyEnd(msg)
                 break
             case 'opponentGone':
-                this.setOpponentOnline(false)
+                this.setOpponentOnline(false, msg.graceDeadline, msg.graceOutcome)
                 break
             case 'opponentBack':
                 this.setOpponentOnline(true)
@@ -851,10 +864,30 @@ class GameSocket {
         })
     }
 
-    private setOpponentOnline(online: boolean) {
+    private setOpponentOnline(
+        online: boolean,
+        graceDeadline?: unknown,
+        graceOutcome?: unknown,
+    ) {
         const g = this.state.game
         if (!g) return
-        this.set({ game: { ...g, opponentOnline: online } })
+        // A repeat `opponentGone` carrying a deadline is the hub telling us a
+        // countdown started after the original notice (it cannot know one before
+        // the clocks start), so take the new value; coming back clears both.
+        const deadline =
+            online || typeof graceDeadline !== 'number' ? null : graceDeadline
+        const outcome =
+            online || (graceOutcome !== 'win' && graceOutcome !== 'draw')
+                ? null
+                : graceOutcome
+        this.set({
+            game: {
+                ...g,
+                opponentOnline: online,
+                opponentGraceDeadline: deadline,
+                opponentGraceOutcome: outcome,
+            },
+        })
     }
 
     // A draw/takeback offer arrived: 'mine' if we sent it (echo), 'theirs' otherwise.
