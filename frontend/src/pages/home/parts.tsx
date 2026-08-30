@@ -227,7 +227,11 @@ export function HomeChrome({
 
 /** The live lobby counters as two right-aligned one-liners (number in text
  * colour, label dimmed) — sits below the leaderboard in the right column. */
+// Temporarily hidden — flip to true to restore the live lobby counters.
+const SHOW_LOBBY_STAT_LINES = false
+
 export function LobbyStatLines({ stats }: { stats: LobbyStats | null }) {
+    if (!SHOW_LOBBY_STAT_LINES) return null
     return (
         <Box
             sx={{
